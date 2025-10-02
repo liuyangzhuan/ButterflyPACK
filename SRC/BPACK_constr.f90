@@ -72,7 +72,7 @@ contains
       integer nn, mm, Maxlevel, give, need
       integer i, j, k, ii, edge, Dimn, kk
       integer nlevel, level
-      integer Permutation(Nunk)
+      integer Permutation(:)
       integer, optional:: tree(:)
       integer Nunk_loc
       integer groupm
@@ -154,6 +154,7 @@ contains
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder"
          call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0 or 4')
+         call LogMemory(stats, SIZEOF(Coordinates)/1024.0d3) ! this assumes that the user will deallocate Coordinates at a much later time
          Ndim = size(Coordinates, 1)
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
@@ -193,6 +194,7 @@ contains
          do edge = 1, Nunk
             Permutation(edge) = msh%new2old(edge)
          enddo
+         call LogMemory(stats, SIZEOF(Permutation)/1024.0d3) ! this assumes that the user will deallocate Permutation at a much later time
       endif
 
    end subroutine BPACK_construction_Init
@@ -1732,6 +1734,9 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       integer Maxlevel
+
+      !write(*,*)stats%Mem_peak,'peak before BPACK_construction_Element'
+
       if (allocated(msh%xyz)) deallocate (msh%xyz)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction......"
 
@@ -1749,6 +1754,8 @@ contains
       Maxlevel = bmat%Maxlevel
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_entry(bmat, option, msh, ker, stats, ptree)
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_SMVP(bmat, option, msh, ker, stats, ptree)
+
+      !write(*,*)stats%Mem_peak,'peak after BPACK_construction_Element'
 
    end subroutine BPACK_construction_Element
 
@@ -1872,13 +1879,16 @@ contains
          enddo
       enddo
 
-      do i = 1, h_mat%myArows
-         do j = 1, h_mat%myAcols
-            blocks => h_mat%Local_blocks(j, i)
-            blocks_copy => h_mat%Local_blocks_copy(j, i)
-            call Hmat_block_copy('N', blocks_copy, blocks)
+      if (option%ErrSol == 1 .or. option%precon > 1) then ! no need to save the forward operator if ErrSol=0 and precon=1
+         do i = 1, h_mat%myArows
+            do j = 1, h_mat%myAcols
+               blocks => h_mat%Local_blocks(j, i)
+               blocks_copy => h_mat%Local_blocks_copy(j, i)
+               call Hmat_block_copy('N', blocks_copy, blocks)
+            enddo
          enddo
-      enddo
+         call LogMemory(stats, stats%Mem_Comp_for + stats%Mem_Direct_for)       
+      endif
 
       T1 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + T1 - T0
@@ -4416,8 +4426,9 @@ contains
       nvec=1 !! currently this can only be 1
       allocate(x_loc(Nunk_n_loc,nvec))
       x_loc=0
+      call LogMemory(stats, SIZEOF(x_loc)/1024.0d3)
 
-      Npt_src = min(500,N_glo)
+      Npt_src = min(20,N_glo)
       allocate(idx_src(Npt_src))
       do ij=1,Npt_src
          call random_number(a)
@@ -4445,12 +4456,14 @@ contains
 
       !! Generate rhs_loc by using BPACK_MD_Mult
       allocate(rhs_loc(Nunk_n_loc,nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc)/1024.0d3)
       rhs_loc=0
       call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats)
 
 
       !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
       allocate(rhs_loc_ref(Nunk_n_loc,nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc_ref)/1024.0d3)
       rhs_loc_ref=0
 
 
@@ -4459,6 +4472,7 @@ contains
       allocate(submats(1)%rows(submats(1)%nr))
       allocate(submats(1)%cols(submats(1)%nc))
       allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call LogMemory(stats, SIZEOF(submats(1)%dat)/1024.0d3)
       submats(1)%dat = 0
       do ii=1,submats(1)%nr
          submats(1)%rows(ii) = msh%idxs + ii - 1
@@ -4475,6 +4489,7 @@ contains
 
       deallocate(submats(1)%rows)
       deallocate(submats(1)%cols)
+      call LogMemory(stats, -SIZEOF(submats(1)%dat)/1024.0d3)
       deallocate(submats(1)%dat)
 
       n2 = MPI_Wtime()
@@ -4489,6 +4504,10 @@ contains
       call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
+
+      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
       deallocate(x_loc)
       deallocate(rhs_loc)
       deallocate(rhs_loc_ref)

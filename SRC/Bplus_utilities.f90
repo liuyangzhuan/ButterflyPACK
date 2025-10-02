@@ -1836,16 +1836,19 @@ contains
                   do jj = 1, block_i%ButterflyV%nblk_loc
                      memory = memory + SIZEOF(block_i%ButterflyV%blocks(jj)%matrix)/1024.0d3
                   enddo
+                  memory = memory + SIZEOF(block_i%ButterflyV%blocks)/1024.0d3
                elseif (level == level_butterfly + 1) then
                   do jj = 1, block_i%ButterflyU%nblk_loc
                      memory = memory + SIZEOF(block_i%ButterflyU%blocks(jj)%matrix)/1024.0d3
                   enddo
+                  memory = memory + SIZEOF(block_i%ButterflyU%blocks)/1024.0d3
                else
                   do ii = 1, block_i%ButterflyKerl(level)%nr
                      do jj = 1, block_i%ButterflyKerl(level)%nc
                         memory = memory + SIZEOF(block_i%ButterflyKerl(level)%blocks(ii, jj)%matrix)/1024.0d3
                      enddo
                   enddo
+                  memory = memory + SIZEOF(block_i%ButterflyKerl(level)%blocks)/1024.0d3
                endif
             enddo
          endif

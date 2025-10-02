@@ -1341,6 +1341,7 @@ contains
          allocate (msh%pretree(2**Maxlevel))
          msh%pretree(1:2**Maxlevel) = N
       endif
+      call LogMemory(stats, SIZEOF(msh%pretree)/1024.0d3)
 
 
       !>**** the geometry points are provided by user
@@ -1348,6 +1349,8 @@ contains
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
+         call LogMemory(stats, SIZEOF(msh%xyz)/1024.0d3)
+         call LogMemory(stats, msh%Nunk*Dimn*8d0/1024.0d3) ! this assumes that the user will deallocate Locations at a much later time
          ii = 0
          do edge = 1, msh%Nunk
             msh%xyz(1:Dimn, edge) = Locations(ii + 1:ii + Dimn)
@@ -1368,6 +1371,7 @@ contains
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
+         call LogMemory(stats, SIZEOF(msh%nns)/1024.0d3)
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
             knn = option%knn
@@ -1387,6 +1391,7 @@ contains
          do edge = 1, N
             Permutation(edge) = msh%new2old(edge)
          enddo
+         call LogMemory(stats, SIZEOF(Permutation)/1024.0d3) ! this assumes that the user will deallocate Permutation at a much later time
       ! endif
 
 
@@ -1396,6 +1401,7 @@ contains
             tree(group-2**bmat%Maxlevel+1) = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
          enddo
          nlevel = bmat%Maxlevel
+         call LogMemory(stats, 2**bmat%Maxlevel*8/1024.0d3) ! this assumes that the user will deallocate tree at a much later time
       endif
 
       !>**** return the C address of BPACK structures to C caller

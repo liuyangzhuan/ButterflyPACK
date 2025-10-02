@@ -581,7 +581,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:nn_loc,1)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -605,12 +605,16 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1155,7 +1159,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md),1)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1174,12 +1178,16 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_noprecon! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1337,7 +1345,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:nn_loc)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1361,11 +1369,17 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-         stop
+
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
-      if(sum(abs(b))==0d0)then
+
+      b_sum = sum(b)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1558,7 +1572,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md))::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1585,12 +1599,16 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0

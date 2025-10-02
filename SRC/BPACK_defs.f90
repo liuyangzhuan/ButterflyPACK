@@ -59,8 +59,8 @@ module BPACK_DEFS
 
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
-    integer, parameter:: BPACK_MAJOR_VERSION = 3
-    integer, parameter:: BPACK_MINOR_VERSION = 2
+    integer, parameter:: BPACK_MAJOR_VERSION = 4
+    integer, parameter:: BPACK_MINOR_VERSION = 0
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
     !>**** common parameters

@@ -103,9 +103,15 @@ contains
             nn = size(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat, 1)
             allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
             ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
+
+            if (option%ErrSol == 0 .and. option%precon == 1) then
+                call Bplus_delete(ho_bf1%levels(level_c)%BP(ii))
+            else 
 #if HAVE_ZFP
             if(option%use_zfp==1)call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%FullmatZFP,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%M,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%N, option%tol_comp,1)
 #endif
+endif
+
             allocate(Singular(nn))
             allocate(UU(nn,nn))
             allocate(VV(nn,nn))
@@ -169,7 +175,9 @@ contains
 
                 if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(rowblock)%pgno)) then
                     call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
-
+                    if (option%ErrSol == 0 .and. option%precon == 1) then
+                        call Bplus_delete(ho_bf1%levels(level_c)%BP(rowblock))
+                    endif    
                     call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_update(rowblock), rtemp, rank)
                     stats%Mem_Sblock = stats%Mem_Sblock + rtemp
                     stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
@@ -247,7 +255,12 @@ contains
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21,Es14.2)') 'Factorization flops:', rtemp
 
         stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
+
+        if (option%ErrSol == 0 .and. option%precon == 1) then        
+            call LogMemory(stats, stats%Mem_Factor-stats%Mem_Fill)
+        else 
         call LogMemory(stats, stats%Mem_Factor)
+        endif        
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_SMW, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -298,11 +311,18 @@ contains
         call MPI_barrier(ptree%Comm, ierr)
 
         call Bplus_copy(hss_bf1%BP, hss_bf1%BP_inverse)
+        call LogMemory(stats, stats%Mem_Fill)
+
+        if (option%ErrSol == 0 .and. option%precon == 1) then
+            call Bplus_delete(hss_bf1%BP)
+            call LogMemory(stats, -stats%Mem_Fill)
+        endif    
 
         call Bplus_inverse_schur_partitionedinverse_hss(hss_bf1%BP_inverse, option, stats, ptree, msh)
         call Bplus_ComputeMemory(hss_bf1%BP_inverse, rtemp,rank)
         stats%rankmax_of_level_global_factor(0)=rank
         stats%Mem_Factor = rtemp
+        call LogMemory(stats, stats%Mem_Factor-stats%Mem_Fill)
 
         nn2 = MPI_Wtime()
         stats%Time_Inv = nn2 - nn1
@@ -345,7 +365,7 @@ contains
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21,Es14.2)') 'Factorization flops:', rtemp
 
-        call LogMemory(stats, stats%Mem_Factor)
+        
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -398,7 +418,7 @@ contains
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
-        
+
 #ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
       !$omp parallel
@@ -493,7 +513,7 @@ contains
                     call LogMemory(stats, Memory)
                 endif
 
-#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
                 !$omp taskloop default(shared) private(j,jproc1, myj1,blocks_uu,blocks_mm)
 #endif
@@ -507,7 +527,7 @@ contains
                         call pack_all_blocks_one_node(blocks_uu, msh, option)
                     endif
                 enddo
-#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
                 !$omp end taskloop
 #endif
@@ -526,7 +546,7 @@ contains
                         call pack_all_blocks_one_node(blocks_ll, msh, option)
                     endif
                 enddo
-#ifdef HAVE_TOPLEVEL_OPENMP                
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
                 !$omp end taskloop
 #endif
@@ -620,7 +640,7 @@ contains
 
                 if(kk+1<=num_blocks)then
                     T3 = MPI_Wtime()
-#ifdef HAVE_TOPLEVEL_OPENMP                    
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
              !$omp taskloop default(shared) private(i,j,iproc1, myi1,jproc1, myj1,blocks_ll,blocks_uu,blocks_mm,Memory,t_start, t_stop, tid)
 #endif
@@ -651,7 +671,7 @@ contains
                         t_stop  = omp_get_wtime()
                         t_total(tid+1) = t_total(tid+1) + (t_stop - t_start)
                     enddo
-#ifdef HAVE_TOPLEVEL_OPENMP                    
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
                    !$omp end taskloop
 #endif
@@ -684,7 +704,7 @@ contains
 
         nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
-#ifdef HAVE_TOPLEVEL_OPENMP        
+#ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
       !$omp end single
       !$omp end parallel
@@ -747,7 +767,7 @@ contains
             write (*, *) 'Unpacking all blocks...'
         endif
 
-        call LogMemory(stats, stats%Mem_Factor)
+        call LogMemory(stats, stats%Mem_Factor-stats%Mem_Fill)
 
         call MPI_verbose_barrier('after printing', ptree, option)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
