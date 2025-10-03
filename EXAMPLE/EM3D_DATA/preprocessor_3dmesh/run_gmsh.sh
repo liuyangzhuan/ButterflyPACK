@@ -1,5 +1,5 @@
 make
-export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
+export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.6.0-Linux64/bin
 #export GMSH_DIR=/home/administrator/Desktop/research/preprocessor/gmsh-2.11.0-Linux/bin
 # export GMSH_DIR=/home/administrator/Desktop/software/gmsh-2.11.0-Linux/bin
 # export GMSH_DIR=/home/administrator/Desktop/Software/gmsh-4.6.0-Linux64/bin
@@ -96,6 +96,21 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
 #  mv node.geo ${name}_node.inp
 #  mv elem.geo ${name}_elem.inp
 
+
+#  name=sphere_512000
+#  ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.05e-1 -clmax 0.08125e-1 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
+
+
+ name=sphere_2M
+#  ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.025e-1 -clmax 0.040625e-1 -string "Mesh.BdfFieldFormat = 2;"  
+ ./con_all ${name}.nas
+ mv node.geo ${name}_node.inp
+ mv elem.geo ${name}_elem.inp
+
+
  #name=sphere_17999
  #${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.3e-1 -clmax 0.44e-1 -string "Mesh.BdfFieldFormat = 2;"  
  #./con_all ${name}.nas
@@ -143,11 +158,11 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
 #  mv node.geo ${name}_node.inp
 #  mv elem.geo ${name}_elem.inp
 
- name=plate_512000
- ${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.045e-1 -clmax 0.045e-1  -string "Mesh.BdfFieldFormat = 2;" # 7552 patches
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=plate_512000
+#  ${GMSH_DIR}/gmsh plate.geo -2 -o $name.nas -algo front2d -clmin 0.045e-1 -clmax 0.045e-1  -string "Mesh.BdfFieldFormat = 2;" # 7552 patches
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
 
 #name=plate_10240000
@@ -162,33 +177,33 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.0.4-Linux64/bin
 #${GMSH_DIR}/gmsh plate.geo -2 -o plate_10000000.nas -algo front2d -clmin 0.1e-2 -clmax 0.1e-2   # 2314782 patches
 
 
- name=pillbox_1000
- ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.12e-1 -clmax 0.2e-1 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=pillbox_1000
+#  ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.12e-1 -clmax 0.2e-1 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
 
- name=pillbox_4000
- ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.06e-1 -clmax 0.1e-1 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=pillbox_4000
+#  ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.06e-1 -clmax 0.1e-1 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
 
 
- name=pillbox_50K
- ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.015e-1 -clmax 0.025e-1 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=pillbox_50K
+#  ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.015e-1 -clmax 0.025e-1 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
 
- name=pillbox_200K
- ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.0075e-1 -clmax 0.0125e-1 -string "Mesh.BdfFieldFormat = 2;"  
- ./con_all ${name}.nas
- mv node.geo ${name}_node.inp
- mv elem.geo ${name}_elem.inp
+#  name=pillbox_200K
+#  ${GMSH_DIR}/gmsh pillbox.geo -2 -o $name.nas -algo del2d -clmin 0.0075e-1 -clmax 0.0125e-1 -string "Mesh.BdfFieldFormat = 2;"  
+#  ./con_all ${name}.nas
+#  mv node.geo ${name}_node.inp
+#  mv elem.geo ${name}_elem.inp
 
 
 #  name=cavity_wakefield_4K_feko
