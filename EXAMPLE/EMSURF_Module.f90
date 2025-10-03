@@ -61,6 +61,7 @@ implicit none
 		real(kind=8), allocatable :: ng1(:),ng2(:),ng3(:),gauss_w(:) ! Gass quadrature and weights
 		real(kind=8),allocatable:: normal_of_patch(:,:) ! normal vector of each triangular patch
 		integer,allocatable:: node_of_patch(:,:) ! vertices of each triangular patch
+		integer,allocatable:: edge_of_patch(:,:,:) ! unknown ids of each triangular patch
 		type(edge_node),allocatable:: edge_of_node(:) ! edges of each vertice
 		CHARACTER (LEN=1000) DATA_DIR
 		integer::CMmode=0 !  1: solve the characteristic mode, 0: solve the eigen mode
@@ -115,7 +116,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 
 	select TYPE(quant)
 	type is (quant_EMSURF)
-
+		
 		! convert to new indices because quant%info_unk has been reordered
 		edge_m = m
 		edge_n = n
@@ -186,10 +187,10 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*exp(-BPACK_junit*quant%wavenum*distance)/(4*BPACK_pi*distance**3)
-							 call z_rccurl(an,dg,dg1)
-							 call z_rccurl(nr_m,dg1,dg2)
-							 call z_cscalar(dg2,am,ctemp)
-							 value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
+								call z_rccurl(an,dg,dg1)
+								call z_rccurl(nr_m,dg1,dg2)
+								call z_cscalar(dg2,am,ctemp)
+								value_m=value_m-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
 							imp=imp+wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
 							imp1=imp1+quant%ng1(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
 							imp2=imp2+quant%ng2(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
@@ -198,7 +199,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 						nodetemp_n=quant%info_unk(jj+2,edge_n)
 						patch=quant%info_unk(jj,edge_n)
 						do jjj=1,3
-						   aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
+							aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
 						enddo
 						bb(1)=bb(1)+(-1)**(jj+1)*imp
 					endif
@@ -214,6 +215,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 		value=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*BPACK_impedence0*value_m
 
 		deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
+
 	class default
 		write(*,*)"unexpected type"
 		stop
@@ -222,6 +224,434 @@ subroutine Zelem_EMSURF(m,n,value,quant)
     return
 
 end subroutine Zelem_EMSURF
+
+
+
+
+subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
+	
+    use z_BPACK_DEFS
+    implicit none	
+	
+    integer i,j,ii,jj
+
+	class(*), pointer :: quant
+	integer:: Ninter
+	integer:: allrows(:), allcols(:)
+	complex(kind=8),target::alldat_loc(:)
+	integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
+	integer::Npmap, pmaps(Npmap, 3)
+	integer::myid,nmpi,ierr,nn,pp,nprow,npcol,pid,nr,nc,nn1
+	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e,iii,jjj
+	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
+	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
+	integer(kind=8)::idx_row_map(Ninter)  
+	integer(kind=8)::idx_col_map(Ninter)  
+	integer(kind=8)::idx_val_map(Ninter)  
+	integer::inter_map(Ninter)  
+	complex(kind=8) value
+	integer,allocatable::M_elemlist(:,:),N_elemlist(:,:),M_element_offset(:),N_element_offset(:)
+	idx_row_map=0
+	idx_col_map=0
+	idx_val_map=0
+	inter_map=0
+
+
+	call MPI_comm_rank(MPI_COMM_WORLD,myid,ierr)
+	call MPI_comm_size(MPI_COMM_WORLD,nmpi,ierr)
+
+	select TYPE(quant)
+	type is (quant_EMSURF)
+		NinterNew=0
+		idx_row=0
+		idx_col=0
+		idx_val=0
+		nrmax=0
+		ncmax=0
+		nvalmax=0
+		do nn=1,Ninter
+			pp=pgidx(nn)
+			nprow = pmaps(pp,1)
+			npcol = pmaps(pp,2)
+			pid = pmaps(pp,3)
+			nr = rowidx(nn)
+			nc = colidx(nn)
+			if(nprow*npcol==1)then
+				if(myid==pid)then
+					! write(*,*)Ninter,NinterNew
+					idx_row_map(NinterNew+1)=idx_row
+					idx_col_map(NinterNew+1)=idx_col
+					idx_val_map(NinterNew+1)=idx_val
+					idx_val=idx_val+nr*nc
+					inter_map(NinterNew+1)=nn
+					NinterNew=NinterNew+1				
+				endif
+				idx_row = idx_row+nr
+				idx_col = idx_col+nc
+				nrmax = max(nr,nrmax)
+				ncmax = max(nc,ncmax)
+				nvalmax = max(nr*nc,nvalmax)
+			else 
+				write(*,*)"nprow*npcol>1 in Zelem_EMSURF_block"
+				stop
+			endif
+		enddo
+		if(idx_val>0)then
+			alldat_loc(1:idx_val)=0
+		endif
+
+		!!$omp parallel do default(shared) private(nn1)
+		do nn1=1,NinterNew
+			call Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, rowidx, colidx, idx_row_map,idx_col_map,idx_val_map, quant)
+			
+		enddo
+		!!$omp end parallel do 
+	class default
+		write(*,*)"unexpected type"
+		stop
+	end select
+
+    return
+
+end subroutine Zelem_EMSURF_block
+
+
+
+subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, rowidx, colidx, idx_row_map,idx_col_map,idx_val_map,quant)
+	
+    use z_BPACK_DEFS	
+    implicit none
+
+    integer flag,edge_m,edge_n,nodetemp_n,patch
+    complex(kind=8) value_e,value_m,value
+    integer i,j,ii,jj,iii,jjj
+    real(kind=8) ln,lm,am(3),an(3),nr_m(3)
+    real(kind=8) nr_n(3)
+    complex(kind=8) ctemp,ctemp1,ctemp2,aa(3),bb(1),dg(3),dg1(3),dg2(3)
+    complex(kind=8) imp,imp1,imp2,imp3, consts
+    real(kind=8) temp
+    real(kind=8) distance
+    real(kind=8) ianl,ianl1,ianl2
+    real(kind=8) area
+
+	type(quant_EMSURF):: quant
+    real(kind=8),allocatable::xm(:),ym(:),zm(:),wm(:),xn(:),yn(:),zn(:),wn(:)
+    integer kk,ss,sss,ttt
+	integer:: Tord,Sord,N_Tnodes,N_Snodes
+	integer M_elem,N_elem,Selem_id,Telem_id,test_unknown_id,source_unknown_id, M_elem_tot, N_elem_tot, lastelem
+	real(kind=8):: row_sign,col_sign
+	integer,parameter::Nnodes_max=3
+	complex(kind=8),dimension(1:Nnodes_max,1:Nnodes_max,1:3):: temp_matrix
+	complex(kind=8),dimension(1:Nnodes_max,1:Nnodes_max):: final_matrix
+
+
+	integer:: Ninter
+	integer:: allrows(:), allcols(:)
+	complex(kind=8),target::alldat_loc(:)
+	integer::colidx(:), rowidx(:)
+	integer::myid,nmpi,ierr,nn,pp,nprow,npcol,pid,nr,nc,nn1
+	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e
+	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
+	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
+	integer(kind=8)::idx_row_map(:)  
+	integer(kind=8)::idx_col_map(:)  
+	integer(kind=8)::idx_val_map(:)  
+	integer::inter_map(:)  
+	integer,allocatable::M_elemlist(:,:),N_elemlist(:,:),M_element_offset(:),N_element_offset(:)
+	integer::trange,srange
+
+
+	nn=inter_map(nn1)
+	nr = rowidx(nn)
+	nc = colidx(nn)	
+
+
+	!!!! build the mapping from all active elements to the unknowns			
+	allocate(M_elemlist(nr*Nnodes_max,3))
+	M_elemlist=-1
+	idxcnt_m=0
+	do idxr=1,nr
+		m = allrows(idx_row_map(nn1)+idxr)
+		edge_m = m
+		do ii=3,4
+			Telem_id = quant%info_unk(ii,edge_m)
+			if(Telem_id/=-1)then
+				idxcnt_m=idxcnt_m+1
+				M_elemlist(idxcnt_m,1)=Telem_id
+				M_elemlist(idxcnt_m,3)=idxr				
+				do iii=1,3
+					if(quant%edge_of_patch(Telem_id,iii,1)==edge_m)then
+						M_elemlist(idxcnt_m,2)=iii	
+					endif
+				enddo
+			endif
+		enddo
+	enddo
+	call z_PIKSRT_INT_Multi(idxcnt_m, 3, M_elemlist(1:idxcnt_m,:))
+	M_elem_tot=0
+	allocate(M_element_offset(nr*2))
+	M_element_offset=0
+	lastelem=-1
+	do ii=1,idxcnt_m
+		if(M_elemlist(ii,1)/=lastelem)then
+			M_elem_tot=M_elem_tot+1
+			M_element_offset(M_elem_tot)=ii
+		endif
+		lastelem = M_elemlist(ii,1)
+	enddo
+
+
+	allocate(N_elemlist(nc*Nnodes_max,3))
+	N_elemlist=-1
+	idxcnt_n=0
+	do idxc=1,nc
+		n = allcols(idx_col_map(nn1)+idxc)
+		edge_n = n
+		do ii=3,4
+			Selem_id = quant%info_unk(ii,edge_n)
+			if(Selem_id/=-1)then
+				idxcnt_n=idxcnt_n+1
+				N_elemlist(idxcnt_n,1)=Selem_id
+				N_elemlist(idxcnt_n,3)=idxc		
+				do iii=1,3
+					if(quant%edge_of_patch(Selem_id,iii,1)==edge_n)then
+						N_elemlist(idxcnt_n,2)=iii	
+					endif
+				enddo					
+			endif
+		enddo
+	enddo
+	call z_PIKSRT_INT_Multi(idxcnt_n, 3, N_elemlist(1:idxcnt_n,:))
+	N_elem_tot=0
+	allocate(N_element_offset(nc*2))
+	N_element_offset=0
+	lastelem=-1
+	do ii=1,idxcnt_n
+		if(N_elemlist(ii,1)/=lastelem)then
+			N_elem_tot=N_elem_tot+1
+			N_element_offset(N_elem_tot)=ii
+		endif
+		lastelem = N_elemlist(ii,1)
+	enddo
+
+
+
+	allocate (xm(quant%integral_points), ym(quant%integral_points), zm(quant%integral_points), wm(quant%integral_points))
+	allocate (xn(quant%integral_points), yn(quant%integral_points), zn(quant%integral_points), wn(quant%integral_points))
+
+
+
+	!!!! loop all element pairs 
+	do kk=1,M_elem_tot
+		idx_m_s = M_element_offset(kk)
+		if(kk==M_elem_tot)then
+			idx_m_e = idxcnt_m
+		else
+			idx_m_e = M_element_offset(kk+1)-1
+		endif
+		Telem_id = M_elemlist(idx_m_s,1)
+		call gau_grobal_patchid(Telem_id,xm,ym,zm,wm,quant)
+		nr_m(1:3)=quant%normal_of_patch(1:3,Telem_id)
+
+		do ss=1,N_elem_tot
+			idx_n_s = N_element_offset(ss)
+			if(ss==N_elem_tot)then
+				idx_n_e = idxcnt_n
+			else
+				idx_n_e = N_element_offset(ss+1)-1
+			endif					
+			Selem_id = N_elemlist(idx_n_s,1)
+
+			call gau_grobal_patchid(Selem_id,xn,yn,zn,wn,quant)
+			nr_n(1:3)=quant%normal_of_patch(1:3,Selem_id)
+
+			trange=0
+			do ttt=1,3
+				if(quant%edge_of_patch(Telem_id,ttt,1)/=-1)trange=trange+1
+			enddo
+			srange=0
+			do sss=1,3
+				if(quant%edge_of_patch(Selem_id,sss,1)/=-1)srange=srange+1
+			enddo
+
+			temp_matrix = 0
+			final_matrix = 0
+			if (Telem_id==Selem_id) then
+				area=triangle_area(Telem_id,quant)
+
+				do ttt=1,trange
+					edge_m = quant%edge_of_patch(Telem_id,ttt,1)
+					ii = quant%edge_of_patch(Telem_id,ttt,2)
+					do sss=1,srange
+						edge_n = quant%edge_of_patch(Selem_id,sss,1)
+						jj = quant%edge_of_patch(Selem_id,sss,2)
+						ctemp1=(0.,0.)
+						ctemp2=(0.,0.)
+						value_m=(0.,0.)
+						do i=1,quant%integral_points
+							am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+							am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+							am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+							bb(1)=(0.,0.)
+							aa(1:3)=(0.,0.)
+							imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
+							an(1)=xm(i)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+							an(2)=ym(i)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+							an(3)=zm(i)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+							call z_scalar(am,an,temp)
+							temp_matrix(ttt,sss,3)=temp_matrix(ttt,sss,3)+(-1)**(ii+1)*(-1)**(jj+1)*0.5*temp/(2.*area)*wm(i)
+							do j=1,quant%integral_points
+								distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
+								if(distance==0)then
+									imp=imp+wn(j)*(-BPACK_junit*quant%wavenum)
+									imp1=imp1+quant%ng1(j)*wn(j)*(-BPACK_junit*quant%wavenum)
+									imp2=imp2+quant%ng2(j)*wn(j)*(-BPACK_junit*quant%wavenum)
+									ianl=ianalytic(edge_n,jj,xn(j),yn(j),zn(j),quant)
+									ianl1=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),1,quant)
+									ianl2=ianalytic2(edge_n,jj,xn(j),yn(j),zn(j),2,quant)
+									imp=imp+ianl  !debug
+									imp1=imp1+ianl1
+									imp2=imp2+ianl2
+								else
+									imp=imp+wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+									imp1=imp1+quant%ng1(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+									imp2=imp2+quant%ng2(j)*wn(j)*exp(-BPACK_junit*quant%wavenum*distance)/distance
+								endif
+							enddo
+							imp3=imp-imp1-imp2
+							nodetemp_n=quant%info_unk(jj+2,edge_n)
+							patch=Selem_id
+							do jjj=1,3
+								aa(jjj)=aa(jjj)+(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
+							enddo
+							bb(1)=bb(1)+(-1)**(jj+1)*imp
+							call z_cscalar(aa,am,ctemp)
+							temp_matrix(ttt,sss,1)=temp_matrix(ttt,sss,1)+(-1)**(ii+1)*ctemp*wm(i)
+							temp_matrix(ttt,sss,2)=temp_matrix(ttt,sss,2)+4.*(-1)**(ii+1)*bb(1)*wm(i)
+						enddo
+
+						lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+						ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+						value_e=ln*lm*BPACK_junit*(temp_matrix(ttt,sss,1)-temp_matrix(ttt,sss,2))/8./BPACK_pi**2d0/quant%freq/BPACK_eps0
+						value_m=temp_matrix(ttt,sss,3)*lm*ln
+						final_matrix(ttt,sss)=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*BPACK_impedence0*value_m
+					enddo
+				enddo
+			else
+
+				do i=1,quant%integral_points
+					imp=(0.,0.);imp1=(0.,0.);imp2=(0.,0.);imp3=(0.,0.)
+					do j=1,quant%integral_points
+						distance=sqrt((xm(i)-xn(j))**2+(ym(i)-yn(j))**2+(zm(i)-zn(j))**2)
+						consts = exp(-BPACK_junit*quant%wavenum*distance)
+
+						!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+						!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+						! The following block is only used for MFIE
+						if(abs((1.-quant%CFIE_alpha))>1d-14)then
+							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
+							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
+							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
+							
+							do ttt=1,trange
+								edge_m = quant%edge_of_patch(Telem_id,ttt,1)
+								ii = quant%edge_of_patch(Telem_id,ttt,2)
+								am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+								am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+								am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
+								do sss=1,srange
+									edge_n = quant%edge_of_patch(Selem_id,sss,1)
+									jj = quant%edge_of_patch(Selem_id,sss,2)
+
+									an(1)=xn(j)-quant%xyz(1,quant%info_unk(jj+2,edge_n))
+									an(2)=yn(j)-quant%xyz(2,quant%info_unk(jj+2,edge_n))
+									an(3)=zn(j)-quant%xyz(3,quant%info_unk(jj+2,edge_n))
+
+									call z_rccurl(an,dg,dg1)
+									call z_rccurl(nr_m,dg1,dg2)
+									call z_cscalar(dg2,am,ctemp)
+									temp_matrix(ttt,sss,3)=temp_matrix(ttt,sss,3)-(-1)**(ii+1)*(-1)**(jj+1)*ctemp*wm(i)*wn(j)
+
+								enddo
+							enddo
+						endif
+						!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+						!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+						! The following block is only used for EFIE
+						if(abs(quant%CFIE_alpha)>1d-14)then
+							imp=imp+wn(j)*consts/distance
+							imp1=imp1+quant%ng1(j)*wn(j)*consts/distance
+							imp2=imp2+quant%ng2(j)*wn(j)*consts/distance
+						endif
+					enddo
+
+					!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+					!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+					! The following block is only used for EFIE
+					if(abs(quant%CFIE_alpha)>1d-14)then						
+						imp3=imp-imp1-imp2
+						do ttt=1,trange
+							edge_m = quant%edge_of_patch(Telem_id,ttt,1)
+							ii = quant%edge_of_patch(Telem_id,ttt,2)
+							am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
+							am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
+							am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))									
+							do sss=1,srange
+								edge_n = quant%edge_of_patch(Selem_id,sss,1)
+								jj = quant%edge_of_patch(Selem_id,sss,2)
+								nodetemp_n=quant%info_unk(jj+2,edge_n)
+								patch=Selem_id
+								do jjj=1,3
+								aa(jjj)=(-1)**(jj+1)*quant%wavenum**2*(quant%xyz(jjj,quant%node_of_patch(1,patch))*imp1+quant%xyz(jjj,quant%node_of_patch(2,patch))*imp2+quant%xyz(jjj,quant%node_of_patch(3,patch))*imp3-quant%xyz(jjj,nodetemp_n)*imp)
+								enddo
+								bb(1)=(-1)**(jj+1)*imp
+								call z_cscalar(aa,am,ctemp)
+								temp_matrix(ttt,sss,1)=temp_matrix(ttt,sss,1)+(-1)**(ii+1)*ctemp*wm(i)
+								temp_matrix(ttt,sss,2)=temp_matrix(ttt,sss,2)+4.*(-1)**(ii+1)*bb(1)*wm(i)
+							enddo
+						enddo
+					endif
+				enddo
+
+				do ttt=1,trange
+					edge_m = quant%edge_of_patch(Telem_id,ttt,1)
+					ii = quant%edge_of_patch(Telem_id,ttt,2)								
+					do sss=1,srange
+						edge_n = quant%edge_of_patch(Selem_id,sss,1)
+						jj = quant%edge_of_patch(Selem_id,sss,2)
+
+						lm=sqrt((quant%xyz(1,quant%info_unk(1,edge_m))-quant%xyz(1,quant%info_unk(2,edge_m)))**2+(quant%xyz(2,quant%info_unk(1,edge_m))-quant%xyz(2,quant%info_unk(2,edge_m)))**2+(quant%xyz(3,quant%info_unk(1,edge_m))-quant%xyz(3,quant%info_unk(2,edge_m)))**2)
+						ln=sqrt((quant%xyz(1,quant%info_unk(1,edge_n))-quant%xyz(1,quant%info_unk(2,edge_n)))**2+(quant%xyz(2,quant%info_unk(1,edge_n))-quant%xyz(2,quant%info_unk(2,edge_n)))**2+(quant%xyz(3,quant%info_unk(1,edge_n))-quant%xyz(3,quant%info_unk(2,edge_n)))**2)
+
+						value_e=ln*lm*BPACK_junit*(temp_matrix(ttt,sss,1)-temp_matrix(ttt,sss,2))/8./BPACK_pi**2d0/quant%freq/BPACK_eps0
+						value_m=temp_matrix(ttt,sss,3)*lm*ln
+						final_matrix(ttt,sss)=quant%CFIE_alpha*value_e+(1.-quant%CFIE_alpha)*BPACK_impedence0*value_m
+					enddo
+				enddo
+			endif
+			
+			do iii=idx_m_s,idx_m_e
+				ttt=M_elemlist(iii,2)
+				idxr= M_elemlist(iii,3)					
+				do jjj=idx_n_s,idx_n_e
+					sss=N_elemlist(jjj,2)
+					idxc= N_elemlist(jjj,3)					
+					alldat_loc(idx_val_map(nn1)+idxr+(idxc-1)*nr) = alldat_loc(idx_val_map(nn1)+idxr+(idxc-1)*nr) &
+					&				+ final_matrix(ttt,sss) 					
+				enddo
+			enddo
+		enddo	
+	enddo
+	deallocate(M_elemlist)
+	deallocate(N_elemlist)
+	deallocate(M_element_offset)
+	deallocate(N_element_offset)
+
+	deallocate(xm,ym,zm,wm,xn,yn,zn,wn)
+
+
+end subroutine Zelem_EMSURF_oneblock
+
 
 
 
@@ -323,6 +753,58 @@ end subroutine Zelem_EMSURF
 ! 	w(7)=wc
   return
   end subroutine gau_grobal
+
+
+
+  subroutine gau_grobal_patchid(ii,x,y,z,w,quant)
+
+  use z_BPACK_DEFS
+  implicit none
+  type(quant_EMSURF)::quant
+  integer nn ,flag
+  real(kind=8) x(:),y(:),z(:),w(:)
+  integer i,j,ii
+!	wa=area*9./40
+!	wb=area*(155.-sqrt(15.))/1200.
+!	wc=area*(155.+sqrt(15.))/1200.
+
+   ! if(flag==1) then
+
+!		ii=quant%info_unkfine(j,nn)
+!  do i=1,integral_points
+!	x(i)=quant%ng1(i)*quant%xyz(1,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(1,node_of_patchfine(2,ii))+&
+!     quant%ng3(i)*quant%xyz(1,node_of_patchfine(3,ii))
+!	y(i)=quant%ng1(i)*quant%xyz(2,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(2,node_of_patchfine(2,ii))+&
+!     quant%ng3(i)*quant%xyz(2,node_of_patchfine(3,ii))
+!	z(i)=quant%ng1(i)*quant%xyz(3,node_of_patchfine(1,ii))+quant%ng2(i)*quant%xyz(3,node_of_patchfine(2,ii))+&
+!     quant%ng3(i)*quant%xyz(3,node_of_patchfine(3,ii))
+!  enddo
+
+!  elseif(flag==2) then
+
+
+	 do i=1,quant%integral_points
+	x(i)=quant%ng1(i)*quant%xyz(1,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(1,quant%node_of_patch(2,ii))+&
+     quant%ng3(i)*quant%xyz(1,quant%node_of_patch(3,ii))
+	y(i)=quant%ng1(i)*quant%xyz(2,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(2,quant%node_of_patch(2,ii))+&
+     quant%ng3(i)*quant%xyz(2,quant%node_of_patch(3,ii))
+	z(i)=quant%ng1(i)*quant%xyz(3,quant%node_of_patch(1,ii))+quant%ng2(i)*quant%xyz(3,quant%node_of_patch(2,ii))+&
+     quant%ng3(i)*quant%xyz(3,quant%node_of_patch(3,ii))
+  enddo
+
+  w=quant%gauss_w
+
+! 	w(1)=wa
+! 	w(2)=wb
+! 	w(3)=wb
+! 	w(4)=wb
+! 	w(5)=wc
+! 	w(6)=wc
+! 	w(7)=wc
+  return
+  end subroutine gau_grobal_patchid
+
+
 
 
   subroutine gauss_points(quant)
@@ -1435,6 +1917,25 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 #ifdef HAVE_OPENMP
     !$omp end parallel do
 #endif
+
+
+
+	allocate(quant%edge_of_patch(quant%maxpatch,3,2))
+	quant%edge_of_patch=-1
+	do edge=1,maxedge
+	    do jj=3,4
+			patch=quant%info_unk(jj,edge)
+			do iii=1,3
+				if(quant%edge_of_patch(patch,iii,1)==edge .or. quant%edge_of_patch(patch,iii,1)==-1)then
+					quant%edge_of_patch(patch,iii,1) = edge
+					quant%edge_of_patch(patch,iii,2) = jj
+					exit
+				endif
+			enddo
+		enddo
+    enddo	
+
+
     node=quant%maxnode
     do edge=1, Maxedge
         node=node+1
