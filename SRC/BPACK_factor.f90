@@ -106,7 +106,7 @@ contains
 
             if (option%ErrSol == 0 .and. option%precon == 1) then
                 call Bplus_delete(ho_bf1%levels(level_c)%BP(ii))
-            else 
+            else
 #if HAVE_ZFP
             if(option%use_zfp==1)call ZFP_Compress(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%FullmatZFP,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%M,ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%N, option%tol_comp,1)
 #endif
@@ -177,7 +177,7 @@ endif
                     call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
                     if (option%ErrSol == 0 .and. option%precon == 1) then
                         call Bplus_delete(ho_bf1%levels(level_c)%BP(rowblock))
-                    endif    
+                    endif
                     call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_update(rowblock), rtemp, rank)
                     stats%Mem_Sblock = stats%Mem_Sblock + rtemp
                     stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
@@ -256,11 +256,11 @@ endif
 
         stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
 
-        if (option%ErrSol == 0 .and. option%precon == 1) then        
+        if (option%ErrSol == 0 .and. option%precon == 1) then
             call LogMemory(stats, stats%Mem_Factor-stats%Mem_Fill)
-        else 
+        else
         call LogMemory(stats, stats%Mem_Factor)
-        endif        
+        endif
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_SMW, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -316,7 +316,7 @@ endif
         if (option%ErrSol == 0 .and. option%precon == 1) then
             call Bplus_delete(hss_bf1%BP)
             call LogMemory(stats, -stats%Mem_Fill)
-        endif    
+        endif
 
         call Bplus_inverse_schur_partitionedinverse_hss(hss_bf1%BP_inverse, option, stats, ptree, msh)
         call Bplus_ComputeMemory(hss_bf1%BP_inverse, rtemp,rank)
@@ -365,7 +365,7 @@ endif
         call MPI_ALLREDUCE(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A21,Es14.2)') 'Factorization flops:', rtemp
 
-        
+
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
         call MPI_ALLREDUCE(stats%Mem_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)

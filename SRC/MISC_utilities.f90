@@ -1116,6 +1116,7 @@ contains
                   exit
                end if
             end do
+            if(rank==0)rank=1
 
             deallocate (UU, VV, Singular)
 
@@ -2162,28 +2163,36 @@ contains
                end if
             end do
 
-            allocate (UU_h(rank, m))
-            allocate (VV_h(n, rank))
-            allocate (matrixtemp(rank, k))
+            if(rank==0)then
+               if(verbose>=2)write (*, *) 'warning: Matrix almost zero in LinearSolve'
+               rank = 1
+               x = 0
+            else
+               allocate (UU_h(rank, m))
+               allocate (VV_h(n, rank))
+               allocate (matrixtemp(rank, k))
 
-            do ii = 1, rank
-            do jj = 1, m
-               UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
-            end do
-            end do
+               do ii = 1, rank
+               do jj = 1, m
+                  UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
+               end do
+               end do
 
-            do ii = 1, n
-            do jj = 1, rank
-               VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
-            end do
-            end do
+               do ii = 1, n
+               do jj = 1, rank
+                  VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
+               end do
+               end do
 
-            call gemmf90(UU_h, rank, b, m, matrixtemp, rank, 'N', 'N', rank, k, m, alpha, beta, flop)
-            if (present(Flops)) Flops = Flops + flop
-            call gemmf90(VV_h, n, matrixtemp, rank, x, n, 'N', 'N', n, k, rank, alpha, beta, flop)
-            if (present(Flops)) Flops = Flops + flop
+               call gemmf90(UU_h, rank, b, m, matrixtemp, rank, 'N', 'N', rank, k, m, alpha, beta, flop)
+               if (present(Flops)) Flops = Flops + flop
+               call gemmf90(VV_h, n, matrixtemp, rank, x, n, 'N', 'N', n, k, rank, alpha, beta, flop)
+               if (present(Flops)) Flops = Flops + flop
 
-            deallocate (UU_h, VV_h, matrixtemp)
+               deallocate (UU_h, VV_h, matrixtemp)
+            endif
+
+
          end if
          ! end if
 
@@ -2266,27 +2275,38 @@ contains
             end if
          end do
 
-         allocate (UU_h(rank, m))
-         allocate (VV_h(n, rank))
-         UU_h = 0
-         VV_h = 0
 
-         do ii = 1, rank
-         do jj = 1, m
-            UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
-         end do
-         end do
+         if(rank==0)then
+            rank=1
+            write (*, *) 'Warning: A almost zero in GeneralInverse'
+            A_inv = 0
 
-         do ii = 1, n
-         do jj = 1, rank
-            VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
-         end do
-         end do
+         else
+            allocate (UU_h(rank, m))
+            allocate (VV_h(n, rank))
+            UU_h = 0
+            VV_h = 0
 
-         call gemmf90(VV_h, n, UU_h, rank, A_inv, n, 'N', 'N', n, m, rank, alpha, beta, flop=flop)
-         if (present(Flops)) Flops = Flops + flop
+            do ii = 1, rank
+            do jj = 1, m
+               UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
+            end do
+            end do
 
-         deallocate (UU_h, VV_h)
+            do ii = 1, n
+            do jj = 1, rank
+               VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
+            end do
+            end do
+
+            call gemmf90(VV_h, n, UU_h, rank, A_inv, n, 'N', 'N', n, m, rank, alpha, beta, flop=flop)
+            if (present(Flops)) Flops = Flops + flop
+
+            ! write(*,*)fnorm(A_inv,n,m),'invgeneral',sum(Singular), fnorm(UU_h,rank,m), fnorm(VV_h,n,rank),rank
+
+            deallocate (UU_h, VV_h)
+         endif
+
       endif
 
       deallocate (Singular)

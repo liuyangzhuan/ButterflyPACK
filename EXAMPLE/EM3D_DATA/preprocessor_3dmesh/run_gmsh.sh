@@ -97,15 +97,15 @@ export GMSH_DIR=/global/homes/l/liuyangz/Cori/my_software/gmsh-4.6.0-Linux64/bin
 #  mv elem.geo ${name}_elem.inp
 
 
-#  name=sphere_512000
-#  ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.05e-1 -clmax 0.08125e-1 -string "Mesh.BdfFieldFormat = 2;"  
-#  ./con_all ${name}.nas
-#  mv node.geo ${name}_node.inp
-#  mv elem.geo ${name}_elem.inp
+ name=sphere_512000
+ ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.05e-1 -clmax 0.08125e-1 -string "Mesh.BdfFieldFormat = 2;"  
+ ./con_all ${name}.nas
+ mv node.geo ${name}_node.inp
+ mv elem.geo ${name}_elem.inp
 
 
  name=sphere_2M
-#  ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.025e-1 -clmax 0.040625e-1 -string "Mesh.BdfFieldFormat = 2;"  
+ ${GMSH_DIR}/gmsh sphere.geo -2 -o $name.nas -algo del2d -clmin 0.025e-1 -clmax 0.040625e-1 -string "Mesh.BdfFieldFormat = 2;"  
  ./con_all ${name}.nas
  mv node.geo ${name}_node.inp
  mv elem.geo ${name}_elem.inp

@@ -1887,7 +1887,7 @@ contains
                call Hmat_block_copy('N', blocks_copy, blocks)
             enddo
          enddo
-         call LogMemory(stats, stats%Mem_Comp_for + stats%Mem_Direct_for)       
+         call LogMemory(stats, stats%Mem_Comp_for + stats%Mem_Direct_for)
       endif
 
       T1 = MPI_Wtime()

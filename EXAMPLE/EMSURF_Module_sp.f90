@@ -1606,7 +1606,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 		x=0
 
 
-        if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
+        if(ptree%MyID==Main_ID)open (100, file='monostaticH.out')
 
         n1=MPI_Wtime()
 

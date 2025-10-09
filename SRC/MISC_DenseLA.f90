@@ -398,6 +398,9 @@ contains
 
             if (INFO /= 0) then
                !!!!!! gesvd (QR iteration) can occasionally fail compared to gesdd (DC)
+               Singular = 0
+               UU = 0
+               VV = 0
                call gesvdf90(Matrix,Singular,UU,VV,flop=flop)
             endif
          endif

@@ -1,6 +1,9 @@
 module load PrgEnv-gnu
 module load cmake
 
+LIBSCI_DIR=$CRAY_LIBSCI_PREFIX
+module unload cray-libsci
+
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
 mkdir -p build
@@ -25,15 +28,21 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
 	-DCMAKE_INSTALL_PREFIX=. \
+	-DOpenMP_C_FLAGS="-fopenmp" \
+	-DOpenMP_C_LIB_NAMES="gomp" \
+	-DOpenMP_Fortran_FLAGS="-fopenmp" \
+	-DOpenMP_Fortran_LIB_NAMES="gomp" \
+	-DOpenMP_omp_LIBRARY=$(gcc --print-file-name=libgomp.so) \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-	-DTPL_BLAS_LIBRARIES="$CRAY_LIBSCI_PREFIX/lib/libsci_gnu_mpi_mp.so" \
-	-DTPL_LAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX/lib/libsci_gnu_mpi_mp.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX/lib/libsci_gnu_mpi_mp.so"
+	-DTPL_BLAS_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi_mp.so" \
+	-DTPL_LAPACK_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi_mp.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi_mp.so"
 
 make ctest -j
 # make ie2d -j16
 # make ie3dport -j16
+make ie3d -j16
 # make frankben -j16   
 # make frankben_t -j16   
 # make install

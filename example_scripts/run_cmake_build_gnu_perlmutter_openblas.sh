@@ -27,11 +27,17 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
+	-DOpenMP_C_FLAGS="-fopenmp" \
+	-DOpenMP_C_LIB_NAMES="gomp" \
+	-DOpenMP_Fortran_FLAGS="-fopenmp" \
+	-DOpenMP_Fortran_LIB_NAMES="gomp" \
+	-DOpenMP_omp_LIBRARY=$(gcc --print-file-name=libgomp.so) \
 	-DTPL_BLAS_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
 	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
 	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/scalapack-2.2.0/build/install/lib/libscalapack.so"
 
 make ie2d -j16
+make ie3d -j16
 make ie3dport -j16
 make frankben -j16   
 make frankben_t -j16

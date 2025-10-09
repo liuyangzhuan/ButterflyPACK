@@ -116,7 +116,7 @@ subroutine Zelem_EMSURF(m,n,value,quant)
 
 	select TYPE(quant)
 	type is (quant_EMSURF)
-		
+
 		! convert to new indices because quant%info_unk has been reordered
 		edge_m = m
 		edge_n = n
@@ -229,10 +229,10 @@ end subroutine Zelem_EMSURF
 
 
 subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant) ! interface of user-defined element extraction routine in Fortran. allrows,allcols represents indices in natural order
-	
+
     use z_BPACK_DEFS
-    implicit none	
-	
+    implicit none
+
     integer i,j,ii,jj
 
 	class(*), pointer :: quant
@@ -245,10 +245,10 @@ subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, coli
 	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e,iii,jjj
 	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
 	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
-	integer(kind=8)::idx_row_map(Ninter)  
-	integer(kind=8)::idx_col_map(Ninter)  
-	integer(kind=8)::idx_val_map(Ninter)  
-	integer::inter_map(Ninter)  
+	integer(kind=8)::idx_row_map(Ninter)
+	integer(kind=8)::idx_col_map(Ninter)
+	integer(kind=8)::idx_val_map(Ninter)
+	integer::inter_map(Ninter)
 	complex(kind=8) value
 	integer,allocatable::M_elemlist(:,:),N_elemlist(:,:),M_element_offset(:),N_element_offset(:)
 	idx_row_map=0
@@ -284,14 +284,14 @@ subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, coli
 					idx_val_map(NinterNew+1)=idx_val
 					idx_val=idx_val+nr*nc
 					inter_map(NinterNew+1)=nn
-					NinterNew=NinterNew+1				
+					NinterNew=NinterNew+1
 				endif
 				idx_row = idx_row+nr
 				idx_col = idx_col+nc
 				nrmax = max(nr,nrmax)
 				ncmax = max(nc,ncmax)
 				nvalmax = max(nr*nc,nvalmax)
-			else 
+			else
 				write(*,*)"nprow*npcol>1 in Zelem_EMSURF_block"
 				stop
 			endif
@@ -300,12 +300,12 @@ subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, coli
 			alldat_loc(1:idx_val)=0
 		endif
 
-		!!$omp parallel do default(shared) private(nn1)
+		!$omp parallel do default(shared) private(nn1)
 		do nn1=1,NinterNew
 			call Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, rowidx, colidx, idx_row_map,idx_col_map,idx_val_map, quant)
-			
+
 		enddo
-		!!$omp end parallel do 
+		!$omp end parallel do
 	class default
 		write(*,*)"unexpected type"
 		stop
@@ -318,8 +318,8 @@ end subroutine Zelem_EMSURF_block
 
 
 subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, rowidx, colidx, idx_row_map,idx_col_map,idx_val_map,quant)
-	
-    use z_BPACK_DEFS	
+
+    use z_BPACK_DEFS
     implicit none
 
     integer flag,edge_m,edge_n,nodetemp_n,patch
@@ -353,20 +353,20 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e
 	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
 	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
-	integer(kind=8)::idx_row_map(:)  
-	integer(kind=8)::idx_col_map(:)  
-	integer(kind=8)::idx_val_map(:)  
-	integer::inter_map(:)  
+	integer(kind=8)::idx_row_map(:)
+	integer(kind=8)::idx_col_map(:)
+	integer(kind=8)::idx_val_map(:)
+	integer::inter_map(:)
 	integer,allocatable::M_elemlist(:,:),N_elemlist(:,:),M_element_offset(:),N_element_offset(:)
 	integer::trange,srange
 
 
 	nn=inter_map(nn1)
 	nr = rowidx(nn)
-	nc = colidx(nn)	
+	nc = colidx(nn)
 
 
-	!!!! build the mapping from all active elements to the unknowns			
+	!!!! build the mapping from all active elements to the unknowns
 	allocate(M_elemlist(nr*Nnodes_max,3))
 	M_elemlist=-1
 	idxcnt_m=0
@@ -378,10 +378,10 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 			if(Telem_id/=-1)then
 				idxcnt_m=idxcnt_m+1
 				M_elemlist(idxcnt_m,1)=Telem_id
-				M_elemlist(idxcnt_m,3)=idxr				
+				M_elemlist(idxcnt_m,3)=idxr
 				do iii=1,3
 					if(quant%edge_of_patch(Telem_id,iii,1)==edge_m)then
-						M_elemlist(idxcnt_m,2)=iii	
+						M_elemlist(idxcnt_m,2)=iii
 					endif
 				enddo
 			endif
@@ -412,12 +412,12 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 			if(Selem_id/=-1)then
 				idxcnt_n=idxcnt_n+1
 				N_elemlist(idxcnt_n,1)=Selem_id
-				N_elemlist(idxcnt_n,3)=idxc		
+				N_elemlist(idxcnt_n,3)=idxc
 				do iii=1,3
 					if(quant%edge_of_patch(Selem_id,iii,1)==edge_n)then
-						N_elemlist(idxcnt_n,2)=iii	
+						N_elemlist(idxcnt_n,2)=iii
 					endif
-				enddo					
+				enddo
 			endif
 		enddo
 	enddo
@@ -441,7 +441,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 
 
 
-	!!!! loop all element pairs 
+	!!!! loop all element pairs
 	do kk=1,M_elem_tot
 		idx_m_s = M_element_offset(kk)
 		if(kk==M_elem_tot)then
@@ -459,7 +459,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 				idx_n_e = idxcnt_n
 			else
 				idx_n_e = N_element_offset(ss+1)-1
-			endif					
+			endif
 			Selem_id = N_elemlist(idx_n_s,1)
 
 			call gau_grobal_patchid(Selem_id,xn,yn,zn,wn,quant)
@@ -552,7 +552,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 							dg(1)=(xm(i)-xn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
 							dg(2)=(ym(i)-yn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
 							dg(3)=(zm(i)-zn(j))*(1+BPACK_junit*quant%wavenum*distance)*consts/(4*BPACK_pi*distance**3)
-							
+
 							do ttt=1,trange
 								edge_m = quant%edge_of_patch(Telem_id,ttt,1)
 								ii = quant%edge_of_patch(Telem_id,ttt,2)
@@ -588,14 +588,14 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 					!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 					!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 					! The following block is only used for EFIE
-					if(abs(quant%CFIE_alpha)>1d-14)then						
+					if(abs(quant%CFIE_alpha)>1d-14)then
 						imp3=imp-imp1-imp2
 						do ttt=1,trange
 							edge_m = quant%edge_of_patch(Telem_id,ttt,1)
 							ii = quant%edge_of_patch(Telem_id,ttt,2)
 							am(1)=xm(i)-quant%xyz(1,quant%info_unk(ii+2,edge_m))
 							am(2)=ym(i)-quant%xyz(2,quant%info_unk(ii+2,edge_m))
-							am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))									
+							am(3)=zm(i)-quant%xyz(3,quant%info_unk(ii+2,edge_m))
 							do sss=1,srange
 								edge_n = quant%edge_of_patch(Selem_id,sss,1)
 								jj = quant%edge_of_patch(Selem_id,sss,2)
@@ -615,7 +615,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 
 				do ttt=1,trange
 					edge_m = quant%edge_of_patch(Telem_id,ttt,1)
-					ii = quant%edge_of_patch(Telem_id,ttt,2)								
+					ii = quant%edge_of_patch(Telem_id,ttt,2)
 					do sss=1,srange
 						edge_n = quant%edge_of_patch(Selem_id,sss,1)
 						jj = quant%edge_of_patch(Selem_id,sss,2)
@@ -629,18 +629,18 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 					enddo
 				enddo
 			endif
-			
+
 			do iii=idx_m_s,idx_m_e
 				ttt=M_elemlist(iii,2)
-				idxr= M_elemlist(iii,3)					
+				idxr= M_elemlist(iii,3)
 				do jjj=idx_n_s,idx_n_e
 					sss=N_elemlist(jjj,2)
-					idxc= N_elemlist(jjj,3)					
+					idxc= N_elemlist(jjj,3)
 					alldat_loc(idx_val_map(nn1)+idxr+(idxc-1)*nr) = alldat_loc(idx_val_map(nn1)+idxr+(idxc-1)*nr) &
-					&				+ final_matrix(ttt,sss) 					
+					&				+ final_matrix(ttt,sss)
 				enddo
 			enddo
-		enddo	
+		enddo
 	enddo
 	deallocate(M_elemlist)
 	deallocate(N_elemlist)
@@ -1933,7 +1933,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 				endif
 			enddo
 		enddo
-    enddo	
+    enddo
 
 
     node=quant%maxnode
@@ -1987,7 +1987,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
     real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
-    real(kind=8) n1,n2,rtemp
+    real(kind=8) n1,n2,rtemp,n3,n4
     complex(kind=8) value_Z
     complex(kind=8),allocatable:: Voltage_pre(:),x(:,:),b(:,:)
 	real(kind=8):: rel_error
@@ -2035,13 +2035,18 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 		n1 = MPI_Wtime()
         call RCS_bistatic_SURF(Current,msh,quant,ptree)
 		n2 = MPI_Wtime()
-
-		call current_node_patch_mapping('V_current',Current(:,1),msh,quant,ptree)
-		call current_node_patch_mapping('H_current',Current(:,2),msh,quant,ptree)
-
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
         if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+
+		! n3 = MPI_Wtime()
+		! call current_node_patch_mapping('V_current',Current(:,1),msh,quant,ptree)
+		! call current_node_patch_mapping('H_current',Current(:,2),msh,quant,ptree)
+		! n4 = MPI_Wtime()
+        ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+        ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Current dumping',n4-n3,'Seconds'
+        ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+
 		deallocate(Current)
 		deallocate(Voltage)
 
@@ -2058,7 +2063,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 		x=0
 
 
-        if(ptree%MyID==Main_ID)open (100, file='bistaticH.out')
+        if(ptree%MyID==Main_ID)open (100, file='monostaticH.out')
 
         n1=MPI_Wtime()
 
