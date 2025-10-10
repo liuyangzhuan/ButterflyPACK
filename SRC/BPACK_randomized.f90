@@ -293,6 +293,7 @@ contains
 
       ! may need to compute scale factor here
 
+      if (option%ErrSol == 1 .or. option%precon > 1) then ! no need to save the forward operator if ErrSol=0 and precon=1
       do i = 1, h_mat%myArows
          do j = 1, h_mat%myAcols
             blocks => h_mat%Local_blocks(j, i)
@@ -300,6 +301,7 @@ contains
             call Hmat_block_copy('N', blocks_copy, blocks)
          enddo
       enddo
+      endif
 
 
 

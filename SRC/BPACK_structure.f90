@@ -2763,7 +2763,9 @@ end function distance_geo
          h_mat%myAcols = myAcols
 
          allocate (h_mat%Local_blocks(myAcols, myArows))
-         allocate (h_mat%Local_blocks_copy(myAcols, myArows))
+         if (option%ErrSol == 1 .or. option%precon > 1) then ! no need to save the forward operator if ErrSol=0 and precon=1
+            allocate (h_mat%Local_blocks_copy(myAcols, myArows))
+         endif
          do i = 1, myArows
             call l2g(i, myrow, num_blocks, nprow, 1, ii)
             do j = 1, myAcols
