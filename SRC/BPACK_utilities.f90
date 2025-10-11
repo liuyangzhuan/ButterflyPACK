@@ -70,7 +70,14 @@ contains
 
       do i = 1, h_mat%myArows
          do j = 1, h_mat%myAcols
-            if(inverse==0)blocks => h_mat%Local_blocks_copy(j, i)
+            if(inverse==0)then
+               if (option%ErrSol == 1 .or. option%precon > 1) then ! the forward operator has been copied
+                  blocks => h_mat%Local_blocks_copy(j, i)
+               else 
+                  if (ptree%MyID == Main_ID)write(*,*)"H-matrix/BLR (before inversion) has not been copied. Make sure to call BPACK_PrintStructure(inverse=0) before calling the inversion API "
+                  blocks => h_mat%Local_blocks(j, i)
+               endif
+            endif
             if(inverse==1)blocks => h_mat%Local_blocks(j, i)
             call Hmat_block_printinfo(blocks, option, stats, ptree,filename_offset)
          enddo

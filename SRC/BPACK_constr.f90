@@ -4458,7 +4458,8 @@ contains
       allocate(rhs_loc(Nunk_n_loc,nvec))
       call LogMemory(stats, SIZEOF(rhs_loc)/1024.0d3)
       rhs_loc=0
-      call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats)
+      
+      call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats,0)
 
 
       !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user

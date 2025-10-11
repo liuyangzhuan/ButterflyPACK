@@ -1919,7 +1919,7 @@ contains
 
    end subroutine Test_BPACK_Mult
 
-   subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats)
+   subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats, use_blockcopy)
 
       implicit none
       character trans
@@ -1930,12 +1930,17 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
+      integer,optional::use_blockcopy
 
       select case (option%format)
       case (HODLR)
          call HODLR_Mult(trans, Ns, num_vectors, 1, bmat%ho_bf%Maxlevel + 1, Vin, Vout, bmat%ho_bf, ptree, option, stats)
       case (HMAT,BLR)
-         call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
+         if(present(use_blockcopy))then
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,use_blockcopy)
+         else 
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
+         endif
       case (HSS)
          call HSS_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
       end select
