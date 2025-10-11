@@ -73,7 +73,7 @@ contains
             if(inverse==0)then
                if (option%ErrSol == 1 .or. option%precon > 1) then ! the forward operator has been copied
                   blocks => h_mat%Local_blocks_copy(j, i)
-               else 
+               else
                   if (ptree%MyID == Main_ID)write(*,*)"H-matrix/BLR (before inversion) has not been copied. Make sure to call BPACK_PrintStructure(inverse=0) before calling the inversion API "
                   blocks => h_mat%Local_blocks(j, i)
                endif
@@ -1182,7 +1182,7 @@ contains
       option1%jitter = option%jitter
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
-option1%fastsample_tensor = option%fastsample_tensor
+      option1%fastsample_tensor = option%fastsample_tensor
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
@@ -1207,24 +1207,269 @@ option1%fastsample_tensor = option%fastsample_tensor
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
-         write (*, '(A18,Es14.7)') 'near_para', option%near_para
          if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'lr_blk_num', option%LR_BLK_NUM
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'powiter', option%powiter
+               write (*, '(A18,I8)') 'ilu', option%ILU
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'rmax', option%rmax
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+               write (*, *) '***************************'
+               write (*, *) ' '
             else
                write (*, '(A18,A10)') 'algorithm', 'H-BF'
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'level_check', option%level_check
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'rank0', option%rank0
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'ilu', option%ILU
+               write (*, '(A18,I8)') 'nbundle', option%Nbundle
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
+               write (*, '(A18,I8)') 'pat_comp', option%pat_comp
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'less_adapt', option%less_adapt
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+               write (*, '(A50,Es14.7)') 'sample_para (only used for forwardN15flag=0)', option%sample_para
+               write (*, '(A55,Es14.7)') 'sample_para_outer (only used for forwardN15flag=0)', option%sample_para_outer
+               write (*, *) '***************************'
+               write (*, *) ' '
             endif
          else if(option%format==HODLR)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'HODLR'
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'level_check', option%level_check
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'lr_blk_num', option%LR_BLK_NUM
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'powiter', option%powiter
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'rmax', option%rmax
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
+               write (*, *) '***************************'
+               write (*, *) ' '
             else
                write (*, '(A18,A10)') 'algorithm', 'HODBF'
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'level_check', option%level_check
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'lnoBP', option%lnoBP
+               write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+               write (*, '(A18,I8)') 'schulzorder', option%schulzorder
+               write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
+               write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
+               write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'rank0', option%rank0
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'nbundle', option%Nbundle
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
+               write (*, '(A18,I8)') 'pat_comp', option%pat_comp
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'less_adapt', option%less_adapt
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'touch_para', option%touch_para
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
+               write (*, '(A50,Es14.7)') 'sample_para (only used for forwardN15flag=0)', option%sample_para
+               write (*, '(A55,Es14.7)') 'sample_para_outer (only used for forwardN15flag=0)', option%sample_para_outer
+               write (*, *) '***************************'
+               write (*, *) ' '
+
+
             endif
          else if(option%format==BLR)then
             if(option%LRlevel==0 .or. option%Hextralevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'Block-LR'
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'lr_blk_num', option%LR_BLK_NUM
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'powiter', option%powiter
+               write (*, '(A18,I8)') 'ilu', option%ILU
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'rmax', option%rmax
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+               write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
+               write (*, *) '***************************'
+               write (*, *) ' '
             else
                write (*, '(A18,A10)') 'algorithm', 'Block-BF'
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'rank0', option%rank0
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'ilu', option%ILU
+               write (*, '(A18,I8)') 'nbundle', option%Nbundle
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
+               write (*, '(A18,I8)') 'pat_comp', option%pat_comp
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'less_adapt', option%less_adapt
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+               write (*, '(A50,Es14.7)') 'sample_para (only used for forwardN15flag=0)', option%sample_para
+               write (*, '(A55,Es14.7)') 'sample_para_outer (only used for forwardN15flag=0)', option%sample_para_outer
+               write (*, *) '***************************'
+               write (*, *) ' '
             endif
          else if(option%format==HSS)then
             if(option%LRlevel==0)then
@@ -1236,6 +1481,53 @@ option1%fastsample_tensor = option%fastsample_tensor
                else
                   write (*, '(A18,A10)') 'algorithm', 'HSSBF'
                endif
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'lnoBP', option%lnoBP
+               write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+               write (*, '(A18,I8)') 'schulzorder', option%schulzorder
+               write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
+               write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
+               write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+               write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'rank0', option%rank0
+               write (*, '(A18,I8)') 'itermax', option%itermax
+               write (*, '(A18,I8)') 'nbundle', option%Nbundle
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
+               write (*, '(A18,I8)') 'pat_comp', option%pat_comp
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
+               write (*, '(A18,I8)') 'errsol', option%ErrSol
+               write (*, '(A18,I8)') 'less_adapt', option%less_adapt
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+
+               write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
+               write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
+               write (*, '(A18,Es14.7)') 'touch_para', option%touch_para
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
+               write (*, '(A50,Es14.7)') 'sample_para (only used for forwardN15flag=0)', option%sample_para
+               write (*, '(A55,Es14.7)') 'sample_para_outer (only used for forwardN15flag=0)', option%sample_para_outer
+               write (*, *) '***************************'
+               write (*, *) ' '
             endif
          else if(option%format==HSS_MD)then
             if(option%LRlevel==0)then
@@ -1247,64 +1539,38 @@ option1%fastsample_tensor = option%fastsample_tensor
                else
                   write (*, '(A18,A10)') 'algorithm', 'HSSBF_MD'
                endif
+               write (*, '(A18,Es14.7)') 'near_para', option%near_para
+               write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+               write (*, '(A18,I8)') 'n_iter', option%n_iter
+               write (*, '(A18,I8)') 'precon', option%precon
+               write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+               write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+               write (*, '(A18,I8)') 'nogeo', option%nogeo
+               write (*, '(A18,I8)') 'per_geo', option%per_geo
+               if(option%per_geo==1)then
+                  write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+                  write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+                  write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+               endif
+               write (*, '(A18,I8)') 'verbosity', option%verbosity
+               write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
+               write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+               write (*, '(A18,I8)') 'cpp', option%cpp
+               write (*, '(A18,I8)') 'knn', option%knn
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_qtt', option%use_qtt
+
+               write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+               write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+               write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+               write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
+               write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
+               write (*, *) '***************************'
+               write (*, *) ' '
+
             endif
          endif
 
-         write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
-         write (*, '(A18,I8)') 'n_iter', option%n_iter
-         write (*, '(A18,I8)') 'level_check', option%level_check
-         write (*, '(A18,I8)') 'precon', option%precon
-         write (*, '(A18,I8)') 'xyzsort', option%xyzsort
-         write (*, '(A18,I8)') 'lnoBP', option%lnoBP
-         write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
-         write (*, '(A18,I8)') 'TwoLayerOnly', option%TwoLayerOnly
-         write (*, '(A18,I8)') 'schulzorder', option%schulzorder
-         write (*, '(A18,I8)') 'schulzhardstart', option%schulzhardstart
-         write (*, '(A18,I8)') 'schulzsplitlevel', option%schulzsplitlevel
-         write (*, '(A18,I8)') 'schulzlevel', option%schulzlevel
-         write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
-         write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
-         write (*, '(A18,I8)') 'nogeo', option%nogeo
-         write (*, '(A18,I8)') 'per_geo', option%per_geo
-         write (*, '(A18,I8)') 'hextralevel', option%hextralevel
-         write (*, '(A18,Es14.7)') 'period1', option%periods(1)
-         write (*, '(A18,Es14.7)') 'period2', option%periods(2)
-         write (*, '(A18,Es14.7)') 'period3', option%periods(3)
-         write (*, '(A18,I8)') 'lr_blk_num', option%LR_BLK_NUM
-         write (*, '(A18,I8)') 'rank0', option%rank0
-         write (*, '(A18,I8)') 'itermax', option%itermax
-         write (*, '(A18,I8)') 'powiter', option%powiter
-         write (*, '(A18,I8)') 'ilu', option%ILU
-         write (*, '(A18,I8)') 'nbundle', option%Nbundle
-         write (*, '(A18,I8)') 'verbosity', option%verbosity
-         write (*, '(A18,I8)') 'rmax', option%rmax
-         write (*, '(A18,I8)') 'forwardN15flag', option%forwardN15flag
-         write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
-         write (*, '(A18,I8)') 'pat_comp', option%pat_comp
-         write (*, '(A18,I8)') 'elem_extract', option%elem_extract
-         write (*, '(A18,I8)') 'cpp', option%cpp
-         write (*, '(A18,I8)') 'knn', option%knn
-         write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
-         write (*, '(A18,I8)') 'errsol', option%ErrSol
-         ! write (*, '(A18,I8)') 'sample_heuristic', option%sample_heuristic
-         write (*, '(A18,I8)') 'less_adapt', option%less_adapt
-         write (*, '(A18,I8)') 'use_zfp', option%use_zfp
-         write (*, '(A18,I8)') 'use_qtt', option%use_qtt
-
-         write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
-         write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
-         write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
-         write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
-         write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
-         write (*, '(A18,Es14.7)') 'tol_rand', option%tol_rand
-         write (*, '(A18,Es14.7)') 'touch_para', option%touch_para
-         write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
-         write (*, '(A18,Es14.7)') 'scale_factor', option%scale_factor
-         write (*, '(A18,Es14.7)') 'jitter_factor', option%jitter
-         write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
-         write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
-         write (*, *) '***************************'
-         write (*, *) ' '
       endif
    end subroutine PrintOptions
 
