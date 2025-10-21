@@ -367,7 +367,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 
 
 	!!!! build the mapping from all active elements to the unknowns
-	allocate(M_elemlist(nr*Nnodes_max,3))
+	allocate(M_elemlist(nr*2,3))
 	M_elemlist=-1
 	idxcnt_m=0
 	do idxr=1,nr
@@ -401,7 +401,7 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 	enddo
 
 
-	allocate(N_elemlist(nc*Nnodes_max,3))
+	allocate(N_elemlist(nc*2,3))
 	N_elemlist=-1
 	idxcnt_n=0
 	do idxc=1,nc
