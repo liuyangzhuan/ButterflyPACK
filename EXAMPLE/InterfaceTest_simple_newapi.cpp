@@ -58,6 +58,11 @@ MPI_Datatype mpi_scalar = MPI_DOUBLE;
 // using scalart = _Complex double;
 // MPI_Datatype mpi_scalar = MPI_C_DOUBLE_COMPLEX;
 
+// using scalart = std::complex<double>;
+// MPI_Datatype mpi_scalar = MPI_C_DOUBLE_COMPLEX;
+
+
+
 
 
 #ifdef HAVE_MPI
