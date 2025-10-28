@@ -92,7 +92,7 @@ inline void C_FuncZmnBlock_BF(int* Ninter, int* Nallrows, int* Nallcols, int64_t
 
       // The following code computes a single matrix block (intersection) of sizes nr x nc, with row 
       // indices in rows (index is 1-based instead of 0-based) and column indices in cols (index is 
-      // 1-based instead of 0-based), and entry values (nr x nc entries stored in row major) in alldat_loc starting from idx_val_map[nn1] 
+      // 1-based instead of 0-based), and entry values (nr x nc entries stored in column major) in alldat_loc starting from idx_val_map[nn1] 
       your_function_to_compute_one_block(nr, nc, rows, cols, &(alldat_loc[idx_val_map[nn1]]), Q);
 
     }
