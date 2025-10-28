@@ -9,8 +9,9 @@
 #SBATCH --mail-user=liuyangzhuan@lbl.gov
 
 module load PrgEnv-gnu
+# module load PrgEnv-intel
 module unload matlab
-module unload cray-libsci
+module unload cray-libsci  #### This should always be called even if libsci is being used.  
 
 
 ulimit -s unlimited
@@ -30,7 +31,12 @@ export EXEC=./EXAMPLE/ie3d
 export OMP_NUM_THREADS=$NTH
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
-
+# export OMP_PROC_BIND=true
+# export OMP_PLACES=cores
+export OMP_MAX_ACTIVE_LEVELS=1
+export OMP_NESTED=FALSE
+export CRAY_LIBSCI_NUM_THREADS=1
+# export OMP_STACKSIZE=256M
 
 #### The Default parameters
 format=1
@@ -207,6 +213,7 @@ filename=sphere_128000
 logfile=$filename.out_precon_${precon}_sort_${xyzsort}_mpi_${nmpi}_format_${format}_less_adapt_${less_adapt}_tol_rand_${tol_rand}_lrlevel_${LRlevel}_nbundle_${Nbundle}_forwardN15flag_${forwardN15flag}_omp${NTH}
 
 srun -n $nmpi -N 4 -c $THREADS_PER_RANK --cpu_bind=cores /usr/bin/time -f "Time=%E MaxRSS=%M KB" $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --use_zfp 2 --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
+# srun -n $nmpi -N 4 -c $THREADS_PER_RANK --cpu_bind=cores valgrind --leak-check=yes $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --use_zfp 2 --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
 
 
 # Extract all numeric values after "MaxRSS="

@@ -1,7 +1,7 @@
+module load PrgEnv-intel
+MKL_DIR=$MKLROOT
 module load PrgEnv-gnu
 module load cmake
-
-LIBSCI_DIR=$CRAY_LIBSCI_PREFIX
 module unload cray-libsci
 
 cd ..
@@ -30,9 +30,9 @@ cmake .. \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-	-DTPL_BLAS_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi.so" \
-	-DTPL_LAPACK_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$LIBSCI_DIR/lib/libsci_gnu_mpi.so"
+	-DTPL_BLAS_LIBRARIES="$MKL_DIR//lib/intel64/libmkl_gf_lp64.so;$MKL_DIR//lib/intel64/libmkl_gnu_thread.so;$MKL_DIR//lib/intel64/libmkl_core.so" \
+	-DTPL_LAPACK_LIBRARIES="$MKL_DIR//lib/intel64/libmkl_gf_lp64.so;$MKL_DIR//lib/intel64/libmkl_gnu_thread.so;$MKL_DIR//lib/intel64/libmkl_core.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$MKL_DIR//lib/intel64/libmkl_blacs_intelmpi_lp64.so;$MKL_DIR//lib/intel64/libmkl_scalapack_lp64.so"
 
 make ctest -j
 # make ie2d -j16
