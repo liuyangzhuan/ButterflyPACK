@@ -1477,7 +1477,8 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
         !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
-        if(ptree%MyID==Main_ID)write(100,*)phi,rcs
+        ! if(ptree%MyID==Main_ID)write(100,*)phi,rcs
+		if(ptree%MyID==Main_ID)write(100,*)phi,dble(quant%wavenum*ctemp), aimag(quant%wavenum*ctemp)
     enddo
     if(ptree%MyID==Main_ID)close(100)
 
@@ -1500,9 +1501,11 @@ subroutine RCS_bistatic_SURF(curr,msh,quant,ptree)
 #endif
 		call MPI_ALLREDUCE(ctemp_loc,ctemp,1,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
         rcs=(abs(quant%wavenum*ctemp))**2/4/BPACK_pi
-        !rcs=rcs/quant%wavelength
         rcs=10*log10(rcs)
-        if(ptree%MyID==Main_ID)write(1000,*)phi,rcs
+        ! if(ptree%MyID==Main_ID)write(1000,*)phi,rcs
+        if(ptree%MyID==Main_ID)write(1000,*)phi,dble(quant%wavenum*ctemp), aimag(quant%wavenum*ctemp)
+
+
     enddo
     if(ptree%MyID==Main_ID)close(1000)
 
