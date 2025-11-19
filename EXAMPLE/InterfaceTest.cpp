@@ -326,7 +326,7 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
       vector<double> xin_glo(Npo*(*nvec),0.0);
       vector<double> xout_glo(Npo*(*nvec),0.0);
 
-      // gater xin into xin_glo
+      // gather xin into xin_glo
       for (int i=0; i<*nin; i++){
         int i_new_loc = i+1;
         int i_old;
