@@ -330,7 +330,7 @@ call gemmf90(mats_skel, nrow, mats_interp, ranknew, matA_recon, nrow, 'N', 'N', 
          enddo
 
 
-write(*,*)'size of mats (tree-sampling-based):', size(treequant(1)%mats,1),size(treequant(1)%mats,2), 'nq: ',size(treequant(1)%Qs,2)
+write(*,*)'size of mats (tree-sampling-based):', size(treequant(1)%mats,1),size(treequant(1)%mats,2)
 write(*,*)'reconstruction error (for fullmat):',fnorm(matA_recon-matA,nrow,ncol)/fnorm(matA,nrow,ncol), maxerror,'rank:',ranknew
 
 ! write(*,*)jpvt(1:ranknew)
@@ -353,7 +353,7 @@ write(*,*)'reconstruction error (for treequant(1)%mats):',fnorm(matA_recon-treeq
          ! allocate(mattmp2(ncol, count)); mattmp2 = 0
 
          ! ! Project matnew onto span(Qs) and compute residual
-         ! call gemmf90(treequant(1)%Qs, ncol, matA, count, mattmp1, nq, 'C', 'T', nq, count, ncol, BPACK_cone, BPACK_czero)              
+         ! call gemmf90(treequant(1)%Qs, ncol, matA, count, mattmp1, nq, 'C', 'T', nq, count, ncol, BPACK_cone, BPACK_czero)
          ! call gemmf90(treequant(1)%Qs, ncol, mattmp1, nq, mattmp2, ncol, 'N', 'N', ncol, count, nq, BPACK_cone, BPACK_czero)
 
          ! allocate(mattmp3(ncol, count))
@@ -365,8 +365,8 @@ write(*,*)'reconstruction error (for treequant(1)%mats):',fnorm(matA_recon-treeq
          ! ! Update tolerance passed to children
          ! tol_next = min(tol_next, max(matnew_norm * tol_Rdetect, norm_tol))
 
-         ! ! Re-project residual to improve numerical stability                 
-         ! call gemmf90(treequant(1)%Qs, ncol, mattmp3, ncol, mattmp1, nq, 'C', 'N', nq, count, ncol, BPACK_cone, BPACK_czero)   
+         ! ! Re-project residual to improve numerical stability
+         ! call gemmf90(treequant(1)%Qs, ncol, mattmp3, ncol, mattmp1, nq, 'C', 'N', nq, count, ncol, BPACK_cone, BPACK_czero)
          ! call gemmf90(treequant(1)%Qs, ncol, mattmp1, nq, mattmp2, ncol, 'N', 'N', ncol, count, nq, BPACK_cone, BPACK_czero)
          ! ! write(*,*)'node ', nodeID, 'count', count, 'norm after and before the projection', fnorm(mattmp3- mattmp2,ncol,count),matnew_norm
          ! mattmp3 = mattmp3 - mattmp2
@@ -376,7 +376,7 @@ write(*,*)'reconstruction error (for treequant(1)%mats):',fnorm(matA_recon-treeq
          ! enddo
 
          ! write(*,*)'error check ', size(treequant(1)%proxies,1), 'fnorm and max error',fnorm(mattmp3, ncol, count),maxerror, 'tol',tol_next,matnew_norm
- 
+
          ! deallocate(mattmp1)
          ! deallocate(mattmp2)
          ! deallocate(mattmp3)
@@ -492,12 +492,12 @@ contains
 
    ! Pop next frame
    nrow = treequant(index_ij)%M
-   ncol = treequant(index_ij)%N   
+   ncol = treequant(index_ij)%N
    lo        = treequant(index_ij)%stack(treequant(index_ij)%top)%lo
    hi        = treequant(index_ij)%stack(treequant(index_ij)%top)%hi
    m_pick    = treequant(index_ij)%stack(treequant(index_ij)%top)%m_pick
    nodeID     = treequant(index_ij)%stack(treequant(index_ij)%top)%nodeID
-   
+
    ! Base conditions
    if (lo > hi) cycle
    avail = unused_in_interval(treequant(index_ij)%root_node, 1, nrow, lo, hi)
@@ -508,7 +508,7 @@ contains
    endif
    ! Pick up to m_pick unique numbers in [lo, hi]
    allocate(indices_pick(m_pick))
-   
+
    call pick_exact_m_interval(treequant(index_ij)%root_node, 1, nrow, lo, hi, m_pick, indices_pick, count)
 
 
@@ -518,7 +518,7 @@ contains
    ! Sampling step
    allocate(matnew(count, ncol))
    matnew = matZ(indices_pick(1:count), :)
-   
+
 
 
    nrow = treequant(index_ij)%M
@@ -553,8 +553,8 @@ contains
 
    else if (depth == 0) then
       keeprefine = 1
-      
-            
+
+
       allocate (core(count, ncol))
       core = treequant(index_ij)%mats
       allocate(mats(count,ncol))
@@ -577,11 +577,11 @@ contains
       treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
       allocate(treequant(index_ij)%skel_sofar(ranknew))
       treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
-      deallocate(mats)     
-      deallocate(core)     
-      deallocate(tau)     
-      deallocate(jpvt)     
-      
+      deallocate(mats)
+      deallocate(core)
+      deallocate(tau)
+      deallocate(jpvt)
+
 
 
    else
@@ -595,19 +595,19 @@ contains
       ! tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp/(depth+1)
       tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp
       residual = fnorm(matA_recon-matnew,count,ncol)
-      deallocate(mats_skel)    
-      deallocate(matA_recon)    
+      deallocate(mats_skel)
+      deallocate(matA_recon)
 
       write(*,*)'node ', nodeID, 'count', count, 'residual with ID', residual, tol_next
- 
+
       if (residual < tol_next) then
          keeprefine = 0
       else
          keeprefine = 1
-         
-            
-            
-         count = size(treequant(index_ij)%mats,1) 
+
+
+
+         count = size(treequant(index_ij)%mats,1)
          allocate (core(count, ncol))
          core = treequant(index_ij)%mats
          allocate(mats(count,ncol))
@@ -629,19 +629,19 @@ contains
          treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
          call array_resize_int(treequant(index_ij)%skel_sofar,ranknew)
          treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
-         deallocate(mats)     
-         deallocate(core)     
-         deallocate(tau)     
-         deallocate(jpvt)              
-            
-            
-            
-         
-         
-         
-         
-         
-         
+         deallocate(mats)
+         deallocate(core)
+         deallocate(tau)
+         deallocate(jpvt)
+
+
+
+
+
+
+
+
+
          ! call ComputeRange(ncol, count, mattmp3, ranknew, 1, tol_comp, norm_tol=norm_tol)
          ! write(*,*)'after ComputeRange: new basis# ', ranknew, 'node', nodeID
 
@@ -671,7 +671,7 @@ contains
       if (mid + 1 <= hi) then
          if (treequant(index_ij)%tail == size(treequant(index_ij)%stack)) then
             ! In practice H above is enough; grow if you want absolute safety
-            
+
             call stack_resize(treequant(index_ij)%stack,size(treequant(index_ij)%stack)*2)
             treequant(index_ij)%stack(1:treequant(index_ij)%tail-treequant(index_ij)%top+1)=treequant(index_ij)%stack(treequant(index_ij)%top:treequant(index_ij)%tail)
             treequant(index_ij)%tail = treequant(index_ij)%tail - treequant(index_ij)%top+1
