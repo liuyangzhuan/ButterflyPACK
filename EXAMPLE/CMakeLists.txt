@@ -106,6 +106,12 @@ target_link_libraries(testqtt ${all_link_libs_z})
 add_dependencies(testqtt testtt)
 install(TARGETS testqtt RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
+set(FZEXM15 Test_proxy_selection.f90)
+add_executable(testproxy ${FZEXM15})
+target_link_libraries(testproxy ${all_link_libs_z})
+add_dependencies(testproxy testqtt)
+install(TARGETS testproxy RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
 
 
 

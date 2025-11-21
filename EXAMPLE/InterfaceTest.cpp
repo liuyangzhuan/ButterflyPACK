@@ -320,7 +320,43 @@ inline void C_FuncBZmnBlock(int* Ninter, int* Nallrows, int* Nallcols, int64_t* 
 /**  The matvec sampling function wrapper required by the Fortran HODLR code */
 inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, double const *xin, double *xout, C2Fptr quant) {
   C_QuantApp* Q = (C_QuantApp*) quant;
-  d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);
+
+    #if 0  // user provides a function to do the matvec in the original order
+      int Npo = Q->_n;
+      vector<double> xin_glo(Npo*(*nvec),0.0);
+      vector<double> xout_glo(Npo*(*nvec),0.0);
+
+      // gather xin into xin_glo
+      for (int i=0; i<*nin; i++){
+        int i_new_loc = i+1;
+        int i_old;
+        d_c_bpack_new2old(Q->msh,&i_new_loc,&i_old);
+        for (int nth=0; nth<(*nvec); nth++){
+          xin_glo.data()[i_old-1+nth*Npo] = xin[i+nth*(*nin)];
+        }
+      }
+      MPI_Allreduce(MPI_IN_PLACE,xin_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+      // ****************************
+      // call your function here to multiply A with xin_glo (in the original order) to get xout_glo
+      // ****************************
+
+
+      // scatter xout_glo into xout 
+      MPI_Allreduce(MPI_IN_PLACE,xout_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      for (int i=0; i<*nout; i++){
+        int i_new_loc = i+1;
+        int i_old;
+        d_c_bpack_new2old(Q->msh,&i_new_loc,&i_old);
+        for (int nth=0; nth<(*nvec); nth++){
+          xout[i+nth*(*nout)] = xout_glo.data()[i_old-1+nth*Npo];
+        }
+      }
+
+    #else
+      d_c_bpack_mult(trans, xin, xout, nin, nout, nvec, Q->bmat,Q->option,Q->stats,Q->ptree);
+    #endif
+
 }
 
 
@@ -898,6 +934,7 @@ if(tst==4){
 	quant_ptr1->ptree=&ptree;
 	quant_ptr1->stats=&stats;
 	quant_ptr1->option=&option;
+  quant_ptr1->_n=Npo;
 
 	d_c_bpack_createptree(&size, groups, &Fcomm, &ptree1);
 	d_c_bpack_copyoption(&option_save,&option1);

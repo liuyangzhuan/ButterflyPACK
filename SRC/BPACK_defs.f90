@@ -229,8 +229,29 @@ module BPACK_DEFS
     end type acaquant
 
 
+    !>**** information used for one intervel of the tree-based approxy sampling
+    type :: frame_t
+    integer :: lo, hi
+    integer :: nodeID
+    integer :: m_pick
+    real(kind=8) :: tol_run
+    end type frame_t
 
-
+    !>**** information used for the tree-based approxy sampling of one matrix
+    type treesamplequant
+        integer M,N !< matrix dimensions
+        integer:: header_m=0, header_n=0 !< matrix offsets
+        integer::leaf !< the level of the AVL tree below which m_pick will be reduced
+        integer:: m_pick !< number of new proxies to pick per intervel
+        ! integer:: keeprefine !< whether to generate more samples
+        type(TreeNode), pointer :: root_node => null() !< root node of the AVL tree
+        type(frame_t), allocatable :: stack(:) !< the stack that keeps track of the tree traversal
+        integer:: top=0 !< the current iterator for the stack
+        integer:: tail=0 !< the current iterator for the stack
+        integer, allocatable:: skel_cols(:) !< columns to be skeletonized
+        integer, allocatable:: proxies(:), skel_sofar(:) !< columns that have been identified as skeletons so far
+        DT, allocatable:: mats_interp(:,:), mats(:,:) !< basis matrices and original matrices at the current stage
+    end type treesamplequant
 
     !>**** one rank*rank butterfly block
     type butterflymatrix
@@ -774,6 +795,16 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type:: ipair
         integer i, j
     end type ipair
+
+    !>*** a derived type for constructing a AVL tree for an integer interval and pick indices in a top-down fashion where each pick spans as uniformly as possible and do not duplicate with its ancesters
+    type TreeNode
+        integer :: key
+        integer :: height
+        integer :: size
+        type(TreeNode), pointer :: left => null(), right => null()
+    end type TreeNode
+
+
 
     abstract interface
         subroutine BMatVec(operand, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)
