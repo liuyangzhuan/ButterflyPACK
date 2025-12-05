@@ -1270,7 +1270,7 @@ contains
       jpvt = 0
       allocate (tau(mn))
       if (rrflag == 1) then
-         
+
          ! ! SVD
          ! allocate(UU(M,mn))
          ! allocate(VV(mn,N))
@@ -1284,8 +1284,8 @@ contains
          ! deallocate(UU)
          ! deallocate(VV)
          ! deallocate(Singular)
-            
-         
+
+
          ! RRQR
          small=.False.
          if(present(norm_tol))then

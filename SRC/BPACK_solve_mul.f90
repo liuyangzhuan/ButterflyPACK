@@ -1938,7 +1938,7 @@ contains
       case (HMAT,BLR)
          if(present(use_blockcopy))then
             call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,use_blockcopy)
-         else 
+         else
             call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
          endif
       case (HSS)

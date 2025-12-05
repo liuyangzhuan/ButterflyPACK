@@ -41,7 +41,7 @@ integer :: count,ii,jj,ranknew,mn
 
 complex(kind=8),allocatable:: matA(:,:), matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:),matA_recon(:,:), core(:,:), core_row(:,:), mats_interp(:,:), mats_skel(:,:), mattmp1(:,:), mattmp2(:,:), mattmp3(:,:),UU(:,:),VV(:,:)
 
-complex(kind=8),allocatable::mats(:,:)
+complex(kind=8),allocatable::mats(:,:),mats_row(:,:)
 complex(kind=8),allocatable::Qs(:,:),tau(:),tau_row(:)
 real(kind=8),allocatable::locs(:,:),locsp(:,:), dists(:), Singular(:)
 
@@ -56,9 +56,9 @@ type(treesamplequant)::treequant(1)
 
 nrow0=1000000
 ncol0=100
-m_pick=4
+m_pick=8
 leaf=64
-tol_comp=1e-4
+tol_comp=1e-10
 tol_Rdetect=tol_comp   !1e-10
 ndim=1
 knn=10
@@ -202,6 +202,11 @@ endif
    ! treequant(1)%leaf=leaf
    treequant(1)%top=1
    treequant(1)%tail=1
+   allocate(treequant(1)%extra_offsets(ncol+1))
+   treequant(1)%extra_offsets(1)=0
+   allocate(treequant(1)%extra_skel(ncol))
+   allocate(treequant(1)%extra_mats_interp(ncol,ncol))
+   treequant(1)%nextra=0
 
    len = max(0, nrow)
    H=int(log(dble(len))/log(2d0))+1
@@ -263,7 +268,7 @@ jpvt = 0
 
 
 
-call geqp3modf90(core, jpvt, tau, tol_comp*0.5, BPACK_SafeUnderflow, ranknew)
+call geqp3modf90(core, jpvt, tau, tol_comp, BPACK_SafeUnderflow, ranknew)
 
 
 ! ! SVD
@@ -323,11 +328,11 @@ matA_recon=0
 call gemmf90(mats_skel, nrow, mats_interp, ranknew, matA_recon, nrow, 'N', 'N', nrow, ncol, ranknew, BPACK_cone,BPACK_czero)
 
 
-         maxerror=0
-         do ii=1,nrow
-            maxerror = max(maxerror,fnorm(matA_recon(ii:ii,:)-matA(ii:ii,:),1,ncol)/fnorm(matA(ii:ii,:), 1, ncol))
-            ! write(*,*)ii,fnorm(matA_recon(ii:ii,:)-matA(ii:ii,:),1,ncol)/fnorm(matA(ii:ii,:), 1, ncol),fnorm(matA(ii:ii,:), 1, ncol)
-         enddo
+maxerror=0
+do ii=1,nrow
+   maxerror = max(maxerror,fnorm(matA_recon(ii:ii,:)-matA(ii:ii,:),1,ncol)/fnorm(matA(ii:ii,:), 1, ncol))
+   ! write(*,*)ii,fnorm(matA_recon(ii:ii,:)-matA(ii:ii,:),1,ncol)/fnorm(matA(ii:ii,:), 1, ncol),fnorm(matA(ii:ii,:), 1, ncol)
+enddo
 
 
 write(*,*)'size of mats (tree-sampling-based):', size(treequant(1)%mats,1),size(treequant(1)%mats,2)
@@ -341,7 +346,15 @@ mats_skel = treequant(1)%mats(:,jpvt(1:ranknew))
 call matrix_resize(matA_recon,rankmax_r,ncol)
 matA_recon=0
 call gemmf90(mats_skel, rankmax_r, mats_interp, ranknew, matA_recon, rankmax_r, 'N', 'N', rankmax_r, ncol, ranknew, BPACK_cone,BPACK_czero)
-write(*,*)'reconstruction error (for treequant(1)%mats):',fnorm(matA_recon-treequant(1)%mats,rankmax_r,ncol)/fnorm(treequant(1)%mats,rankmax_r,ncol), 'rank:',ranknew
+
+maxerror=0
+do ii=1,rankmax_r
+   maxerror = max(maxerror,fnorm(matA_recon(ii:ii,:)-treequant(1)%mats(ii:ii,:),1,ncol)/fnorm(treequant(1)%mats(ii:ii,:), 1, ncol))
+   ! write(*,*)ii,fnorm(matA_recon(ii:ii,:)-matA(ii:ii,:),1,ncol)/fnorm(matA(ii:ii,:), 1, ncol),fnorm(matA(ii:ii,:), 1, ncol)
+enddo
+
+
+write(*,*)'reconstruction error (for treequant(1)%mats):',fnorm(matA_recon-treequant(1)%mats,rankmax_r,ncol)/fnorm(treequant(1)%mats,rankmax_r,ncol), maxerror, 'rank:',ranknew
 
 
 
@@ -478,14 +491,14 @@ contains
    complex(kind=8), intent(in) :: matZ(:,:)
 
    ! Local work arrays
-   complex(kind=8), allocatable :: matnew(:,:), mattmp1(:,:), mattmp2(:,:), mattmp3(:,:)
-   integer :: nrow, ncol, nq, ranknew, rank
+   complex(kind=8), allocatable :: matnew(:,:), mattmp1(:,:), mattmp2(:,:), mattmp3(:,:),matnew1(:,:), matA_update(:,:), mat_interp(:,:)
+   integer :: nrow, ncol, nq, ranknew, rank, ranknew1, count_res
    integer :: mid, avail, m_adjust
    real(kind=8) :: matnew_norm, norm_tol=1.0d-30
-   real(kind=8) :: tol_next, residual
-   integer :: nodeID, depth, lo, hi, m_pick, keeprefine, top
+   real(kind=8) :: tol_next, tol_next1, residual, residual1, n1, n2, time_nla, norm_ref, norm_ref1
+   integer :: nodeID, depth, lo, hi, m_pick, keeprefine, top, idxs, nskel, nn
 
-
+   time_nla=0
 
    do while (treequant(index_ij)%top <=treequant(index_ij)%tail)
    ! do while (treequant(index_ij)%top >0)
@@ -533,28 +546,95 @@ contains
    ! if (leaf > hi - lo + 1) m_adjust = 1
 
    treequant(index_ij)%top = treequant(index_ij)%top + 1
+
+
    if (depth == 0) then
+      allocate(matA_recon(count,ncol))
+      matA_recon = matnew
       allocate(treequant(index_ij)%mats(size(matnew,1), size(matnew,2)))
       treequant(index_ij)%mats = matnew
       allocate(treequant(index_ij)%proxies(count))
       treequant(index_ij)%proxies=indices_pick(1:count)
    else
-      call matrix_resize(treequant(index_ij)%mats, size(treequant(index_ij)%mats,1) + size(matnew,1), ncol)
-      treequant(index_ij)%mats(size(treequant(index_ij)%mats,1) - size(matnew,1) + 1 : size(treequant(index_ij)%mats,1), :) = matnew
-      call array_resize_int(treequant(index_ij)%proxies, size(treequant(index_ij)%proxies,1) + count)
-      treequant(index_ij)%proxies(size(treequant(index_ij)%proxies,1) - count + 1 : size(treequant(index_ij)%proxies,1)) = indices_pick(1:count)
-   end if
+      n1 = MPI_Wtime()
+      ranknew = size(treequant(index_ij)%skel_sofar,1)
+      allocate(mats_skel(count,ranknew))
+      mats_skel = matnew(:,treequant(index_ij)%skel_sofar)
+      allocate(matA_recon(count,ncol))
+      matA_recon=0
+
+      call gemmf90(mats_skel, count, treequant(index_ij)%mats_interp, ranknew, matA_recon, count, 'N', 'N', count, ncol, ranknew, BPACK_cone,BPACK_czero)
+      matA_recon = matnew-matA_recon
+      residual = fnorm(matA_recon,count,ncol)
+
+      do nn=1,treequant(index_ij)%nextra
+         nskel = treequant(index_ij)%extra_offsets(nn+1)-treequant(index_ij)%extra_offsets(nn)
+         idxs = treequant(index_ij)%extra_offsets(nn)+1
+         allocate(matA_update(count,nskel))
+         do ii=1,nskel
+            matA_update(:,ii)=matA_recon(:,treequant(index_ij)%extra_skel(idxs+ii-1))
+         enddo
+         allocate(mat_interp(nskel,ncol))
+         mat_interp = treequant(index_ij)%extra_mats_interp(idxs:idxs+nskel-1,:)
+
+         call gemmf90(matA_update, count, mat_interp, nskel, matA_recon, count, 'N', 'N', count, ncol, nskel, -BPACK_cone,BPACK_cone)
+         deallocate(matA_update)
+         deallocate(mat_interp)
+
+
+      enddo
+      residual = fnorm(matA_recon,count,ncol)
+      norm_ref1 = fnorm(matnew,count,ncol)
+      norm_ref = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))
+      tol_next1 = fnorm(matnew,count,ncol)*tol_comp
+      ! tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp/(depth+1)
+      tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp
+
+      deallocate(mats_skel)
+
+
+
+      allocate(jpvt_row(max(ncol, count)))
+      allocate(tau_row(max(ncol, count)))
+      allocate(core_row(ncol,count))
+      call copymatT(matA_recon,core_row,count,ncol)
+      jpvt_row = 0
+      call geqp3modf90(core_row, jpvt_row, tau_row, tol_comp, BPACK_SafeUnderflow, ranknew1)
+      if (ranknew1 > 0) then
+
+         ! write(*,*)ranknew1,'new effe ctive rows?'
+         ! do ii=1,ranknew1
+         !    write(*,*)fnorm(matA_recon(jpvt_row(ii):jpvt_row(ii),:),1,ncol)
+         ! enddo
+
+         call matrix_resize(treequant(index_ij)%mats, size(treequant(index_ij)%mats,1) + ranknew1, ncol)
+         treequant(index_ij)%mats(size(treequant(index_ij)%mats,1) - ranknew1 + 1 : size(treequant(index_ij)%mats,1), :) = matnew(jpvt_row(1:ranknew1),:)
+         call array_resize_int(treequant(index_ij)%proxies, size(treequant(index_ij)%proxies,1) + ranknew1)
+         treequant(index_ij)%proxies(size(treequant(index_ij)%proxies,1) - ranknew1 + 1 : size(treequant(index_ij)%proxies,1)) = indices_pick(jpvt_row(1:ranknew1))
+      endif
+
+      ! call matrix_resize(treequant(index_ij)%mats, size(treequant(index_ij)%mats,1) + count, ncol)
+      ! treequant(index_ij)%mats(size(treequant(index_ij)%mats,1) - count + 1 : size(treequant(index_ij)%mats,1), :) = matnew
+      ! call array_resize_int(treequant(index_ij)%proxies, size(treequant(index_ij)%proxies,1) + count)
+      ! treequant(index_ij)%proxies(size(treequant(index_ij)%proxies,1) - count + 1 : size(treequant(index_ij)%proxies,1)) = indices_pick(1:count)
+
+      deallocate(jpvt_row)
+      deallocate(tau_row)
+      deallocate(core_row)
+
+      n2 = MPI_Wtime()
+   endif
    deallocate(indices_pick)
 
 
    keeprefine = 1
    if (count == hi - lo + 1) then
       keeprefine = 0
-
+      if(depth>0)goto 103
    else if (depth == 0) then
       keeprefine = 1
 
-
+      n1 = MPI_Wtime()
       allocate (core(count, ncol))
       core = treequant(index_ij)%mats
       allocate(mats(count,ncol))
@@ -581,23 +661,12 @@ contains
       deallocate(core)
       deallocate(tau)
       deallocate(jpvt)
+      n2 = MPI_Wtime()
+      ! time_nla = time_nla + n2-n1
 
 
 
    else
-      ranknew = size(treequant(index_ij)%skel_sofar,1)
-      allocate(mats_skel(count,ranknew))
-      mats_skel = matnew(:,treequant(index_ij)%skel_sofar)
-      allocate(matA_recon(count,ncol))
-      matA_recon=0
-      call gemmf90(mats_skel, count, treequant(index_ij)%mats_interp, ranknew, matA_recon, count, 'N', 'N', count, ncol, ranknew, BPACK_cone,BPACK_czero)
-      ! tol_next = fnorm(matnew,count,ncol)*tol_comp
-      ! tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp/(depth+1)
-      tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp
-      residual = fnorm(matA_recon-matnew,count,ncol)
-      deallocate(mats_skel)
-      deallocate(matA_recon)
-
       write(*,*)'node ', nodeID, 'count', count, 'residual with ID', residual, tol_next
 
       if (residual < tol_next) then
@@ -605,37 +674,111 @@ contains
       else
          keeprefine = 1
 
+103      n1 = MPI_Wtime()
 
 
-         count = size(treequant(index_ij)%mats,1)
-         allocate (core(count, ncol))
-         core = treequant(index_ij)%mats
-         allocate(mats(count,ncol))
-         mats = treequant(index_ij)%mats
 
-         allocate (jpvt(max(ncol, count)))
-         allocate (tau(max(ncol, count)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, tol_comp, BPACK_SafeUnderflow, ranknew)
-         if (ranknew > 0) then
-            call un_or_mqrf90(core, tau, mats, 'L', 'C', size(mats,1), ncol, ranknew)
-            call trsmf90(core, mats, 'L', 'U', 'N', 'N', ranknew, ncol)
+
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+         count_res = size(matA_recon,1)
+         allocate(jpvt_row(max(ncol, count_res)))
+         allocate(tau_row(max(ncol, count_res)))
+         allocate(core_row(count_res,ncol))
+         core_row = matA_recon
+         jpvt_row = 0
+
+
+
+         ! write(*,*)residual,norm_ref/residual*tol_comp
+         ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_comp/size(treequant(index_ij)%mats,1), max(ncol, count_res)*norm_ref*tol_comp, ranknew1)
+         ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_comp, max(ncol, count_res)*norm_ref*tol_comp, ranknew1)
+         ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_comp, BPACK_SafeUnderflow, ranknew1)
+         ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_comp, max(ncol, count_res)*norm_ref*tol_comp, ranknew1)
+         call geqp3modf90(core_row, jpvt_row, tau_row, tol_comp, BPACK_SafeUnderflow, ranknew1)
+
+         ! call geqp3f90(core_row, jpvt_row, tau_row)
+         ! ranknew1 = min(ncol, count_res)
+         ! do i = 1, min(ncol, count_res)
+         !    if (abs(core_row(i, i)) <= max(ncol, count_res)*fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp) then
+         !       ranknew1 = i
+         !       exit
+         !    end if
+         ! end do
+
+         ! core_row=matA_recon
+         ! jpvt_row = 0
+         ! call geqp3f90(core_row, jpvt_row, tau_row)
+         ! ranknew1 = min(ncol, count_res)
+         ! do i = 1, min(ncol, count_res)
+         !    if (abs(core_row(i, i)) <= max(BPACK_SafeUnderflow,abs(core_row(1, 1))*tol_next/residual))then
+         !       ranknew1 = i
+         !       exit
+         !    end if
+         ! end do
+
+
+         ! ranknew1 = min(ranknew1,1)
+         if (ranknew1 > 0) then
+               ! write(*,*)ranknew1,'wocao?'
+            if(ranknew1 + treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1)<=ncol)then
+               ! if(treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1)<=8)then
+               allocate(mats_row(count_res,ncol))
+               mats_row = matA_recon
+               call un_or_mqrf90(core_row, tau_row, mats_row, 'L', 'C', size(mats_row,1), ncol, ranknew1)
+               call trsmf90(core_row, mats_row, 'L', 'U', 'N', 'N', ranknew1, ncol)
+               treequant(index_ij)%nextra=treequant(index_ij)%nextra+1
+               treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1) = treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra) + ranknew1
+               nskel = ranknew1
+               idxs = treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra)+1
+               treequant(index_ij)%extra_mats_interp(idxs:idxs+nskel-1,:) = mats_row(1:ranknew1,:)
+               treequant(index_ij)%extra_skel(idxs:idxs+nskel-1) = jpvt_row(1:ranknew1)
+               deallocate(mats_row)
+            else
+               ! write(*,*)'from scratch'
+               count = size(treequant(index_ij)%mats,1)
+               allocate (core(count, ncol))
+               core = treequant(index_ij)%mats
+               allocate(mats(count,ncol))
+               mats = treequant(index_ij)%mats
+               allocate (jpvt(max(ncol, count)))
+               allocate (tau(max(ncol, count)))
+               jpvt = 0
+               call geqp3modf90(core, jpvt, tau, tol_comp, BPACK_SafeUnderflow, ranknew)
+               if (ranknew > 0) then
+                  call un_or_mqrf90(core, tau, mats, 'L', 'C', size(mats,1), ncol, ranknew)
+                  call trsmf90(core, mats, 'L', 'U', 'N', 'N', ranknew, ncol)
+               else
+                  ranknew = 1
+                  jpvt(1) = 1
+                  mats = 0
+               endif
+               ! write(*,*)treequant(index_ij)%skel_sofar,'before',size(treequant(index_ij)%skel_sofar,1) ! size(treequant(index_ij)%mats_interp,1),ranknew
+               ! write(*,*)jpvt(1:ranknew),'nima',ranknew ! size(treequant(index_ij)%mats_interp,1),ranknew
+               call matrix_resize(treequant(index_ij)%mats_interp,ranknew,ncol)
+               treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
+               call array_resize_int(treequant(index_ij)%skel_sofar,ranknew)
+               treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
+               deallocate(mats)
+               deallocate(core)
+               deallocate(tau)
+               deallocate(jpvt)
+               treequant(index_ij)%nextra=0
+            endif
          else
-            ranknew = 1
-            jpvt(1) = 1
-            mats = 0
+            ! write(*,*)'how come???'
          endif
-         call matrix_resize(treequant(index_ij)%mats_interp,ranknew,ncol)
-         treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
-         call array_resize_int(treequant(index_ij)%skel_sofar,ranknew)
-         treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
-         deallocate(mats)
-         deallocate(core)
-         deallocate(tau)
-         deallocate(jpvt)
+         deallocate(jpvt_row)
+         deallocate(tau_row)
+         deallocate(core_row)
+
+         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 
+
+
+         n2 = MPI_Wtime()
+         ! time_nla = time_nla + n2-n1
 
 
 
@@ -660,8 +803,9 @@ contains
       ! deallocate(mattmp1)
       ! deallocate(mattmp2)
    end if
-
+   deallocate(matA_recon)
    deallocate(matnew)
+
 
    ! If we should refine, push children (right, then left) so left is processed next
    if (keeprefine == 1) then
@@ -702,7 +846,47 @@ contains
             treequant(index_ij)%stack(treequant(index_ij)%tail)%tol_run = tol_next
          end if
       end if
+
+
+      ! if(treequant(index_ij)%top >treequant(index_ij)%tail)then
+
+      !    count = size(treequant(index_ij)%mats,1)
+      !    ranknew = size(treequant(index_ij)%skel_sofar,1)
+      !    allocate(mats_skel(count,ranknew))
+      !    mats_skel = treequant(index_ij)%mats(:,treequant(index_ij)%skel_sofar)
+      !    allocate(matA_recon(count,ncol))
+      !    matA_recon=0
+
+      !    call gemmf90(mats_skel, count, treequant(index_ij)%mats_interp, ranknew, matA_recon, count, 'N', 'N', count, ncol, ranknew, BPACK_cone,BPACK_czero)
+      !    matA_recon = treequant(index_ij)%mats-matA_recon
+      !    residual1 = fnorm(matA_recon,count,ncol)
+      !    do nn=1,treequant(index_ij)%nextra
+      !       nskel = treequant(index_ij)%extra_offsets(nn+1)-treequant(index_ij)%extra_offsets(nn)
+      !       idxs = treequant(index_ij)%extra_offsets(nn)+1
+      !       allocate(matA_update(count,nskel))
+      !       do ii=1,nskel
+      !          matA_update(:,ii)=matA_recon(:,treequant(index_ij)%extra_skel(idxs+ii-1))
+      !       enddo
+      !       allocate(mat_interp(nskel,ncol))
+      !       mat_interp = treequant(index_ij)%extra_mats_interp(idxs:idxs+nskel-1,:)
+
+      !       call gemmf90(matA_update, count, mat_interp, nskel, matA_recon, count, 'N', 'N', count, ncol, nskel, -BPACK_cone,BPACK_cone)
+      !       deallocate(matA_update)
+      !       deallocate(mat_interp)
+      !    enddo
+      !    residual = fnorm(matA_recon,count,ncol)
+      !    tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_comp
+      !    write(*,*)residual1, residual,tol_next
+      !    deallocate(mats_skel)
+      !    deallocate(matA_recon)
+
+      ! endif
+
+
+
    end do
+
+   write(*,*)"time_nla",time_nla
 
    ! deallocate(stack)
    end subroutine refine_interval

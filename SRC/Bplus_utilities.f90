@@ -13249,8 +13249,8 @@ end subroutine BF_block_MVP_dat_batch_magma
       type(Hstat)::stats
       integer nn, ri, ci, nng, headm, headn, head, tail, pp, row_group, col_group
       type(intersect)::inters(:)
-      integer ii, jj, rank, ncol, nrow, iidx, pgno, ierr, nr_loc
-      DT, allocatable::Vpartial(:, :), matU(:, :)
+      integer ii, jj, rank, ncol, nrow, iidx, pgno, ierr, nr_loc, nc_loc
+      DT, allocatable::Vpartial(:, :), matU(:, :), mat_loc(:,:)
       real(kind=8)::t1, t2, t3, t4
 
       headm = blocks%headm
@@ -13273,10 +13273,13 @@ end subroutine BF_block_MVP_dat_batch_magma
       t3 = MPI_Wtime()
 
       nr_loc = 0
+      nc_loc = 0
       do nn = 1, size(blocks%inters, 1)
          nr_loc = max(nr_loc, blocks%inters(nn)%nr_loc)
+         nc_loc = max(nc_loc, blocks%inters(nn)%nc)
       enddo
       allocate (matU(nr_loc, rank))
+      allocate (mat_loc(nr_loc, nc_loc))
 
       iidx = 0
       do nn = 1, size(blocks%inters, 1)
@@ -13287,7 +13290,8 @@ end subroutine BF_block_MVP_dat_batch_magma
                matU(ii, :) = blocks%ButterflyU%blocks(1)%matrix(ri, :)
             enddo
             if (blocks%inters(nn)%nc > 0) then
-               call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, BPACK_czero, blocks%inters(nn)%dat_loc(1, 1), blocks%inters(nn)%nr_loc)
+               call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, BPACK_czero, mat_loc(1,1), nr_loc)
+               blocks%inters(nn)%dat_loc(:,:) = mat_loc(1:blocks%inters(nn)%nr_loc, 1:blocks%inters(nn)%nc)
             endif
             stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank)
          endif
@@ -13296,6 +13300,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       deallocate (Vpartial)
       deallocate (matU)
+      deallocate (mat_loc)
 
       t4 = MPI_Wtime()
       ! time_tmp = time_tmp + t3 - t2

@@ -237,20 +237,24 @@ module BPACK_DEFS
     real(kind=8) :: tol_run
     end type frame_t
 
-    !>**** information used for the tree-based approxy sampling of one matrix
+    !>**** information used for the tree-based proxy sampling of one matrix
     type treesamplequant
         integer M,N !< matrix dimensions
         integer:: header_m=0, header_n=0 !< matrix offsets
         integer::leaf !< the level of the AVL tree below which m_pick will be reduced
         integer:: m_pick !< number of new proxies to pick per intervel
+        integer:: nextra
         ! integer:: keeprefine !< whether to generate more samples
         type(TreeNode), pointer :: root_node => null() !< root node of the AVL tree
         type(frame_t), allocatable :: stack(:) !< the stack that keeps track of the tree traversal
         integer:: top=0 !< the current iterator for the stack
         integer:: tail=0 !< the current iterator for the stack
-        integer, allocatable:: skel_cols(:) !< columns to be skeletonized
-        integer, allocatable:: proxies(:), skel_sofar(:) !< columns that have been identified as skeletons so far
-        DT, allocatable:: mats_interp(:,:), mats(:,:) !< basis matrices and original matrices at the current stage
+        integer, allocatable:: skel_rows(:), skel_cols(:) !< rows or columns to be skeletonized
+        integer, allocatable:: proxies(:), skel_sofar(:) !< rows or columns that have been sampled so far
+        integer, allocatable:: extra_offsets(:)
+        integer, allocatable:: extra_skel(:)
+        DT, allocatable:: extra_mats_interp(:,:)
+        DT, allocatable:: mats_interp(:,:), Qs(:,:), mats(:,:) !< basis matrices and original matrices at the current stage
     end type treesamplequant
 
     !>**** one rank*rank butterfly block
