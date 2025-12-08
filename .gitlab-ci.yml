@@ -16,25 +16,13 @@ build:
   script:
     - MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
     - echo "MULTIARCH = $MULTIARCH"
-    - cmake --version
     - export BLAS_LIB=/usr/lib/$MULTIARCH/libblas.so
     - export LAPACK_LIB=/usr/lib/$MULTIARCH/liblapack.so
     - export SCALAPACK_LIB="/usr/lib/$MULTIARCH/libscalapack-openmpi.so"
-    - echo ${SCALAPACK_LIB}
     - echo "YL; Installing ButterflyPACK from source"
     - pwd
     - rm -rf build && mkdir -p build && cd build
-    - cmake .. \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DCMAKE_C_COMPILER=mpicc \
-        -DCMAKE_CXX_COMPILER=mpic++ \
-        -DCMAKE_Fortran_COMPILER=mpif90 \
-        -DCMAKE_INSTALL_PREFIX=. \
-        -DCMAKE_BUILD_TYPE=Debug \
-        -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF \
-        -DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
-        -DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
-        -DTPL_SCALAPACK_LIBRARIES:FILEPATH="${SCALAPACK_LIB}"
+    - cmake .. -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_COMPILER=mpicc -DCMAKE_CXX_COMPILER=mpic++ -DCMAKE_Fortran_COMPILER=mpif90 -DCMAKE_INSTALL_PREFIX=. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF -DTPL_BLAS_LIBRARIES="$BLAS_LIB" -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
     - make -j$(nproc)
     - make install
     - cd ..
