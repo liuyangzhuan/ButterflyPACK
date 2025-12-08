@@ -2,7 +2,7 @@ image: gcc
 default:
   before_script:
     - apt-get update -y
-    - apt-get install -y gcc-13 g++-13 gfortran-13
+    - apt-get install -y gcc-13 g++-13 gfortran-13 dpkg-dev
     - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
     - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-13 60
     - apt-get install -y openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
@@ -14,10 +14,11 @@ stages:
 build:
   stage: build
   script:
-    - export BLAS_LIB=/usr/lib/x86_64-linux-gnu/libblas.so
-    - export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
-    - export SCALAPACK_LIB=/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so
-    - ls /usr/lib/x86_64-linux-gnu/
+    - MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
+    - echo "MULTIARCH = $MULTIARCH"
+    - export BLAS_LIB=/usr/lib/$MULTIARCH/libblas.so
+    - export LAPACK_LIB=/usr/lib/$MULTIARCH/liblapack.so
+    - export SCALAPACK_LIB=/usr/lib/$MULTIARCH/libscalapack-openmpi.so
     - echo "YL; Installing ButterflyPACK from source"
     - pwd
     - rm -rf build && mkdir -p build && cd build
