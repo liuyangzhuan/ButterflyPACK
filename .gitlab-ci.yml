@@ -2,7 +2,6 @@ image: gcc
 
 default:
   before_script:
-    # On gitlab.com, add extra Debian repo to get gcc-13
     - |
       if [ "$CI_SERVER_HOST" = "gitlab.com" ]; then
         echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
@@ -17,10 +16,27 @@ stages:
   - build
   - test
 
-# -------------------------------
-# HIDDEN JOB: Core Build Logic
-# -------------------------------
-.build_core:
+# =========================================================
+# 1. DEFINE PLATFORM CONFIGS ONCE (The "Mixins")
+# =========================================================
+
+# Configuration for GitLab.com
+.env_com:
+  tags: [butterflypack-tr4workstation]
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
+
+# Configuration for Spack.io
+.env_spack:
+  tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100]
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.spack.io"'
+
+# =========================================================
+# 2. DEFINE SHARED LOGIC (Scripts)
+# =========================================================
+
+.build_script:
   stage: build
   script:
     - MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
@@ -29,145 +45,117 @@ stages:
     - export LAPACK_LIB=/usr/lib/$MULTIARCH/liblapack.so
     - export SCALAPACK_LIB="/usr/lib/$MULTIARCH/libscalapack-openmpi.so"
     - echo "YL; Installing ButterflyPACK from source"
-    - pwd
     - rm -rf build && mkdir -p build && cd build
     - cmake .. -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_COMPILER=mpicc -DCMAKE_CXX_COMPILER=mpic++ -DCMAKE_Fortran_COMPILER=mpif90 -DCMAKE_INSTALL_PREFIX=. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF -DTPL_BLAS_LIBRARIES="$BLAS_LIB" -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
     - make -j$(nproc)
     - make install
     - cd ..
-    - echo "YL; Done installing ButterflyPACK from source"
   artifacts:
-    paths:
-      - build
+    paths: [build]
     expire_in: 1 week
 
-# -------------------------------
-# CONCRETE BUILD JOBS (Split by Host)
-# -------------------------------
-build-com:
-  extends: .build_core
-  tags: [butterflypack-tr4workstation]
-  rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com"'
-
-build-spack:
-  extends: .build_core
-  tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100]
-  rules:
-    - if: '$CI_SERVER_HOST == "gitlab.spack.io"'
-
-# -------------------------------
-# Shared test templates
-# -------------------------------
-.test_base:
+.test_script:
   stage: test
   script:
     - echo "Running test number ${TEST_NUMBER}"
     - sh .ci_tests.sh
 
-# Template for GitLab.com (Sets Tags + Needs specific build)
+# =========================================================
+# 3. CONCRETE BUILD JOBS
+# =========================================================
+
+# Merges (.build_script + .env_com)
+build-com:
+  extends: [.build_script, .env_com]
+
+# Merges (.build_script + .env_spack)
+build-spack:
+  extends: [.build_script, .env_spack]
+
+# =========================================================
+# 4. TEST TEMPLATES (Linking Build to Test)
+# =========================================================
+
+# Inherits config from .env_com and waits for build-com
 .test_com:
-  extends: .test_base
-  tags: [butterflypack-tr4workstation]
+  extends: [.test_script, .env_com]
   needs: ["build-com"]
-  rules:
-    - if: '$CI_SERVER_HOST == "gitlab.com"'
 
-# Template for Spack.io (Sets Tags + Needs specific build)
+# Inherits config from .env_spack and waits for build-spack
 .test_spack:
-  extends: .test_base
-  tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100]
+  extends: [.test_script, .env_spack]
   needs: ["build-spack"]
-  rules:
-    - if: '$CI_SERVER_HOST == "gitlab.spack.io"'
 
-# ------------------------------------------------
-# Tests
-# ------------------------------------------------
+# =========================================================
+# 5. TEST DEFINITIONS
+# =========================================================
 
-# Test 1: Needs to run on BOTH (Split into two jobs)
-test_1/16-com:
+# Test 1 runs on BOTH platforms
+test_1/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "1"
+  variables: { TEST_NUMBER: "1" }
 
 test_1/16-spack:
   extends: .test_spack
-  variables:
-    TEST_NUMBER: "1"
+  variables: { TEST_NUMBER: "1" }
 
-# Tests 2-16: Run ONLY on gitlab.com (Use .test_com)
+# Tests 2-16 run ONLY on GitLab.com (inheriting .test_com)
 test_2/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "2"
+  variables: { TEST_NUMBER: "2" }
 
 test_3/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "3"
+  variables: { TEST_NUMBER: "3" }
 
 test_4/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "4"
+  variables: { TEST_NUMBER: "4" }
 
 test_5/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "5"
+  variables: { TEST_NUMBER: "5" }
 
 test_6/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "6"
+  variables: { TEST_NUMBER: "6" }
 
 test_7/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "7"
+  variables: { TEST_NUMBER: "7" }
 
 test_8/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "8"
+  variables: { TEST_NUMBER: "8" }
 
 test_9/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "9"
+  variables: { TEST_NUMBER: "9" }
 
 test_10/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "10"
+  variables: { TEST_NUMBER: "10" }
 
 test_11/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "11"
+  variables: { TEST_NUMBER: "11" }
 
 test_12/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "12"
+  variables: { TEST_NUMBER: "12" }
 
 test_13/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "13"
+  variables: { TEST_NUMBER: "13" }
 
 test_14/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "14"
+  variables: { TEST_NUMBER: "14" }
 
 test_15/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "15"
+  variables: { TEST_NUMBER: "15" }
 
 test_16/16:
   extends: .test_com
-  variables:
-    TEST_NUMBER: "16"
+  variables: { TEST_NUMBER: "16" }
