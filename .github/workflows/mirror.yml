@@ -1,5 +1,3 @@
-name: Mirror and run GitLab CI
-
 on: [push, pull_request]
 
 jobs:
@@ -7,14 +5,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
-    - name: Mirror and trigger CI job at https://gitlab.com
+    - name: Mirror and trigger CI job at https://gitlab.spack.io
       uses: stenongithub/gitlab-mirror-and-ci-action@0.2.8
       with:
-        args: "https://gitlab.com/liuyangzhuan/ButterflyPACK.git"
+        args: "https://gitlab.spack.io/ssg/ButterflyPACK.git"
       env:
-        GITLAB_HOSTNAME: "gitlab.com"
-        GITLAB_USERNAME: "liuyangzhuan"
+        GITLAB_HOSTNAME: "gitlab.spack.io"
+        GITLAB_USERNAME: "liuyang"
         GITLAB_PASSWORD: ${{ secrets.GITLAB_PASSWORD }}
-        GITLAB_PROJECT_ID: "30169841"
+        GITLAB_PROJECT_ID: "72"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         POLL_TIMEOUT: "800"
+
