@@ -1,12 +1,11 @@
-image: gcc
 default:
+  image: gcc:13
   before_script:
-    - echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
-    - apt update
-    - apt-get -y install gcc-13 g++-13 gfortran-13
+    - apt-get update -y
+    - apt-get install -y gcc-13 g++-13 gfortran-13
     - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
     - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-13 60
-    - apt-get -y install openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
+    - apt-get install -y openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
 
 stages:
   - build
@@ -14,116 +13,119 @@ stages:
 
 build:
   stage: build
-
   script:
     - export BLAS_LIB=/usr/lib/x86_64-linux-gnu/libblas.so
     - export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
-    - export SCALAPACK_LIB="/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so"
-    - printf "${BLUE} YL; Installing ButterflyPACK from source\n"
+    - export SCALAPACK_LIB=/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so
+    - echo "YL; Installing ButterflyPACK from source"
     - pwd
     - rm -rf build && mkdir -p build && cd build
-    - cmake .. -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_COMPILER=mpicc -DCMAKE_CXX_COMPILER=mpic++ -DCMAKE_Fortran_COMPILER=mpif90 -DCMAKE_INSTALL_PREFIX=. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF -DTPL_BLAS_LIBRARIES="$BLAS_LIB" -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
-    - make && make install
-    - cd ../
-    - printf "${BLUE} YL; Done installing ButterflyPACK from source\n"
+    - cmake .. \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_C_COMPILER=mpicc \
+        -DCMAKE_CXX_COMPILER=mpic++ \
+        -DCMAKE_Fortran_COMPILER=mpif90 \
+        -DCMAKE_INSTALL_PREFIX=. \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF \
+        -DTPL_BLAS_LIBRARIES="$BLAS_LIB" \
+        -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" \
+        -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
+    - make -j$(nproc)
+    - make install
+    - cd ..
+    - echo "YL; Done installing ButterflyPACK from source"
 
   artifacts:
     paths:
       - build
     expire_in: 1 week
 
-test 1/16:
+# Helper anchor for tests so we don't repeat ourselves too much
+.test-template: &test_template
   stage: test
+  needs: ["build"]          # Make sure build finishes before tests
+  dependencies: ["build"]   # Download build artifacts (./build)
   script:
-    - export TEST_NUMBER=1
+    - echo "Running test number ${TEST_NUMBER}"
     - sh .ci_tests.sh
 
-test 2/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=2
-    - sh .ci_tests.sh
+test_1/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "1"
 
-test 3/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=3
-    - sh .ci_tests.sh
+test_2/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "2"
 
-test 4/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=4
-    - sh .ci_tests.sh
+test_3/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "3"
 
-test 5/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=5
-    - sh .ci_tests.sh
+test_4/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "4"
 
-test 6/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=6
-    - sh .ci_tests.sh
+test_5/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "5"
 
-test 7/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=7
-    - sh .ci_tests.sh
+test_6/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "6"
 
-test 8/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=8
-    - sh .ci_tests.sh
+test_7/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "7"
 
-test 9/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=9
-    - sh .ci_tests.sh
+test_8/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "8"
 
-test 10/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=10
-    - sh .ci_tests.sh
+test_9/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "9"
 
-test 11/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=11
-    - sh .ci_tests.sh
+test_10/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "10"
 
-test 12/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=12
-    - sh .ci_tests.sh
+test_11/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "11"
 
-test 13/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=13
-    - sh .ci_tests.sh
+test_12/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "12"
 
-test 14/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=14
-    - sh .ci_tests.sh
+test_13/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "13"
 
-test 15/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=15
-    - sh .ci_tests.sh    
+test_14/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "14"
 
-test 16/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=16
-    - sh .ci_tests.sh  
+test_15/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "15"
+
+test_16/16:
+  <<: *test_template
+  variables:
+    TEST_NUMBER: "16"
