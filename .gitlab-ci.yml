@@ -1,6 +1,12 @@
 image: gcc
+
 default:
   before_script:
+    # On gitlab.com, add extra Debian repo to get gcc-13
+    - |
+      if [ "$CI_SERVER_HOST" = "gitlab.com" ]; then
+        echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
+      fi
     - apt-get update -y
     - apt-get install -y gcc-13 g++-13 gfortran-13 dpkg-dev
     - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
@@ -11,6 +17,9 @@ stages:
   - build
   - test
 
+# -------------------------------
+# Build job (runs everywhere)
+# -------------------------------
 build:
   stage: build
   script:
@@ -19,6 +28,7 @@ build:
     - export BLAS_LIB=/usr/lib/$MULTIARCH/libblas.so
     - export LAPACK_LIB=/usr/lib/$MULTIARCH/liblapack.so
     - export SCALAPACK_LIB="/usr/lib/$MULTIARCH/libscalapack-openmpi.so"
+
     - echo "YL; Installing ButterflyPACK from source"
     - pwd
     - rm -rf build && mkdir -p build && cd build
@@ -33,92 +43,133 @@ build:
       - build
     expire_in: 1 week
 
-# Helper anchor for tests so we don't repeat ourselves too much
+# -------------------------------
+# Shared test template
+# -------------------------------
 .test-template: &test_template
   stage: test
-  needs: ["build"]          # Make sure build finishes before tests
-  resource_group: butterflypack-tests # Make sure all the tests in the same group are run one by one
-  dependencies: ["build"]   # Download build artifacts (./build)
+  needs: ["build"]          # wait for build
+  dependencies: ["build"]   # download build artifacts
+  # (optional) uncomment next line if you want tests strictly serialized
+  # resource_group: butterflypack-tests
   script:
     - echo "Running test number ${TEST_NUMBER}"
     - sh .ci_tests.sh
 
+# ------------------------------------------------
+# Tests
+#   - test_1/16: runs on BOTH gitlab.spack.io + gitlab.com
+#   - test_2–16: ONLY on gitlab.com
+# ------------------------------------------------
+
+# This is the single test that will also run on gitlab.spack.io
 test_1/16:
   <<: *test_template
   variables:
     TEST_NUMBER: "1"
 
+# The rest only run on gitlab.com
 test_2/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "2"
 
 test_3/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "3"
 
 test_4/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "4"
 
 test_5/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "5"
 
 test_6/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "6"
 
 test_7/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "7"
 
 test_8/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "8"
 
 test_9/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "9"
 
 test_10/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "10"
 
 test_11/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "11"
 
 test_12/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "12"
 
 test_13/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "13"
 
 test_14/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "14"
 
 test_15/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "15"
 
 test_16/16:
   <<: *test_template
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
   variables:
     TEST_NUMBER: "16"
