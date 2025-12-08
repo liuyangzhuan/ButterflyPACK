@@ -16,7 +16,7 @@ build:
   script:
     - export BLAS_LIB=/usr/lib/x86_64-linux-gnu/libblas.so
     - export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
-    - export SCALAPACK_LIB=/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so
+    - export SCALAPACK_LIB=/usr/lib/x86_64-linux-gnu/libscalapack.so
     - echo "YL; Installing ButterflyPACK from source"
     - pwd
     - rm -rf build && mkdir -p build && cd build
