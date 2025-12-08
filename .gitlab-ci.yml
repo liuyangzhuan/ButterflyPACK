@@ -37,6 +37,7 @@ build:
 .test-template: &test_template
   stage: test
   needs: ["build"]          # Make sure build finishes before tests
+  resource_group: butterflypack-tests # Make sure all the tests in the same group are run one by one
   dependencies: ["build"]   # Download build artifacts (./build)
   script:
     - echo "Running test number ${TEST_NUMBER}"
