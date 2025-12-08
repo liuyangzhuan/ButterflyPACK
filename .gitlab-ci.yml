@@ -1,7 +1,13 @@
 image: gcc
 
 default:
-  tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100, butterflypack-tr4workstation]
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
+      tags: [butterflypack-tr4workstation]
+
+    - if: '$CI_SERVER_HOST == "gitlab.spack.io"'
+      tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100]
+
   before_script:
     # On gitlab.com, add extra Debian repo to get gcc-13
     - |
