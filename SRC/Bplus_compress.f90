@@ -177,7 +177,7 @@ contains
                enddo
                n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2 - n1
-               if(Nboundall==0 .and. option%forwardN15flag/=3)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
+               if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                   allocate(alldat_loc_in(nnz_loc))
                   call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
                   call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
@@ -206,7 +206,7 @@ contains
 
 
             do index_ij = 1, nr*nc
-               if(Nboundall>0)then
+               if(Nboundall>0 .or. option%forwardN15flag==3)then
                   call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
                   if(associated(submats(index_ij)%dat))then
                      deallocate(submats(index_ij)%dat)
@@ -1109,11 +1109,11 @@ contains
 
 
                   ! write(*,*)residual,norm_ref/residual*tol_Rdetect
-                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect/size(treequant(index_ij)%mats,1), max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1)
-                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1)
-                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, BPACK_SafeUnderflow, ranknew1)
-                  ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1)
-                  call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop)
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect/size(treequant(index_ij)%mats,1), max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop) !!!!! this will use a normalized tolerence for the residual matrix, and help the search go deeper in the tree.
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop)
                   flops = flops + flop
 
                   ! ranknew1 = min(ranknew1,1)
