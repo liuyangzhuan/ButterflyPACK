@@ -1960,6 +1960,162 @@ contains
    end subroutine sgetrff90
 #endif
 
+
+
+   subroutine getrfmodf90(Matrix, thresh0, ipiv, flop, phase, logabsdet)
+      DT Matrix(:, :), uii
+      real(kind=8) thresh0
+      DTR thresh,absuii,norm
+      integer ipiv(:)
+      real(kind=8), optional::flop
+      DT, optional::phase
+      DTR, optional::logabsdet
+      integer :: i, nswap,m,n
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      norm = fnorm(Matrix, m, n, 'F')
+      thresh = norm*thresh0
+
+#if DAT==0
+      call zgetrfmodf90(Matrix, thresh, ipiv, flop)
+#elif DAT==1
+      call dgetrfmodf90(Matrix, thresh, ipiv, flop)
+#elif DAT==2
+      call cgetrfmodf90(Matrix, thresh, ipiv, flop)
+#elif DAT==3
+      call sgetrfmodf90(Matrix, thresh, ipiv, flop)
+#endif
+
+      if (present(phase) .and. present(logabsdet))then
+         nswap     = 0
+         logabsdet = 0
+         phase     = 1
+
+         do i = 1, n
+            if (ipiv(i) /= i) nswap = nswap + 1
+            uii    = Matrix(i,i)              ! diag(U)
+            absuii = abs(uii)
+            logabsdet = logabsdet + log(absuii)
+            phase = phase * (uii / absuii)
+         end do
+
+         ! Apply permutation sign: det(P)^(-1) = (-1)^{nswap}
+         if (mod(nswap, 2) == 1) phase = -phase
+      endif
+
+
+   end subroutine getrfmodf90
+
+
+
+#if DAT==0
+   subroutine zgetrfmodf90(Matrix, thresh, ipiv, flop)
+!
+      implicit none
+      complex(kind=8) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+      DTR thresh
+      real(kind=8), optional::flop
+      integer INFO
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call ZGETRFmod(m, n, Matrix, m, thresh, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrfmodf90 failed!!', INFO
+         stop
+      endif
+
+      if (present(flop)) flop = flops_zgeqrf(m, n)
+
+   end subroutine zgetrfmodf90
+#elif DAT==1
+   subroutine dgetrfmodf90(Matrix, thresh, ipiv, flop)
+   !
+      implicit none
+      real(kind=8) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+
+      integer INFO
+      DTR thresh
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call DGETRFmod(m, n, Matrix, m, thresh, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrfmodf90 failed!!', INFO
+         stop
+      endif
+
+      if (present(flop)) flop = flops_dgeqrf(m, n)
+
+   end subroutine dgetrfmodf90
+
+#elif DAT==2
+   subroutine cgetrfmodf90(Matrix, thresh, ipiv, flop)
+!
+      implicit none
+      complex(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+      real(kind=8), optional::flop
+      integer INFO
+      DTR thresh
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call CGETRFmod(m, n, Matrix, m, thresh, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrfmodf90 failed!!', INFO
+         stop
+      endif
+
+      if (present(flop)) flop = flops_zgeqrf(m, n)
+
+   end subroutine cgetrfmodf90
+#elif DAT==3
+   subroutine sgetrfmodf90(Matrix, thresh, ipiv, flop)
+   !
+      implicit none
+      real(kind=4) Matrix(:, :)
+      integer ipiv(:)
+      integer m, n, mn_min, ii
+
+      integer INFO
+      real(kind=8), optional::flop
+      DTR thresh
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      mn_min = min(m, n)
+
+      call SGETRFmod(m, n, Matrix, m, thresh, ipiv, INFO)
+
+      if (INFO /= 0) then
+         write (*, *) 'getrfmodf90 failed!!', INFO
+         stop
+      endif
+
+      if (present(flop)) flop = flops_dgeqrf(m, n)
+
+   end subroutine sgetrfmodf90
+#endif
+
+
+
+
    subroutine getrsf90(Matrix, ipiv, B, trans, flop)
       DT Matrix(:, :), B(:, :)
       integer ipiv(:)
@@ -2900,6 +3056,78 @@ contains
 #endif
    end subroutine pgetrff90
 
+
+
+   subroutine pgetrfmodf90(m, n, a, ia, ja, desca, thresh0, ipiv, info, flop, phase_loc, logabsdet_loc)
+      implicit none
+      integer m, n, ia, ja,ii,myArows,myAcols
+      DT uii
+      DTR absuii
+      DT a(:, :)
+      real(kind=8)::thresh0,norm1
+      integer desca(9)
+      integer ipiv(:)
+      integer info, nswap
+      real(kind=8), optional::flop
+      DT, optional::phase_loc
+      DTR, optional::logabsdet_loc
+      DTR thresh
+      integer nprow, npcol,myrow,mycol,myi,myj,iproc,jproc
+
+#ifdef HAVE_MPI
+      norm1 = pfnorm(m, n, a, ia, ja, desca, 'F')
+      thresh = norm1*thresh0
+      call blacs_gridinfo_wrp(desca(CTXT_), nprow, npcol, myrow, mycol)
+#if DAT==0
+      call pzgetrfmod(m, n, a, ia, ja, desca, thresh, ipiv, info)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+#elif DAT==1
+      call pdgetrfmod(m, n, a, ia, ja, desca, thresh, ipiv, info)
+      if (present(flop)) flop = flops_dgetrf(m, n)
+#elif DAT==2
+      call pcgetrfmod(m, n, a, ia, ja, desca, thresh, ipiv, info)
+      if (present(flop)) flop = flops_zgetrf(m, n)
+#elif DAT==3
+      call psgetrfmod(m, n, a, ia, ja, desca, thresh, ipiv, info)
+      if (present(flop)) flop = flops_dgetrf(m, n)
+#endif
+
+      if (present(phase_loc) .and. present(logabsdet_loc))then
+         if(m/=n)then
+            write (*, *) 'not supporting logdet for nonsquare matrix!!'
+            stop
+         endif
+         nswap     = 0
+         logabsdet_loc = 0
+         phase_loc     = 1
+         do ii = 1, n
+            call g2l(ii, n, nprow, nbslpk, iproc, myi)
+            call g2l(ii, n, npcol, nbslpk, jproc, myj)
+            if (iproc == myrow .and. jproc == mycol) then
+               uii    = a(myi,myj)              ! diag(U)
+               absuii = abs(uii)
+               logabsdet_loc = logabsdet_loc + log(absuii)
+               phase_loc = phase_loc * (uii / absuii)
+            endif
+         enddo
+         myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
+
+         do myi = 1, myArows
+            call l2g(myi, myrow, m, nprow, nbslpk, ii)
+            if (ipiv(myi) .ne. ii) nswap = nswap + 1
+         end do
+         ! Apply permutation sign: det(P)^(-1) = (-1)^{nswap}
+         if (mod(nswap, 2) == 1) phase_loc = -phase_loc
+      endif
+#else
+      call getrfmodf90(a, ipiv, thresh0, flop, phase_loc, logabsdet_loc)
+#endif
+   end subroutine pgetrfmodf90
+
+
+
+
+
    subroutine pgetrif90(n, a, ia, ja, desca, ipiv, flop)
       implicit none
       integer n, ia, ja
@@ -3345,8 +3573,6 @@ contains
       integer ctxt, ctxt_head, ii, jj, myi, myj, IWORK(1), iproc, jproc, info
       DT, allocatable:: Matrix0(:,:),tau0(:), tau1(:),Matrix_head(:,:),Q_head(:,:)
       integer,allocatable:: IPIV(:)
-      INTEGER,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
-
 
 #ifdef HAVE_MPI
       if (present(flops))flops=0

@@ -53,9 +53,11 @@ echo "#define DTZFP zFORp_type_double" >> $MACRO_FILE
 echo "#define DTRBytes 8" >> $MACRO_FILE
 echo "#define DTC complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_COMPLEX" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_DOUBLE_PRECISION" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_complex16" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_DOUBLE_COMPLEX)" >> $MACRO_FILE
 echo "#define C_DT _Complex double" >> $MACRO_FILE
+echo "#define C_RDT double" >> $MACRO_FILE
 echo "#define gemmf77 zgemm" >> $MACRO_FILE
 echo "#define copymatf77 zlacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
@@ -71,9 +73,11 @@ echo "#define DTZFP zFORp_type_double" >> $MACRO_FILE
 echo "#define DTRBytes 8" >> $MACRO_FILE
 echo "#define DTC complex(kind=8)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_DOUBLE_PRECISION" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_DOUBLE_PRECISION" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_double" >> $MACRO_FILE
 echo "#define CBIND_DT real(kind=C_DOUBLE)" >> $MACRO_FILE
 echo "#define C_DT double" >> $MACRO_FILE
+echo "#define C_RDT double" >> $MACRO_FILE
 echo "#define gemmf77 dgemm" >> $MACRO_FILE
 echo "#define copymatf77 dlacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
@@ -89,9 +93,11 @@ echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
 echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_COMPLEX" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_FLOAT" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_complex" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_FLOAT_COMPLEX)" >> $MACRO_FILE
 echo "#define C_DT _Complex float" >> $MACRO_FILE
+echo "#define C_RDT float" >> $MACRO_FILE
 echo "#define gemmf77 cgemm" >> $MACRO_FILE
 echo "#define copymatf77 clacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
@@ -107,9 +113,11 @@ echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
 echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_FLOAT" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_FLOAT" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_float" >> $MACRO_FILE
 echo "#define CBIND_DT real(kind=C_FLOAT)" >> $MACRO_FILE
 echo "#define C_DT float" >> $MACRO_FILE
+echo "#define C_RDT float" >> $MACRO_FILE
 echo "#define gemmf77 sgemm" >> $MACRO_FILE
 echo "#define copymatf77 slacpy" >> $MACRO_FILE
 echo " " >> $MACRO_FILE
@@ -163,6 +171,7 @@ while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex double /g" $ZSRCDIR/*.h
+sed -i -e "s/C_RDT/double/g" $ZSRCDIR/*.h
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.h
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/z_BPACK_WRAP/g" $ZSRCDIR/*.h
@@ -209,6 +218,7 @@ while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/double/g" $DSRCDIR/*.h
+sed -i -e "s/C_RDT/double/g" $DSRCDIR/*.h
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.h
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/d_BPACK_WRAP/g" $DSRCDIR/*.h
@@ -254,6 +264,7 @@ while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/c_$line/g" $CSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex float /g" $CSRCDIR/*.h
+sed -i -e "s/C_RDT/float/g" $CSRCDIR/*.h
 sed -i -e "s/c_bpack_/c_c_bpack_/g" $CSRCDIR/*.h
 sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/c_BPACK_WRAP/g" $CSRCDIR/*.h
@@ -299,6 +310,7 @@ while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/float/g" $SSRCDIR/*.h
+sed -i -e "s/C_RDT/float/g" $SSRCDIR/*.h
 sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.h
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.h
 sed -i -e "s/BPACK_WRAP/s_BPACK_WRAP/g" $SSRCDIR/*.h

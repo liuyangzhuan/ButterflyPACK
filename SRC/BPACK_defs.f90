@@ -63,6 +63,11 @@ module BPACK_DEFS
     integer, parameter:: BPACK_MINOR_VERSION = 0
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
+
+    !>**** scalapack parameters
+    integer,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
+
+
     !>**** common parameters
 #if defined(PGI) || defined(CRAY)
     integer, external :: iargc
@@ -419,6 +424,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
         integer:: rankmin=BPACK_BigINT !< minimum butterfly ranks
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         integer dimension_rank !< estimated maximum rank
         integer M, N !< size of the block
         integer M_loc, N_loc !< local size of the block
@@ -589,6 +596,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type hobf
         integer Maxlevel, N !< HODLR/HODBF levels and sizes
         integer ind_lv, ind_bk !< iterator of level and block number in a HODLR/HODBF
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         type(cascadingfactors), allocatable::levels(:) !
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hobf
@@ -599,6 +608,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Maxlevel, N !< H matrix levels and sizes
         integer Dist_level !< used in Hmatrix solver, the level at which parallelization is performed
         integer idxs, idxe !< same as msh%idxs and msh%idxe
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         integer, pointer:: N_p(:, :) => null() !< row sizes of all processes sharing this Hmat
         type(basisgroup), allocatable:: basis_group(:) !< basis_group at the Dist_level level, this is needed as msh is not currently passed to matvec interface
         integer:: myArows=0,myAcols=0 !< local number of row and column blocks

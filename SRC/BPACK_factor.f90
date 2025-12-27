@@ -85,7 +85,8 @@ contains
         DT,allocatable::matrixtemp(:,:),UU(:,:),VV(:,:)
         DTR,allocatable::Singular(:)
 
-
+        ho_bf1%phase=1
+        ho_bf1%logabsdet=0
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
 
@@ -112,6 +113,19 @@ contains
 #endif
 endif
 
+
+#if 1
+            allocate (ipiv(nn))
+            ! call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)
+            call getrfmodf90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, option%jitter, ipiv, flop=flop,phase=ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%phase,logabsdet=ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%logabsdet)
+            ho_bf1%phase = ho_bf1%phase*ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%phase
+            ho_bf1%logabsdet = ho_bf1%logabsdet+ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%logabsdet
+            stats%Flop_Factor = stats%Flop_Factor + flop
+            call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)
+            stats%Flop_Factor = stats%Flop_Factor + flop
+            deallocate (ipiv)
+#else
+
             allocate(Singular(nn))
             allocate(UU(nn,nn))
             allocate(VV(nn,nn))
@@ -127,15 +141,6 @@ endif
             deallocate(VV)
             deallocate(Singular)
 
-
-#if 1
-            allocate (ipiv(nn))
-            call getrff90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)
-            stats%Flop_Factor = stats%Flop_Factor + flop
-            call getrif90(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, ipiv, flop=flop)
-            stats%Flop_Factor = stats%Flop_Factor + flop
-            deallocate (ipiv)
-#else
             allocate(matrixtemp(n,n))
             matrixtemp = ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat
             call GeneralInverse(nn, nn, matrixtemp, ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat, BPACK_SafeEps, Flops=flop)
@@ -208,11 +213,21 @@ endif
                     stats%Mem_SMW = stats%Mem_SMW + rtemp
                     stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
 
+                    if(ptree%pgrp(pgno)%head==ptree%MyID)then
+                        ho_bf1%phase = ho_bf1%phase*ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%phase
+                        ho_bf1%logabsdet = ho_bf1%logabsdet+ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)%logabsdet
+                    endif
                 endif
             end do
             n2 = MPI_Wtime()
             stats%Time_Inv = stats%Time_Inv + n2 - n1
         end do
+
+        call MPI_ALLREDUCE(MPI_IN_PLACE, ho_bf1%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, ho_bf1%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID)then
+            write(*,*)'logdet:', ho_bf1%phase,ho_bf1%logabsdet
+        endif
 
         nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
@@ -405,6 +420,9 @@ endif
         double precision    :: t_start, t_stop
         double precision, allocatable :: t_total(:)
 
+        h_mat%phase=1
+        h_mat%logabsdet=0
+
         nthreads=1
 #ifdef HAVE_OPENMP
         nthreads = omp_get_max_threads()
@@ -473,6 +491,8 @@ endif
                     blocks => h_mat%Local_blocks(myj, myi)
                     ! call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, mypgno)
                     call Hmat_LU(blocks, h_mat, option, stats, ptree, msh)
+                    h_mat%phase = h_mat%phase * blocks%phase
+                    h_mat%logabsdet = h_mat%logabsdet + blocks%logabsdet
                     call pack_all_blocks_one_node(blocks, msh, option)
                     send=1
                 endif
@@ -715,6 +735,12 @@ endif
         deallocate(h_mat%blocks_1)
         deallocate(h_mat%blocks_2)
 
+        call MPI_ALLREDUCE(MPI_IN_PLACE, h_mat%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, h_mat%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID)then
+            write(*,*)'logdet:', h_mat%phase,h_mat%logabsdet
+        endif
+
         call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
         call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -797,9 +823,14 @@ endif
         type(matrixblock):: blocks
         type(matrixblock), pointer :: block_son1, block_son2, block_son3
 
+        blocks%phase=1
+        blocks%logabsdet=0
+
         if (blocks%style == 4) then
             block_son1 => blocks%sons(1, 1)
             call Hmat_LU(block_son1, h_mat, option, stats, ptree, msh)
+            blocks%phase = blocks%phase * block_son1%phase
+            blocks%logabsdet = blocks%logabsdet + block_son1%logabsdet
 
             if (option%ILU == 0) then
                 block_son1 => blocks%sons(1, 1)
@@ -818,6 +849,8 @@ endif
 
             block_son1 => blocks%sons(2, 2)
             call Hmat_LU(block_son1, h_mat, option, stats, ptree, msh)
+            blocks%phase = blocks%phase * block_son1%phase
+            blocks%logabsdet = blocks%logabsdet + block_son1%logabsdet
         else
             call Full_LU(blocks, option, stats)
         endif

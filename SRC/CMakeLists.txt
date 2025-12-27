@@ -17,6 +17,14 @@ LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 LAPACK_sgeqp3mod.f
 LAPACK_cgeqp3mod.f
+LAPACK_dgetrfmod.f
+LAPACK_dgetrf2mod.f
+LAPACK_zgetrfmod.f
+LAPACK_zgetrf2mod.f
+LAPACK_sgetrfmod.f
+LAPACK_sgetrf2mod.f
+LAPACK_cgetrfmod.f
+LAPACK_cgetrf2mod.f
 MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
@@ -36,7 +44,7 @@ BPACK_wrapper.f90
 )
 
 if (enable_mpi)
-  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f)
+  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f SCALAPACK_pdgetrfmod.f SCALAPACK_pzgetrfmod.f SCALAPACK_psgetrfmod.f SCALAPACK_pcgetrfmod.f SCALAPACK_pdgetf2mod.f SCALAPACK_pzgetf2mod.f SCALAPACK_psgetf2mod.f SCALAPACK_pcgetf2mod.f)
 endif ()
 
 

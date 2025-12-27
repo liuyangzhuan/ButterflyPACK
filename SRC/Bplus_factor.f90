@@ -55,7 +55,9 @@ contains
          ! write(777,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
          ! enddo
          ! enddo
-         call getrff90(blocks%fullmat, blocks%ipiv, flop=flop)
+         ! call getrff90(blocks%fullmat, blocks%ipiv, flop=flop)
+         call getrfmodf90(blocks%fullmat, option%jitter, blocks%ipiv, flop=flop,phase=blocks%phase,logabsdet=blocks%logabsdet)
+
          stats%Flop_Factor = stats%Flop_Factor + flop
          ! do ii=1,size_m
          ! do jj=1,size_m
@@ -362,7 +364,7 @@ endif
 
    end subroutine LR_minusBC
 
-   subroutine LR_SMW(block_o, Memory, ptree, stats, pgno)
+   subroutine LR_SMW(block_o, Memory, ptree, option, stats, pgno)
 
 
 
@@ -384,6 +386,7 @@ endif
       integer lwork, liwork, lcmrc, ierr
       DT, allocatable:: work(:)
       type(Hstat)::stats
+      type(Hoption)::option
       real(kind=8)::dlamch
 
       ctxt = ptree%pgrp(pgno)%ctxt
@@ -411,10 +414,11 @@ endif
          enddo
 
          ! write(*,*)abs(matrixtemp1),rank,'gggddd'
-#if 0
+#if 1
          allocate (ipiv(rank))
          ipiv = 0
-         call getrff90(matrixtemp1, ipiv, flop=flop)
+         ! call getrff90(matrixtemp1, ipiv, flop=flop)
+         call getrfmodf90(matrixtemp1, option%jitter, ipiv, flop=flop,phase=block_o%phase,logabsdet=block_o%logabsdet)
          stats%Flop_Factor = stats%Flop_Factor + flop
          call getrif90(matrixtemp1, ipiv, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
@@ -458,6 +462,9 @@ endif
          call Redistribute1Dto2D(block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, matU2D, block_o%M, 0, pgno, rank, ptree)
          call Redistribute1Dto2D(block_o%ButterflyV%blocks(1)%matrix, block_o%N_p, 0, pgno, matV2D, block_o%N, 0, pgno, rank, ptree)
 
+
+         block_o%phase=1
+         block_o%logabsdet=0
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -475,21 +482,22 @@ endif
                   matrix_small(myi, myj) = matrix_small(myi, myj) + 1
                endif
             enddo
-#if 0
+#if 1
             allocate (ipiv(max(1,myArows) + nbslpk))
             ipiv = 0
-            call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
+            ! call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
+            call pgetrfmodf90(rank, rank, matrix_small, 1, 1, descsmall, option%jitter, ipiv, info, flop=flop, phase_loc=block_o%phase,logabsdet_loc=block_o%logabsdet)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
-            norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
-            do ii = 1, rank
-               call g2l(ii, rank, nprow, nbslpk, iproc, myi)
-               call g2l(ii, rank, npcol, nbslpk, jproc, myj)
-               if (iproc == myrow .and. jproc == mycol) then
-                  if(abs(matrix_small(myi, myj))<dlamch('E'))then
-                     matrix_small(myi, myj) = sign(1d0,dble(matrix_small(myi, myj)))*sqrt(dlamch('E'))*norm1
-                  endif
-               endif
-            enddo
+            ! norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
+            ! do ii = 1, rank
+            !    call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+            !    call g2l(ii, rank, npcol, nbslpk, jproc, myj)
+            !    if (iproc == myrow .and. jproc == mycol) then
+            !       if(abs(matrix_small(myi, myj))<dlamch('E'))then
+            !          matrix_small(myi, myj) = sign(1d0,dble(matrix_small(myi, myj)))*sqrt(dlamch('E'))*norm1
+            !       endif
+            !    endif
+            ! enddo
             call pgetrif90(rank, matrix_small, 1, 1, descsmall, ipiv, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             deallocate (ipiv)
@@ -507,6 +515,9 @@ endif
             matU2D1 = -matU2D1
             deallocate (matrix_small)
          endif
+
+         call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          call Redistribute2Dto1D(matU2D1, block_o%M, 0, pgno, block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, rank, ptree)
 
@@ -1409,7 +1420,7 @@ endif
       error_inout = 0
 
       if (blocks_io%level_butterfly == 0) then
-         call LR_SMW(blocks_io, Memory, ptree, stats, pgno)
+         call LR_SMW(blocks_io, Memory, ptree, option, stats, pgno)
          return
       else
          allocate (partitioned_block%sons(2, 2))
@@ -1464,9 +1475,18 @@ endif
             call BF_get_rank_ABCD(partitioned_block, rank0)
          else
             rank0 = 0
+            blocks_A%phase=1
+            blocks_A%logabsdet=0
+            blocks_D%phase=1
+            blocks_D%logabsdet=0
          endif
          call MPI_ALLREDUCE(MPI_IN_PLACE, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_A%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_A%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_D%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_D%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+
 
          if (level_butterfly_target <= 0) then ! try to use deterministic algorithms for merging four LRs into a bigger LR
             pgno1 = blocks_io%pgno  ! recording pgno as blocks_io%pgno will be set to partitioned_block%sons(1,1)%pgno in LR_ABCDinverse
@@ -1510,6 +1530,9 @@ endif
          endif
 
          ! stop
+
+         blocks_io%phase = blocks_A%phase*blocks_D%phase
+         blocks_io%logabsdet = blocks_A%logabsdet+blocks_D%logabsdet
 
          if (option%verbosity >= 2 .and. recurlevel == 0 .and. ptree%MyID == Main_ID) write (*, '(A23,A6,I3,A8,I3,A11,Es14.7)') ' RecursiveI ', ' rank:', blocks_io%rankmax, ' L_butt:', blocks_io%level_butterfly, ' error:', error_inout
 

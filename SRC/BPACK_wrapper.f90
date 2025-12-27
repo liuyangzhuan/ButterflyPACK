@@ -3359,5 +3359,43 @@ contains
 
    end subroutine C_BPACK_TreeIndex_Merged2Child
 
+
+
+
+
+
+!>**** C interface of BPACK log-determinant
+   !> @param phase: sign of determinant
+   !> @param logabsdet: log of magnitude of determinant
+   !> @param bmat_Cptr: the structure containing BPACK
+   !> @param option_Cptr: the structure containing option
+   subroutine C_BPACK_Logdet(phase, logabsdet, option_Cptr, bmat_Cptr) bind(c, name="c_bpack_logdet")
+      implicit none
+      DTR:: logabsdet
+      DT:: phase
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(Bmatrix), pointer::bmat
+      type(Hoption), pointer::option
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(bmat_Cptr, bmat)
+
+      select case (option%format)
+      case (HODLR)
+         phase = bmat%ho_bf%phase
+         logabsdet = bmat%ho_bf%logabsdet
+      case (HMAT,BLR)
+         phase = bmat%h_mat%phase
+         logabsdet = bmat%h_mat%logabsdet
+      case (HSS)
+            write(*,*)"HSS not yet implemented in C_BPACK_Logdet"
+            stop
+      end select
+
+   end subroutine C_BPACK_Logdet
+
+
+
 end module BPACK_wrapper
 

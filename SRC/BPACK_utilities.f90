@@ -1123,6 +1123,8 @@ contains
                   read (strings1, *) option%bp_cnt_lr
                else if (trim(strings) == '--touch_para') then
                   read (strings1, *) option%touch_para
+               else if (trim(strings) == '--jitter_factor') then
+                  read (strings1, *) option%jitter
                else
                   if (ptree%MyID == Main_ID) write (*, *) 'ignoring unknown option: ', trim(strings)
                endif
