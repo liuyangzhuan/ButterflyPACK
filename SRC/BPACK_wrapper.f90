@@ -151,6 +151,18 @@ contains
       ptree_Cptr = c_loc(ptree)
    end subroutine C_BPACK_Createptree
 
+
+   subroutine C_BPACK_Get_Comm(ptree_Cptr, fcomm) bind(c, name="c_bpack_get_comm")
+   use iso_c_binding
+   implicit none
+   type(c_ptr) :: ptree_Cptr
+   integer(c_int)     :: fcomm
+   type(proctree), pointer :: ptree
+
+   call c_f_pointer(ptree_Cptr, ptree)
+   fcomm = ptree%Comm
+   end subroutine C_BPACK_Get_Comm
+
 !>**** C interface of initializing statistics
    !> @param stats_Cptr: the structure containing statistics
    subroutine C_BPACK_Createstats(stats_Cptr) bind(c, name="c_bpack_createstats")
@@ -1591,6 +1603,42 @@ contains
       oldidx = msh%new2old(msh%idxs + newidx_loc - 1)
 
    end subroutine C_BPACK_New2Old
+
+
+
+!>**** C interface of converting from old, global index to new, global index, the indexs start from 1
+   !> @param newidx: new, global index, from 1 to N (out)
+   !> @param oldidx: old, global index, from 1 to N (in)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_Old2New(msh_Cptr, oldidx, newidx) bind(c, name="c_bpack_old2new")
+      implicit none
+      integer newidx,oldidx
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+      newidx = msh%old2new(oldidx)
+
+   end subroutine C_BPACK_Old2New
+
+
+
+!>**** C interface of getting the start index and local (and global) number of indices (in the permuted order)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_LocalIndices(msh_Cptr, idxs, Nlocal, Nglobal) bind(c, name="c_bpack_localindices")
+      implicit none
+      integer idxs, Nlocal, Nglobal
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+      idxs=msh%idxs
+      Nlocal = msh%idxe - msh%idxs + 1
+      Nglobal = msh%Nunk
+   end subroutine C_BPACK_LocalIndices
+
+
+
 
 
 !>**** C interface of converting from new,local index to old, global index, the indexs start from 1. Both newidx_loc and oldidx are Ndim dimensional.

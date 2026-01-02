@@ -93,7 +93,7 @@ echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
 echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
 echo "#define MPI_DT MPI_COMPLEX" >> $MACRO_FILE
-echo "#define MPI_DTR MPI_FLOAT" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_REAL" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_complex" >> $MACRO_FILE
 echo "#define CBIND_DT complex(kind=C_FLOAT_COMPLEX)" >> $MACRO_FILE
 echo "#define C_DT _Complex float" >> $MACRO_FILE
@@ -112,8 +112,8 @@ echo "#define DTR real(kind=4)" >> $MACRO_FILE
 echo "#define DTZFP zFORp_type_float" >> $MACRO_FILE
 echo "#define DTRBytes 4" >> $MACRO_FILE
 echo "#define DTC complex(kind=4)" >> $MACRO_FILE
-echo "#define MPI_DT MPI_FLOAT" >> $MACRO_FILE
-echo "#define MPI_DTR MPI_FLOAT" >> $MACRO_FILE
+echo "#define MPI_DT MPI_REAL" >> $MACRO_FILE
+echo "#define MPI_DTR MPI_REAL" >> $MACRO_FILE
 echo "#define C_SIZEOF_DT sizeof_float" >> $MACRO_FILE
 echo "#define CBIND_DT real(kind=C_FLOAT)" >> $MACRO_FILE
 echo "#define C_DT float" >> $MACRO_FILE
@@ -171,10 +171,27 @@ while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/z_$line/g" $ZSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex double /g" $ZSRCDIR/*.h
+sed -i -e "s/C_DT/_Complex double /g" $ZSRCDIR/*.cpp
+sed -i -e "s/C_MPI_DT/MPI_C_DOUBLE_COMPLEX /g" $ZSRCDIR/*.cpp
 sed -i -e "s/C_RDT/double/g" $ZSRCDIR/*.h
+sed -i -e "s/C_RDT/double/g" $ZSRCDIR/*.cpp
+sed -i -e "s/bpack_handle/z_bpack_handle/g" $ZSRCDIR/*.h
+sed -i -e "s/bpack_handle/z_bpack_handle/g" $ZSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.h
+sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/z_py_bpack_/g" $ZSRCDIR/*.h
+sed -i -e "s/py_bpack_/z_py_bpack_/g" $ZSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/z_py_bpack_/g" $ZSRCDIR/*.py
+sed -i -e "s/np_dt/np.complex128/g" $ZSRCDIR/*.py
+sed -i -e "s/ctypes_dt/ctypes.c_double*2/g" $ZSRCDIR/*.py
+sed -i -e "s/ctypes_rdt/ctypes.c_double/g" $ZSRCDIR/*.py
+sed -i -e "s/butterflypack_python/zbutterflypack_python/g" $ZSRCDIR/*.py
+sed -i -e "s/Py_BPACK/zPy_BPACK/g" $ZSRCDIR/*.py
+sed -i -e "s/py_bpack/z_py_bpack/g" $ZSRCDIR/CMakeLists.txt
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.h
+sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/z_BPACK_WRAP/g" $ZSRCDIR/*.h
+sed -i -e "s/BPACK_wrapper.h/zBPACK_wrapper.h/g" $ZSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/z_c_magma_offset_1d/g" $ZSRCDIR/*.f90
@@ -218,10 +235,27 @@ while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/d_$line/g" $DSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/double/g" $DSRCDIR/*.h
+sed -i -e "s/C_DT/double/g" $DSRCDIR/*.cpp
+sed -i -e "s/C_MPI_DT/MPI_DOUBLE /g" $DSRCDIR/*.cpp
 sed -i -e "s/C_RDT/double/g" $DSRCDIR/*.h
+sed -i -e "s/C_RDT/double/g" $DSRCDIR/*.cpp
+sed -i -e "s/bpack_handle/d_bpack_handle/g" $DSRCDIR/*.h
+sed -i -e "s/bpack_handle/d_bpack_handle/g" $DSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.h
+sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/d_py_bpack_/g" $DSRCDIR/*.h
+sed -i -e "s/py_bpack_/d_py_bpack_/g" $DSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/d_py_bpack_/g" $DSRCDIR/*.py
+sed -i -e "s/np_dt/np.float64/g" $DSRCDIR/*.py
+sed -i -e "s/ctypes_dt/ctypes.c_double/g" $DSRCDIR/*.py
+sed -i -e "s/ctypes_rdt/ctypes.c_double/g" $DSRCDIR/*.py
+sed -i -e "s/butterflypack_python/dbutterflypack_python/g" $DSRCDIR/*.py
+sed -i -e "s/Py_BPACK/dPy_BPACK/g" $DSRCDIR/*.py
+sed -i -e "s/py_bpack/d_py_bpack/g" $DSRCDIR/CMakeLists.txt
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.h
+sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/d_BPACK_WRAP/g" $DSRCDIR/*.h
+sed -i -e "s/BPACK_wrapper.h/dBPACK_wrapper.h/g" $DSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.f90
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/d_c_magma_offset_1d/g" $DSRCDIR/*.f90
@@ -264,10 +298,27 @@ while IFS= read -r line; do
     sed -i -e "s/$lb$line$rb/c_$line/g" $CSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/_Complex float /g" $CSRCDIR/*.h
+sed -i -e "s/C_DT/_Complex float /g" $CSRCDIR/*.cpp
+sed -i -e "s/C_MPI_DT/MPI_C_COMPLEX /g" $CSRCDIR/*.cpp
 sed -i -e "s/C_RDT/float/g" $CSRCDIR/*.h
+sed -i -e "s/C_RDT/float/g" $CSRCDIR/*.cpp
+sed -i -e "s/bpack_handle/c_bpack_handle/g" $CSRCDIR/*.h
+sed -i -e "s/bpack_handle/c_bpack_handle/g" $CSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/c_c_bpack_/g" $CSRCDIR/*.h
+sed -i -e "s/c_bpack_/c_c_bpack_/g" $CSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/c_py_bpack_/g" $CSRCDIR/*.h
+sed -i -e "s/py_bpack_/c_py_bpack_/g" $CSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/c_py_bpack_/g" $CSRCDIR/*.py
+sed -i -e "s/np_dt/np.complex64/g" $CSRCDIR/*.py
+sed -i -e "s/ctypes_dt/ctypes.c_float*2/g" $CSRCDIR/*.py
+sed -i -e "s/ctypes_rdt/ctypes.c_float/g" $CSRCDIR/*.py
+sed -i -e "s/butterflypack_python/cbutterflypack_python/g" $CSRCDIR/*.py
+sed -i -e "s/Py_BPACK/cPy_BPACK/g" $CSRCDIR/*.py
+sed -i -e "s/py_bpack/c_py_bpack/g" $CSRCDIR/CMakeLists.txt
 sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.h
+sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/c_BPACK_WRAP/g" $CSRCDIR/*.h
+sed -i -e "s/BPACK_wrapper.h/cBPACK_wrapper.h/g" $CSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/c_c_bpack_/g" $CSRCDIR/*.f90
 sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/c_c_magma_offset_1d/g" $CSRCDIR/*.f90
@@ -310,10 +361,27 @@ while IFS= read -r line; do
 	sed -i -e "s/$lb$line$rb/s_$line/g" $SSRCDIR/*.h
 done < "$TMP_FILE"
 sed -i -e "s/C_DT/float/g" $SSRCDIR/*.h
+sed -i -e "s/C_DT/float/g" $SSRCDIR/*.cpp
+sed -i -e "s/C_MPI_DT/MPI_FLOAT /g" $SSRCDIR/*.cpp
 sed -i -e "s/C_RDT/float/g" $SSRCDIR/*.h
+sed -i -e "s/C_RDT/float/g" $SSRCDIR/*.cpp
+sed -i -e "s/bpack_handle/s_bpack_handle/g" $SSRCDIR/*.h
+sed -i -e "s/bpack_handle/s_bpack_handle/g" $SSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.h
+sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/s_py_bpack_/g" $SSRCDIR/*.h
+sed -i -e "s/py_bpack_/s_py_bpack_/g" $SSRCDIR/*.cpp
+sed -i -e "s/py_bpack_/s_py_bpack_/g" $SSRCDIR/*.py
+sed -i -e "s/np_dt/np.float32/g" $SSRCDIR/*.py
+sed -i -e "s/ctypes_dt/ctypes.c_float/g" $SSRCDIR/*.py
+sed -i -e "s/ctypes_rdt/ctypes.c_float/g" $SSRCDIR/*.py
+sed -i -e "s/butterflypack_python/sbutterflypack_python/g" $SSRCDIR/*.py
+sed -i -e "s/Py_BPACK/sPy_BPACK/g" $SSRCDIR/*.py
+sed -i -e "s/py_bpack/s_py_bpack/g" $SSRCDIR/CMakeLists.txt
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.h
+sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/s_BPACK_WRAP/g" $SSRCDIR/*.h
+sed -i -e "s/BPACK_wrapper.h/sBPACK_wrapper.h/g" $SSRCDIR/*.cpp
 sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.f90
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/s_c_magma_offset_1d/g" $SSRCDIR/*.f90

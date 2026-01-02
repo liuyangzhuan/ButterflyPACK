@@ -17,7 +17,7 @@ Developers:Yang Liu
 
 #ifndef BPACK_WRAP /* allow multiple inclusions */
 #define BPACK_WRAP
-
+#include <stdint.h>
 #ifdef HAVE_MPI
 #include <mpi.h>
 #else
@@ -33,9 +33,14 @@ Developers:Yang Liu
 typedef void*F2Cptr; //pointer passing fortran derived types to c
 typedef void*C2Fptr; //pointer passing c objects to fortran
 
+
 //------------------------------------------------------------------------------
 //Declartion of FORTRAN subroutines to BPACK code
+#ifdef __cplusplus
 extern "C"{
+#endif
+
+void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0);
 
 void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
@@ -59,9 +64,11 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
-void c_bpack_createptree(int*nmpi, int*groupmembers, int* MPIcomm, F2Cptr*ptree);
+void c_bpack_get_comm(F2Cptr* ptree, int* fcomm);
 void c_bpack_createstats(F2Cptr*stats);
 void c_bpack_new2old(F2Cptr* msh, int* newidx_loc, int* oldidx);
+void c_bpack_old2new(F2Cptr* msh, int* oldidx, int* newidx);
+void c_bpack_localindices(F2Cptr* msh, int* idxs, int* nlocal, int* nglobal);
 void c_bpack_printstats(F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_printstructure(F2Cptr* bmat, int* inverse, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_getstats(F2Cptr*stats, char const*nam, double*val_d);
@@ -80,6 +87,9 @@ void c_bpack_md_deletemesh(int* Ndim, F2Cptr*msh);
 void c_bpack_deletekernelquant(F2Cptr*ker);
 void c_bpack_delete(F2Cptr*bmat);
 void c_bpack_deleteoption(F2Cptr*option);
+void c_bpack_vector_global2local(F2Cptr* ptree, F2Cptr* msh, int* nvec, C_DT   *b_global, C_DT   *b);
+void c_bpack_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* nvec, C_DT   *b, C_DT   *b_global);
+
 inline void c_bpack_set_I_option(F2Cptr*option, char const*nam, int val) {
 c_bpack_setoption(option, nam, (C2Fptr) &val);
 }
@@ -97,8 +107,9 @@ void c_bf_new2old_row(F2Cptr* mshr, int* newidx_loc, int* oldidx);
 void c_bf_new2old_col(F2Cptr* mshc, int* newidx_loc, int* oldidx);
 
 
-
+#ifdef __cplusplus
 }
+#endif
 //-----------------------------------------------------------------------------
 
 #endif

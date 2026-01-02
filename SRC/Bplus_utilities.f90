@@ -982,14 +982,16 @@ contains
             call Redistribute1Dto1D(dat_old, max(1, blocks%M_loc), blocks%M_p, 0, blocks%pgno, dat_new, max(1, blocks_dummy%M_loc), blocks_dummy%M_p, 0, pgno_new, rank, ptree)
             if (blocks%M_loc > 0) then
                deallocate (blocks%ButterflyU%blocks(1)%matrix)
-
+               blocks%ButterflyU%blocks(1)%matrix => null()
+               deallocate(blocks%ButterflyU%blocks)
+               blocks%ButterflyU%nblk_loc=0
             endif
             deallocate (dat_old)
             if (blocks_dummy%M_loc > 0) then
                if (.not. allocated(blocks%ButterflyU%blocks)) allocate (blocks%ButterflyU%blocks(1))
                if (.not. associated(blocks%ButterflyU%blocks(1)%matrix)) allocate (blocks%ButterflyU%blocks(1)%matrix(blocks_dummy%M_loc, rank))
                blocks%ButterflyU%blocks(1)%matrix = dat_new
-
+               blocks%ButterflyU%nblk_loc=1
             endif
             deallocate (dat_new)
 
@@ -1004,7 +1006,9 @@ contains
             call Redistribute1Dto1D(dat_old,max(1, blocks%N_loc), blocks%N_p, 0, blocks%pgno, dat_new, max(1, blocks_dummy%N_loc),blocks_dummy%N_p, 0, pgno_new, rank, ptree)
             if (blocks%N_loc > 0) then
                deallocate (blocks%ButterflyV%blocks(1)%matrix)
-
+               blocks%ButterflyV%blocks(1)%matrix => null()
+               deallocate(blocks%ButterflyV%blocks)
+               blocks%ButterflyV%nblk_loc=0
             endif
             deallocate (dat_old)
 
@@ -1012,7 +1016,7 @@ contains
                if (.not. allocated(blocks%ButterflyV%blocks)) allocate (blocks%ButterflyV%blocks(1))
                if (.not. associated(blocks%ButterflyV%blocks(1)%matrix)) allocate (blocks%ButterflyV%blocks(1)%matrix(blocks_dummy%N_loc, rank))
                blocks%ButterflyV%blocks(1)%matrix = dat_new
-
+               blocks%ButterflyV%nblk_loc=1
                blocks%rankmax = rank
             endif
             deallocate (dat_new)

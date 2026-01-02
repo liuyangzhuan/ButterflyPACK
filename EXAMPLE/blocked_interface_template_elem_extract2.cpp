@@ -3,7 +3,7 @@
 // The performance benefits compared to single entry evaluation-based interface are:
 // 1. Possible OpenMP loops over the number of blocks
 // 2. Possible OpenMP loops over the entries of each block
-// 3. The implementation of loop-by-element instead of loop-by-basis for high-order methods, etc.  
+// 3. The implementation of loop-by-element instead of loop-by-basis for high-order methods, etc.
 // To use this interface, one needs to call bpack_set_option(option, "elem_extract", 2);
     // allrows: 1D array containing the global row indices (in original order starting from 1 to N) stacked together
     // allcols: 1D array containing the global column indices (in original order starting from 1 to N) stacked together
@@ -70,10 +70,10 @@ inline void C_FuncZmnBlock_BF(int* Ninter, int* Nallrows, int* Nallcols, int64_t
     {
     rows= (int*)malloc(nrmax*sizeof(int));
     cols= (int*)malloc(ncmax*sizeof(int));
-    
+
     // #pragma omp for
     for (int nn1=0;nn1<NinterNew;nn1++){
-      int nn =inter_map[nn1]; 
+      int nn =inter_map[nn1];
       int pp = pgidx[nn];
       int nprow = pmaps[pp];
       int npcol = pmaps[*Npmap+pp];
@@ -90,9 +90,9 @@ inline void C_FuncZmnBlock_BF(int* Ninter, int* Nallrows, int* Nallcols, int64_t
 
       }
 
-      // The following code computes a single matrix block (intersection) of sizes nr x nc, with row 
-      // indices in rows (index is 1-based instead of 0-based) and column indices in cols (index is 
-      // 1-based instead of 0-based), and entry values (nr x nc entries stored in column major) in alldat_loc starting from idx_val_map[nn1] 
+      // The following code computes a single matrix block (intersection) of sizes nr x nc, with row
+      // indices in rows (index is 1-based instead of 0-based) and column indices in cols (index is
+      // 1-based instead of 0-based), and entry values (nr x nc entries stored in column major) in alldat_loc starting from idx_val_map[nn1]
       your_function_to_compute_one_block(nr, nc, rows, cols, &(alldat_loc[idx_val_map[nn1]]), Q);
 
     }

@@ -37,5 +37,6 @@ cmake .. \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
 	# -DCMAKE_Fortran_FLAGS="-no-prec-div -align records -parallel -lpthread" \
-make ie2d
+make ie2d -j8
+make ie3d
 	# -DCMAKE_EXE_LINKER_FLAGS="-qopenmp -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64 -lmkl_intel_thread -lmkl_intel_lp64 -lmkl_core" \

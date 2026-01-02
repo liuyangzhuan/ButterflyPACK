@@ -41,7 +41,7 @@
 #include <getopt.h>
 #include <unistd.h>
 
-#include "dC_BPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
 
 
 
@@ -342,7 +342,7 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
       // ****************************
 
 
-      // scatter xout_glo into xout 
+      // scatter xout_glo into xout
       MPI_Allreduce(MPI_IN_PLACE,xout_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       for (int i=0; i<*nout; i++){
         int i_new_loc = i+1;
@@ -390,214 +390,6 @@ vector<T> write_from_file(string filename) {
   return data;
 }
 
-
-/**  The command line parser for the example related parameters */
-void set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
-    double opt_d;
-    int opt_i;
-    std::vector<std::unique_ptr<char[]>> argv_data(argc);
-    std::vector<char*> argv(argc);
-    for (int i=0; i<argc; i++) {
-      argv_data[i].reset(new char[strlen(cargv[i])+1]);
-      argv[i] = argv_data[i].get();
-      strcpy(argv[i], cargv[i]);
-    }
-    option long_options[] =
-      {{"nmin_leaf",                     required_argument, 0, 1},
-       {"tol_comp",                   required_argument, 0, 2},
-       {"tol_rand",                   required_argument, 0, 3},
-       {"tol_Rdetect",             required_argument, 0, 4},
-       {"tol_itersol",             required_argument, 0, 5},
-       {"n_iter",          required_argument, 0, 6},
-       {"level_check",         required_argument, 0, 7},
-       {"precon",                  required_argument, 0, 8},
-       {"xyzsort",      required_argument, 0, 9},
-       {"lrlevel",     required_argument, 0, 10},
-       {"errfillfull",       required_argument, 0, 11},
-       {"baca_batch",      required_argument, 0, 12},
-       {"reclr_leaf",      required_argument, 0, 13},
-       {"nogeo",     required_argument, 0, 14},
-       {"less_adapt",            required_argument, 0, 15},
-       {"errsol",           required_argument, 0, 16},
-       {"lr_blk_num",                  required_argument, 0, 17},
-       {"rank0",  required_argument, 0, 18},
-       {"rankrate", required_argument, 0, 19},
-       {"itermax",               required_argument, 0, 20},
-       {"powiter",  required_argument, 0, 21},
-       {"ilu", required_argument, 0, 22},
-       {"nbundle",     required_argument, 0, 23},
-       {"near_para",  required_argument, 0, 24},
-       {"format",  required_argument, 0, 25},
-       {"verbosity", required_argument, 0, 26},
-       {"rmax", required_argument, 0, 27},
-       {"sample_para", required_argument, 0, 28},
-       {"pat_comp",    required_argument, 0, 29},
-       {"knn",         required_argument, 0, 30},
-       {NULL, 0, NULL, 0}
-      };
-    int c, option_index = 0;
-    // bool unrecognized_options = false;
-    opterr = optind = 0;
-    while ((c = getopt_long_only
-            (argc, argv.data(), "",
-             long_options, &option_index)) != -1) {
-      switch (c) {
-      case 1: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "Nmin_leaf", opt_i);
-      } break;
-      case 2: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "tol_comp", opt_d);
-        d_c_bpack_set_D_option(&option0, "tol_rand", opt_d);
-        d_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d*0.1);
-      } break;
-      case 3: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "tol_rand", opt_d);
-      } break;
-      case 4: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "tol_Rdetect", opt_d);
-      } break;
-      case 5: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "tol_itersol", opt_d);
-      } break;
-      case 6: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "n_iter", opt_i);
-      } break;
-      case 7: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "level_check", opt_i);
-      } break;
-      case 8: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "precon", opt_i);
-      } break;
-      case 9: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "xyzsort", opt_i);
-      } break;
-      case 10: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "LRlevel", opt_i);
-      } break;
-      case 11: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "ErrFillFull", opt_i);
-      } break;
-      case 12: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "BACA_Batch", opt_i);
-      } break;
-      case 13: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "RecLR_leaf", opt_i);
-      } break;
-      case 14: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "nogeo", opt_i);
-      } break;
-      case 15: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "less_adapt", opt_i);
-      } break;
-      case 16: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "ErrSol", opt_i);
-      } break;
-      case 17: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "LR_BLK_NUM", opt_i);
-      } break;
-      case 18: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "rank0", opt_i);
-      } break;
-      case 19: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "rankrate", opt_d);
-      } break;
-      case 20: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "itermax", opt_i);
-      } break;
-      case 21: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "powiter", opt_i);
-      } break;
-      case 22: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "ILU", opt_i);
-      } break;
-      case 23: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "Nbundle", opt_i);
-      } break;
-      case 24: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "near_para", opt_d);
-      } break;
-      case 25: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "format", opt_i);
-      } break;
-      case 26: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "verbosity", opt_i);
-      } break;
-      case 27: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "rmax", opt_i);
-      } break;
-      case 28: {
-        std::istringstream iss(optarg);
-        iss >> opt_d;
-        d_c_bpack_set_D_option(&option0, "sample_para", opt_d);
-      } break;
-      case 29: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "pat_comp", opt_i);
-      } break;
-      case 30: {
-        std::istringstream iss(optarg);
-        iss >> opt_i;
-        d_c_bpack_set_I_option(&option0, "knn", opt_i);
-      } break;
-      default: break;
-      }
-    }
-  }
 
 ////////////////////////////////////////////////////////////////////////////////
 /**  --------------------------- Main Code Starts Here ------------------------ */
@@ -882,7 +674,7 @@ if(tst==4){
 	d_c_bpack_set_I_option(&option, "ErrSol", 1);
 
 
-	set_option_from_command_line(argc, argv,option);
+	d_c_bpack_set_option_from_command_line(argc, argv,option);
 
   F2Cptr option_save;
   d_c_bpack_copyoption(&option,&option_save);

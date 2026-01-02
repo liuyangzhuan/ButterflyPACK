@@ -41,7 +41,7 @@
 #include <getopt.h>
 #include <unistd.h>
 
-#include "dC_BPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
 #include "CPPWrapper.hpp"
 
 
@@ -478,7 +478,7 @@ if(tst==1){
 
 	bpack_construct_ho_element_compute<scalart>(bmat, option, stats, msh, kerquant, ptree, &C_FuncZmn, &C_FuncZmnBlock, quant_ptr);
 	bpack_printstructure<scalart>(bmat, 0, option, stats, ptree);
-	
+
 	// factor matrix
 	bpack_factor_ho<scalart>(bmat,option,stats,ptree,msh);
 	bpack_printstructure<scalart>(bmat, 1, option, stats, ptree);

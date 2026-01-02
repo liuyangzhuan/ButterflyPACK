@@ -43,10 +43,10 @@
 #endif
 
 #include "CPPWrapper.hpp"
-#include "sC_BPACK_wrapper.h"
-#include "dC_BPACK_wrapper.h"
-#include "cC_BPACK_wrapper.h"
-#include "zC_BPACK_wrapper.h"
+#include "sBPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
+#include "cBPACK_wrapper.h"
+#include "zBPACK_wrapper.h"
 
 namespace butterflypack {
 
@@ -1198,6 +1198,7 @@ namespace butterflypack {
           {"n_iter",          required_argument, 0, 6},			 
           {"level_check",         required_argument, 0, 7},		
           {"precon",                  required_argument, 0, 8}, 	
+          {"xyzsort",                  required_argument, 0, 9}, 	
           {"lrlevel",     required_argument, 0, 10},   
           {"errfillfull",       required_argument, 0, 11}, 
           {"baca_batch",      required_argument, 0, 12}, 

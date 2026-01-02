@@ -21,6 +21,7 @@ option(enable_doc       "Build doxygen documentation" OFF)
 option(enable_openmp    "Build with OpenMP support" ON)
 option(enable_toplevel_openmp    "Use OpenMP at top levels of the solver" OFF)
 option(enable_mpi    "Build with MPI support" ON)
+option(enable_python "Enable Python" OFF)
 
 ######################################################################
 #
@@ -253,6 +254,7 @@ endif()
 if(enable_mpi)
   set(CMAKE_Fortran_FLAGS "-DHAVE_MPI ${CMAKE_Fortran_FLAGS}")
   set(CMAKE_CXX_FLAGS "-DHAVE_MPI ${CMAKE_CXX_FLAGS}")
+  set(CMAKE_C_FLAGS "-DHAVE_MPI ${CMAKE_C_FLAGS}")
 
 if(TPL_SCALAPACK_LIBRARIES)
   set(SCALAPACK_FOUND TRUE)
@@ -359,6 +361,19 @@ if(BUTTERFLYPACK_USE_MPI3)
 endif()
 endif()
 
+if(enable_python)
+  #--------------------- Python ---------------------
+  # Find Python
+  find_package(Python REQUIRED COMPONENTS Interpreter Development)
+  # Find pybind11
+  execute_process(
+      COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+      OUTPUT_VARIABLE pybind11_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  list(APPEND CMAKE_PREFIX_PATH "${pybind11_DIR}")
+  find_package(pybind11 REQUIRED)
+endif()
 
 # Test Fortran Destructor
 check_fortran_source_compiles(

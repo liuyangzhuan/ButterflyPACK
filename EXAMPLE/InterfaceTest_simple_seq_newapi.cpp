@@ -40,7 +40,7 @@
 #include <getopt.h>
 #include <unistd.h>
 
-#include "dC_BPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
 #include "CPPWrapper.hpp"
 
 
