@@ -52,6 +52,7 @@ while True:
                     break
             time.sleep(poll_interval)
     flag = comm.bcast(flag, root=0)
+    fid = comm.bcast(fid, root=0)
     if(flag=="init"):
         #####  read payload by rank 0 and broadcast
         payload=None
@@ -105,7 +106,7 @@ while True:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs = pickle.load(f)
             xb = np.ascontiguousarray(xb, dtype=np_dt)
-
+        nrhs = comm.bcast(nrhs, root=0)
         sp.py_bpack_solve(
             ctypes.byref(pyobjs[fid]),            # void **pyobj
             nrhs,                           # int nrhs
@@ -118,12 +119,14 @@ while True:
         ####################### mult
         #####  read in the RHS by rank 0
         nrhs=-1
+        trans=None
         xb = np.random.rand(1).astype(np_dt)
         if rank == 0:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs,trans = pickle.load(f)
             xb = np.ascontiguousarray(xb, dtype=np_dt)
-
+        nrhs = comm.bcast(nrhs, root=0)
+        trans = comm.bcast(trans, root=0)
         sp.py_bpack_mult(
             ctypes.byref(pyobjs[fid]),            # void **pyobj
             nrhs,                           # int nrhs
