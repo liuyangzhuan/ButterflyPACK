@@ -25,6 +25,7 @@ coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 ############################################## the following tests a 1/r kernel
 # meta = {"coordinates": coordinates}
 # payload = {
+#     "block_func_filepath": os.path.abspath(__file__),
 #     "block_func_module": "user_block_funcs_1_r",
 #     "block_func_name": "compute_block",
 #     "meta": meta
@@ -46,6 +47,7 @@ meta = {
     "yerr": np.repeat(err, Npo).astype(np.float64)
 }
 payload = {
+    "block_func_filepath": os.path.abspath(__file__),
     "block_func_module": "user_block_funcs_george",
     "block_func_name": "compute_block",
     "meta": meta

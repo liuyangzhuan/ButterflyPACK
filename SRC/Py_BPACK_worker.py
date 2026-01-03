@@ -61,6 +61,9 @@ while True:
                 payload = pickle.load(f)
         payload = comm.bcast(payload, root=0)
         # Resolve user function
+        filedir = os.path.dirname(payload["block_func_filepath"])
+        if filedir not in sys.path:
+            sys.path.insert(0, filedir)
         mod = importlib.import_module(payload["block_func_module"])
         compute_block = getattr(mod, payload["block_func_name"])
         meta = payload["meta"]

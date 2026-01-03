@@ -10,13 +10,13 @@ module unload python
 export PATH=/home/administrator/Desktop/Research/GPTune_master/env/bin/:$PATH
 export BPACK_PYTHON_LIB_PATH=/home/administrator/Desktop/Research/ButterflyPACK_logdet/build/SRC_DOUBLE/
 export PYTHONPATH=$BPACK_PYTHON_LIB_PATH:$PYTHONPATH
-export PYTHONPATH=$PWD/../EXAMPLE/:$PYTHONPATH
+# export PYTHONPATH=$PWD/../EXAMPLE/:$PYTHONPATH
 python --version
 
 
 
 
-nmpi=1
+nmpi=2
 export OMP_NUM_THREADS=1
 
 # # mpirun --allow-run-as-root -n $nmpi valgrind --tool=memcheck --leak-check=full --track-origins=yes python ../EXAMPLE/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-6 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128
@@ -38,7 +38,8 @@ for fid in $(seq 0 "$MAX_ID_FILE"); do
     rm -rf "$CONTROL_FILE.$fid" "$DATA_FILE.$fid" "$RESULT_FILE.$fid"
 done
 mpirun --allow-run-as-root -n $nmpi python -u ${BPACK_PYTHON_LIB_PATH}/dPy_BPACK_worker.py -option --xyzsort 1 --tol_comp 1e-10 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128 --errsol 1 | tee a.out_seperatelaunch_worker &
-python -u ../EXAMPLE/Test_python_master_2mats.py | tee a.out_seperatelaunch_master 
+python -u ../EXAMPLE/Test_python_master.py | tee a.out_seperatelaunch_master 
+# python -u ../EXAMPLE/Test_python_master_2mats.py | tee a.out_seperatelaunch_master 
 python -c "from dPy_BPACK_wrapper import *; bpack_terminate()"
 
 
