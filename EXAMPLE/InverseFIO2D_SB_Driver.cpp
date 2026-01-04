@@ -659,7 +659,7 @@ int main(int argc, char* argv[])
       for (int i = 0; i < nrhs*myseg_n; i++)
         u0[i] = u0[i]-x[i];
       double norm3=pow(l2_norm(u0,nrhs*myseg_n),2);
-      MPI_Allreduce(MPI_IN_PLACE,&norm3,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);
+      MPI_Allreduce(&norm3,&norm3,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);
       double norm1=0,norm2=0,norm1t=0,norm2t=0;
       for (int i = 0; i < nrhs*myseg_n; i++){
         norm1+=pow(cabs(xtrue[i]),2);

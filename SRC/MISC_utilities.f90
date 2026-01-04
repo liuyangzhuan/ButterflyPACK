@@ -1169,7 +1169,7 @@ contains
             small=.False.
             if(present(norm_tol))then
                norm = fnorm(mat,M_loc,N)**2d0
-               call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+               call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
                norm = sqrt(norm)
                if(norm/sqrt(dble(N))<norm_tol)small=.True.
             endif
@@ -1229,7 +1229,7 @@ contains
                   end if
                endif
 
-               call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
                !!!!>**** redistribution of output matrix
                call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)

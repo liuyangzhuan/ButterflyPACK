@@ -363,8 +363,8 @@ PROGRAM ButterflyPACK_IE_3D
 	do nn=1,quant%nev
 		norm1 = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
 		normi = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
-		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
-		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(norm1, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(normi, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
 		norm1 =norm1/normi
 		if(norm1>maxnorm)then
 			nn1=nn

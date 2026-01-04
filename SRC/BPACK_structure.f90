@@ -1523,7 +1523,7 @@ end function distance_geo
       endif
 
       do ii=1,option%knn
-         call MPI_ALLREDUCE(MPI_IN_PLACE, msh%nns(:,ii), msh%Nunk, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(msh%nns(:,ii), msh%nns(:,ii), msh%Nunk, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       enddo
 
       do ii = Bidxs, Bidxe
@@ -2795,7 +2795,7 @@ end function distance_geo
          enddo
       endif
 
-      call MPI_allreduce(MPI_IN_PLACE, stats%leafs_of_level(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_integer, MPI_sum, ptree%Comm, ierr)
+      call MPI_allreduce(stats%leafs_of_level(0:h_mat%Maxlevel), stats%leafs_of_level(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_integer, MPI_sum, ptree%Comm, ierr)
 
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then

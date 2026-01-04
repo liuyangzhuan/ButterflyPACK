@@ -775,7 +775,7 @@ contains
             enddo
          endif
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level)%blocks)) then
@@ -1091,7 +1091,7 @@ contains
             enddo
          endif
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
@@ -1326,8 +1326,8 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         call MPI_ALLREDUCE(block_rand(1)%rankmax, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc
 
@@ -1461,8 +1461,8 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         call MPI_ALLREDUCE(block_rand(1)%rankmax, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A8,I5,I5,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc, block_rand(1)%row_group,block_rand(1)%col_group
 
@@ -1722,7 +1722,7 @@ contains
                allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
             endif
 
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
 
             block_rand%rankmax = rank
             block_rand%rankmin = rank
@@ -1829,8 +1829,8 @@ contains
       else
       endif
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(Singular, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
 
       deallocate (MatQcA_trans2D)
       deallocate (UU)
@@ -1935,7 +1935,7 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%N_loc,1)**2d0
-                  call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -2053,7 +2053,7 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%M_loc,1)**2d0
-                  call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -5455,7 +5455,7 @@ contains
          error_inout = max(error_inout, error)
          ! write(*,*)'go'
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(rankthusfar, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
 
       end do
       ! call Test_Error_RR_Inner_Exact(bplus_o)
@@ -5481,7 +5481,7 @@ contains
          do bb = 1, Bplus_randomized%LL(ll)%Nbound
             Bplus_randomized%LL(ll)%rankmax = max(Bplus_randomized%LL(ll)%rankmax, Bplus_randomized%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(Bplus_randomized%LL(ll)%rankmax, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       call Bplus_delete(bplus_o)

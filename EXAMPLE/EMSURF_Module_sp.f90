@@ -815,7 +815,7 @@ subroutine current_node_patch_mapping(string,curr,msh,quant,ptree)
 #ifdef HAVE_OPENMP
 	!$omp end parallel do
 #endif
-	call MPI_ALLREDUCE(MPI_IN_PLACE,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(vec_current_at_patch,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
 
 
 	do i=1,quant%maxpatch

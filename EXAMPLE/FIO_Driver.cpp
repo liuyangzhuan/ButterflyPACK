@@ -589,7 +589,7 @@ if(tst ==3){
       xin.data()[i+nth*myseg_k] = xin_glo.data()[i_old-1+nth*K]; // generate the local input vector
     }
   }
-  MPI_Allreduce(MPI_IN_PLACE,xin_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(xin_glo.data(),xin_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
   if(myrank==master_rank){   // only MPI rank 0 write data to file
     fstream myfile1;
@@ -614,7 +614,7 @@ if(tst ==3){
       xout_glo.data()[i_old-1+nth*M] = xout2.data()[i+nth*myseg_m];
     }
   }
-  MPI_Allreduce(MPI_IN_PLACE,xout_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(xout_glo.data(),xout_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
   /* save the matrix vector production results*/
   if(myrank==master_rank){   // only MPI rank 0 write data to file
@@ -659,7 +659,7 @@ if(tst ==3){
       rhs.data()[i+nth*myseg_m] = rhs_glo.data()[i_old-1+nth*M]; // generate the local input vector
     }
   }
-  MPI_Allreduce(MPI_IN_PLACE,rhs_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(rhs_glo.data(),rhs_glo.data(), M*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
   if(myrank==master_rank){   // only MPI rank 0 write data to file
     fstream myfile1;
     myfile1.open("rhs.txt",fstream::out);
@@ -699,7 +699,7 @@ if(tst ==3){
       x_glo.data()[i_old-1+nth*K] = x.data()[i+nth*myseg_k];
     }
   }
-  MPI_Allreduce(MPI_IN_PLACE,x_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(x_glo.data(),x_glo.data(), K*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
   /* save the tfqmr results*/
   if(myrank==master_rank){   // only MPI rank 0 write data to file

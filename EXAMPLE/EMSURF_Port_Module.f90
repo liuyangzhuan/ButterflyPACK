@@ -1721,7 +1721,7 @@ subroutine current_node_patch_mapping(JMflag,string,curr,msh,quant,ptree)
 	endif
 
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(vec_current_at_patch,vec_current_at_patch,quant%maxpatch*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
 
 	do i=1,quant%maxpatch
@@ -3033,7 +3033,7 @@ subroutine nxK_waveguidePrecompute(option,msh,quant,ptree,stats)
 
 
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,quant%nxK_waveguide,(quant%Nunk_int + quant%Nunk_port)*quant%Nunk_waveguidemode,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(quant%nxK_waveguide,quant%nxK_waveguide,(quant%Nunk_int + quant%Nunk_port)*quant%Nunk_waveguidemode,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 	if(ptree%MyID==Main_ID)then
 		write(*,*)minval(abs(quant%nxK_waveguide(:,1))),maxval(abs(quant%nxK_waveguide(:,1))),minval(abs(quant%nxK_waveguide(:,2))),maxval(abs(quant%nxK_waveguide(:,2)))
 		! write(897,*)dble(quant%nxK_waveguide(:,1))
@@ -3094,7 +3094,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		enddo
 	enddo
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,quant%obs_Efields,quant%Nobs*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(quant%obs_Efields,quant%obs_Efields,quant%Nobs*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 
 	if(ptree%MyID==Main_ID)then
 		volt_acc = 0
@@ -3154,7 +3154,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		endif
 	enddo
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(Enormal_at_patch,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
 	Enormal_at_patch = Enormal_at_patch/quant%normalize_factor
 
 	if(ptree%MyID==Main_ID)then  ! check the normal E field on the wall
@@ -3221,8 +3221,8 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		endif
 	enddo
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-	call MPI_ALLREDUCE(MPI_IN_PLACE,cnt_patch,quant%maxpatch,MPI_INTEGER,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(Enormal_at_patch,Enormal_at_patch,quant%maxpatch,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(cnt_patch,cnt_patch,quant%maxpatch,MPI_INTEGER,MPI_SUM,ptree%Comm,ierr)
 	do patch =1,quant%maxpatch
 		if(cnt_patch(patch)>0)then
 			Enormal_at_patch(patch)=Enormal_at_patch(patch)/cnt_patch(patch)
@@ -3277,7 +3277,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 
 
 	max_Enormal_GF = maxval(abs(Enormal_GF))
-	call MPI_ALLREDUCE(MPI_IN_PLACE,max_Enormal_GF,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(max_Enormal_GF,max_Enormal_GF,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
 
 
 	if(ptree%MyID==Main_ID)write(*,*)'   max normal E (GF):',max_Enormal_GF
@@ -3325,7 +3325,7 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		endif
 	enddo
 
-	call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+	call MPI_ALLREDUCE(Ht_at_patch,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
     Ht_at_patch = Ht_at_patch/quant%normalize_factor
 
 	if(ptree%MyID==Main_ID)then
@@ -3408,9 +3408,9 @@ subroutine EM_cavity_postprocess(option,msh,quant,ptree,stats,eigvec,nth,norm,ei
 		enddo
 		Et_at_patch = Et_at_patch/quant%normalize_factor
 
-		call MPI_ALLREDUCE(MPI_IN_PLACE,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-		call MPI_ALLREDUCE(MPI_IN_PLACE,Et_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
-		call MPI_ALLREDUCE(MPI_IN_PLACE,port_of_patch,quant%maxpatch,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
+		call MPI_ALLREDUCE(Ht_at_patch,Ht_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+		call MPI_ALLREDUCE(Et_at_patch,Et_at_patch,quant%maxpatch*quant%integral_points*3,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree%Comm,ierr)
+		call MPI_ALLREDUCE(port_of_patch,port_of_patch,quant%maxpatch,MPI_INTEGER,MPI_MAX,ptree%Comm,ierr)
 
 
 

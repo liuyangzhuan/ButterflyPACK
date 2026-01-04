@@ -612,8 +612,8 @@ PROGRAM ButterflyPACK_IE_3D
 	do nn=1,quant%nev
 		norm1 = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
 		normi = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
-		call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
-		call MPI_ALLREDUCE(MPI_IN_PLACE, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(norm1, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
+		call MPI_ALLREDUCE(normi, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
 		! if(ptree_A%MyID==Main_ID)then
 		! 	write(*,*)norm1,normi,norm1/normi
 		! endif
@@ -678,7 +678,7 @@ PROGRAM ButterflyPACK_IE_3D
 		if(norms(ii)>norm_thresh)then
 			eigvec_glo=0
 			eigvec_glo(msh_A%idxs:msh_A%idxe)=eigvec(:,ii)
-			call MPI_ALLREDUCE(MPI_IN_PLACE,eigvec_glo,quant%Nunk,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
+			call MPI_ALLREDUCE(eigvec_glo,eigvec_glo,quant%Nunk,MPI_DOUBLE_COMPLEX,MPI_SUM,ptree_A%Comm,ierr)
 			eigvec_glo = eigvec_glo/dot_product(eigvec_glo,eigvec_glo)
 
 			!**** compare with eigenvectors in file

@@ -516,8 +516,8 @@ endif
             deallocate (matrix_small)
          endif
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(block_o%phase, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(block_o%logabsdet, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          call Redistribute2Dto1D(matU2D1, block_o%M, 0, pgno, block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, rank, ptree)
 
@@ -1107,8 +1107,8 @@ endif
 
          norm1 = fnorm(VecOut - VecIn, mm, num_vect)**2d0
          norm2 = fnorm(VecIn, mm, num_vect)**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(norm1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(norm2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
          error_inout = sqrt(norm1)/sqrt(norm2)
 
          if (ptree%MyID == Main_ID .and. option%verbosity >= 1) write (*, '(A22,A6,I3,A8,I2,A8,I3,A7,Es14.7)') ' Schultz ', ' rank:', block_Xn%rankmax, ' Iter:', ii, ' L_butt:', block_Xn%level_butterfly, ' error:', error_inout
@@ -1480,8 +1480,8 @@ endif
             blocks_D%phase=1
             blocks_D%logabsdet=0
          endif
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(rank0, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_A%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_A%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_D%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
@@ -1504,7 +1504,7 @@ endif
             vecout=0
             call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
-            call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
             norm = sqrt(norm)
             deallocate(vecin)
             deallocate(vecout)
@@ -1824,14 +1824,14 @@ endif
       else
          level_butterfly_o = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_c = blocks_A%level_butterfly
       else
          level_butterfly_c = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_c, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       call assert(level_butterfly_o == 2 + level_butterfly_c, 'BF_ABCD only supports merging L-2-level BFs into a L-level BF')
 
@@ -2885,7 +2885,7 @@ endif
             do bb = 1, Bplus%LL(ll)%Nbound
                Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
             enddo
-            call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
          end do
 
          rank_new_max = 0
@@ -3129,7 +3129,7 @@ endif
          do bb = 1, Bplus%LL(ll)%Nbound
             if(IOwnPgrp(ptree,Bplus%LL(ll)%matrices_block(bb)%pgno))Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       rank_new_max = 0

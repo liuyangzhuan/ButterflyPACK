@@ -606,14 +606,14 @@ contains
       endif
 
       x_sum = sum(x)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(x_sum, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(myisnan(abs(x_sum)))then
          if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
          x = 0
       endif
 
       b_sum = sum(b)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(b_sum, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
@@ -856,7 +856,7 @@ contains
 
 
    !    nb_local = dot_product(b(:,1), b(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nb_local, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(nb_local, nb_local, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    nb = sqrt(abs(nb_local))
 
@@ -867,7 +867,7 @@ contains
    !    r = b-ytmp
 
    !    nr_local = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    nr = sqrt(abs(nr_local))
    !    nr_act = nr
@@ -895,7 +895,7 @@ contains
    !    eta = 0
 
    !    rho = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, rho, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(rho, rho, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    rho_old = rho
 
@@ -904,7 +904,7 @@ contains
    !    do mm=1,itmax
    !       if(even==1)then
    !          r0v = dot_product(r0(:,1), v(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0v, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(r0v, r0v, 1, MPI_DT, MPI_SUM, &
    !                               ptree%Comm, ierr)
    !          alpha = rho/r0v
    !          u_mp1 = u_m - alpha*v
@@ -915,7 +915,7 @@ contains
    !       Ad = Au + sigma*Ad
 
    !       nw_local = dot_product(w(:,1), w(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nw_local, 1, MPI_DT, MPI_SUM, &
+   !       call MPI_ALLREDUCE(nw_local, nw_local, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !       nw = sqrt(abs(nw_local))
    !       theta = nw/tau
@@ -927,7 +927,7 @@ contains
    !       x = x + eta*d
    !       r = r - eta*Ad
    !       nr_local = dot_product(r(:,1), r(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !       call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !       nr = sqrt(abs(nr_local))
    !       nr_act = nr;
@@ -943,7 +943,7 @@ contains
    !          r = b - ytmp
 
    !          nr_local = dot_product(r(:,1), r(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                               ptree%Comm, ierr)
    !          nr_act = sqrt(abs(nr_local))
    !          if (nr_act <= tolb)then
@@ -954,7 +954,7 @@ contains
 
    !       if(even==0)then
    !          r0w = dot_product(r0(:,1), w(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0w, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(r0w, r0w, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !          rho = r0w;
    !          beta = rho/rho_old
@@ -1019,7 +1019,7 @@ contains
 
 
    !    nb_local = dot_product(b(:,1), b(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nb_local, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(nb_local, nb_local, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    nb = sqrt(abs(nb_local))
 
@@ -1030,7 +1030,7 @@ contains
    !    r = b-ytmp
 
    !    nr_local = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    nr = sqrt(abs(nr_local))
    !    nr_act = nr
@@ -1058,7 +1058,7 @@ contains
    !    eta = 0
 
    !    rho = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, rho, 1, MPI_DT, MPI_SUM, &
+   !    call MPI_ALLREDUCE(rho, rho, 1, MPI_DT, MPI_SUM, &
    !                          ptree%Comm, ierr)
    !    rho_old = rho
 
@@ -1067,7 +1067,7 @@ contains
    !    do mm=1,itmax
    !       if(even==1)then
    !          r0v = dot_product(r0(:,1), v(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0v, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(r0v, r0v, 1, MPI_DT, MPI_SUM, &
    !                               ptree%Comm, ierr)
    !          alpha = rho/r0v
    !          u_mp1 = u_m - alpha*v
@@ -1078,7 +1078,7 @@ contains
    !       Ad = Au + sigma*Ad
 
    !       nw_local = dot_product(w(:,1), w(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nw_local, 1, MPI_DT, MPI_SUM, &
+   !       call MPI_ALLREDUCE(nw_local, nw_local, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !       nw = sqrt(abs(nw_local))
    !       theta = nw/tau
@@ -1090,7 +1090,7 @@ contains
    !       x = x + eta*d
    !       r = r - eta*Ad
    !       nr_local = dot_product(r(:,1), r(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !       call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !       nr = sqrt(abs(nr_local))
    !       nr_act = nr;
@@ -1106,7 +1106,7 @@ contains
    !          r = b - ytmp
 
    !          nr_local = dot_product(r(:,1), r(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(nr_local, nr_local, 1, MPI_DT, MPI_SUM, &
    !                               ptree%Comm, ierr)
    !          nr_act = sqrt(abs(nr_local))
    !          if (nr_act <= tolb)then
@@ -1117,7 +1117,7 @@ contains
 
    !       if(even==0)then
    !          r0w = dot_product(r0(:,1), w(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0w, 1, MPI_DT, MPI_SUM, &
+   !          call MPI_ALLREDUCE(r0w, r0w, 1, MPI_DT, MPI_SUM, &
    !                            ptree%Comm, ierr)
    !          rho = r0w;
    !          beta = rho/rho_old
@@ -1179,14 +1179,14 @@ contains
       endif
 
       x_sum = sum(x)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(x_sum, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(myisnan(abs(x_sum)))then
          if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed. Setting x=0 as an initial guess. '
          x=0
       endif
 
       b_sum = sum(b)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(b_sum, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_noprecon! Returning a trivial solution vector'
          x = 0d0
@@ -1371,14 +1371,14 @@ contains
 
 
       x_sum = sum(x)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(x_sum, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(myisnan(abs(x_sum)))then
          if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
          x=0
       endif
 
       b_sum = sum(b)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(b_sum, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
@@ -1600,14 +1600,14 @@ contains
       endif
 
       x_sum = sum(x)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(x_sum, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(myisnan(abs(x_sum)))then
          if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
          x=0
       endif
 
       b_sum = sum(b)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(b_sum, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
@@ -2999,7 +2999,7 @@ contains
          n2 = MPI_Wtime()
 
          ! vecnorm = fnorm(Vout, Ns, num_vectors)**2d0
-         ! call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)
+         ! call MPI_AllREDUCE(vecnorm, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)
          ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",sqrt(vecnorm)
       endif
 
@@ -3042,7 +3042,7 @@ contains
          allocate(xglo(N_glo,nvec))
          xglo=0
          xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xglo, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
          allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
          receiverlists=0
@@ -3108,7 +3108,7 @@ contains
                sendbufmod(i)%vector=0
             endif
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(sendflagarray, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
          do i = 1, h_mat%myArows
             call l2g(i, myrow, num_blocks, nprow, 1, ii)
             do j = 1, h_mat%myAcols
@@ -3260,7 +3260,7 @@ contains
                endif
             enddo
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xglo, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
          xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
          deallocate(xglo)
          deallocate(fmod)
@@ -3324,7 +3324,7 @@ contains
          allocate(xglo(N_glo,nvec))
          xglo=0
          xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xglo, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
 
          allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
          receiverlists=0
@@ -3390,7 +3390,7 @@ contains
                sendbufmod(i)%vector=0
             endif
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(sendflagarray, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
          do i = 1, h_mat%myArows
             call l2g(i, myrow, num_blocks, nprow, 1, ii)
             do j = 1, h_mat%myAcols
@@ -3545,7 +3545,7 @@ contains
                endif
             enddo
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xglo, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
          xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
          deallocate(xglo)
          deallocate(bmod)

@@ -335,7 +335,7 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
           xin_glo.data()[i_old-1+nth*Npo] = xin[i+nth*(*nin)];
         }
       }
-      MPI_Allreduce(MPI_IN_PLACE,xin_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(xin_glo.data(),xin_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
       // ****************************
       // call your function here to multiply A with xin_glo (in the original order) to get xout_glo
@@ -343,7 +343,7 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, dou
 
 
       // scatter xout_glo into xout
-      MPI_Allreduce(MPI_IN_PLACE,xout_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(xout_glo.data(),xout_glo.data(), Npo*(*nvec), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       for (int i=0; i<*nout; i++){
         int i_new_loc = i+1;
         int i_old;

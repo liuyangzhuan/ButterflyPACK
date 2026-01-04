@@ -979,7 +979,7 @@ contains
          M_loc = blocks%M_loc
          N_loc = blocks%N_loc
          call Hmat_construct_local_tree(blocks, option, stats, msh, ker, ptree, Maxlevel)
-         call MPI_allreduce(MPI_IN_PLACE, stats%leafs_of_level(0:Maxlevel), Maxlevel + 1, MPI_integer, MPI_sum, ptree%Comm, ierr)
+         call MPI_allreduce(stats%leafs_of_level(0:Maxlevel), stats%leafs_of_level(0:Maxlevel), Maxlevel + 1, MPI_integer, MPI_sum, ptree%Comm, ierr)
 
          allocate(blocks%lstblks(0:Maxlevel))
          do level = 0, Maxlevel
@@ -1844,7 +1844,7 @@ contains
       !!!! It's safer to not modify option%scale_factor inside butterflypack
 #if 0
       option%scale_factor = 1d0/scale_factor
-      call MPI_ALLREDUCE(MPI_IN_PLACE, option%scale_factor, 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(option%scale_factor, option%scale_factor, 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          write (*, *) 'element_Zmn is scaled by a factor of:', option%scale_factor
@@ -2046,7 +2046,7 @@ contains
          n4 = MPI_Wtime()
          n5 = n4 - n3
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(n5, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level
       end do
       n2 = MPI_Wtime()
@@ -2139,7 +2139,7 @@ contains
       enddo
 
       do ll = 1, hss_bf1%BP%Lplus
-         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(hss_bf1%BP%LL(ll)%rankmax, hss_bf1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       enddo
 
 
@@ -2226,7 +2226,7 @@ contains
       enddo
 
       do ll = 1, hss_bf_md1%BP%Lplus
-         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf_md1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf_md1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(hss_bf_md1%BP%LL(ll)%rankmax, hss_bf_md1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf_md1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       enddo
 
 
@@ -2517,9 +2517,9 @@ contains
       deallocate (pmaps)
 
       n2 = MPI_Wtime()
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -2746,9 +2746,9 @@ contains
       deallocate (alldat_loc)
       deallocate (pmaps)
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(BP%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BP_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -3065,8 +3065,8 @@ contains
          if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nr_m))receiver=pp
          idx_m=idx_c_m-blocks%idx_c_m+1
          if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nc_m))sender=pp
-         call MPI_ALLREDUCE(MPI_IN_PLACE, receiver, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, sender, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+         call MPI_ALLREDUCE(receiver, receiver, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+         call MPI_ALLREDUCE(sender, sender, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
 
          inter_MD(nn)%receiver=receiver
          inter_MD(nn)%sender=sender
@@ -3132,9 +3132,9 @@ contains
       call BF_MD_delete_subtensors(Ndim, dims_1D, inter_MD, stats)
 
       n2 = MPI_Wtime()
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -4381,9 +4381,9 @@ contains
       deallocate (alldat_loc)
       deallocate (pmaps)
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A32,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(entry): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
@@ -4508,9 +4508,9 @@ contains
       rhs_loc = rhs_loc - rhs_loc_ref
       v3 =(fnorm(rhs_loc,Nunk_n_loc,nvec))**2d0
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
 
@@ -4637,9 +4637,9 @@ contains
       rhs_loc = rhs_loc - rhs_loc_ref
       v3 =(fnorm(rhs_loc,product(Nunk_n_loc),nvec))**2d0
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(v3, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A28,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_MD_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
       deallocate(x_loc)

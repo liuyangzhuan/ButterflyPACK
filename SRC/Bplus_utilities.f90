@@ -922,7 +922,7 @@ contains
                if (IOwnPgrp(ptree, pgno)) call BF_ReDistribute_Inplace(bplus_o%LL(ll)%matrices_block(bb), pgno, stats, ptree, msh)
             end do
             endif
-            call MPI_ALLREDUCE(MPI_IN_PLACE, bplus_o%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(bplus_o%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(bplus_o%LL(ll)%rankmax, bplus_o%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(bplus_o%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
          end if
       end do
       endif
@@ -1803,7 +1803,7 @@ contains
       if (IOwnPgrp(ptree, block_i%pgno)) then
          call BF_ComputeMemory(block_i, memory)
          compression_ratio = 1 - memory/(storage_size(tmp)*block_i%M*block_i%N/8d0/1024.0d3)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, memory, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(block_i%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(memory, memory, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(block_i%pgno)%Comm, ierr)
          call BF_get_rank(block_i, ptree)
 
          if (ptree%pgrp(block_i%pgno)%head == ptree%MyID)then !!! only the head process prints the information about this block
@@ -5227,10 +5227,10 @@ contains
          level_butterfly_o = -1
          block_o%level_half = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_i, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_i%level_half, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_o%level_half, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       if (level_i <= block_i%level_half) then
          call assert(level_o <= block_o%level_half, 'row-wise ordering is only redistributed to row-wise ordering')
@@ -6046,10 +6046,10 @@ contains
          level_butterfly_o = -1
          block_o%level_half = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_i, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_i%level_half, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_o%level_half, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
 
@@ -6440,10 +6440,10 @@ contains
          level_butterfly_o = -1
          block_o%level_half = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_i, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_i%level_half, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_o%level_half, block_o%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       if (level_i <= block_i%level_half) then
          call assert(level_o <= block_o%level_half, 'row-wise ordering is only redistributed to row-wise ordering')
@@ -6762,9 +6762,9 @@ contains
       else
          level_butterfly_o = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_i, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_i%level_half, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       level_butterfly_c_o = max(level_butterfly_o - 1, 0)
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
@@ -7172,9 +7172,9 @@ contains
       else
          level_butterfly_o = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_i, level_butterfly_i, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(block_i%level_half, block_i%level_half, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       level_butterfly_c_o = max(level_butterfly_o - 1, 0)
       level_butterfly_o_true = max(level_butterfly_i - 2, 0)
@@ -8627,7 +8627,7 @@ contains
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                         index_j = idx_c
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
-                        call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                        call MPI_ALLREDUCE(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      endif
 
                   elseif (level == level_butterfly + 1) then
@@ -9043,7 +9043,7 @@ contains
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                         index_i = blocks%ButterflyU%idx
                         index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
-                        call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                        call MPI_ALLREDUCE(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      endif
 
                   elseif (level == 0) then
@@ -9601,7 +9601,7 @@ contains
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                         index_j = idx_c
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
-                        call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                        call MPI_ALLREDUCE(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      endif
 
                   elseif (level == level_butterfly + 1) then
@@ -10049,7 +10049,7 @@ contains
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                         index_i = blocks%ButterflyU%idx
                         index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
-                        call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                        call MPI_ALLREDUCE(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      endif
 
                   elseif (level == 0) then
@@ -10738,7 +10738,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                      index_j = idx_c
                      index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
-                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     call MPI_ALLREDUCE(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                   endif
 
                elseif (level == level_butterfly + 1) then
@@ -11887,7 +11887,7 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                      index_i = blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
-                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     call MPI_ALLREDUCE(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                   endif
 
                elseif (level == 0) then
@@ -12932,7 +12932,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                      index_j = idx_c
                      index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
-                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     call MPI_ALLREDUCE(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                   endif
 
                elseif (level == level_butterfly + 1) then
@@ -13120,7 +13120,7 @@ end subroutine BF_block_MVP_dat_batch_magma
                      rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                      index_i = blocks%ButterflyU%idx
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
-                     call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     call MPI_ALLREDUCE(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                   endif
 
                elseif (level == 0) then
@@ -14231,7 +14231,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
          proc_of_groupr(idx_r_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(proc_of_groupr, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
       do bb=1, product(blocks%nc_m)
          call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
@@ -14239,7 +14239,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          call MultiIndexToSingleIndex(Ndim, dims_c, idx_c_scalar, idx_c_m)
          proc_of_groupc(idx_c_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(proc_of_groupc, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
       ! allocation of communication quantities
       allocate (statuss(MPI_status_size, nproc))
@@ -16734,8 +16734,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                endif
             enddo
 
-            call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(block_i%rankmax, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            call MPI_ALLREDUCE(block_i%rankmin, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
 
          endif
       endif
@@ -16835,8 +16835,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             endif
             endif
          endif
-         call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(blocks%rankmax, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(blocks%rankmin, blocks%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
 
       endif

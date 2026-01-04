@@ -2466,7 +2466,7 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2478,7 +2478,7 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -2539,7 +2539,7 @@ contains
       endif
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2547,7 +2547,7 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -3081,10 +3081,10 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,Ninloc,Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,Noutloc,Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 
@@ -3160,10 +3160,10 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,product(Ninloc),Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,product(Noutloc),Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 
