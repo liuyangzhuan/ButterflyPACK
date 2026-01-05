@@ -16,11 +16,12 @@ python --version
 
 
 
-nmpi=2
+nmpi=1
 export OMP_NUM_THREADS=1
 
-# # mpirun --allow-run-as-root -n $nmpi valgrind --tool=memcheck --leak-check=full --track-origins=yes python ../EXAMPLE/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-6 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128
+# mpirun --allow-run-as-root -n $nmpi valgrind --tool=memcheck --leak-check=full --track-origins=yes python ../EXAMPLE/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-6 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128
 # mpirun --allow-run-as-root -n $nmpi python ../EXAMPLE/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-6 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128 --errsol 1
+# python ../EXAMPLE/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-6 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128 --errsol 1
 
 
 

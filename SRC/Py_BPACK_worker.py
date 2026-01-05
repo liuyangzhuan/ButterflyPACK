@@ -3,20 +3,54 @@ import os
 import ctypes
 import time
 import sys
-import mpi4py
-from mpi4py import MPI
 import Py_BPACK_wrapper
 import pickle
 import importlib
 
 
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
+def get_mpi():
+    """
+    Robust MPI detection:
+    - If mpi4py not installed → serial mode
+    - If mpi4py installed but MPI not initialized → serial mode
+    - If launched without mpirun → serial mode
+    """
+    try:
+        import mpi4py
+        from mpi4py import MPI
+    except ImportError:
+        return None, 0, 1
 
-if(rank==0):
-    print('mpi4py version: ', mpi4py.__version__)
-    print('MPI count:', size)
+    try:
+        if not MPI.Is_initialized():
+            return None, 0, 1
+
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
+        rank = comm.Get_rank()
+        if(rank==0):
+            print('mpi4py version: ', mpi4py.__version__)
+            print('MPI count:', size)
+
+        return comm, rank, size
+
+    except Exception:
+        return None, 0, 1
+
+
+comm, rank, size = get_mpi()
+if comm is None:
+    # Serial fallback
+    rank = 0
+    size = 1
+
+    def bcast(obj, root=0):
+        return obj
+else:
+    bcast = comm.bcast
+
+
+
 
 ####################### handle options
 argv=sys.argv
@@ -51,15 +85,15 @@ while True:
             if flag is not None:
                     break
             time.sleep(poll_interval)
-    flag = comm.bcast(flag, root=0)
-    fid = comm.bcast(fid, root=0)
+    flag = bcast(flag, root=0)
+    fid = bcast(fid, root=0)
     if(flag=="init"):
         #####  read payload by rank 0 and broadcast
         payload=None
         if rank == 0:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 payload = pickle.load(f)
-        payload = comm.bcast(payload, root=0)
+        payload = bcast(payload, root=0)
         # Resolve user function
         filedir = os.path.dirname(payload["block_func_filepath"])
         if filedir not in sys.path:
@@ -109,7 +143,7 @@ while True:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs = pickle.load(f)
             xb = np.ascontiguousarray(xb, dtype=np_dt)
-        nrhs = comm.bcast(nrhs, root=0)
+        nrhs = bcast(nrhs, root=0)
         sp.py_bpack_solve(
             ctypes.byref(pyobjs[fid]),            # void **pyobj
             nrhs,                           # int nrhs
@@ -128,8 +162,8 @@ while True:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs,trans = pickle.load(f)
             xb = np.ascontiguousarray(xb, dtype=np_dt)
-        nrhs = comm.bcast(nrhs, root=0)
-        trans = comm.bcast(trans, root=0)
+        nrhs = bcast(nrhs, root=0)
+        trans = bcast(trans, root=0)
         sp.py_bpack_mult(
             ctypes.byref(pyobjs[fid]),            # void **pyobj
             nrhs,                           # int nrhs

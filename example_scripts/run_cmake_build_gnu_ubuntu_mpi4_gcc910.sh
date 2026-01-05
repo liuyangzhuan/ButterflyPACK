@@ -41,7 +41,7 @@ cmake .. \
 
 make ctest_simple_newapi -j
 make d_py_bpack
-
+make install -j
 	chmod -R 777 ../SRC*
 
 	# -DTPL_ARPACK_LIBRARIES="/home/administrator/Desktop/Software/arpack-ng/build/lib/libarpack.so;/home/administrator/Desktop/Software/arpack-ng/build/lib/libparpack.so" \

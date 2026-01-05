@@ -3,18 +3,28 @@ import os
 import ctypes
 import time
 import sys
-import mpi4py
-from mpi4py import MPI
 import dPy_BPACK_wrapper
 from user_block_funcs_1_r import * # this is the file that defines the compute_block function
 
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
 
-if(rank==0):
-    print('mpi4py version: ', mpi4py.__version__)
-    print('MPI count:', size)
+try:
+    import mpi4py
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    bcast = comm.bcast
+    if(rank==0):
+        print('mpi4py version: ', mpi4py.__version__)
+        print('MPI count:', size)
+except ImportError:
+    comm=None
+    rank=0
+    size=1
+    def bcast(obj, root=0):
+        return obj
+
+    
 
 
 ####################################################################################################
@@ -26,7 +36,7 @@ nrhs = 1
 Npo = 1000
 Ndim = 3
 coordinates = rng.random((Npo, Ndim)).astype(np.float64)
-coordinates = comm.bcast(coordinates, root=0)
+coordinates = bcast(coordinates, root=0)
 meta = {"coordinates": coordinates}
 
 

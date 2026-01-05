@@ -3120,7 +3120,7 @@ contains
          if (mod(nswap, 2) == 1) phase_loc = -phase_loc
       endif
 #else
-      call getrfmodf90(a, ipiv, thresh0, flop, phase_loc, logabsdet_loc)
+      call getrfmodf90(a, thresh0, ipiv, flop, phase_loc, logabsdet_loc)
 #endif
    end subroutine pgetrfmodf90
 

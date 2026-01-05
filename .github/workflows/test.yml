@@ -11,7 +11,7 @@ jobs:
       matrix:
         compiler:
           - gcc
-        test: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]
+        test: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
     steps:
       - name: Checkout code
@@ -55,6 +55,17 @@ jobs:
           sudo apt-get install liblapack-dev
           export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
           printf "${BLUE} YL; Done installing LAPACKfrom apt\n"
+
+          if [ "$TEST_NUMBER" = "19" ] || [ "$TEST_NUMBER" = "20" ]; then
+            python3 -m ensurepip --upgrade || true
+            python3 -m pip install --upgrade pip setuptools wheel
+            python3 -m pip install numpy          
+            python3 -m pip install pybind11
+            if [ "$TEST_NUMBER" = "20" ]; then
+              export MPICC=mpicc
+              python3 -m pip install mpi4py
+            fi          
+          fi
 
           printf "${BLUE} YL; Installing ScaLAPACK from source\n"
           cd $GITHUB_WORKSPACE/installDir
@@ -123,9 +134,22 @@ jobs:
           rm -rf CTestTestfile.cmake
           rm -rf cmake_install.cmake
           rm -rf CMakeFiles
+          export TEST_NUMBER=${{ matrix.test }}
+          if [ "$TEST_NUMBER" = "17" ] || [ "$TEST_NUMBER" = "18" ] || [ "$TEST_NUMBER" = "19" ]; then
+            MPI_FLAG="Denable_mpi=OFF"
+          else
+            MPI_FLAG="Denable_mpi=ON"
+          fi
+          if [ "$TEST_NUMBER" = "19" ] || [ "$TEST_NUMBER" = "20" ]; then
+            PY_FLAG="Denable_python=ON"
+          else
+            PY_FLAG="Denable_python=OFF"
+          fi          
           cmake .. \
             -DCMAKE_CXX_FLAGS="-fopenmp" \
             -Denable_blaslib=OFF \
+            -$MPI_FLAG \
+            -$PY_FLAG \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_C_COMPILER=mpicc \
             -DCMAKE_CXX_COMPILER=mpic++ \

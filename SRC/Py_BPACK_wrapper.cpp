@@ -222,12 +222,16 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
     bpack_obj->quant_ptr->py_meta =
         py::reinterpret_borrow<py::object>(meta_obj);
 
-    int myrank, size;                     // Store values of processor rank and total no of procs requestedss
+    int myrank=0, size=1;                     // Store values of processor rank and total no of procs requestedss
     int master_rank = 0;
+
+#ifdef HAVE_MPI
 	// MPI_Init(&c_argc, &argv_ptr); 	                            // Initialize MPI, called only once
     MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
     MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
-    MPI_Op op;
+    // MPI_Op op;
+#endif
+
 	double starttime, endtime;
 	int* nns_ptr;
 	int nogeo=0;  // 1: no geometrical information passed to butterflypack, dat_ptr and Ndim are dummy
@@ -271,8 +275,13 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 	int cpp=1; //1: use user-defined cpp/c functions for construction
 	int elem_extract=2;
 
+#ifdef HAVE_MPI
 	MPI_Fint Fcomm;  // the fortran MPI communicator
 	Fcomm = MPI_Comm_c2f(MPI_COMM_WORLD);
+#else
+    int Fcomm=321;  // dummy fortran MPI communicator
+#endif
+
 
 	for (int i = 0; i < size; i++)groups[i]=i;
 	// create butterflypack data structures

@@ -91,7 +91,7 @@ subroutine mpi_allgather ( sendbuf, sendcount, sendtype, recvbuf, recvcount, &
     call mpi_copy_double_precision ( sendbuf, recvbuf(:,1), sendcount, ierror )
   else if ( sendtype == mpi_integer ) then
     call mpi_copy_integer ( sendbuf, recvbuf(:,1), sendcount, ierror )
-  else if ( sendtype == mpi_float ) then
+  else if ( sendtype == mpi_real ) then
     call mpi_copy_real ( sendbuf, recvbuf(:,1), sendcount, ierror )
   else if ( sendtype == mpi_complex ) then
     call mpi_copy_complex ( sendbuf, recvbuf(:,1), sendcount, ierror )
@@ -187,7 +187,7 @@ subroutine mpi_allgatherv ( sendbuf, sendcount, sendtype, recvbuf, &
   else if ( sendtype == mpi_integer ) then
     call mpi_copy_integer ( &
       sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
-  else if ( sendtype == mpi_float ) then
+  else if ( sendtype == mpi_real ) then
     call mpi_copy_real ( &
       sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
   else if ( sendtype == mpi_complex ) then
@@ -254,7 +254,7 @@ subroutine mpi_allreduce ( data1, data2, n, datatype, operation, comm, ierror )
 !    Input, integer DATATYPE, indicates the datatype of DATA1 and DATA2.
 !
 !    Input, integer OPERATION, should have the value of one of the symbolic
-!    constants MPI_MAX, MPI_MIN, MPI_PRODUCT or MPI_SUM.
+!    constants MPI_MAX, MPI_MIN, MPI_PROD or MPI_SUM.
 !
 !    Input, integer COMM, the MPI communicator.
 !
@@ -287,7 +287,7 @@ subroutine mpi_allreduce ( data1, data2, n, datatype, operation, comm, ierror )
 
     call mpi_reduce_integer ( data1, data2, n, operation, ierror )
 
-  else if ( datatype == mpi_float ) then
+  else if ( datatype == mpi_real ) then
 
     call mpi_reduce_real ( data1, data2, n, operation, ierror )
   else if ( datatype == mpi_complex ) then
@@ -325,7 +325,7 @@ subroutine MPI_ALLTOALL(SENDBUF, SENDCOUNT, SENDTYPE, RECVBUF, RECVCOUNT,RECVTYP
     call mpi_copy_double_precision ( sendbuf, recvbuf, sendcount, ierror )
   else if ( sendtype == mpi_integer ) then
     call mpi_copy_integer ( sendbuf, recvbuf, sendcount, ierror )
-  else if ( sendtype == mpi_float ) then
+  else if ( sendtype == mpi_real ) then
     call mpi_copy_real ( sendbuf, recvbuf, sendcount, ierror )
   else if ( sendtype == mpi_complex ) then
     call mpi_copy_complex ( sendbuf, recvbuf, sendcount, ierror )
@@ -1142,7 +1142,7 @@ subroutine mpi_reduce ( data1, data2, n, datatype, operation, receiver, &
 !    Input, integer DATATYPE, indicates the datatype of DATA1 and DATA2.
 !
 !    Input, integer OPERATION, should have the value of one of the symbolic
-!    constants MPI_MAX, MPI_MIN, MPI_PRODUCT or MPI_SUM.
+!    constants MPI_MAX, MPI_MIN, MPI_PROD or MPI_SUM.
 !
 !    Input, integer RECEIVER, the process that is to receive the
 !    result.
@@ -1178,7 +1178,7 @@ subroutine mpi_reduce ( data1, data2, n, datatype, operation, receiver, &
 
     call mpi_reduce_integer ( data1, data2, n, operation, ierror )
 
-  else if ( datatype == mpi_float ) then
+  else if ( datatype == mpi_real ) then
 
     call mpi_reduce_real ( data1, data2, n, operation, ierror )
 
@@ -1240,7 +1240,7 @@ subroutine mpi_reduce_double_precision ( data1, data2, n, operation, ierror )
 !    Input, integer N, the number of items in DATA1.
 !
 !    Input, integer OPERATION, should have the value of one of the symbolic
-!    constants MPI_MAX, MPI_MIN, MPI_PRODUCT or MPI_SUM.
+!    constants MPI_MAX, MPI_MIN, MPI_PROD or MPI_SUM.
 !
 !    Output, integer IERROR, is nonzero if an error occurred.
 !
@@ -1265,7 +1265,7 @@ subroutine mpi_reduce_double_precision ( data1, data2, n, operation, ierror )
 
     data2(1:n) = data1(1:n)
 
-  else if ( operation == mpi_product ) then
+  else if ( operation == mpi_prod ) then
 
     data2(1:n) = data1(1:n)
 
@@ -1306,7 +1306,7 @@ subroutine mpi_reduce_complex ( data1, data2, n, operation, ierror )
 
     data2(1:n) = data1(1:n)
 
-  else if ( operation == mpi_product ) then
+  else if ( operation == mpi_prod ) then
 
     data2(1:n) = data1(1:n)
 
@@ -1348,7 +1348,7 @@ subroutine mpi_reduce_double_complex ( data1, data2, n, operation, ierror )
 
     data2(1:n) = data1(1:n)
 
-  else if ( operation == mpi_product ) then
+  else if ( operation == mpi_prod ) then
 
     data2(1:n) = data1(1:n)
 
@@ -1409,7 +1409,7 @@ subroutine mpi_reduce_integer ( data1, data2, n, operation, ierror )
 !    Input, integer N, the number of items in DATA1.
 !
 !    Input, integer OPERATION, should have the value of one of the symbolic
-!    constants MPI_MAX, MPI_MIN, MPI_PRODUCT or MPI_SUM.
+!    constants MPI_MAX, MPI_MIN, MPI_PROD or MPI_SUM.
 !
 !    Output, integer IERROR, is nonzero if an error occurred.
 !
@@ -1434,7 +1434,7 @@ subroutine mpi_reduce_integer ( data1, data2, n, operation, ierror )
 
     data2(1:n) = data1(1:n)
 
-  else if ( operation == mpi_product ) then
+  else if ( operation == mpi_prod ) then
 
     data2(1:n) = data1(1:n)
 
@@ -1493,7 +1493,7 @@ subroutine mpi_reduce_real ( data1, data2, n, operation, ierror )
 !    Input, integer N, the number of items in DATA1.
 !
 !    Input, integer OPERATION, should have the value of one of the symbolic
-!    constants MPI_MAX, MPI_MIN, MPI_PRODUCT or MPI_SUM.
+!    constants MPI_MAX, MPI_MIN, MPI_PROD or MPI_SUM.
 !
 !    Output, integer IERROR, is nonzero if an error occurred.
 !
@@ -1518,7 +1518,7 @@ subroutine mpi_reduce_real ( data1, data2, n, operation, ierror )
 
     data2(1:n) = data1(1:n)
 
-  else if ( operation == mpi_product ) then
+  else if ( operation == mpi_prod ) then
 
     data2(1:n) = data1(1:n)
 

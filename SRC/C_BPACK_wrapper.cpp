@@ -343,6 +343,10 @@ void c_bpack_vector_global2local(F2Cptr* ptree, F2Cptr* msh, int* nvec_p, C_DT  
 
     int iam, size;
     int master_rank = 0;
+
+
+#ifdef HAVE_MPI
+
 	MPI_Comm comm;
 	int fcomm;
 	c_bpack_get_comm(ptree, &fcomm);
@@ -392,6 +396,17 @@ void c_bpack_vector_global2local(F2Cptr* ptree, F2Cptr* msh, int* nvec_p, C_DT  
 	}
 	free(btmp);
 	}
+#else
+	c_bpack_localindices(msh, &idxs, &m_loc, &m);
+	for (int j = 0; j < nvec; ++j)
+	{
+		for (int i = 0; i < m; ++i)
+		{
+			b[j * m + i] = b_global[j * m + i];
+		}
+	}
+#endif
+
 }
 
 
@@ -402,6 +417,9 @@ void c_bpack_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* nvec_p, C_DT  
 	int nvec = *nvec_p;
     int iam, size;
     int master_rank = 0;
+
+
+#ifdef HAVE_MPI
 	MPI_Comm comm;
 	int fcomm;
 	c_bpack_get_comm(ptree, &fcomm);
@@ -449,4 +467,17 @@ void c_bpack_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* nvec_p, C_DT  
 	}
 	free(btmp);
 	}
+#else
+
+	c_bpack_localindices(msh, &idxs, &m_loc, &m);
+	for (int j = 0; j < nvec; ++j)
+	{
+		for (int i = 0; i < m; ++i)
+		{
+			b_global[j * m + i] = b[j * m + i];
+		}
+	}
+
+#endif
+
 }
