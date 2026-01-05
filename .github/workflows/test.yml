@@ -55,7 +55,8 @@ jobs:
           sudo apt-get install liblapack-dev
           export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
           printf "${BLUE} YL; Done installing LAPACKfrom apt\n"
-
+          
+          export TEST_NUMBER=${{ matrix.test }}
           if [ "$TEST_NUMBER" = "19" ] || [ "$TEST_NUMBER" = "20" ]; then
             python3 -m ensurepip --upgrade || true
             python3 -m pip install --upgrade pip setuptools wheel
