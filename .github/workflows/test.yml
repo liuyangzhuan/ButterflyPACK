@@ -62,6 +62,7 @@ jobs:
             python3 -m pip install --upgrade pip setuptools wheel
             python3 -m pip install numpy          
             python3 -m pip install pybind11
+            python3 -m pip install scikit-learn
             python3 -m pip install git+https://github.com/gptune/george.git
             if [ "$TEST_NUMBER" = "20" ]; then
               export MPICC=mpicc
