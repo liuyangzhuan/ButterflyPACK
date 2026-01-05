@@ -1135,14 +1135,14 @@ contains
       logical::small
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:), mat1D(:, :), mat2D(:, :)
       DTR, allocatable :: Singular(:)
-      real(kind=8) :: flop,norm
+      real(kind=8) :: flop,norm,vtmp
       integer, allocatable :: jpvt(:)
       integer, allocatable :: ipiv(:), jpiv(:), JPERM(:)
       integer:: M_p(:, :)
       integer, allocatable:: M_p_1D(:, :)
       type(proctree)::ptree
       integer pgno, proc, nproc, nb1Dc, nb1Dr, ctxt1D, ctxt, idxs_o, idxe_o, ierr
-      integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun
+      integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun, vtmpi
       integer::descsMat1D(9), descsMat2D(9)
       real(kind=8), optional:: Flops
       real(kind=8), optional:: norm_tol
@@ -1169,7 +1169,8 @@ contains
             small=.False.
             if(present(norm_tol))then
                norm = fnorm(mat,M_loc,N)**2d0
-               call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = norm
+               call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
                norm = sqrt(norm)
                if(norm/sqrt(dble(N))<norm_tol)small=.True.
             endif
@@ -1228,8 +1229,8 @@ contains
                      stop
                   end if
                endif
-
-               call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmpi = rank
+               call MPI_ALLREDUCE(vtmpi, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
                !!!!>**** redistribution of output matrix
                call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)

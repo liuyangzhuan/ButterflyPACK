@@ -2439,7 +2439,7 @@ contains
 
       integer Nloc, Nrhs
       DT::x(Nloc, Nrhs), b(Nloc, Nrhs)
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
@@ -2466,7 +2466,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2478,7 +2479,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -2505,7 +2507,7 @@ contains
       integer Nloc(Ndim), Nrhs
       DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs)
 
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
@@ -2539,7 +2541,8 @@ contains
       endif
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp=tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2547,7 +2550,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -3043,7 +3047,7 @@ contains
       type(Bmatrix), pointer::bmat
       type(proctree), pointer::ptree
 
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       t1 = MPI_Wtime()
@@ -3081,10 +3085,12 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,Ninloc,Ncol))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,Noutloc,Ncol))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 
@@ -3115,7 +3121,7 @@ contains
       integer Ndim
       integer Ninloc(Ndim), Noutloc(Ndim), Ncol
       DT::xin(product(Ninloc), Ncol), xout(product(Noutloc), Ncol)
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       character(kind=c_char, len=1) :: trans(*)
@@ -3160,10 +3166,12 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,product(Ninloc),Ncol))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp=tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,product(Noutloc),Ncol))**2d0
-         call MPI_ALLREDUCE(tmpnorm, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 

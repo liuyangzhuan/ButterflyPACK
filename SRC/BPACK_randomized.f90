@@ -82,7 +82,7 @@ contains
       implicit none
       type(Hmat)::h_mat
       real(kind=8):: n1, n2, n3, n4, Memory, Memtmp, tmpfact, error, tmp1, tmp2, norm1, norm2
-      integer level_c, level_top, level_butterfly, bb, rank_new_max, level, i, j, ii, groupm, groupn, Nloc, rank_max_lastiter, rank_max_lastlevel, rank_pre_max, converged, group_start, group_m, num_blocks
+      integer level_c, level_top, level_butterfly, bb, rank_new_max, vtmp, level, i, j, ii, groupm, groupn, Nloc, rank_max_lastiter, rank_max_lastlevel, rank_pre_max, converged, group_start, group_m, num_blocks
       type(matrixblock), pointer::block_o, block_ref, blocks, blocks_copy
       type(matrixblock)::block_dummy
       DT, allocatable::Vin(:, :), Vout1(:, :), Vout2(:, :)
@@ -184,7 +184,7 @@ contains
          allocate(h_mat%fullmat(msh%Nunk,msh%Nunk))
          h_mat%fullmat=0
          h_mat%fullmat(msh%idxs:msh%idxe,:) = RandVectOut
-         call MPI_ALLREDUCE(h_mat%fullmat, h_mat%fullmat, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, h_mat%fullmat, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'true operator norm: ', fnorm(h_mat%fullmat,msh%Nunk,msh%Nunk)
          deallocate (RandVectIn)
          deallocate (RandVectOut)
@@ -225,8 +225,8 @@ contains
                   write(*,*)"Hmat_randomized with BF is not yet implemented"
                   stop
                end if
-
-               call MPI_ALLREDUCE(rank_new_max, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+               vtmp = rank_new_max
+               call MPI_ALLREDUCE(vtmp, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' #sample:', rank_pre_max
                nsample_tot = nsample_tot + rank_pre_max
@@ -1048,7 +1048,7 @@ contains
 
       implicit none
       real(kind=8):: n1, n2, n3, n4, Memory, error_inout, Memtmp, matnorm
-      integer i,num_blocks, N, rankref, level_c, rmaxloc, level_butterfly, bb, rank_new_max, rank, num_vect, group_start, group_n, group_m, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, gg, jGroup, N_source_group, ncolor, Nloc
+      integer vtmp,i,num_blocks, N, rankref, level_c, rmaxloc, level_butterfly, bb, rank_new_max, rank, num_vect, group_start, group_n, group_m, header_n, header_m, tailer_m, tailer_n, ii, jj, k, mm, nn, gg, jGroup, N_source_group, ncolor, Nloc
       type(matrixblock), pointer::block_o, block_ref, blocks_i, blocks
       DT, allocatable::RandVectTmp(:, :)
       DT, allocatable :: matrixtemp(:,:), matRcol(:, :), matZRcol(:, :), matRrow(:, :), matZcRrow(:, :), mattmp1(:, :), mattmp2(:, :)
@@ -1081,7 +1081,8 @@ contains
             end select
             curr => curr%next
       enddo
-      call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      vtmp = num_vect
+      call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
 
       allocate(RandVectInR_glo(msh%Nunk,num_vect))
@@ -1133,7 +1134,7 @@ contains
          call Hmat_MVP_randomized_OneL(h_mat, blackbox_Hmat_MVP, 'N', RandVectInR, RandVectOutR, Nloc, h_mat%Maxlevel, num_vect, ker, ptree, stats, msh, option)
          RandVectOutR_glo=0
          RandVectOutR_glo(msh%idxs:msh%idxe,:) = RandVectOutR
-         call MPI_ALLREDUCE(RandVectOutR_glo, RandVectOutR_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, RandVectOutR_glo, msh%Nunk*num_vect, MPI_DT, MPI_SUM, ptree%Comm, ierr)
          ! n4 = MPI_Wtime()
          ! stats%Time_BLK_MVP = stats%Time_BLK_MVP + n4 - n3
 
@@ -1204,7 +1205,7 @@ contains
       procedure(HMatVec)::blackbox_HODLR_MVP
       type(proctree)::ptree
       type(mesh)::msh
-      integer Bidxs, Bidxe, ierr, tt
+      integer Bidxs, Bidxe, ierr, tt, vtmp
       integer vecCNT,num_vect,nn,mm,ranktmp,rank,mn
       integer nsample_tot
       DT, allocatable:: RandVectIn(:, :),RandVectOut(:, :)
@@ -1334,7 +1335,8 @@ contains
                   rank_new_max = max(rank_new_max, block_rand(bb - Bidxs + 1)%rankmax)
                endif
                end do
-               call MPI_ALLREDUCE(rank_new_max, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+               vtmp = rank_new_max
+               call MPI_ALLREDUCE(vtmp, rank_new_max, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A10,I5,A6,I5,A8,I3, A8,I3,A7,Es14.7,A9,I5)') ' Level ', level_c, ' rank:', rank_new_max, ' Ntrial:', tt, ' L_butt:', level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max
                nsample_tot = nsample_tot + rank_pre_max
@@ -1777,7 +1779,7 @@ contains
       type(Hstat)::stats
       type(Hoption)::option
       type(mesh)::msh
-      integer ierr, tempi
+      integer ierr, tempi, vtmp
       integer Bidxs, Bidxe, N_unk_loc
 
       procedure(HMatVec)::blackbox_HODLR_MVP
@@ -1804,7 +1806,8 @@ contains
             num_vect = max(num_vect, nn)
          endif
       end do
-      call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      vtmp = num_vect
+      call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
       N_unk_loc = msh%idxe - msh%idxs + 1
 
@@ -2290,7 +2293,7 @@ contains
       type(Hstat)::stats
       real(kind=8)::n1, n2, eps, flop
       integer, pointer::M_p(:, :)
-      integer Bidxs
+      integer Bidxs,vtmp
 
       block_off1 => ho_bf1%levels(level)%BP(ii*2 - 1)%LL(1)%matrices_block(1)
       block_off2 => ho_bf1%levels(level)%BP(ii*2)%LL(1)%matrices_block(1)
@@ -2303,8 +2306,10 @@ contains
       offout(2) = block_off1%M
 
       !!!>*** redistribute AR from process layout of hodlr to the process layout of block_off1 and block_off2
-      call MPI_ALLREDUCE(ranks(ii*2 - 1 - Bidxs + 1), ranks(ii*2 - 1 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(ranks(ii*2 - Bidxs + 1), ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
+      vtmp = ranks(ii*2 - 1 - Bidxs + 1)
+      call MPI_ALLREDUCE(vtmp, ranks(ii*2 - 1 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
+      vtmp = ranks(ii*2 - Bidxs + 1)
+      call MPI_ALLREDUCE(vtmp, ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
 
       do bb = 1, 2
          block_off => ho_bf1%levels(level)%BP(ii*2 - 1 + bb - 1)%LL(1)%matrices_block(1)
@@ -2339,9 +2344,10 @@ contains
             stats%Flop_Fill = stats%Flop_Fill + flop
          endif
       enddo
-
-      call MPI_ALLREDUCE(ranks(ii*2 - 1 - Bidxs + 1), ranks(ii*2 - 1 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(ranks(ii*2 - Bidxs + 1), ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
+      vtmp = ranks(ii*2 - 1 - Bidxs + 1)
+      call MPI_ALLREDUCE(vtmp, ranks(ii*2 - 1 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
+      vtmp = ranks(ii*2 - Bidxs + 1)
+      call MPI_ALLREDUCE(vtmp, ranks(ii*2 - Bidxs + 1), 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_inv%pgno)%Comm, ierr)
       ! write(*,*)'wonima',ii*2-1-Bidxs+1,ranks(ii*2-1-Bidxs+1),ii*2-Bidxs+1,ranks(ii*2-Bidxs+1),ptree%MyID,mm(1)
 
       !!!>*** redistribute AR from process layout of block_off1 and block_off2  to the process layout of hodlr

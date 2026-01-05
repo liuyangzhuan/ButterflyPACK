@@ -388,6 +388,8 @@ endif
       type(Hstat)::stats
       type(Hoption)::option
       real(kind=8)::dlamch
+      DT::phase
+      DTR::logabsdet
 
       ctxt = ptree%pgrp(pgno)%ctxt
       ctxt_head = ptree%pgrp(pgno)%ctxt_head
@@ -515,9 +517,10 @@ endif
             matU2D1 = -matU2D1
             deallocate (matrix_small)
          endif
-
-         call MPI_ALLREDUCE(block_o%phase, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(block_o%logabsdet, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         phase = block_o%phase
+         call MPI_ALLREDUCE(phase, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
+         logabsdet = block_o%logabsdet
+         call MPI_ALLREDUCE(logabsdet, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          call Redistribute2Dto1D(matU2D1, block_o%M, 0, pgno, block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, rank, ptree)
 
@@ -1039,7 +1042,7 @@ endif
       DTR:: error_inout_tmp
       real(kind=8):: rate, err_avr
       integer itermax, ntry, converged
-      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr
+      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr, vtmp
       type(Hoption)::option
       type(Hstat)::stats
       type(proctree)::ptree
@@ -1107,8 +1110,10 @@ endif
 
          norm1 = fnorm(VecOut - VecIn, mm, num_vect)**2d0
          norm2 = fnorm(VecIn, mm, num_vect)**2d0
-         call MPI_ALLREDUCE(norm1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(norm2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         vtmp = norm1
+         call MPI_ALLREDUCE(vtmp, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         vtmp = norm2
+         call MPI_ALLREDUCE(vtmp, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
          error_inout = sqrt(norm1)/sqrt(norm2)
 
          if (ptree%MyID == Main_ID .and. option%verbosity >= 1) write (*, '(A22,A6,I3,A8,I2,A8,I3,A7,Es14.7)') ' Schultz ', ' rank:', block_Xn%rankmax, ' Iter:', ii, ' L_butt:', block_Xn%level_butterfly, ' error:', error_inout
@@ -1401,8 +1406,8 @@ endif
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
       type(matrixblock)::blocks_io
       type(matrixblock)::blocks_schur
-      integer rank_new_max, rank0
-      real(kind=8):: rank_new_avr, error, rate, norm
+      integer rank_new_max, rank0,vtmpi
+      real(kind=8):: rank_new_avr, error, rate, norm,vtmp
       integer niter
       real(kind=8):: error_inout
       integer itermax, ntry
@@ -1480,8 +1485,10 @@ endif
             blocks_D%phase=1
             blocks_D%logabsdet=0
          endif
-         call MPI_ALLREDUCE(rank0, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         vtmpi=rank0
+         call MPI_ALLREDUCE(vtmpi, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_A%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_A%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
          call MPI_Bcast(blocks_D%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
@@ -1504,7 +1511,8 @@ endif
             vecout=0
             call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
-            call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+            vtmp = norm
+            call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
             norm = sqrt(norm)
             deallocate(vecin)
             deallocate(vecout)
@@ -1791,7 +1799,7 @@ endif
 
       implicit none
       integer level_p, ADflag, iii, jjj
-      integer mm1, mm2, nn1, nn2, M1, M2, N1, N2, ii, jj, ss, kk, j, i, mm, nn
+      integer mm1, mm2, nn1, nn2, M1, M2, N1, N2, ii, jj, ss, kk, j, i, mm, nn, vtmp
       integer level_butterfly, num_blocks, level_butterfly_c, level_butterfly_o, level_butterfly_dummy, level_final, num_blocks_c, level, num_col, num_row, num_rowson, num_colson
 
       type(matrixblock)::partitioned_block
@@ -1824,14 +1832,16 @@ endif
       else
          level_butterfly_o = -1
       endif
-      call MPI_ALLREDUCE(level_butterfly_o, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      vtmp = level_butterfly_o
+      call MPI_ALLREDUCE(vtmp, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_c = blocks_A%level_butterfly
       else
          level_butterfly_c = -1
       endif
-      call MPI_ALLREDUCE(level_butterfly_c, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      vtmp = level_butterfly_c
+      call MPI_ALLREDUCE(vtmp, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       call assert(level_butterfly_o == 2 + level_butterfly_c, 'BF_ABCD only supports merging L-2-level BFs into a L-level BF')
 
@@ -2784,7 +2794,7 @@ endif
       real(kind=8):: rank_new_avr, error, err_avr, err_max
       integer niter
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
-      integer itermax, ntry, cnt, cnt_partial
+      integer itermax, ntry, cnt, cnt_partial, vtmp
       real(kind=8):: n1, n2, n3, n4, Memory
       integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b
       DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :)
@@ -2885,7 +2895,8 @@ endif
             do bb = 1, Bplus%LL(ll)%Nbound
                Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
             enddo
-            call MPI_ALLREDUCE(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+            vtmp = Bplus%LL(ll)%rankmax
+            call MPI_ALLREDUCE(vtmp, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
          end do
 
          rank_new_max = 0
@@ -2926,7 +2937,7 @@ endif
       real(kind=8):: rank_new_avr, error, err_avr, err_max, tol_used
       integer niter
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
-      integer itermax, ntry, cnt, cnt_partial
+      integer itermax, ntry, cnt, cnt_partial, vtmp
       real(kind=8):: n1, n2, n3, n4, Memory
       integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b, idxs,idxe,groupm
       DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :), matrixtemp(:,:)
@@ -3129,7 +3140,8 @@ endif
          do bb = 1, Bplus%LL(ll)%Nbound
             if(IOwnPgrp(ptree,Bplus%LL(ll)%matrices_block(bb)%pgno))Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = Bplus%LL(ll)%rankmax
+         call MPI_ALLREDUCE(vtmp, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       rank_new_max = 0

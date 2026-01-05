@@ -40,7 +40,7 @@ contains
 
       type(mesh)::msh
       type(kernelquant)::ker
-      integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new, rank_new1
+      integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new, rank_new1, vtmp
       integer group_m, group_n, mm, nn, index_i, index_i_loc, index_j_loc, index_j, ii, jj, ij
       integer level, length_1, length_2, level_blocks, index_ij
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
@@ -238,8 +238,8 @@ contains
                call BF_exchange_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'B')
             endif
             endif
-
-            call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level < level_butterfly + 1) then
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
@@ -358,8 +358,8 @@ contains
             if (level > level_final) then
                call BF_exchange_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'C', 'B')
             endif
-
-            call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp=rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level > 0) then
             if (rank_new > rankmax_for_butterfly(level - 1)) then
                rankmax_for_butterfly(level - 1) = rank_new
@@ -3247,6 +3247,7 @@ do i_dim = 1,dims_row(dim)
       integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
       integer, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer,allocatable::proc_of_groupc(:),proc_of_groupr(:)
+      integer::vtmp(1)
       integer:: dims_r(Ndim),dims_c(Ndim),idx_r_m(Ndim),idx_c_m(Ndim),idx_r_scalar,idx_c_scalar
       type(butterfly_skel_MD):: ButterflySkel_R_transposed(:)
 
@@ -3271,7 +3272,12 @@ do i_dim = 1,dims_row(dim)
          call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
          proc_of_groupr(idx_r_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(proc_of_groupr, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      if(product(dims_r)==1)then
+         vtmp=proc_of_groupr
+         call MPI_ALLREDUCE(vtmp, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)         
+      else 
+         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      endif
 
       do bb=1, product(blocks%nc_m)
          call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
@@ -3279,8 +3285,12 @@ do i_dim = 1,dims_row(dim)
          call MultiIndexToSingleIndex(Ndim, dims_c, idx_c_scalar, idx_c_m)
          proc_of_groupc(idx_c_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(proc_of_groupc, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
-
+      if(product(dims_c)==1)then
+         vtmp = proc_of_groupc
+         call MPI_ALLREDUCE(vtmp, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else 
+         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)      
+      endif
 
 
       do bb=1, product(blocks%nr_m)
@@ -4134,7 +4144,7 @@ do i_dim = 1,dims_row(dim)
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, dim_MD(Ndim+2), idx_MD(Ndim+2), idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), idx_c_scalar, idx_r_scalar, dim_subtensor(Ndim*2),idx_subtensor(Ndim*2)
-      integer passflag,use_zfp
+      integer passflag,use_zfp, vtmp
       integer*8 nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
@@ -4293,7 +4303,7 @@ do i_dim = 1,dims_row(dim)
             do while (passflag == 0)
                call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
-            ! call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level < level_butterfly + 1) then
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
@@ -4412,7 +4422,7 @@ do i_dim = 1,dims_row(dim)
                call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
             enddo
 
-            ! call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            ! call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level > 0) then
             if (rank_new > rankmax_for_butterfly(level - 1)) then
                rankmax_for_butterfly(level - 1) = rank_new
@@ -4503,8 +4513,12 @@ do i_dim = 1,dims_row(dim)
 
 
       endif
-
-      call MPI_ALLREDUCE(rankmax_for_butterfly(0:level_butterfly), rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      if(level_butterfly==0)then
+         vtmp = rankmax_for_butterfly(0)
+         call MPI_ALLREDUCE(vtmp, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)      
+      else 
+         call MPI_ALLREDUCE(MPI_IN_PLACE, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      endif
 
       if (statflag == 1) then
          if (allocated(stats%rankmax_of_level)) stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly), stats%rankmax_of_level(level_blocks))
@@ -5175,7 +5189,7 @@ do i_dim = 1,dims_row(dim)
       integer blocks_idx, i, j, level_butterfly, num_blocks, k, attempt
       integer group_m, group_n, M,N, mm, nn, mn, index_i, index_j, index_i_m, index_j_m, index_ij_loc, index_i_loc, index_i_loc_s, index_j_loc, index_j_loc_s, ii, jj, iii, jjj, nn1, nn2, mm1, mm2, idxs_m, idxs_n, header_m, header_n
       integer level, levelm, level_half, level_final, level_loc, length_1, length_2, level_blocks, index_ij, edge_m, edge_n
-      integer rank, rank0, rank_new1, rank_new, rankmax, butterflyB_inuse, rank1, rank2, rmax
+      integer rank, rank0, rank_new1, rank_new, vtmp, rankmax, butterflyB_inuse, rank1, rank2, rmax
       real(kind=8) rate, tolerance, SVD_tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
       real(kind=8) Memory, n1, n2
       DT ctemp
@@ -6027,8 +6041,8 @@ time_tmp = time_tmp + n2 - n1
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
-
-            call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
             endif
@@ -6102,7 +6116,8 @@ time_tmp = time_tmp + n2 - n1
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
-            call MPI_ALLREDUCE(rank_new, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
             endif
@@ -6355,7 +6370,7 @@ time_tmp = time_tmp + n2 - n1
       implicit none
       integer rank, ranktmp
       integer header_m, header_n
-      integer N, M, i, j, ii, jj, myi, myj, iproc, jproc, rmax, mn
+      integer N, M, i, j, ii, jj, myi, myj, iproc, jproc, rmax, mn, vtmp
       type(mesh)::msh
       type(Hoption)::option
       type(matrixblock)::blocks, blockc(2)
@@ -6592,9 +6607,12 @@ time_tmp = time_tmp + n2 - n1
                call BF_delete(blocks%sons(2, 1), 1)
                deallocate (blocks%sons)
 
-               call MPI_ALLREDUCE(blocks%rankmax, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(blocks%rankmin, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(rank, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmax
+               call MPI_ALLREDUCE(vtmp, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmin
+               call MPI_ALLREDUCE(vtmp, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = rank
+               call MPI_ALLREDUCE(vtmp, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
             else
                if (nprow /= -1 .and. npcol /= -1) then
@@ -6740,9 +6758,12 @@ time_tmp = time_tmp + n2 - n1
                call BF_delete(blocks%sons(1, 1), 1)
                call BF_delete(blocks%sons(2, 1), 1)
                deallocate (blocks%sons)
-               call MPI_ALLREDUCE(blocks%rankmax, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(blocks%rankmin, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(rank, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmax
+               call MPI_ALLREDUCE(vtmp, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmin
+               call MPI_ALLREDUCE(vtmp, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = rank
+               call MPI_ALLREDUCE(vtmp, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
             endif
          endif
 
@@ -7730,7 +7751,7 @@ time_tmp = time_tmp + n2 - n1
       integer edge_m, edge_n, header_m, header_n, Dimn, mn, Navr, itr
       integer rank, rank1, rank2, ranknew, row, column, rankmax, N, M, rankmax_min, rmax0, rmax, idxs_r, idxs_c, frow, mn1, mn2
       DT value_Z, maxvalue
-      DT inner_U, inner_V, ctemp, value_UVs
+      DT inner_U, inner_V, ctemp, value_UVs,vtmp
       real(kind=8) inner_UV, n1, n2, a, error, flop
       integer:: select_column(N), select_row(M)
       DT, allocatable::matU(:, :), matV(:, :),matU0(:, :), matV0(:, :), matU2D(:, :), matV2D(:, :)
@@ -7813,7 +7834,7 @@ time_tmp = time_tmp + n2 - n1
       row_R = 0
       row_R(headn_loc:headn_loc + blocks%N_loc - 1) = matr(1, 1:blocks%N_loc)
 
-      call MPI_ALLREDUCE(row_R, row_R, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, row_R, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
       norm_row_R = dble(row_R*conjg(cmplx(row_R, kind=8)))
 
@@ -7856,7 +7877,7 @@ time_tmp = time_tmp + n2 - n1
 
       column_R = 0
       column_R(headm_loc:headm_loc + blocks%M_loc - 1) = matc(1:blocks%M_loc, 1)
-      call MPI_ALLREDUCE(column_R, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
       norm_column_R = dble(column_R*conjg(cmplx(column_R, kind=8)))
 
       norm_column_R(select_row(1)) = 0
@@ -7909,7 +7930,7 @@ time_tmp = time_tmp + n2 - n1
 
          row_R = 0
          row_R(headn_loc:headn_loc + blocks%N_loc - 1) = matr(1, 1:blocks%N_loc)
-         call MPI_ALLREDUCE(row_R, row_R, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, row_R, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          value_UV = 0
          if (select_row(rank + 1) >= headm_loc .and. select_row(rank + 1) <= headm_loc + blocks%M_loc - 1) then
@@ -7917,10 +7938,10 @@ time_tmp = time_tmp + n2 - n1
          else
             tmpval(1:rank) = 0
          endif
-         call MPI_ALLREDUCE(tmpval, tmpval, rank, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpval, rank, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          call gemmf77('N', 'N', 1, blocks%N_loc, rank, BPACK_cone, tmpval(1), 1, matV, rmax, BPACK_czero, value_UV(headn_loc), 1)
-         call MPI_ALLREDUCE(value_UV, value_UV, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, value_UV, N, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          ! call gemmf90(matU(select_row(rank+1),1), M,matV,rmax,value_UV,1,'N','N',1,N,rank,BPACK_cone,BPACK_czero)
 
@@ -7999,7 +8020,7 @@ time_tmp = time_tmp + n2 - n1
          ! call element_Zmn_block_user(blocks%M_loc, 1, mrange, nrange, matc, msh, option, ker, 0, passflag, ptree, stats)
          column_R = 0
          column_R(headm_loc:headm_loc + blocks%M_loc - 1) = matc(1:blocks%M_loc, 1)
-         call MPI_ALLREDUCE(column_R, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, column_R, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          value_UV = 0
          if (select_column(rank + 1) >= headn_loc .and. select_column(rank + 1) <= headn_loc + blocks%N_loc - 1) then
@@ -8008,13 +8029,13 @@ time_tmp = time_tmp + n2 - n1
             tmpval(1:rank) = 0
          endif
          ! write(*,*)'dd',ptree%MyID,sum(value_UV(1:M)),sum(tmpval(1:rank))
-         call MPI_ALLREDUCE(tmpval, tmpval, rank, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpval, rank, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
          ! write(*,*)'dd3',ptree%MyID,sum(value_UV(1:M)),sum(tmpval(1:rank))
          call gemmf77('N', 'N', blocks%M_loc, 1, rank, BPACK_cone, matU, blocks%M_loc, tmpval(1), rank, BPACK_czero, value_UV(headm_loc), M)
 
          ! write(*,*)'dd4',ptree%MyID,sum(value_UV(1:M))
 
-         call MPI_ALLREDUCE(value_UV, value_UV, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, value_UV, M, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          ! call gemmf90(matU, M,matV(1,select_column(rank+1)),rmax,value_UV,M,'N','N',M,1,rank,BPACK_cone,BPACK_czero)
 
@@ -8052,8 +8073,10 @@ time_tmp = time_tmp + n2 - n1
                inner_V = inner_V + ctemp
             enddo
             ! !$omp end parallel do
-            call MPI_ALLREDUCE(inner_U, inner_U, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
-            call MPI_ALLREDUCE(inner_V, inner_V, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+            vtmp = inner_U
+            call MPI_ALLREDUCE(vtmp, inner_U, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+            vtmp = inner_V
+            call MPI_ALLREDUCE(vtmp, inner_V, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
 
          enddo

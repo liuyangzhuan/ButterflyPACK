@@ -715,7 +715,7 @@ contains
 
       implicit none
 
-      integer nth_s, nth_e, level
+      integer nth_s, nth_e, level, vtmp
       integer i, j, k, num_blocks, num_row, num_col, ii, jj, mm, kk, rs, re, rank
       integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, iter, vector1, vector2, direction, round, flag
       real(kind=8) a, b, c, d, norm1, norm2, norm3, norm4, norm1L, norm2L, norm3L, norm4L, norm1R, norm2R, norm3R, norm4R, error, errorL, errorR, rtemp, error0, error1, error2
@@ -774,8 +774,8 @@ contains
                endif
             enddo
          endif
-
-         call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         vtmp = num_vect
+         call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level)%blocks)) then
@@ -1014,7 +1014,7 @@ contains
 
       implicit none
 
-      integer nth_s, nth_e, level
+      integer nth_s, nth_e, level,vtmp
       integer i, j, k, num_blocks, num_row, num_col, ii, jj, mm, kk, rs, re, rank
       integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc_s,index_j_loc_s,iter, vector1, vector2, direction, round, flag
       real(kind=8) a, b, c, d, norm1, norm2, norm3, norm4, norm1L, norm2L, norm3L, norm4L, norm1R, norm2R, norm3R, norm4R, error, errorL, errorR, rtemp, error0, error1, error2
@@ -1090,8 +1090,8 @@ contains
                endif
             enddo
          endif
-
-         call MPI_ALLREDUCE(num_vect, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         vtmp = num_vect
+         call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
@@ -1269,7 +1269,7 @@ contains
       integer rank_new_max, rank_pre_max
       real(kind=8):: rank_new_avr, error, rankrate
       integer niter, groupm, groupn
-      real(kind=8):: error_inout
+      real(kind=8):: error_inout, vtmp
       integer itermax, ntry
       real(kind=8):: n1, n2, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
@@ -1287,7 +1287,7 @@ contains
       procedure(BMatVec)::blackbox_MVP_dat
       type(proctree)::ptree
       type(mesh)::msh
-      integer converged
+      integer converged,vtmpi
       integer pgno_large
 
       ctemp1 = 1d0; ctemp2 = 0d0
@@ -1326,8 +1326,10 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(block_rand(1)%rankmax, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmpi = block_rand(1)%rankmax
+         call MPI_ALLREDUCE(vtmpi, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc
 
@@ -1385,7 +1387,7 @@ contains
       integer rank_new_max, rank_pre_max
       real(kind=8):: rank_new_avr, error, rankrate
       integer niter, groupm, groupn
-      real(kind=8):: error_inout
+      real(kind=8):: error_inout,vtmp
       integer itermax, ntry
       real(kind=8):: n1, n2, n3, n4, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
@@ -1404,7 +1406,7 @@ contains
       type(proctree)::ptree
       type(mesh)::msh
       integer converged,converged1,converged2,rankmax1, rankmax2
-      integer pgno_large
+      integer pgno_large,vtmpi
 
       n3 = MPI_Wtime()
 
@@ -1461,8 +1463,10 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(error_inout, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(block_rand(1)%rankmax, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmpi = block_rand(1)%rankmax
+         call MPI_ALLREDUCE(vtmpi, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A8,I5,I5,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc, block_rand(1)%row_group,block_rand(1)%col_group
 
@@ -1576,7 +1580,7 @@ contains
       type(Hoption)::option
       type(Hstat)::stats
       DT::matQ(:, :), matQcA_trans(:, :)
-      integer num_vect, level_butterfly
+      integer num_vect, level_butterfly,vtmp
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
       DTR, allocatable:: Singular(:)
       integer q, qq, Nloc, pp
@@ -1721,8 +1725,8 @@ contains
             else
                allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
             endif
-
-            call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+            vtmp = rank
+            call MPI_ALLREDUCE(vtmp, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
 
             block_rand%rankmax = rank
             block_rand%rankmin = rank
@@ -1755,7 +1759,7 @@ contains
 
       integer level_c, rowblock
       integer rank, rmax, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-      integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+      integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2, vtmp
 
       real(kind=8)::n1, n2, flop
       real(kind=8), optional::flops
@@ -1767,6 +1771,7 @@ contains
       integer num_vect, level_butterfly
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
       DTR:: Singular(:)
+      DTR::vtmpr
       integer q, qq, Nloc, pp
       DT, pointer :: matQ2D(:, :), matQcA_trans2D(:, :), matQUt2D(:, :), UU(:, :), VV(:, :)
       integer descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -1828,9 +1833,14 @@ contains
          if (present(flops)) flops = flops + flop/dble(nprow*npcol)
       else
       endif
-
-      call MPI_ALLREDUCE(rank, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(Singular, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      vtmp = rank
+      call MPI_ALLREDUCE(vtmp, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      if(rank==1)then
+         vtmpr = Singular(1)
+         call MPI_ALLREDUCE(vtmpr, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      endif
 
       deallocate (MatQcA_trans2D)
       deallocate (UU)
@@ -1865,7 +1875,7 @@ contains
       integer tt
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
       integer::rank_new_max, dimension_rank ,ierr
-      real(kind=8)::rank_new_avr, error, norm_tol,norm
+      real(kind=8)::rank_new_avr, error, norm_tol,norm,vtmp
       DT, allocatable::matrixtmp(:, :)
       integer niter, unique_nth
       real(kind=8):: error_inout
@@ -1935,7 +1945,8 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%N_loc,1)**2d0
-                  call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  vtmp = norm
+                  call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -1983,7 +1994,7 @@ contains
       integer tt
       ! type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
       integer::rank_new_max, dimension_rank
-      real(kind=8)::rank_new_avr, norm_tol, norm
+      real(kind=8)::rank_new_avr, norm_tol, norm, vtmp
       DT, allocatable:: RandVectIn(:, :), RandVectOut(:, :), vecin(:,:), vecout(:,:)
       integer niter, level
 
@@ -2053,7 +2064,8 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%M_loc,1)**2d0
-                  call MPI_ALLREDUCE(norm, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  vtmp = norm
+                  call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -5423,7 +5435,7 @@ contains
       type(matrixblock), pointer::block_off1, block_off2, block_o
       class(*)::operand
       character(*)  :: strings
-      integer rankthusfar
+      integer rankthusfar, vtmp
       type(Hoption)::option
       type(Hstat)::stats
       type(blockplus) :: Bplus_randomized
@@ -5454,8 +5466,8 @@ contains
          call Bplus_MultiLrandomized_Onesubblock(rank0, rankrate_inner, block_o, operand, blackbox_MVP_dat_inner, error, strings, option, stats, ptree, msh, Bplus_randomized)
          error_inout = max(error_inout, error)
          ! write(*,*)'go'
-
-         call MPI_ALLREDUCE(rankthusfar, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = rankthusfar
+         call MPI_ALLREDUCE(vtmp, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
 
       end do
       ! call Test_Error_RR_Inner_Exact(bplus_o)
@@ -5481,7 +5493,8 @@ contains
          do bb = 1, Bplus_randomized%LL(ll)%Nbound
             Bplus_randomized%LL(ll)%rankmax = max(Bplus_randomized%LL(ll)%rankmax, Bplus_randomized%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(Bplus_randomized%LL(ll)%rankmax, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = Bplus_randomized%LL(ll)%rankmax
+         call MPI_ALLREDUCE(vtmp, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       call Bplus_delete(bplus_o)

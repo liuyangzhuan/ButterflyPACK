@@ -84,6 +84,8 @@ contains
         type(mesh)::msh
         DT,allocatable::matrixtemp(:,:),UU(:,:),VV(:,:)
         DTR,allocatable::Singular(:)
+        DT::phase
+        DTR::logabsdet
 
         ho_bf1%phase=1
         ho_bf1%logabsdet=0
@@ -222,16 +224,17 @@ endif
             n2 = MPI_Wtime()
             stats%Time_Inv = stats%Time_Inv + n2 - n1
         end do
-
-        call MPI_ALLREDUCE(ho_bf1%phase, ho_bf1%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
-        call MPI_ALLREDUCE(ho_bf1%logabsdet, ho_bf1%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+        phase = ho_bf1%phase
+        call MPI_ALLREDUCE(phase, ho_bf1%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
+        logabsdet = ho_bf1%logabsdet
+        call MPI_ALLREDUCE(logabsdet, ho_bf1%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID)then
             write(*,*)'logdet:', ho_bf1%phase,ho_bf1%logabsdet
         endif
 
         nn2 = MPI_Wtime()
         stats%Time_Factor = nn2 - nn1
-        call MPI_ALLREDUCE(stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
         call MPI_ALLREDUCE(stats%Time_Sblock, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing updated forward block time:', rtemp, 'Seconds'
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -342,7 +345,7 @@ endif
         nn2 = MPI_Wtime()
         stats%Time_Inv = nn2 - nn1
         stats%Time_Factor = stats%Time_Inv
-        call MPI_ALLREDUCE(stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel), stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel), hss_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:hss_bf1%Maxlevel), hss_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing inverse block time:', rtemp, 'Seconds'
         call MPI_ALLREDUCE(stats%Time_random(1), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -419,6 +422,8 @@ endif
         integer             :: tid, nthreads
         double precision    :: t_start, t_stop
         double precision, allocatable :: t_total(:)
+        DT::phase
+        DTR::logabsdet
 
         h_mat%phase=1
         h_mat%logabsdet=0
@@ -734,14 +739,15 @@ endif
         deallocate(t_total)
         deallocate(h_mat%blocks_1)
         deallocate(h_mat%blocks_2)
-
-        call MPI_ALLREDUCE(h_mat%phase, h_mat%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
-        call MPI_ALLREDUCE(h_mat%logabsdet, h_mat%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+        phase = h_mat%phase
+        call MPI_ALLREDUCE(phase, h_mat%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
+        logabsdet = h_mat%logabsdet
+        call MPI_ALLREDUCE(logabsdet, h_mat%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID)then
             write(*,*)'logdet:', h_mat%phase,h_mat%logabsdet
         endif
 
-        call MPI_ALLREDUCE(stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
 
         call MPI_ALLREDUCE(stats%Time_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Factor:', rtemp
@@ -763,12 +769,12 @@ endif
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', rtemp
 
 
-        call MPI_allreduce(stats%Add_random_CNT(0:h_mat%Maxlevel), stats%Add_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
-        call MPI_allreduce(stats%Mul_random_CNT(0:h_mat%Maxlevel), stats%Mul_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
-        call MPI_allreduce(stats%XLUM_random_CNT(0:h_mat%Maxlevel), stats%XLUM_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
-        call MPI_allreduce(stats%Add_random_Time(0:h_mat%Maxlevel), stats%Add_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
-        call MPI_allreduce(stats%Mul_random_Time(0:h_mat%Maxlevel), stats%Mul_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
-        call MPI_allreduce(stats%XLUM_random_Time(0:h_mat%Maxlevel), stats%XLUM_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Add_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Mul_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%XLUM_random_CNT(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_INTEGER, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Add_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Mul_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%XLUM_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
             write (*, *) ''
