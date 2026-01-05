@@ -1259,7 +1259,8 @@ if(myrank==master_rank){
       smax = max(smax,slowness(i*h+x0min,j*h+y0min,slow_x0, slow_y0,ivelo));
     }
   }
-  MPI_Allreduce(&smax,&smax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  double vtmp=smax;
+  MPI_Allreduce(&vtmp,&smax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
 
 
@@ -1367,7 +1368,7 @@ if(myrank==master_rank){
         u_inc_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = b.data()[i+nth*product(myseg,Ndim)];
       }
     }
-    MPI_Allreduce(u_inc_glo.data(),u_inc_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE,u_inc_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
     if(myrank==master_rank){
       for(int nth=0; nth<nvec; nth++){
@@ -1504,7 +1505,7 @@ if(myrank==master_rank){
         x_v_glo[i_old_scalar-1+nth*product(Ns,Ndim)]=x_s[i+nth*product(myseg_s2s,Ndim)]*coef;
       }
     }
-    MPI_Allreduce(x_v_glo.data(),x_v_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
 
     vector<_Complex double> x_v(product(myseg,Ndim)*nvec,{0.0,0.0}),b_v(product(myseg,Ndim)*nvec,{0.0,0.0});
@@ -1538,7 +1539,7 @@ if(myrank==master_rank){
         u_sca_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = b_v.data()[i+nth*product(myseg,Ndim)];
       }
     }
-    MPI_Allreduce(u_sca_glo.data(),u_sca_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
 
     if(myrank==master_rank){

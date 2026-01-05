@@ -329,13 +329,9 @@ PROGRAM ButterflyPACK_IE_2D
 	enddo
     allocate(Permutation(quant%Nunk))
 	call z_PrintOptions(option,ptree)
-
 	call z_BPACK_construction_Init(quant%Nunk,Permutation,Nunk_loc,bmat,option,stats,msh,ker,ptree,Coordinates=xyz)
-
 	deallocate(Permutation) ! caller can use this permutation vector if needed
 	deallocate(xyz)
-
-
 
 	!**** computation of the construction phase
     call z_BPACK_construction_Element(bmat,option,stats,msh,ker,ptree)
@@ -427,6 +423,7 @@ PROGRAM ButterflyPACK_IE_2D
 
 	! !**** solve phase
 	! call EM_solve_CURV(bmat,option,msh,quant,ptree,stats)
+
 
 
 	!**** print statistics

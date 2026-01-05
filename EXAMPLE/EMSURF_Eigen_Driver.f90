@@ -45,7 +45,7 @@ PROGRAM ButterflyPACK_IE_3D
     integer i,j,k, threads_num
 	integer seed_myid(50)
 	integer times(8)
-	real(kind=8) t1,t2,x,y,z,r,norm1,normi,maxnorm
+	real(kind=8) t1,t2,x,y,z,r,norm1,normi,maxnorm,vtmp
 	complex(kind=8),allocatable:: matU(:,:),matV(:,:),matZ(:,:),LL(:,:),RR(:,:),matZ1(:,:)
 
 	character(len=:),allocatable  :: string
@@ -363,8 +363,10 @@ PROGRAM ButterflyPACK_IE_3D
 	do nn=1,quant%nev
 		norm1 = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, '1')
 		normi = z_fnorm(eigvec(:,nn:nn), Nunk_loc, 1, 'I')
-		call MPI_ALLREDUCE(norm1, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
-		call MPI_ALLREDUCE(normi, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
+		vtmp = norm1
+		call MPI_ALLREDUCE(vtmp, norm1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree_A%Comm, ierr)
+		vtmp = normi
+		call MPI_ALLREDUCE(vtmp, normi, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree_A%Comm, ierr)
 		norm1 =norm1/normi
 		if(norm1>maxnorm)then
 			nn1=nn

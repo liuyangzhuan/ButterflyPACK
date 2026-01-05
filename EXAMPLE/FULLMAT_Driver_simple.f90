@@ -338,7 +338,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 		do ii=1,msh%idxe-msh%idxs+1
 			x_glo(Permutation(ii+msh%idxs-1),:) = x_loc(ii,:)
 		end do
-		call MPI_ALLREDUCE(x_glo,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
 
 	endif
 
@@ -428,7 +428,7 @@ PROGRAM ButterflyPACK_TEMPLATE
 		do ii=1,msh%idxe-msh%idxs+1
 			x_glo(Permutation(ii+msh%idxs-1),:) = x_loc(ii,:)
 		end do
-		call MPI_ALLREDUCE(x_glo,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
+		call MPI_ALLREDUCE(MPI_IN_PLACE,x_glo,quant%Nunk*nrhs,MPI_DOUBLE_COMPLEX,MPI_SUM, ptree%Comm, ierr)
 	endif
 
 

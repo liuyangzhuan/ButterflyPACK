@@ -514,7 +514,7 @@ if(tst==1){
         x_glo.data()[i_old-1+nth*Npo] = x[i+nth*myseg];
       }
     }
-	MPI_Allreduce(x_glo.data(),x_glo.data(), Npo*nrhs, mpi_scalar, MPI_SUM, MPI_COMM_WORLD);
+	MPI_Allreduce(MPI_IN_PLACE,x_glo.data(), Npo*nrhs, mpi_scalar, MPI_SUM, MPI_COMM_WORLD);
 
 
 

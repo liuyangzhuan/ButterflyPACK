@@ -116,10 +116,10 @@ contains
 					! pos_o(dim_i) = quant%locations_m(dim_i,z_bit_reverse(m(dim_i),INT((log(dble(quant%Nunk_m(dim_i))) / log(2d0)))))
 
 					pos_s(dim_i) = quant%locations_n(dim_i,n(dim_i))
-					pos_o(dim_i) = quant%locations_m(dim_i,m(dim_i))
+					pos_o(dim_i) = quant%locations_m(dim_i,m(dim_i))					
 				enddo
 				dotp = dot_product(pos_o,pos_s)
-				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)
+				value = EXP(-2*BPACK_pi*BPACK_junit*dotp)			
 			else
 				write(*,*)'tst unknown'
 			endif
@@ -187,7 +187,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 
     integer rank,ii,ii1,jj,kk,nvec
 	real(kind=8),allocatable:: datain(:),location_tmp(:)
-	real(kind=8) :: wavelen, ds, ppw, a, v1,v2
+	real(kind=8) :: wavelen, ds, ppw, a, v1,v2,vtmp
 	integer :: ierr
 	type(z_Hoption),target::option
 	type(z_Hstat),target::stats
@@ -209,7 +209,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	integer flag,nargs,dim_i, Npt_src, ij, ij1
 	integer,allocatable::idx_src(:), idx_1(:), idx_2(:), idxs(:), idxe(:), roundedindex(:,:),indexmapper(:,:),binsizes(:)
 	complex(kind=8)::tmp
-	integer:: binmax
+	integer:: binmax 
 	class(*), pointer :: Quant_ref
 
 	!**** nmpi and groupmembers should be provided by the user
@@ -450,7 +450,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  allocate(quant%locations_n(quant%Ndim,Nperdim))
 	  allocate(roundedindex(Nperdim,2))
 	  allocate(location_tmp(Nperdim))
-
+	  
 	  do dim_i=1,quant%Ndim
 		do m=1,Nperdim
 			call random_number(a)
@@ -458,18 +458,18 @@ PROGRAM ButterflyPACK_RankBenchmark
 			quant%locations_m(dim_i,m)=z_floor_safe(Nperdim*min(a,0.99999999999d0)) !! z_floor_safe makes the rank smaller when xyzsort=0, but gives large compression error
 			! quant%locations_m(dim_i,m)=Nperdim*min(a,0.99999999999d0)
 			! quant%locations_m(dim_i,m)=(m*(1-0.001*a)-1)
-			! quant%locations_m(dim_i,m)=m-1
+			! quant%locations_m(dim_i,m)=m-1 
 		enddo
 		do n=1,Nperdim
 			call random_number(a)
 			! call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
 			! quant%locations_n(dim_i,n)=z_floor_safe(Nperdim*min(a,0.99999999999d0))/dble(Nperdim)
 			! quant%locations_n(dim_i,n)=(n*(1-0.001*a)-1)/Nperdim
-			quant%locations_n(dim_i,n)=dble(n-1)/Nperdim
+			quant%locations_n(dim_i,n)=dble(n-1)/Nperdim 
 		enddo
-	  enddo
+	  enddo	  
 
-	  ! The following will take no effect if option%xyzsort\=0
+	  ! The following will take no effect if option%xyzsort\=0 	
 	  do dim_i=1,quant%Ndim
 		do m=1,Nperdim
 		roundedindex(m,1) = z_bit_reverse(z_floor_safe(quant%locations_m(dim_i,m)/(1))+1,INT((log(dble(Nperdim)) / log(2d0))))
@@ -490,7 +490,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 	  enddo
 	  call MPI_Bcast(quant%locations_m, quant%Ndim*Nperdim, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
 	  call MPI_Bcast(quant%locations_n, quant%Ndim*Nperdim, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-
+	  
 
 	  deallocate(roundedindex)
 	  deallocate(location_tmp)
@@ -577,8 +577,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 	rhs_loc = rhs_loc - rhs_loc_ref
 	v1 =(z_fnorm(rhs_loc,product(Nunk_m_loc),nvec))**2d0
 	v2 =(z_fnorm(rhs_loc_ref,product(Nunk_m_loc),nvec))**2d0
-	call MPI_ALLREDUCE(v1, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-	call MPI_ALLREDUCE(v2, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	vtmp=v1
+	call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	vtmp=v2
+	call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 	if(ptree%MyID==Main_ID)then
 		write(*,*)'multiplication (contraction) error: ', sqrt(v1/v2)
 	endif
