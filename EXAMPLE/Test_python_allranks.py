@@ -4,7 +4,6 @@ import ctypes
 import time
 import sys
 import dPy_BPACK_wrapper
-from user_block_funcs_1_r import * # this is the file that defines the compute_block function
 
 
 try:
@@ -24,12 +23,13 @@ except ImportError:
     def bcast(obj, root=0):
         return obj
 
-    
+
 
 
 ####################################################################################################
 ####################################################################################################
 ####################### create the matrix
+from user_block_funcs_1_r import * # this is the file that defines the compute_block function
 seed=12345
 rng = np.random.default_rng(seed=seed)
 nrhs = 1
@@ -38,6 +38,34 @@ Ndim = 3
 coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 coordinates = bcast(coordinates, root=0)
 meta = {"coordinates": coordinates}
+
+
+
+
+
+# ############################################### the following tests a RBF kernel in george
+# from user_block_funcs_george import * # this is the file that defines the compute_block function
+# import george
+# seed=12345
+# rng = np.random.default_rng(seed=seed)
+# nrhs = 1
+# Npo = 1000
+# Ndim = 3
+# coordinates = rng.random((Npo, Ndim)).astype(np.float64)
+# coordinates = bcast(coordinates, root=0)
+# input_dim=Ndim
+# intialguess=[5e-6, 1] + [1]*input_dim
+# #### Note that intialguess contains theta, but george needs theta^2
+# K = george.kernels.ExpSquaredKernel(metric=np.array(intialguess[2:]), ndim=input_dim)
+# amplitude = intialguess[1]
+# K *= amplitude
+# err=np.sqrt(intialguess[0])
+# meta = {
+#     "coordinates": coordinates,
+#     "kernel": K,
+#     "yerr": np.repeat(err, Npo).astype(np.float64)
+# }
+
 
 
 
@@ -143,9 +171,12 @@ sp.d_py_bpack_logdet(
 )
 
 if(rank==0):
-    print("bpack logdet:",sign.value,logdet.value)
-    # sign, logdet = np.linalg.slogdet(m.toarray())
-    # print("numpy logdet:",int(sign),logdet)
+    print("bpack logdet:",int(sign.value),logdet.value)
+    rows=np.arange(Npo)
+    cols=np.arange(Npo)
+    fullmat = compute_block(rows,cols,meta)
+    sign, logdet = np.linalg.slogdet(fullmat)
+    print("numpy logdet:",int(sign),logdet)
 end = time.time()
 if(rank==0):
     print(f"Time spent in d_py_bpack_logdet: {end - start} seconds")
