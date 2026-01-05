@@ -11934,8 +11934,8 @@ subroutine BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi,
                      index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
 
                      if(rank*num_vectors==1)then
-                        vtmp = BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1)
-                        call MPI_ALLREDUCE(vtmp, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
+                        vtmp = BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1)
+                        call MPI_ALLREDUCE(vtmp, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      else
                         call MPI_ALLREDUCE(MPI_IN_PLACE, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                      endif

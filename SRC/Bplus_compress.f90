@@ -3274,8 +3274,8 @@ do i_dim = 1,dims_row(dim)
       enddo
       if(product(dims_r)==1)then
          vtmp=proc_of_groupr
-         call MPI_ALLREDUCE(vtmp, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)         
-      else 
+         call MPI_ALLREDUCE(vtmp, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else
          call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
       endif
 
@@ -3288,8 +3288,8 @@ do i_dim = 1,dims_row(dim)
       if(product(dims_c)==1)then
          vtmp = proc_of_groupc
          call MPI_ALLREDUCE(vtmp, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
-      else 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)      
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
       endif
 
 
@@ -4515,8 +4515,8 @@ do i_dim = 1,dims_row(dim)
       endif
       if(level_butterfly==0)then
          vtmp = rankmax_for_butterfly(0)
-         call MPI_ALLREDUCE(vtmp, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)      
-      else 
+         call MPI_ALLREDUCE(vtmp, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else
          call MPI_ALLREDUCE(MPI_IN_PLACE, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
       endif
 
