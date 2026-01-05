@@ -1,5 +1,6 @@
 module load PrgEnv-gnu
 module load cmake
+module load python
 module unload cray-libsci
 
 cd ..
@@ -20,6 +21,7 @@ cmake .. \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
+	-Denable_python=ON \
 	-Denable_toplevel_openmp=OFF \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \
