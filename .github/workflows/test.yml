@@ -91,7 +91,6 @@ jobs:
           make
           make install
           export SCALAPACK_LIB="$GITHUB_WORKSPACE/installDir/scalapack-2.1.0/build/install/lib/libscalapack.so"  
-          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/installDir/scalapack-2.1.0/build/install/lib:$LD_LIBRARY_PATH
           printf "${BLUE} YL; Done installing ScaLAPACK from source\n"
               
           printf "${BLUE} YL; Installing arpack from source\n"
@@ -180,4 +179,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           export TEST_NUMBER=${{ matrix.test }}
+          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/installDir/scalapack-2.1.0/build/install/lib:$LD_LIBRARY_PATH
+          export LD_PRELOAD=$GITHUB_WORKSPACE/installDir/scalapack-2.1.0/build/install/lib/libscalapack.so
           sh ./.ci_tests.sh
