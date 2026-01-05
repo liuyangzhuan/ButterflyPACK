@@ -26,26 +26,10 @@ except ImportError:
 
 
 
-####################################################################################################
-####################################################################################################
-####################### create the matrix
-from user_block_funcs_1_r import * # this is the file that defines the compute_block function
-seed=12345
-rng = np.random.default_rng(seed=seed)
-nrhs = 1
-Npo = 1000
-Ndim = 3
-coordinates = rng.random((Npo, Ndim)).astype(np.float64)
-coordinates = bcast(coordinates, root=0)
-meta = {"coordinates": coordinates}
-
-
-
-
-
-# ############################################### the following tests a RBF kernel in george
-# from user_block_funcs_george import * # this is the file that defines the compute_block function
-# import george
+# ####################################################################################################
+# ####################################################################################################
+# ####################### create the matrix
+# from user_block_funcs_1_r import * # this is the file that defines the compute_block function
 # seed=12345
 # rng = np.random.default_rng(seed=seed)
 # nrhs = 1
@@ -53,18 +37,34 @@ meta = {"coordinates": coordinates}
 # Ndim = 3
 # coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 # coordinates = bcast(coordinates, root=0)
-# input_dim=Ndim
-# intialguess=[5e-6, 1] + [1]*input_dim
-# #### Note that intialguess contains theta, but george needs theta^2
-# K = george.kernels.ExpSquaredKernel(metric=np.array(intialguess[2:]), ndim=input_dim)
-# amplitude = intialguess[1]
-# K *= amplitude
-# err=np.sqrt(intialguess[0])
-# meta = {
-#     "coordinates": coordinates,
-#     "kernel": K,
-#     "yerr": np.repeat(err, Npo).astype(np.float64)
-# }
+# meta = {"coordinates": coordinates}
+
+
+
+
+
+############################################### the following tests a RBF kernel in george
+from user_block_funcs_george import * # this is the file that defines the compute_block function
+import george
+seed=12345
+rng = np.random.default_rng(seed=seed)
+nrhs = 1
+Npo = 1000
+Ndim = 3
+coordinates = rng.random((Npo, Ndim)).astype(np.float64)
+coordinates = bcast(coordinates, root=0)
+input_dim=Ndim
+intialguess=[5e-6, 1] + [1]*input_dim
+#### Note that intialguess contains theta, but george needs theta^2
+K = george.kernels.ExpSquaredKernel(metric=np.array(intialguess[2:]), ndim=input_dim)
+amplitude = intialguess[1]
+K *= amplitude
+err=np.sqrt(intialguess[0])
+meta = {
+    "coordinates": coordinates,
+    "kernel": K,
+    "yerr": np.repeat(err, Npo).astype(np.float64)
+}
 
 
 
