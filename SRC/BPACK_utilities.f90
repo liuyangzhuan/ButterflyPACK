@@ -1203,7 +1203,7 @@ contains
       type(Hoption)::option
       type(proctree)::ptree
 
-      if (ptree%MyID == Main_ID) then
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          write (*, *) ' '
          write (*, *) '***************************'
          write (*, '(A25)') 'Printing Solver Options:'
