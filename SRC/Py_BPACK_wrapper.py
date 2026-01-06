@@ -117,6 +117,7 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
 ####################### solve
 def bpack_solve(vec, verbosity=False,fid=0):
     vec = np.asarray(vec, dtype=np_dt)
+    orig_shape = vec.shape
     if vec.ndim == 1:
         vec = vec.reshape(-1, 1)
     nrhs=vec.shape[-1]
@@ -134,6 +135,7 @@ def bpack_solve(vec, verbosity=False,fid=0):
     end = time.time()
     if verbosity==True:
         print(f"ID {fid}: Time spent in py_bpack_solve: {end - start} seconds")
+    vec_out = vec_out.reshape(orig_shape)
     return vec_out
 
 
@@ -141,6 +143,7 @@ def bpack_solve(vec, verbosity=False,fid=0):
 ####################### mult
 def bpack_mult(vec, trans, verbosity=False,fid=0):
     vec = np.asarray(vec, dtype=np_dt)
+    orig_shape = vec.shape
     if vec.ndim == 1:
         vec = vec.reshape(-1, 1)
     nrhs=vec.shape[-1]
@@ -158,6 +161,7 @@ def bpack_mult(vec, trans, verbosity=False,fid=0):
     end = time.time()
     if verbosity==True:
         print(f"ID {fid}: Time spent in py_bpack_mult: {end - start} seconds")
+    vec_out = vec_out.reshape(orig_shape)
     return vec_out
 
 
