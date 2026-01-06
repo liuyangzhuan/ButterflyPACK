@@ -68,16 +68,16 @@ bpack_factor(payload, verbosity, fid=channel_id_1)
 
 sign,logd = bpack_logdet(verbosity, fid=channel_id_0)
 xb = rng.random((Npo,nrhs)).astype(np.float64,order="F")
-bpack_solve(xb, verbosity, fid=channel_id_0)
+y=bpack_solve(xb, verbosity, fid=channel_id_0)
 xb = rng.random((Npo,nrhs)).astype(np.float64,order="F")
-bpack_mult(xb, "N", verbosity, fid=channel_id_0)
+y=bpack_mult(xb, "N", verbosity, fid=channel_id_0)
 
 
 sign,logd = bpack_logdet(verbosity, fid=channel_id_1)
 xb = rng.random((Npo,nrhs)).astype(np.float64,order="F")
-bpack_solve(xb, verbosity, fid=channel_id_1)
+y=bpack_solve(xb, verbosity, fid=channel_id_1)
 xb = rng.random((Npo,nrhs)).astype(np.float64,order="F")
-bpack_mult(xb, "N", verbosity, fid=channel_id_1)
+y=bpack_mult(xb, "N", verbosity, fid=channel_id_1)
 
 bpack_free(verbosity, fid=channel_id_0)
 bpack_free(verbosity, fid=channel_id_1)

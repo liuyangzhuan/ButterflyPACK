@@ -116,7 +116,7 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
 
 ####################### solve
 def bpack_solve(vec, verbosity=False,fid=0):
-    vec = np.asarray(vec)
+    vec = np.asarray(vec, dtype=np_dt)
     if vec.ndim == 1:
         vec = vec.reshape(-1, 1)
     nrhs=vec.shape[-1]
@@ -131,17 +131,16 @@ def bpack_solve(vec, verbosity=False,fid=0):
     wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
     with open(f"{RESULT_FILE}.{fid}", "rb") as f:
         vec_out = pickle.load(f)
-        np.copyto(vec, vec_out)
     end = time.time()
     if verbosity==True:
         print(f"ID {fid}: Time spent in py_bpack_solve: {end - start} seconds")
+    return vec_out
 
 
 
 ####################### mult
 def bpack_mult(vec, trans, verbosity=False,fid=0):
-    vec = np.asarray(vec)
-    vec.dtype=np_dt
+    vec = np.asarray(vec, dtype=np_dt)
     if vec.ndim == 1:
         vec = vec.reshape(-1, 1)
     nrhs=vec.shape[-1]
@@ -156,10 +155,10 @@ def bpack_mult(vec, trans, verbosity=False,fid=0):
     wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
     with open(f"{RESULT_FILE}.{fid}", "rb") as f:
         vec_out = pickle.load(f)
-        np.copyto(vec, vec_out)
     end = time.time()
     if verbosity==True:
         print(f"ID {fid}: Time spent in py_bpack_mult: {end - start} seconds")
+    return vec_out
 
 
 
