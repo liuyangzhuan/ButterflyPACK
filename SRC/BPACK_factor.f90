@@ -54,7 +54,7 @@ contains
 
         if (option%ErrSol == 1) then
             call BPACK_Test_Solve_error(bmat, msh%idxe - msh%idxs + 1, option, ptree, stats)
-            if(ptree%MyID==Main_ID)write(*,*) 'RedistV time: ', stats%Time_RedistV
+            if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) 'RedistV time: ', stats%Time_RedistV
         endif
 
     end subroutine BPACK_Factorization

@@ -87,6 +87,7 @@ while True:
             time.sleep(poll_interval)
     flag = bcast(flag, root=0)
     fid = bcast(fid, root=0)
+    verbosity=0    
     if(flag=="init"):
         #####  read payload by rank 0 and broadcast
         payload=None
@@ -102,12 +103,16 @@ while True:
         compute_block = getattr(mod, payload["block_func_name"])
         meta = payload["meta"]
 
+        if "--verbosity" in argv:
+            idx = argv.index("--verbosity")
+            verbosity = int(argv[idx + 1])
+
         argv_tmp = argv.copy()
         argv_tmp.append(compute_block)
         argv_tmp.append(meta)
 
         argc = len(argv_tmp)
-        if(rank==0):
+        if(rank==0 and verbosity>=0):
             threshold=np.get_printoptions()["threshold"]
             np.set_printoptions(threshold=50)
             print('BPACK options: ',argv_tmp[1:])
@@ -187,7 +192,7 @@ while True:
             with open(f"{RESULT_FILE}.{fid}", "wb") as f:
                 pickle.dump((sign.value, logdet.value),f)
 
-        if(rank==0):
+        if(rank==0 and verbosity>=0):
             print("bpack logdet:",sign.value,logdet.value)
             # sign, logdet = np.linalg.slogdet(m.toarray())
             # print("numpy logdet:",int(sign),logdet)

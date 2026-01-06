@@ -258,14 +258,14 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 	tree[0] = Npo;
 
 
-    if(myrank==master_rank){
-        c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
-        std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
-    }
+    // if(myrank==master_rank){
+    //     c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
+    //     std::cout<<"ButterflyPACK Version: "<<v_major<<"."<<v_minor<<"."<<v_bugfix<<std::endl;
+    // }
 
 	/*****************************************************************/
 
-	if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
+	// if(myrank==master_rank)std::cout<<"Npo "<<Npo<<" Ndim "<<Ndim<<std::endl;
 
 	int myseg=0;     // local number of unknowns
 	int* perms = new int[Npo]; //permutation vector returned by HODLR
