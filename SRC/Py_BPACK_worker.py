@@ -87,7 +87,7 @@ while True:
             time.sleep(poll_interval)
     flag = bcast(flag, root=0)
     fid = bcast(fid, root=0)
-    verbosity=0    
+    verbosity=0
     if(flag=="init"):
         #####  read payload by rank 0 and broadcast
         payload=None
@@ -124,15 +124,18 @@ while True:
         sp = Py_BPACK_wrapper.py_bpack_load()
         ####################### initialization
         pyobjs[fid] = ctypes.c_void_p()
-
+        maxrank = ctypes.c_int(0)
         sp.py_bpack_init_compute(
             meta["coordinates"].shape[0],
             meta["coordinates"].shape[1],
             meta["coordinates"].ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
             ctypes.byref(pyobjs[fid]),            # void **pyobj
+            ctypes.byref(maxrank),
             argc,                           # int argc
             argv_ctypes                     # char *argv[]
         )
+        if(rank==0):
+            print("maxrank from py_bpack_init_compute:", maxrank.value)
 
     elif(flag=="factor"):
         ####################### factor

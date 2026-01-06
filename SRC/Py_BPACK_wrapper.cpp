@@ -183,7 +183,7 @@ void py_bpack_logdet(void ** pyobj, C_DT * phase, C_RDT * logabsdet)
 }
 
 
-void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int argc, char* argv[])
+void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int* rankmax, int argc, char* argv[])
 {
 	pybind11::gil_scoped_acquire gil;
     bpack_handle* bpack_obj = (bpack_handle*)malloc(sizeof(bpack_handle));
@@ -322,6 +322,10 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
     // construct matrix with geometrical points
 	c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncDistmn, &c_bpack_FuncNearFar, quant_ptr);
 	c_bpack_construct_element_compute(&(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncZmn, &c_bpack_FuncZmnBlock, quant_ptr);
+
+    double vtmp;
+    c_bpack_getstats(&(bpack_obj->stats),"Rank_max",&vtmp);
+    *rankmax=int(vtmp);
 
 
 	delete[] perms;

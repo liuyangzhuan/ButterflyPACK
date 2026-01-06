@@ -97,20 +97,21 @@ start = time.time()
 sp = dPy_BPACK_wrapper.d_py_bpack_load()
 ####################### initialization
 pyobj = ctypes.c_void_p()
-
+maxrank = ctypes.c_int(0)
 
 sp.d_py_bpack_init_compute(
     Npo,
     Ndim,
     coordinates.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
     ctypes.byref(pyobj),            # void **pyobj
+    ctypes.byref(maxrank),
     argc,                           # int argc
     argv_ctypes                     # char *argv[]
 )
 
 end = time.time()
 if(rank==0):
-    print(f"Time spent in py_bpack_init_compute: {end - start} seconds")
+    print(f"Time spent in py_bpack_init_compute: {end - start} seconds. Maxrank: {maxrank.value}")
 
 
 

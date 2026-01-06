@@ -14,6 +14,7 @@ def py_bpack_setup(sp):
         ctypes.c_int, ctypes.c_int,
         ctypes.POINTER(ctypes.c_double),
         ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_int),
         ctypes.c_int,
         ctypes.POINTER(ctypes.c_void_p)
     ]
