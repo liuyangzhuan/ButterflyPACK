@@ -228,7 +228,7 @@ endif
         call MPI_ALLREDUCE(phase, ho_bf1%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
         logabsdet = ho_bf1%logabsdet
         call MPI_ALLREDUCE(logabsdet, ho_bf1%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID)then
+        if (ptree%MyID == Main_ID .and. option%verbosity>=0)then
             write(*,*)'logdet:', ho_bf1%phase,ho_bf1%logabsdet
         endif
 
@@ -743,7 +743,7 @@ endif
         call MPI_ALLREDUCE(phase, h_mat%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
         logabsdet = h_mat%logabsdet
         call MPI_ALLREDUCE(logabsdet, h_mat%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
-        if (ptree%MyID == Main_ID)then
+        if (ptree%MyID == Main_ID .and. option%verbosity>=0)then
             write(*,*)'logdet:', h_mat%phase,h_mat%logabsdet
         endif
 
