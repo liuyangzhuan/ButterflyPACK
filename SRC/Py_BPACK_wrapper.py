@@ -92,7 +92,7 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
         with open(f"{CONTROL_FILE}.{fid}", "r") as f:
             flag = f.read().strip()
         if flag != "clean":
-            bpack_free(verbosity)
+            bpack_free(verbosity,fid=fid)
 
     DATA_FILE=os.getenv("DATA_FILE", "data.bin")
     with open(f"{DATA_FILE}.{fid}", "wb") as f:
@@ -102,7 +102,7 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
     wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_init_compute: {end - start} seconds")
+        print(f"ID {fid}: Time spent in py_bpack_init_compute: {end - start} seconds")
 
     if nofactor==False:
         start = time.time()
@@ -111,7 +111,7 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
         wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
         end = time.time()
         if verbosity==True:
-            print(f"Time spent in py_bpack_factor: {end - start} seconds")
+            print(f"ID {fid}: Time spent in py_bpack_factor: {end - start} seconds")
 
 
 ####################### solve
@@ -134,13 +134,14 @@ def bpack_solve(vec, verbosity=False,fid=0):
         np.copyto(vec, vec_out)
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_solve: {end - start} seconds")
+        print(f"ID {fid}: Time spent in py_bpack_solve: {end - start} seconds")
 
 
 
 ####################### mult
 def bpack_mult(vec, trans, verbosity=False,fid=0):
     vec = np.asarray(vec)
+    vec.dtype=np_dt
     if vec.ndim == 1:
         vec = vec.reshape(-1, 1)
     nrhs=vec.shape[-1]
@@ -158,7 +159,7 @@ def bpack_mult(vec, trans, verbosity=False,fid=0):
         np.copyto(vec, vec_out)
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_mult: {end - start} seconds")
+        print(f"ID {fid}: Time spent in py_bpack_mult: {end - start} seconds")
 
 
 
@@ -174,7 +175,7 @@ def bpack_logdet(verbosity=False,fid=0):
         sign,log_det = pickle.load(f)
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_logdet: {end - start} seconds")
+        print(f"ID {fid}: Time spent in py_bpack_logdet: {end - start} seconds")
     return sign,log_det
 
 ####################### free stuff
@@ -186,7 +187,7 @@ def bpack_free(verbosity=False,fid=0):
     wait_for_flag("clean", f"{CONTROL_FILE}.{fid}")
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_free: {end - start} seconds")
+        print(f"ID {fid}: Time spent in py_bpack_free: {end - start} seconds")
 
 
 ####################### terminate all workers if no more bpack calls are needed, only f"{CONTROL_FILE}.{0}" is written the signal
@@ -197,7 +198,7 @@ def bpack_terminate(verbosity=False):
         f.write("terminate")
     end = time.time()
     if verbosity==True:
-        print(f"Time spent in py_bpack_terminate: {end - start} seconds")
+        print(f"ID {0}: Time spent in py_bpack_terminate: {end - start} seconds")
 
 
 
