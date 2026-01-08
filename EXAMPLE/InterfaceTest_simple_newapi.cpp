@@ -266,6 +266,7 @@ int main(int argc, char* argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &size); 	                // Get no of procs
     MPI_Comm_rank(MPI_COMM_WORLD, &myrank); 	                // Get no of procs
     MPI_Op op;
+	bpack_write_pids_to_file(myrank, size, MPI_COMM_WORLD);
 
 	double h=0.1; //kernel parameter
 	double lambda=10.0 ; //kernel parameter

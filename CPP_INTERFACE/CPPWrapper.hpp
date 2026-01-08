@@ -41,6 +41,8 @@
 #include <cstring>
 #include <getopt.h>
 #include <unistd.h>
+#include <climits>
+#include <fstream>
 
 typedef void* F2Cptr;
 typedef void* C2Fptr;
@@ -176,6 +178,10 @@ namespace butterflypack {
     void bpack_deleteoptions(F2Cptr&);
 
     void bpack_getversionnumber(int& v_major, int& v_minor, int& v_bugfix);
+
+#ifdef HAVE_MPI
+    void bpack_write_pids_to_file(int rank, int size, MPI_Comm comm);
+#endif
 
     template<typename scalar_t> void bpack_mult_ho
     (char op, const scalar_t* X, scalar_t* Y, int Xlrows, int Ylrows, int cols,

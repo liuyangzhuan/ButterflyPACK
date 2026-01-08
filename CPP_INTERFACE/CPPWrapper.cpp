@@ -33,6 +33,7 @@
 #include <complex>
 #include <iomanip>
 
+
 #define OMPI_SKIP_MPICXX 1
 #ifdef HAVE_MPI
 #include <mpi.h>
@@ -1123,10 +1124,6 @@ namespace butterflypack {
       d_c_bpack_getversionnumber(&v_major,&v_minor,&v_bugfix);
     }
 
-
-
-
-
     // The command line parser for the example related parameters
     void bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
         
@@ -1440,5 +1437,39 @@ namespace butterflypack {
           }
         }
       }
+
+
+
+#ifdef HAVE_MPI
+    void bpack_write_pids_to_file(int rank, int size, MPI_Comm comm)
+    {
+        MPI_Barrier(comm);
+
+        pid_t pid = getpid();
+        char hostname[HOST_NAME_MAX];
+        gethostname(hostname, HOST_NAME_MAX);
+
+        std::vector<pid_t> all_pids(size);
+        MPI_Gather(&pid, 1, MPI_INT, all_pids.data(), 1, MPI_INT, 0, comm);
+
+        std::vector<char> all_hostnames(size * HOST_NAME_MAX);
+        MPI_Gather(hostname, HOST_NAME_MAX, MPI_CHAR,
+                  all_hostnames.data(), HOST_NAME_MAX, MPI_CHAR, 0, comm);
+
+        if (rank == 0)
+        {
+            std::ofstream outfile("pid_list.txt");
+            for (int i = 0; i < size; ++i)
+            {
+                char* host = &all_hostnames[i * HOST_NAME_MAX];
+                outfile << "rank_" << i << ":" << host << ":" << all_pids[i] << std::endl;
+            }
+            outfile.close();
+        }
+
+        MPI_Barrier(comm);
+    }
+#endif
+
 
     } // end namespace butterflypack
