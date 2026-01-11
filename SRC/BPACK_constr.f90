@@ -2879,17 +2879,18 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       type(matrixblock), pointer::blocks
-      integer groupm_start(Ndim), Nboundall,Ninadmissible
+      integer groupm_start(Ndim), groupm_start0(Ndim),Nboundall,Ninadmissible
 
       Memory = 0
+      groupm_start0=bplus%LL(1)%matrices_block(1)%row_group
       do ll = 1, bplus%Lplus
          bplus%LL(ll)%rankmax = 0
          statflag = 0
          if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
-         do bb = 1, bplus%LL(ll)%Nbound
+         do bb = 1, bplus%LL(ll)%Nbound_loc
             if (IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(bb)%pgno)) then
                if(option%verbosity>=2 .and. ptree%MyID==ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head)then
-                  write(*,*)'Start compressing BF_MD',bb,' out of ', bplus%LL(ll)%Nbound, 'at level',ll
+                  write(*,*)'Start compressing BF_MD',bb,' out of #local ', bplus%LL(ll)%Nbound_loc,'on rank',ptree%MyID, 'at level',ll
                endif
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
                   call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
@@ -2900,7 +2901,7 @@ contains
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
                   bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
                   levelm = bplus%LL(ll)%matrices_block(bb)%level_half
-                  groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+                  groupm_start = groupm_start0*2**levelm
                   Nboundall = 0
                   Ninadmissible = 0
                   if (allocated(bplus%LL(ll + 1)%boundary_map)) then
@@ -2918,6 +2919,8 @@ contains
                endif
             endif
          end do
+         levelm = bplus%LL(ll)%matrices_block(1)%level_half
+         groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
          endif

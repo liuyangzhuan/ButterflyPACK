@@ -1788,7 +1788,7 @@ contains
             dims_bm= Nboundall
             call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
             do jj=1,Ninadmissible
-               group_n_mid = boundary_map(group_scalar,jj,:)
+               group_n_mid = boundary_map(group_scalar,jj,1:Ndim)
                if (ALL(group_n_mid /= -1)) then
                   do dim_i=1,Ndim
                      idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head
@@ -2466,7 +2466,7 @@ do j_dim = 1,dims_col(dim)
             dims_bm= Nboundall
             call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
             do jj=1,Ninadmissible
-               group_n_mid = boundary_map(group_scalar,jj,:)
+               group_n_mid = boundary_map(group_scalar,jj,1:Ndim)
                if (ALL(group_n_mid /= -1)) then
                   do dim_i=1,Ndim
                      idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head

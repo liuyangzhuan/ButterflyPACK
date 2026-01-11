@@ -16,7 +16,13 @@
 using namespace std;
 
 
-
+static inline int product(int arr[], int n) {
+  int out = 1;  // Initialize product to 1
+  for (int i = 0; i < n; i++) {
+      out *= arr[i];
+  }
+  return out;
+}
 
 // The command line parser for the example related parameters
 void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
@@ -479,5 +485,110 @@ void c_bpack_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* nvec_p, C_DT  
 	}
 
 #endif
+
+}
+
+
+void c_bpack_md_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* ndim_p, int* nvec_p, C_DT   *b, C_DT   *b_global)
+{
+
+	int nvec = *nvec_p;
+	int Ndim= *ndim_p;
+    int iam, size;
+    int master_rank = 0;
+
+
+	int *idxs = (int *) malloc(Ndim*sizeof(int));
+	int *m_loc = (int *) malloc(Ndim*sizeof(int));
+	int *m = (int *) malloc(Ndim*sizeof(int));
+
+#ifdef HAVE_MPI
+	MPI_Comm comm;
+	int fcomm;
+	c_bpack_get_comm(ptree, &fcomm);
+	comm = MPI_Comm_f2c((MPI_Fint)fcomm);
+
+	MPI_Comm_size(comm, &size);
+    MPI_Comm_rank(comm, &iam);
+	MPI_Bcast( &nvec, 1, MPI_INT, 0, comm);
+	c_bpack_md_localindices(&Ndim, msh, idxs, m_loc, m);
+	size_t m_scalar = product(m,Ndim);
+	int m_loc1 = product(m_loc,Ndim)*nvec;
+
+	int *counts = NULL, *displs = NULL, *m_locs=NULL, *idxss=NULL;
+	C_DT *b_global_tmp = NULL;
+	if (iam == 0) {
+		counts = (int *) malloc(size*sizeof(int));
+		displs = (int *) malloc(size*sizeof(int));
+		m_locs = (int *) malloc(Ndim*size*sizeof(int));
+		idxss = (int *) malloc(Ndim*size*sizeof(int));
+		b_global_tmp= (C_DT*)malloc(m_scalar * nvec*sizeof(C_DT));
+	}
+
+	MPI_Gather(m_loc, Ndim, MPI_INT, m_locs, Ndim, MPI_INT, 0, comm);
+	MPI_Gather(idxs, Ndim, MPI_INT, idxss, Ndim, MPI_INT, 0, comm);
+	MPI_Gather(&m_loc1, 1, MPI_INT, counts, 1, MPI_INT, 0, comm);
+	if (iam == 0) {
+		displs[0] = 0;
+		for (int i = 1; i < size; i++) {
+			displs[i] = displs[i-1] + counts[i-1];
+		}
+	}
+	MPI_Gatherv(b, m_loc1, C_MPI_DT, b_global, counts, displs, C_MPI_DT, 0, comm);
+
+	if (iam == 0) {
+		//Converting from the "stacked" order (rank 0's data, then rank 1's, etc.) to the permuted global ordering
+		for (int s=0;s<size;s++){
+			int m_loc_1vec = product(&(m_locs[s*Ndim]),Ndim);
+			for (int i=0; i<m_loc_1vec; i++){
+				int i_new_scalar = i+1;
+				int i_new_md[Ndim];
+				c_bpack_singleindex_to_multiindex(&Ndim,&(m_locs[s*Ndim]),&i_new_scalar,i_new_md);
+				for (int j=0;j<Ndim;j++){
+					i_new_md[j]=i_new_md[j]+idxss[s*Ndim+j]-1;
+				}
+				c_bpack_multiindex_to_singleindex(&Ndim,m,&i_new_scalar,i_new_md);
+				for (int nth=0; nth<nvec; nth++){
+					b_global_tmp[(i_new_scalar-1)+m_scalar*nth] = b_global[displs[s]+i+m_loc_1vec*nth];
+				}
+			}
+		}
+
+		//Converting from permuted global ordering to the original ordering
+		for (int i = 0; i < m_scalar; ++i) {
+			int i_old_scalar=i+1;
+			int i_new_scalar;
+			int i_old_md[Ndim];
+			int i_new_md[Ndim];
+			c_bpack_singleindex_to_multiindex(&Ndim,m,&i_old_scalar,i_old_md);
+			c_bpack_md_old2new(&Ndim, msh, i_old_md, i_new_md);
+			c_bpack_multiindex_to_singleindex(&Ndim,m,&i_new_scalar,i_new_md);
+			for (int nth=0; nth<nvec; nth++){
+				b_global[nth * m_scalar + i] = b_global_tmp[nth * m_scalar + (i_new_scalar-1)];
+			}
+		}
+
+		free(counts);
+		free(displs);
+		free(m_locs);
+		free(idxss);
+		free(b_global_tmp);
+	}
+#else
+
+	c_bpack_md_localindices(&Ndim, msh, idxs, m_loc, m);
+	size_t m_scalar = product(m,Ndim);
+	for (int j = 0; j < nvec; ++j)
+	{
+		for (int i = 0; i < m_scalar; ++i)
+		{
+			b_global[j * m_scalar + i] = b[j * m_scalar + i];
+		}
+	}
+#endif
+
+free(idxs);
+free(m_loc);
+free(m);
 
 }

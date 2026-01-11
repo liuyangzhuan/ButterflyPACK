@@ -1661,6 +1661,48 @@ contains
 
 
 
+
+!>**** C interface of converting from old, global index to new, global index, the indexs start from 1
+   !> @param newidx: new, global index, from 1 to N (out)
+   !> @param oldidx: old, global index, from 1 to N (in)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_Old2New(Ndim, msh_Cptr, oldidx, newidx) bind(c, name="c_bpack_md_old2new")
+      implicit none
+      integer Ndim,dim_i
+      integer newidx(Ndim),oldidx(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         newidx(dim_i) = msh(dim_i)%old2new(oldidx(dim_i))
+      enddo
+   end subroutine C_BPACK_MD_Old2New
+
+
+
+
+!>**** C interface of getting the start index and local (and global) number of indices (in the permuted order)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_LocalIndices(Ndim,msh_Cptr, idxs, Nlocal, Nglobal) bind(c, name="c_bpack_md_localindices")
+      implicit none
+      integer Ndim,dim_i
+      integer idxs(Ndim),Nlocal(Ndim),Nglobal(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         idxs(dim_i)=msh(dim_i)%idxs
+         Nlocal(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
+         Nglobal(dim_i) = msh(dim_i)%Nunk
+      enddo
+
+   end subroutine C_BPACK_MD_LocalIndices
+
+
+
+
 !>**** C interface of Fortran subroutine SingleIndexToMultiIndex for converting single index to multi-index
    !> @param Ndim: dimensionality
    !> @param dims(Ndim): size of each dimension

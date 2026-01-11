@@ -53,10 +53,13 @@ void c_bpack_md_tfqmr_noprecon(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, 
 void c_bpack_md_construct_init(int* Ns, int* Nmax, int* Ndim, double* Locations, int* perms, int* Ns_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncNearFar_MD)(int*, int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_md_construct_element_compute(int* Ndim, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn_MD)(int*, int*, int*, C_DT *,C2Fptr), void (*C_FuncZmnBlock_MD)(int*, int*, int*, int*, int64_t*, int*, int*, C_DT *, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_md_get_local_midlevel_blocks(int* Ndim, int* nc_m, int* head_array, F2Cptr* bmat, F2Cptr* option,F2Cptr* ptree,F2Cptr* msh);
-
 void c_bpack_md_mult(int* Ndim, char const * trans, C_DT  const * xin, C_DT * xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree,F2Cptr* msh);
 void c_bpack_md_solve(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree,F2Cptr* msh);
 void c_bpack_md_new2old(int* Ndim, F2Cptr* msh, int* newidx_loc, int* oldidx);
+void c_bpack_md_old2new(int* Ndim, F2Cptr* msh, int* oldidx, int* newidx);
+void c_bpack_md_localindices(int* Ndim, F2Cptr* msh, int* idxs, int* Nlocal, int* Nglobal);
+void c_bpack_md_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* Ndim, int* nvec, C_DT   *b, C_DT   *b_global);
+
 void c_bpack_singleindex_to_multiindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
 void c_bpack_multiindex_to_singleindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
 void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);

@@ -530,6 +530,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** one layer in a Bplus
     type onelplus_MD
         integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
+        integer Nbound_loc !< # local # of corrected blocks that are further decomposed into deeper layers
+        integer Nboundall
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup

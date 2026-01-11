@@ -1631,7 +1631,7 @@ end function distance_geo
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
       integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start_global(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
-      integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
+      integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, Ninadmissible_tot_loc, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
       type(matrixblock_MD), pointer::blocks, block_f
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
       real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
@@ -1646,6 +1646,7 @@ end function distance_geo
       type(proctree)::ptree
       integer,allocatable::boundary_map(:,:)
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
+      integer pgno, bb_loc
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -1658,11 +1659,15 @@ end function distance_geo
       allocate (hss_bf1_md%BP%LL(LplusMax))
       do ll = 1, LplusMax
          hss_bf1_md%BP%LL(ll)%Nbound = 0
+         hss_bf1_md%BP%LL(ll)%Nbound_loc = 0
+         hss_bf1_md%BP%LL(ll)%Nboundall = 0
       end do
 
       allocate(nlist_MD(LplusMax))
 
       hss_bf1_md%BP%LL(1)%Nbound = 1
+      hss_bf1_md%BP%LL(1)%Nbound_loc = 1
+      hss_bf1_md%BP%LL(1)%Nboundall = 1
       allocate (hss_bf1_md%BP%LL(1)%matrices_block(1))
       block_f => hss_bf1_md%BP%LL(1)%matrices_block(1)
       block_f%level = hss_bf1_md%BP%level
@@ -1691,8 +1696,10 @@ end function distance_geo
 
 
       block_f%style = 2
-      allocate (hss_bf1_md%BP%LL(1)%boundary_map(1,1,Ndim))
-      hss_bf1_md%BP%LL(1)%boundary_map(1,1,:) = block_f%col_group
+      allocate (hss_bf1_md%BP%LL(1)%boundary_map(1,1,Ndim+2))
+      hss_bf1_md%BP%LL(1)%boundary_map(1,1,1:Ndim) = block_f%col_group
+      hss_bf1_md%BP%LL(1)%boundary_map(1,1,1+Ndim) = 1
+      hss_bf1_md%BP%LL(1)%boundary_map(1,1,2+Ndim) = 1
       hss_bf1_md%BP%Lplus = 0
       groupm_ll = block_f%row_group
       level_butterfly_ll = block_f%level_butterfly
@@ -1711,11 +1718,14 @@ end function distance_geo
 
             if (ll == LplusMax - 1 .or. level_butterfly_ll == 0) then
                hss_bf1_md%BP%LL(ll + 1)%Nbound = 0
+               hss_bf1_md%BP%LL(ll + 1)%Nbound_loc = 0
+               hss_bf1_md%BP%LL(ll + 1)%Nboundall = 0
             else
                level_BP = hss_bf1_md%BP%level
                levelm = ceiling_safe(dble(level_butterfly_ll)/2d0)
 
                Nboundall = 2**(level_ll + levelm - level_BP)
+               hss_bf1_md%BP%LL(ll + 1)%Nboundall=Nboundall
                groupm_start_global = hss_bf1_md%BP%row_group * Nboundall ! this is the ID of the first group at level ll+levelm
                groupm_start = hss_bf1_md%BP%row_group * 2**(level_ll - level_BP) ! this is the ID of the first group at level ll
                dims2 = Nboundall
@@ -1792,31 +1802,42 @@ end function distance_geo
                   enddo
                enddo
 
-               allocate (hss_bf1_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Ninadmissible_max,Ndim))
+               allocate (hss_bf1_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Ninadmissible_max,Ndim+2))
                hss_bf1_md%BP%LL(ll + 1)%boundary_map=-1
                call LogMemory(stats, SIZEOF(hss_bf1_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
 
+               Ninadmissible_tot_loc=0
+               Ninadmissible_tot=0
                do bb = 1, Nboundall**Ndim
+                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                  group_m = group_m + groupm_start_global - 1
+                  pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
                   do nn=1,nlist_MD(ll+1)%list(bb)%nn
                      group_n = nlist_MD(ll+1)%list(bb)%nlist(nn,:)
-                     hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,nn,:)=group_n
+                     hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,nn,1:Ndim)=group_n
+                     Ninadmissible_tot = Ninadmissible_tot + 1
+                     hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,nn,2+Ndim)=Ninadmissible_tot
+                     if (IOwnPgrp(ptree, pgno)) then
+                        Ninadmissible_tot_loc = Ninadmissible_tot_loc + 1
+                        hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,nn,1+Ndim)=Ninadmissible_tot_loc
+                     endif
                   enddo
                enddo
                hss_bf1_md%BP%LL(ll + 1)%Nbound = Ninadmissible_tot
+               hss_bf1_md%BP%LL(ll + 1)%Nbound_loc = Ninadmissible_tot_loc
+               call assert(Ninadmissible_tot_loc>0, 'BP%LL(ll + 1)%Nbound_loc needs to be at least 1')
 
-
-               allocate (hss_bf1_md%BP%LL(ll + 1)%matrices_block(hss_bf1_md%BP%LL(ll + 1)%Nbound))
+               allocate (hss_bf1_md%BP%LL(ll + 1)%matrices_block(hss_bf1_md%BP%LL(ll + 1)%Nbound_loc))
                call LogMemory(stats, SIZEOF(hss_bf1_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
 
-               cnt = 0
                do bb = 1, Nboundall**Ndim
                   call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
                   group_m = group_m + groupm_start_global - 1
                   do jj=1,Ninadmissible_max
-                     if (hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,1) /= -1) then
-                        cnt = cnt + 1
-                        group_n = hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,:)
-                        blocks => hss_bf1_md%BP%LL(ll + 1)%matrices_block(cnt)
+                     bb_loc = hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,1+Ndim)
+                     if (bb_loc /= -1) then
+                        group_n = hss_bf1_md%BP%LL(ll + 1)%boundary_map(bb,jj,1:Ndim)
+                        blocks => hss_bf1_md%BP%LL(ll + 1)%matrices_block(bb_loc)
                         blocks%Ndim = Ndim
                         allocate(blocks%row_group(Ndim))
                         allocate(blocks%col_group(Ndim))
