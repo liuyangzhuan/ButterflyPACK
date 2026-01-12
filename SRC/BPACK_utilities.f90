@@ -462,6 +462,44 @@ contains
 
 
 
+
+
+   subroutine HMAT_MD_delete(h_mat_md)
+      implicit none
+      integer ll,bb
+      type(hssbf_md)::h_mat_md
+
+      if (associated(h_mat_md%BP%LL)) then
+         do ll = 1, LplusMax
+            if (h_mat_md%BP%LL(ll)%Nbound_loc > 0) then
+               if (associated(h_mat_md%BP%LL(ll)%matrices_block)) then
+               do bb = 1, h_mat_md%BP%LL(ll)%Nbound_loc
+                  ! write(*,*)ll,h_mat_md%BP%Lplus,bb,h_mat_md%BP%LL(ll)%Nbound,'fff'
+                  call BF_MD_delete(h_mat_md%Ndim, h_mat_md%BP%LL(ll)%matrices_block(bb), 1)
+               end do
+               deallocate (h_mat_md%BP%LL(ll)%matrices_block)
+               endif
+               if (allocated(h_mat_md%BP%LL(ll)%boundary_map)) deallocate (h_mat_md%BP%LL(ll)%boundary_map)
+            end if
+         end do
+         deallocate (h_mat_md%BP%LL)
+      endif
+
+      if(allocated(h_mat_md%BP%row_group))then
+         deallocate(h_mat_md%BP%row_group)
+      endif
+      if(allocated(h_mat_md%BP%col_group))then
+         deallocate(h_mat_md%BP%col_group)
+      endif
+      if(allocated(h_mat_md%N))then
+         deallocate(h_mat_md%N)
+      endif
+
+   end subroutine HMAT_MD_delete
+
+
+
+
    subroutine BPACK_delete(bmat)
 
       implicit none
@@ -487,6 +525,12 @@ contains
          deallocate (bmat%hss_bf_md)
          bmat%hss_bf_md => null()
       endif
+
+      if (associated(bmat%h_mat_md)) then
+         call HMAT_MD_delete(bmat%h_mat_md)
+         deallocate (bmat%h_mat_md)
+         bmat%h_mat_md => null()
+      endif      
 
    end subroutine BPACK_delete
 
@@ -1569,10 +1613,42 @@ contains
                write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
                write (*, *) '***************************'
                write (*, *) ' '
-
             endif
-         endif
+         else if(option%format==HTENSOR)then
+            if(option%LRlevel==0)then
+               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-LR'
+            else
+               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-BF'
+            endif
+            write (*, '(A18,Es14.7)') 'near_para', option%near_para
+            write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+            write (*, '(A18,I8)') 'n_iter', option%n_iter
+            write (*, '(A18,I8)') 'precon', option%precon
+            write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+            write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
+            write (*, '(A18,I8)') 'nogeo', option%nogeo
+            write (*, '(A18,I8)') 'per_geo', option%per_geo
+            if(option%per_geo==1)then
+               write (*, '(A18,Es14.7)') 'period1', option%periods(1)
+               write (*, '(A18,Es14.7)') 'period2', option%periods(2)
+               write (*, '(A18,Es14.7)') 'period3', option%periods(3)
+            endif
+            write (*, '(A18,I8)') 'verbosity', option%verbosity
+            write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
+            write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+            write (*, '(A18,I8)') 'cpp', option%cpp
+            write (*, '(A18,I8)') 'knn', option%knn
+            write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+            write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
+            write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+            write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+            write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para
+            write (*, '(A18,Es14.7)') 'sample_para', option%sample_para
+            write (*, '(A18,Es14.7)') 'sample_para_outer', option%sample_para_outer
+            write (*, *) '***************************'
+            write (*, *) ' '
+         endif
       endif
    end subroutine PrintOptions
 

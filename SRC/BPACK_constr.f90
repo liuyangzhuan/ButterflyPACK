@@ -1709,6 +1709,8 @@ contains
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_construction(Ndim, bmat%hss_bf_md, option, stats, msh, ker, ptree)
+      case (HTENSOR)
+         call HMAT_MD_construction(Ndim, bmat%h_mat_md, option, stats, msh, ker, ptree)
       case default
          write(*,*)'not supported format in BPACK_MD_construction_Element:', option%format
          stop
@@ -2218,7 +2220,7 @@ contains
       allocate (stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel))
       stats%rankmax_of_level_global = 0
 
-      call BP_MD_compress_entry(Ndim, hss_bf_md1%BP, option, rtemp, stats, msh, ker, ptree)
+      call BP_MD_compress_entry(Ndim, hss_bf_md1%BP, option, rtemp, stats, msh, ker, ptree, logn_level_flag=0)
       stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
 
       passflag = 0
@@ -2236,7 +2238,9 @@ contains
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      ! if (ptree%MyID == Main_ID)write(*,*)stats%Mem_Fill,stats%Mem_Comp_for,stats%Mem_Direct_for,stats%Mem_Peak,'wocao'
       call LogMemory(stats, stats%Mem_Fill)
+      ! if (ptree%MyID == Main_ID)write(*,*)stats%Mem_Fill,stats%Mem_Comp_for,stats%Mem_Direct_for,stats%Mem_Peak,'wocao after logmemory'
 
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:hss_bf_md1%Maxlevel), stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel), hss_bf_md1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
@@ -2261,6 +2265,106 @@ contains
       return
 
    end subroutine HSS_MD_construction
+
+
+
+
+
+   subroutine HMAT_MD_construction(Ndim, h_mat_md, option, stats, msh, ker, ptree)
+
+      implicit none
+      integer Ndim
+      real(kind=8) n1, n2, n3, n4, n5
+      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll, rankmax
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
+      real T0
+      real(kind=8):: rtemp, rel_error, error, t1, t2, tim_tmp, rankrate_inner, rankrate_outter
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2
+      type(matrixblock)::block_tmp, block_tmp1
+      DT, allocatable::fullmat(:, :)
+      integer level_c, iter, level_cc, level_butterfly, Bidxs, Bidxe
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Hmat_md)::h_mat_md
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer::passflag = 0, bp_cnt_lr_tmp
+      type(intersect_MD) :: subtensors_dummy(1)
+      integer::mrange_dummy(1), nrange_dummy(1)
+      DT::mat_dummy(1, 1)
+
+      ! Memory_direct_forward=0
+      ! Memory_butterfly_forward=0
+      tim_tmp = 0
+      !tolerance=0.001
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! write (*,*) 'ACA error threshold',tolerance
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'SVD error threshold', option%tol_comp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing HTENSOR......"
+
+      n1 = MPI_Wtime()
+
+      allocate (stats%rankmax_of_level(0:h_mat_md%Maxlevel))
+      stats%rankmax_of_level = 0
+      allocate (stats%rankmax_of_level_global(0:h_mat_md%Maxlevel))
+      stats%rankmax_of_level_global = 0
+      bp_cnt_lr_tmp=option%bp_cnt_lr
+      option%bp_cnt_lr=1
+      call BP_MD_compress_entry(Ndim, h_mat_md%BP, option, rtemp, stats, msh, ker, ptree, logn_level_flag=1)
+      option%bp_cnt_lr=bp_cnt_lr_tmp
+      stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+
+      passflag = 0
+      do while (passflag < 2)
+         call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 2, passflag, ptree, stats)
+      enddo
+
+      do ll = 1, h_mat_md%BP%Lplus
+         rankmax = h_mat_md%BP%LL(ll)%rankmax
+         call MPI_ALLREDUCE(rankmax, h_mat_md%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(h_mat_md%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+      enddo
+
+
+      n2 = MPI_Wtime()
+      stats%Time_Fill = stats%Time_Fill + n2 - n1
+
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+
+      call MPI_ALLREDUCE(stats%rankmax_of_level(0:h_mat_md%Maxlevel), stats%rankmax_of_level_global(0:h_mat_md%Maxlevel), h_mat_md%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Time_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total construction time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
+      call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for butterfly forward blocks'
+      call MPI_ALLREDUCE(stats%Mem_Direct_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for direct forward blocks'
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! stop
+
+      return
+
+   end subroutine HMAT_MD_construction
+
+
+
+
+
+
+
 
 
    recursive subroutine Hmat_block_construction(blocks, Memory_far, Memory_near, option, stats, msh, ker, ptree)
@@ -2865,7 +2969,7 @@ contains
 
 
 
-   subroutine BP_MD_compress_entry(Ndim, bplus, option, Memory, stats, msh, ker, ptree)
+   subroutine BP_MD_compress_entry(Ndim, bplus, option, Memory, stats, msh, ker, ptree, logn_level_flag)
 
       implicit none
       integer Ndim
@@ -2880,6 +2984,7 @@ contains
       type(proctree)::ptree
       type(matrixblock), pointer::blocks
       integer groupm_start(Ndim), groupm_start0(Ndim),Nboundall,Ninadmissible
+      integer logn_level_flag
 
       Memory = 0
       groupm_start0=bplus%LL(1)%matrices_block(1)%row_group
@@ -2896,15 +3001,19 @@ contains
                   call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
                   call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
                   Memory = Memory + rtemp
-               else
+               elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
 
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
                   bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
-                  levelm = bplus%LL(ll)%matrices_block(bb)%level_half
+                  if(logn_level_flag==0)then
+                     levelm = bplus%LL(ll)%matrices_block(bb)%level_half
+                  else
+                     levelm = 1
+                  endif
                   groupm_start = groupm_start0*2**levelm
                   Nboundall = 0
                   Ninadmissible = 0
-                  if (allocated(bplus%LL(ll + 1)%boundary_map)) then
+                  if (allocated(bplus%LL(ll + 1)%boundary_map) .and. logn_level_flag==0) then
                      Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
                      Nboundall = NINT(exp(log(dble(Nboundall)) / dble(Ndim)))
                      Ninadmissible = size(bplus%LL(ll + 1)%boundary_map, 2)
@@ -2919,7 +3028,11 @@ contains
                endif
             endif
          end do
-         levelm = bplus%LL(ll)%matrices_block(1)%level_half
+         if(logn_level_flag==0)then
+            levelm = bplus%LL(ll)%matrices_block(1)%level_half
+         else
+            levelm = 1
+         endif
          groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
@@ -4577,6 +4690,9 @@ contains
       case (HSS_MD)
          N_glo=bmat%hss_bf_md%N
          idxs = bmat%hss_bf_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
+      case (HTENSOR)
+         N_glo=bmat%h_mat_md%N
+         idxs = bmat%h_mat_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
       case default
          write(*,*)'not supported format in BPACK_MD_CheckError:', option%format
          stop

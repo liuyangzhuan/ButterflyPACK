@@ -4086,9 +4086,11 @@ do i_dim = 1,dims_row(dim)
   type(intersect_MD) :: subtensors(:)
 
    do index_ij = 1, product(dims)
-      call LogMemory(stats, -SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
 
-      if(associated(subtensors(index_ij)%dat))deallocate(subtensors(index_ij)%dat)
+      if(associated(subtensors(index_ij)%dat))then
+         call LogMemory(stats, -SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+         deallocate(subtensors(index_ij)%dat)
+      endif
       if(allocated(subtensors(index_ij)%rows))then
          do dim_i=1,Ndim
             call iarray_finalizer(subtensors(index_ij)%rows(dim_i))

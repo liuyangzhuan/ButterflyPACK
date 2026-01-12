@@ -633,8 +633,6 @@ contains
 
   subroutine Bplus_MD_block_MVP_dat(Ndim, bplus, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats, msh, option,level_start, level_end)
 
-
-
       implicit none
 
       integer Ndim
@@ -668,95 +666,92 @@ contains
       integer Nboundall,dims2(Ndim),group_m(Ndim),group_n(Ndim),groupm_start_global(Ndim),Ninadmissible,bb_loc,tt
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
-      if(blocks_1%style==4)then
-         write(*,*)"not supported style==4 in Bplus_MD_block_MVP_dat"
-         stop
+
+      level_s = 1
+      level_e = bplus%Lplus
+      if (present(level_start)) level_s = level_start
+      if (present(level_end)) level_e = level_end
+
+      if (chara == 'N') allocate (Vout(product(M), Nrnd))
+      if (chara == 'T') allocate (Vout(product(N), Nrnd))
+      Vout = 0
+
+      ctemp1 = 1.0d0; ctemp2 = 0.0d0
+
+
+      allocate(Vin_locs(level_s:level_e))
+      allocate(Vout_locs(level_s:level_e))
+
+      do ll = level_s, level_e
+         allocate(Vin_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
+         allocate(Vout_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
+         do bb = 1, bplus%LL(ll)%Nbound_loc
+            blocks => bplus%LL(ll)%matrices_block(bb)
+            if (chara == 'N') then
+               allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
+               Vout_locs(ll)%vs(bb)%vector=0
+               allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
+            else
+               allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
+               Vout_locs(ll)%vs(bb)%vector=0
+               allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
+            endif
+         enddo
+      enddo
+
+      n1 = MPI_Wtime()
+      if (chara == 'N') then
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
       else
-         level_s = 1
-         level_e = bplus%Lplus
-         if (present(level_start)) level_s = level_start
-         if (present(level_end)) level_e = level_end
-
-         if (chara == 'N') allocate (Vout(product(M), Nrnd))
-         if (chara == 'T') allocate (Vout(product(N), Nrnd))
-         Vout = 0
-
-         ctemp1 = 1.0d0; ctemp2 = 0.0d0
-
-
-         allocate(Vin_locs(level_s:level_e))
-         allocate(Vout_locs(level_s:level_e))
-
-         do ll = level_s, level_e
-            allocate(Vin_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
-            allocate(Vout_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
-            do bb = 1, bplus%LL(ll)%Nbound_loc
-               blocks => bplus%LL(ll)%matrices_block(bb)
-               if (chara == 'N') then
-                  allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
-                  Vout_locs(ll)%vs(bb)%vector=0
-                  allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
-               else
-                  allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
-                  Vout_locs(ll)%vs(bb)%vector=0
-                  allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
-               endif
-            enddo
-         enddo
-
-         n1 = MPI_Wtime()
-         if (chara == 'N') then
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
-         else
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh,ptree%pgrp(blocks_1%pgno)%nproc)
-         endif
-         n2 = MPI_Wtime()
-         stats%Time_RedistV = stats%Time_RedistV + n2-n1
-
-         do ll = level_s, level_e
-            do bb = 1, bplus%LL(ll)%Nbound_loc
-               blocks => bplus%LL(ll)%matrices_block(bb)
-               if (chara == 'N') then
-                  dim_in = blocks%N_loc
-                  dim_out = blocks%M_loc
-               else
-                  dim_in = blocks%M_loc
-                  dim_out = blocks%N_loc
-               endif
-               if(blocks%style==1)then
-                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2)
-               else
-                  call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
-               endif
-            enddo
-         enddo
-
-
-         n1 = MPI_Wtime()
-         if (chara == 'N') then
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
-         else
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
-         endif
-         n2 = MPI_Wtime()
-         stats%Time_RedistV = stats%Time_RedistV + n2-n1
-
-
-         do ll = level_s, level_e
-            do bb = 1, bplus%LL(ll)%Nbound_loc
-               blocks => bplus%LL(ll)%matrices_block(bb)
-               deallocate (Vout_locs(ll)%vs(bb)%vector)
-               deallocate (Vin_locs(ll)%vs(bb)%vector)
-            end do
-            deallocate(Vin_locs(ll)%vs)
-            deallocate(Vout_locs(ll)%vs)
-         end do
-         deallocate(Vin_locs)
-         deallocate(Vout_locs)
-
-         random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
-         deallocate (Vout)
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh,ptree%pgrp(blocks_1%pgno)%nproc)
       endif
+      n2 = MPI_Wtime()
+      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+      do ll = level_s, level_e
+         do bb = 1, bplus%LL(ll)%Nbound_loc
+            blocks => bplus%LL(ll)%matrices_block(bb)
+            if (chara == 'N') then
+               dim_in = blocks%N_loc
+               dim_out = blocks%M_loc
+            else
+               dim_in = blocks%M_loc
+               dim_out = blocks%N_loc
+            endif
+            if(blocks%style==1)then
+               call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2)
+            else
+               call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+            endif
+         enddo
+      enddo
+
+
+      n1 = MPI_Wtime()
+      if (chara == 'N') then
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
+      else
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
+      endif
+      n2 = MPI_Wtime()
+      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+
+
+      do ll = level_s, level_e
+         do bb = 1, bplus%LL(ll)%Nbound_loc
+            blocks => bplus%LL(ll)%matrices_block(bb)
+            deallocate (Vout_locs(ll)%vs(bb)%vector)
+            deallocate (Vin_locs(ll)%vs(bb)%vector)
+         end do
+         deallocate(Vin_locs(ll)%vs)
+         deallocate(Vout_locs(ll)%vs)
+      end do
+      deallocate(Vin_locs)
+      deallocate(Vout_locs)
+
+      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+      deallocate (Vout)
+
    end subroutine Bplus_MD_block_MVP_dat
 
 
@@ -1796,7 +1791,7 @@ contains
 
       if (IOwnPgrp(ptree, block_i%pgno)) then
          call BF_ComputeMemory(block_i, memory)
-         compression_ratio = 1 - memory/(storage_size(tmp)*block_i%M*block_i%N/8d0/1024.0d3)
+         compression_ratio = 1 - memory/(storage_size(tmp,kind=8)*block_i%M*block_i%N/8d0/1024.0d3)
          vtmp = memory
          call MPI_ALLREDUCE(vtmp, memory, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(block_i%pgno)%Comm, ierr)
          call BF_get_rank(block_i, ptree)
@@ -8032,7 +8027,7 @@ contains
                         blocks%row_group = group_m
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m(1)) - 1
-                        blocks%level_butterfly = BP%LL(ll)%matrices_block(1)%level_butterfly
+                        blocks%level_butterfly = BP%LL(ll)%level_butterfly
                         blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
                         do dim_i=1,Ndim
                            blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
@@ -8156,7 +8151,7 @@ contains
                         blocks%row_group = group_m
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m(1)) - 1
-                        blocks%level_butterfly = BP%LL(ll)%matrices_block(1)%level_butterfly
+                        blocks%level_butterfly = BP%LL(ll)%level_butterfly
                         blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
                         do dim_i=1,Ndim
                            blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
@@ -8293,7 +8288,7 @@ contains
                         blocks%row_group = group_m
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m(1)) - 1
-                        blocks%level_butterfly = BP%LL(ll)%matrices_block(1)%level_butterfly
+                        blocks%level_butterfly = BP%LL(ll)%level_butterfly
                         blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
                         do dim_i=1,Ndim
                            blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
@@ -19843,7 +19838,7 @@ integer, save:: my_tid = 0
                if(present(zfpquants) .or. present(qttquants))then
                   allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
 
-                  call LogMemory(stats, storage_size(subtensors(nn)%dat)/8/1024.0d3)
+                  call LogMemory(stats, storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3)
 
                endif
                allocate(idxs(2*Ndim,num_threads))
@@ -19899,15 +19894,15 @@ integer, save:: my_tid = 0
 #endif
 #if HAVE_ZFP
                if(present(zfpquants))then
-                  tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
+                  tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
                   call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r)/8/1024.0d3)
-                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i)/8/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r,kind=8)/8/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i,kind=8)/8/1024.0d3)
                   call LogMemory(stats, -tmpmem)
                endif
 #endif
                if(present(qttquants))then
-                  tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
+                  tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
 
                   qttquants(nn)%d_org = Ndim
                   qttquants(nn)%mpo = 1
@@ -19916,10 +19911,10 @@ integer, save:: my_tid = 0
                   qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                   call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                   deallocate(subtensors(nn)%dat)
-                  if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core,kind=8)/8/1024.0d3)
 
-                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r)/8/1024.0d3)
-                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r,kind=8)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i,kind=8)/8/1024.0d3)
 
                   call LogMemory(stats, -tmpmem)
                endif
@@ -20002,7 +19997,7 @@ integer, save:: my_tid = 0
                if (product(dims8)> 0) then
                   if(present(zfpquants) .or. present(qttquants))then
                      allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
-                     call LogMemory(stats, storage_size(subtensors(nn)%dat)/8/1024.0d3)
+                     call LogMemory(stats, storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3)
                   endif
                   allocate(idxs(2*Ndim,1))
                   do ij = 1, product(dims8)
@@ -20028,13 +20023,13 @@ integer, save:: my_tid = 0
                   if(present(zfpquants))then
                      tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
                      call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r)/8/1024.0d3)
-                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i)/8/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r,kind=8)/8/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i,kind=8)/8/1024.0d3)
                      call LogMemory(stats, -tmpmem)
                   endif
 #endif
                   if(present(qttquants))then
-                     tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
+                     tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
 
                      qttquants(nn)%d_org = Ndim
                      qttquants(nn)%mpo = 1
@@ -20043,10 +20038,10 @@ integer, save:: my_tid = 0
                      qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                      call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                      deallocate(subtensors(nn)%dat)
-                     if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core,kind=8)/8/1024.0d3)
 
-                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r)/8/1024.0d3)
-                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r,kind=8)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i,kind=8)/8/1024.0d3)
 
                      call LogMemory(stats, -tmpmem)
                   endif

@@ -1973,6 +1973,8 @@ contains
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf_md, ptree, option, stats, msh)
+      case (HTENSOR)
+         call HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%h_mat_md, ptree, option, stats, msh)
       case default
          write(*,*)'not supported format in BPACK_MD_Mult:', option%format
          stop
@@ -2815,6 +2817,66 @@ contains
       return
 
    end subroutine HSS_MD_Mult
+
+
+
+
+
+
+   subroutine HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, h_mat_md, ptree, option, stats,msh)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ndim
+      integer Ns(Ndim)
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+      type(matrixblock_MD), pointer::blocks
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(Hmat_md)::h_mat_md
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+
+   ! blocks => h_mat_md%BP%LL(1)%matrices_block(1)
+   ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
+
+      call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HMAT_MD_Mult
 
 
 

@@ -1050,6 +1050,14 @@ end function distance_geo
          do dim_i=1,Ndim
             bmat%hss_bf_md%N(dim_i)=msh(dim_i)%Nunk
          enddo
+      case (HTENSOR)
+         allocate (bmat%h_mat_md)
+         bmat%h_mat_md%Maxlevel = Maxlevel
+         bmat%h_mat_md%Ndim = Ndim
+         allocate (bmat%h_mat_md%N(Ndim))
+         do dim_i=1,Ndim
+            bmat%h_mat_md%N(dim_i)=msh(dim_i)%Nunk
+         enddo
       case default
          write(*,*)'not supported format in Cluster_partition_MD:', option%format
          stop
@@ -1610,6 +1618,8 @@ end function distance_geo
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_structuring(Ndim, bmat%hss_bf_md, option, msh, ker, ptree, stats)
+      case (HTENSOR)
+         call HMAT_MD_structuring(Ndim, bmat%h_mat_md, option, msh, ker, ptree, stats)
       case default
          write(*,*)'not supported format in BPACK_structuring_MD:', option%format
          stop
@@ -1703,6 +1713,7 @@ end function distance_geo
       hss_bf1_md%BP%Lplus = 0
       groupm_ll = block_f%row_group
       level_butterfly_ll = block_f%level_butterfly
+      hss_bf1_md%BP%LL(1)%level_butterfly=level_butterfly_ll
       level_ll = GetTreelevel(groupm_ll(1)) - 1
 
       nlist_MD(1)%len=1
@@ -1878,6 +1889,7 @@ end function distance_geo
                groupm_ll = groupm_ll*2**levelm
                level_ll = GetTreelevel(groupm_ll(1)) - 1
                level_butterfly_ll = int((hss_bf1_md%Maxlevel - level_ll)/2)*2
+               hss_bf1_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
             end if
          else
             exit
@@ -1914,6 +1926,361 @@ end function distance_geo
       enddo
 
    end subroutine HSS_MD_structuring
+
+
+
+
+   subroutine HMAT_MD_structuring(Ndim, h_mat_md, option, msh, ker, ptree, stats)
+
+      implicit none
+
+      integer Ndim
+      integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, gg2, sortdirec, ii_sch, pgno_bplus
+      integer level, edge, patch, node, group, group_touch
+      integer rank, index_near, m, n, length, flag, itemp, cnt, detection, dim_i
+      real T0
+      real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
+      real(kind=8) Memory_direct_forward, Memory_butterfly_forward
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start_global(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
+      integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, Ninadmissible_tot_loc, Nadmissible_max, Nadmissible_tot, Nadmissible_tot_loc, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
+      type(matrixblock_MD), pointer::blocks, block_f
+      real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
+      real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
+      integer, allocatable::Isboundary_M(:), Isboundary_N(:)
+      integer Dimn, col_group, row_group, Maxgrp
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(Hstat)::stats
+      type(Hmat_md)::h_mat_md
+      character(len=1024)  :: strings
+      type(proctree)::ptree
+      integer,allocatable::boundary_map(:,:)
+      type(nil_onelevel_MD),allocatable:: nlist_MD(:)
+      type(nil_onelevel_MD),allocatable:: flist_MD(:)
+      integer pgno, bb_loc
+
+      Maxgrp = 2**(ptree%nlevel) - 1
+
+      h_mat_md%BP%level = 0
+      allocate(h_mat_md%BP%col_group(Ndim))
+      h_mat_md%BP%col_group = 1
+      allocate(h_mat_md%BP%row_group(Ndim))
+      h_mat_md%BP%row_group = 1
+      h_mat_md%BP%pgno = 1
+      allocate (h_mat_md%BP%LL(LplusMax))
+      do ll = 1, LplusMax
+         h_mat_md%BP%LL(ll)%Nbound = 0
+         h_mat_md%BP%LL(ll)%Nbound_loc = 0
+         h_mat_md%BP%LL(ll)%Nboundall = 0
+      end do
+
+      allocate(nlist_MD(LplusMax))
+      allocate(flist_MD(LplusMax))
+
+      h_mat_md%BP%LL(1)%Nbound = 1
+      h_mat_md%BP%LL(1)%Nbound_loc = 1
+      h_mat_md%BP%LL(1)%Nboundall = 1
+      allocate (h_mat_md%BP%LL(1)%matrices_block(1))
+      block_f => h_mat_md%BP%LL(1)%matrices_block(1)
+      block_f%level = h_mat_md%BP%level
+      block_f%level_butterfly = h_mat_md%Maxlevel - block_f%level
+
+      allocate(block_f%col_group(Ndim))
+      block_f%col_group = h_mat_md%BP%col_group
+      allocate(block_f%row_group(Ndim))
+      block_f%row_group = h_mat_md%BP%row_group
+      block_f%pgno = h_mat_md%BP%pgno
+      ! pgno_bplus=block_f%pgno
+
+      block_f%Ndim = Ndim
+      allocate(block_f%M(Ndim))
+      allocate(block_f%N(Ndim))
+      allocate(block_f%headm(Ndim))
+      allocate(block_f%headn(Ndim))
+      do dim_i=1,Ndim
+         block_f%M(dim_i) = msh(dim_i)%basis_group(block_f%row_group(dim_i))%tail - msh(dim_i)%basis_group(block_f%row_group(dim_i))%head + 1
+         block_f%N(dim_i) = msh(dim_i)%basis_group(block_f%col_group(dim_i))%tail - msh(dim_i)%basis_group(block_f%col_group(dim_i))%head + 1
+         block_f%headm(dim_i) = msh(dim_i)%basis_group(block_f%row_group(dim_i))%head
+         block_f%headn(dim_i) = msh(dim_i)%basis_group(block_f%col_group(dim_i))%head
+      enddo
+
+      call ComputeParallelIndices_MD(block_f, block_f%pgno, Ndim, ptree, msh)
+
+
+      block_f%style = 4 ! The top level has no admissible blocks
+
+      h_mat_md%BP%Lplus = 0
+
+
+      groupm_ll = block_f%row_group
+      level_butterfly_ll = block_f%level_butterfly
+      h_mat_md%BP%LL(1)%level_butterfly=level_butterfly_ll
+      level_ll = GetTreelevel(groupm_ll(1)) - 1
+
+      nlist_MD(1)%len=1
+      allocate(nlist_MD(1)%list(1))
+      nlist_MD(1)%list(1)%nn=1
+      allocate(nlist_MD(1)%list(1)%nlist(1,Ndim))
+      nlist_MD(1)%list(1)%nlist(1,:)=block_f%col_group
+      flist_MD(1)%len=0
+      if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
+         write(*,*)'#admissible',0,'#inadmissible',0
+      endif
+
+      do ll = 1, LplusMax - 1
+         if (ll <= h_mat_md%Maxlevel+1) then
+            h_mat_md%BP%Lplus = h_mat_md%BP%Lplus + 1
+            call assert(h_mat_md%BP%Lplus <= LplusMax, 'increase LplusMax')
+
+            if (ll == LplusMax - 1 .or. ll == h_mat_md%Maxlevel+1) then
+               h_mat_md%BP%LL(ll + 1)%Nbound = 0
+               h_mat_md%BP%LL(ll + 1)%Nbound_loc = 0
+               h_mat_md%BP%LL(ll + 1)%Nboundall = 0
+            else
+               level_BP = h_mat_md%BP%level
+               levelm = 1
+
+               Nboundall = 2**(level_ll + levelm - level_BP)
+               h_mat_md%BP%LL(ll + 1)%Nboundall=Nboundall
+               groupm_start_global = h_mat_md%BP%row_group * Nboundall ! this is the ID of the first group at level ll+levelm
+               groupm_start = h_mat_md%BP%row_group * 2**(level_ll - level_BP) ! this is the ID of the first group at level ll
+               dims2 = Nboundall
+               nlist_MD(ll+1)%len = Nboundall**Ndim
+               allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
+               call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
+               flist_MD(ll+1)%len = Nboundall**Ndim
+               allocate(flist_MD(ll+1)%list(Nboundall**Ndim))
+               call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list)/1024.0d3)
+
+
+               do bb = 1, Nboundall**Ndim
+                  nlist_MD(ll+1)%list(bb)%nn=0
+                  flist_MD(ll+1)%list(bb)%nn=0
+               enddo
+
+               Ninadmissible_max=0
+               Ninadmissible_tot=0
+               Nadmissible_max=0
+               Nadmissible_tot=0
+               dims = 2**(level_ll)
+               do gg=1,product(dims)
+                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  group_m1 = group_m1 + groupm_start -1
+                  do nn=1,nlist_MD(ll)%list(gg)%nn
+                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     dims1 = Nboundall1
+                     do bb = 1, Nboundall1**Ndim
+                     do cc = 1, Nboundall1**Ndim
+                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
+                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
+                        ! write(*,*)ll,group_m,groupm_start1,groupm_start_global,groupn_start1,'dd',group_n1,ll,gg,nn
+                        group_m = group_m + groupm_start1 - 1
+                        group_n = group_n + groupn_start1 - 1
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1)then
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                           Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
+                           Ninadmissible_tot = Ninadmissible_tot +1
+                        else
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                           flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                           Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
+                           if(near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                              Ninadmissible_tot = Ninadmissible_tot +1
+                           else
+                              Nadmissible_tot = Nadmissible_tot +1
+                           endif
+                        endif
+                     enddo
+                     enddo
+                  enddo
+               enddo
+               if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
+                  write(*,*)'#admissible',Nadmissible_tot,'#inadmissible',Ninadmissible_tot
+               endif
+
+               do bb = 1, Nboundall**Ndim
+                  allocate(nlist_MD(ll+1)%list(bb)%nlist(max(1,nlist_MD(ll+1)%list(bb)%nn),Ndim))
+                  call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                  nlist_MD(ll+1)%list(bb)%nn=0
+                  allocate(flist_MD(ll+1)%list(bb)%nlist(max(1,flist_MD(ll+1)%list(bb)%nn),Ndim))
+                  call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                  flist_MD(ll+1)%list(bb)%nn=0
+               enddo
+
+               dims = 2**(level_ll)
+               do gg=1,product(dims)
+                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                  group_m1 = group_m1 + groupm_start -1
+                  do nn=1,nlist_MD(ll)%list(gg)%nn
+                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                     Nboundall1 = 2**(levelm)
+                     groupm_start1 = group_m1*2**levelm
+                     groupn_start1 = group_n1*2**levelm
+                     dims1 = Nboundall1
+                     do bb = 1, Nboundall1**Ndim
+                     do cc = 1, Nboundall1**Ndim
+                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
+                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
+                        group_m = group_m + groupm_start1 - 1
+                        group_n = group_n + groupn_start1 - 1
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1)then
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                           nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                           ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
+                        else
+                           group_m = group_m - groupm_start_global + 1
+                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                           flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                           flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                        endif
+                     enddo
+                     enddo
+                  enddo
+               enddo
+
+               allocate (h_mat_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Nadmissible_max,Ndim+2))
+               h_mat_md%BP%LL(ll + 1)%boundary_map=-1
+               call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
+
+               Nadmissible_tot_loc=0
+               Nadmissible_tot=0
+               do bb = 1, Nboundall**Ndim
+                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                  group_m = group_m + groupm_start_global - 1
+                  pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+                  do nn=1,flist_MD(ll+1)%list(bb)%nn
+                     group_n = flist_MD(ll+1)%list(bb)%nlist(nn,:)
+                     h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1:Ndim)=group_n
+                     Nadmissible_tot = Nadmissible_tot + 1
+                     h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,2+Ndim)=Nadmissible_tot
+                     if (IOwnPgrp(ptree, pgno)) then
+                        Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                        h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1+Ndim)=Nadmissible_tot_loc
+                     endif
+                  enddo
+               enddo
+               h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot
+               h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nadmissible_tot_loc
+               !!!!!!!!!!!!! The following is suspicious, do we need this assertion? !!!!!
+
+               ! call assert(Nadmissible_tot_loc>0, 'BP%LL(ll + 1)%Nbound_loc needs to be at least 1')
+               if(Nadmissible_tot_loc>0)then
+                  allocate (h_mat_md%BP%LL(ll + 1)%matrices_block(h_mat_md%BP%LL(ll + 1)%Nbound_loc))
+                  call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
+               endif
+
+               do bb = 1, Nboundall**Ndim
+                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                  group_m = group_m + groupm_start_global - 1
+                  do jj=1,Nadmissible_max
+                     bb_loc = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1+Ndim)
+                     if (bb_loc /= -1) then
+                        group_n = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1:Ndim)
+                        blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(bb_loc)
+                        blocks%Ndim = Ndim
+                        allocate(blocks%row_group(Ndim))
+                        allocate(blocks%col_group(Ndim))
+                        blocks%row_group = group_m
+                        blocks%col_group = group_n
+                        blocks%level = GetTreelevel(group_m(1)) - 1
+                        blocks%level_butterfly = h_mat_md%Maxlevel - blocks%level
+                        blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+
+                        allocate(blocks%M(Ndim))
+                        allocate(blocks%N(Ndim))
+                        allocate(blocks%headm(Ndim))
+                        allocate(blocks%headn(Ndim))
+
+                        do dim_i=1,Ndim
+                           blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+                           blocks%N(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+                           blocks%headm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+                           blocks%headn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+                        enddo
+
+                        call ComputeParallelIndices_MD(blocks, blocks%pgno, Ndim, ptree, msh)
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 1) then
+                           blocks%style = 2
+                        else
+                           blocks%style = 1  ! leaflevel or leaflevel+1 is dense
+                           if(ptree%pgrp(blocks%pgno)%nproc>1)then
+                              write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
+                              stop
+                           endif
+                        endif
+
+                        call LogMemory(stats, SIZEOF(blocks)/1024.0d3)
+
+                     end if
+                  enddo
+               end do
+               groupm_ll = groupm_ll*2**levelm
+               level_ll = GetTreelevel(groupm_ll(1)) - 1
+               level_butterfly_ll = h_mat_md%Maxlevel - level_ll
+               h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
+            end if
+         else
+            exit
+         end if
+      end do
+
+      do ll = 1, LplusMax
+      do bb = 1, nlist_MD(ll)%len
+         if (allocated(nlist_MD(ll)%list(bb)%nlist)) then
+            call LogMemory(stats, -SIZEOF(nlist_MD(ll)%list(bb)%nlist)/1024.0d3)
+            deallocate(nlist_MD(ll)%list(bb)%nlist)
+            nlist_MD(ll)%list(bb)%nn=0
+         endif
+      enddo
+      if(nlist_MD(ll)%len>0)then
+         call LogMemory(stats, -SIZEOF(nlist_MD(ll)%list)/1024.0d3)
+         deallocate(nlist_MD(ll)%list)
+      endif
+      enddo
+      deallocate(nlist_MD)
+
+      do ll = 1, LplusMax
+      do bb = 1, flist_MD(ll)%len
+         if (allocated(flist_MD(ll)%list(bb)%nlist)) then
+            call LogMemory(stats, -SIZEOF(flist_MD(ll)%list(bb)%nlist)/1024.0d3)
+            deallocate(flist_MD(ll)%list(bb)%nlist)
+            flist_MD(ll)%list(bb)%nn=0
+         endif
+      enddo
+      if(flist_MD(ll)%len>0)then
+         call LogMemory(stats, -SIZEOF(flist_MD(ll)%list)/1024.0d3)
+         deallocate(flist_MD(ll)%list)
+      endif
+      enddo
+      deallocate(flist_MD)
+
+
+
+      !!!!!! h_mat_md%BP_inverse has not been considered yet
+      ! call Bplus_copy(h_mat_md%BP, h_mat_md%BP_inverse)
+      call LogMemory(stats, SIZEOF(h_mat_md%BP)/1024.0d3)
+
+      do dim_i=1,Ndim
+         msh(dim_i)%idxs = h_mat_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, dim_i)
+         msh(dim_i)%idxe = h_mat_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 2, dim_i)
+
+         ! if (allocated(msh(dim_i)%xyz)) then
+         !    call LogMemory(stats, - SIZEOF(msh(dim_i)%xyz)/1024.0d3)
+         !    deallocate (msh(dim_i)%xyz)
+         ! endif
+      enddo
+
+   end subroutine HMAT_MD_structuring
+
 
 
 

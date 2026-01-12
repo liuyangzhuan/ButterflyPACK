@@ -103,13 +103,14 @@ module BPACK_DEFS
     integer, parameter:: NOPRECON = 2  !< use compressed BPACK as fast matvec
     integer, parameter:: BPACKPRECON = 3        !< use factored BPACK as preconditioner
 
-    integer, parameter:: LplusMax = 10
+    integer, parameter:: LplusMax = 15
 
     integer, parameter:: HODLR = 1  !< use hodlr/hodbf solver
     integer, parameter:: HMAT = 2  !< use H matrix (lr/bf) solver
     integer, parameter:: HSS = 3  !< use hss_bf/shnbf solver
     integer, parameter:: HSS_MD = 4  !< use hss_bf_md/shn_bf_md solver
     integer, parameter:: BLR = 5  !< use single-level matrix (lr/bf) solver
+    integer, parameter:: HTENSOR = 6  !< use H tensor (lr/bf) solver
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -532,6 +533,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
         integer Nbound_loc !< # local # of corrected blocks that are further decomposed into deeper layers
         integer Nboundall
+        integer level_butterfly !< # butterlfy level for all blocks on this level
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
@@ -642,6 +644,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
     end type hssbf_md
 
+    !>**** HTENSOR structure
+    type Hmat_md
+        integer Maxlevel, Ndim !< HTENSOR levels and dimensionility
+        integer, allocatable:: N(:) !< size per dimension
+        type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
+    end type Hmat_md
+
 
     type SVD_quant
         DT, allocatable:: matU(:,:),matV(:,:)
@@ -654,6 +663,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()
         type(hssbf_md), pointer::hss_bf_md => null()
+        type(Hmat_md), pointer::h_mat_md => null()
     end type Bmatrix
 
     !>**** intermidate vectors for applying a butterfly
