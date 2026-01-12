@@ -467,7 +467,7 @@ contains
    subroutine HMAT_MD_delete(h_mat_md)
       implicit none
       integer ll,bb
-      type(hssbf_md)::h_mat_md
+      type(Hmat_md)::h_mat_md
 
       if (associated(h_mat_md%BP%LL)) then
          do ll = 1, LplusMax
@@ -530,7 +530,7 @@ contains
          call HMAT_MD_delete(bmat%h_mat_md)
          deallocate (bmat%h_mat_md)
          bmat%h_mat_md => null()
-      endif      
+      endif
 
    end subroutine BPACK_delete
 
