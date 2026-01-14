@@ -4702,6 +4702,7 @@ contains
       enddo
       nvec=1 !! currently this can only be 1
       allocate(x_loc(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(x_loc)/1024.0d3)
       x_loc=0
 
       Npt_src = min(40,product(N_glo))
@@ -4731,12 +4732,14 @@ contains
 
       !! Generate rhs_loc by using BPACK_MD_Mult
       allocate(rhs_loc(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc)/1024.0d3)
       rhs_loc=0
       call BPACK_MD_Mult(Ndim, 'N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats, msh)
 
 
       !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
       allocate(rhs_loc_ref(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc_ref)/1024.0d3)
       rhs_loc_ref=0
       allocate(subtensors(1)%nr(Ndim))
       allocate(subtensors(1)%nc(Ndim))
@@ -4749,7 +4752,7 @@ contains
          allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
       enddo
       allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
-
+      call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
 
       do ij=1,Npt_src
          subtensors(1)%dat = 0
@@ -4781,8 +4784,11 @@ contains
       call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A28,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_MD_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
+      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
       deallocate(x_loc)
+      call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
       deallocate(rhs_loc)
+      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
       deallocate(rhs_loc_ref)
       deallocate(idx_src)
 

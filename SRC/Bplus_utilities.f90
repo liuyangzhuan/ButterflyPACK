@@ -674,6 +674,7 @@ contains
 
       if (chara == 'N') allocate (Vout(product(M), Nrnd))
       if (chara == 'T') allocate (Vout(product(N), Nrnd))
+      call LogMemory(stats, SIZEOF(Vout)/1024.0d3)
       Vout = 0
 
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
@@ -684,7 +685,9 @@ contains
 
       do ll = level_s, level_e
          allocate(Vin_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
+         call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs)/1024.0d3)
          allocate(Vout_locs(ll)%vs(bplus%LL(ll)%Nbound_loc))
+         call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
          do bb = 1, bplus%LL(ll)%Nbound_loc
             blocks => bplus%LL(ll)%matrices_block(bb)
             if (chara == 'N') then
@@ -696,14 +699,16 @@ contains
                Vout_locs(ll)%vs(bb)%vector=0
                allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
             endif
+            call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+            call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
          enddo
       enddo
 
       n1 = MPI_Wtime()
       if (chara == 'N') then
-         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
       else
-         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh,ptree%pgrp(blocks_1%pgno)%nproc)
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
       endif
       n2 = MPI_Wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2-n1
@@ -729,9 +734,9 @@ contains
 
       n1 = MPI_Wtime()
       if (chara == 'N') then
-         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
       else
-         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree,msh, ptree%pgrp(blocks_1%pgno)%nproc)
+         call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
       endif
       n2 = MPI_Wtime()
       stats%Time_RedistV = stats%Time_RedistV + n2-n1
@@ -740,9 +745,13 @@ contains
       do ll = level_s, level_e
          do bb = 1, bplus%LL(ll)%Nbound_loc
             blocks => bplus%LL(ll)%matrices_block(bb)
+            call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+            call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
             deallocate (Vout_locs(ll)%vs(bb)%vector)
             deallocate (Vin_locs(ll)%vs(bb)%vector)
          end do
+         call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs)/1024.0d3)
+         call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
          deallocate(Vin_locs(ll)%vs)
          deallocate(Vout_locs(ll)%vs)
       end do
@@ -750,6 +759,7 @@ contains
       deallocate(Vout_locs)
 
       random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+      call LogMemory(stats, -SIZEOF(Vout)/1024.0d3)
       deallocate (Vout)
 
    end subroutine Bplus_MD_block_MVP_dat
@@ -1893,6 +1903,9 @@ contains
                         memory_comp = memory_comp + SIZEOF(blocks%ButterflyV(bb)%blocks(jj,dim_i)%matrix)/1024.0d3
                      enddo
                   enddo
+                  if(blocks%ButterflyV(bb)%nblk_loc>0)then
+                     memory_comp = memory_comp + SIZEOF(blocks%ButterflyV(bb)%blocks)/1024.0d3
+                  endif
                elseif (level == level_butterfly + 1) then
                   write(*,*)"should not reach level == level_butterfly + 1 for the right half of matrixblock_MD"
                else
@@ -1907,9 +1920,11 @@ contains
                      call MultiIndexToSingleIndex(Ndim,dim_MD(1:Ndim), index_r_scalar, index_r_vector)
                      memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R(bb,level)%blocks(index_r_scalar,index_j,dim)%matrix)/1024.0d3
                   enddo
+                  memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R(bb,level)%blocks)/1024.0d3
                endif
             enddo
             enddo
+            memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R)/1024.0d3
 
             level_final = level_half + 1
             do bb=1, product(blocks%nr_m)
@@ -1922,6 +1937,9 @@ contains
                         memory_comp = memory_comp + SIZEOF(blocks%ButterflyU(bb)%blocks(ii,dim_i)%matrix)/1024.0d3
                      enddo
                   enddo
+                  if(blocks%ButterflyU(bb)%nblk_loc>0)then
+                     memory_comp = memory_comp + SIZEOF(blocks%ButterflyU(bb)%blocks)/1024.0d3
+                  endif                  
                else
                   dim_MD(1)=blocks%ButterflyKerl_L(bb,level)%nr(1)
                   dim_MD(2:1+Ndim)=blocks%ButterflyKerl_L(bb,level)%nc
@@ -1934,9 +1952,11 @@ contains
                      call MultiIndexToSingleIndex(Ndim,dim_MD(2:1+Ndim), index_c_scalar, index_c_vector)
                      memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L(bb,level)%blocks(index_i,index_c_scalar,dim)%matrix)/1024.0d3
                   enddo
+                  memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L(bb,level)%blocks)/1024.0d3
                endif
             enddo
             enddo
+            memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L)/1024.0d3
 
             nc=2**(level_butterfly -level_half)
             dim_subtensor(1:Ndim)=blocks%nr_m
@@ -1955,6 +1975,9 @@ contains
                   if(allocated(blocks%MiddleQTT(index_ij)%coreZFP%buffer_i))memory_dense = memory_dense + SIZEOF(blocks%MiddleQTT(index_ij)%coreZFP%buffer_i)/1024.0d3
                endif
             enddo
+            if(allocated(blocks%MiddleQTT))then
+               memory_dense = memory_dense + product(dim_subtensor)*storage_size(blocks%MiddleQTT,kind=8)/8/1024.0d3
+            endif
          endif
          endif
 
@@ -7936,7 +7959,7 @@ contains
 
 
    !>***** redistribute the input and output vectors in Bplus_MD_block_MVP_dat between layout of bplus%LL(1)%matrices_block(1) to the layout of bplus%LL(xx)%matrices_block(yy)
-   subroutine Bplus_MD_vec_1Dto1D(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree,msh, nproc)
+   subroutine Bplus_MD_vec_1Dto1D(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc)
 
 
       implicit none
@@ -7950,6 +7973,7 @@ contains
       type(vectorsblock_oneL)::vecs(level_s:level_e)
       type(proctree)::ptree
       type(mesh)::msh(Ndim)
+      type(Hstat)::stats
       integer ll,bb,offset_s(Ndim),offset_r(Ndim),sizen(Ndim), head_i(Ndim), head_o(Ndim)
       type(matrixblock_MD),pointer::blocks,blocks_1
       type(matrixblock_MD),target::blocks_tmp
@@ -8242,11 +8266,13 @@ contains
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
          allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         call LogMemory(stats, SIZEOF(sendquant(pp)%dat)/1024.0d3)
          sendquant(pp)%size = 0
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
          allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+         call LogMemory(stats, SIZEOF(recvquant(pp)%dat)/1024.0d3)
       enddo
 
       ! pack the send buffer in the second pass
@@ -8501,11 +8527,17 @@ contains
       ! deallocation
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+         if (allocated(sendquant(pp)%dat))then 
+            call LogMemory(stats, -SIZEOF(sendquant(pp)%dat)/1024.0d3)
+            deallocate (sendquant(pp)%dat)
+         endif
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+         if (allocated(recvquant(pp)%dat))then 
+            call LogMemory(stats, -SIZEOF(recvquant(pp)%dat)/1024.0d3)
+            deallocate (recvquant(pp)%dat)
+         endif
       enddo
 
       call BF_MD_delete(Ndim, blocks_tmp, 1)
@@ -15082,6 +15114,63 @@ end subroutine BF_block_MVP_dat_batch_magma
 
          n6 = MPI_Wtime()
 
+
+
+         ! Estimate the peak memory being used 
+         rtemp=0
+         do nn=1,product(blocks%nc_m)
+            if(allocated(BFvec(nn)%vec))then
+               do level=0,level_half + 1
+                  if(allocated(BFvec(nn)%vec(level)%blocks))then
+                  do ii=1,BFvec(nn)%vec(level)%nr
+                     if(associated(BFvec(nn)%vec(level)%blocks(ii,1)%matrix))then
+                        rtemp = rtemp + SIZEOF(BFvec(nn)%vec(level)%blocks(ii,1)%matrix)/1024.0d3
+                     endif
+                  enddo
+                  rtemp = rtemp + SIZEOF(BFvec(nn)%vec(level)%blocks)/1024.0d3
+                  rtemp = rtemp + SIZEOF(BFvec(nn)%vec(level)%index_MD)/1024.0d3
+                  endif
+               enddo
+               rtemp = rtemp + SIZEOF(BFvec(nn)%vec)/1024.0d3
+            endif
+         enddo
+
+         do nn=1,product(blocks%nr_m)
+            if(allocated(BFvec1(nn)%vec))then
+               do level=0,level_butterfly-level_half + 1
+                  if(allocated(BFvec1(nn)%vec(level)%blocks))then
+                  do jj=1,BFvec1(nn)%vec(level)%nc
+                     if(associated(BFvec1(nn)%vec(level)%blocks(1,jj)%matrix))then
+                        rtemp = rtemp + SIZEOF(BFvec1(nn)%vec(level)%blocks(1,jj)%matrix)/1024.0d3
+                     endif
+                  enddo
+                  rtemp = rtemp + SIZEOF(BFvec1(nn)%vec(level)%blocks)/1024.0d3
+                  rtemp = rtemp + SIZEOF(BFvec1(nn)%vec(level)%index_MD)/1024.0d3
+                  endif
+               enddo
+               rtemp = rtemp + SIZEOF(BFvec1(nn)%vec)/1024.0d3
+            endif
+
+            if(allocated(BFvec_transposed(nn)%vec))then
+               if(allocated(BFvec_transposed(nn)%vec(1)%blocks))then
+               do jj=1,BFvec_transposed(nn)%vec(1)%nc
+                  if(associated(BFvec_transposed(nn)%vec(1)%blocks(1,jj)%matrix))then
+                     rtemp = rtemp + SIZEOF(BFvec_transposed(nn)%vec(1)%blocks(1,jj)%matrix)/1024.0d3
+                  endif
+               enddo
+               rtemp = rtemp + SIZEOF(BFvec_transposed(nn)%vec(1)%blocks)/1024.0d3
+               rtemp = rtemp + SIZEOF(BFvec_transposed(nn)%vec(1)%index_MD)/1024.0d3
+               endif
+               rtemp = rtemp + SIZEOF(BFvec_transposed(nn)%vec)/1024.0d3
+            endif
+         enddo
+
+         call LogMemory(stats, rtemp)
+         call LogMemory(stats, -rtemp)
+
+
+
+
          do nn=1,product(blocks%nc_m)
             if(allocated(BFvec(nn)%vec))then
                do level=0,level_half + 1
@@ -19838,7 +19927,7 @@ integer, save:: my_tid = 0
                if(present(zfpquants) .or. present(qttquants))then
                   allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
 
-                  call LogMemory(stats, storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3)
+                  call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
 
                endif
                allocate(idxs(2*Ndim,num_threads))
@@ -19894,15 +19983,15 @@ integer, save:: my_tid = 0
 #endif
 #if HAVE_ZFP
                if(present(zfpquants))then
-                  tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
+                  tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
                   call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r,kind=8)/8/1024.0d3)
-                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i,kind=8)/8/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
+                  if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
                   call LogMemory(stats, -tmpmem)
                endif
 #endif
                if(present(qttquants))then
-                  tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
+                  tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
 
                   qttquants(nn)%d_org = Ndim
                   qttquants(nn)%mpo = 1
@@ -19911,10 +20000,10 @@ integer, save:: my_tid = 0
                   qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                   call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                   deallocate(subtensors(nn)%dat)
-                  if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core,kind=8)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%core))call LogMemory(stats, SIZEOF(qttquants(nn)%core)/1024.0d3)
 
-                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r,kind=8)/8/1024.0d3)
-                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i,kind=8)/8/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_r)/1024.0d3)
+                  if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_i)/1024.0d3)
 
                   call LogMemory(stats, -tmpmem)
                endif
@@ -19997,7 +20086,7 @@ integer, save:: my_tid = 0
                if (product(dims8)> 0) then
                   if(present(zfpquants) .or. present(qttquants))then
                      allocate(subtensors(nn)%dat(product(subtensors(nn)%nr),product(subtensors(nn)%nc)))
-                     call LogMemory(stats, storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3)
+                     call LogMemory(stats, SIZEOF(subtensors(nn)%dat)/1024.0d3)
                   endif
                   allocate(idxs(2*Ndim,1))
                   do ij = 1, product(dims8)
@@ -20021,15 +20110,15 @@ integer, save:: my_tid = 0
                   enddo
 #if HAVE_ZFP
                   if(present(zfpquants))then
-                     tmpmem = storage_size(subtensors(nn)%dat)/8/1024.0d3
+                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
                      call ZFP_Compress(subtensors(nn)%dat,zfpquants(nn),product(subtensors(nn)%nr),product(subtensors(nn)%nc),option%tol_comp,0)
-                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_r,kind=8)/8/1024.0d3)
-                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, storage_size(zfpquants(nn)%buffer_i,kind=8)/8/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_r))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_r)/1024.0d3)
+                     if(allocated(zfpquants(nn)%buffer_i))call LogMemory(stats, SIZEOF(zfpquants(nn)%buffer_i)/1024.0d3)
                      call LogMemory(stats, -tmpmem)
                   endif
 #endif
                   if(present(qttquants))then
-                     tmpmem = storage_size(subtensors(nn)%dat,kind=8)/8/1024.0d3
+                     tmpmem = SIZEOF(subtensors(nn)%dat)/1024.0d3
 
                      qttquants(nn)%d_org = Ndim
                      qttquants(nn)%mpo = 1
@@ -20038,10 +20127,10 @@ integer, save:: my_tid = 0
                      qttquants(nn)%m_n_org(:,2)=dims(1+Ndim:2*Ndim)
                      call QTT_Compress_SVD(reshape(subtensors(nn)%dat,[product(dims)]),option%tol_comp,qttquants(nn),option%use_zfp)
                      deallocate(subtensors(nn)%dat)
-                     if(allocated(qttquants(nn)%core))call LogMemory(stats, storage_size(qttquants(nn)%core,kind=8)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%core))call LogMemory(stats, SIZEOF(qttquants(nn)%core)/1024.0d3)
 
-                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_r,kind=8)/8/1024.0d3)
-                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, storage_size(qttquants(nn)%coreZFP%buffer_i,kind=8)/8/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_r))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_r)/1024.0d3)
+                     if(allocated(qttquants(nn)%coreZFP%buffer_i))call LogMemory(stats, SIZEOF(qttquants(nn)%coreZFP%buffer_i)/1024.0d3)
 
                      call LogMemory(stats, -tmpmem)
                   endif
