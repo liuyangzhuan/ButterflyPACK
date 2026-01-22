@@ -1,3 +1,32 @@
+Version 4.1.0: Released Jan 22, 2026
+===================================
+- Added tree-based adaptive proxy sampling in the butterfly construction 
+- Added Python-interface to ButterflyPACK's matrix algorithms
+- Added a tensor extension of hierachical matrix called H-tensor 
+- Improved memory usage of SHNBF-MD 
+- Added runtime memory monitor tools, and fixed bugs in peak memory tracker
+- Added functions to print out the hierarchical matrix structure and ranks
+- Added demonstration of using blocked entry evaluation in both C++ and Fortran examples 
+- Fixed a few bugs in iterative solver, the use of MPI_IN_PLACE, and blocked entry evaluation  
+
+
+Version 4.0.0: Released Jul 23, 2025
+===================================
+- Added TT-SVD algorithms for TT and QTT compressions, used to compress dense blocks in the middle level of butterfly tensors and the TT cores can be further compressed by ZFP
+- Added a set of templated CPP interface APIs
+- Added a block-diagonal pre-conditioner for 3D VIE compressed by SHNBF-MD
+- Better support for non-MPI-based build
+- Added top level OMP parallelism (experimental) for B-LR/BF and H-LR/BF inversions
+
+
+Version 3.2.0: Released Sep 19, 2024
+===================================
+- Added the B-LR/B-BF direct matrix solver formats
+- Improved HSS_BF_MD memory tracking and fixed ZFP issue
+- Fixed a few bugs in CMakeList.txt
+- Allowed sketcher and target matrix to have different formats in InterfaceTest.cpp
+
+
 Version 3.1.0: Released May 09, 2024
 ===================================
 - Added more examples for Radon transforms
