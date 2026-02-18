@@ -187,7 +187,7 @@ PROGRAM ButterflyPACK_RankBenchmark
 
     integer rank,ii,ii1,jj,kk,nvec
 	real(kind=8),allocatable:: datain(:),location_tmp(:)
-	real(kind=8) :: wavelen, ds, ppw, a, v1,v2
+	real(kind=8) :: wavelen, ds, ppw, a, v1,v2,vtmp
 	integer :: ierr
 	type(z_Hoption),target::option
 	type(z_Hstat),target::stats
@@ -577,8 +577,10 @@ PROGRAM ButterflyPACK_RankBenchmark
 	rhs_loc = rhs_loc - rhs_loc_ref
 	v1 =(z_fnorm(rhs_loc,product(Nunk_m_loc),nvec))**2d0
 	v2 =(z_fnorm(rhs_loc_ref,product(Nunk_m_loc),nvec))**2d0
-	call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-	call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	vtmp=v1
+	call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+	vtmp=v2
+	call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 	if(ptree%MyID==Main_ID)then
 		write(*,*)'multiplication (contraction) error: ', sqrt(v1/v2)
 	endif

@@ -45,7 +45,7 @@
 #include "G3D/G3D.h"
 
 
-#include "zC_BPACK_wrapper.h"
+#include "zBPACK_wrapper.h"
 
 
 

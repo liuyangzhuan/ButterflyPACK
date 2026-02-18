@@ -183,6 +183,7 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
 	ker%FuncZmn => Zelem_EMSURF
+	ker%FuncZmnBlock => Zelem_EMSURF_block
 
 	!**** initialization of the construction phase
 	t1 = MPI_Wtime()

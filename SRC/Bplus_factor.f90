@@ -36,7 +36,7 @@ contains
       type(Hstat)::stats
 
       integer size_m, size_n
-      integer i, j, k, ii, jj, kk
+      integer i, j, k, ii, jj, kk, zfpflag
       real*8 T0, T1, tol_used
       type(matrixblock) :: blocks
       real(kind=8) flop
@@ -44,15 +44,20 @@ contains
       T0 = MPI_Wtime()
       size_m = size(blocks%fullmat, 1)
       if (option%ILU == 0) then
+
+      zfpflag=0
+      if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,0)
+      if(zfpflag==1)call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,tol_used,0)
 #endif
          ! do ii=1,size_m
          ! do jj=1,size_m
          ! write(777,*)dble(blocks%fullmat(ii,jj)),aimag(blocks%fullmat(ii,jj))
          ! enddo
          ! enddo
-         call getrff90(blocks%fullmat, blocks%ipiv, flop=flop)
+         ! call getrff90(blocks%fullmat, blocks%ipiv, flop=flop)
+         call getrfmodf90(blocks%fullmat, option%jitter, blocks%ipiv, flop=flop,phase=blocks%phase,logabsdet=blocks%logabsdet)
+
          stats%Flop_Factor = stats%Flop_Factor + flop
          ! do ii=1,size_m
          ! do jj=1,size_m
@@ -60,7 +65,7 @@ contains
          ! enddo
          ! enddo
 #if HAVE_ZFP
-         if(option%use_zfp==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,0)
+         if(zfpflag==1)call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N,option%tol_comp,0)
 #endif
       else
          do ii = 1, size_m
@@ -84,53 +89,118 @@ contains
       type(mesh)::msh
 
       integer level_butterfly, flag
-      integer i, j, k, ii, level, mm, nn, kk, rank, level_blocks, mn, group_k
-      integer style(3), data_type(3), id1, id2, id3
+      integer i, j, k, ii, level, mm, nn, kk, rank, level_blocks, mn, group_k, rmax, rank_new
+      integer style(3), data_type(3), id1, id2, id3, zfpflag
       character chara
-      DT, allocatable::Vin(:, :), Vin1(:, :), fullmat(:, :), fullmatrix(:, :)
-      real*8 T0, T1, tol_used
+      DT, allocatable::Vin(:, :), Vin1(:, :), Vin2(:, :), fullmat(:, :), fullmatrix(:, :), matrix_U(:,:), matrix_V(:,:)
+      real*8 T0, T1,T2,T3, tol_used, flop_tmp
       type(matrixblock) :: block1, block2, block3
 
       stats%Flop_Tmp = 0
 
       T0 = MPI_Wtime()
       style(3) = block3%style
+      style(1) = block1%style
+      style(2) = block2%style
       level_blocks = block3%level
 
       group_k = block1%col_group
       kk = msh%basis_group(group_k)%tail - msh%basis_group(group_k)%head + 1
 
-      call assert(style(3) == 1, 'block3 supposed to be style 1')
+
+      if(style(3) == 1)then
+         zfpflag=0
+         if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+#if HAVE_ZFP
+         if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+#endif
+      else
+         call assert(style(1) == 1 .and. style(2) == 1, 'both block1 and block2 supposed to be style 1')
+         zfpflag=0
+         if(allocated(block1%FullmatZFP%buffer_r))zfpflag=1
+      endif
+
+         mm = block3%m
+         nn = block3%n
+
+if(style(3) == 1)then
+
+         allocate (Vin(nn, nn))
+         Vin = 0d0
+         do ii = 1, nn
+            Vin(ii, ii) = 1d0
+         enddo
+         allocate (Vin1(kk, nn))
+         Vin1 = 0d0
+         allocate (fullmatrix(mm, nn))
+         fullmatrix = 0d0
+
+         call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, BPACK_cone, ptree, stats)
+         call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, BPACK_cone, ptree, stats)
+
+         if (chara == '-') fullmatrix = -fullmatrix
+         block3%fullmat = block3%fullmat + fullmatrix
+         deallocate (Vin)
+         deallocate (Vin1)
+         deallocate (fullmatrix)
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+         if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
 #endif
 
-      mm = size(block3%fullmat, 1)
-      nn = size(block3%fullmat, 2)
+else
+         T2 = MPI_Wtime()
+#if HAVE_ZFP
+         if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Decompress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,tol_used,1)
+         if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Decompress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,tol_used,1)
+#endif
 
-      allocate (Vin(nn, nn))
-      Vin = 0d0
-      do ii = 1, nn
-         Vin(ii, ii) = 1d0
-      enddo
-      allocate (Vin1(kk, nn))
-      Vin1 = 0d0
-      allocate (fullmatrix(mm, nn))
-      fullmatrix = 0d0
-
-      call Hmat_block_MVP_dat(block2, 'N', msh%basis_group(block2%row_group)%head, msh%basis_group(block2%col_group)%head, nn, Vin, nn, Vin1, kk, BPACK_cone, ptree, stats)
-      call Hmat_block_MVP_dat(block1, 'N', msh%basis_group(block1%row_group)%head, msh%basis_group(block1%col_group)%head, nn, Vin1, kk, fullmatrix, mm, BPACK_cone, ptree, stats)
-
-      if (chara == '-') fullmatrix = -fullmatrix
-      block3%fullmat = block3%fullmat + fullmatrix
-      deallocate (fullmatrix)
-      deallocate (Vin)
-      deallocate (Vin1)
+         allocate (fullmatrix(mm, nn))
+         fullmatrix = 0d0
+         call gemmf90(block1%fullmat, block1%M, block2%fullmat, block2%M, fullmatrix, mm, 'N', 'N', mm, nn, kk, BPACK_cone, BPACK_czero, flop=flop_tmp)
+         stats%Flop_Tmp = stats%Flop_Tmp + flop_tmp
+         if (chara == '-') fullmatrix = -fullmatrix
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
+         if(allocated(block1%FullmatZFP%buffer_r))call ZFP_Compress(block1%fullmat,block1%FullmatZFP,block1%M,block1%N,option%tol_comp,1)
+         if(allocated(block2%FullmatZFP%buffer_r))call ZFP_Compress(block2%fullmat,block2%FullmatZFP,block2%M,block2%N,option%tol_comp,1)
 #endif
+         allocate (Vin2(nn, nn))
+         Vin2 = 0d0
+         do ii = 1, nn
+            Vin2(ii, ii) = 1d0
+         enddo
+         allocate (fullmat(mm, nn))
+         fullmat = 0d0
+         call Hmat_block_MVP_dat(block3, 'N', msh%basis_group(block3%row_group)%head, msh%basis_group(block3%col_group)%head, nn, Vin2, nn, fullmat, mm, BPACK_cone, ptree, stats)
+         fullmat = fullmat + fullmatrix
+
+
+         rmax = min(mm, nn)
+         allocate (matrix_U(mm, rmax))
+         allocate (matrix_V(rmax, nn))
+         call ACA_CompressionFull(fullmat, matrix_U, matrix_V, mm, nn, rmax, rank_new, option%tol_comp*0.3d0, option%tol_comp)
+
+         deallocate(block3%ButterflyU%blocks(1)%matrix)
+         allocate(block3%ButterflyU%blocks(1)%matrix(mm,rank_new))
+         block3%ButterflyU%blocks(1)%matrix=matrix_U(:,1:rank_new)
+
+         deallocate(block3%ButterflyV%blocks(1)%matrix)
+         allocate(block3%ButterflyV%blocks(1)%matrix(nn,rank_new))
+         call copymatT(matrix_V(1:rank_new,:), block3%ButterflyV%blocks(1)%matrix, rank_new, nn)
+
+         block3%rankmax=rank_new
+         block3%rankmin=rank_new
+         deallocate(matrix_U)
+         deallocate(matrix_V)
+
+         deallocate(Vin2)
+         deallocate(fullmat)
+         deallocate (fullmatrix)
+         T3 = MPI_Wtime()
+         ! time_tmp = time_tmp + T3-T2
+endif
+
 
       T1 = MPI_Wtime()
       stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
@@ -145,7 +215,7 @@ contains
       implicit none
 
       type(Hoption)::option
-      integer level_butterfly, flag, group_n, group_m
+      integer level_butterfly, flag, group_n, group_m, zfpflag
       integer i, j, k, level, mm, nn, rank, level_blocks, mn, ii, jj
       integer style(3), data_type(3), id1, id2, id3
       character chara
@@ -185,12 +255,15 @@ contains
 
       if (chara == '-') fullmatrix = -fullmatrix
 
+      zfpflag=0
+      if(allocated(block3%FullmatZFP%buffer_r))zfpflag=1
+
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
+      if(zfpflag==1)call ZFP_Decompress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,tol_used,0)
 #endif
       block3%fullmat = block3%fullmat + fullmatrix
 #if HAVE_ZFP
-      if(option%use_zfp==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
+      if(zfpflag==1)call ZFP_Compress(block3%fullmat,block3%FullmatZFP,block3%M,block3%N,option%tol_comp,0)
 #endif
       deallocate (fullmatrix)
       deallocate (Vin)
@@ -291,7 +364,7 @@ contains
 
    end subroutine LR_minusBC
 
-   subroutine LR_SMW(block_o, Memory, ptree, stats, pgno)
+   subroutine LR_SMW(block_o, Memory, ptree, option, stats, pgno)
 
 
 
@@ -313,7 +386,10 @@ contains
       integer lwork, liwork, lcmrc, ierr
       DT, allocatable:: work(:)
       type(Hstat)::stats
+      type(Hoption)::option
       real(kind=8)::dlamch
+      DT::phase
+      DTR::logabsdet
 
       ctxt = ptree%pgrp(pgno)%ctxt
       ctxt_head = ptree%pgrp(pgno)%ctxt_head
@@ -340,10 +416,11 @@ contains
          enddo
 
          ! write(*,*)abs(matrixtemp1),rank,'gggddd'
-#if 0
+#if 1
          allocate (ipiv(rank))
          ipiv = 0
-         call getrff90(matrixtemp1, ipiv, flop=flop)
+         ! call getrff90(matrixtemp1, ipiv, flop=flop)
+         call getrfmodf90(matrixtemp1, option%jitter, ipiv, flop=flop,phase=block_o%phase,logabsdet=block_o%logabsdet)
          stats%Flop_Factor = stats%Flop_Factor + flop
          call getrif90(matrixtemp1, ipiv, flop=flop)
          stats%Flop_Factor = stats%Flop_Factor + flop
@@ -387,6 +464,9 @@ contains
          call Redistribute1Dto2D(block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, matU2D, block_o%M, 0, pgno, rank, ptree)
          call Redistribute1Dto2D(block_o%ButterflyV%blocks(1)%matrix, block_o%N_p, 0, pgno, matV2D, block_o%N, 0, pgno, rank, ptree)
 
+
+         block_o%phase=1
+         block_o%logabsdet=0
          if (myrow /= -1 .and. mycol /= -1) then
             myArows = numroc_wp(rank, nbslpk, myrow, 0, nprow)
             myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
@@ -404,21 +484,22 @@ contains
                   matrix_small(myi, myj) = matrix_small(myi, myj) + 1
                endif
             enddo
-#if 0
+#if 1
             allocate (ipiv(max(1,myArows) + nbslpk))
             ipiv = 0
-            call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
+            ! call pgetrff90(rank, rank, matrix_small, 1, 1, descsmall, ipiv, info, flop=flop)
+            call pgetrfmodf90(rank, rank, matrix_small, 1, 1, descsmall, option%jitter, ipiv, info, flop=flop, phase_loc=block_o%phase,logabsdet_loc=block_o%logabsdet)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
-            norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
-            do ii = 1, rank
-               call g2l(ii, rank, nprow, nbslpk, iproc, myi)
-               call g2l(ii, rank, npcol, nbslpk, jproc, myj)
-               if (iproc == myrow .and. jproc == mycol) then
-                  if(abs(matrix_small(myi, myj))<dlamch('E'))then
-                     matrix_small(myi, myj) = sign(1d0,dble(matrix_small(myi, myj)))*sqrt(dlamch('E'))*norm1
-                  endif
-               endif
-            enddo
+            ! norm1 = pfnorm(rank, rank, matrix_small, 1, 1, descsmall, '1')
+            ! do ii = 1, rank
+            !    call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+            !    call g2l(ii, rank, npcol, nbslpk, jproc, myj)
+            !    if (iproc == myrow .and. jproc == mycol) then
+            !       if(abs(matrix_small(myi, myj))<dlamch('E'))then
+            !          matrix_small(myi, myj) = sign(1d0,dble(matrix_small(myi, myj)))*sqrt(dlamch('E'))*norm1
+            !       endif
+            !    endif
+            ! enddo
             call pgetrif90(rank, matrix_small, 1, 1, descsmall, ipiv, flop=flop)
             stats%Flop_Factor = stats%Flop_Factor + flop/dble(nprow*npcol)
             deallocate (ipiv)
@@ -436,6 +517,10 @@ contains
             matU2D1 = -matU2D1
             deallocate (matrix_small)
          endif
+         phase = block_o%phase
+         call MPI_ALLREDUCE(phase, block_o%phase, 1, MPI_DT, MPI_PROD, ptree%pgrp(pgno)%Comm, ierr)
+         logabsdet = block_o%logabsdet
+         call MPI_ALLREDUCE(logabsdet, block_o%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
 
          call Redistribute2Dto1D(matU2D1, block_o%M, 0, pgno, block_o%ButterflyU%blocks(1)%matrix, block_o%M_p, 0, pgno, rank, ptree)
 
@@ -957,7 +1042,7 @@ contains
       DTR:: error_inout_tmp
       real(kind=8):: rate, err_avr
       integer itermax, ntry, converged
-      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr
+      real(kind=8):: n1, n2, Memory, memory_temp, norm1, norm2, scale_new, rr, vtmp
       type(Hoption)::option
       type(Hstat)::stats
       type(proctree)::ptree
@@ -1025,8 +1110,10 @@ contains
 
          norm1 = fnorm(VecOut - VecIn, mm, num_vect)**2d0
          norm2 = fnorm(VecIn, mm, num_vect)**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         vtmp = norm1
+         call MPI_ALLREDUCE(vtmp, norm1, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
+         vtmp = norm2
+         call MPI_ALLREDUCE(vtmp, norm2, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(schulz_op%matrices_block%pgno)%Comm, ierr)
          error_inout = sqrt(norm1)/sqrt(norm2)
 
          if (ptree%MyID == Main_ID .and. option%verbosity >= 1) write (*, '(A22,A6,I3,A8,I2,A8,I3,A7,Es14.7)') ' Schultz ', ' rank:', block_Xn%rankmax, ' Iter:', ii, ' L_butt:', block_Xn%level_butterfly, ' error:', error_inout
@@ -1319,8 +1406,8 @@ contains
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
       type(matrixblock)::blocks_io
       type(matrixblock)::blocks_schur
-      integer rank_new_max, rank0
-      real(kind=8):: rank_new_avr, error, rate, norm
+      integer rank_new_max, rank0,vtmpi
+      real(kind=8):: rank_new_avr, error, rate, norm,vtmp
       integer niter
       real(kind=8):: error_inout
       integer itermax, ntry
@@ -1338,7 +1425,7 @@ contains
       error_inout = 0
 
       if (blocks_io%level_butterfly == 0) then
-         call LR_SMW(blocks_io, Memory, ptree, stats, pgno)
+         call LR_SMW(blocks_io, Memory, ptree, option, stats, pgno)
          return
       else
          allocate (partitioned_block%sons(2, 2))
@@ -1393,9 +1480,20 @@ contains
             call BF_get_rank_ABCD(partitioned_block, rank0)
          else
             rank0 = 0
+            blocks_A%phase=1
+            blocks_A%logabsdet=0
+            blocks_D%phase=1
+            blocks_D%logabsdet=0
          endif
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         vtmpi=rank0
+         call MPI_ALLREDUCE(vtmpi, rank0, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_A%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_A%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_D%phase, 1, MPI_DT, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+         call MPI_Bcast(blocks_D%logabsdet, 1, MPI_DTR, Main_ID, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+
 
          if (level_butterfly_target <= 0) then ! try to use deterministic algorithms for merging four LRs into a bigger LR
             pgno1 = blocks_io%pgno  ! recording pgno as blocks_io%pgno will be set to partitioned_block%sons(1,1)%pgno in LR_ABCDinverse
@@ -1413,7 +1511,8 @@ contains
             vecout=0
             call BF_block_MVP_inverse_ABCD_dat(partitioned_block, blocks_io, 'N', blocks_io%M_loc, blocks_io%N_loc, 1, vecin, blocks_io%N_loc, vecout, blocks_io%M_loc, BPACK_cone, BPACK_czero, ptree, stats)
             norm = fnorm(vecout,blocks_io%M_loc,1)**2d0
-            call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
+            vtmp = norm
+            call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(blocks_io%pgno)%Comm, ierr)
             norm = sqrt(norm)
             deallocate(vecin)
             deallocate(vecout)
@@ -1439,6 +1538,9 @@ contains
          endif
 
          ! stop
+
+         blocks_io%phase = blocks_A%phase*blocks_D%phase
+         blocks_io%logabsdet = blocks_A%logabsdet+blocks_D%logabsdet
 
          if (option%verbosity >= 2 .and. recurlevel == 0 .and. ptree%MyID == Main_ID) write (*, '(A23,A6,I3,A8,I3,A11,Es14.7)') ' RecursiveI ', ' rank:', blocks_io%rankmax, ' L_butt:', blocks_io%level_butterfly, ' error:', error_inout
 
@@ -1697,7 +1799,7 @@ contains
 
       implicit none
       integer level_p, ADflag, iii, jjj
-      integer mm1, mm2, nn1, nn2, M1, M2, N1, N2, ii, jj, ss, kk, j, i, mm, nn
+      integer mm1, mm2, nn1, nn2, M1, M2, N1, N2, ii, jj, ss, kk, j, i, mm, nn, vtmp
       integer level_butterfly, num_blocks, level_butterfly_c, level_butterfly_o, level_butterfly_dummy, level_final, num_blocks_c, level, num_col, num_row, num_rowson, num_colson
 
       type(matrixblock)::partitioned_block
@@ -1730,14 +1832,16 @@ contains
       else
          level_butterfly_o = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      vtmp = level_butterfly_o
+      call MPI_ALLREDUCE(vtmp, level_butterfly_o, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_c = blocks_A%level_butterfly
       else
          level_butterfly_c = -1
       endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      vtmp = level_butterfly_c
+      call MPI_ALLREDUCE(vtmp, level_butterfly_c, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
       call assert(level_butterfly_o == 2 + level_butterfly_c, 'BF_ABCD only supports merging L-2-level BFs into a L-level BF')
 
@@ -2690,7 +2794,7 @@ contains
       real(kind=8):: rank_new_avr, error, err_avr, err_max
       integer niter
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
-      integer itermax, ntry, cnt, cnt_partial
+      integer itermax, ntry, cnt, cnt_partial, vtmp
       real(kind=8):: n1, n2, n3, n4, Memory
       integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b
       DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :)
@@ -2791,7 +2895,8 @@ contains
             do bb = 1, Bplus%LL(ll)%Nbound
                Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
             enddo
-            call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+            vtmp = Bplus%LL(ll)%rankmax
+            call MPI_ALLREDUCE(vtmp, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
          end do
 
          rank_new_max = 0
@@ -2832,7 +2937,7 @@ contains
       real(kind=8):: rank_new_avr, error, err_avr, err_max, tol_used
       integer niter
       real(kind=8):: error_inout, rate, rankrate_inner, rankrate_outter
-      integer itermax, ntry, cnt, cnt_partial
+      integer itermax, ntry, cnt, cnt_partial, vtmp
       real(kind=8):: n1, n2, n3, n4, Memory
       integer rank0, rank0_inner, rank0_outter, Lplus, level_BP, levelm, groupm_start, ij_loc, edge_s, edge_e, edge_first, idx_end_m_ref, idx_start_m_ref, idx_start_b, idx_end_b, idxs,idxe,groupm
       DT, allocatable:: matin(:, :), matout(:, :), matin_tmp(:, :), matout_tmp(:, :), matrixtemp(:,:)
@@ -2927,7 +3032,7 @@ contains
                n1 = MPI_Wtime()
                if (block_o%style == 1) then
 #if HAVE_ZFP
-                  if(option%use_zfp==1)call ZFP_Decompress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,tol_used,0)
+                  if(option%use_zfp==1 .or. (option%use_zfp==2 .and. block_o%row_group /=block_o%col_group))call ZFP_Decompress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,tol_used,0)
 #endif
 #if 0
                   allocate (ipiv(block_o%M))
@@ -2947,7 +3052,7 @@ contains
                   deallocate(matrixtemp)
 #endif
 #if HAVE_ZFP
-                  if(option%use_zfp==1)call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,option%tol_comp,0)
+                  if(option%use_zfp==1 .or. (option%use_zfp==2 .and. block_o%row_group /=block_o%col_group))call ZFP_Compress(block_o%fullmat,block_o%FullmatZFP,block_o%M,block_o%N,option%tol_comp,0)
 #endif
                else
                   !!!!! invert I+B1 to be I+B2
@@ -3035,7 +3140,8 @@ contains
          do bb = 1, Bplus%LL(ll)%Nbound
             if(IOwnPgrp(ptree,Bplus%LL(ll)%matrices_block(bb)%pgno))Bplus%LL(ll)%rankmax = max(Bplus%LL(ll)%rankmax, Bplus%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = Bplus%LL(ll)%rankmax
+         call MPI_ALLREDUCE(vtmp, Bplus%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       rank_new_max = 0

@@ -59,9 +59,14 @@ module BPACK_DEFS
 
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
-    integer, parameter:: BPACK_MAJOR_VERSION = 3
-    integer, parameter:: BPACK_MINOR_VERSION = 2
+    integer, parameter:: BPACK_MAJOR_VERSION = 4
+    integer, parameter:: BPACK_MINOR_VERSION = 0
     integer, parameter:: BPACK_PATCH_VERSION = 0
+
+
+    !>**** scalapack parameters
+    integer,parameter:: BLOCK_CYCLIC_2D=1, CSRC_=8, CTXT_=2, DLEN_=9, DTYPE_=1,lld_=9, mb_=5, m_=3, nb_=6, n_=4, rsrc_=7
+
 
     !>**** common parameters
 #if defined(PGI) || defined(CRAY)
@@ -98,13 +103,14 @@ module BPACK_DEFS
     integer, parameter:: NOPRECON = 2  !< use compressed BPACK as fast matvec
     integer, parameter:: BPACKPRECON = 3        !< use factored BPACK as preconditioner
 
-    integer, parameter:: LplusMax = 10
+    integer, parameter:: LplusMax = 15
 
     integer, parameter:: HODLR = 1  !< use hodlr/hodbf solver
     integer, parameter:: HMAT = 2  !< use H matrix (lr/bf) solver
     integer, parameter:: HSS = 3  !< use hss_bf/shnbf solver
     integer, parameter:: HSS_MD = 4  !< use hss_bf_md/shn_bf_md solver
     integer, parameter:: BLR = 5  !< use single-level matrix (lr/bf) solver
+    integer, parameter:: HTENSOR = 6  !< use H tensor (lr/bf) solver
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -229,8 +235,33 @@ module BPACK_DEFS
     end type acaquant
 
 
+    !>**** information used for one intervel of the tree-based approxy sampling
+    type :: frame_t
+    integer :: lo, hi
+    integer :: nodeID
+    integer :: m_pick
+    real(kind=8) :: tol_run
+    end type frame_t
 
-
+    !>**** information used for the tree-based proxy sampling of one matrix
+    type treesamplequant
+        integer M,N !< matrix dimensions
+        integer:: header_m=0, header_n=0 !< matrix offsets
+        integer::leaf !< the level of the AVL tree below which m_pick will be reduced
+        integer:: m_pick !< number of new proxies to pick per intervel
+        integer:: nextra
+        ! integer:: keeprefine !< whether to generate more samples
+        type(TreeNode), pointer :: root_node => null() !< root node of the AVL tree
+        type(frame_t), allocatable :: stack(:) !< the stack that keeps track of the tree traversal
+        integer:: top=0 !< the current iterator for the stack
+        integer:: tail=0 !< the current iterator for the stack
+        integer, allocatable:: skel_rows(:), skel_cols(:) !< rows or columns to be skeletonized
+        integer, allocatable:: proxies(:), skel_sofar(:) !< rows or columns that have been sampled so far
+        integer, allocatable:: extra_offsets(:)
+        integer, allocatable:: extra_skel(:)
+        DT, allocatable:: extra_mats_interp(:,:)
+        DT, allocatable:: mats_interp(:,:), Qs(:,:), mats(:,:) !< basis matrices and original matrices at the current stage
+    end type treesamplequant
 
     !>**** one rank*rank butterfly block
     type butterflymatrix
@@ -394,6 +425,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
         integer:: rankmin=BPACK_BigINT !< minimum butterfly ranks
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         integer dimension_rank !< estimated maximum rank
         integer M, N !< size of the block
         integer M_loc, N_loc !< local size of the block
@@ -498,6 +531,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** one layer in a Bplus
     type onelplus_MD
         integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
+        integer Nbound_loc !< # local # of corrected blocks that are further decomposed into deeper layers
+        integer Nboundall
+        integer level_butterfly !< # butterlfy level for all blocks on this level
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
@@ -564,6 +600,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type hobf
         integer Maxlevel, N !< HODLR/HODBF levels and sizes
         integer ind_lv, ind_bk !< iterator of level and block number in a HODLR/HODBF
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         type(cascadingfactors), allocatable::levels(:) !
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
     end type hobf
@@ -574,13 +612,15 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Maxlevel, N !< H matrix levels and sizes
         integer Dist_level !< used in Hmatrix solver, the level at which parallelization is performed
         integer idxs, idxe !< same as msh%idxs and msh%idxe
+        DTR:: logabsdet=0 !< store the value of logdet
+        DT:: phase=1 !< store the sign of logdet
         integer, pointer:: N_p(:, :) => null() !< row sizes of all processes sharing this Hmat
         type(basisgroup), allocatable:: basis_group(:) !< basis_group at the Dist_level level, this is needed as msh is not currently passed to matvec interface
         integer:: myArows=0,myAcols=0 !< local number of row and column blocks
         type(matrixblock), pointer :: Local_blocks(:, :) => null()
         type(matrixblock), pointer :: Local_blocks_copy(:, :) => null() !< copy of the forward matrix
-      type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()
-        type(matrixblock), pointer:: blocks_1 => null(), blocks_2 => null()
+        type(matrixblock), pointer :: Computing_matricesblock_m(:, :) => null(), Computing_matricesblock_l(:, :) => null(), Computing_matricesblock_u(:, :) => null()
+        type(block_ptr), pointer:: blocks_1(:)=> null(), blocks_2(:)=> null()
         type(list), allocatable::lstblks(:) !< lstblks(level) is the list of blocks at that level
         type(list),allocatable::admissibles(:) !< a list of admissible and inadmissible groups per each group
         type(iarray),allocatable::colorsets(:) !< the colorset (an integer array) of each level
@@ -604,6 +644,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
     end type hssbf_md
 
+    !>**** HTENSOR structure
+    type Hmat_md
+        integer Maxlevel, Ndim !< HTENSOR levels and dimensionility
+        integer, allocatable:: N(:) !< size per dimension
+        type(blockplus_MD)::BP !< a single butterfly plus for the entire matrix
+    end type Hmat_md
+
 
     type SVD_quant
         DT, allocatable:: matU(:,:),matV(:,:)
@@ -616,6 +663,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()
         type(hssbf_md), pointer::hss_bf_md => null()
+        type(Hmat_md), pointer::h_mat_md => null()
     end type Bmatrix
 
     !>**** intermidate vectors for applying a butterfly
@@ -646,7 +694,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) sample_para_outer   !< parameters used for linear-complexity ID-butterfly, # of row/columns samples is sample_para*2*butterfly_rank
         ! integer sample_heuristic   !< 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp !< pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
-        integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 0: do not use zfp
+        integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 2: use zfp for the dense blocks (excluding diagonal blocks) 0: do not use zfp
         integer:: use_qtt  !< 1: use qtt for the dense blocks 0: do not use qtt
 
         ! options for matrix construction
@@ -774,6 +822,16 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type:: ipair
         integer i, j
     end type ipair
+
+    !>*** a derived type for constructing a AVL tree for an integer interval and pick indices in a top-down fashion where each pick spans as uniformly as possible and do not duplicate with its ancesters
+    type TreeNode
+        integer :: key
+        integer :: height
+        integer :: size
+        type(TreeNode), pointer :: left => null(), right => null()
+    end type TreeNode
+
+
 
     abstract interface
         subroutine BMatVec(operand, block_o, trans, M, N, num_vect_sub, Vin, ldi, Vout, ldo, a, b, ptree, stats, operand1)

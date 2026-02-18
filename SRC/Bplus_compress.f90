@@ -40,7 +40,7 @@ contains
 
       type(mesh)::msh
       type(kernelquant)::ker
-      integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new, rank_new1
+      integer i, j, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_c, rankmax_min, rank_new, rank_new1, vtmp
       integer group_m, group_n, mm, nn, index_i, index_i_loc, index_j_loc, index_j, ii, jj, ij
       integer level, length_1, length_2, level_blocks, index_ij
       integer rank, rankmax, butterflyB_inuse, rank1, rank2
@@ -158,24 +158,32 @@ contains
                submats(index_ij)%nr=0
                submats(index_ij)%nc=0
             enddo
-            n1 = MPI_Wtime()
 
-            nnz_loc=0
-            do index_ij = 1, nr*nc
-               index_i_loc = (index_ij - 1)/nc + 1
-               index_j_loc = mod(index_ij - 1, nc) + 1
-               index_i = (index_i_loc - 1)*inc_r + idx_r
-               index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
-            enddo
-            n2 = MPI_Wtime()
-            ! time_tmp = time_tmp + n2 - n1
-            if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
-               allocate(alldat_loc_in(nnz_loc))
-               call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
-               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+
+            if(option%forwardN15flag==3)then
+               call assert(option%pat_comp==1,'forwardN15flag=3 currently only supports pat_comp=1')
+               call BF_compress_NlogN_tree_R_sample(submats, nr, nc, idx_r, idx_c, inc_r, inc_c, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, level, flops1)
+               flops =flops+flops1
             else
-               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+               n1 = MPI_Wtime()
+               nnz_loc=0
+               do index_ij = 1, nr*nc
+                  index_i_loc = (index_ij - 1)/nc + 1
+                  index_j_loc = mod(index_ij - 1, nc) + 1
+                  index_i = (index_i_loc - 1)*inc_r + idx_r
+                  index_j = (index_j_loc - 1)*inc_c + idx_c
+                  call BF_compress_NlogN_oneblock_R_sample(submats,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, nnz_loc, flops1)
+                  flops =flops+flops1
+               enddo
+               n2 = MPI_Wtime()
+               ! time_tmp = time_tmp + n2 - n1
+               if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
+                  allocate(alldat_loc_in(nnz_loc))
+                  call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
+                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+               else
+                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+               endif
             endif
 
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
@@ -196,10 +204,14 @@ contains
 #endif
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
+
             do index_ij = 1, nr*nc
-               if(Nboundall>0)then
+               if(Nboundall>0 .or. option%forwardN15flag==3)then
                   call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
-                  if(associated(submats(index_ij)%dat))deallocate(submats(index_ij)%dat)
+                  if(associated(submats(index_ij)%dat))then
+                     deallocate(submats(index_ij)%dat)
+                     submats(index_ij)%dat=>null()
+                  endif
                endif
                if(allocated(submats(index_ij)%rows))deallocate(submats(index_ij)%rows)
                if(allocated(submats(index_ij)%cols))deallocate(submats(index_ij)%cols)
@@ -226,8 +238,8 @@ contains
                call BF_exchange_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'R', 'B')
             endif
             endif
-
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level < level_butterfly + 1) then
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
@@ -346,8 +358,8 @@ contains
             if (level > level_final) then
                call BF_exchange_skel(blocks, blocks%ButterflySkel(level), option, stats, msh, ptree, level, 'C', 'B')
             endif
-
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp=rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (level > 0) then
             if (rank_new > rankmax_for_butterfly(level - 1)) then
                rankmax_for_butterfly(level - 1) = rank_new
@@ -388,6 +400,836 @@ contains
       return
 
    end subroutine BF_compress_NlogN
+
+
+
+
+
+
+
+
+
+
+   subroutine BF_compress_NlogN_tree_R_sample(submats_out, nr, nc, idx_r, idx_c, inc_r, inc_c, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, level, flops)
+
+      implicit none
+
+      integer Nboundall,Ninadmissible,nr,nc,idx_r,idx_c, inc_r, inc_c
+      integer*8 nnz_loc
+      integer boundary_map(:,:)
+      integer groupm_start
+      type(intersect) :: submats_out(:)
+      type(intersect),allocatable :: submats(:),submats_ref(:)
+      type(mesh)::msh
+      type(kernelquant)::ker
+      logical:: inserted
+      integer i, j, jjj, level_butterfly, num_blocks, k, attempt, edge_m, edge_n, header_m, header_n, leafsize, nn_start, rankmax_r, rankmax_r1, rankmax_c, rankmax_min
+      integer group_m, group_n, group_m_mid, group_n_mid, idxstart, idxend, mm, nn, index_i, index_ij, index_i_loc_k, index_i_loc_s, index_j, index_j_loc_k, index_j_loc_s, ii, jj, ij
+      integer level, length_1, length_2, level_blocks
+      integer rank, rankmax, butterflyB_inuse, rank1, rank2, inter
+      real(kind=8) rate, tolerance, rtemp, norm_1, norm_2, norm_e
+      integer header_n1, header_n2, nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1, last
+      real(kind=8) flop, flops, flops1
+      DT ctemp
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable:: select_row(:), select_row_tmp(:), select_column(:), column_pivot(:), row_pivot(:)
+      integer, allocatable:: select_row_rr(:), select_column_rr(:), order(:)
+      DT, allocatable:: UU(:, :), VV(:, :), matrix_little(:, :), matrix_little_inv(:, :), matrix_U(:, :), matrix_V(:, :), matrix_V_tmp(:, :), matrix_tmp(:, :), matrix_little_cc(:, :), core(:, :), core_tmp(:, :), core_tmp1(:, :), tau(:)
+
+      integer, allocatable::jpvt(:)
+      integer Nlayer, passflag, levelm, nrow, ncol,rank_new, H, len
+
+      integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
+      real(kind=8)::n2, n1,overrate
+      type(treesamplequant),allocatable::treequant(:)
+      integer:: m_pick0, leaf=64
+
+      integer :: nq, ranknew
+      integer :: mid, avail, m_adjust
+      real(kind=8) :: matnew_norm, norm_tol=1.0d-15, tol_Rdetect
+      real(kind=8) :: tol_next, residual
+      integer :: nodeID, depth, lo, hi, keeprefine, top, m_pick, count, index_i_loc, index_j_loc, index_ij_loc
+      logical :: finish
+      DT, allocatable :: matnew(:,:), mattmp1(:,:), mattmp2(:,:), mattmp3(:,:)
+      type(intersect) :: submats_dummy(1)
+      DT,allocatable:: matA_recon(:,:), mats_interp(:,:), mats_skel(:,:), mats(:,:)
+
+
+      m_pick0=option%BACA_Batch
+      tol_Rdetect=option%tol_comp
+
+      flops = 0
+      level_butterfly = blocks%level_butterfly
+      levelm = floor_safe(dble(level_butterfly)/2d0)
+
+
+      allocate(treequant(nr*nc))
+      allocate(submats(nr*nc))
+      do index_ij = 1, nr*nc
+         index_i_loc = (index_ij - 1)/nc + 1
+         index_j_loc = mod(index_ij - 1, nc) + 1
+         index_i = (index_i_loc - 1)*inc_r + idx_r
+         index_j = (index_j_loc - 1)*inc_c + idx_c
+
+         group_m = blocks%row_group    ! Note: row_group and col_group interchanged here
+         group_n = blocks%col_group
+         if (level == level_butterfly + 1) then
+            group_m = group_m*2**level_butterfly - 1 + index_i
+            group_n = group_n - 1 + index_j
+         else
+            group_m = group_m*2**level - 1 + index_i
+            group_n = group_n*2**(level_butterfly - level) - 1 + index_j
+         endif
+
+         mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+         if (level == 0) then
+            nn = msh%basis_group(group_n)%tail - msh%basis_group(group_n)%head + 1
+            header_m = msh%basis_group(group_m)%head
+            header_n = msh%basis_group(group_n)%head
+            allocate(treequant(index_ij)%skel_cols(nn))
+            call LogMemory(stats, SIZEOF(treequant(index_ij)%skel_cols)/1024.0d3)
+            do j=1,nn
+               treequant(index_ij)%skel_cols(j) = header_n + j - 1
+            enddo
+         elseif (level == level_butterfly + 1) then
+            index_ii_loc = (index_i - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+            index_jj_loc = (index_j - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
+            index_i_loc_s = (index_i - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+            nn = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+            header_m = msh%basis_group(group_m)%head
+            header_n = msh%basis_group(group_n)%head
+            allocate(treequant(index_ij)%skel_cols(nn))
+            call LogMemory(stats, SIZEOF(treequant(index_ij)%skel_cols)/1024.0d3)
+            do j=1,nn
+               treequant(index_ij)%skel_cols(j) = blocks%ButterflySkel(level - 1)%inds(index_i_loc_s, 1)%array(j) + header_n - 1
+            enddo
+         else
+            index_ii = int((index_i + 1)/2); index_jj = 2*index_j - 1
+            index_ii_loc = (index_ii - blocks%ButterflySkel(level - 1)%idx_r)/blocks%ButterflySkel(level - 1)%inc_r + 1
+            index_jj_loc = (index_jj - blocks%ButterflySkel(level - 1)%idx_c)/blocks%ButterflySkel(level - 1)%inc_c + 1
+            nn1 = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array, 1)
+            nn2 = size(blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array, 1)
+            nn = nn1 + nn2
+            header_m = msh%basis_group(group_m)%head
+            header_n1 = msh%basis_group(group_n)%head
+            header_n2 = msh%basis_group(2*group_n + 1)%head
+            allocate(treequant(index_ij)%skel_cols(nn))
+            call LogMemory(stats, SIZEOF(treequant(index_ij)%skel_cols)/1024.0d3)
+            do j = 1, nn
+               if (j <= nn1) then
+                  treequant(index_ij)%skel_cols(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc)%array(j) + header_n1 - 1
+               else
+                  treequant(index_ij)%skel_cols(j) = blocks%ButterflySkel(level - 1)%inds(index_ii_loc, index_jj_loc + 1)%array(j - nn1) + header_n2 - 1
+               endif
+            enddo
+         endif
+
+         treequant(index_ij)%header_m=msh%basis_group(group_m)%head
+         ! treequant(index_ij)%header_n=1
+         treequant(index_ij)%M=mm
+         treequant(index_ij)%N=nn
+         ! treequant(index_ij)%leaf=leaf
+         treequant(index_ij)%top=1
+         treequant(index_ij)%tail=1
+         allocate(treequant(index_ij)%extra_offsets(nn+1))
+         call LogMemory(stats, SIZEOF(treequant(index_ij)%extra_offsets)/1024.0d3)
+         treequant(index_ij)%extra_offsets(1)=0
+         allocate(treequant(index_ij)%extra_skel(nn))
+         call LogMemory(stats, SIZEOF(treequant(index_ij)%extra_skel)/1024.0d3)
+         allocate(treequant(index_ij)%extra_mats_interp(nn,nn))
+         call LogMemory(stats, SIZEOF(treequant(index_ij)%extra_mats_interp)/1024.0d3)
+         treequant(index_ij)%nextra=0
+
+
+         len = max(0, mm)
+         H=int(log(dble(len))/log(2d0))+1
+         allocate(treequant(index_ij)%stack(H))
+         call LogMemory(stats, SIZEOF(treequant(index_ij)%stack)/1024.0d3)
+         ! Push root frame
+         treequant(index_ij)%stack(1)%lo      = 1
+         treequant(index_ij)%stack(1)%hi      = mm
+         treequant(index_ij)%stack(1)%nodeID   = 1
+         treequant(index_ij)%stack(1)%m_pick  =  m_pick0 !  mm/4 ! m_pick0 ! mm ! m_pick0 ! nn
+         treequant(index_ij)%stack(1)%tol_run = 1e30 ! not used for the root node
+      enddo
+
+
+
+      finish=.false.
+      do while(.not. finish)
+
+         !!!! Step 1: generate submats for each index index_ij
+         do index_ij = 1, nr*nc
+            index_i_loc = (index_ij - 1)/nc + 1
+            index_j_loc = mod(index_ij - 1, nc) + 1
+            index_i = (index_i_loc - 1)*inc_r + idx_r
+            index_j = (index_j_loc - 1)*inc_c + idx_c
+
+            ! need to reset submats
+            submats(index_ij)%nr=0
+            submats(index_ij)%nc=0
+            if(associated(submats(index_ij)%dat))then
+               call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
+               deallocate(submats(index_ij)%dat)
+               submats(index_ij)%dat=>null()
+               deallocate(submats(index_ij)%rows)
+               deallocate(submats(index_ij)%cols)
+            endif
+
+            if(treequant(index_ij)%top <=treequant(index_ij)%tail)then
+               ! Pop next frame in stack
+               nrow = treequant(index_ij)%M
+               ncol = treequant(index_ij)%N
+               lo        = treequant(index_ij)%stack(treequant(index_ij)%top)%lo
+               hi        = treequant(index_ij)%stack(treequant(index_ij)%top)%hi
+               nodeID     = treequant(index_ij)%stack(treequant(index_ij)%top)%nodeID
+               depth     = floor_safe(log(dble(nodeID))/log(2d0))
+               ! m_pick    = floor_safe(ncol/dble(2**(depth)))+1
+               ! m_pick    = ncol
+               m_pick    = treequant(index_ij)%stack(treequant(index_ij)%top)%m_pick
+               ! if(depth==0 .and. level==0)m_pick=nrow-1
+
+
+
+               ! Base conditions
+               call assert(hi>=lo,"internvel bounds wrong")
+               avail = unused_in_interval(treequant(index_ij)%root_node, 1, nrow, lo, hi)
+               if (avail <= 0) cycle ! all indices in this intervel has been sampled
+
+
+               if(level == level_butterfly + 1)then
+                  call assert(depth==0, "depth should only be 0 for the level level_butterfly + 1")
+                  m_pick = nrow
+                  count =  nrow
+                  call array_resize_int(select_row,m_pick)
+                  do i=1,m_pick
+                     select_row(i) = i
+                  enddo
+
+               else
+                  ! rankmax_r1 = min(ceiling_safe(option%sample_para*ncol), nrow)
+                  rankmax_r1=0
+                  call array_resize_int(select_row,ncol*option%knn+m_pick+rankmax_r1)
+
+                  rankmax_r=0
+                  ! if(option%knn>0 .and. depth==0)then
+                  if(depth==0)then
+                     if (level /= level_butterfly + 1) then
+                     ! call linspaceI(1, nrow, rankmax_r1, select_row(1:rankmax_r1))
+                     do j = 1, ncol
+                        edge_n = treequant(index_ij)%skel_cols(j)
+                        do jjj = 1, option%knn
+                        if (msh%nns(edge_n, jjj) >= treequant(index_ij)%header_m .and. msh%nns(edge_n, jjj) <= treequant(index_ij)%header_m + treequant(index_ij)%M -1) then
+                           rankmax_r1 = rankmax_r1 + 1
+                           select_row(rankmax_r1) = msh%nns(edge_n, jjj) + 1 - treequant(index_ij)%header_m
+                        endif
+                        enddo
+                     enddo
+                     endif
+                     call remove_dup_int(select_row, rankmax_r1, rankmax_r)
+                     do i = 1, rankmax_r
+                        call insert_key(treequant(index_ij)%root_node, select_row(i), inserted)
+                     enddo
+                     ! write(*,*)rankmax_r,"nani"
+                  endif
+
+                  ! Pick up to m_pick unique numbers in [lo, hi]
+                  call array_resize_int(select_row,rankmax_r+m_pick)
+                  call pick_exact_m_interval(treequant(index_ij)%root_node, 1, nrow, lo, hi, m_pick, select_row(rankmax_r+1:rankmax_r+m_pick), count)
+                  count = rankmax_r + count
+               endif
+
+               ! if (avail <= 0) then
+               !    write(*,*)index_ij, lo, hi, nrow, 'reall?', treequant(index_ij)%proxies,'what', select_row(1:count)
+               ! endif
+
+               submats(index_ij)%nr = count
+               submats(index_ij)%nc = ncol
+               allocate(submats(index_ij)%rows(submats(index_ij)%nr))
+               do i=1,count
+                  submats(index_ij)%rows(i) = treequant(index_ij)%header_m + select_row(i) - 1
+               enddo
+               deallocate(select_row)
+               allocate(submats(index_ij)%cols(submats(index_ij)%nc))
+               submats(index_ij)%cols = treequant(index_ij)%skel_cols
+               allocate(submats(index_ij)%dat(submats(index_ij)%nr,submats(index_ij)%nc))
+               submats(index_ij)%dat=0
+               call LogMemory(stats, SIZEOF(submats(index_ij)%dat)/1024.0d3)
+
+               if (Nboundall > 0) then
+                  allocate (submats(index_ij)%masks(submats(index_ij)%nr, submats(index_ij)%nc))
+                  call LogMemory(stats, SIZEOF(submats(index_ij)%masks)/1024.0d3)
+                  submats(index_ij)%masks = 1
+                  do i = 1, submats(index_ij)%nr
+                     group_m_mid = findgroup(submats(index_ij)%rows(i), msh, levelm, blocks%row_group)
+                     do jj=1,Ninadmissible
+                        group_n_mid = boundary_map(group_m_mid - groupm_start + 1,jj)
+                        if (group_n_mid /= -1) then
+                           idxstart = msh%basis_group(group_n_mid)%head
+                           idxend = msh%basis_group(group_n_mid)%tail
+                           do j = 1, submats(index_ij)%nc
+                              if (submats(index_ij)%cols(j) >= idxstart .and. submats(index_ij)%cols(j) <= idxend) submats(index_ij)%masks(i, j) = 0
+                           enddo
+                        endif
+                     enddo
+                  enddo
+               endif
+            endif
+            ! write(*,*)'aha',blocks%row_group,blocks%col_group,index_ij,nodeID,shape(submats(index_ij)%dat),associated(submats(index_ij)%dat),treequant(index_ij)%top
+         enddo
+
+
+         !!!! Step 2: collectively call element_Zmn_blocklist_user
+         call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+
+
+
+         !!!! Step 3: compute the row space and determine convergence
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(index_ij,flops1) reduction(+:flops)
+#endif
+         do index_ij = 1, nr*nc
+            call BF_compress_NlogN_tree_R_sample_check_convergence(submats, treequant, ptree, index_ij,tol_Rdetect,flops1)
+            flops =flops+flops1
+         enddo
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+
+
+
+         finish=.true.
+         do index_i_loc = 1, nr
+            do index_j_loc = 1, nc
+               index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+               finish = finish .and. (treequant(index_ij_loc)%top > treequant(index_ij_loc)%tail)
+            enddo
+         enddo
+      enddo
+      passflag = 0
+      do while (passflag == 0)
+         call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+      enddo
+
+      do index_i_loc = 1, nr
+         do index_j_loc = 1, nc
+            index_ij_loc = (index_j_loc-1)*nr+index_i_loc
+            call LogMemory(stats, SIZEOF(treequant(index_ij_loc)%mats)/1024.0d3)
+            ! if(allocated(treequant(index_ij_loc)%Qs))call LogMemory(stats, SIZEOF(treequant(index_ij_loc)%Qs)/1024.0d3)
+            call LogMemory(stats, SIZEOF(treequant(index_ij_loc)%proxies)/1024.0d3)
+            ! write(*,*)index_i_loc,index_j_loc,treequant(index_ij_loc)%M,size(treequant(index_ij_loc)%proxies,1)
+         enddo
+      enddo
+
+
+
+
+#if 0
+      !!!! Error checking
+      allocate(submats_ref(nr*nc))
+      do index_ij = 1, nr*nc
+         index_i_loc = (index_ij - 1)/nc + 1
+         index_j_loc = mod(index_ij - 1, nc) + 1
+         index_i = (index_i_loc - 1)*inc_r + idx_r
+         index_j = (index_j_loc - 1)*inc_c + idx_c
+
+         group_m = blocks%row_group    ! Note: row_group and col_group interchanged here
+         group_n = blocks%col_group
+         if (level == level_butterfly + 1) then
+            group_m = group_m*2**level_butterfly - 1 + index_i
+            group_n = group_n - 1 + index_j
+         else
+            group_m = group_m*2**level - 1 + index_i
+            group_n = group_n*2**(level_butterfly - level) - 1 + index_j
+         endif
+
+         mm = msh%basis_group(group_m)%tail - msh%basis_group(group_m)%head + 1
+         count = mm
+         ncol = size(treequant(index_ij)%skel_cols,1)
+            submats_ref(index_ij)%nr = mm
+            submats_ref(index_ij)%nc = ncol
+            allocate(submats_ref(index_ij)%rows(submats_ref(index_ij)%nr))
+            do i=1,count
+               submats_ref(index_ij)%rows(i) = treequant(index_ij)%header_m + i - 1
+            enddo
+
+            allocate(submats_ref(index_ij)%cols(submats_ref(index_ij)%nc))
+            submats_ref(index_ij)%cols = treequant(index_ij)%skel_cols
+            allocate(submats_ref(index_ij)%dat(submats_ref(index_ij)%nr,submats_ref(index_ij)%nc))
+            submats_ref(index_ij)%dat=0
+      enddo
+      !!!! Step 2: collectively call element_Zmn_blocklist_user
+      call element_Zmn_blocklist_user(submats_ref, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
+
+      do index_ij = 1, nr*nc
+         index_i_loc = (index_ij - 1)/nc + 1
+         index_j_loc = mod(index_ij - 1, nc) + 1
+         index_i = (index_i_loc - 1)*inc_r + idx_r
+         index_j = (index_j_loc - 1)*inc_c + idx_c
+
+         group_m = blocks%row_group    ! Note: row_group and col_group interchanged here
+         group_n = blocks%col_group
+         if (level == level_butterfly + 1) then
+            group_m = group_m*2**level_butterfly - 1 + index_i
+            group_n = group_n - 1 + index_j
+         else
+            group_m = group_m*2**level - 1 + index_i
+            group_n = group_n*2**(level_butterfly - level) - 1 + index_j
+         endif
+
+         ncol = size(treequant(index_ij)%skel_cols,1)
+         nrow = submats_ref(index_ij)%nr
+         rankmax_r=size(treequant(index_ij)%mats,1)
+         rankmax_c=size(treequant(index_ij)%mats,2)
+
+         allocate (core(rankmax_r, rankmax_c))
+         core = treequant(index_ij)%mats
+         allocate(matnew(rankmax_r, rankmax_c))
+         matnew = treequant(index_ij)%mats
+
+
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         allocate (tau(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         call geqp3modf90(core, jpvt, tau, option%tol_comp*0.5, BPACK_SafeUnderflow, ranknew)
+         ! call geqp3f90(core, jpvt, tau)
+         ! ranknew = size(treequant(index_ij)%Qs, 2)
+
+         if (ranknew > 0) then
+            call un_or_mqrf90(core, tau, matnew, 'L', 'C', rankmax_r, ncol, ranknew)
+            call trsmf90(core, matnew, 'L', 'U', 'N', 'N', ranknew, ncol)
+         else
+            ranknew = 1
+            jpvt(1) = 1
+            matnew = 0
+         endif
+
+         allocate(mats_interp(ranknew,ncol))
+         mats_interp =matnew(1:ranknew, 1:ncol)
+         allocate(mats_skel(nrow,ranknew))
+         mats_skel = submats_ref(index_ij)%dat(:,jpvt(1:ranknew))
+
+
+         ! if(ptree%MyID==14 .and. index_ij==4 .and. level==0)then
+         !    open(unit=10, file='matrix.dat', form='unformatted', status='replace')
+         !    write(10) nrow,ncol           ! store dimensions first
+         !    write(10) submats_ref(index_ij)%dat
+         !    close(10)
+         ! endif
+
+         allocate(matA_recon(nrow,ncol))
+         matA_recon=0
+
+         call gemmf90(mats_skel, nrow, mats_interp, ranknew, matA_recon, nrow, 'N', 'N', nrow, ncol, ranknew, BPACK_cone,BPACK_czero)
+
+         write(*,*)'size of mats (tree-sampling-based):', size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2)
+         write(*,*)'mpi_rank',ptree%MyID, 'level,index_ij',level,index_ij,'reconstruction error:',fnorm(matA_recon-submats_ref(index_ij)%dat,nrow,ncol)/fnorm(submats_ref(index_ij)%dat,nrow,ncol), 'rank:',ranknew
+
+         deallocate(matA_recon)
+         deallocate(mats_skel)
+         deallocate(mats_interp)
+         deallocate(core)
+         deallocate(jpvt)
+         deallocate(tau)
+         deallocate(matnew)
+
+      enddo
+      ! delete submats_ref
+      do index_ij = 1, nr*nc
+         index_i_loc = (index_ij - 1)/nc + 1
+         index_j_loc = mod(index_ij - 1, nc) + 1
+         index_i = (index_i_loc - 1)*inc_r + idx_r
+         index_j = (index_j_loc - 1)*inc_c + idx_c
+         submats_ref(index_ij)%nr=0
+         submats_ref(index_ij)%nc=0
+         if(associated(submats_ref(index_ij)%dat))then
+            call LogMemory(stats, -SIZEOF(submats_ref(index_ij)%dat)/1024.0d3)
+            deallocate(submats_ref(index_ij)%dat)
+            submats_ref(index_ij)%dat=>null()
+            deallocate(submats_ref(index_ij)%rows)
+            deallocate(submats_ref(index_ij)%cols)
+            if(allocated(submats_ref(index_ij)%masks))then
+               call LogMemory(stats, -SIZEOF(submats_ref(index_ij)%masks)/1024.0d3)
+               deallocate(submats_ref(index_ij)%masks)
+            endif
+         endif
+      enddo
+      deallocate(submats_ref)
+#endif
+
+
+
+
+      ! copy treequant to submats_out, and delete treequant and submats
+      do index_ij = 1, nr*nc
+         index_i_loc = (index_ij - 1)/nc + 1
+         index_j_loc = mod(index_ij - 1, nc) + 1
+         index_i = (index_i_loc - 1)*inc_r + idx_r
+         index_j = (index_j_loc - 1)*inc_c + idx_c
+         ! delete submats
+         submats(index_ij)%nr=0
+         submats(index_ij)%nc=0
+         if(associated(submats(index_ij)%dat))then
+            call LogMemory(stats, -SIZEOF(submats(index_ij)%dat)/1024.0d3)
+            deallocate(submats(index_ij)%dat)
+            submats(index_ij)%dat=>null()
+            deallocate(submats(index_ij)%rows)
+            deallocate(submats(index_ij)%cols)
+            if(allocated(submats(index_ij)%masks))then
+               call LogMemory(stats, -SIZEOF(submats(index_ij)%masks)/1024.0d3)
+               deallocate(submats(index_ij)%masks)
+            endif
+         endif
+
+         ! submats_out((index_ij))%rmax = size(treequant(index_ij)%Qs,2)
+         submats_out((index_ij))%nr = size(treequant(index_ij)%proxies,1)
+         submats_out((index_ij))%nc = treequant(index_ij)%N
+         allocate(submats_out((index_ij))%rows(submats_out((index_ij))%nr))
+         submats_out((index_ij))%rows = treequant(index_ij)%proxies
+         allocate(submats_out((index_ij))%cols(submats_out((index_ij))%nc))
+         submats_out((index_ij))%cols = treequant(index_ij)%skel_cols
+         allocate(submats_out((index_ij))%dat(submats_out((index_ij))%nr,submats_out((index_ij))%nc))
+         call LogMemory(stats, SIZEOF(submats_out(index_ij)%dat)/1024.0d3)
+         submats_out((index_ij))%dat = treequant(index_ij)%mats
+
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%mats)/1024.0d3)
+         deallocate(treequant(index_ij)%mats)
+         ! if(allocated(treequant(index_ij)%Qs))then
+         !    call LogMemory(stats, -SIZEOF(treequant(index_ij)%Qs)/1024.0d3)
+         !    deallocate(treequant(index_ij)%Qs)
+         ! endif
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%proxies)/1024.0d3)
+         deallocate(treequant(index_ij)%proxies)
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%skel_cols)/1024.0d3)
+         deallocate(treequant(index_ij)%skel_cols)
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%stack)/1024.0d3)
+         deallocate(treequant(index_ij)%stack)
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%extra_offsets)/1024.0d3)
+         deallocate(treequant(index_ij)%extra_offsets)
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%extra_skel)/1024.0d3)
+         deallocate(treequant(index_ij)%extra_skel)
+         call LogMemory(stats, -SIZEOF(treequant(index_ij)%extra_mats_interp)/1024.0d3)
+         deallocate(treequant(index_ij)%extra_mats_interp)
+
+
+         call LogMemory(stats, -count_nodes(treequant(index_ij)%root_node)*32/1024.0d3)
+         call free_tree(treequant(index_ij)%root_node)
+
+      enddo
+      deallocate(submats)
+      deallocate(treequant)
+
+   end subroutine BF_compress_NlogN_tree_R_sample
+
+
+
+
+
+   subroutine BF_compress_NlogN_tree_R_sample_check_convergence(submats, treequant, ptree, index_ij,tol_Rdetect,flops)
+      implicit none
+      real(kind=8) flop, flops,tol_next,tol_next1,tol_Rdetect,residual,residual1,norm_ref, norm_ref1,n1,n2
+      type(treesamplequant)::treequant(:)
+      type(intersect) :: submats(:)
+      type(proctree)::ptree
+      integer:: index_ij,ii,nn
+      integer nrow, ncol,lo,hi,mid,nodeID,depth,m_adjust,count,count_res,keeprefine,ranknew,ranknew1, idxs, nskel
+      integer, allocatable::jpvt(:),jpvt_row(:)
+      DT,allocatable:: mats_row(:,:), matnew(:,:), matA_recon(:,:), mats_interp(:,:), mats_skel(:,:), mats(:,:), tau(:), tau_row(:), core(:,:), core_row(:,:), matA_update(:,:), mat_interp(:,:)
+
+      flops=0
+
+      if(treequant(index_ij)%top <=treequant(index_ij)%tail)then
+         nrow = treequant(index_ij)%M
+         ncol = treequant(index_ij)%N
+         lo        = treequant(index_ij)%stack(treequant(index_ij)%top)%lo
+         hi        = treequant(index_ij)%stack(treequant(index_ij)%top)%hi
+         nodeID     = treequant(index_ij)%stack(treequant(index_ij)%top)%nodeID
+         depth     = floor_safe(log(dble(nodeID))/log(2d0))
+         tol_next  = treequant(index_ij)%stack(treequant(index_ij)%top)%tol_run
+         m_adjust = treequant(index_ij)%stack(treequant(index_ij)%top)%m_pick
+         ! if (leaf > hi - lo + 1) m_adjust = 1
+         treequant(index_ij)%top = treequant(index_ij)%top + 1
+         if(submats(index_ij)%nr>0 .and. submats(index_ij)%nc>0)then
+
+            count = size(submats(index_ij)%rows,1)
+            allocate(matnew(size(submats(index_ij)%dat,1),size(submats(index_ij)%dat,2)))
+            ! write(*,*)'caoa',blocks%row_group,blocks%col_group,index_ij,nodeID,shape(matnew),shape(submats(index_ij)%dat),associated(submats(index_ij)%dat)
+            matnew = submats(index_ij)%dat
+
+
+
+            ! if (depth == 0) then
+            !    allocate(treequant(index_ij)%mats(size(matnew,1), size(matnew,2)))
+            !    treequant(index_ij)%mats = matnew
+            !    allocate(treequant(index_ij)%proxies(count))
+            !    treequant(index_ij)%proxies=submats(index_ij)%rows
+            ! else
+            !    call matrix_resize(treequant(index_ij)%mats, size(treequant(index_ij)%mats,1) + size(matnew,1), ncol)
+            !    treequant(index_ij)%mats(size(treequant(index_ij)%mats,1) - size(matnew,1) + 1 : size(treequant(index_ij)%mats,1), :) = matnew
+            !    call array_resize_int(treequant(index_ij)%proxies, size(treequant(index_ij)%proxies,1) + count)
+            !    treequant(index_ij)%proxies(size(treequant(index_ij)%proxies,1) - count + 1 : size(treequant(index_ij)%proxies,1)) = submats(index_ij)%rows
+            ! end if
+
+
+            if (depth == 0) then
+               allocate(matA_recon(count,ncol))
+               matA_recon = matnew
+               allocate(treequant(index_ij)%mats(size(matnew,1), size(matnew,2)))
+               treequant(index_ij)%mats = matnew
+               allocate(treequant(index_ij)%proxies(count))
+               treequant(index_ij)%proxies=submats(index_ij)%rows
+            else
+               n1 = MPI_Wtime()
+               ranknew = size(treequant(index_ij)%skel_sofar,1)
+               allocate(mats_skel(count,ranknew))
+               mats_skel = matnew(:,treequant(index_ij)%skel_sofar)
+               allocate(matA_recon(count,ncol))
+               matA_recon=0
+
+               call gemmf90(mats_skel, count, treequant(index_ij)%mats_interp, ranknew, matA_recon, count, 'N', 'N', count, ncol, ranknew, BPACK_cone,BPACK_czero,flop=flop)
+               flops = flops + flop
+               matA_recon = matnew-matA_recon
+               residual = fnorm(matA_recon,count,ncol)
+
+               do nn=1,treequant(index_ij)%nextra
+                  nskel = treequant(index_ij)%extra_offsets(nn+1)-treequant(index_ij)%extra_offsets(nn)
+                  idxs = treequant(index_ij)%extra_offsets(nn)+1
+                  allocate(matA_update(count,nskel))
+                  do ii=1,nskel
+                     matA_update(:,ii)=matA_recon(:,treequant(index_ij)%extra_skel(idxs+ii-1))
+                  enddo
+                  allocate(mat_interp(nskel,ncol))
+                  mat_interp = treequant(index_ij)%extra_mats_interp(idxs:idxs+nskel-1,:)
+
+                  call gemmf90(matA_update, count, mat_interp, nskel, matA_recon, count, 'N', 'N', count, ncol, nskel, -BPACK_cone,BPACK_cone,flop=flop)
+                  flops = flops + flop
+                  deallocate(matA_update)
+                  deallocate(mat_interp)
+               enddo
+               residual = fnorm(matA_recon,count,ncol)
+               norm_ref1 = fnorm(matnew,count,ncol)
+               norm_ref = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))
+               tol_next1 = fnorm(matnew,count,ncol)*tol_Rdetect
+               ! tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_Rdetect/(depth+1)
+               tol_next = fnorm(treequant(index_ij)%mats,size(treequant(index_ij)%mats,1),size(treequant(index_ij)%mats,2))*tol_Rdetect
+               deallocate(mats_skel)
+
+               allocate(jpvt_row(max(ncol, count)))
+               allocate(tau_row(max(ncol, count)))
+               allocate(core_row(ncol,count))
+               call copymatT(matA_recon,core_row,count,ncol)
+               jpvt_row = 0
+               call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop)
+               flops = flops + flop
+               if (ranknew1 > 0) then
+
+                  ! write(*,*)ranknew1,'new effective rows?'
+                  ! do ii=1,ranknew1
+                  !    write(*,*)fnorm(matA_recon(jpvt_row(ii):jpvt_row(ii),:),1,ncol)
+                  ! enddo
+
+                  call matrix_resize(treequant(index_ij)%mats, size(treequant(index_ij)%mats,1) + ranknew1, ncol)
+                  treequant(index_ij)%mats(size(treequant(index_ij)%mats,1) - ranknew1 + 1 : size(treequant(index_ij)%mats,1), :) = matnew(jpvt_row(1:ranknew1),:)
+                  call array_resize_int(treequant(index_ij)%proxies, size(treequant(index_ij)%proxies,1) + ranknew1)
+                  treequant(index_ij)%proxies(size(treequant(index_ij)%proxies,1) - ranknew1 + 1 : size(treequant(index_ij)%proxies,1)) = submats(index_ij)%rows(jpvt_row(1:ranknew1))
+               endif
+               deallocate(jpvt_row)
+               deallocate(tau_row)
+               deallocate(core_row)
+
+               n2 = MPI_Wtime()
+            endif
+
+
+
+
+
+
+            keeprefine = 1
+            if (count == hi - lo + 1) then
+               keeprefine = 0
+               if (depth == 0)goto 102
+               if (depth>0)  goto 103
+
+            else if (depth == 0) then
+               keeprefine = 1
+102            allocate (core(count, ncol))
+               core = treequant(index_ij)%mats
+               allocate(mats(count,ncol))
+               mats = treequant(index_ij)%mats
+
+               allocate (jpvt(max(ncol, count)))
+               allocate (tau(max(ncol, count)))
+               jpvt = 0
+               call geqp3modf90(core, jpvt, tau, tol_Rdetect, BPACK_SafeUnderflow, ranknew, flop=flop)
+               flops = flops + flop
+               if (ranknew > 0) then
+                  call un_or_mqrf90(core, tau, mats, 'L', 'C', size(mats,1), ncol, ranknew, flop=flop)
+                  flops = flops + flop
+                  call trsmf90(core, mats, 'L', 'U', 'N', 'N', ranknew, ncol, flop=flop)
+                  flops = flops + flop
+               else
+                  ranknew = 1
+                  jpvt(1) = 1
+                  mats = 0
+               endif
+
+               allocate(treequant(index_ij)%mats_interp(ranknew,ncol))
+               treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
+               allocate(treequant(index_ij)%skel_sofar(ranknew))
+               treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
+               deallocate(mats)
+               deallocate(core)
+               deallocate(tau)
+               deallocate(jpvt)
+
+            else
+
+               ! write(*,*)'node ', nodeID, 'count', count, 'residual with ID', residual, tol_next
+
+               if (residual < tol_next) then
+                  keeprefine = 0
+               else
+                  keeprefine = 1
+
+103               n1 = MPI_Wtime()
+
+                  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                  count_res = size(matA_recon,1)
+                  allocate(jpvt_row(max(ncol, count_res)))
+                  allocate(tau_row(max(ncol, count_res)))
+                  allocate(core_row(count_res,ncol))
+                  core_row = matA_recon
+                  jpvt_row = 0
+
+
+
+                  ! write(*,*)residual,norm_ref/residual*tol_Rdetect
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect/size(treequant(index_ij)%mats,1), max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  call geqp3modf90(core_row, jpvt_row, tau_row, norm_ref/residual*tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop) !!!!! this will use a normalized tolerence for the residual matrix, and help the search go deeper in the tree.
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, max(ncol, count_res)*norm_ref*tol_Rdetect, ranknew1,flop=flop)
+                  ! call geqp3modf90(core_row, jpvt_row, tau_row, tol_Rdetect, BPACK_SafeUnderflow, ranknew1,flop=flop)
+                  flops = flops + flop
+
+                  ! ranknew1 = min(ranknew1,1)
+                  if (ranknew1 > 0) then
+                        ! write(*,*)ranknew1,'wocao?'
+                        if(ranknew1 + treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1)<=ncol)then
+                        ! if(treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1)<=8)then
+                        allocate(mats_row(count_res,ncol))
+                        mats_row = matA_recon
+                        call un_or_mqrf90(core_row, tau_row, mats_row, 'L', 'C', size(mats_row,1), ncol, ranknew1,flop=flop)
+                        flops = flops + flop
+                        call trsmf90(core_row, mats_row, 'L', 'U', 'N', 'N', ranknew1, ncol,flop=flop)
+                        flops = flops + flop
+                        treequant(index_ij)%nextra=treequant(index_ij)%nextra+1
+                        treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra+1) = treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra) + ranknew1
+                        nskel = ranknew1
+                        idxs = treequant(index_ij)%extra_offsets(treequant(index_ij)%nextra)+1
+                        treequant(index_ij)%extra_mats_interp(idxs:idxs+nskel-1,:) = mats_row(1:ranknew1,:)
+                        treequant(index_ij)%extra_skel(idxs:idxs+nskel-1) = jpvt_row(1:ranknew1)
+                        deallocate(mats_row)
+                     else
+                        ! write(*,*)'from scratch'
+                  count = size(treequant(index_ij)%mats,1)
+                  allocate (core(count, ncol))
+                  core = treequant(index_ij)%mats
+                  allocate(mats(count,ncol))
+                  mats = treequant(index_ij)%mats
+                  allocate (jpvt(max(ncol, count)))
+                  allocate (tau(max(ncol, count)))
+                  jpvt = 0
+                  call geqp3modf90(core, jpvt, tau, tol_Rdetect, BPACK_SafeUnderflow, ranknew,flop=flop)
+                  flops = flops + flop
+                  if (ranknew > 0) then
+                     call un_or_mqrf90(core, tau, mats, 'L', 'C', size(mats,1), ncol, ranknew,flop=flop)
+                     flops = flops + flop
+                     call trsmf90(core, mats, 'L', 'U', 'N', 'N', ranknew, ncol,flop=flop)
+                     flops = flops + flop
+                  else
+                     ranknew = 1
+                     jpvt(1) = 1
+                     mats = 0
+                  endif
+                        ! write(*,*)treequant(index_ij)%skel_sofar,'before',size(treequant(index_ij)%skel_sofar,1) ! size(treequant(index_ij)%mats_interp,1),ranknew
+                        ! write(*,*)jpvt(1:ranknew),'nima',ranknew ! size(treequant(index_ij)%mats_interp,1),ranknew
+                  call matrix_resize(treequant(index_ij)%mats_interp,ranknew,ncol)
+                  treequant(index_ij)%mats_interp =mats(1:ranknew, 1:ncol)
+                  call array_resize_int(treequant(index_ij)%skel_sofar,ranknew)
+                  treequant(index_ij)%skel_sofar = jpvt(1:ranknew)
+                  deallocate(mats)
+                  deallocate(core)
+                  deallocate(tau)
+                  deallocate(jpvt)
+                        treequant(index_ij)%nextra=0
+                     endif
+                  else
+                     ! write(*,*)'how come???'
+                  endif
+                  deallocate(jpvt_row)
+                  deallocate(tau_row)
+                  deallocate(core_row)
+
+                  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+                  n2 = MPI_Wtime()
+                  ! time_nla = time_nla + n2-n1
+               endif
+            end if
+            deallocate(matnew)
+            deallocate(matA_recon)
+
+
+            ! If we should refine, push children (right, then left) so left is processed next
+            if (keeprefine == 1) then
+               mid = (lo + hi) / 2
+
+               ! Right child [mid+1, hi]
+               if (mid + 1 <= hi) then
+                  if (treequant(index_ij)%tail == size(treequant(index_ij)%stack)) then
+                     call stack_resize(treequant(index_ij)%stack,size(treequant(index_ij)%stack)*2)
+                     treequant(index_ij)%stack(1:treequant(index_ij)%tail-treequant(index_ij)%top+1)=treequant(index_ij)%stack(treequant(index_ij)%top:treequant(index_ij)%tail)
+                     treequant(index_ij)%tail = treequant(index_ij)%tail - treequant(index_ij)%top+1
+                     treequant(index_ij)%top = 1
+                  end if
+                  treequant(index_ij)%tail = treequant(index_ij)%tail + 1
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%lo      = mid + 1
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%hi      = hi
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%nodeID   = 2*nodeID + 1
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%m_pick  = m_adjust
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%tol_run = tol_next
+               end if
+
+               ! Left child [lo, mid]
+               if (lo <= mid) then
+                  if (treequant(index_ij)%tail == size(treequant(index_ij)%stack)) then
+                     call stack_resize(treequant(index_ij)%stack,size(treequant(index_ij)%stack)*2)
+                     treequant(index_ij)%stack(1:treequant(index_ij)%tail-treequant(index_ij)%top+1)=treequant(index_ij)%stack(treequant(index_ij)%top:treequant(index_ij)%tail)
+                     treequant(index_ij)%tail = treequant(index_ij)%tail - treequant(index_ij)%top+1
+                     treequant(index_ij)%top = 1
+                  end if
+                  treequant(index_ij)%tail = treequant(index_ij)%tail + 1
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%lo      = lo
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%hi      = mid
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%nodeID   = 2*nodeID
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%m_pick  = m_adjust
+                  treequant(index_ij)%stack(treequant(index_ij)%tail)%tol_run = tol_next
+               end if
+            end if
+         endif
+      endif
+
+
+   end subroutine BF_compress_NlogN_tree_R_sample_check_convergence
+
+
+
+
 
 
    subroutine BF_compress_NlogN_oneblock_R_sample(submats, blocks, boundary_map, Nboundall,Ninadmissible, groupm_start, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, nnz_loc, flops)
@@ -646,6 +1488,9 @@ contains
          endif
 
       endif
+
+      ! write(*,*)"in BF_compress_NlogN_oneblock_R_sample", index_i,index_j,mm,size(submats(index_ij)%rows,1)
+
 
       if (allocated(core)) deallocate (core)
       if (allocated(core_tmp)) deallocate (core_tmp)
@@ -943,7 +1788,7 @@ contains
             dims_bm= Nboundall
             call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
             do jj=1,Ninadmissible
-               group_n_mid = boundary_map(group_scalar,jj,:)
+               group_n_mid = boundary_map(group_scalar,jj,1:Ndim)
                if (ALL(group_n_mid /= -1)) then
                   do dim_i=1,Ndim
                      idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head
@@ -1621,7 +2466,7 @@ do j_dim = 1,dims_col(dim)
             dims_bm= Nboundall
             call MultiIndexToSingleIndex(Ndim,dims_bm, group_scalar, group_m_mid - groupm_start + 1)
             do jj=1,Ninadmissible
-               group_n_mid = boundary_map(group_scalar,jj,:)
+               group_n_mid = boundary_map(group_scalar,jj,1:Ndim)
                if (ALL(group_n_mid /= -1)) then
                   do dim_i=1,Ndim
                      idxstart(dim_i) = msh(dim_i)%basis_group(group_n_mid(dim_i))%head
@@ -2402,6 +3247,7 @@ do i_dim = 1,dims_row(dim)
       integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
       integer, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer,allocatable::proc_of_groupc(:),proc_of_groupr(:)
+      integer::vtmp(1)
       integer:: dims_r(Ndim),dims_c(Ndim),idx_r_m(Ndim),idx_c_m(Ndim),idx_r_scalar,idx_c_scalar
       type(butterfly_skel_MD):: ButterflySkel_R_transposed(:)
 
@@ -2426,7 +3272,12 @@ do i_dim = 1,dims_row(dim)
          call MultiIndexToSingleIndex(Ndim, dims_r, idx_r_scalar, idx_r_m)
          proc_of_groupr(idx_r_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      if(product(dims_r)==1)then
+         vtmp=proc_of_groupr
+         call MPI_ALLREDUCE(vtmp, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupr, product(dims_r), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      endif
 
       do bb=1, product(blocks%nc_m)
          call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb, idx_c_m)
@@ -2434,8 +3285,12 @@ do i_dim = 1,dims_row(dim)
          call MultiIndexToSingleIndex(Ndim, dims_c, idx_c_scalar, idx_c_m)
          proc_of_groupc(idx_c_scalar)=pp
       enddo
-      call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
-
+      if(product(dims_c)==1)then
+         vtmp = proc_of_groupc
+         call MPI_ALLREDUCE(vtmp, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, proc_of_groupc, product(dims_c), MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      endif
 
 
       do bb=1, product(blocks%nr_m)
@@ -3231,9 +4086,11 @@ do i_dim = 1,dims_row(dim)
   type(intersect_MD) :: subtensors(:)
 
    do index_ij = 1, product(dims)
-      call LogMemory(stats, -SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
 
-      if(associated(subtensors(index_ij)%dat))deallocate(subtensors(index_ij)%dat)
+      if(associated(subtensors(index_ij)%dat))then
+         call LogMemory(stats, -SIZEOF(subtensors(index_ij)%dat)/1024.0d3)
+         deallocate(subtensors(index_ij)%dat)
+      endif
       if(allocated(subtensors(index_ij)%rows))then
          do dim_i=1,Ndim
             call iarray_finalizer(subtensors(index_ij)%rows(dim_i))
@@ -3289,7 +4146,7 @@ do i_dim = 1,dims_row(dim)
 
       integer, allocatable::jpvt(:)
       integer Nlayer, level_half, level_final, dim_MD(Ndim+2), idx_MD(Ndim+2), idx_r(Ndim), inc_r(Ndim), nr(Ndim), idx_c(Ndim), inc_c(Ndim), nc(Ndim), idx_c_scalar, idx_r_scalar, dim_subtensor(Ndim*2),idx_subtensor(Ndim*2)
-      integer passflag,use_zfp
+      integer passflag,use_zfp, vtmp
       integer*8 nnz_loc
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), select_row_pre(:), select_col_pre(:)
       integer::mrange_dummy(1), nrange_dummy(1)
@@ -3620,7 +4477,7 @@ do i_dim = 1,dims_row(dim)
             enddo
             use_zfp=0
 #if HAVE_ZFP
-            if(option%use_zfp==1)use_zfp=1
+            if(option%use_zfp>=1)use_zfp=1
 #endif
             if(use_zfp==0)then
                allocate(subtensors(index_ij)%dat(product(subtensors(index_ij)%nr),product(subtensors(index_ij)%nc)))
@@ -3658,8 +4515,12 @@ do i_dim = 1,dims_row(dim)
 
 
       endif
-
-      call MPI_ALLREDUCE(MPI_IN_PLACE, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      if(level_butterfly==0)then
+         vtmp = rankmax_for_butterfly(0)
+         call MPI_ALLREDUCE(vtmp, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, rankmax_for_butterfly(0:level_butterfly), level_butterfly + 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+      endif
 
       if (statflag == 1) then
          if (allocated(stats%rankmax_of_level)) stats%rankmax_of_level(level_blocks) = max(maxval(rankmax_for_butterfly), stats%rankmax_of_level(level_blocks))
@@ -4330,7 +5191,7 @@ do i_dim = 1,dims_row(dim)
       integer blocks_idx, i, j, level_butterfly, num_blocks, k, attempt
       integer group_m, group_n, M,N, mm, nn, mn, index_i, index_j, index_i_m, index_j_m, index_ij_loc, index_i_loc, index_i_loc_s, index_j_loc, index_j_loc_s, ii, jj, iii, jjj, nn1, nn2, mm1, mm2, idxs_m, idxs_n, header_m, header_n
       integer level, levelm, level_half, level_final, level_loc, length_1, length_2, level_blocks, index_ij, edge_m, edge_n
-      integer rank, rank0, rank_new1, rank_new, rankmax, butterflyB_inuse, rank1, rank2, rmax
+      integer rank, rank0, rank_new1, rank_new, vtmp, rankmax, butterflyB_inuse, rank1, rank2, rmax
       real(kind=8) rate, tolerance, SVD_tolerance, memory_butterfly, rtemp, norm_1, norm_2, norm_e
       real(kind=8) Memory, n1, n2
       DT ctemp
@@ -5182,8 +6043,8 @@ time_tmp = time_tmp + n2 - n1
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
-
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
             endif
@@ -5257,7 +6118,8 @@ time_tmp = time_tmp + n2 - n1
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
-            call MPI_ALLREDUCE(MPI_IN_PLACE, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+            vtmp = rank_new
+            call MPI_ALLREDUCE(vtmp, rank_new, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
             if (rank_new > rankmax_for_butterfly(level)) then
                rankmax_for_butterfly(level) = rank_new
             endif
@@ -5510,7 +6372,7 @@ time_tmp = time_tmp + n2 - n1
       implicit none
       integer rank, ranktmp
       integer header_m, header_n
-      integer N, M, i, j, ii, jj, myi, myj, iproc, jproc, rmax, mn
+      integer N, M, i, j, ii, jj, myi, myj, iproc, jproc, rmax, mn, vtmp
       type(mesh)::msh
       type(Hoption)::option
       type(matrixblock)::blocks, blockc(2)
@@ -5747,9 +6609,12 @@ time_tmp = time_tmp + n2 - n1
                call BF_delete(blocks%sons(2, 1), 1)
                deallocate (blocks%sons)
 
-               call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmax
+               call MPI_ALLREDUCE(vtmp, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmin
+               call MPI_ALLREDUCE(vtmp, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = rank
+               call MPI_ALLREDUCE(vtmp, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
             else
                if (nprow /= -1 .and. npcol /= -1) then
@@ -5895,9 +6760,12 @@ time_tmp = time_tmp + n2 - n1
                call BF_delete(blocks%sons(1, 1), 1)
                call BF_delete(blocks%sons(2, 1), 1)
                deallocate (blocks%sons)
-               call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(MPI_IN_PLACE, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
-               call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmax
+               call MPI_ALLREDUCE(vtmp, blocks%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = blocks%rankmin
+               call MPI_ALLREDUCE(vtmp, blocks%rankmin, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = rank
+               call MPI_ALLREDUCE(vtmp, rank, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
             endif
          endif
 
@@ -6885,7 +7753,7 @@ time_tmp = time_tmp + n2 - n1
       integer edge_m, edge_n, header_m, header_n, Dimn, mn, Navr, itr
       integer rank, rank1, rank2, ranknew, row, column, rankmax, N, M, rankmax_min, rmax0, rmax, idxs_r, idxs_c, frow, mn1, mn2
       DT value_Z, maxvalue
-      DT inner_U, inner_V, ctemp, value_UVs
+      DT inner_U, inner_V, ctemp, value_UVs,vtmp
       real(kind=8) inner_UV, n1, n2, a, error, flop
       integer:: select_column(N), select_row(M)
       DT, allocatable::matU(:, :), matV(:, :),matU0(:, :), matV0(:, :), matU2D(:, :), matV2D(:, :)
@@ -7207,8 +8075,10 @@ time_tmp = time_tmp + n2 - n1
                inner_V = inner_V + ctemp
             enddo
             ! !$omp end parallel do
-            call MPI_ALLREDUCE(MPI_IN_PLACE, inner_U, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE, inner_V, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+            vtmp = inner_U
+            call MPI_ALLREDUCE(vtmp, inner_U, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+            vtmp = inner_V
+            call MPI_ALLREDUCE(vtmp, inner_V, 1, MPI_DT, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
 
          enddo
@@ -9494,7 +10364,7 @@ time_tmp = time_tmp + n2 - n1
       deallocate(submats(1)%dat)
 
 #if HAVE_ZFP
-      if(option%use_zfp==1)then
+      if(option%use_zfp==1 .or. (option%use_zfp==2 .and. blocks%row_group/=blocks%col_group))then
          call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,blocks%M,blocks%N, option%tol_comp,0)
          memory = SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
 #if DAT==0 || DAT==2
@@ -9562,7 +10432,7 @@ time_tmp = time_tmp + n2 - n1
       enddo
       use_zfp=0
 #if HAVE_ZFP
-      if(option%use_zfp==1)use_zfp=1
+      if(option%use_zfp>=1)use_zfp=1
 #endif
       if(use_zfp==1 .and. option%use_qtt==0)then
 #if HAVE_ZFP

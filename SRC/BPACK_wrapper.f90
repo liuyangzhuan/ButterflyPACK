@@ -151,6 +151,18 @@ contains
       ptree_Cptr = c_loc(ptree)
    end subroutine C_BPACK_Createptree
 
+
+   subroutine C_BPACK_Get_Comm(ptree_Cptr, fcomm) bind(c, name="c_bpack_get_comm")
+   use iso_c_binding
+   implicit none
+   type(c_ptr) :: ptree_Cptr
+   integer(c_int)     :: fcomm
+   type(proctree), pointer :: ptree
+
+   call c_f_pointer(ptree_Cptr, ptree)
+   fcomm = ptree%Comm
+   end subroutine C_BPACK_Get_Comm
+
 !>**** C interface of initializing statistics
    !> @param stats_Cptr: the structure containing statistics
    subroutine C_BPACK_Createstats(stats_Cptr) bind(c, name="c_bpack_createstats")
@@ -375,6 +387,34 @@ contains
       call PrintStat(stats, ptree)
 
    end subroutine C_BPACK_Printstats
+
+!>**** C interface of printing the structure, size, and memory of each admissible block of the hierarchical matrix
+   !> @param stats_Cptr: the structure containing statistics
+   !> @param ptree_Cptr: the structure containing process tree
+   !> @param bmat_Cptr: the structure containing the hierarchical matrix
+   !> @param option_Cptr: the structure containing option
+   !> @param inverse: 0 (printing the forward matrix) or 1 (printing the inverse matrix)
+   subroutine C_BPACK_PrintStructure(bmat_Cptr,inverse, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_printstructure")
+      implicit none
+      type(c_ptr) :: stats_Cptr
+      type(c_ptr) :: ptree_Cptr
+      type(c_ptr) :: bmat_Cptr
+      type(c_ptr) :: option_Cptr
+
+      type(Hoption), pointer::option
+      type(Bmatrix), pointer::bmat
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      integer inverse
+
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(bmat_Cptr, bmat)
+      call c_f_pointer(option_Cptr, option)
+      !>**** print statistics variables
+      call BPACK_PrintStructure(bmat, inverse, option, stats, ptree)
+
+   end subroutine C_BPACK_PrintStructure
 
 !>**** C interface of initializing option
    !> @param option_Cptr: the structure containing option
@@ -721,7 +761,7 @@ contains
          option%xyzsort = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'lnoBP') then
+      if (trim(str) == 'lnobp' .or. trim(str) == 'lnoBP') then
          call c_f_pointer(val_Cptr, val_i)
          option%lnoBP = val_i
          valid_opt = 1
@@ -731,7 +771,7 @@ contains
          option%bp_cnt_lr = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'TwoLayerOnly') then
+      if (trim(str) == 'twolayeronly' .or. trim(str) == 'TwoLayerOnly') then
          call c_f_pointer(val_Cptr, val_i)
          option%TwoLayerOnly = val_i
          valid_opt = 1
@@ -756,22 +796,22 @@ contains
          option%schulzlevel = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'LRlevel') then
+      if (trim(str) == 'lrlevel' .or. trim(str) == 'LRlevel') then
          call c_f_pointer(val_Cptr, val_i)
          option%LRlevel = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ErrFillFull') then
+      if (trim(str) == 'errfillfull' .or. trim(str) == 'ErrFillFull') then
          call c_f_pointer(val_Cptr, val_i)
          option%ErrFillFull = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'BACA_Batch') then
+      if (trim(str) == 'baca_batch' .or. trim(str) == 'BACA_Batch') then
          call c_f_pointer(val_Cptr, val_i)
          option%BACA_Batch = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ErrSol') then
+      if (trim(str) == 'errsol' .or. trim(str) == 'ErrSol') then
          call c_f_pointer(val_Cptr, val_i)
          option%ErrSol = val_i
          valid_opt = 1
@@ -796,17 +836,17 @@ contains
          option%less_adapt = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'RecLR_leaf') then
+      if (trim(str) == 'reclr_leaf' .or. trim(str) == 'RecLR_leaf') then
          call c_f_pointer(val_Cptr, val_i)
          option%RecLR_leaf = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'Nmin_leaf') then
+      if (trim(str) == 'nmin_leaf' .or. trim(str) == 'Nmin_leaf') then
          call c_f_pointer(val_Cptr, val_i)
          option%Nmin_leaf = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'LR_BLK_NUM') then
+      if (trim(str) == 'lr_blk_num' .or. trim(str) == 'LR_BLK_NUM') then
          call c_f_pointer(val_Cptr, val_i)
          option%LR_BLK_NUM = val_i
          valid_opt = 1
@@ -826,12 +866,12 @@ contains
          option%powiter = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'ILU') then
+      if (trim(str) == 'ilu' .or. trim(str) == 'ILU') then
          call c_f_pointer(val_Cptr, val_i)
          option%ILU = val_i
          valid_opt = 1
       endif
-      if (trim(str) == 'Nbundle') then
+      if (trim(str) == 'nbundle' .or. trim(str) == 'Nbundle') then
          call c_f_pointer(val_Cptr, val_i)
          option%Nbundle = val_i
          valid_opt = 1
@@ -910,12 +950,12 @@ contains
          option%tol_comp = val_d
          valid_opt = 1
       endif
-      if (trim(str) == 'tol_Rdetect') then
+      if (trim(str) == 'tol_rdetect' .or. trim(str) == 'tol_Rdetect') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_Rdetect = val_d
          valid_opt = 1
       endif
-      if (trim(str) == 'tol_LS') then
+      if (trim(str) == 'tol_ls' .or. trim(str) == 'tol_LS') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_LS = val_d
          valid_opt = 1
@@ -1168,8 +1208,8 @@ contains
    !> @param Ndim: data set dimensionality (not used if nogeo=1)
    !> @param Locations: coordinates used for clustering (not used if nogeo=1)
    !> @param nns: nearest neighbours provided by user (referenced if nogeo=3 or 4)
-   !> @param nlevel: the number of top levels that have been ordered (in)
-   !> @param tree: the order tree provided by the caller, if incomplete, the init routine will make it complete (inout)
+   !> @param nlevel: If nevel>0: the number of top levels that have been ordered. If nlevel=-1, nlevel will be returned as the actual number of tree levels. (inout)
+   !> @param tree: If nlevel>0: the order tree provided by the caller, if incomplete, the init routine will make it complete; if nlevel=-1, tree returns the list of actual leaf sizes (note that the length of tree needs to be at least 2**nlevel when passed into this function); if nlevel=0, not referenced  (inout)
    !> @param Permutation: return the permutation vector new2old (indexed from 1) (out)
    !> @param N_loc: number of local row/column indices (out)
    !> @param bmat_Cptr: the structure containing BPACK (out)
@@ -1219,6 +1259,7 @@ contains
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
       integer(kind=8) idx,kk,knn
+      integer group
 
       call c_f_pointer(option_Cptr, option)
       call c_f_pointer(stats_Cptr, stats)
@@ -1277,40 +1318,51 @@ contains
       t1 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
-      Maxlevel = nlevel
-      allocate (msh%pretree(2**Maxlevel))
 
-      msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
+      if(nlevel>0)then
+         Maxlevel = nlevel
+         allocate (msh%pretree(2**Maxlevel))
 
-      !>**** make 0-element node a 1-element node
+         msh%pretree(1:2**Maxlevel) = tree(1:2**Maxlevel)
 
-      ! write(*,*)'before adjustment:',msh%pretree
-      call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
-      need = 0
-      do ii = 1, 2**Maxlevel
-         if (msh%pretree(ii) == 0) need = need + 1
-      enddo
-      do while (need > 0)
-         give = ceiling_safe(need/dble(2**Maxlevel - need))
+         !>**** make 0-element node a 1-element node
+
+         ! write(*,*)'before adjustment:',msh%pretree
+         call assert(N>=2**Maxlevel,'The incomplete tree cannot be made complete. Try decreasing tree levels')
+         need = 0
          do ii = 1, 2**Maxlevel
-            nn = msh%pretree(ii)
-            if (nn > 1) then
-               msh%pretree(ii) = msh%pretree(ii) - min(min(nn - 1, give), need)
-               need = need - min(min(nn - 1, give), need)
-            endif
+            if (msh%pretree(ii) == 0) need = need + 1
          enddo
-      enddo
-      do ii = 1, 2**Maxlevel
-         if (msh%pretree(ii) == 0) msh%pretree(ii) = 1
-      enddo
-      ! write(*,*)'after adjustment:',msh%pretree
-      tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
+         do while (need > 0)
+            give = ceiling_safe(need/dble(2**Maxlevel - need))
+            do ii = 1, 2**Maxlevel
+               nn = msh%pretree(ii)
+               if (nn > 1) then
+                  msh%pretree(ii) = msh%pretree(ii) - min(min(nn - 1, give), need)
+                  need = need - min(min(nn - 1, give), need)
+               endif
+            enddo
+         enddo
+         do ii = 1, 2**Maxlevel
+            if (msh%pretree(ii) == 0) msh%pretree(ii) = 1
+         enddo
+         ! write(*,*)'after adjustment:',msh%pretree
+         tree(1:2**Maxlevel) = msh%pretree(1:2**Maxlevel)
+      else
+         Maxlevel = 0
+         allocate (msh%pretree(2**Maxlevel))
+         msh%pretree(1:2**Maxlevel) = N
+      endif
+      call LogMemory(stats, SIZEOF(msh%pretree)/1024.0d3)
+
 
       !>**** the geometry points are provided by user
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder:"
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
+         call LogMemory(stats, SIZEOF(msh%xyz)/1024.0d3)
+         call LogMemory(stats, msh%Nunk*Dimn*8d0/1024.0d3) ! this assumes that the user will deallocate Locations at a much later time
          ii = 0
          do edge = 1, msh%Nunk
             msh%xyz(1:Dimn, edge) = Locations(ii + 1:ii + Dimn)
@@ -1331,6 +1383,7 @@ contains
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          allocate (msh%nns(msh%Nunk, option%knn))
+         call LogMemory(stats, SIZEOF(msh%nns)/1024.0d3)
          do ii = 1, msh%Nunk
          do kk = 1, option%knn
             knn = option%knn
@@ -1350,7 +1403,18 @@ contains
          do edge = 1, N
             Permutation(edge) = msh%new2old(edge)
          enddo
+         call LogMemory(stats, SIZEOF(Permutation)/1024.0d3) ! this assumes that the user will deallocate Permutation at a much later time
       ! endif
+
+
+      !>**** return the clustering tree
+      if(nlevel==-1)then
+         do group = 2**bmat%Maxlevel, 2**(bmat%Maxlevel + 1) - 1
+            tree(group-2**bmat%Maxlevel+1) = msh%basis_group(group)%tail - msh%basis_group(group)%head + 1
+         enddo
+         nlevel = bmat%Maxlevel
+         call LogMemory(stats, 2**bmat%Maxlevel*8/1024.0d3) ! this assumes that the user will deallocate tree at a much later time
+      endif
 
       !>**** return the C address of BPACK structures to C caller
       bmat_Cptr = c_loc(bmat)
@@ -1541,6 +1605,42 @@ contains
    end subroutine C_BPACK_New2Old
 
 
+
+!>**** C interface of converting from old, global index to new, global index, the indexs start from 1
+   !> @param newidx: new, global index, from 1 to N (out)
+   !> @param oldidx: old, global index, from 1 to N (in)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_Old2New(msh_Cptr, oldidx, newidx) bind(c, name="c_bpack_old2new")
+      implicit none
+      integer newidx,oldidx
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+      newidx = msh%old2new(oldidx)
+
+   end subroutine C_BPACK_Old2New
+
+
+
+!>**** C interface of getting the start index and local (and global) number of indices (in the permuted order)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_LocalIndices(msh_Cptr, idxs, Nlocal, Nglobal) bind(c, name="c_bpack_localindices")
+      implicit none
+      integer idxs, Nlocal, Nglobal
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+      idxs=msh%idxs
+      Nlocal = msh%idxe - msh%idxs + 1
+      Nglobal = msh%Nunk
+   end subroutine C_BPACK_LocalIndices
+
+
+
+
+
 !>**** C interface of converting from new,local index to old, global index, the indexs start from 1. Both newidx_loc and oldidx are Ndim dimensional.
    !> @param newidx_loc: new, local index, from 1 to Nloc
    !> @param oldidx: old, global index, from 1 to N (out)
@@ -1558,6 +1658,48 @@ contains
       enddo
 
    end subroutine C_BPACK_MD_New2Old
+
+
+
+
+!>**** C interface of converting from old, global index to new, global index, the indexs start from 1
+   !> @param newidx: new, global index, from 1 to N (out)
+   !> @param oldidx: old, global index, from 1 to N (in)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_Old2New(Ndim, msh_Cptr, oldidx, newidx) bind(c, name="c_bpack_md_old2new")
+      implicit none
+      integer Ndim,dim_i
+      integer newidx(Ndim),oldidx(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         newidx(dim_i) = msh(dim_i)%old2new(oldidx(dim_i))
+      enddo
+   end subroutine C_BPACK_MD_Old2New
+
+
+
+
+!>**** C interface of getting the start index and local (and global) number of indices (in the permuted order)
+   !> @param msh_Cptr: the structure containing points and ordering information
+   subroutine C_BPACK_MD_LocalIndices(Ndim,msh_Cptr, idxs, Nlocal, Nglobal) bind(c, name="c_bpack_md_localindices")
+      implicit none
+      integer Ndim,dim_i
+      integer idxs(Ndim),Nlocal(Ndim),Nglobal(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         idxs(dim_i)=msh(dim_i)%idxs
+         Nlocal(dim_i) = msh(dim_i)%idxe - msh(dim_i)%idxs + 1
+         Nglobal(dim_i) = msh(dim_i)%Nunk
+      enddo
+
+   end subroutine C_BPACK_MD_LocalIndices
+
 
 
 
@@ -2339,7 +2481,7 @@ contains
 
       integer Nloc, Nrhs
       DT::x(Nloc, Nrhs), b(Nloc, Nrhs)
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
@@ -2366,7 +2508,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2378,7 +2521,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,Nloc,Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -2405,7 +2549,7 @@ contains
       integer Nloc(Ndim), Nrhs
       DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs)
 
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       type(c_ptr), intent(in) :: bmat_Cptr
@@ -2439,7 +2583,8 @@ contains
       endif
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(b,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp=tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm B',tmpnorm
       endif
 
@@ -2447,7 +2592,8 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(x,product(Nloc),Nrhs))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm X',tmpnorm
       endif
 
@@ -2943,7 +3089,7 @@ contains
       type(Bmatrix), pointer::bmat
       type(proctree), pointer::ptree
 
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       t1 = MPI_Wtime()
@@ -2981,10 +3127,12 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,Ninloc,Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,Noutloc,Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 
@@ -3015,7 +3163,7 @@ contains
       integer Ndim
       integer Ninloc(Ndim), Noutloc(Ndim), Ncol
       DT::xin(product(Ninloc), Ncol), xout(product(Noutloc), Ncol)
-      real(kind=8)::tmpnorm
+      real(kind=8)::tmpnorm,vtmp
       integer ierr
 
       character(kind=c_char, len=1) :: trans(*)
@@ -3060,10 +3208,12 @@ contains
 
       if(option%verbosity >=2)then
          tmpnorm = (fnorm(xin,product(Ninloc),Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp=tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xin',tmpnorm
          tmpnorm = (fnorm(xout,product(Noutloc),Ncol))**2d0
-         call MPI_ALLREDUCE(MPI_IN_PLACE, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         vtmp = tmpnorm
+         call MPI_ALLREDUCE(vtmp, tmpnorm, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
          if(ptree%MyID==0)write(*,*)'norm xout',tmpnorm
       endif
 
@@ -3230,7 +3380,7 @@ contains
    end subroutine C_BPACK_Deletekernelquant
 
 !>**** C interface of deleting HOBF
-   !> @param bmat_Cptr: the structure containing HOBF
+   !> @param bmat_Cptr: the structure containing the hierarchical matrix
    subroutine C_BPACK_Delete(bmat_Cptr) bind(c, name="c_bpack_delete")
       implicit none
       type(c_ptr), intent(inout) :: bmat_Cptr
@@ -3306,6 +3456,44 @@ contains
       if (l_or_r == 0) idx_child = -idx_child
 
    end subroutine C_BPACK_TreeIndex_Merged2Child
+
+
+
+
+
+
+!>**** C interface of BPACK log-determinant
+   !> @param phase: sign of determinant
+   !> @param logabsdet: log of magnitude of determinant
+   !> @param bmat_Cptr: the structure containing BPACK
+   !> @param option_Cptr: the structure containing option
+   subroutine C_BPACK_Logdet(phase, logabsdet, option_Cptr, bmat_Cptr) bind(c, name="c_bpack_logdet")
+      implicit none
+      DTR:: logabsdet
+      DT:: phase
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(Bmatrix), pointer::bmat
+      type(Hoption), pointer::option
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(bmat_Cptr, bmat)
+
+      select case (option%format)
+      case (HODLR)
+         phase = bmat%ho_bf%phase
+         logabsdet = bmat%ho_bf%logabsdet
+      case (HMAT,BLR)
+         phase = bmat%h_mat%phase
+         logabsdet = bmat%h_mat%logabsdet
+      case (HSS)
+            write(*,*)"HSS not yet implemented in C_BPACK_Logdet"
+            stop
+      end select
+
+   end subroutine C_BPACK_Logdet
+
+
 
 end module BPACK_wrapper
 

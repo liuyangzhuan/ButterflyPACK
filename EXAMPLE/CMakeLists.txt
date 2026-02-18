@@ -1,3 +1,4 @@
+include_directories(${ButterflyPACK_SOURCE_DIR}/CPP_INTERFACE)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX)
 include_directories(${ButterflyPACK_SOURCE_DIR}/SRC_SINGLE)
@@ -6,6 +7,7 @@ include_directories(${ButterflyPACK_SOURCE_DIR}/EXAMPLE)
 if(NOT enable_mpi)
 include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
 endif()
+include_directories( ${ButterflyPACK_BINARY_DIR}/CPP_INTERFACE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_SINGLE)
@@ -16,11 +18,13 @@ set(all_link_libs_z zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES}
 set(all_link_libs_d dbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_c cbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_s sbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_cpp butterflypack_cpp sbutterflypack dbutterflypack cbutterflypack zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 else()
 set(all_link_libs_z zbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
 set(all_link_libs_d dbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_c cbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_s sbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_cpp butterflypack_cpp sbutterflypack dbutterflypack cbutterflypack zbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 endif()
 ########################################### single complex Fortran drivers
 
@@ -102,6 +106,12 @@ target_link_libraries(testqtt ${all_link_libs_z})
 add_dependencies(testqtt testtt)
 install(TARGETS testqtt RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
+set(FZEXM15 Test_proxy_selection.f90)
+add_executable(testproxy ${FZEXM15})
+target_link_libraries(testproxy ${all_link_libs_z})
+add_dependencies(testproxy testqtt)
+install(TARGETS testproxy RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
 
 
 
@@ -144,8 +154,11 @@ set(CDEXM_SEQ InterfaceTest_simple_seq.cpp)
 add_executable(ctest_simple_seq ${CDEXM_SEQ})
 target_link_libraries(ctest_simple_seq ${all_link_libs_d})
 
+set(CDEXM_SEQ1 InterfaceTest_simple_seq_newapi.cpp)
+add_executable(ctest_simple_seq_newapi ${CDEXM_SEQ1})
+target_link_libraries(ctest_simple_seq_newapi ${all_link_libs_cpp})
 
-if(enable_mpi) # YL: I haven't add the MPI dummy library in C yet.
+if(enable_mpi)
 
 ########################################### double C++ drivers
 set(CDEXM1 InterfaceTest.cpp)
@@ -156,6 +169,11 @@ set(CDEXM2 InterfaceTest_simple.cpp)
 add_executable(ctest_simple ${CDEXM2})
 target_link_libraries(ctest_simple ${all_link_libs_d})
 add_dependencies(ctest_simple ctest)
+
+set(CDEXM3 InterfaceTest_simple_newapi.cpp)
+add_executable(ctest_simple_newapi ${CDEXM3})
+target_link_libraries(ctest_simple_newapi ${all_link_libs_cpp})
+
 
 ########################################### double complex C++ drivers
 

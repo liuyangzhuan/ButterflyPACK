@@ -1,7 +1,7 @@
 include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
 
 set(headers
-    C_BPACK_wrapper.h
+    BPACK_wrapper.h
     ButterflyPACK_config.fi
     # ${PROJECT_BINARY_DIR}/ButterflyPACK_config.h
 )
@@ -17,6 +17,14 @@ LAPACK_dgeqp3mod.f
 LAPACK_zgeqp3mod.f
 LAPACK_sgeqp3mod.f
 LAPACK_cgeqp3mod.f
+LAPACK_dgetrfmod.f
+LAPACK_dgetrf2mod.f
+LAPACK_zgetrfmod.f
+LAPACK_zgetrf2mod.f
+LAPACK_sgetrfmod.f
+LAPACK_sgetrf2mod.f
+LAPACK_cgetrfmod.f
+LAPACK_cgetrf2mod.f
 MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
@@ -33,10 +41,11 @@ BPACK_constr.f90
 BPACK_randomized.f90
 BPACK_factor.f90
 BPACK_wrapper.f90
+C_BPACK_wrapper.cpp
 )
 
 if (enable_mpi)
-  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f)
+  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f SCALAPACK_pdgetrfmod.f SCALAPACK_pzgetrfmod.f SCALAPACK_psgetrfmod.f SCALAPACK_pcgetrfmod.f SCALAPACK_pdgetf2mod.f SCALAPACK_pzgetf2mod.f SCALAPACK_psgetf2mod.f SCALAPACK_pcgetf2mod.f)
 endif ()
 
 
@@ -56,6 +65,22 @@ target_include_directories(butterflypack PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
   $<INSTALL_INTERFACE:include>)
 
+
+# ---- Python extension module ----
+if (enable_python)
+  add_library(butterflypack_python SHARED Py_BPACK_wrapper.cpp)
+  set_target_properties(butterflypack_python PROPERTIES PREFIX "")
+  add_dependencies(butterflypack_python butterflypack)
+  target_link_libraries(butterflypack_python
+    PUBLIC
+      butterflypack
+      pybind11::module
+  )
+  target_include_directories(butterflypack_python PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+  )
+endif()
+
 # Define GNU standard installation directories
 include(GNUInstallDirs)
 
@@ -65,9 +90,47 @@ install(TARGETS butterflypack EXPORT MYBPACKTargets
   PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
+if (enable_python)
+  install(TARGETS butterflypack_python EXPORT MYBPACKTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  )
+endif()
+
+
 install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 
 #SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.mod")
+
+
+if (enable_python)
+  set(PY_SCRIPTS
+      Py_BPACK_wrapper.py
+      Py_BPACK_worker.py
+  )
+  set(PY_SCRIPT_OUTPUTS)
+  foreach(pyfile IN LISTS PY_SCRIPTS)
+      set(src ${CMAKE_CURRENT_SOURCE_DIR}/${pyfile})
+      set(dst ${CMAKE_CURRENT_BINARY_DIR}/${pyfile})
+
+      add_custom_command(
+          OUTPUT ${dst}
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different ${src} ${dst}
+          DEPENDS ${src}
+          COMMENT "Copying ${pyfile}"
+      )
+
+      list(APPEND PY_SCRIPT_OUTPUTS ${dst})
+  endforeach()
+  add_custom_target(py_bpack ALL
+      DEPENDS ${PY_SCRIPT_OUTPUTS}
+  )
+  install(
+      FILES ${PY_SCRIPTS}
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()

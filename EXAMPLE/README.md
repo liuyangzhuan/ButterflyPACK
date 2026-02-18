@@ -186,7 +186,7 @@ mpirun -n nmpi ./EXAMPLE/full
 ## C/C++ Interface to construct, factor and solve a hierarchical matrix
 Similar to the Fortran interface, the C/C++ interface is named with the prefix "x_". x='z' for double-complex, 'd' for double-real, 'c' for single-complex, and 's' for single-complex. Take double-real precision for example, the caller needs to first define a class/object that can perform either matrix entry evaluation or matrix vector multiplication:
 ```
-#include "dC_BPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
 //provide a user-defined class consisting all data and metadata needed for this matrix entry evaluation and/or matvec
 class C_QuantApp {
 //define your data or metadata here
@@ -286,7 +286,7 @@ d_c_bpack_solve(x,b,&N_loc,&nrhs,&bmat,&option,&stats,&ptree);
 # Interface to construct, and multiply a low-rank/butterfly block
 ButterflyPACK also provides an interface for constructing a single MxN low-rank/butterfly block. Take double-real precision for example, the caller needs to first define a class/object that can perform either matrix entry evaluation or matrix vector multiplication:
 ```
-#include "dC_BPACK_wrapper.h"
+#include "dBPACK_wrapper.h"
 //provide a user-defined class consisting all data and metadata needed for this matrix entry evaluation and/or matvec
 class C_QuantApp {
 //define your data or metadata here

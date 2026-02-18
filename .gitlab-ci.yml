@@ -1,129 +1,161 @@
 image: gcc
+
 default:
   before_script:
-    - echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
-    - apt update
-    - apt-get -y install gcc-11 g++-11 gfortran-11
-    - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 60 --slave /usr/bin/g++ g++ /usr/bin/g++-11
-    - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-11 60
-    - apt-get -y install openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
+    - |
+      if [ "$CI_SERVER_HOST" = "gitlab.com" ]; then
+        echo "deb http://http.us.debian.org/debian stable main contrib non-free" >> /etc/apt/sources.list
+      fi
+    - apt-get update -y
+    - apt-get install -y gcc-13 g++-13 gfortran-13 dpkg-dev
+    - update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 60 --slave /usr/bin/g++ g++ /usr/bin/g++-13
+    - update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-13 60
+    - apt-get install -y openmpi-bin libopenmpi-dev libblas-dev liblapack-dev libscalapack-mpi-dev cmake
 
 stages:
   - build
   - test
 
-build:
-  stage: build
+# =========================================================
+# 1. DEFINE PLATFORM CONFIGS ONCE (The "Mixins")
+# =========================================================
 
+# Configuration for GitLab.com
+.env_com:
+  tags: [butterflypack-tr4workstation]
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.com"'
+
+# Configuration for Spack.io
+.env_spack:
+  tags: [hpsf-gpu, x86_64-nvidiagpu, nvidia-a100]
+  rules:
+    - if: '$CI_SERVER_HOST == "gitlab.spack.io"'
+
+# =========================================================
+# 2. DEFINE SHARED LOGIC (Scripts)
+# =========================================================
+
+.build_script:
+  stage: build
   script:
-    - export BLAS_LIB=/usr/lib/x86_64-linux-gnu/libblas.so
-    - export LAPACK_LIB=/usr/lib/x86_64-linux-gnu/liblapack.so
-    - export SCALAPACK_LIB="/usr/lib/x86_64-linux-gnu/libscalapack-openmpi.so"
-    - printf "${BLUE} YL; Installing ButterflyPACK from source\n"
-    - pwd
+    - MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH)
+    - echo "MULTIARCH = $MULTIARCH"
+    - export BLAS_LIB=/usr/lib/$MULTIARCH/libblas.so
+    - export LAPACK_LIB=/usr/lib/$MULTIARCH/liblapack.so
+    - export SCALAPACK_LIB="/usr/lib/$MULTIARCH/libscalapack-openmpi.so"
+    - echo "YL; Installing ButterflyPACK from source"
     - rm -rf build && mkdir -p build && cd build
     - cmake .. -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_COMPILER=mpicc -DCMAKE_CXX_COMPILER=mpic++ -DCMAKE_Fortran_COMPILER=mpif90 -DCMAKE_INSTALL_PREFIX=. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_VERBOSE_MAKEFILE:BOOL=OFF -DTPL_BLAS_LIBRARIES="$BLAS_LIB" -DTPL_LAPACK_LIBRARIES="$LAPACK_LIB" -DTPL_SCALAPACK_LIBRARIES="$SCALAPACK_LIB"
-    - make && make install
-    - cd ../
-    - printf "${BLUE} YL; Done installing ButterflyPACK from source\n"
-
+    - make -j$(nproc)
+    - make install
+    - cd ..
   artifacts:
-    paths:
-      - build
+    paths: [build]
     expire_in: 1 week
 
-test 1/16:
+.test_script:
   stage: test
   script:
-    - export TEST_NUMBER=1
+    - echo "Running test number ${TEST_NUMBER}"
     - sh .ci_tests.sh
 
-test 2/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=2
-    - sh .ci_tests.sh
+# =========================================================
+# 3. CONCRETE BUILD JOBS
+# =========================================================
 
-test 3/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=3
-    - sh .ci_tests.sh
+# Merges (.build_script + .env_com)
+build-com:
+  extends: [.build_script, .env_com]
 
-test 4/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=4
-    - sh .ci_tests.sh
+# Merges (.build_script + .env_spack)
+build-spack:
+  extends: [.build_script, .env_spack]
 
-test 5/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=5
-    - sh .ci_tests.sh
+# =========================================================
+# 4. TEST TEMPLATES (Linking Build to Test)
+# =========================================================
 
-test 6/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=6
-    - sh .ci_tests.sh
+# Inherits config from .env_com and waits for build-com
+.test_com:
+  extends: [.test_script, .env_com]
+  needs: ["build-com"]
 
-test 7/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=7
-    - sh .ci_tests.sh
+# Inherits config from .env_spack and waits for build-spack
+.test_spack:
+  extends: [.test_script, .env_spack]
+  needs: ["build-spack"]
 
-test 8/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=8
-    - sh .ci_tests.sh
+# =========================================================
+# 5. TEST DEFINITIONS
+# =========================================================
 
-test 9/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=9
-    - sh .ci_tests.sh
+# Test 1 runs on BOTH platforms
+test_1/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "1" }
 
-test 10/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=10
-    - sh .ci_tests.sh
+test_1/16-spack:
+  extends: .test_spack
+  variables: { TEST_NUMBER: "1" }
 
-test 11/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=11
-    - sh .ci_tests.sh
+# Tests 2-16 run ONLY on GitLab.com (inheriting .test_com)
+test_2/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "2" }
 
-test 12/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=12
-    - sh .ci_tests.sh
+test_3/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "3" }
 
-test 13/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=13
-    - sh .ci_tests.sh
+test_4/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "4" }
 
-test 14/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=14
-    - sh .ci_tests.sh
+test_5/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "5" }
 
-test 15/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=15
-    - sh .ci_tests.sh    
+test_6/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "6" }
 
-test 16/16:
-  stage: test
-  script:
-    - export TEST_NUMBER=16
-    - sh .ci_tests.sh  
+test_7/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "7" }
+
+test_8/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "8" }
+
+test_9/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "9" }
+
+test_10/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "10" }
+
+test_11/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "11" }
+
+test_12/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "12" }
+
+test_13/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "13" }
+
+test_14/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "14" }
+
+test_15/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "15" }
+
+test_16/16:
+  extends: .test_com
+  variables: { TEST_NUMBER: "16" }

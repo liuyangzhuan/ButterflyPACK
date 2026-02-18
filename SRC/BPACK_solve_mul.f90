@@ -581,7 +581,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:nn_loc,1)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -605,12 +605,18 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      vtmp=x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1155,7 +1161,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md),1)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1174,12 +1180,18 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_noprecon! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1337,7 +1349,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:nn_loc)::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum, vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1361,11 +1373,19 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-         stop
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
-      if(sum(abs(b))==0d0)then
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1558,7 +1578,7 @@ contains
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md))::w, yo, ayo, ye, aye, r, d, v
       real(kind=8)::ta, we, cm
-      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
@@ -1585,12 +1605,18 @@ contains
          write(*,*)' '
       endif
 
-      if(myisnan(sum(abs(x))))then
-         write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed'
-         stop
+      x_sum = sum(x)
+      vtmp=x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
       endif
 
-      if(sum(abs(b))==0d0)then
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
          write(*,*)'Zero RHS in BPACK_MD_Ztfqmr! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
@@ -1901,7 +1927,7 @@ contains
 
    end subroutine Test_BPACK_Mult
 
-   subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats)
+   subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats, use_blockcopy)
 
       implicit none
       character trans
@@ -1912,12 +1938,17 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
       type(Hoption)::option
+      integer,optional::use_blockcopy
 
       select case (option%format)
       case (HODLR)
          call HODLR_Mult(trans, Ns, num_vectors, 1, bmat%ho_bf%Maxlevel + 1, Vin, Vout, bmat%ho_bf, ptree, option, stats)
       case (HMAT,BLR)
-         call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
+         if(present(use_blockcopy))then
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,use_blockcopy)
+         else
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
+         endif
       case (HSS)
          call HSS_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
       end select
@@ -1942,6 +1973,8 @@ contains
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf_md, ptree, option, stats, msh)
+      case (HTENSOR)
+         call HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%h_mat_md, ptree, option, stats, msh)
       case default
          write(*,*)'not supported format in BPACK_MD_Mult:', option%format
          stop
@@ -2738,7 +2771,7 @@ contains
       integer Ndim
       integer Ns(Ndim)
       integer level_c, rowblock
-      integer i, j, k, level, ii, jj, kk, test, num_vectors
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll
       integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
       character chara
       real(kind=8) a, b, c, d
@@ -2769,8 +2802,14 @@ contains
 
    ! blocks => hss_bf_md1%BP%LL(1)%matrices_block(1)
    ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
-
+      
+#if 0      
       call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
+#else ! the following is more memory efficient
+      do ll=1,hss_bf_md1%BP%Lplus
+         call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
+      enddo
+#endif
 
       if (trans == 'C') then
          Vout = conjg(cmplx(Vout, kind=8))
@@ -2784,6 +2823,75 @@ contains
       return
 
    end subroutine HSS_MD_Mult
+
+
+
+
+
+
+   subroutine HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, h_mat_md, ptree, option, stats,msh)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ndim
+      integer Ns(Ndim)
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+      type(matrixblock_MD), pointer::blocks
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(Hmat_md)::h_mat_md
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+
+   ! blocks => h_mat_md%BP%LL(1)%matrices_block(1)
+   ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
+
+      
+#if 0      
+      call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
+#else ! the following is more memory efficient
+      do ll=2,h_mat_md%BP%Lplus
+         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=h_mat_md%BP%Lplus)
+      enddo
+#endif
+
+
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HMAT_MD_Mult
 
 
 
@@ -3006,6 +3114,8 @@ contains
       integer ierr,num_vectors,selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo
       integer,allocatable:: fmod(:), frecv(:),sendflagarray(:), receiverlists(:,:)
       type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
+      integer,allocatable:: tags(:)
+      integer tagij
 
       if (trans == 'N') then
          Nreq=0
@@ -3107,6 +3217,14 @@ contains
          call g2l(ii, num_blocks, nprow, 1, iproc, myi)
          call g2l(jj, num_blocks, npcol, 1, jproc, myj)
 
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
          if(iproc==myrow .and. jproc==mycol)then
             blocks_l => h_mat%Local_blocks(myj, myi)
 
@@ -3117,19 +3235,39 @@ contains
                if(receiverlists(i,myj)==1)then
                   receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
-                  call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij +1
+                     tags(tagij) = jj
+                  endif
                endif
             enddo
          endif
          do nrecv=1, nrecvx+nrecvmod
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            tag = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            nn = m_size/nvec
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
-
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  nn = size(sendbufmod(ii)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufmod(ii)%vector
+               endif
+            endif
             if(tag<=num_blocks)then
                jj=tag
                call g2l(jj, num_blocks, npcol, 1, jproc, myj)
@@ -3148,8 +3286,12 @@ contains
                         ! offdiagonal block: send right to diagonal block
                         receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
-
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii+num_blocks
+                        endif
                      endif
                   endif
                enddo
@@ -3157,7 +3299,9 @@ contains
                ii=tag-num_blocks
                call g2l(ii, num_blocks, nprow, 1, iproc, myi)
                call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
-               sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               if(ptree%nproc>1 .or. ii>1)then
+                  sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               endif
                frecv(myi) = frecv(myi)-1
                if(frecv(myi)==0 .and. fmod(myi)==0)then
                   blocks_l => h_mat%Local_blocks(myj1, myi)
@@ -3168,15 +3312,25 @@ contains
                      if(receiverlists(i1,myj1)==1)then
                         receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii
+                        endif
                      endif
                   enddo
                endif
             endif
             deallocate (vin)
+
          enddo
 
-         if (Nreq > 0) then
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
             call MPI_waitall(Nreq, request_all, status_all, ierr)
             deallocate (status_all)
             deallocate (request_all)
@@ -3240,7 +3394,8 @@ contains
       integer selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo,tag
       integer,allocatable:: bmod(:), brecv(:),sendflagarray(:), receiverlists(:,:)
       type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
-
+      integer,allocatable:: tags(:)
+      integer tagij
 
 
       if (trans == 'N') then
@@ -3344,6 +3499,14 @@ contains
          call g2l(ii, num_blocks, nprow, 1, iproc, myi)
          call g2l(jj, num_blocks, npcol, 1, jproc, myj)
 
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
          if(iproc==myrow .and. jproc==mycol)then
             blocks_u => h_mat%Local_blocks(myj, myi)
 
@@ -3354,19 +3517,43 @@ contains
                if(receiverlists(i,myj)==1)then
                   receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
                   Nreq = Nreq + 1
-                  call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij + 1
+                     tags(tagij)=jj
+                  endif
                endif
             enddo
          endif
 
          do nrecv=1, nrecvx+nrecvmod
-            call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
-            pp = status(MPI_SOURCE)
-            tag = status(MPI_TAG)
-            call MPI_Get_count(status, MPI_DT, m_size,ierr)
-            nn = m_size/nvec
-            allocate (vin(nn, nvec))
-            call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  if(ii<num_blocks)then
+                     nn = size(sendbufmod(ii)%vector,1)
+                     allocate (vin(nn, nvec))
+                     vin = sendbufmod(ii)%vector
+                  endif
+               endif
+            endif
+
 
             if(tag<=num_blocks)then
                jj=tag
@@ -3386,7 +3573,12 @@ contains
                         ! offdiagonal block: send left to diagonal block
                         receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii+num_blocks
+                        endif
                      endif
                   endif
                enddo
@@ -3405,7 +3597,12 @@ contains
                      if(receiverlists(i1,myj1)==1)then
                         receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
                         Nreq = Nreq + 1
-                        call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii
+                        endif
                      endif
                   enddo
                endif
@@ -3413,7 +3610,11 @@ contains
             deallocate (vin)
          enddo
 
-         if (Nreq > 0) then
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
             call MPI_waitall(Nreq, request_all, status_all, ierr)
             deallocate (status_all)
             deallocate (request_all)

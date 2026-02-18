@@ -72,7 +72,7 @@ contains
       integer nn, mm, Maxlevel, give, need
       integer i, j, k, ii, edge, Dimn, kk
       integer nlevel, level
-      integer Permutation(Nunk)
+      integer Permutation(:)
       integer, optional:: tree(:)
       integer Nunk_loc
       integer groupm
@@ -154,6 +154,7 @@ contains
       if (option%nogeo == 0 .or. option%nogeo == 4) then
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel requiring reorder"
          call assert(present(Coordinates), 'geometry points should be provided if option%nogeo==0 or 4')
+         call LogMemory(stats, SIZEOF(Coordinates)/1024.0d3) ! this assumes that the user will deallocate Coordinates at a much later time
          Ndim = size(Coordinates, 1)
          Dimn = Ndim
          allocate (msh%xyz(Dimn, 1:msh%Nunk))
@@ -193,6 +194,7 @@ contains
          do edge = 1, Nunk
             Permutation(edge) = msh%new2old(edge)
          enddo
+         call LogMemory(stats, SIZEOF(Permutation)/1024.0d3) ! this assumes that the user will deallocate Permutation at a much later time
       endif
 
    end subroutine BPACK_construction_Init
@@ -1707,6 +1709,8 @@ contains
       select case (option%format)
       case (HSS_MD)
          call HSS_MD_construction(Ndim, bmat%hss_bf_md, option, stats, msh, ker, ptree)
+      case (HTENSOR)
+         call HMAT_MD_construction(Ndim, bmat%h_mat_md, option, stats, msh, ker, ptree)
       case default
          write(*,*)'not supported format in BPACK_MD_construction_Element:', option%format
          stop
@@ -1732,6 +1736,9 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       integer Maxlevel
+
+      !write(*,*)stats%Mem_peak,'peak before BPACK_construction_Element'
+
       if (allocated(msh%xyz)) deallocate (msh%xyz)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Matrix construction......"
 
@@ -1749,6 +1756,8 @@ contains
       Maxlevel = bmat%Maxlevel
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_entry(bmat, option, msh, ker, stats, ptree)
       if (option%lnoBP > Maxlevel .and. option%verbosity >= 0) call BPACK_CheckError_SMVP(bmat, option, msh, ker, stats, ptree)
+
+      !write(*,*)stats%Mem_peak,'peak after BPACK_construction_Element'
 
    end subroutine BPACK_construction_Element
 
@@ -1872,13 +1881,16 @@ contains
          enddo
       enddo
 
-      do i = 1, h_mat%myArows
-         do j = 1, h_mat%myAcols
-            blocks => h_mat%Local_blocks(j, i)
-            blocks_copy => h_mat%Local_blocks_copy(j, i)
-            call Hmat_block_copy('N', blocks_copy, blocks)
+      if (option%ErrSol == 1 .or. option%precon > 1) then ! no need to save the forward operator if ErrSol=0 and precon=1
+         do i = 1, h_mat%myArows
+            do j = 1, h_mat%myAcols
+               blocks => h_mat%Local_blocks(j, i)
+               blocks_copy => h_mat%Local_blocks_copy(j, i)
+               call Hmat_block_copy('N', blocks_copy, blocks)
+            enddo
          enddo
-      enddo
+         call LogMemory(stats, stats%Mem_Comp_for + stats%Mem_Direct_for)
+      endif
 
       T1 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + T1 - T0
@@ -1910,7 +1922,7 @@ contains
    subroutine HODLR_construction(ho_bf1, option, stats, msh, ker, ptree)
 
       implicit none
-      real(kind=8) n1, n2, n3, n4, n5
+      real(kind=8) n1, n2, n3, n4, n5,n5_tmp
       integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
       integer level, blocks, edge, patch, node, group
       integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
@@ -2035,8 +2047,8 @@ contains
 
          n4 = MPI_Wtime()
          n5 = n4 - n3
-
-         call MPI_ALLREDUCE(MPI_IN_PLACE, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         n5_tmp = n5
+         call MPI_ALLREDUCE(n5_tmp, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
          if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level
       end do
       n2 = MPI_Wtime()
@@ -2055,7 +2067,15 @@ contains
       call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
       call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', rtemp
+      call MPI_ALLREDUCE(time_tmp1, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp1', rtemp
+      call MPI_ALLREDUCE(time_tmp2, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp2', rtemp
+      call MPI_ALLREDUCE(time_tmp3, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp3', rtemp
+
+      ! if (option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp, 'time_tmp1', time_tmp1, 'time_tmp2', time_tmp2, 'time_tmp3', time_tmp3
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
       call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
@@ -2073,7 +2093,7 @@ contains
 
       implicit none
       real(kind=8) n1, n2, n3, n4, n5
-      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
+      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll, rankmax
       integer level, blocks, edge, patch, node, group
       integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
       real T0
@@ -2121,7 +2141,8 @@ contains
       enddo
 
       do ll = 1, hss_bf1%BP%Lplus
-         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         rankmax = hss_bf1%BP%LL(ll)%rankmax
+         call MPI_ALLREDUCE(rankmax, hss_bf1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       enddo
 
 
@@ -2161,7 +2182,7 @@ contains
       implicit none
       integer Ndim
       real(kind=8) n1, n2, n3, n4, n5
-      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll
+      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll, rankmax
       integer level, blocks, edge, patch, node, group
       integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
       real T0
@@ -2199,7 +2220,7 @@ contains
       allocate (stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel))
       stats%rankmax_of_level_global = 0
 
-      call BP_MD_compress_entry(Ndim, hss_bf_md1%BP, option, rtemp, stats, msh, ker, ptree)
+      call BP_MD_compress_entry(Ndim, hss_bf_md1%BP, option, rtemp, stats, msh, ker, ptree, logn_level_flag=0)
       stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
 
       passflag = 0
@@ -2208,7 +2229,8 @@ contains
       enddo
 
       do ll = 1, hss_bf_md1%BP%Lplus
-         call MPI_ALLREDUCE(MPI_IN_PLACE, hss_bf_md1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf_md1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         rankmax = hss_bf_md1%BP%LL(ll)%rankmax
+         call MPI_ALLREDUCE(rankmax, hss_bf_md1%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(hss_bf_md1%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       enddo
 
 
@@ -2216,7 +2238,9 @@ contains
       stats%Time_Fill = stats%Time_Fill + n2 - n1
 
       stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      ! if (ptree%MyID == Main_ID)write(*,*)stats%Mem_Fill,stats%Mem_Comp_for,stats%Mem_Direct_for,stats%Mem_Peak,'wocao'
       call LogMemory(stats, stats%Mem_Fill)
+      ! if (ptree%MyID == Main_ID)write(*,*)stats%Mem_Fill,stats%Mem_Comp_for,stats%Mem_Direct_for,stats%Mem_Peak,'wocao after logmemory'
 
       call MPI_ALLREDUCE(stats%rankmax_of_level(0:hss_bf_md1%Maxlevel), stats%rankmax_of_level_global(0:hss_bf_md1%Maxlevel), hss_bf_md1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
@@ -2241,6 +2265,106 @@ contains
       return
 
    end subroutine HSS_MD_construction
+
+
+
+
+
+   subroutine HMAT_MD_construction(Ndim, h_mat_md, option, stats, msh, ker, ptree)
+
+      implicit none
+      integer Ndim
+      real(kind=8) n1, n2, n3, n4, n5
+      integer i, j, ii, ii_inv, jj, kk, iii, jjj, ll, rankmax
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, itemp, rank0_inner, rank0_outter, ierr
+      real T0
+      real(kind=8):: rtemp, rel_error, error, t1, t2, tim_tmp, rankrate_inner, rankrate_outter
+      integer mm, nn, header_m, header_n, edge_m, edge_n, group_m, group_n, group_m1, group_n1, group_m2, group_n2
+      type(matrixblock)::block_tmp, block_tmp1
+      DT, allocatable::fullmat(:, :)
+      integer level_c, iter, level_cc, level_butterfly, Bidxs, Bidxe
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Hmat_md)::h_mat_md
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer::passflag = 0, bp_cnt_lr_tmp
+      type(intersect_MD) :: subtensors_dummy(1)
+      integer::mrange_dummy(1), nrange_dummy(1)
+      DT::mat_dummy(1, 1)
+
+      ! Memory_direct_forward=0
+      ! Memory_butterfly_forward=0
+      tim_tmp = 0
+      !tolerance=0.001
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! write (*,*) 'ACA error threshold',tolerance
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'SVD error threshold', option%tol_comp
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing HTENSOR......"
+
+      n1 = MPI_Wtime()
+
+      allocate (stats%rankmax_of_level(0:h_mat_md%Maxlevel))
+      stats%rankmax_of_level = 0
+      allocate (stats%rankmax_of_level_global(0:h_mat_md%Maxlevel))
+      stats%rankmax_of_level_global = 0
+      bp_cnt_lr_tmp=option%bp_cnt_lr
+      option%bp_cnt_lr=1
+      call BP_MD_compress_entry(Ndim, h_mat_md%BP, option, rtemp, stats, msh, ker, ptree, logn_level_flag=1)
+      option%bp_cnt_lr=bp_cnt_lr_tmp
+      stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+
+      passflag = 0
+      do while (passflag < 2)
+         call element_Zmn_tensorlist_user(Ndim, subtensors_dummy, 0, msh, option, ker, 2, passflag, ptree, stats)
+      enddo
+
+      do ll = 1, h_mat_md%BP%Lplus
+         rankmax = h_mat_md%BP%LL(ll)%rankmax
+         call MPI_ALLREDUCE(rankmax, h_mat_md%BP%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(h_mat_md%BP%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+      enddo
+
+
+      n2 = MPI_Wtime()
+      stats%Time_Fill = stats%Time_Fill + n2 - n1
+
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+
+      call MPI_ALLREDUCE(stats%rankmax_of_level(0:h_mat_md%Maxlevel), stats%rankmax_of_level_global(0:h_mat_md%Maxlevel), h_mat_md%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'rankmax_of_level:', stats%rankmax_of_level_global
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Time_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total construction time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_Entry, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'Total entry eval time:', rtemp, 'Seconds'
+      call MPI_ALLREDUCE(stats%Flop_Fill, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A26,Es14.2)') 'Total construction flops:', rtemp
+      call MPI_ALLREDUCE(time_tmp, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time_tmp', time_tmp
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      call MPI_ALLREDUCE(stats%Mem_Comp_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for butterfly forward blocks'
+      call MPI_ALLREDUCE(stats%Mem_Direct_for, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) rtemp, 'MB costed for direct forward blocks'
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
+      ! stop
+
+      return
+
+   end subroutine HMAT_MD_construction
+
+
+
+
+
+
+
 
 
    recursive subroutine Hmat_block_construction(blocks, Memory_far, Memory_near, option, stats, msh, ker, ptree)
@@ -2315,7 +2439,7 @@ contains
       integer N, M, i, j, ii, jj, nn, pp, myi, myj, iproc, jproc, rmax
       integer edge_n, edge_m, rank
       real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
-      real(kind=8):: a, v1, v2, v3
+      real(kind=8):: a, v1, v2, v3, vtmp
       real(kind=8),optional:: error
       DT:: value1, value2, value3
       type(list)::lstr, lstc, lst, lstblk
@@ -2499,9 +2623,12 @@ contains
       deallocate (pmaps)
 
       n2 = MPI_Wtime()
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp = v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp = v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp = v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -2535,7 +2662,7 @@ contains
       integer N, M, i, j, ii, jj, nn, pp, myi, myj, iproc, jproc, rmax
       integer edge_n, edge_m, rank
       real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
-      real(kind=8):: a, v1, v2, v3
+      real(kind=8):: a, v1, v2, v3, vtmp
       real(kind=8),optional:: error
       DT:: value1, value2, value3
       type(list)::lstr, lstc, lst, lstblk
@@ -2727,10 +2854,12 @@ contains
       deallocate (allcols)
       deallocate (alldat_loc)
       deallocate (pmaps)
-
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      vtmp=v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      vtmp=v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
+      vtmp=v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(BP%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(BP%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BP_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -2840,7 +2969,7 @@ contains
 
 
 
-   subroutine BP_MD_compress_entry(Ndim, bplus, option, Memory, stats, msh, ker, ptree)
+   subroutine BP_MD_compress_entry(Ndim, bplus, option, Memory, stats, msh, ker, ptree, logn_level_flag)
 
       implicit none
       integer Ndim
@@ -2854,31 +2983,37 @@ contains
       type(kernelquant)::ker
       type(proctree)::ptree
       type(matrixblock), pointer::blocks
-      integer groupm_start(Ndim), Nboundall,Ninadmissible
+      integer groupm_start(Ndim), groupm_start0(Ndim),Nboundall,Ninadmissible
+      integer logn_level_flag
 
       Memory = 0
+      groupm_start0=bplus%LL(1)%matrices_block(1)%row_group
       do ll = 1, bplus%Lplus
          bplus%LL(ll)%rankmax = 0
          statflag = 0
          if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
-         do bb = 1, bplus%LL(ll)%Nbound
+         do bb = 1, bplus%LL(ll)%Nbound_loc
             if (IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(bb)%pgno)) then
                if(option%verbosity>=2 .and. ptree%MyID==ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head)then
-                  write(*,*)'Start compressing BF_MD',bb,' out of ', bplus%LL(ll)%Nbound, 'at level',ll
+                  write(*,*)'Start compressing BF_MD',bb,' out of #local ', bplus%LL(ll)%Nbound_loc,'on rank',ptree%MyID, 'at level',ll
                endif
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
                   call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
                   call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
                   Memory = Memory + rtemp
-               else
+               elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
 
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
                   bplus%LL(ll)%matrices_block(bb)%level_half = BF_Switchlevel(bplus%LL(ll)%matrices_block(bb)%level_butterfly, option%pat_comp)
-                  levelm = bplus%LL(ll)%matrices_block(bb)%level_half
-                  groupm_start = bplus%LL(ll)%matrices_block(1)%row_group*2**levelm
+                  if(logn_level_flag==0)then
+                     levelm = bplus%LL(ll)%matrices_block(bb)%level_half
+                  else
+                     levelm = 1
+                  endif
+                  groupm_start = groupm_start0*2**levelm
                   Nboundall = 0
                   Ninadmissible = 0
-                  if (allocated(bplus%LL(ll + 1)%boundary_map)) then
+                  if (allocated(bplus%LL(ll + 1)%boundary_map) .and. logn_level_flag==0) then
                      Nboundall = size(bplus%LL(ll + 1)%boundary_map, 1)
                      Nboundall = NINT(exp(log(dble(Nboundall)) / dble(Ndim)))
                      Ninadmissible = size(bplus%LL(ll + 1)%boundary_map, 2)
@@ -2893,6 +3028,12 @@ contains
                endif
             endif
          end do
+         if(logn_level_flag==0)then
+            levelm = bplus%LL(ll)%matrices_block(1)%level_half
+         else
+            levelm = 1
+         endif
+         groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
          endif
@@ -2935,7 +3076,7 @@ contains
       integer N, M, i, j, ii, jj, nn, pp, myi, myj, iproc, jproc, rmax
       integer edge_n, edge_m, rank
       real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
-      real(kind=8):: a, v1, v2, v3
+      real(kind=8):: a, v1, v2, v3, vtmp
       real(kind=8),optional:: error
       DT:: value1, value2, value3
       type(list)::lstr, lstc, lst, lstblk
@@ -2950,7 +3091,7 @@ contains
       integer:: Ninter, dims_r, dims_c, dim_MD(Ndim*2), idx_MD(Ndim*2), idx_m(Ndim), idx_r_m(Ndim), idx_c_m(Ndim), ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect_MD)::subtensor(1)
       type(intersect_MD),allocatable::inter_MD(:)
-      integer level_butterfly,level_half,levelm,receiver, sender, bbm
+      integer level_butterfly,level_half,levelm,receiver, sender, bbm, vtmpi
       integer,allocatable::order(:),order_m(:)
       integer:: dims_row(Ndim),dims_col(Ndim), dims_one(Ndim),group_m(Ndim),group_n(Ndim),dims_1D(1)
       real(kind=8)::dis
@@ -3047,8 +3188,10 @@ contains
          if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nr_m))receiver=pp
          idx_m=idx_c_m-blocks%idx_c_m+1
          if (ALL(idx_m >0) .and. ALL(idx_m <=blocks%nc_m))sender=pp
-         call MPI_ALLREDUCE(MPI_IN_PLACE, receiver, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, sender, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+         vtmpi = receiver
+         call MPI_ALLREDUCE(vtmpi, receiver, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
+         vtmpi = sender
+         call MPI_ALLREDUCE(vtmpi, sender, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm , ierr)
 
          inter_MD(nn)%receiver=receiver
          inter_MD(nn)%sender=sender
@@ -3114,9 +3257,12 @@ contains
       call BF_MD_delete_subtensors(Ndim, dims_1D, inter_MD, stats)
 
       n2 = MPI_Wtime()
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp=v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp=v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
+      vtmp=v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(blocks%pgno)%Comm  , ierr)
 
       if (ptree%MyID - ptree%pgrp(blocks%pgno)%head == Main_ID .and. verbosity >= 0) write (*, '(A25,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BF_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
       if(present(error)) error=sqrt(v3/v1)
@@ -4164,7 +4310,7 @@ contains
       integer N, M, i, j, ii, jj, nn, pp, myi, myj, iproc, jproc, rmax
       integer edge_n, edge_m, rank
       real(kind=8):: fnorm1, fnorm0, rtemp1 = 0, rtemp0 = 0
-      real(kind=8):: a, v1, v2, v3
+      real(kind=8):: a, v1, v2, v3, vtmp
       DT:: value1, value2, value3
       type(list)::lstr, lstc, lst, lstblk
       type(nod), pointer::cur, curr, curc, curri, curci
@@ -4175,7 +4321,7 @@ contains
       integer, allocatable:: allrows(:), allcols(:), pmaps(:, :)
       integer, allocatable::datidx(:), colidx(:), rowidx(:), pgidx(:)
       DT, target, allocatable::alldat_loc(:)
-      integer:: Ninter, nr, nc, ntot_loc, level, Npmap, nproc, npavr, np
+      integer:: Ninter, nr, nrmax, nc, ncmax, ntot_loc, level, Npmap, nproc, npavr, np
       type(intersect)::submats(1)
 
       ! select case(option%format)
@@ -4195,16 +4341,16 @@ contains
       ! nr=msh%Nunk
       ! nc=msh%Nunk
 
-      nr = 100
-      nc = 100
+      nrmax = 100
+      ncmax = 100
 
       allocate (colidx(Ninter))
       allocate (rowidx(Ninter))
       allocate (pgidx(Ninter))
       ! allocate(datidx(Ninter))
 
-      allocate (allrows(Ninter*nr))
-      allocate (allcols(Ninter*nc))
+      allocate (allrows(Ninter*nrmax))
+      allocate (allcols(Ninter*ncmax))
 
       ! pgno=1
       ! ctxt = ptree%pgrp(pgno)%ctxt
@@ -4230,6 +4376,35 @@ contains
       ! ntot_loc=0
       pp = 0
       do nn = 1, Ninter
+
+         do ii = 1, nrmax
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+            allrows(idx_row + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allrows(idx_row + 1) = max(floor_safe(3125*a), 1)+3125*0
+            ! allrows(idx_row + 1) = max(floor_safe(7812*a), 1)+7812*0
+            ! allrows(idx_row + 1) = max(floor_safe(19531*a), 1)+19531*0
+            ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
+            idx_row = idx_row + 1
+         enddo
+         call remove_dup_int(allrows(idx_row-nrmax+1:idx_row), nrmax, nr)
+         idx_row = idx_row - (nrmax-nr)
+
+
+         do ii = 1, ncmax
+            call random_number(a)
+            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
+            allcols(idx_col + 1) = max(floor_safe(msh%Nunk*a), 1)
+            ! allcols(idx_col + 1) = max(floor_safe(3125*a), 1)+3125*1
+            ! allcols(idx_col + 1) = max(floor_safe(7812*a), 1)+7812*1
+            ! allcols(idx_col + 1) = max(floor_safe(19531*a), 1)+19531*1
+            ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
+            idx_col = idx_col + 1
+         enddo
+         call remove_dup_int(allcols(idx_col-ncmax+1:idx_col), ncmax, nc)
+         idx_col = idx_col - (ncmax-nc)
+
+
          rowidx(nn) = nr
          colidx(nn) = nc
          pp = pp + 1
@@ -4245,27 +4420,7 @@ contains
             idx_dat = idx_dat + myArows*myAcols
          endif
 
-         do ii = 1, nr
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-            allrows(idx_row + 1) = max(floor_safe(msh%Nunk*a), 1)
-            ! allrows(idx_row + 1) = max(floor_safe(3125*a), 1)+3125*0
-            ! allrows(idx_row + 1) = max(floor_safe(7812*a), 1)+7812*0
-            ! allrows(idx_row + 1) = max(floor_safe(19531*a), 1)+19531*0
-            ! allrows(idx_row+1)=msh%basis_group(2**level+nn-1)%head+ii-1
-            idx_row = idx_row + 1
-         enddo
 
-         do ii = 1, nc
-            call random_number(a)
-            call MPI_Bcast(a, 1, MPI_DOUBLE_PRECISION, Main_ID, ptree%Comm, ierr)
-            allcols(idx_col + 1) = max(floor_safe(msh%Nunk*a), 1)
-            ! allcols(idx_col + 1) = max(floor_safe(3125*a), 1)+3125*1
-            ! allcols(idx_col + 1) = max(floor_safe(7812*a), 1)+7812*1
-            ! allcols(idx_col + 1) = max(floor_safe(19531*a), 1)+19531*1
-            ! allcols(idx_col+1)=msh%basis_group(2**level+1-(nn-1))%head+ii-1
-            idx_col = idx_col + 1
-         enddo
       enddo
 
       allocate (alldat_loc(idx_dat))
@@ -4353,10 +4508,12 @@ contains
       deallocate (allcols)
       deallocate (alldat_loc)
       deallocate (pmaps)
-
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A32,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(entry): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
@@ -4382,8 +4539,8 @@ contains
       integer dim_i,ij,ii,ii1,ij1
       integer:: Nunk_n_loc,idxs,idxe,idx_1,idx_2
       integer,allocatable:: idx_src(:)
-      integer:: Npt_src, N_glo
-      real(kind=8):: a, v1, v2, v3
+      integer:: Npt_src, N_glo, Npt_src_tmp
+      real(kind=8):: a, v1, v2, v3, vtmp
       integer ierr
       type(intersect) :: submats(1)
       integer passflag
@@ -4407,8 +4564,9 @@ contains
       nvec=1 !! currently this can only be 1
       allocate(x_loc(Nunk_n_loc,nvec))
       x_loc=0
+      call LogMemory(stats, SIZEOF(x_loc)/1024.0d3)
 
-      Npt_src = min(500,N_glo)
+      Npt_src = min(20,N_glo)
       allocate(idx_src(Npt_src))
       do ij=1,Npt_src
          call random_number(a)
@@ -4416,6 +4574,8 @@ contains
       enddo
       call MPI_Bcast(idx_src, Npt_src, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
 
+      Npt_src_tmp = Npt_src
+      call remove_dup_int(idx_src, Npt_src_tmp, Npt_src)
 
       ! Npt_src=1
       ! allocate(idx_src(Npt_src))
@@ -4434,12 +4594,15 @@ contains
 
       !! Generate rhs_loc by using BPACK_MD_Mult
       allocate(rhs_loc(Nunk_n_loc,nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc)/1024.0d3)
       rhs_loc=0
-      call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats)
+
+      call BPACK_Mult('N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats,0)
 
 
       !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
       allocate(rhs_loc_ref(Nunk_n_loc,nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc_ref)/1024.0d3)
       rhs_loc_ref=0
 
 
@@ -4448,6 +4611,7 @@ contains
       allocate(submats(1)%rows(submats(1)%nr))
       allocate(submats(1)%cols(submats(1)%nc))
       allocate(submats(1)%dat(submats(1)%nr,submats(1)%nc))
+      call LogMemory(stats, SIZEOF(submats(1)%dat)/1024.0d3)
       submats(1)%dat = 0
       do ii=1,submats(1)%nr
          submats(1)%rows(ii) = msh%idxs + ii - 1
@@ -4464,6 +4628,7 @@ contains
 
       deallocate(submats(1)%rows)
       deallocate(submats(1)%cols)
+      call LogMemory(stats, -SIZEOF(submats(1)%dat)/1024.0d3)
       deallocate(submats(1)%dat)
 
       n2 = MPI_Wtime()
@@ -4473,11 +4638,18 @@ contains
       rhs_loc = rhs_loc - rhs_loc_ref
       v3 =(fnorm(rhs_loc,Nunk_n_loc,nvec))**2d0
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp = v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp = v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp = v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
+
+      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
       deallocate(x_loc)
       deallocate(rhs_loc)
       deallocate(rhs_loc_ref)
@@ -4507,7 +4679,7 @@ contains
       integer:: Nunk_n_loc(Ndim),idxs(Ndim),idxe(Ndim),idx_1(Ndim),idx_2(Ndim)
       integer,allocatable:: idx_src(:)
       integer:: Npt_src, N_glo(Ndim)
-      real(kind=8):: a, v1, v2, v3
+      real(kind=8):: a, v1, v2, v3, vtmp
       integer ierr
       type(intersect_MD) :: subtensors(1)
       integer passflag
@@ -4518,6 +4690,9 @@ contains
       case (HSS_MD)
          N_glo=bmat%hss_bf_md%N
          idxs = bmat%hss_bf_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
+      case (HTENSOR)
+         N_glo=bmat%h_mat_md%N
+         idxs = bmat%h_mat_md%BP%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1, :)
       case default
          write(*,*)'not supported format in BPACK_MD_CheckError:', option%format
          stop
@@ -4527,6 +4702,7 @@ contains
       enddo
       nvec=1 !! currently this can only be 1
       allocate(x_loc(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(x_loc)/1024.0d3)
       x_loc=0
 
       Npt_src = min(40,product(N_glo))
@@ -4556,12 +4732,14 @@ contains
 
       !! Generate rhs_loc by using BPACK_MD_Mult
       allocate(rhs_loc(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc)/1024.0d3)
       rhs_loc=0
       call BPACK_MD_Mult(Ndim, 'N', Nunk_n_loc, nvec, x_loc, rhs_loc, bmat, ptree, option, stats, msh)
 
 
       !! Generate the reference rhs_loc_ref by using element_Zmn_tensorlist_user
       allocate(rhs_loc_ref(product(Nunk_n_loc),nvec))
+      call LogMemory(stats, SIZEOF(rhs_loc_ref)/1024.0d3)
       rhs_loc_ref=0
       allocate(subtensors(1)%nr(Ndim))
       allocate(subtensors(1)%nc(Ndim))
@@ -4574,7 +4752,7 @@ contains
          allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
       enddo
       allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
-
+      call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
 
       do ij=1,Npt_src
          subtensors(1)%dat = 0
@@ -4598,13 +4776,19 @@ contains
       rhs_loc = rhs_loc - rhs_loc_ref
       v3 =(fnorm(rhs_loc,product(Nunk_n_loc),nvec))**2d0
 
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v1
+      call MPI_ALLREDUCE(vtmp, v1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v2
+      call MPI_ALLREDUCE(vtmp, v2, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      vtmp=v3
+      call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A28,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_MD_CheckError: fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
+      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
       deallocate(x_loc)
+      call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
       deallocate(rhs_loc)
+      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
       deallocate(rhs_loc_ref)
       deallocate(idx_src)
 

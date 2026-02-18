@@ -58,7 +58,7 @@ PROGRAM ButterflyPACK_IE_2D
 	character(len=1024)  :: strings,strings1
 	character(len=6)  :: info_env
 	integer :: length
-	integer :: ierr
+	integer :: ierr,provided
 	integer*8 oldmode,newmode
 	type(z_Hoption),target::option,option1
 	type(z_Hstat),target::stats,stats1
@@ -204,7 +204,8 @@ PROGRAM ButterflyPACK_IE_2D
 
 
 	! nmpi and groupmembers should be provided by the user
-	call MPI_Init(ierr)
+	! call MPI_Init(ierr)
+	call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
 	call MPI_COMM_GET_PARENT(parent, ierr) ! YL: this is needed if this function is spawned by a master process
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
@@ -415,6 +416,9 @@ PROGRAM ButterflyPACK_IE_2D
 
 	!**** factorization phase
     call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
+
+	! call z_BPACK_PrintStructure(bmat,0, option,stats,ptree)
+	! call z_BPACK_PrintStructure(bmat,1, option,stats,ptree)
 
 
 	! !**** solve phase

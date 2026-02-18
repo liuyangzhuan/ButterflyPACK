@@ -11,15 +11,17 @@ cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 
 # Project version numbers
 project(ButterflyPACK C CXX Fortran)
-set(VERSION_MAJOR "3")
-set(VERSION_MINOR "2")
+set(VERSION_MAJOR "4")
+set(VERSION_MINOR "1")
 set(VERSION_BugFix "0")
 set(PROJECT_VERSION ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_BugFix})
 
 # Set up options
 option(enable_doc       "Build doxygen documentation" OFF)
 option(enable_openmp    "Build with OpenMP support" ON)
+option(enable_toplevel_openmp    "Use OpenMP at top levels of the solver" OFF)
 option(enable_mpi    "Build with MPI support" ON)
+option(enable_python "Enable Python" OFF)
 
 ######################################################################
 #
@@ -91,13 +93,15 @@ include(CheckCXXCompilerFlag)
 
 check_fortran_compiler_flag("-ffree-line-length-none" COMPILER_GNU)
 if(COMPILER_GNU)
-  set(CMAKE_Fortran_FLAGS "-cpp -fno-range-check -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
+  set(CMAKE_Fortran_FLAGS "-cpp -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")
   check_fortran_compiler_flag("-fallow-argument-mismatch" GNU10)
   if(GNU10)
   set(CMAKE_Fortran_FLAGS "-fallow-argument-mismatch ${CMAKE_Fortran_FLAGS}")
   endif()
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(CMAKE_Fortran_FLAGS "-fno-range-check -fbacktrace -fbounds-check -Wconversion ${CMAKE_Fortran_FLAGS}")
+    set(CMAKE_Fortran_FLAGS "-frange-check -fbacktrace -fbounds-check -Wconversion ${CMAKE_Fortran_FLAGS}")
+  else()
+    set(CMAKE_Fortran_FLAGS "-fno-range-check ${CMAKE_Fortran_FLAGS}")
   endif()
 endif()
 
@@ -129,7 +133,9 @@ endif()
 set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 check_cxx_compiler_flag("-qopt-matmul" qoptmatmul)
 if(qoptmatmul)
-  set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
+  if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_CXX_FLAGS  "-qopt-matmul ${CMAKE_CXX_FLAGS}")
+  endif()
 endif()
 
 ######################################################################
@@ -157,7 +163,18 @@ if(enable_openmp)
     set(CMAKE_Fortran_FLAGS "-DHAVE_OPENMP ${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
     set(OpenMP_Fortran_FLAGS_EXPORT "${OpenMP_Fortran_FLAGS}")
     set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
+
+    if(enable_toplevel_openmp)
+        set(CMAKE_Fortran_FLAGS "-DHAVE_TOPLEVEL_OPENMP ${OpenMP_Fortran_FLAGS} ${CMAKE_Fortran_FLAGS}")
+        set(OpenMP_Fortran_FLAGS_EXPORT "${OpenMP_Fortran_FLAGS}")
+        set(CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES "${CMAKE_Fortran_IMPLICIT_LINK_LIBRARIES} ${OpenMP_Fortran_FLAGS}")
+    endif()
+
   endif()
+
+
+
+
   if(OPENMP_CXX_FOUND)
     set(CMAKE_CXX_FLAGS "-DHAVE_OPENMP ${OpenMP_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
     set(OpenMP_CXX_FLAGS_EXPORT "${OpenMP_CXX_FLAGS}")
@@ -237,6 +254,7 @@ endif()
 if(enable_mpi)
   set(CMAKE_Fortran_FLAGS "-DHAVE_MPI ${CMAKE_Fortran_FLAGS}")
   set(CMAKE_CXX_FLAGS "-DHAVE_MPI ${CMAKE_CXX_FLAGS}")
+  set(CMAKE_C_FLAGS "-DHAVE_MPI ${CMAKE_C_FLAGS}")
 
 if(TPL_SCALAPACK_LIBRARIES)
   set(SCALAPACK_FOUND TRUE)
@@ -343,6 +361,19 @@ if(BUTTERFLYPACK_USE_MPI3)
 endif()
 endif()
 
+if(enable_python)
+  #--------------------- Python ---------------------
+  # Find Python
+  find_package(Python REQUIRED COMPONENTS Interpreter Development)
+  # Find pybind11
+  execute_process(
+      COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+      OUTPUT_VARIABLE pybind11_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  list(APPEND CMAKE_PREFIX_PATH "${pybind11_DIR}")
+  find_package(pybind11 REQUIRED)
+endif()
 
 # Test Fortran Destructor
 check_fortran_source_compiles(
@@ -464,6 +495,8 @@ add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(SRC_SINGLE)
 add_subdirectory(SRC_COMPLEX)
 add_subdirectory(EXAMPLE)
+add_subdirectory(CPP_INTERFACE)
+
 
 # Documentation
 if(enable_doc)

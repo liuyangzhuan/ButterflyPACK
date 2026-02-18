@@ -625,7 +625,7 @@ contains
 
          inner_UV = 0
 #ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
+         !!$omp parallel do default(shared) private(j,i,ctemp,inner_V,inner_U) reduction(+:inner_UV)
 #endif
          do j = 1, rank
             inner_U = 0
@@ -645,7 +645,7 @@ contains
             inner_UV = inner_UV + 2*dble(inner_U*inner_V)
          enddo
 #ifdef HAVE_OPENMP
-         !$omp end parallel do
+         !!$omp end parallel do
 #endif
          norm_Z = norm_Z + inner_UV + norm_U*norm_V
 
@@ -1080,7 +1080,7 @@ contains
             end if
             A_tmp = 0
 #ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(ii,jj)
+            !!$omp parallel do default(shared) private(ii,jj)
 #endif
             do ii = 1, mn
                do jj = ii, mn
@@ -1088,7 +1088,7 @@ contains
                enddo
             enddo
 #ifdef HAVE_OPENMP
-            !$omp end parallel do
+            !!$omp end parallel do
 #endif
             rank = mn
             do i = 1, mn
@@ -1116,6 +1116,7 @@ contains
                   exit
                end if
             end do
+            if(rank==0)rank=1
 
             deallocate (UU, VV, Singular)
 
@@ -1134,14 +1135,14 @@ contains
       logical::small
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:), mat1D(:, :), mat2D(:, :)
       DTR, allocatable :: Singular(:)
-      real(kind=8) :: flop,norm
+      real(kind=8) :: flop,norm,vtmp
       integer, allocatable :: jpvt(:)
       integer, allocatable :: ipiv(:), jpiv(:), JPERM(:)
       integer:: M_p(:, :)
       integer, allocatable:: M_p_1D(:, :)
       type(proctree)::ptree
       integer pgno, proc, nproc, nb1Dc, nb1Dr, ctxt1D, ctxt, idxs_o, idxe_o, ierr
-      integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun
+      integer myArows, myAcols, info, nprow, npcol, myrow, mycol, taun, vtmpi
       integer::descsMat1D(9), descsMat2D(9)
       real(kind=8), optional:: Flops
       real(kind=8), optional:: norm_tol
@@ -1168,7 +1169,8 @@ contains
             small=.False.
             if(present(norm_tol))then
                norm = fnorm(mat,M_loc,N)**2d0
-               call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
+               vtmp = norm
+               call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(pgno)%Comm, ierr)
                norm = sqrt(norm)
                if(norm/sqrt(dble(N))<norm_tol)small=.True.
             endif
@@ -1227,8 +1229,8 @@ contains
                      stop
                   end if
                endif
-
-               call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+               vtmpi = rank
+               call MPI_ALLREDUCE(vtmpi, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
 
                !!!!>**** redistribution of output matrix
                call Redistribute2Dto1D(mat2D, M, 0, pgno, mat, M_p, 0, pgno, N, ptree)
@@ -1250,6 +1252,7 @@ contains
       real(kind=8) eps
       DT, allocatable :: UU(:, :), VV(:, :), Atmp(:, :), A_tmp(:, :), tau(:)
       DTR, allocatable :: Singular(:)
+      DT, allocatable::mat0(:, :)
       integer, allocatable :: jpvt(:)
       real(kind=8), optional:: Flops
       real(kind=8), optional:: norm_tol
@@ -1268,6 +1271,22 @@ contains
       jpvt = 0
       allocate (tau(mn))
       if (rrflag == 1) then
+
+         ! ! SVD
+         ! allocate(UU(M,mn))
+         ! allocate(VV(mn,N))
+         ! allocate(Singular(mn))
+         ! UU = 0
+         ! VV = 0
+         ! Singular = 0
+         ! call SVD_Truncate(mat, M, N, mn, UU, VV, Singular, eps, norm_tol, rank, flop=flop)
+         ! mat(:,1:rank) = UU(:,1:rank)
+         ! if (present(Flops)) Flops = Flops + flop
+         ! deallocate(UU)
+         ! deallocate(VV)
+         ! deallocate(Singular)
+
+
          ! RRQR
          small=.False.
          if(present(norm_tol))then
@@ -2162,28 +2181,36 @@ contains
                end if
             end do
 
-            allocate (UU_h(rank, m))
-            allocate (VV_h(n, rank))
-            allocate (matrixtemp(rank, k))
+            if(rank==0)then
+               if(verbose>=2)write (*, *) 'warning: Matrix almost zero in LinearSolve'
+               rank = 1
+               x = 0
+            else
+               allocate (UU_h(rank, m))
+               allocate (VV_h(n, rank))
+               allocate (matrixtemp(rank, k))
 
-            do ii = 1, rank
-            do jj = 1, m
-               UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
-            end do
-            end do
+               do ii = 1, rank
+               do jj = 1, m
+                  UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
+               end do
+               end do
 
-            do ii = 1, n
-            do jj = 1, rank
-               VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
-            end do
-            end do
+               do ii = 1, n
+               do jj = 1, rank
+                  VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
+               end do
+               end do
 
-            call gemmf90(UU_h, rank, b, m, matrixtemp, rank, 'N', 'N', rank, k, m, alpha, beta, flop)
-            if (present(Flops)) Flops = Flops + flop
-            call gemmf90(VV_h, n, matrixtemp, rank, x, n, 'N', 'N', n, k, rank, alpha, beta, flop)
-            if (present(Flops)) Flops = Flops + flop
+               call gemmf90(UU_h, rank, b, m, matrixtemp, rank, 'N', 'N', rank, k, m, alpha, beta, flop)
+               if (present(Flops)) Flops = Flops + flop
+               call gemmf90(VV_h, n, matrixtemp, rank, x, n, 'N', 'N', n, k, rank, alpha, beta, flop)
+               if (present(Flops)) Flops = Flops + flop
 
-            deallocate (UU_h, VV_h, matrixtemp)
+               deallocate (UU_h, VV_h, matrixtemp)
+            endif
+
+
          end if
          ! end if
 
@@ -2266,27 +2293,38 @@ contains
             end if
          end do
 
-         allocate (UU_h(rank, m))
-         allocate (VV_h(n, rank))
-         UU_h = 0
-         VV_h = 0
 
-         do ii = 1, rank
-         do jj = 1, m
-            UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
-         end do
-         end do
+         if(rank==0)then
+            rank=1
+            write (*, *) 'Warning: A almost zero in GeneralInverse'
+            A_inv = 0
 
-         do ii = 1, n
-         do jj = 1, rank
-            VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
-         end do
-         end do
+         else
+            allocate (UU_h(rank, m))
+            allocate (VV_h(n, rank))
+            UU_h = 0
+            VV_h = 0
 
-         call gemmf90(VV_h, n, UU_h, rank, A_inv, n, 'N', 'N', n, m, rank, alpha, beta, flop=flop)
-         if (present(Flops)) Flops = Flops + flop
+            do ii = 1, rank
+            do jj = 1, m
+               UU_h(ii, jj) = conjg(cmplx(UU(jj, ii), kind=8))
+            end do
+            end do
 
-         deallocate (UU_h, VV_h)
+            do ii = 1, n
+            do jj = 1, rank
+               VV_h(ii, jj) = conjg(cmplx(VV(jj, ii), kind=8))/Singular(jj)
+            end do
+            end do
+
+            call gemmf90(VV_h, n, UU_h, rank, A_inv, n, 'N', 'N', n, m, rank, alpha, beta, flop=flop)
+            if (present(Flops)) Flops = Flops + flop
+
+            ! write(*,*)fnorm(A_inv,n,m),'invgeneral',sum(Singular), fnorm(UU_h,rank,m), fnorm(VV_h,n,rank),rank
+
+            deallocate (UU_h, VV_h)
+         endif
+
       endif
 
       deallocate (Singular)
@@ -2862,7 +2900,7 @@ contains
       DT value_Z, value_UV, maxvalue
       DT inner_U, inner_V, ctemp
       real(kind=8) inner_UV
-      integer, allocatable:: select_column(:), select_row(:)
+      integer:: select_column(rmax+1), select_row(rmax+1)
       DT::mat(rankmax_r, rankmax_c), matU(rankmax_r, rmax), matV(rmax, rankmax_c)
 
       DT, allocatable:: row_R(:), column_R(:)
@@ -3091,9 +3129,6 @@ contains
       end do
       deallocate (mattemp, RR1, RR2, QQ1, QQ2, UUsml, VVsml, Singularsml)
 
-      deallocate (select_column)
-      deallocate (select_row)
-
       return
 
    end subroutine ACA_CompressionFull
@@ -3199,6 +3234,14 @@ contains
             end if
          end do
       endif
+
+      if (rank==0) then
+         rank = 1
+         UU = 0
+         VV = 0
+         Singular = 0
+      endif
+
       deallocate (mat0)
 
    end subroutine SVD_Truncate
@@ -4131,6 +4174,88 @@ contains
          deallocate(tmp)
       endif
    end subroutine array_resize
+
+
+
+   !>****  reallocate a(:) to a new size while preserving old data. If new_size<old_size, the old data is truncated.
+   subroutine array_resize_int(a, new_size)
+      implicit none
+      integer, allocatable, intent(inout) :: a(:)
+      integer      :: new_size
+
+      integer :: old_size
+      integer, allocatable :: tmp(:)
+
+      call assert(new_size>=0,"array new size incorrect")
+
+      if(.not. allocated(a))then
+         if(new_size>0)allocate(a(new_size))
+      else
+         old_size = size(a)
+         allocate(tmp(old_size))
+         tmp = a
+         deallocate(a)
+
+         allocate(a(new_size))
+         a=0d0
+         a(1:min(old_size,new_size)) = tmp(1:min(old_size,new_size))
+         deallocate(tmp)
+      endif
+   end subroutine array_resize_int
+
+   !>****  reallocate a(:) to a new size while preserving old data. If new_size<old_size, the old data is truncated.
+   subroutine stack_resize(a, new_size)
+      implicit none
+      type(frame_t), allocatable, intent(inout) :: a(:)
+      integer      :: new_size
+
+      integer :: old_size
+      type(frame_t), allocatable :: tmp(:)
+
+      call assert(new_size>=0,"array new size incorrect")
+
+      if(.not. allocated(a))then
+         if(new_size>0)allocate(a(new_size))
+      else
+         old_size = size(a)
+         allocate(tmp(old_size))
+         tmp = a
+         deallocate(a)
+
+         allocate(a(new_size))
+         a(1:min(old_size,new_size)) = tmp(1:min(old_size,new_size))
+         deallocate(tmp)
+      endif
+   end subroutine stack_resize
+
+   subroutine matrix_resize(a, new_row_size, new_col_size)
+      implicit none
+      DT, allocatable, intent(inout) :: a(:,:)
+      integer      :: new_row_size,new_col_size
+
+      integer :: old_row_size, old_col_size
+      DT, allocatable :: tmp(:,:)
+
+      call assert(new_row_size>=0 .and. new_col_size>=0,"matrix new size incorrect")
+
+      if(.not. allocated(a))then
+         allocate(a(new_row_size,new_col_size))
+      else
+         old_row_size = size(a,1)
+         old_col_size = size(a,2)
+         allocate(tmp(old_row_size,old_col_size))
+         tmp = a
+         deallocate(a)
+
+         allocate(a(new_row_size,new_col_size))
+         a=0d0
+         a(1:min(old_row_size,new_row_size),1:min(old_col_size,new_col_size)) = tmp(1:min(old_row_size,new_row_size),1:min(old_col_size,new_col_size))
+         deallocate(tmp)
+      endif
+   end subroutine matrix_resize
+
+
+
 
 
    !>**** convert single index to multi-index, assuming first index is the fastest
@@ -7015,6 +7140,288 @@ subroutine TT_Apply_TTvec(tmat, b, c)
 
 end subroutine TT_Apply_TTvec
 
+
+
+
+
+! -------- AVL tree with subtree sizes --------
+
+recursive subroutine insert_key(node, key, inserted)
+type(TreeNode), pointer, intent(inout) :: node
+integer, intent(in) :: key
+logical, intent(out) :: inserted
+integer :: bf
+
+if (.not. associated(node)) then
+   allocate(node)
+   node%key = key
+   node%left => null()
+   node%right => null()
+   node%height = 1
+   node%size = 1
+   inserted = .true.
+   return
+endif
+
+if (key == node%key) then
+   inserted = .false.
+   return
+elseif (key < node%key) then
+   call insert_key(node%left, key, inserted)
+else
+  call insert_key(node%right, key, inserted)
+endif
+
+call update_node(node)
+
+bf = height_of(node%left) - height_of(node%right)
+
+if (bf > 1) then
+   if (key < node%left%key) then
+      call rotate_right(node)
+   else
+      call rotate_left(node%left)
+      call rotate_right(node)
+   endif
+elseif (bf < -1) then
+   if (key > node%right%key) then
+      call rotate_left(node)
+   else
+      call rotate_right(node%right)
+      call rotate_left(node)
+   endif
+endif
+
+end subroutine insert_key
+
+recursive integer function count_leq(node, x) result(c)
+type(TreeNode), pointer :: node
+integer, intent(in) :: x
+if (.not. associated(node)) then
+   c = 0
+elseif (x < node%key) then
+   c = count_leq(node%left, x)
+else
+   c = size_of(node%left) + 1 + count_leq(node%right, x)
+endif
+end function count_leq
+
+subroutine update_node(node)
+type(TreeNode), pointer :: node
+node%height = 1 + max( height_of(node%left), height_of(node%right) )
+node%size   = 1 + size_of(node%left) + size_of(node%right)
+end subroutine update_node
+
+integer function height_of(node)
+type(TreeNode), pointer :: node
+if (associated(node)) then
+height_of = node%height
+else
+height_of = 0
+endif
+end function height_of
+
+integer function size_of(node)
+type(TreeNode), pointer :: node
+if (associated(node)) then
+size_of = node%size
+else
+size_of = 0
+endif
+end function size_of
+
+subroutine rotate_left(root)
+type(TreeNode), pointer, intent(inout) :: root
+type(TreeNode), pointer :: y, T2
+if (.not. associated(root)) return
+y => root%right
+if (.not. associated(y)) return
+T2 => y%left
+y%left => root
+root%right => T2
+call update_node(root)
+call update_node(y)
+root => y
+end subroutine rotate_left
+
+subroutine rotate_right(root)
+type(TreeNode), pointer, intent(inout) :: root
+type(TreeNode), pointer :: x, T3
+if (.not. associated(root)) return
+x => root%left
+if (.not. associated(x)) return
+T3 => x%right
+x%right => root
+root%left => T3
+call update_node(root)
+call update_node(x)
+root => x
+end subroutine rotate_right
+
+recursive subroutine free_tree(node)
+type(TreeNode), pointer, intent(inout) :: node
+if (.not. associated(node)) return
+call free_tree(node%left)
+call free_tree(node%right)
+deallocate(node)
+node => null()
+end subroutine free_tree
+
+! -------- Unused counts and rank-selection --------
+
+integer function unused_in_interval(node, a, b, lo, hi)
+type(TreeNode), pointer :: node
+integer, intent(in) :: a, b, lo, hi
+integer :: L, H, used_count
+L = max(lo, a)
+H = min(hi, b)
+if (L > H) then
+unused_in_interval = 0
+else
+used_count = count_leq(node, H) - count_leq(node, L-1)
+unused_in_interval = (H - L + 1) - used_count
+endif
+end function unused_in_interval
+
+logical function select_rth_unused(node, a, b, lo, hi, r, y)
+type(TreeNode), pointer :: node
+integer, intent(in) :: a, b, lo, hi, r
+integer, intent(out) :: y
+integer :: L, H, total, low, high, mid, used_L_mid, unused_L_mid
+
+L = max(lo, a)
+H = min(hi, b)
+if (L > H) then
+   select_rth_unused = .false.
+   return
+endif
+
+total = unused_in_interval(node, a, b, L, H)
+if (r < 1 .or. r > total) then
+   select_rth_unused = .false.
+   return
+endif
+
+low = L
+high = H
+do while (low <= high)
+   mid = (low + high) / 2
+   used_L_mid = count_leq(node, mid) - count_leq(node, L-1)
+   unused_L_mid = (mid - L + 1) - used_L_mid
+   if (unused_L_mid >= r) then
+      y = mid
+      high = mid - 1
+   else
+      low = mid + 1
+   endif
+end do
+
+select_rth_unused = .true.
+
+end function select_rth_unused
+
+subroutine pick_exact_m_interval(node, a, b, lo, hi, m, out, count)
+type(TreeNode), pointer :: node
+integer, intent(in) :: a, b, lo, hi, m
+integer, intent(out) :: out(:)
+integer, intent(out) :: count
+integer :: picks, avail_loc, i, r, y
+logical :: ok, inserted
+real :: step
+
+count = 0
+
+avail_loc = unused_in_interval(node, a, b, lo, hi)
+picks = min(m, avail_loc)
+if (picks <= 0) return
+
+if (picks == 1) then
+r = (avail_loc + 1) / 2
+ok = select_rth_unused(node, a, b, lo, hi, r, y)
+if (ok) then
+call insert_key(node, y, inserted)
+if (inserted) then
+count = 1
+out(1) = y
+endif
+endif
+return
+endif
+
+do i = 0, picks - 1
+avail_loc = unused_in_interval(node, a, b, lo, hi)
+if (avail_loc <= 0) exit
+step = real(avail_loc - 1) / real(picks - 1)
+r = 1 + int(step * real(i) + 0.5)
+if (r < 1) r = 1
+if (r > avail_loc) r = avail_loc
+ok = select_rth_unused(node, a, b, lo, hi, r, y)
+if (ok) then
+call insert_key(node, y, inserted)
+if (inserted) then
+count = count + 1
+out(count) = y
+endif
+endif
+end do
+
+end subroutine pick_exact_m_interval
+
+
+subroutine print_round(round, vals, count)
+integer, intent(in) :: round, count
+integer, intent(in) :: vals(:)
+integer :: i
+write(*,'(A,I0,A,I0)') 'Round ', round, ' count=', count
+if (count > 0) then
+write(*,'(*(I0,1X))') (vals(i), i=1,count)
+else
+write(*,*) '  (no picks in this interval)'
+endif
+end subroutine print_round
+
+  subroutine as_square_as_possible(a, b, c)
+    implicit none
+    integer, intent(in)  :: a
+    integer, intent(out) :: b, c
+    real(kind=8) :: ar, br, cr
+
+    if (a <= 0) then
+       error stop "a must be positive."
+    end if
+
+    ar = dble(a)
+
+    ! 1) Start near sqrt(a)
+    br = sqrt(ar)
+    b  = nint(br)                       ! round to nearest integer
+
+    if (b < 1) b = 1        ! safety (shouldn't trigger for a>0)
+
+    ! 2) c ≈ a / b (rounded)
+    cr = ar / dble(b)
+    c  = nint(cr)
+    if (c < 1) c = 1
+
+    ! 3) One-step refinement (usually enough)
+    b = nint(ar / dble(c))
+    if (b < 1) b = 1
+    c = nint(ar / dble(b))
+    if (c < 1) c = 1
+  end subroutine as_square_as_possible
+
+
+
+recursive function count_nodes(node) result(n)
+    type(TreeNode), pointer :: node
+    integer :: n
+
+    if (.not. associated(node)) then
+        n = 0
+    else
+        n = 1 + count_nodes(node%left) + count_nodes(node%right)
+    end if
+end function count_nodes
 
 
 

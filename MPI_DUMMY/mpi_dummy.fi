@@ -35,12 +35,13 @@
   parameter (MPI_COMPLEX=18)
   integer MPI_DOUBLE_COMPLEX
   parameter (MPI_DOUBLE_COMPLEX=22)
-  integer MPI_FLOAT
-  parameter (MPI_FLOAT=45)
+  integer MPI_REAL
+  parameter (MPI_REAL=45)
   integer mpi_logical
   parameter ( mpi_logical = 4 )
   integer mpi_character
   parameter ( mpi_character = 5 )
+
 
   integer mpi_sum
   parameter ( mpi_sum = 1 )
@@ -48,9 +49,19 @@
   parameter ( mpi_max = 2 )
   integer mpi_min
   parameter ( mpi_min = 3 )
-  integer mpi_product
-  parameter ( mpi_product = 4 )
-  
+  integer mpi_prod
+  parameter ( mpi_prod = 4 )
+
+
+  integer MPI_THREAD_SINGLE
+  parameter ( MPI_THREAD_SINGLE = 0 )
+  integer MPI_THREAD_FUNNELED
+  parameter ( MPI_THREAD_FUNNELED = 1 )
+  integer MPI_THREAD_SERIALIZED
+  parameter ( MPI_THREAD_SERIALIZED = 2 )  
+  integer MPI_THREAD_MULTIPLE
+  parameter ( MPI_THREAD_MULTIPLE = 3 )
+
 
   ! YL: I cannot find better ways than the following. It's possible that data equals 2147483646, then the MPI function will give wrong results. 
   integer MPI_IN_PLACE

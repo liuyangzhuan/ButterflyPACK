@@ -715,7 +715,7 @@ contains
 
       implicit none
 
-      integer nth_s, nth_e, level
+      integer nth_s, nth_e, level, vtmp
       integer i, j, k, num_blocks, num_row, num_col, ii, jj, mm, kk, rs, re, rank
       integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, iter, vector1, vector2, direction, round, flag
       real(kind=8) a, b, c, d, norm1, norm2, norm3, norm4, norm1L, norm2L, norm3L, norm4L, norm1R, norm2R, norm3R, norm4R, error, errorL, errorR, rtemp, error0, error1, error2
@@ -774,8 +774,8 @@ contains
                endif
             enddo
          endif
-
-         call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         vtmp = num_vect
+         call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level)%blocks)) then
@@ -1014,7 +1014,7 @@ contains
 
       implicit none
 
-      integer nth_s, nth_e, level
+      integer nth_s, nth_e, level,vtmp
       integer i, j, k, num_blocks, num_row, num_col, ii, jj, mm, kk, rs, re, rank
       integer index_i, index_j, index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc_s,index_j_loc_s,iter, vector1, vector2, direction, round, flag
       real(kind=8) a, b, c, d, norm1, norm2, norm3, norm4, norm1L, norm2L, norm3L, norm4L, norm1R, norm2R, norm3R, norm4R, error, errorL, errorR, rtemp, error0, error1, error2
@@ -1090,8 +1090,8 @@ contains
                endif
             enddo
          endif
-
-         call MPI_ALLREDUCE(MPI_IN_PLACE, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
+         vtmp = num_vect
+         call MPI_ALLREDUCE(vtmp, num_vect, 1, MPI_integer, MPI_MAX, ptree%pgrp(blocks%pgno)%Comm, ierr)
 
          !>********* delete BFvec%vec(level_butterfly-level+1), note that all the other levels have already been deleted in BF_block_MVP_partial
          if (allocated(BFvec%vec(level_butterfly - level + 1)%blocks)) then
@@ -1269,7 +1269,7 @@ contains
       integer rank_new_max, rank_pre_max
       real(kind=8):: rank_new_avr, error, rankrate
       integer niter, groupm, groupn
-      real(kind=8):: error_inout
+      real(kind=8):: error_inout, vtmp
       integer itermax, ntry
       real(kind=8):: n1, n2, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
@@ -1287,7 +1287,7 @@ contains
       procedure(BMatVec)::blackbox_MVP_dat
       type(proctree)::ptree
       type(mesh)::msh
-      integer converged
+      integer converged,vtmpi
       integer pgno_large
 
       ctemp1 = 1d0; ctemp2 = 0d0
@@ -1326,8 +1326,10 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmpi = block_rand(1)%rankmax
+         call MPI_ALLREDUCE(vtmpi, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A9,I5,A8,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #sample:', rank_pre_max, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc
 
@@ -1385,7 +1387,7 @@ contains
       integer rank_new_max, rank_pre_max
       real(kind=8):: rank_new_avr, error, rankrate
       integer niter, groupm, groupn
-      real(kind=8):: error_inout
+      real(kind=8):: error_inout,vtmp
       integer itermax, ntry
       real(kind=8):: n1, n2, n3, n4, Memory
       DT, allocatable::matrix_small(:, :), U1(:, :), V1(:, :), U2(:, :), V2(:, :), U3(:, :), V3(:, :), U3tmp(:, :), V3tmp(:, :), UUtmp(:, :), VVtmp(:, :), UU(:, :), VV(:, :), UUr(:, :), VVr(:, :)
@@ -1404,7 +1406,7 @@ contains
       type(proctree)::ptree
       type(mesh)::msh
       integer converged,converged1,converged2,rankmax1, rankmax2
-      integer pgno_large
+      integer pgno_large,vtmpi
 
       n3 = MPI_Wtime()
 
@@ -1461,8 +1463,10 @@ contains
          n2 = MPI_Wtime()
 
          call BF_get_rank(block_rand(1), ptree)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmp = error_inout
+         call MPI_ALLREDUCE(vtmp, error_inout, 1, MPI_double_precision, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
+         vtmpi = block_rand(1)%rankmax
+         call MPI_ALLREDUCE(vtmpi, block_rand(1)%rankmax, 1, MPI_integer, MPI_MAX, ptree%pgrp(pgno_large)%Comm, ierr)
 
          if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A8,I5,I5,I5)') ' '//TRIM(strings)//' ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', tt, ' L_butt:', block_rand(1)%level_butterfly, ' error:', error_inout, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc, block_rand(1)%row_group,block_rand(1)%col_group
 
@@ -1576,7 +1580,7 @@ contains
       type(Hoption)::option
       type(Hstat)::stats
       DT::matQ(:, :), matQcA_trans(:, :)
-      integer num_vect, level_butterfly
+      integer num_vect, level_butterfly,vtmp
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
       DTR, allocatable:: Singular(:)
       integer q, qq, Nloc, pp
@@ -1587,122 +1591,163 @@ contains
 
       if (present(flops)) flops = 0
 
-      if (IOwnPgrp(ptree, block_rand%pgno)) then
-
-         !!!!>**** generate 2D grid blacs quantities
-         ctxt = ptree%pgrp(block_rand%pgno)%ctxt
-         call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
-         if (myrow /= -1 .and. mycol /= -1) then
-            myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            ! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQ2D')
-            allocate (matQ2D(max(1,myArows), max(1,myAcols)))
-            matQ2D = 0
-
-            myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
-            allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
-            MatQcA_trans2D = 0
+      if(ptree%pgrp(block_rand%pgno)%nproc==1)then
 
             mnmin = min(block_rand%N, rmax)
-
-            myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
-            allocate (UU(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)ptree%MyID,'descUU',N, mnmin
-            call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descUU')
+            allocate (UU(block_rand%N, mnmin))
             UU = 0
-
-            myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
-            allocate (VV(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
-            call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descVV')
+            allocate (VV(mnmin, rmax))
             VV = 0
-
             allocate (Singular(mnmin))
             Singular = 0
 
-         else
-            descQ2D(2) = -1
-            descQcA_trans2D(2) = -1
-            descUU(2) = -1
-            descVV(2) = -1
-            allocate (matQ2D(1, 1))   ! required for Redistribute1Dto2D
-            matQ2D = 0
-            allocate (matQcA_trans2D(1, 1)) ! required for Redistribute1Dto2D
-            matQcA_trans2D = 0
-            allocate (UU(1, 1))  ! required for Redistribute2Dto1D
-            UU = 0
-            allocate (VV(1, 1))
-            VV = 0
-         endif
-
-!!!!>**** redistribution into 2D grid
-         call Redistribute1Dto2D(matQ, block_rand%M_p, 0, block_rand%pgno, matQ2D, block_rand%M, 0, block_rand%pgno, rmax, ptree)
-         call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
-
-!!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
-         rank = 0
-         if (myrow /= -1 .and. mycol /= -1) then
-            call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
-            if (present(flops)) flops = flops + flop/dble(nprow*npcol)
-            ! do ii=1,rank
-            ! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
-            ! if(jproc==mycol)then
-            ! UU(:,myj) = UU(:,myj)*Singular(ii)
-            ! endif
-            ! enddo
-
+   !!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
+            rank = 0
+            call SVD_Truncate(matQcA_trans, block_rand%N, rmax, mnmin, UU, VV, Singular, option%tol_Rdetect, tolerance_abs, rank, flop=flop)
+            if (present(flops)) flops = flops + flop
             do ii = 1, rank
-               call g2l(ii, rank, nprow, nbslpk, iproc, myi)
-               if (iproc == myrow) then
-                  VV(myi, :) = VV(myi, :)*Singular(ii)
-               endif
+                  VV(ii, :) = VV(ii, :)*Singular(ii)
             enddo
 
-            myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
-            myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
-            allocate (matQUt2D(max(1,myArows), max(1,myAcols)))
-            ! write(*,*)'descQUt2D', M, rank
-            call descinit_wp(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
-            call assert(info == 0, 'descinit_wp fail for descQUt2D')
+            allocate (matQUt2D(block_rand%M, rank))
             matQUt2D = 0
 
-            call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
-            if (present(flops)) flops = flops + flop/dble(nprow*npcol)
-         else
-            allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
-         endif
+            call gemmf90(matQ,block_rand%M,VV,mnmin,matQUt2D,block_rand%M,'N','T',block_rand%M, rank, rmax,BPACK_cone,BPACK_czero)
+            if (present(flops)) flops = flops + flop
 
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+            block_rand%rankmax = rank
+            block_rand%rankmin = rank
+            allocate (block_rand%ButterflyU%blocks(1))
+            allocate (block_rand%ButterflyV%blocks(1))
+            allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
+            allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
+            block_rand%ButterflyU%blocks(1)%matrix = matQUt2D
+            block_rand%ButterflyV%blocks(1)%matrix = UU(:, 1:rank)
 
-         block_rand%rankmax = rank
-         block_rand%rankmin = rank
-         allocate (block_rand%ButterflyU%blocks(1))
-         allocate (block_rand%ButterflyV%blocks(1))
-         allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
-         allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
-
-         !!!!>**** redistribution into 1D grid conformal to leaf sizes
-         call Redistribute2Dto1D(matQUt2D, block_rand%M, 0, block_rand%pgno, block_rand%ButterflyU%blocks(1)%matrix, block_rand%M_p, 0, block_rand%pgno, rank, ptree)
-         call Redistribute2Dto1D(UU, block_rand%N, 0, block_rand%pgno, block_rand%ButterflyV%blocks(1)%matrix, block_rand%N_p, 0, block_rand%pgno, rank, ptree)
-
-         if (myrow /= -1 .and. mycol /= -1) then
             deallocate (Singular)
+            deallocate (UU)
+            deallocate (VV)
+            deallocate (matQUt2D)
+
+      else
+
+         if (IOwnPgrp(ptree, block_rand%pgno)) then
+
+            !!!!>**** generate 2D grid blacs quantities
+            ctxt = ptree%pgrp(block_rand%pgno)%ctxt
+            call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
+            if (myrow /= -1 .and. mycol /= -1) then
+               myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               ! write(*,*)ptree%MyID,'descQ2D',M, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descQ2D, block_rand%M, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQ2D')
+               allocate (matQ2D(max(1,myArows), max(1,myAcols)))
+               matQ2D = 0
+
+               myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               ! write(*,*)ptree%MyID,'descQcA_trans2D',N, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descQcA_trans2D, block_rand%N, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQcA_trans2D')
+               allocate (MatQcA_trans2D(max(1,myArows), max(1,myAcols)))
+               MatQcA_trans2D = 0
+
+               mnmin = min(block_rand%N, rmax)
+
+               myArows = numroc_wp(block_rand%N, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(mnmin, nbslpk, mycol, 0, npcol)
+               allocate (UU(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)ptree%MyID,'descUU',N, mnmin
+               call descinit_wp(descUU, block_rand%N, mnmin, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descUU')
+               UU = 0
+
+               myArows = numroc_wp(mnmin, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rmax, nbslpk, mycol, 0, npcol)
+               allocate (VV(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)ptree%MyID,'descVV', mnmin, ranks(bb_inv*2-1+bb-1-Bidxs+1)
+               call descinit_wp(descVV, mnmin, rmax, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descVV')
+               VV = 0
+
+               allocate (Singular(mnmin))
+               Singular = 0
+
+            else
+               descQ2D(2) = -1
+               descQcA_trans2D(2) = -1
+               descUU(2) = -1
+               descVV(2) = -1
+               allocate (matQ2D(1, 1))   ! required for Redistribute1Dto2D
+               matQ2D = 0
+               allocate (matQcA_trans2D(1, 1)) ! required for Redistribute1Dto2D
+               matQcA_trans2D = 0
+               allocate (UU(1, 1))  ! required for Redistribute2Dto1D
+               UU = 0
+               allocate (VV(1, 1))
+               VV = 0
+            endif
+
+   !!!!>**** redistribution into 2D grid
+            call Redistribute1Dto2D(matQ, block_rand%M_p, 0, block_rand%pgno, matQ2D, block_rand%M, 0, block_rand%pgno, rmax, ptree)
+            call Redistribute1Dto2D(matQcA_trans, block_rand%N_p, 0, block_rand%pgno, matQcA_trans2D, block_rand%N, 0, block_rand%pgno, rmax, ptree)
+
+   !!!!>**** compute B^T=(V^TS^T)U^T or B^T=V^T(S^TU^T)
+            rank = 0
+            if (myrow /= -1 .and. mycol /= -1) then
+               call PSVD_Truncate(block_rand%N, rmax, matQcA_trans2D, descQcA_trans2D, UU, VV, descUU, descVV, Singular, option%tol_Rdetect, rank, ctxt, tolerance_abs,flop=flop)
+               if (present(flops)) flops = flops + flop/dble(nprow*npcol)
+               ! do ii=1,rank
+               ! call g2l(ii,rank,npcol,nbslpk,jproc,myj)
+               ! if(jproc==mycol)then
+               ! UU(:,myj) = UU(:,myj)*Singular(ii)
+               ! endif
+               ! enddo
+
+               do ii = 1, rank
+                  call g2l(ii, rank, nprow, nbslpk, iproc, myi)
+                  if (iproc == myrow) then
+                     VV(myi, :) = VV(myi, :)*Singular(ii)
+                  endif
+               enddo
+
+               myArows = numroc_wp(block_rand%M, nbslpk, myrow, 0, nprow)
+               myAcols = numroc_wp(rank, nbslpk, mycol, 0, npcol)
+               allocate (matQUt2D(max(1,myArows), max(1,myAcols)))
+               ! write(*,*)'descQUt2D', M, rank
+               call descinit_wp(descQUt2D, block_rand%M, rank, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+               call assert(info == 0, 'descinit_wp fail for descQUt2D')
+               matQUt2D = 0
+
+               call pgemmf90('N', 'T', block_rand%M, rank, rmax, BPACK_cone, matQ2D, 1, 1, descQ2D, VV, 1, 1, descVV, BPACK_czero, matQUt2D, 1, 1, descQUt2D, flop=flop)
+               if (present(flops)) flops = flops + flop/dble(nprow*npcol)
+            else
+               allocate (matQUt2D(1, 1)) ! required for Redistribute2Dto1D
+            endif
+            vtmp = rank
+            call MPI_ALLREDUCE(vtmp, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+
+            block_rand%rankmax = rank
+            block_rand%rankmin = rank
+            allocate (block_rand%ButterflyU%blocks(1))
+            allocate (block_rand%ButterflyV%blocks(1))
+            allocate (block_rand%ButterflyU%blocks(1)%matrix(block_rand%M_loc, rank))
+            allocate (block_rand%ButterflyV%blocks(1)%matrix(block_rand%N_loc, rank))
+
+            !!!!>**** redistribution into 1D grid conformal to leaf sizes
+            call Redistribute2Dto1D(matQUt2D, block_rand%M, 0, block_rand%pgno, block_rand%ButterflyU%blocks(1)%matrix, block_rand%M_p, 0, block_rand%pgno, rank, ptree)
+            call Redistribute2Dto1D(UU, block_rand%N, 0, block_rand%pgno, block_rand%ButterflyV%blocks(1)%matrix, block_rand%N_p, 0, block_rand%pgno, rank, ptree)
+
+            if (myrow /= -1 .and. mycol /= -1) then
+               deallocate (Singular)
+            endif
+            deallocate (matQ2D)
+            deallocate (MatQcA_trans2D)
+            deallocate (UU)
+            deallocate (VV)
+            deallocate (matQUt2D)
          endif
-         deallocate (matQ2D)
-         deallocate (MatQcA_trans2D)
-         deallocate (UU)
-         deallocate (VV)
-         deallocate (matQUt2D)
       endif
 
    end subroutine PQxSVDTruncate
@@ -1714,7 +1759,7 @@ contains
 
       integer level_c, rowblock
       integer rank, rmax, group_m, group_n, group_mm, group_nn, index_i, index_j, na, nb, index_start
-      integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2
+      integer i, j, ii, jj, level, groupm_start, groupn_start, index_iijj, index_ij, k, kk, intemp1, intemp2, vtmp
 
       real(kind=8)::n1, n2, flop
       real(kind=8), optional::flops
@@ -1726,6 +1771,7 @@ contains
       integer num_vect, level_butterfly
       DT, allocatable:: RandVectInR(:, :), RandVectOutR(:, :)
       DTR:: Singular(:)
+      DTR::vtmpr
       integer q, qq, Nloc, pp
       DT, pointer :: matQ2D(:, :), matQcA_trans2D(:, :), matQUt2D(:, :), UU(:, :), VV(:, :)
       integer descQcA_trans2D(9), descUU(9), descVV(9), descQUt2D(9)
@@ -1787,9 +1833,14 @@ contains
          if (present(flops)) flops = flops + flop/dble(nprow*npcol)
       else
       endif
-
-      call MPI_ALLREDUCE(MPI_IN_PLACE, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      vtmp = rank
+      call MPI_ALLREDUCE(vtmp, rank, 1, MPI_integer, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      if(rank==1)then
+         vtmpr = Singular(1)
+         call MPI_ALLREDUCE(vtmpr, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      else
+         call MPI_ALLREDUCE(MPI_IN_PLACE, Singular, rank, MPI_double_precision, MPI_MAX, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+      endif
 
       deallocate (MatQcA_trans2D)
       deallocate (UU)
@@ -1824,7 +1875,7 @@ contains
       integer tt
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
       integer::rank_new_max, dimension_rank ,ierr
-      real(kind=8)::rank_new_avr, error, norm_tol,norm
+      real(kind=8)::rank_new_avr, error, norm_tol,norm,vtmp
       DT, allocatable::matrixtmp(:, :)
       integer niter, unique_nth
       real(kind=8):: error_inout
@@ -1894,7 +1945,8 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'T', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%M_loc, vecout, block_rand%N_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%N_loc,1)**2d0
-                  call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  vtmp = norm
+                  call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -1942,7 +1994,7 @@ contains
       integer tt
       ! type(matrixblock),pointer::blocks_A,blocks_B,blocks_C,blocks_D
       integer::rank_new_max, dimension_rank
-      real(kind=8)::rank_new_avr, norm_tol, norm
+      real(kind=8)::rank_new_avr, norm_tol, norm, vtmp
       DT, allocatable:: RandVectIn(:, :), RandVectOut(:, :), vecin(:,:), vecout(:,:)
       integer niter, level
 
@@ -2012,7 +2064,8 @@ contains
                   vecout=0
                   call blackbox_MVP_dat(operand, blocks_o, 'N', block_rand%M_loc, block_rand%N_loc, 1, vecin, block_rand%N_loc, vecout, block_rand%M_loc, BPACK_cone, BPACK_czero, ptree, stats, operand1)
                   norm = fnorm(vecout,block_rand%M_loc,1)**2d0
-                  call MPI_ALLREDUCE(MPI_IN_PLACE, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
+                  vtmp = norm
+                  call MPI_ALLREDUCE(vtmp, norm, 1, MPI_double_precision, MPI_SUM, ptree%pgrp(block_rand%pgno)%Comm, ierr)
                   norm = sqrt(norm)
                   norm_tol = sqrt(norm**2d0/(2**block_rand%level_butterfly))*option%tol_Rdetect/1d2
                   deallocate(vecin)
@@ -3263,7 +3316,7 @@ contains
       implicit none
       integer level, ii, M, N, num_vect_sub, mv, nv, mi
       character trans
-      integer ldi, ldo
+      integer ldi, ldo, tid
       DT :: Vin(ldi, *), Vout(ldo, *)
       DT, allocatable :: Vin_tmp(:, :), Vbuff(:, :), Vout_tmp(:, :)
       DT :: ctemp1, ctemp2, a, b
@@ -3275,13 +3328,20 @@ contains
       type(proctree)::ptree
       type(Hstat)::stats
 
+
+        tid = 0
+#ifdef HAVE_OPENMP
+        tid = omp_get_thread_num()
+#endif
+
+
       select TYPE (h_mat)
       type is (Hmat)
          select TYPE (chara)
          type is (character(*))
 
-            block_off1 => h_mat%blocks_1
-            block_off2 => h_mat%blocks_2
+            block_off1 => h_mat%blocks_1(tid+1)%ptr
+            block_off2 => h_mat%blocks_2(tid+1)%ptr
 
             mm = block_o%M_loc
             nn = block_o%N_loc
@@ -5375,7 +5435,7 @@ contains
       type(matrixblock), pointer::block_off1, block_off2, block_o
       class(*)::operand
       character(*)  :: strings
-      integer rankthusfar
+      integer rankthusfar, vtmp
       type(Hoption)::option
       type(Hstat)::stats
       type(blockplus) :: Bplus_randomized
@@ -5406,8 +5466,8 @@ contains
          call Bplus_MultiLrandomized_Onesubblock(rank0, rankrate_inner, block_o, operand, blackbox_MVP_dat_inner, error, strings, option, stats, ptree, msh, Bplus_randomized)
          error_inout = max(error_inout, error)
          ! write(*,*)'go'
-
-         call MPI_ALLREDUCE(MPI_IN_PLACE, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = rankthusfar
+         call MPI_ALLREDUCE(vtmp, rankthusfar, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
 
       end do
       ! call Test_Error_RR_Inner_Exact(bplus_o)
@@ -5433,7 +5493,8 @@ contains
          do bb = 1, Bplus_randomized%LL(ll)%Nbound
             Bplus_randomized%LL(ll)%rankmax = max(Bplus_randomized%LL(ll)%rankmax, Bplus_randomized%LL(ll)%matrices_block(bb)%rankmax)
          enddo
-         call MPI_ALLREDUCE(MPI_IN_PLACE, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
+         vtmp = Bplus_randomized%LL(ll)%rankmax
+         call MPI_ALLREDUCE(vtmp, Bplus_randomized%LL(ll)%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(Bplus_randomized%LL(1)%matrices_block(1)%pgno)%Comm, ierr)
       end do
 
       call Bplus_delete(bplus_o)
