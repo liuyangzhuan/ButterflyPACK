@@ -418,7 +418,8 @@ public:
     if(_vs==1){
       // int closeby = fabs(x1-x2)<_h*2+1e-20 && fabs(y1-y2)<_h*2+1e-20?1:0;
       if(self==1){
-        double s0 = slowness(x1,y1, _slow_x0, _slow_y0,_ivelo);
+        // double s0 = slowness(x1,y1, _slow_x0, _slow_y0,_ivelo);
+        double s0 = 2;
         double gamma = 1.781072418;
 
         // 7-point Legendre-Gauss Quadrature on [0,pi/4] for the integral due to Jianliang Qian

@@ -377,7 +377,8 @@ public:
     if(_vs==1){
       // int closeby = fabs(x1-x2)<_h*2+1e-20 && fabs(y1-y2)<_h*2+1e-20?1:0;
       if(self==1){
-        double s0 = slowness(x1,y1,z1, _slow_x0, _slow_y0,_slow_z0,_ivelo,_slowness_array.data(),_h, round(_x0max/_h), round(_y0max/_h), round(_z0max/_h));
+        // double s0 = slowness(x1,y1,z1, _slow_x0, _slow_y0,_slow_z0,_ivelo,_slowness_array.data(),_h, round(_x0max/_h), round(_y0max/_h), round(_z0max/_h));
+        double s0 = 2;
         double gamma = 1.781072418;
 
 
