@@ -38,6 +38,7 @@ make frankben_t -j16
 make cifio2dsb -j16  
 make cvie2d -j16  
 make cvie2d_t -j16
+make cvie3d_t -j16
 make install
 
 	# -DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Perlmutter/my_research/arpack-ng-gnu_libsci/build/lib/libparpack.so"

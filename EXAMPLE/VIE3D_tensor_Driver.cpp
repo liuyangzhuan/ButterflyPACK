@@ -106,7 +106,7 @@ int floor_safe(double x){
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
-  g1=-0.4; g2=-0.8; g3=-0.7;
+  g1=-0.2; g2=-0.4; g3=-0.35;
   s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
 
   double A = -0.01;
@@ -912,7 +912,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, int *nout, int *nvec, _Complex d
       int Npo = product(nout,Ndim);
       int64_t cnt_diag = (*nvec)*Npo_diag;
       _Complex double* xin_diag = new _Complex double[cnt_diag];
-      _Complex double* xout_diag = new _Complex double[cnt_diag];       
+      _Complex double* xout_diag = new _Complex double[cnt_diag];
 
 
       for(int i0=0;i0<Npo_diag;i0++){
@@ -962,7 +962,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, int *nout, int *nvec, _Complex d
     for(int i0=0;i0<Npo;i0++){
       for (int nth=0; nth<*nvec; nth++){
         xout[i0+nth*Npo]=xin[i0+nth*Npo];
-      }        
+      }
     }
   }
 }
@@ -1029,18 +1029,11 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
   }
   delete[] xbuf1;
   delete[] xin1;
-  
+
   C_FuncApplyDiagPrecond(Ndim, nout, nvec, xout_before_precon, xout, Q);
   delete[] xout_before_precon;
 
 }
-
-
-
-
-
-
-
 
 
 
@@ -1372,6 +1365,7 @@ if(myrank==master_rank){
   double smin_ivelo11=1.0;
   double smax_ivelo11=3.0;
   int nshape=200;
+  int bdiag_precon = 0 ;
 
   FILE *fout1;
 
@@ -1419,6 +1413,7 @@ if(myrank==master_rank){
       {"nshape",        required_argument, 0, 31},
       {"smin_ivelo11",        required_argument, 0, 32},
       {"smax_ivelo11",        required_argument, 0, 33},
+      {"bdiag_precon",        required_argument, 0, 34},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1560,6 +1555,10 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> smax_ivelo11;
     } break;
+    case 34: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_precon;
+    } break;
     default: break;
     }
   }
@@ -1574,17 +1573,19 @@ if(myrank==master_rank){
   Ns[1]=Ny;
   Ns[2]=Nz;
   Nmax = max(max(Nx,Ny),Nz);
-  slow_x0 = round((x0min+x0max)/2/h)*h;
-  slow_y0 = round((y0min+y0max)/2/h)*h;
-  slow_z0 = round((z0min+z0max)/2/h)*h;
 
-  double center[3];
+  double radius_max=0.3;
+  double center[3]; //geometrical center of the scatterer
   // center[0]=(x0min+x0max)/2.0;
   // center[1]=(y0min+y0max)/2.0;
-  center[0]=0.5;
-  center[1]=0.5;
-  center[2]=0.5;
-  double radius_max=0.3;
+  // center[2]=(z0min+z0max)/2.0;
+  center[0]=0.4;
+  center[1]=0.4;
+  center[2]=0.4;
+
+  slow_x0 = center[0];
+  slow_y0 = center[1];
+  slow_z0 = center[2];
 
 
   // const int64_t I=round((xmax-xmin)/h+1),  J=round((ymax-ymin)/h+1), K=round((zmax-zmin)/h+1);
@@ -1706,7 +1707,6 @@ if(myrank==master_rank){
 	bnum = 1; //sqrt of #of subblocks in H-BACA
 	knn=0; //k nearest neighbours stored per point
 	double eps1 =1e-6;
-  int bdiag_precon = 1 ;
 
 	//quantities for the first holdr
 	F2Cptr bmat_bf;  //hierarchical matrix returned by Fortran code
@@ -1750,7 +1750,7 @@ if(myrank==master_rank){
   for(int i=0;i<Nx_s;i++){
     for(int j=0;j<Ny_s;j++){
       for(int k=0;k<Nz_s;k++){
-        smax = max(smax,slowness((i+idx_off_x)*h,(j+idx_off_y)*h,(k+idx_off_z)*h,slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
+        smax = max(smax,slowness(i*h-L/2+center[0],j*h-H/2+center[1],k*h-W/2+center[2],slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
       }
     }
   }
@@ -1823,7 +1823,7 @@ if(myrank==master_rank){
 
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=3;
+    int nvec=1;
     vector<_Complex double> b(product(myseg,Ndim)*nvec,{0.0,0.0});
     vector<_Complex double> x(product(myseg,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg,Ndim); i++){
@@ -1839,13 +1839,13 @@ if(myrank==master_rank){
       double xs = data_geo[(i_old_md[0]-1) * Ndim];
       double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
       double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
-      // double xs0=x0max-0.15;
-      // double ys0=y0max-0.15;
-      // double zs0=z0max-0.15;
+      double xs0=x0max-0.1;
+      double ys0=y0max-0.1;
+      double zs0=z0max-0.1;
 
-      double xs0=slow_x0;
-      double ys0=slow_y0;
-      double zs0=slow_z0;
+      // double xs0=slow_x0;
+      // double ys0=slow_y0;
+      // double zs0=slow_z0;
 
       for (int nth=0; nth<nvec; nth++){
         x.data()[i+nth*product(myseg,Ndim)]=source_function(xs,ys,zs, xs0, ys0, zs0, nth,h,w);  // generate a source distribution
@@ -1919,7 +1919,6 @@ if(myrank==master_rank){
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
 
 
-
   	C_QuantApp_BF *quant_ptr_bf_s2s;
 
 
@@ -1976,11 +1975,13 @@ if(myrank==master_rank){
 
 
   	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", 0); // HODLR
-  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 1); // HODLR
+  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 2); // HODLR
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "xyzsort", 1); // KD-tree ordering
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "knn", 0); // HODLR requires no knn
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "precon", 1); // Direct solver
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "elem_extract", 0); // Need to add elem_extract=2 for the matrix solver
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "RecLR_leaf", 5); // sometimes BACA is not accurate enough
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "Nmin_leaf", 64); // leaf size in the matrix solver
 
     quant_ptr_bf_s2s->bmat_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->kerquant_diags = new F2Cptr[nblock];
@@ -1990,7 +1991,7 @@ if(myrank==master_rank){
 
 
     for (int bb=0; bb<nblock; bb++){
-      vector<double> data_geo_diag;      
+      vector<double> data_geo_diag;
       z_c_bpack_createstats(&(quant_ptr_bf_s2s->stats_diags[bb]));
 
       int nout_diag[3];
@@ -2054,12 +2055,12 @@ if(myrank==master_rank){
       z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 0); // suppress prining
       z_c_bpack_printoption(&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->ptree_diag));
     }
-	  
+
   	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diag), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
     z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diag),&(quant_ptr_bf_s2s->msh_diags[bb]));
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
-    
+
     delete[] tree_diag;
     delete[] groups_diag;
     delete[] perms_diag;
@@ -2276,7 +2277,7 @@ if(myrank==master_rank){
       MPI_Group_free(&single_group);
       MPI_Group_free(&world_group);
     }
-    
+
     delete quant_ptr_bf_s2s;
     delete quant_ptr_bf;
     z_c_bpack_deletestats(&stats_bf_s2s);

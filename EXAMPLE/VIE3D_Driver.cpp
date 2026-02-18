@@ -116,7 +116,7 @@ int subdomain_detection(double x, double y, double z, double center[], int shape
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
-  g1=-0.4; g2=-0.8; g3=-0.7;
+  g1=-0.2; g2=-0.4; g3=-0.35;
   s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
 
   double A = -0.01;
@@ -1120,16 +1120,18 @@ if(myrank==master_rank){
 
   N = round((x0max-x0min)/h+1)*round((y0max-y0min)/h+1)*round((z0max-z0min)/h+1);
 
-    slow_x0 = round((x0min+x0max)/2/h)*h;
-    slow_y0 = round((y0min+y0max)/2/h)*h;
-    slow_z0 = round((z0min+z0max)/2/h)*h;
-    double center[3];
-    // center[0]=(x0min+x0max)/2.0;
-    // center[1]=(y0min+y0max)/2.0;
-    center[0]=0.5;
-    center[1]=0.5;
-    center[2]=0.5;
-    double radius_max=0.3;
+  double radius_max=0.3;
+  double center[3]; //geometrical center of the scatterer
+  // center[0]=(x0min+x0max)/2.0;
+  // center[1]=(y0min+y0max)/2.0;
+  // center[2]=(z0min+z0max)/2.0;
+  center[0]=0.4;
+  center[1]=0.4;
+  center[2]=0.4;
+
+  slow_x0 = center[0];
+  slow_y0 = center[1];
+  slow_z0 = center[2];
 
 
 
@@ -1286,7 +1288,7 @@ if(myrank==master_rank){
   for(int i=0;i<Nx_s;i++){
     for(int j=0;j<Ny_s;j++){
       for(int k=0;k<Nz_s;k++){
-        smax = max(smax,slowness((i+idx_off_x)*h,(j+idx_off_y)*h,(k+idx_off_z)*h,slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
+        smax = max(smax,slowness(i*h-L/2+center[0],j*h-H/2+center[1],k*h-W/2+center[2],slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
       }
     }
   }
@@ -1397,7 +1399,7 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
     if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=3;
+    int nvec=1;
     vector<_Complex double> b(myseg*nvec,{0.0,0.0});
     vector<_Complex double> x(myseg*nvec,{0.0,0.0});
     for (int i=0; i<myseg; i++){
@@ -1407,9 +1409,14 @@ if(myrank==master_rank){
       double xs = data_geo[(i_old-1) * Ndim];
       double ys = data_geo[(i_old-1) * Ndim+1];
       double zs = data_geo[(i_old-1) * Ndim+2];
-      double xs0=slow_x0;
-      double ys0=slow_y0;
-      double zs0=slow_z0;
+
+      double xs0=x0max-0.1;
+      double ys0=y0max-0.1;
+      double zs0=z0max-0.1;
+
+      // double xs0=slow_x0;
+      // double ys0=slow_y0;
+      // double zs0=slow_z0;
       for (int nth=0; nth<nvec; nth++){
         x.data()[i+nth*myseg]=source_function(xs,ys,zs,xs0,ys0,zs0,nth,h,w);  // generate a source distribution
       }

@@ -21,18 +21,20 @@ def generate_shapes(shape_background, shape, offset, num_shapes, slowness_min, s
     for _ in range(num_shapes):
         center = np.random.randint(0, min(shape), 3)
         if np.random.rand() > 0.66:
-            add_cube(center, np.random.randint(shape[0]*0.1, shape[0]*0.2))
+            add_cube(center, np.random.randint(shape[0]*0.2, shape[0]*0.3))
         elif np.random.rand() > 0.33:
-            add_ellipsoid(center, np.random.randint(shape[0]*0.05, shape[0]*0.15, 3))
+            add_ellipsoid(center, np.random.randint(shape[0]*0.2, shape[0]*0.3, 3))
         else:
-            axes = np.random.randint(shape[0]*0.05, shape[0]*0.15, 3)
+            axes = np.random.randint(shape[0]*0.2, shape[0]*0.3, 3)
             axes[1] = axes[0] // 2
             add_ellipsoid(center, axes)
 
     labeled_volume, num_features = label(volume, structure=generate_binary_structure(3, 1))
     slowness_map=np.full_like(volume, slowness_back, dtype=np.float64)
     for label_num in range(1, num_features + 1):
-        slowness_map[labeled_volume == label_num] = np.random.uniform(slowness_min, slowness_max)
+        val=np.random.uniform(slowness_min, slowness_max)
+        # print(label_num,val)
+        slowness_map[labeled_volume == label_num] = val
 
     volume_background = np.zeros(shape_background, dtype=bool)
     slowness_map_tot = np.full_like(volume_background, slowness_back, dtype=np.float64)
@@ -44,6 +46,7 @@ def generate_shapes(shape_background, shape, offset, num_shapes, slowness_min, s
     if '.' in s2:
         s2 = s2.rstrip('0').rstrip('.')
     slowness_map_tot.tofile('slowness_map_shapeoutter'+str(shape_background[0])+'x'+str(shape_background[1])+'x'+str(shape_background[2])+'_shape'+str(shape[0])+'x'+str(shape[1])+'x'+str(shape[2])+'_off'+str(offset[0])+'x'+str(offset[1])+'x'+str(offset[2])+'_range'+s1+'_'+s2+'_nshape'+str(num_shapes)+'.bin')
+    slowness_map_tot.tofile('slowness_map_shapeoutter'+str(shape_background[0])+'x'+str(shape_background[1])+'x'+str(shape_background[2])+'_off'+str(offset[0])+'x'+str(offset[1])+'x'+str(offset[2])+'_range'+s1+'_'+s2+'_nshape'+str(num_shapes)+'.bin')
 
     return slowness_map_tot
 
@@ -69,7 +72,8 @@ def main():
         plt.imshow(slowness_map_tot[args.shape_background[0] // 2], cmap='Spectral')
         plt.colorbar(label='Slowness (s/m)')
         plt.title('Central Slice of Slowness Map')
-        plt.show()
+        plt.savefig("slowness.pdf", format='pdf', bbox_inches='tight')
+        plt.show(block=False)
 
 if __name__ == "__main__":
     main()
