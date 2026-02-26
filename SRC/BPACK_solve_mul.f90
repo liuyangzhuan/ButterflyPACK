@@ -2874,7 +2874,7 @@ contains
       call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
 #else ! the following is more memory efficient
       do ll=2,h_mat_md%BP%Lplus
-         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=h_mat_md%BP%Lplus)
+         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
       enddo
 #endif
 
