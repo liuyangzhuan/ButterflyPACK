@@ -1984,7 +1984,12 @@ end function distance_geo
       allocate (h_mat_md%BP%LL(1)%matrices_block(1))
       block_f => h_mat_md%BP%LL(1)%matrices_block(1)
       block_f%level = h_mat_md%BP%level
-      block_f%level_butterfly = h_mat_md%Maxlevel - block_f%level
+
+      if (block_f%level >= option%LRlevel) then
+         block_f%level_butterfly = 0 ! low rank below LRlevel   
+      else    
+         block_f%level_butterfly = h_mat_md%Maxlevel - block_f%level
+      endif
 
       allocate(block_f%col_group(Ndim))
       block_f%col_group = h_mat_md%BP%col_group
@@ -2192,7 +2197,11 @@ end function distance_geo
                         blocks%row_group = group_m
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m(1)) - 1
-                        blocks%level_butterfly = h_mat_md%Maxlevel - blocks%level
+                        if (blocks%level >= option%LRlevel) then                        
+                           blocks%level_butterfly = 0
+                        else 
+                           blocks%level_butterfly = h_mat_md%Maxlevel - blocks%level
+                        endif
                         blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
 
                         allocate(blocks%M(Ndim))
@@ -2225,7 +2234,11 @@ end function distance_geo
                end do
                groupm_ll = groupm_ll*2**levelm
                level_ll = GetTreelevel(groupm_ll(1)) - 1
-               level_butterfly_ll = h_mat_md%Maxlevel - level_ll
+               if (level_ll >= option%LRlevel) then       
+                  level_butterfly_ll = 0
+               else 
+                  level_butterfly_ll = h_mat_md%Maxlevel - level_ll
+               endif
                h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
             end if
          else
