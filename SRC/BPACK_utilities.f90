@@ -1025,7 +1025,7 @@ contains
       option%verbosity = 0
       option%scale_factor = 1d0
       option%jitter = 1d-13
-      option%rmax = 3000
+      option%rmax = 10000
       option%forwardN15flag = 0
       option%fastsample_tensor = 0
       option%sample_para = 2.0d0
@@ -1625,6 +1625,7 @@ contains
             write (*, '(A18,I8)') 'n_iter', option%n_iter
             write (*, '(A18,I8)') 'precon', option%precon
             write (*, '(A18,I8)') 'xyzsort', option%xyzsort
+            write (*, '(A18,I8)') 'rmax', option%rmax
             write (*, '(A18,I8)') 'bp_cnt_lr', option%bp_cnt_lr
             write (*, '(A18,I8)') 'nogeo', option%nogeo
             write (*, '(A18,I8)') 'per_geo', option%per_geo
