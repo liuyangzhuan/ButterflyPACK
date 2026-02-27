@@ -1939,7 +1939,7 @@ contains
                   enddo
                   if(blocks%ButterflyU(bb)%nblk_loc>0)then
                      memory_comp = memory_comp + SIZEOF(blocks%ButterflyU(bb)%blocks)/1024.0d3
-                  endif                  
+                  endif
                else
                   dim_MD(1)=blocks%ButterflyKerl_L(bb,level)%nr(1)
                   dim_MD(2:1+Ndim)=blocks%ButterflyKerl_L(bb,level)%nc
@@ -8527,14 +8527,14 @@ contains
       ! deallocation
       do tt = 1, Nsendactive
          pp = sendIDactive(tt)
-         if (allocated(sendquant(pp)%dat))then 
+         if (allocated(sendquant(pp)%dat))then
             call LogMemory(stats, -SIZEOF(sendquant(pp)%dat)/1024.0d3)
             deallocate (sendquant(pp)%dat)
          endif
       enddo
       do tt = 1, Nrecvactive
          pp = recvIDactive(tt)
-         if (allocated(recvquant(pp)%dat))then 
+         if (allocated(recvquant(pp)%dat))then
             call LogMemory(stats, -SIZEOF(recvquant(pp)%dat)/1024.0d3)
             deallocate (recvquant(pp)%dat)
          endif
@@ -15116,7 +15116,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 
 
 
-         ! Estimate the peak memory being used 
+         ! Estimate the peak memory being used
          rtemp=0
          do nn=1,product(blocks%nc_m)
             if(allocated(BFvec(nn)%vec))then
@@ -18854,7 +18854,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer, pointer::M_p(:, :, :), N_p(:, :, :)
       type(mesh)::msh(Ndim)
       dim_s=1
-      level_butterfly = block%level_butterfly
+
 
       if(.not. allocated(block%M_loc))allocate(block%M_loc(Ndim))
       block%M_loc = 0
@@ -18862,6 +18862,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       block%N_loc = 0
 
       Maxlevel = GetTreelevel(msh(1)%Maxgroup) - 1
+      level_butterfly = Maxlevel - block%level
       ! write(*,*)msh%Maxgroup,GetTreelevel(msh%Maxgroup),Maxlevel-block%level,block%level,ptree%nlevel-GetTreelevel(pgno),pgno,Maxlevel-block%level>=ptree%nlevel-GetTreelevel(pgno),pgno
       call assert((Maxlevel - block%level)*Ndim >= ptree%nlevel - GetTreelevel(pgno), 'too many process sharing this group')
 

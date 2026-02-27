@@ -1031,14 +1031,23 @@ end function distance_geo
          i = 2**level
       enddo
       Maxlevel = level
-      tmp = floor_safe(Maxlevel/2d0)*Ndim
 
-      if (tmp+1 < ptree%nlevel) then  !!!! floor_safe(Maxlevel/2d0)*Ndim is the number of parallelism at the middle level of a tensor butterfly of bmat
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
-         nlevel_more = ptree%nlevel-tmp-1
-         do i=1,nlevel_more,Ndim
-            Maxlevel = Maxlevel + 2 - mod(Maxlevel,2)
-         enddo
+      if(option%LRlevel==0)then ! YL: should be more careful when LRlevel not equal 0 or some very large number, e.g., 100
+         if (Maxlevel*Ndim < ptree%nlevel) then
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
+            do while (Maxlevel*Ndim < ptree%nlevel)
+               Maxlevel = Maxlevel +1
+            enddo
+         endif
+      else
+         tmp = floor_safe(Maxlevel/2d0)*Ndim
+         if (tmp+1 < ptree%nlevel) then  !!!! floor_safe(Maxlevel/2d0)*Ndim is the number of parallelism at the middle level of a tensor butterfly of bmat
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'warning: too many processes for paralleling leaf boxes, keep refining the tree ...'
+            nlevel_more = ptree%nlevel-tmp-1
+            do i=1,nlevel_more,Ndim
+               Maxlevel = Maxlevel + 2 - mod(Maxlevel,2)
+            enddo
+         endif
       endif
 
       select case (option%format)
@@ -1936,7 +1945,7 @@ end function distance_geo
 
       integer Ndim
       integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, gg2, sortdirec, ii_sch, pgno_bplus
-      integer level, edge, patch, node, group, group_touch
+      integer level, edge, patch, node, group, group_touch,furhter_partition
       integer rank, index_near, m, n, length, flag, itemp, cnt, detection, dim_i
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
@@ -1986,8 +1995,8 @@ end function distance_geo
       block_f%level = h_mat_md%BP%level
 
       if (block_f%level >= option%LRlevel) then
-         block_f%level_butterfly = 0 ! low rank below LRlevel   
-      else    
+         block_f%level_butterfly = 0 ! low rank below LRlevel
+      else
          block_f%level_butterfly = h_mat_md%Maxlevel - block_f%level
       endif
 
@@ -2085,7 +2094,15 @@ end function distance_geo
                         ! write(*,*)ll,group_m,groupm_start1,groupm_start_global,groupn_start1,'dd',group_n1,ll,gg,nn
                         group_m = group_m + groupm_start1 - 1
                         group_n = group_n + groupn_start1 - 1
-                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1)then
+
+                        furhter_partition=0
+                        pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+                        level = GetTreelevel(group_m(1)) - 1
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) then
+                           furhter_partition=1  ! This indicates that the block is low-rank, but shared by multiple MPI ranks
+                        endif
+
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            group_m = group_m - groupm_start_global + 1
                            call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
@@ -2135,7 +2152,15 @@ end function distance_geo
                         call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
                         group_m = group_m + groupm_start1 - 1
                         group_n = group_n + groupn_start1 - 1
-                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1)then
+
+                        furhter_partition=0
+                        pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+                        level = GetTreelevel(group_m(1)) - 1
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) then
+                           furhter_partition=1  ! This indicates that the block is low-rank, but shared by multiple MPI ranks
+                        endif
+
+                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            group_m = group_m - groupm_start_global + 1
                            call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
@@ -2197,9 +2222,9 @@ end function distance_geo
                         blocks%row_group = group_m
                         blocks%col_group = group_n
                         blocks%level = GetTreelevel(group_m(1)) - 1
-                        if (blocks%level >= option%LRlevel) then                        
+                        if (blocks%level >= option%LRlevel) then
                            blocks%level_butterfly = 0
-                        else 
+                        else
                            blocks%level_butterfly = h_mat_md%Maxlevel - blocks%level
                         endif
                         blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
@@ -2234,9 +2259,9 @@ end function distance_geo
                end do
                groupm_ll = groupm_ll*2**levelm
                level_ll = GetTreelevel(groupm_ll(1)) - 1
-               if (level_ll >= option%LRlevel) then       
+               if (level_ll >= option%LRlevel) then
                   level_butterfly_ll = 0
-               else 
+               else
                   level_butterfly_ll = h_mat_md%Maxlevel - level_ll
                endif
                h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
