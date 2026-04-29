@@ -10240,7 +10240,7 @@ contains
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                         index_i = blocks%ButterflyU%idx
                         index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
-                        if(rank*num_vectors=1)then
+                        if(rank*num_vectors==1)then
                            vtmp = BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1)
                            call MPI_ALLREDUCE(vtmp, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank*num_vectors, MPI_DT, MPI_SUM, ptree%pgrp(pgno_sub)%Comm, ierr)
                         else
