@@ -20,6 +20,7 @@
 
 #include "ButterflyPACK_config.fi"
 module BPACK_factor
+    use iso_c_binding, only: c_int, c_loc, c_ptr
     use Bplus_factor
     use BPACK_DEFS
     use MISC_Utilities
@@ -399,11 +400,11 @@ endif
     subroutine Hmat_Factorization(h_mat, option, stats, ptree, msh)
         implicit none
 
-        type(Hoption)::option
-        type(Hstat)::stats
-        type(Hmat)::h_mat
-        type(proctree)::ptree
-        type(mesh)::msh
+        type(Hoption), target::option
+        type(Hstat), target::stats
+        type(Hmat), target::h_mat
+        type(proctree), target::ptree
+        type(mesh), target::msh
 
         integer level, flag, num_blocks, level_butterfly
         integer Primary_block, kk, i, j, k, ij, intemp, ierr
@@ -424,6 +425,21 @@ endif
         double precision, allocatable :: t_total(:)
         DT::phase
         DTR::logabsdet
+#ifdef HAVE_PARSEC
+        integer(c_int) :: ptg_ierr
+        interface
+            subroutine c_bpack_hmat_factorization_ptg(hmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr, nb, ierr) bind(c, name="c_bpack_hmat_factorization_ptg")
+                use iso_c_binding, only: c_int, c_ptr
+                type(c_ptr), value :: hmat_Cptr
+                type(c_ptr), value :: option_Cptr
+                type(c_ptr), value :: stats_Cptr
+                type(c_ptr), value :: ptree_Cptr
+                type(c_ptr), value :: msh_Cptr
+                integer(c_int), value :: nb
+                integer(c_int), intent(out) :: ierr
+            end subroutine c_bpack_hmat_factorization_ptg
+        end interface
+#endif
 
         h_mat%phase=1
         h_mat%logabsdet=0
@@ -472,6 +488,24 @@ endif
             enddo
             enddo
 
+#ifdef HAVE_PARSEC
+            if(option%use_parsec==1)then
+                call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+                num_blocks = 2**h_mat%Dist_level
+
+                if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting PaRSEC PTG HMAT factorization"
+                call c_bpack_hmat_factorization_ptg(c_loc(h_mat), c_loc(option), c_loc(stats), c_loc(ptree), c_loc(msh), int(num_blocks, c_int), ptg_ierr)
+                call assert(ptg_ierr == 0, 'PaRSEC PTG HMAT factorization failed')
+
+                do j = 1, h_mat%myAcols
+                    do i = 1, h_mat%myArows
+                        blocks => h_mat%Local_blocks(j, i)
+                        call unpack_all_blocks_one_node(blocks, h_mat%Maxlevel, ptree, msh, blocks%pgno, option)
+                        call Hmat_block_ComputeMemory(blocks, stats%Mem_Factor)
+                    enddo
+                enddo
+            else
+#endif
             allocate (h_mat%Computing_matricesblock_m(1, 1))
             allocate (h_mat%Computing_matricesblock_l(max(1,h_mat%myAcols), max(1,h_mat%myArows)))
             allocate (h_mat%Computing_matricesblock_u(max(1,h_mat%myAcols), max(1,h_mat%myArows)))
@@ -725,6 +759,9 @@ endif
                     call Hmat_block_ComputeMemory(blocks, stats%Mem_Factor)
                 enddo
             enddo
+#ifdef HAVE_PARSEC
+            endif
+#endif
         endif
 
         nn2 = MPI_Wtime()

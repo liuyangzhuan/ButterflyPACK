@@ -1169,6 +1169,7 @@ namespace butterflypack {
           {"elem_extract",    "0: evaluating entries one by one 1: evaluating entries block by block (may requires communication inside the callback function) 2: evaluating entries block by block (no communication allowed inside the callback function)"},
           {"fastsample_tensor","0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance"},
           {"use_zfp",         "whether to use zfp compression"},
+          {"use_parsec",      "whether to use PaRSEC PTG factorization"},
           {"use_qtt",         "whether to use qtt compression"},
           {"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
           {"help",            "print this help message"}
@@ -1225,6 +1226,7 @@ namespace butterflypack {
           {"use_zfp",         required_argument, 0, 36}, 
           {"use_qtt",         required_argument, 0, 37},    
           {"hextralevel",         required_argument, 0, 38},    
+          {"use_parsec",         required_argument, 0, 39},
           {NULL, 0, NULL, 0}
           };
         int c, option_index = 0;
@@ -1432,6 +1434,11 @@ namespace butterflypack {
             std::istringstream iss(optarg);
             iss >> opt_i;
             d_c_bpack_set_I_option(&option0, "hextralevel", opt_i);
+          } break;
+          case 39: {
+            std::istringstream iss(optarg);
+            iss >> opt_i;
+            d_c_bpack_set_I_option(&option0, "use_parsec", opt_i);
           } break;
           default: break;
           }

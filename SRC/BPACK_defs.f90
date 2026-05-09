@@ -60,7 +60,7 @@ module BPACK_DEFS
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
     integer, parameter:: BPACK_MAJOR_VERSION = 4
-    integer, parameter:: BPACK_MINOR_VERSION = 0
+    integer, parameter:: BPACK_MINOR_VERSION = 1
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
 
@@ -695,6 +695,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         ! integer sample_heuristic   !< 1: use skeleton rows/columns from the previous block during BF compression assuming they should share similar skeletons
         integer:: pat_comp !< pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
         integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 2: use zfp for the dense blocks (excluding diagonal blocks) 0: do not use zfp
+        integer:: use_parsec  !< 1: use PaRSEC PTG factorization when ButterflyPACK is built with PaRSEC support 0: use the native factorization
         integer:: use_qtt  !< 1: use qtt for the dense blocks 0: do not use qtt
 
         ! options for matrix construction

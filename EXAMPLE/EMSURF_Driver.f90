@@ -62,7 +62,7 @@ PROGRAM ButterflyPACK_IE_3D
 	type(quant_EMSURF),target::quant
 	type(z_proctree)::ptree
 	integer,allocatable:: groupmembers(:)
-	integer nmpi
+	integer nmpi,provided
 	real(kind=8),allocatable::xyz(:,:)
 	integer,allocatable::Permutation(:)
 	integer Nunk_loc
@@ -70,7 +70,10 @@ PROGRAM ButterflyPACK_IE_3D
 	integer v_major,v_minor,v_bugfix
 
 	! nmpi and groupmembers should be provided by the user
-	call MPI_Init(ierr)
+	
+	! call MPI_Init(ierr) 
+	call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
+
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi

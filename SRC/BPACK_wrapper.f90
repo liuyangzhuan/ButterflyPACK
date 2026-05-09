@@ -654,6 +654,10 @@ contains
          val_d = option%use_zfp
          valid_opt = 1
       endif
+      if (trim(str) == 'use_parsec') then
+         val_d = option%use_parsec
+         valid_opt = 1
+      endif
       if (trim(str) == 'use_qtt') then
          val_d = option%use_qtt
          valid_opt = 1
@@ -929,6 +933,12 @@ contains
       if (trim(str) == 'use_zfp') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_zfp = val_i
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'use_parsec') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%use_parsec = val_i
          valid_opt = 1
       endif
 
@@ -3496,4 +3506,3 @@ contains
 
 
 end module BPACK_wrapper
-

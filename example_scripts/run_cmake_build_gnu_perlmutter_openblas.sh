@@ -1,6 +1,6 @@
 module load PrgEnv-gnu
 module load cmake
-module load python
+module load python/3.11
 module unload cray-libsci
 
 cd ..
@@ -9,6 +9,10 @@ mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
 export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
+export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
+export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
+export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
+export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
 
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
@@ -22,7 +26,9 @@ cmake .. \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_python=ON \
+	-Denable_parsec=ON \
 	-Denable_toplevel_openmp=OFF \
+	-DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
@@ -46,7 +52,3 @@ make frankben_t -j16
 make cifio2dsb -j16  
 make cvie2d -j16  
 make cvie2d_t -j16
-make cvie3d_t -j16
-make install
-
-	# -DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Perlmutter/my_research/arpack-ng-gnu_libsci/build/lib/libparpack.so"

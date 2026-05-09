@@ -1,10 +1,29 @@
 include_directories(${ButterflyPACK_SOURCE_DIR}/MPI_DUMMY)
 
+option(enable_parsec "Build optional PaRSEC PTG support" OFF)
+
+if (enable_parsec)
+  if (NOT enable_mpi)
+    message(FATAL_ERROR "enable_parsec requires enable_mpi")
+  endif ()
+  find_package(PaRSEC CONFIG REQUIRED)
+  if (NOT TARGET PaRSEC::parsec)
+    message(FATAL_ERROR "enable_parsec requires the PaRSEC::parsec CMake target")
+  endif ()
+  if (NOT TARGET PaRSEC::parsec-ptgpp)
+    message(FATAL_ERROR "enable_parsec requires the PaRSEC::parsec-ptgpp CMake target")
+  endif ()
+endif ()
+
 set(headers
     BPACK_wrapper.h
     ButterflyPACK_config.fi
     # ${PROJECT_BINARY_DIR}/ButterflyPACK_config.h
 )
+
+if (enable_parsec)
+  list(APPEND headers parsec_hmat_ptg_bridge.h)
+endif ()
 
 set(sources
 MAGMA_offset.c
@@ -44,19 +63,54 @@ BPACK_wrapper.f90
 C_BPACK_wrapper.cpp
 )
 
+if (enable_parsec)
+  list(APPEND sources
+       parsec_hmat_ptg_bridge.c
+       parsec_hmat_ptg_bridge_fortran.f90)
+endif ()
+
 if (enable_mpi)
   list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f SCALAPACK_pdgetrfmod.f SCALAPACK_pzgetrfmod.f SCALAPACK_psgetrfmod.f SCALAPACK_pcgetrfmod.f SCALAPACK_pdgetf2mod.f SCALAPACK_pzgetf2mod.f SCALAPACK_psgetf2mod.f SCALAPACK_pcgetf2mod.f)
 endif ()
 
 
-add_library(butterflypack ${sources} ${HEADERS})
+add_library(butterflypack ${sources} ${headers})
+
+if (enable_parsec)
+  set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)
+  get_filename_component(PARSEC_HMAT_PTG_NAME ${PARSEC_HMAT_PTG_JDF} NAME_WE)
+  set(PARSEC_HMAT_PTG_C ${CMAKE_CURRENT_BINARY_DIR}/${PARSEC_HMAT_PTG_NAME}.c)
+  set(PARSEC_HMAT_PTG_H ${CMAKE_CURRENT_BINARY_DIR}/${PARSEC_HMAT_PTG_NAME}.h)
+
+  add_custom_command(
+    OUTPUT ${PARSEC_HMAT_PTG_H} ${PARSEC_HMAT_PTG_C}
+    COMMAND $<TARGET_FILE:PaRSEC::parsec-ptgpp>
+            --noline --Wremoteref -E
+            -i ${PARSEC_HMAT_PTG_JDF}
+            -C ${PARSEC_HMAT_PTG_C}
+            -H ${PARSEC_HMAT_PTG_H}
+            -f ${PARSEC_HMAT_PTG_NAME}
+    MAIN_DEPENDENCY ${PARSEC_HMAT_PTG_JDF}
+    DEPENDS ${PARSEC_HMAT_PTG_JDF} PaRSEC::parsec-ptgpp
+    VERBATIM)
+  add_custom_target(butterflypack_hmat_ptgpp
+    DEPENDS ${PARSEC_HMAT_PTG_H} ${PARSEC_HMAT_PTG_C})
+  add_dependencies(butterflypack butterflypack_hmat_ptgpp)
+  target_sources(butterflypack PRIVATE ${PARSEC_HMAT_PTG_H} ${PARSEC_HMAT_PTG_C})
+  target_compile_definitions(butterflypack PRIVATE HAVE_PARSEC)
+  target_include_directories(butterflypack PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+endif ()
 
 if (enable_mpi)
 target_link_libraries(butterflypack
                        ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
 else()
-target_link_libraries(butterflypack mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
+  target_link_libraries(butterflypack mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
 endif()
+
+if (enable_parsec)
+  target_link_libraries(butterflypack PaRSEC::parsec)
+endif ()
                       set_target_properties(butterflypack PROPERTIES
                       VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
 )
@@ -64,7 +118,6 @@ endif()
 target_include_directories(butterflypack PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
   $<INSTALL_INTERFACE:include>)
-
 
 # ---- Python extension module ----
 if (enable_python)
@@ -97,7 +150,6 @@ if (enable_python)
     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 endif()
-
 
 install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 

@@ -147,7 +147,7 @@ for file in *; do
 	then
 		eval sed -i -e "s/$CONFIG_FILE.fi/z$CONFIG_FILE.fi/g" $ZSRCDIR/$file
 		eval sed -i -e "s/$file/z$file/g" $ZSRCDIR/CMakeLists.txt
-		eval sed -i -e "s/$lb$file$rb/z$file/g" $ZSRCDIR/$file
+		eval sed -i -e "s/$lb$file$rb/z$file/g" $ZSRCDIR/*
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/z$objfile/g" $ZSRCDIR/Makefile
 		mv "$file" "z${file}"
@@ -192,6 +192,8 @@ sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.h
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/z_BPACK_WRAP/g" $ZSRCDIR/*.h
 sed -i -e "s/BPACK_wrapper.h/zBPACK_wrapper.h/g" $ZSRCDIR/*.cpp
+sed -i -e "s/parsec_hmat_ptg_bridge.h/zparsec_hmat_ptg_bridge.h/g" $ZSRCDIR/*.c
+sed -i -e "s/parsec_hmat_ptg_bridge.h/zparsec_hmat_ptg_bridge.h/g" $ZSRCDIR/*.jdf
 sed -i -e "s/c_bpack_/z_c_bpack_/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_bf_/z_c_bf_/g" $ZSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/z_c_magma_offset_1d/g" $ZSRCDIR/*.f90
@@ -211,7 +213,7 @@ for file in *; do
 	then
 		eval sed -i -e "s/$CONFIG_FILE/d$CONFIG_FILE/g" $DSRCDIR/$file
 		eval sed -i -e "s/$file/d$file/g" $DSRCDIR/CMakeLists.txt
-		eval sed -i -e "s/$lb$file$rb/d$file/g" $DSRCDIR/$file
+		eval sed -i -e "s/$lb$file$rb/d$file/g" $DSRCDIR/*
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/d$objfile/g" $DSRCDIR/Makefile
 		mv "$file" "d${file}"
@@ -256,6 +258,8 @@ sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.h
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/d_BPACK_WRAP/g" $DSRCDIR/*.h
 sed -i -e "s/BPACK_wrapper.h/dBPACK_wrapper.h/g" $DSRCDIR/*.cpp
+sed -i -e "s/parsec_hmat_ptg_bridge.h/dparsec_hmat_ptg_bridge.h/g" $DSRCDIR/*.c
+sed -i -e "s/parsec_hmat_ptg_bridge.h/dparsec_hmat_ptg_bridge.h/g" $DSRCDIR/*.jdf
 sed -i -e "s/c_bpack_/d_c_bpack_/g" $DSRCDIR/*.f90
 sed -i -e "s/c_bf_/d_c_bf_/g" $DSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/d_c_magma_offset_1d/g" $DSRCDIR/*.f90
@@ -275,7 +279,7 @@ for file in *; do
 	then
 		eval sed -i -e "s/$CONFIG_FILE/c$CONFIG_FILE/g" $CSRCDIR/$file
 		eval sed -i -e "s/$file/c$file/g" $CSRCDIR/CMakeLists.txt
-		eval sed -i -e "s/$lb$file$rb/c$file/g" $CSRCDIR/$file
+		eval sed -i -e "s/$lb$file$rb/c$file/g" $CSRCDIR/*
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/c$objfile/g" $CSRCDIR/Makefile
 		mv "$file" "c${file}"
@@ -319,6 +323,8 @@ sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.h
 sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/c_BPACK_WRAP/g" $CSRCDIR/*.h
 sed -i -e "s/BPACK_wrapper.h/cBPACK_wrapper.h/g" $CSRCDIR/*.cpp
+sed -i -e "s/parsec_hmat_ptg_bridge.h/cparsec_hmat_ptg_bridge.h/g" $CSRCDIR/*.c
+sed -i -e "s/parsec_hmat_ptg_bridge.h/cparsec_hmat_ptg_bridge.h/g" $CSRCDIR/*.jdf
 sed -i -e "s/c_bpack_/c_c_bpack_/g" $CSRCDIR/*.f90
 sed -i -e "s/c_bf_/c_c_bf_/g" $CSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/c_c_magma_offset_1d/g" $CSRCDIR/*.f90
@@ -338,7 +344,7 @@ for file in *; do
 	then
 		eval sed -i -e "s/$CONFIG_FILE/s$CONFIG_FILE/g" $SSRCDIR/$file
 		eval sed -i -e "s/$file/s$file/g" $SSRCDIR/CMakeLists.txt
-		eval sed -i -e "s/$lb$file$rb/s$file/g" $SSRCDIR/$file
+		eval sed -i -e "s/$lb$file$rb/s$file/g" $SSRCDIR/*
 		objfile=${file%.*}.o
 		eval sed -i -e "s/$objfile/s$objfile/g" $SSRCDIR/Makefile
 		mv "$file" "s${file}"
@@ -382,6 +388,8 @@ sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.h
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.cpp
 sed -i -e "s/BPACK_WRAP/s_BPACK_WRAP/g" $SSRCDIR/*.h
 sed -i -e "s/BPACK_wrapper.h/sBPACK_wrapper.h/g" $SSRCDIR/*.cpp
+sed -i -e "s/parsec_hmat_ptg_bridge.h/sparsec_hmat_ptg_bridge.h/g" $SSRCDIR/*.c
+sed -i -e "s/parsec_hmat_ptg_bridge.h/sparsec_hmat_ptg_bridge.h/g" $SSRCDIR/*.jdf
 sed -i -e "s/c_bpack_/s_c_bpack_/g" $SSRCDIR/*.f90
 sed -i -e "s/c_bf_/s_c_bf_/g" $SSRCDIR/*.f90
 sed -i -e "s/c_magma_offset_1d/s_c_magma_offset_1d/g" $SSRCDIR/*.f90

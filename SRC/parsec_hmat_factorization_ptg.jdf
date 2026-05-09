@@ -1,0 +1,146 @@
+extern "C" %{
+#include "parsec.h"
+#include "parsec/data_distribution.h"
+#define BPACK_HMAT_PTG_NO_PTR_RENAME
+#include "parsec_hmat_ptg_bridge.h"
+#undef BPACK_HMAT_PTG_NO_PTR_RENAME
+%}
+
+A   [type = "parsec_data_collection_t*"]
+ctx [type = "bpack_hmat_ptg_t*"]
+NB  [type = int]
+
+DIAG(k)
+k = 0 .. NB-1
+
+: A(k, k)
+
+READ Aij <- (k == 0) ? A(k, k)
+                     : Aij UPDATE(k-1, k, k)
+RW D <- bpack_hmat_ptg_diag_ptr(ctx, k)
+     -> D UPANEL(k, k+1..NB-1)
+        [ type_remote   = DEFAULT
+          layout_remote = parsec_datatype_int8_t
+          count_remote  = %{ return bpack_hmat_ptg_diag_bytes(ctx, k); %}
+          displ_remote  = 0 ]
+     -> D LPANEL(k, k+1..NB-1)
+        [ type_remote   = DEFAULT
+          layout_remote = parsec_datatype_int8_t
+          count_remote  = %{ return bpack_hmat_ptg_diag_bytes(ctx, k); %}
+          displ_remote  = 0 ]
+CTL Dlast -> (k == NB-1) ? Dlast DRELEASE(k)
+BODY
+{
+    bpack_hmat_ptg_diag(ctx, k);
+    bpack_hmat_ptg_diag_set_copy(ctx, k, _f_D);
+}
+END
+
+UPANEL(k, j)
+k = 0 .. NB-2
+j = k+1 .. NB-1
+
+: A(k, j)
+
+READ D <- D DIAG(k) [ type_remote = AUTO ]
+READ Aij <- (k == 0) ? A(k, j)
+                     : Aij UPDATE(k-1, k, j)
+RW U <- bpack_hmat_ptg_u_ptr(ctx, k, j)
+     -> U UPDATE(k, k+1..NB-1, j)
+        [ type_remote   = DEFAULT
+          layout_remote = parsec_datatype_int8_t
+          count_remote  = %{ return bpack_hmat_ptg_u_bytes(ctx, k, j); %}
+          displ_remote  = 0 ]
+CTL Udiagdone -> Udiagdone DRELEASE(k)
+BODY
+{
+    bpack_hmat_ptg_upanel(ctx, k, j, D);
+    bpack_hmat_ptg_u_set_copy(ctx, k, j, _f_U);
+}
+END
+
+LPANEL(k, i)
+k = 0 .. NB-2
+i = k+1 .. NB-1
+
+: A(i, k)
+
+READ D <- D DIAG(k) [ type_remote = AUTO ]
+READ Aij <- (k == 0) ? A(i, k)
+                     : Aij UPDATE(k-1, i, k)
+RW L <- bpack_hmat_ptg_l_ptr(ctx, i, k)
+     -> L UPDATE(k, i, k+1..NB-1)
+        [ type_remote   = DEFAULT
+          layout_remote = parsec_datatype_int8_t
+          count_remote  = %{ return bpack_hmat_ptg_l_bytes(ctx, i, k); %}
+          displ_remote  = 0 ]
+CTL Ldiagdone -> Ldiagdone DRELEASE(k)
+BODY
+{
+    bpack_hmat_ptg_lpanel(ctx, k, i, D);
+    bpack_hmat_ptg_l_set_copy(ctx, i, k, _f_L);
+}
+END
+
+UPDATE(k, i, j)
+k = 0 .. NB-2
+i = k+1 .. NB-1
+j = k+1 .. NB-1
+
+: A(i, j)
+
+READ L <- L LPANEL(k, i) [ type_remote = AUTO ]
+READ U <- U UPANEL(k, j) [ type_remote = AUTO ]
+RW Aij <- (k == 0) ? A(i, j)
+                   : Aij UPDATE(k-1, i, j)
+       -> (i == j && k == i-1)     ? Aij DIAG(i)
+       -> (i < j && k == i-1)      ? Aij UPANEL(i, j)
+       -> (j < i && k == j-1)      ? Aij LPANEL(j, i)
+       -> (k+1 < i && k+1 < j)     ? Aij UPDATE(k+1, i, j)
+CTL Udone -> Udone URELEASE(k, j)
+CTL Ldone -> Ldone LRELEASE(k, i)
+BODY
+{
+    bpack_hmat_ptg_update(ctx, k, i, j, L, U);
+}
+END
+
+DRELEASE(k)
+k = 0 .. NB-1
+
+: A(k, k)
+
+CTL Dlast <- (k == NB-1) ? Dlast DIAG(k)
+CTL Udiagdone <- (k < NB-1) ? Udiagdone UPANEL(k, k+1..NB-1)
+CTL Ldiagdone <- (k < NB-1) ? Ldiagdone LPANEL(k, k+1..NB-1)
+BODY
+{
+    bpack_hmat_ptg_diag_release(ctx, k);
+}
+END
+
+URELEASE(k, j)
+k = 0 .. NB-2
+j = k+1 .. NB-1
+
+: A(k, j)
+
+CTL Udone <- Udone UPDATE(k, k+1..NB-1, j)
+BODY
+{
+    bpack_hmat_ptg_u_release(ctx, k, j);
+}
+END
+
+LRELEASE(k, i)
+k = 0 .. NB-2
+i = k+1 .. NB-1
+
+: A(i, k)
+
+CTL Ldone <- Ldone UPDATE(k, i, k+1..NB-1)
+BODY
+{
+    bpack_hmat_ptg_l_release(ctx, i, k);
+}
+END

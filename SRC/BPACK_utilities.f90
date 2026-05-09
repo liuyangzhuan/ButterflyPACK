@@ -1031,6 +1031,7 @@ contains
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
+      option%use_parsec = 0
       option%use_qtt = 0
       ! option%sample_heuristic = 1
       option%pat_comp = 3
@@ -1149,6 +1150,8 @@ contains
                   read (strings1, *) option%sample_para_outer
                else if (trim(strings) == '--use_zfp') then
                   read (strings1, *) option%use_zfp
+               else if (trim(strings) == '--use_parsec') then
+                  read (strings1, *) option%use_parsec
                else if (trim(strings) == '--use_qtt') then
                   read (strings1, *) option%use_qtt
                ! else if (trim(strings) == '--sample_heuristic') then
@@ -1232,6 +1235,7 @@ contains
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
+      option1%use_parsec = option%use_parsec
       option1%use_qtt = option%use_qtt
       ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
@@ -1283,7 +1287,9 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
+               write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
                write (*, '(A18,Es14.7)') 'tol_LS', option%tol_LS
@@ -1326,6 +1332,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1368,6 +1375,7 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1413,6 +1421,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1460,6 +1469,7 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1503,6 +1513,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1560,6 +1571,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1604,6 +1616,7 @@ contains
                write (*, '(A18,I8)') 'cpp', option%cpp
                write (*, '(A18,I8)') 'knn', option%knn
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1640,6 +1653,7 @@ contains
             write (*, '(A18,I8)') 'cpp', option%cpp
             write (*, '(A18,I8)') 'knn', option%knn
             write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+            write (*, '(A18,I8)') 'use_parsec', option%use_parsec
             write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
             write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
