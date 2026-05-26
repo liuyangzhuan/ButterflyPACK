@@ -32,6 +32,11 @@ set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
 add_executable(ie3d_sp ${FCEXM1})
 target_link_libraries(ie3d_sp ${all_link_libs_c})
 
+set(FCEXM1MP EMSURF_Driver_mp.f90 EMSURF_Module_mp.f90)
+add_executable(ie3d_mp ${FCEXM1MP})
+target_link_libraries(ie3d_mp ${all_link_libs_c})
+target_link_libraries(ie3d_mp ${all_link_libs_z})
+
 ########################################### double complex Fortran drivers
 
 set(FZEXM1 EMCURV_Driver.f90 EMCURV_Module.f90)
@@ -263,7 +268,6 @@ endif()
 
 
 endif()
-
 
 
 
