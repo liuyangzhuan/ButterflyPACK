@@ -40,7 +40,7 @@ PROGRAM ButterflyPACK_IE_3D
 	! include "mkl_vml.fi"
 
     integer Primary_block, nn, mm,kk,mn,rank,ii,jj
-    integer i,j,k, threads_num
+    integer i,j,k, threads_num,provided
 	integer seed_myid(50)
 	integer times(8)
 	real(kind=8) t1,t2
@@ -67,7 +67,10 @@ PROGRAM ButterflyPACK_IE_3D
 	integer v_major,v_minor,v_bugfix
 
 	! nmpi and groupmembers should be provided by the user
-	call MPI_Init(ierr)
+
+	! call MPI_Init(ierr)
+	call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
+
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)
 	allocate(groupmembers(nmpi))
 	do ii=1,nmpi
@@ -180,6 +183,7 @@ PROGRAM ButterflyPACK_IE_3D
 	!**** register the user-defined function and type in ker
 	ker%QuantApp => quant
 	ker%FuncZmn => Zelem_EMSURF
+	ker%FuncZmnBlock => Zelem_EMSURF_block
 
 	!**** initialization of the construction phase
 	t1 = MPI_Wtime()
@@ -230,7 +234,6 @@ PROGRAM ButterflyPACK_IE_3D
     ! ! ! ! pause
 
 end PROGRAM ButterflyPACK_IE_3D
-
 
 
 

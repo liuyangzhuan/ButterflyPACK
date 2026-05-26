@@ -70,8 +70,8 @@ PROGRAM ButterflyPACK_IE_3D
 	integer v_major,v_minor,v_bugfix
 
 	! nmpi and groupmembers should be provided by the user
-	
-	! call MPI_Init(ierr) 
+
+	! call MPI_Init(ierr)
 	call MPI_Init_thread(MPI_THREAD_MULTIPLE, provided, ierr)
 
 	call MPI_Comm_size(MPI_Comm_World,nmpi,ierr)

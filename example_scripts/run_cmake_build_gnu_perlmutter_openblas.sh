@@ -46,6 +46,8 @@ cmake .. \
 
 make ie2d -j16
 make ie3d -j16
+make ie3d_sp -j16
+make ie3d_mp -j16
 make ie3dport -j16
 make frankben -j16   
 make frankben_t -j16
