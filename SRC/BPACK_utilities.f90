@@ -995,6 +995,7 @@ contains
       option%tol_Rdetect = option%tol_comp*1d-1
       option%level_check = 10000
       option%precon = DIRECT
+      option%iter_solver = GMRES
       option%xyzsort = TM
       option%lnoBP = 40000
       option%TwoLayerOnly = 1
@@ -1082,6 +1083,8 @@ contains
                   read (strings1, *) option%level_check
                else if (trim(strings) == '--precon') then
                   read (strings1, *) option%precon
+               else if (trim(strings) == '--iter_solver') then
+                  read (strings1, *) option%iter_solver
                else if (trim(strings) == '--xyzsort') then
                   read (strings1, *) option%xyzsort
                else if (trim(strings) == '--schulzorder') then
@@ -1198,6 +1201,7 @@ contains
       option1%tol_rand = option%tol_rand
       option1%level_check = option%level_check
       option1%precon = option%precon
+      option1%iter_solver = option%iter_solver
       option1%xyzsort = option%xyzsort
       option1%lnoBP = option%lnoBP
       option1%bp_cnt_lr = option%bp_cnt_lr
@@ -1288,6 +1292,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1333,6 +1338,7 @@ contains
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1376,6 +1382,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1422,6 +1429,7 @@ contains
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1470,6 +1478,7 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
                write (*, '(A18,Es14.7)') 'tol_Rdetect', option%tol_Rdetect
@@ -1514,6 +1523,7 @@ contains
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1572,6 +1582,7 @@ contains
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1617,6 +1628,7 @@ contains
                write (*, '(A18,I8)') 'knn', option%knn
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'iter_solver', option%iter_solver
                write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
@@ -1654,6 +1666,7 @@ contains
             write (*, '(A18,I8)') 'knn', option%knn
             write (*, '(A18,I8)') 'use_zfp', option%use_zfp
             write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+            write (*, '(A18,I8)') 'iter_solver', option%iter_solver
             write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
             write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp

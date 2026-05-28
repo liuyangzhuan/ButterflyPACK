@@ -24,12 +24,17 @@
 module EMSURF_MODULE_MP
 use c_BPACK_DEFS
 use c_MISC_Utilities
-use c_BPACK_Solve_Mul, only: c_BPACK_Mult, c_BPACK_Inv_Mult
-use z_BPACK_DEFS, only: z_Hoption, z_Hstat, z_proctree, z_kernelquant
-use z_BPACK_Utilities, only: z_InitStat, z_SetDefaultOptions, z_delete_Hstat, &
-	z_delete_kernelquant, z_delete_proctree
-use z_MISC_Utilities, only: z_CreatePtree
-use z_BPACK_Solve_Mul, only: z_BPACK_Ztfqmr_usermatvec_noprecon
+use z_MISC_Utilities
+use c_BPACK_Solve_Mul, only: c_BPACK_Inv_Mult
+use z_BPACK_DEFS, only: z_Hoption, z_Hstat, z_Bmatrix, z_mesh, z_proctree, z_kernelquant
+use z_BPACK_Utilities, only: z_delete_kernelquant
+use z_BPACK_Solve_Mul, only: z_BPACK_Z_iter_usermatvec_precon, &
+	z_BPACK_Mult, z_BPACK_Inv_Mult
+use EMSURF_MODULE, only: quant_EMSURF_DP => quant_EMSURF, &
+	element_Vinc_VV_SURF_DP => element_Vinc_VV_SURF, &
+	element_Vinc_HH_SURF_DP => element_Vinc_HH_SURF, &
+	RCS_bistatic_SURF_DP => RCS_bistatic_SURF, &
+	RCS_monostatic_HH_SURF_DP => RCS_monostatic_HH_SURF
 implicit none
 
 		!**** define your application-related variables here
@@ -42,10 +47,14 @@ implicit none
 		end type edge_node
 
 		type mp_matvec_quant
-			type(c_Bmatrix), pointer :: bmat => null()
-			type(c_Hoption), pointer :: option => null()
-			type(c_Hstat), pointer :: stats => null()
-			type(c_proctree), pointer :: ptree => null()
+			type(z_Bmatrix), pointer :: amat => null()
+			type(z_Hoption), pointer :: option_a => null()
+			type(z_Hstat), pointer :: stats_a => null()
+			type(z_proctree), pointer :: ptree_a => null()
+			type(c_Bmatrix), pointer :: mmat => null()
+			type(c_Hoption), pointer :: option_m => null()
+			type(c_Hstat), pointer :: stats_m => null()
+			type(c_proctree), pointer :: ptree_m => null()
 		end type mp_matvec_quant
 
 	!**** quantities related to geometries, meshes, unknowns and points
@@ -2004,7 +2013,7 @@ subroutine geo_modeling_SURF(quant,MPIcomm,DATA_DIR)
 end subroutine geo_modeling_SURF
 
 
-subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
+subroutine EM_solve_SURF(amat,option_a,msh_a,stats_a,ptree_a,mmat,option_m,msh_m,quant,ptree_m,stats_m)
     use c_BPACK_DEFS
 
 
@@ -2013,56 +2022,47 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
     integer i, j, ii, jj, iii, jjj,ierr
     integer level, blocks, edge, patch, node, group
     integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter ,N_unk, N_unk_loc
-    integer nmpi_z
+    integer N_unk_loc_a, N_unk_loc_m
     real(kind=8) theta, phi, dphi, rcs_V, rcs_H
     real T0
     real(kind=8) n1,n2,rtemp
-    complex(kind=4) value_Z
-    complex(kind=4),allocatable:: x(:,:),b(:,:)
+    complex(kind=8) value_Z
+    complex(kind=8),allocatable:: x(:,:),b(:,:)
 	real(kind=8):: rel_error
-	type(c_Hoption),target::option
-	type(c_Bmatrix),target::bmat
-	type(c_mesh)::msh
-	type(quant_EMSURF)::quant
-	type(c_proctree),target::ptree
-	type(c_Hstat),target::stats
-	type(z_Hoption)::option_z
-	type(z_Hstat)::stats_z
-	type(z_proctree)::ptree_z
+	type(z_Bmatrix),target::amat
+	type(z_Hoption),target::option_a
+	type(z_mesh)::msh_a
+	type(z_Hstat),target::stats_a
+	type(z_proctree),target::ptree_a
+	type(c_Bmatrix),target::mmat
+	type(c_Hoption),target::option_m
+	type(c_mesh)::msh_m
+	type(quant_EMSURF_DP)::quant
+	type(c_proctree),target::ptree_m
+	type(c_Hstat),target::stats_m
 	type(z_kernelquant)::ker_z
 	type(mp_matvec_quant),target::mvquant
-	complex(kind=4),allocatable:: current(:,:),voltage(:,:)
-	complex(kind=8),allocatable::r0_initial(:,:)
-	real(kind=8),allocatable::random_shadow(:)
-	integer,allocatable::groupmembers_z(:)
+	complex(kind=8),allocatable:: current(:,:),voltage(:,:)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve......"
+	if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write(*,*) "EM_solve......"
 
-	N_unk_loc = msh%idxe-msh%idxs+1
+	N_unk_loc_m = msh_m%idxe-msh_m%idxs+1
+	N_unk_loc_a = msh_a%idxe-msh_a%idxs+1
+	if(N_unk_loc_a/=N_unk_loc_m)then
+		if(ptree_m%MyID==Main_ID)write(*,*) "mixed-precision A and M have different local sizes:", N_unk_loc_a, N_unk_loc_m
+		stop
+	endif
+	N_unk_loc = N_unk_loc_m
 
-	call z_InitStat(stats_z)
-	call z_SetDefaultOptions(option_z)
-	option_z%verbosity = option%verbosity
-	option_z%tol_itersol = option%tol_itersol
-	option_z%n_iter = option%n_iter
-
-	call MPI_Comm_size(ptree%Comm,nmpi_z,ierr)
-	allocate(groupmembers_z(nmpi_z))
-	do ii=1,nmpi_z
-		groupmembers_z(ii)=ii-1
-	enddo
-	call z_CreatePtree(nmpi_z,groupmembers_z,ptree%Comm,ptree_z)
-	deallocate(groupmembers_z)
-
-	mvquant%bmat => bmat
-	mvquant%option => option
-	mvquant%stats => stats
-	mvquant%ptree => ptree
+	mvquant%amat => amat
+	mvquant%option_a => option_a
+	mvquant%stats_a => stats_a
+	mvquant%ptree_a => ptree_a
+	mvquant%mmat => mmat
+	mvquant%option_m => option_m
+	mvquant%stats_m => stats_m
+	mvquant%ptree_m => ptree_m
 	ker_z%QuantApp => mvquant
-
-	allocate(r0_initial(N_unk_loc,1),random_shadow(N_unk_loc))
-	call random_number(random_shadow)
-	r0_initial(:,1)=random_shadow
 
     if (quant%RCS_static==2) then
 
@@ -2076,34 +2076,34 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 #ifdef HAVE_OPENMP
         !$omp parallel do default(shared) private(edge,value_Z)
 #endif
-        do edge=msh%idxs, msh%idxe
-            call element_Vinc_VV_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-			voltage(edge-msh%idxs+1,1)=value_Z
-			call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-            voltage(edge-msh%idxs+1,2)=value_Z
+        do edge=msh_a%idxs, msh_a%idxe
+            call element_Vinc_VV_SURF_DP(theta,phi,msh_a%new2old(edge),value_Z,quant)
+			voltage(edge-msh_a%idxs+1,1)=value_Z
+			call element_Vinc_HH_SURF_DP(theta,phi,msh_a%new2old(edge),value_Z,quant)
+            voltage(edge-msh_a%idxs+1,2)=value_Z
         enddo
 #ifdef HAVE_OPENMP
         !$omp end parallel do
 #endif
         n1 = MPI_Wtime()
-		call EM_solve_SURF_mp_tfqmr(N_unk_loc,2,Voltage,Current,bmat,option,ptree,stats,option_z,ptree_z,stats_z,ker_z,r0_initial)
+		call EM_solve_SURF_mp_iter(N_unk_loc,2,Voltage,Current,mmat,option_m,ptree_m,stats_m,option_a,ptree_a,stats_a,ker_z)
 		n2 = MPI_Wtime()
-		stats%Time_Sol = stats%Time_Sol + n2-n1
+		stats_m%Time_Sol = stats_m%Time_Sol + n2-n1
 
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Mixed-precision solving:',n2-n1,'Seconds'
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) ''
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) 'Mixed-precision solving:',n2-n1,'Seconds'
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) ''
 
         n1 = MPI_Wtime()
-        call RCS_bistatic_SURF(Current,msh,quant,ptree)
+        call RCS_bistatic_SURF_DP(Current,msh_a,quant,ptree_a)
 		n2 = MPI_Wtime()
 
 		! call current_node_patch_mapping('V',curr(:,1),msh)
 		! call current_node_patch_mapping('H',curr(:,2),msh)
 
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
-        if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,*) ''
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) ''
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) 'Bistatic RCS',n2-n1,'Seconds'
+        if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,*) ''
 		deallocate(Current)
 		deallocate(Voltage)
 
@@ -2120,7 +2120,7 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 		x=0
 
 
-        if(ptree%MyID==Main_ID)open (100, file='monostaticH.out')
+        if(ptree_m%MyID==Main_ID)open (100, file='monostaticH.out')
 
         n1=MPI_Wtime()
 
@@ -2129,23 +2129,23 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 #ifdef HAVE_OPENMP
 			!$omp parallel do default(shared) private(edge,value_Z)
 #endif
-			do edge=msh%idxs, msh%idxe
-				call element_Vinc_HH_SURF(theta,phi,msh%new2old(edge),value_Z,quant)
-				b(edge-msh%idxs+1,j+1)=value_Z
+			do edge=msh_a%idxs, msh_a%idxe
+				call element_Vinc_HH_SURF_DP(theta,phi,msh_a%new2old(edge),value_Z,quant)
+				b(edge-msh_a%idxs+1,j+1)=value_Z
 			enddo
 #ifdef HAVE_OPENMP
 			!$omp end parallel do
 #endif
         enddo
 
-		call EM_solve_SURF_mp_tfqmr(N_unk_loc,num_sample+1,b,x,bmat,option,ptree,stats,option_z,ptree_z,stats_z,ker_z,r0_initial)
+		call EM_solve_SURF_mp_iter(N_unk_loc,num_sample+1,b,x,mmat,option_m,ptree_m,stats_m,option_a,ptree_a,stats_a,ker_z)
 
 		do j=0, num_sample
 			phi=j*dphi
 
 			Current(:,1)=x(:,j+1)
 
-            call RCS_monostatic_HH_SURF(theta,phi,rcs_H,Current(:,1),msh,quant,ptree)
+            call RCS_monostatic_HH_SURF_DP(theta,phi,rcs_H,Current(:,1),msh_a,quant,ptree_a)
 !             !$omp parallel do default(shared) private(i)
 !             do i=1, N_unk
 !                 current(i)=vectors_block(0)%vector(i,2)
@@ -2153,82 +2153,77 @@ subroutine EM_solve_SURF(bmat,option,msh,quant,ptree,stats)
 !             !$omp end parallel do
 !             call RCS_monostatic_HH_SURF(theta,phi,rcs_H)
 
-            if(ptree%MyID==Main_ID)write (100,*) phi,rcs_H !,rcs_H
+            if(ptree_m%MyID==Main_ID)write (100,*) phi,rcs_H !,rcs_H
 
             ! deallocate (vectors_block)
 
-        enddo
+		enddo
 
 		n2 = MPI_Wtime()
-		stats%Time_Sol = stats%Time_Sol + n2-n1
-		call MPI_ALLREDUCE(stats%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree%Comm,ierr)
+		stats_m%Time_Sol = stats_m%Time_Sol + n2-n1
+		call MPI_ALLREDUCE(stats_m%Time_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_MAX,ptree_m%Comm,ierr)
 
-        if(ptree%MyID==Main_ID)then
+        if(ptree_m%MyID==Main_ID)then
 			close(100)
 			write (*,*) ''
 			write (*,*) 'Mixed-precision solving:',rtemp,'Seconds'
 			write (*,*) ''
 		endif
 
-		call MPI_ALLREDUCE(stats%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree%Comm,ierr)
-		if(ptree%MyID==Main_ID .and. option%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',rtemp
+		call MPI_ALLREDUCE(stats_m%Flop_Sol,rtemp,1,MPI_DOUBLE_PRECISION,MPI_SUM,ptree_m%Comm,ierr)
+		if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write (*,'(A13,Es14.2)') 'Solve flops:',rtemp
 
 
 		deallocate(Current)
+		deallocate(b,x)
 
     endif
 
-	deallocate(r0_initial,random_shadow)
 	call z_delete_kernelquant(ker_z)
-	call z_delete_Hstat(stats_z)
-	call z_delete_proctree(ptree_z)
 
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "EM_solve finished"
-	if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "    "
+	if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write(*,*) "EM_solve finished"
+	if(ptree_m%MyID==Main_ID .and. option_m%verbosity>=0)write(*,*) "    "
 
     return
 
 end subroutine EM_solve_SURF
 
 
-subroutine EM_solve_SURF_mp_tfqmr(N_unk_loc,Nrhs,rhs_sp,sol_sp,bmat,option,ptree,stats,option_z,ptree_z,stats_z,ker_z,r0_initial)
+subroutine EM_solve_SURF_mp_iter(N_unk_loc,Nrhs,rhs_z,sol_z,mmat,option_m,ptree_m,stats_m,option_a,ptree_a,stats_a,ker_z)
 	use c_BPACK_DEFS
 	implicit none
 
 	integer,intent(in)::N_unk_loc,Nrhs
-	complex(kind=4)::rhs_sp(N_unk_loc,Nrhs),sol_sp(N_unk_loc,Nrhs)
-	type(c_Bmatrix)::bmat
-	type(c_Hoption)::option
-	type(c_proctree)::ptree
-	type(c_Hstat)::stats
-	type(z_Hoption)::option_z
-	type(z_proctree)::ptree_z
-	type(z_Hstat)::stats_z
+	complex(kind=8)::rhs_z(N_unk_loc,Nrhs),sol_z(N_unk_loc,Nrhs)
+	type(c_Bmatrix)::mmat
+	type(c_Hoption)::option_m
+	type(c_proctree)::ptree_m
+	type(c_Hstat)::stats_m
+	type(z_Hoption)::option_a
+	type(z_proctree)::ptree_a
+	type(z_Hstat)::stats_a
 	type(z_kernelquant)::ker_z
-	complex(kind=8)::r0_initial(:,:)
-	complex(kind=4),allocatable::rhs_prec_sp(:,:)
-	complex(kind=8),allocatable::rhs_z(:,:),sol_z(:,:)
+	complex(kind=8),allocatable::rhs_work_z(:,:),sol_work_z(:,:)
 	real(kind=8)::rel_error
 	integer rhs,iter
 
-	allocate(rhs_prec_sp(N_unk_loc,Nrhs))
-	call c_BPACK_Inv_Mult('N',N_unk_loc,Nrhs,rhs_sp,rhs_prec_sp,bmat,ptree,option,stats)
-	stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+	allocate(rhs_work_z(N_unk_loc,1),sol_work_z(N_unk_loc,1))
 
-	allocate(rhs_z(N_unk_loc,1),sol_z(N_unk_loc,1))
 	do rhs=1,Nrhs
-		rhs_z(:,1)=cmplx(real(rhs_prec_sp(:,rhs),kind=8),real(aimag(rhs_prec_sp(:,rhs)),kind=8),kind=8)
-		sol_z(:,1)=cmplx(real(sol_sp(:,rhs),kind=8),real(aimag(sol_sp(:,rhs)),kind=8),kind=8)
-		rel_error=option%tol_itersol
+		rhs_work_z(:,1)=rhs_z(:,rhs)
+		sol_work_z(:,1)=sol_z(:,rhs)
+
+		rel_error=option_a%tol_itersol
 		iter=0
-		call z_BPACK_Ztfqmr_usermatvec_noprecon(option%n_iter,N_unk_loc,rhs_z,sol_z, &
-			rel_error,iter,r0_initial,blackbox_MVP_EMSURF_MP,ptree_z,option_z,stats_z,ker_z)
-		sol_sp(:,rhs)=cmplx(real(sol_z(:,1),kind=4),aimag(sol_z(:,1)),kind=4)
+		call z_BPACK_Z_iter_usermatvec_precon(option_a%n_iter,N_unk_loc,rhs_work_z,sol_work_z, &
+			rel_error,iter,blackbox_MVP_EMSURF_MP,blackbox_precon_MVP_EMSURF_MP, &
+			ptree_a,option_a,stats_a,ker_z)
+		sol_z(:,rhs)=sol_work_z(:,1)
 	enddo
 
-	deallocate(rhs_prec_sp,rhs_z,sol_z)
+	deallocate(rhs_work_z,sol_work_z)
 
-end subroutine EM_solve_SURF_mp_tfqmr
+end subroutine EM_solve_SURF_mp_iter
 
 
 subroutine blackbox_MVP_EMSURF_MP(trans,M,N,num_vect,Vin,Vout,ker)
@@ -2239,24 +2234,55 @@ subroutine blackbox_MVP_EMSURF_MP(trans,M,N,num_vect,Vin,Vout,ker)
 	integer,intent(in)::M,N,num_vect
 	complex(kind=8)::Vin(:,:),Vout(:,:)
 	type(z_kernelquant)::ker
-	complex(kind=4),allocatable::vin_sp(:,:),av_sp(:,:),vout_sp(:,:)
 
 	select TYPE(mvquant => ker%QuantApp)
 	type is (mp_matvec_quant)
-		allocate(vin_sp(N,num_vect),av_sp(M,num_vect),vout_sp(M,num_vect))
-		vin_sp=cmplx(real(Vin(1:N,1:num_vect),kind=4),aimag(Vin(1:N,1:num_vect)),kind=4)
-		call c_BPACK_Mult(trans,N,num_vect,vin_sp,av_sp,mvquant%bmat,mvquant%ptree,mvquant%option,mvquant%stats)
-		mvquant%stats%Flop_Sol = mvquant%stats%Flop_Sol + mvquant%stats%Flop_Tmp
-		call c_BPACK_Inv_Mult(trans,M,num_vect,av_sp,vout_sp,mvquant%bmat,mvquant%ptree,mvquant%option,mvquant%stats)
-		mvquant%stats%Flop_Sol = mvquant%stats%Flop_Sol + mvquant%stats%Flop_Tmp
-		Vout(1:M,1:num_vect)=cmplx(real(vout_sp,kind=8),real(aimag(vout_sp),kind=8),kind=8)
-		deallocate(vin_sp,av_sp,vout_sp)
+		if(M/=N)then
+			write(*,*)"blackbox_MVP_EMSURF_MP expects a square local operator:", M, N
+			stop
+		endif
+		call z_BPACK_Mult(trans,M,num_vect,Vin,Vout,mvquant%amat,mvquant%ptree_a,mvquant%option_a,mvquant%stats_a)
 	class default
 		write(*,*)"unexpected type in blackbox_MVP_EMSURF_MP"
 		stop
 	end select
 
 end subroutine blackbox_MVP_EMSURF_MP
+
+
+subroutine blackbox_precon_MVP_EMSURF_MP(trans,M,N,num_vect,Vin,Vout,ker)
+	use z_BPACK_DEFS, only: z_kernelquant
+	implicit none
+
+	character trans
+	integer,intent(in)::M,N,num_vect
+	complex(kind=8)::Vin(:,:),Vout(:,:)
+	type(z_kernelquant)::ker
+	complex(kind=4),allocatable::vin_sp(:,:),vout_sp(:,:)
+
+	select TYPE(mvquant => ker%QuantApp)
+	type is (mp_matvec_quant)
+		if(M/=N)then
+			write(*,*)"blackbox_precon_MVP_EMSURF_MP expects a square local operator:", M, N
+			stop
+		endif
+
+		allocate(vin_sp(M,num_vect),vout_sp(M,num_vect))
+		vin_sp=cmplx(real(Vin(1:M,1:num_vect),kind=4),real(aimag(Vin(1:M,1:num_vect)),kind=4),kind=4)
+		call c_BPACK_Inv_Mult(trans,M,num_vect,vin_sp,vout_sp,mvquant%mmat,mvquant%ptree_m,mvquant%option_m,mvquant%stats_m)
+		mvquant%stats_m%Flop_Sol = mvquant%stats_m%Flop_Sol + mvquant%stats_m%Flop_Tmp
+		Vout(1:M,1:num_vect)=cmplx(real(vout_sp,kind=8),real(aimag(vout_sp),kind=8),kind=8)
+		deallocate(vin_sp,vout_sp)
+
+		! call z_BPACK_Inv_Mult(trans,M,num_vect,Vin,Vout,mvquant%amat,mvquant%ptree_a,mvquant%option_a,mvquant%stats_a)
+
+		! Vout=Vin
+	class default
+		write(*,*)"unexpected type in blackbox_precon_MVP_EMSURF_MP"
+		stop
+	end select
+
+end subroutine blackbox_precon_MVP_EMSURF_MP
 
 
 

@@ -607,6 +607,11 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
 
 }
 
+inline void C_FuncIdentityPrecon(char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
+  int64_t cnt = (*nvec)*(*nout);
+  for (int64_t i=0; i<cnt; i++) xout[i] = xin[i];
+}
+
 
 
 // This example uses Chebshev interpolation from WENO to compute the phase and amplitudes, and then use entry evaluation to compute the hodbf
@@ -1362,7 +1367,7 @@ if(myrank==master_rank){
       quant_ptr_bf_s2s->ptree_bf = &ptree_bf;
       quant_ptr_bf_s2s->msh_bf = &msh_bf_s2s;
       F2Cptr kerquant_s2s;
-      z_c_bpack_tfqmr_noprecon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, quant_ptr_bf_s2s);
+      z_c_bpack_iter_usermatvec_precon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_bf_s2s);
 
       // vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
       // vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});

@@ -485,24 +485,16 @@ contains
       ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
       type(Bmatrix)::bmat
       DT::x(Ns_loc, num_vectors), b(Ns_loc, num_vectors)
-      DT, allocatable::r0_initial(:)
       real(kind=8) n1, n2, rtemp
 
       n1 = MPI_Wtime()
 
       if (option%precon /= DIRECT) then
-         allocate (r0_initial(1:Ns_loc))
-         do ii = 1, Ns_loc
-            call random_dp_number(r0_initial(ii))
-         end do
-
          do ii = 1, num_vectors
             iter = 0
             rel_error = option%tol_itersol
-            call BPACK_Ztfqmr(option%precon, option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, bmat, ptree, option, stats)
+            call BPACK_Z_iter(option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, bmat, ptree, option, stats)
          end do
-
-         deallocate (r0_initial)
       else
          call BPACK_Inv_Mult('N', Ns_loc, num_vectors, b, x, bmat, ptree, option, stats)
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
@@ -535,29 +527,16 @@ contains
       ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
       type(Bmatrix)::bmat
       DT::x(product(Ns_loc), num_vectors), b(product(Ns_loc), num_vectors)
-      DT, allocatable::r0_initial(:)
       real(kind=8) n1, n2, rtemp
 
       n1 = MPI_Wtime()
 
-      if (option%precon /= NOPRECON) then
-         write(*,*)"only NOPRECON is supported so far as we haven't worked on the factorization"
-         stop
-      endif
-
       if (option%precon /= DIRECT) then
-         allocate (r0_initial(1:product(Ns_loc)))
-         do ii = 1, product(Ns_loc)
-            call random_dp_number(r0_initial(ii))
-         end do
-
          do ii = 1, num_vectors
             iter = 0
             rel_error = option%tol_itersol
-            call BPACK_MD_Ztfqmr(Ndim, option%precon, option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, bmat, ptree, option, stats, msh)
+            call BPACK_MD_Z_iter(Ndim, option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, bmat, ptree, option, stats, msh)
          end do
-
-         deallocate (r0_initial)
       else
          write(*,*)'not yet implemented'
       end if
@@ -571,8 +550,8 @@ contains
 
 
 
-   !!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is the same as BPACK_Ztfqmr
-   subroutine BPACK_Ztfqmr_usermatvec_noprecon(ntotal, nn_loc, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
+   !!!>**** TFQMR kernel for an already left-preconditioned user-supplied matvec
+   subroutine Ztfqmr_usermatvec_precon_kernel(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, ptree, option, stats, ker)
       implicit none
       integer level_c, rowblock, ierr
       integer, intent(in)::ntotal
@@ -584,9 +563,11 @@ contains
       DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
-      real(kind=8)::bmag
+      real(kind=8)::bmag, rerr_last, breakdown_tol
       real(kind=8)::tim1, tim2
-      integer::kk, ll
+      integer::ii, kk, ll, iter_last
+      logical::breakdown
+      character(len=128)::breakdown_reason
       ! Variables for storing current
       integer::count_unk, srcbox_id
       DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
@@ -596,7 +577,7 @@ contains
       type(kernelquant)::ker
       procedure(HMatVec)::blackbox_MVP
 
-      DT::r0_initial(:,:)
+      DT, allocatable::r0_initial(:,:), x_last(:,:)
       type(proctree)::ptree
       type(Hoption)::option
 
@@ -626,6 +607,9 @@ contains
 
 
       itmax = iter
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
 
       ! call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
       bb=b
@@ -636,6 +620,14 @@ contains
       ! ! ! end if
 
       if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc,1), x_last(nn_loc,1))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii,1))
+      enddo
+      x_last = x
+      rerr_last = err
+      iter_last = 0
 
       !  set initial values
       !
@@ -675,7 +667,24 @@ contains
       ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
       ta = sqrt(abs(ta_sum))
       bmag = sqrt(abs(bmag_sum1))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR has a zero or NaN RHS norm, returning now.'
+         err = 0d0
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
       rerr = ta/bmag
+      if ((rerr /= rerr)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR initial residual is NaN, returning initial guess.'
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      x_last = x
+      rerr_last = rerr
+      iter_last = 0
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          print *, '# ofiter,error:', 0, rerr
          ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
@@ -683,13 +692,24 @@ contains
       if (err > rerr) then
          err = rerr
          iter = 0
+         deallocate(r0_initial, x_last)
          return
       endif
       iters: do it = 1, itmax
          amgis_local = dot_product(r0_initial(:,1), v(:,1))
          call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (abs(amgis) <= breakdown_tol .or. myisnan(abs(amgis)) .or. myisnan(abs(rho))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in alpha denominator'
+            exit iters
+         endif
          ahpla = rho/amgis
+         if (myisnan(abs(ahpla))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN alpha'
+            exit iters
+         endif
          ye = yo - ahpla*v
          ! write(*,*)'3'
          ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
@@ -697,6 +717,11 @@ contains
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
          ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
          aye=ytmp
+         if (myisnan(sum(abs(aye)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
 
          !  start odd (2n-1) m loop
          d = yo + (we*we*etha/ahpla)*d
@@ -704,10 +729,20 @@ contains
          we_local = dot_product(w(:,1), w(:,1))
          call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in odd TFQMR update'
+            exit iters
+         endif
          we = sqrt(abs(we_sum))/ta
          cm = 1.0d0/sqrt(1.0d0 + we*we)
          ta = ta*we*cm
          etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in odd TFQMR update'
+            exit iters
+         endif
          x = x + etha*d
          !  check if the result has converged.
          !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
@@ -718,18 +753,21 @@ contains
          we_local = dot_product(w(:,1), w(:,1))
          call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
-         if (ta<=1d-30) then
-            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
-            err = rerr
-            iter = it
-            return
-            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
-         end if
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in even TFQMR update'
+            exit iters
+         endif
 
          we = sqrt(abs(we_sum))/ta
          cm = 1.0d0/sqrt(1.0d0 + we*we)
          ta = ta*we*cm
          etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in even TFQMR update'
+            exit iters
+         endif
          x = x + etha*d
 
          !  check if the result has converged.
@@ -746,6 +784,14 @@ contains
             call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
                                ptree%Comm, ierr)
             rerr = sqrt(abs(rerr_sum))/bmag
+            if ((rerr /= rerr)) then
+               breakdown = .true.
+               breakdown_reason = 'NaN residual'
+               exit iters
+            endif
+            x_last = x
+            rerr_last = rerr
+            iter_last = it
 
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
                print *, '# ofiter,error:', it, rerr
@@ -755,6 +801,7 @@ contains
             if (err > rerr) then
                err = rerr
                iter = it
+               deallocate(r0_initial, x_last)
 
                ! ! ! if (myid == main_id) then
                ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
@@ -767,7 +814,17 @@ contains
          dum_local = dot_product(r0_initial(:,1), w(:,1))
          call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (abs(rho) <= breakdown_tol .or. myisnan(abs(rho)) .or. myisnan(abs(dum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in beta denominator'
+            exit iters
+         endif
          beta = dum/rho
+         if (myisnan(abs(beta))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN beta'
+            exit iters
+         endif
          rho = dum
          yo = w + beta*ye
          ! write(*,*)'5'
@@ -776,10 +833,24 @@ contains
          stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
          ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
          ayo=ytmp
+         if (myisnan(sum(abs(ayo)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
 
          !MAGIC
          v = ayo + beta*(aye + beta*v)
       enddo iters
+      if (breakdown) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR ', trim(breakdown_reason), &
+            ', returning last finite iterate:', iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
       ! write(*,*)'6'
       ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
       call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
@@ -793,370 +864,619 @@ contains
       call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
                          ierr)
       err = sqrt(abs(err_sum))/bmag
+      if ((err /= err)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR final residual is NaN, returning last finite iterate:', &
+            iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
       iter = itmax
 
       print *, 'Iterative solver is terminated without convergence!!!', it, err
       stop
 
       return
-   end subroutine BPACK_Ztfqmr_usermatvec_noprecon
-
-   ! !!!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is translated from matlab's tfqmr implementaion and slightly different compared to BPACK_Ztfqmr
-   ! subroutine BPACK_Ztfqmr_usermatvec_noprecon(ntotal, nn_loc, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
-   !    implicit none
-   !    integer ierr
-   !    integer, intent(in)::ntotal
-   !    integer::iter, itmax, it, nn_loc
-   !    DT, dimension(1:nn_loc,1)::x, b, ytmp, r, r0, u_m, w, pu_m, v, Au, d, u_mp1, Ad, Au_new
-   !    DT, allocatable:: eye(:,:),fullmat(:,:),UU(:,:),VV(:,:)
-   !    DTR, allocatable::Singular(:)
-   !    real(kind=8)::err
-   !    integer::mm
-   !    type(Hstat)::stats
-   !    type(kernelquant)::ker
-   !    procedure(HMatVec)::blackbox_MVP
-   !    DT::r0_initial(:,:) ! not used
-   !    type(proctree)::ptree
-   !    type(Hoption)::option
-   !    DT::nb_local,nr_local,nw_local,eta,alpha,r0v,r0w,sigma,beta,rho,rho_old
-   !    integer flag,even
-   !    real(kind=8)::tolb,nb,nr,nw,nr_act,tau,theta,c_mp1
+   end subroutine Ztfqmr_usermatvec_precon_kernel
 
 
-   !    !!!!!!!!! check condition number of the operator
-   !    ! if (ptree%nproc==1)then
-   !    ! allocate(eye(nn_loc,nn_loc))
-   !    ! allocate(fullmat(nn_loc,nn_loc))
-   !    ! allocate(UU(nn_loc,nn_loc))
-   !    ! allocate(VV(nn_loc,nn_loc))
-   !    ! allocate(Singular(nn_loc))
-   !    ! eye=0
-   !    ! do mm=1,nn_loc
-   !    !    eye(mm,mm)=1
-   !    ! enddo
-   !    ! fullmat=0
-   !    ! call blackbox_MVP('N',nn_loc,nn_loc,nn_loc,eye,fullmat,ker)
+   !!!>**** expose left-preconditioned TFQMR with separate user-supplied operator and preconditioner matvecs
+   subroutine BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::bb(:,:)
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
 
-   !    ! UU = 0
-   !    ! VV = 0
-   !    ! Singular = 0
-   !    ! call gesvd_robust(fullmat, Singular, UU, VV, nn_loc, nn_loc, nn_loc)
-   !    ! write(*,*)'condition number:', Singular(1)/Singular(nn_loc)
-   !    ! deallocate(eye)
-   !    ! deallocate(fullmat)
-   !    ! deallocate(UU)
-   !    ! deallocate(VV)
-   !    ! deallocate(Singular)
-   !    ! endif
+      allocate(bb(nn_loc,1))
 
-   !    if(myisnan(sum(abs(x))))then
-   !       write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-   !       stop
-   !    endif
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, b, bb, ker)
 
-   !    itmax = ntotal
+      call Ztfqmr_usermatvec_precon_kernel(ntotal, nn_loc, bb, x, err, iter, &
+         blackbox_MVP_precond, ptree, option, stats, ker)
 
+      deallocate(bb)
 
-   !    nb_local = dot_product(b(:,1), b(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nb_local, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    nb = sqrt(abs(nb_local))
+      return
 
-   !    flag=1
-   !    tolb=err*nb
+   contains
 
-   !    call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
-   !    r = b-ytmp
+      subroutine blackbox_MVP_precond(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+         DT, allocatable::ytmp(:,:)
 
-   !    nr_local = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    nr = sqrt(abs(nr_local))
-   !    nr_act = nr
+         allocate(ytmp(M,num_vect))
+         call blackbox_MVP(trans, M, N, num_vect, Vin, ytmp, ker)
+         call blackbox_precon_MVP(trans, M, N, num_vect, ytmp, Vout, ker)
+         deallocate(ytmp)
 
-   !    if (nr <= tolb)then  ! Initial guess is a good enough solution
-   !       flag = 0
-   !       iter = 0
-   !       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-   !          print *, '# ofiter,error:', iter, nr/nb
-   !       end if
-   !       return
-   !    endif
+         return
+      end subroutine blackbox_MVP_precond
 
-   !    r0 = r
-   !    u_m = r
-   !    w = r
-   !    pu_m = u_m
-   !    call blackbox_MVP('N',nn_loc,nn_loc,1,pu_m,v,ker)
-   !    Au = v
-   !    d = 0
-   !    Ad = d
-
-   !    tau = nr
-   !    theta = 0
-   !    eta = 0
-
-   !    rho = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, rho, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    rho_old = rho
-
-   !    even=1
-
-   !    do mm=1,itmax
-   !       if(even==1)then
-   !          r0v = dot_product(r0(:,1), v(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0v, 1, MPI_DT, MPI_SUM, &
-   !                               ptree%Comm, ierr)
-   !          alpha = rho/r0v
-   !          u_mp1 = u_m - alpha*v
-   !       endif
-   !       w = w - alpha*Au
-   !       sigma = (theta**2/alpha)*eta
-   !       d = pu_m + sigma*d
-   !       Ad = Au + sigma*Ad
-
-   !       nw_local = dot_product(w(:,1), w(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nw_local, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !       nw = sqrt(abs(nw_local))
-   !       theta = nw/tau
-
-   !       c_mp1 = 1d0/sqrt(1+theta**2);
-   !       tau = tau*theta*c_mp1;
-   !       eta = c_mp1**2*alpha;
-
-   !       x = x + eta*d
-   !       r = r - eta*Ad
-   !       nr_local = dot_product(r(:,1), r(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !       nr = sqrt(abs(nr_local))
-   !       nr_act = nr;
-
-   !       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-   !          print *, '# ofiter,error:', mm, nr_act/nb
-   !       end if
-   !       iter = mm
-
-   !       ! check for convergence
-   !       if (nr <= tolb)then
-   !          call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
-   !          r = b - ytmp
-
-   !          nr_local = dot_product(r(:,1), r(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                               ptree%Comm, ierr)
-   !          nr_act = sqrt(abs(nr_local))
-   !          if (nr_act <= tolb)then
-   !                flag = 0
-   !                exit
-   !          endif
-   !       endif
-
-   !       if(even==0)then
-   !          r0w = dot_product(r0(:,1), w(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0w, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !          rho = r0w;
-   !          beta = rho/rho_old
-   !          rho_old = rho
-   !          u_mp1 = w + beta*u_m
-   !       endif
-
-   !       pu_m = u_mp1;
-   !       call blackbox_MVP('N',nn_loc,nn_loc,1,pu_m,Au_new,ker)
-
-   !       if(even==0)then
-   !          v = Au_new + beta*(Au+beta*v)
-   !       endif
-
-   !       Au = Au_new
-   !       u_m = u_mp1
-   !       even=1-even
-   !    enddo
-
-   !    if (ptree%MyID == Main_ID )then
-   !    if(iter>=itmax)then
-   !       print *, 'Iterative solver is terminated without convergence!!!', iter, nr_act
-   !       stop
-   !    endif
-   !    endif
-
-   !    return
-   ! end subroutine BPACK_Ztfqmr_usermatvec_noprecon
+   end subroutine BPACK_Ztfqmr_usermatvec_precon
 
 
+   !!!>**** expose left-preconditioned restarted GMRES with separate user-supplied operator and preconditioner matvecs
+   subroutine BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker, restart_in)
+      implicit none
+      integer, intent(in)::ntotal, nn_loc
+      integer, intent(in), optional::restart_in
+      integer::iter, itmax, restart, total_iter, inner_iter, nrit
+      integer::i, j, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::V(:,:), Ax(:,:), b_prec(:,:), hess(:,:), givens_c(:), givens_s(:), g(:), y(:)
+      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol
+      DT::x_sum, b_sum, vtmp, norm_local, norm_sum, dot_local, dot_sum, tmp
+      logical::converged, happy_breakdown
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Zgmres, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0 .and. sqrt(abs(norm_sum))==0d0)then
+         write(*,*)'Zero RHS in BPACK_Zgmres! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      if (itmax <= 0) itmax = max(1, ntotal)
+
+      restart = 30
+      if (present(restart_in)) restart = restart_in
+      restart = max(1, min(restart, itmax))
+      breakdown_tol = 1d-300
+
+      allocate(V(nn_loc,restart+1), Ax(nn_loc,1), b_prec(nn_loc,1))
+      allocate(hess(restart+1,restart), givens_c(restart), givens_s(restart))
+      allocate(g(restart+1), y(restart))
+
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, b, b_prec, ker)
+
+      rho0 = 0d0
+      relres = 1d0
+      total_iter = 0
+      converged = .false.
+
+      do while (.not. converged .and. total_iter < itmax)
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, Ax, V(:,1:1), ker)
+         V(:,1:1) = b_prec - V(:,1:1)
+
+         norm_local = dot_product(V(:,1), V(:,1))
+         call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         rho = sqrt(abs(norm_sum))
+         if (total_iter == 0) rho0 = rho
+
+         if (rho0 <= breakdown_tol) then
+            err = 0d0
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         relres = rho/rho0
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of GMRES,error:', total_iter, relres, ' restart'
+         end if
+
+         if (relres < tol) then
+            err = relres
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         V(:,1) = V(:,1)/rho
+         hess = 0d0
+         givens_c = 0d0
+         givens_s = 0d0
+         g = 0d0
+         g(1) = rho
+         nrit = 0
+
+         do inner_iter = 1, restart
+            if (total_iter >= itmax) exit
+            total_iter = total_iter + 1
+
+            call blackbox_MVP('N', nn_loc, nn_loc, 1, V(:,inner_iter:inner_iter), Ax, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, Ax, V(:,inner_iter+1:inner_iter+1), ker)
+
+            do i = 1, inner_iter
+               dot_local = dot_product(V(:,i), V(:,inner_iter+1))
+               call MPI_ALLREDUCE(dot_local, dot_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+               hess(i,inner_iter) = dot_sum
+               V(:,inner_iter+1) = V(:,inner_iter+1) - hess(i,inner_iter)*V(:,i)
+            enddo
+
+            norm_local = dot_product(V(:,inner_iter+1), V(:,inner_iter+1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            wnorm = sqrt(abs(norm_sum))
+            hess(inner_iter+1,inner_iter) = wnorm
+            happy_breakdown = (wnorm <= breakdown_tol)
+            if (.not. happy_breakdown) V(:,inner_iter+1) = V(:,inner_iter+1)/wnorm
+
+            do i = 1, inner_iter-1
+               tmp = gmres_dt_conjg(givens_c(i))*hess(i,inner_iter) + gmres_dt_conjg(givens_s(i))*hess(i+1,inner_iter)
+               hess(i+1,inner_iter) = -givens_s(i)*hess(i,inner_iter) + givens_c(i)*hess(i+1,inner_iter)
+               hess(i,inner_iter) = tmp
+            enddo
+
+            delta = sqrt(abs(hess(inner_iter,inner_iter))**2 + abs(hess(inner_iter+1,inner_iter))**2)
+            if (delta <= breakdown_tol) then
+               givens_c(inner_iter) = 1d0
+               givens_s(inner_iter) = 0d0
+            else
+               givens_c(inner_iter) = hess(inner_iter,inner_iter)/delta
+               givens_s(inner_iter) = hess(inner_iter+1,inner_iter)/delta
+            endif
+
+            hess(inner_iter,inner_iter) = gmres_dt_conjg(givens_c(inner_iter))*hess(inner_iter,inner_iter) + &
+               gmres_dt_conjg(givens_s(inner_iter))*hess(inner_iter+1,inner_iter)
+            hess(inner_iter+1,inner_iter) = 0d0
+            g(inner_iter+1) = -givens_s(inner_iter)*g(inner_iter)
+            g(inner_iter) = gmres_dt_conjg(givens_c(inner_iter))*g(inner_iter)
+
+            rho = abs(g(inner_iter+1))
+            relres = rho/rho0
+            nrit = inner_iter
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of GMRES,error:', total_iter, relres
+            end if
+
+            if (relres < tol .or. total_iter >= itmax .or. happy_breakdown) exit
+         enddo
+
+         if (nrit > 0) then
+            do i = nrit, 1, -1
+               tmp = g(i)
+               do j = i+1, nrit
+                  tmp = tmp - hess(i,j)*y(j)
+               enddo
+               if (abs(hess(i,i)) <= breakdown_tol) then
+                  y(i) = 0d0
+               else
+                  y(i) = tmp/hess(i,i)
+               endif
+            enddo
+
+            do i = 1, nrit
+               x(:,1) = x(:,1) + V(:,i)*y(i)
+            enddo
+         endif
+
+         if (relres < tol) then
+            converged = .true.
+            exit
+         endif
+      enddo
+
+      err = relres
+      iter = total_iter
+      if (.not. converged .and. ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: GMRES terminated without reaching tolerance:', err
+      endif
+
+      deallocate(V, Ax, b_prec, hess, givens_c, givens_s, g, y)
+
+      return
+
+   contains
+
+      function gmres_dt_conjg(val) result(res)
+         implicit none
+         DT::val, res
+#if DAT==0 || DAT==2
+         res = conjg(val)
+#else
+         res = val
+#endif
+      end function gmres_dt_conjg
+
+   end subroutine BPACK_Zgmres_usermatvec_precon
 
 
-   ! !!!!>**** expose the TFQMR as an API using user-supplied matvec, the TFQMR is translated from matlab's tfqmr implementaion and slightly different compared to BPACK_MD_Ztfqmr
-   ! subroutine BPACK_MD_Ztfqmr_usermatvec_noprecon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
-   !    implicit none
-   !    integer Ndim
-   !    integer ierr
-   !    integer, intent(in)::ntotal
-   !    integer::iter, itmax, it, nn_loc, nn_loc_MD(Ndim)
-   !    DT, dimension(1:product(nn_loc_md),1)::x, b, ytmp, r, r0, u_m, w, pu_m, v, Au, d, u_mp1, Ad, Au_new
-   !    DT, allocatable:: eye(:,:),fullmat(:,:),UU(:,:),VV(:,:)
-   !    DTR, allocatable::Singular(:)
-   !    real(kind=8)::err
-   !    integer::mm
-   !    type(Hstat)::stats
-   !    type(kernelquant)::ker
-   !    procedure(HMatVec_MD)::blackbox_MVP
-   !    DT::r0_initial(:,:) ! not used
-   !    type(proctree)::ptree
-   !    type(Hoption)::option
-   !    DT::nb_local,nr_local,nw_local,eta,alpha,r0v,r0w,sigma,beta,rho,rho_old
-   !    integer flag,even
-   !    real(kind=8)::tolb,nb,nr,nw,nr_act,tau,theta,c_mp1
-   !    nn_loc = product(nn_loc_md)
+   !!!>**** expose iterative refinement with a user-supplied operator and preconditioner
+   subroutine BPACK_Ziterrefine_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::r(:,:), Ax(:,:), dx(:,:), x_best(:,:)
+      real(kind=8)::err, tol, rerr, rerr_best, bmag, breakdown_tol
+      real(kind=8)::stagnation_tol, divergence_factor
+      real(kind=8)::dxnorm, xnorm, dx_abs_sum, ax_abs_sum, x_abs_sum
+      DT::rerr_local, rerr_sum, bmag_local, bmag_sum, b_sum, x_sum, vtmp
+      DT::dxnorm_local, dxnorm_sum, xnorm_local, xnorm_sum
+      integer::halt_code_local, halt_code, stagnate_count, stagnate_max
+      integer, parameter::IR_HALT_NONE = 0, IR_HALT_BAD_PRECON = 1
+      integer, parameter::IR_HALT_TINY_DX = 2, IR_HALT_BAD_X = 3
+      integer, parameter::IR_HALT_BAD_MVP = 4, IR_HALT_BAD_RERR = 5
+      integer, parameter::IR_HALT_DIVERGED = 6, IR_HALT_STAGNATED = 7
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
 
-   !    if(myisnan(sum(abs(x))))then
-   !       write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed'
-   !       stop
-   !    endif
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
 
-   !    itmax = ntotal
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ziterrefine, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ziterrefine! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      breakdown_tol = 1d-30
+      stagnation_tol = max(1d-12, min(1d-2, tol*1d-2))
+      divergence_factor = 1d2
+      stagnate_max = 5
+      stagnate_count = 0
+
+      allocate(r(nn_loc,1), Ax(nn_loc,1), dx(nn_loc,1), x_best(nn_loc,1))
+
+      bmag_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(bmag_local, bmag_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      bmag = sqrt(abs(bmag_sum))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag) .or. bmag > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid RHS norm:', bmag
+         endif
+         x = 0d0
+         if (bmag <= breakdown_tol) then
+            err = 0d0
+         else
+            err = BPACK_Bigvalue
+         endif
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ax_abs_sum = real(sum(abs(Ax)), kind=8)
+      halt_code_local = IR_HALT_NONE
+      if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+      call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                         ptree%Comm, ierr)
+      if (halt_code /= IR_HALT_NONE) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid initial operator output.'
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      r = b - Ax
+      rerr_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      rerr = sqrt(abs(rerr_sum))/bmag
+      if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid initial residual:', rerr
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      rerr_best = rerr
+      x_best = x
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of IR,error:', 0, rerr
+      end if
+
+      if (tol > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      do it = 1, itmax
+         call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, dx, ker)
+         dx_abs_sum = real(sum(abs(dx)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((dx_abs_sum /= dx_abs_sum) .or. dx_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_PRECON
+
+         dxnorm_local = dot_product(dx(:,1), dx(:,1))
+         xnorm_local = dot_product(x(:,1), x(:,1))
+         call MPI_ALLREDUCE(dxnorm_local, dxnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xnorm_local, xnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         dxnorm = sqrt(abs(dxnorm_sum))
+         xnorm = sqrt(abs(xnorm_sum))
+         if (halt_code_local == IR_HALT_NONE) then
+            if ((dxnorm /= dxnorm) .or. (xnorm /= xnorm) .or. &
+                dxnorm > huge(1d0)/100d0 .or. xnorm > huge(1d0)/100d0) then
+               halt_code_local = IR_HALT_BAD_PRECON
+            elseif (dxnorm <= stagnation_tol*max(1d0, xnorm)) then
+               halt_code_local = IR_HALT_TINY_DX
+            endif
+         endif
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         x = x + dx
+         x_abs_sum = real(sum(abs(x)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((x_abs_sum /= x_abs_sum) .or. x_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_X
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ax_abs_sum = real(sum(abs(Ax)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+         r = b - Ax
+
+         rerr_local = dot_product(r(:,1), r(:,1))
+         call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         rerr = sqrt(abs(rerr_sum))/bmag
+
+         if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(IR_HALT_BAD_RERR, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of IR,error:', it, rerr
+         end if
+
+         if (rerr < rerr_best*(1d0 - stagnation_tol)) then
+            rerr_best = rerr
+            x_best = x
+            stagnate_count = 0
+         else
+            if (rerr < rerr_best) then
+               rerr_best = rerr
+               x_best = x
+            endif
+            stagnate_count = stagnate_count + 1
+         endif
+
+         halt_code = IR_HALT_NONE
+         if (rerr > divergence_factor*max(rerr_best, breakdown_tol)) then
+            halt_code = IR_HALT_DIVERGED
+         elseif (stagnate_count >= stagnate_max) then
+            halt_code = IR_HALT_STAGNATED
+         endif
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = it
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (tol > rerr) then
+            err = rerr
+            iter = it
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+      enddo
+
+      x = x_best
+      err = rerr_best
+      iter = itmax
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: iterative refinement terminated without reaching tolerance:', err
+      endif
+
+      deallocate(r, Ax, dx, x_best)
+
+      return
+
+   contains
+
+      subroutine print_ir_halt(halt_code_in, best_err)
+         implicit none
+         integer, intent(in)::halt_code_in
+         real(kind=8), intent(in)::best_err
+
+         select case(halt_code_in)
+         case(IR_HALT_BAD_PRECON)
+            print *, 'Warning: IR halts due to invalid preconditioner correction, returning best iterate:', best_err
+         case(IR_HALT_TINY_DX)
+            print *, 'Warning: IR halts due to tiny correction, returning best iterate:', best_err
+         case(IR_HALT_BAD_X)
+            print *, 'Warning: IR halts due to invalid solution update, returning best iterate:', best_err
+         case(IR_HALT_BAD_MVP)
+            print *, 'Warning: IR halts due to invalid operator output, returning best iterate:', best_err
+         case(IR_HALT_BAD_RERR)
+            print *, 'Warning: IR halts due to invalid residual, returning best iterate:', best_err
+         case(IR_HALT_DIVERGED)
+            print *, 'Warning: IR halts due to residual divergence, returning best iterate:', best_err
+         case(IR_HALT_STAGNATED)
+            print *, 'Warning: IR halts due to residual stagnation, returning best iterate:', best_err
+         case default
+            print *, 'Warning: IR halts, returning best iterate:', best_err
+         end select
+      end subroutine print_ir_halt
+   end subroutine BPACK_Ziterrefine_usermatvec_precon
 
 
-   !    nb_local = dot_product(b(:,1), b(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nb_local, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    nb = sqrt(abs(nb_local))
+   !!!>**** synonym kept for the full iterative-refinement spelling used by the iter_solver dispatcher
+   subroutine BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
 
-   !    flag=1
-   !    tolb=err*nb
+      call BPACK_Ziterrefine_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+         blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
 
-   !    call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,ytmp,ker)
-   !    r = b-ytmp
-
-   !    nr_local = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    nr = sqrt(abs(nr_local))
-   !    nr_act = nr
-
-   !    if (nr <= tolb)then  ! Initial guess is a good enough solution
-   !       flag = 0
-   !       iter = 0
-   !       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-   !          print *, '# ofiter,error:', iter, nr/nb
-   !       end if
-   !       return
-   !    endif
-
-   !    r0 = r
-   !    u_m = r
-   !    w = r
-   !    pu_m = u_m
-   !    call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,pu_m,v,ker)
-   !    Au = v
-   !    d = 0
-   !    Ad = d
-
-   !    tau = nr
-   !    theta = 0
-   !    eta = 0
-
-   !    rho = dot_product(r(:,1), r(:,1))
-   !    call MPI_ALLREDUCE(MPI_IN_PLACE, rho, 1, MPI_DT, MPI_SUM, &
-   !                          ptree%Comm, ierr)
-   !    rho_old = rho
-
-   !    even=1
-
-   !    do mm=1,itmax
-   !       if(even==1)then
-   !          r0v = dot_product(r0(:,1), v(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0v, 1, MPI_DT, MPI_SUM, &
-   !                               ptree%Comm, ierr)
-   !          alpha = rho/r0v
-   !          u_mp1 = u_m - alpha*v
-   !       endif
-   !       w = w - alpha*Au
-   !       sigma = (theta**2/alpha)*eta
-   !       d = pu_m + sigma*d
-   !       Ad = Au + sigma*Ad
-
-   !       nw_local = dot_product(w(:,1), w(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nw_local, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !       nw = sqrt(abs(nw_local))
-   !       theta = nw/tau
-
-   !       c_mp1 = 1d0/sqrt(1+theta**2);
-   !       tau = tau*theta*c_mp1;
-   !       eta = c_mp1**2*alpha;
-
-   !       x = x + eta*d
-   !       r = r - eta*Ad
-   !       nr_local = dot_product(r(:,1), r(:,1))
-   !       call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !       nr = sqrt(abs(nr_local))
-   !       nr_act = nr;
-
-   !       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-   !          print *, '# ofiter,error:', mm, nr_act/nb
-   !       end if
-   !       iter = mm
-
-   !       ! check for convergence
-   !       if (nr <= tolb)then
-   !          call blackbox_MVP(Ndim,'N',nn_loc_md,nn_loc_md,1,x,ytmp,ker)
-   !          r = b - ytmp
-
-   !          nr_local = dot_product(r(:,1), r(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, nr_local, 1, MPI_DT, MPI_SUM, &
-   !                               ptree%Comm, ierr)
-   !          nr_act = sqrt(abs(nr_local))
-   !          if (nr_act <= tolb)then
-   !                flag = 0
-   !                exit
-   !          endif
-   !       endif
-
-   !       if(even==0)then
-   !          r0w = dot_product(r0(:,1), w(:,1))
-   !          call MPI_ALLREDUCE(MPI_IN_PLACE, r0w, 1, MPI_DT, MPI_SUM, &
-   !                            ptree%Comm, ierr)
-   !          rho = r0w;
-   !          beta = rho/rho_old
-   !          rho_old = rho
-   !          u_mp1 = w + beta*u_m
-   !       endif
-
-   !       pu_m = u_mp1;
-   !       call blackbox_MVP(Ndim,'N',nn_loc_md,nn_loc_md,1,pu_m,Au_new,ker)
-
-   !       if(even==0)then
-   !          v = Au_new + beta*(Au+beta*v)
-   !       endif
-
-   !       Au = Au_new
-   !       u_m = u_mp1
-   !       even=1-even
-   !    enddo
-
-   !    if (ptree%MyID == Main_ID )then
-   !    if(iter>=itmax)then
-   !       print *, 'Iterative solver is terminated without convergence!!!', iter, nr_act
-   !       stop
-   !    endif
-   !    endif
-
-   !    return
-   ! end subroutine BPACK_MD_Ztfqmr_usermatvec_noprecon
+      return
+   end subroutine BPACK_Ziterativerefinement_usermatvec_precon
 
 
-   !!!!>**** expose the TFQMR as an API using user-supplied matvec (tensor), the TFQMR is the same as BPACK_MD_Ztfqmr
-   subroutine BPACK_MD_Ztfqmr_usermatvec_noprecon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, r0_initial, blackbox_MVP, ptree, option, stats, ker)
+   !!!>**** dispatch usermatvec iterative solves according to option%iter_solver
+   subroutine BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      select case (option%iter_solver)
+      case (GMRES)
+         call BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (IR)
+         call BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (TFQMR)
+         call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case default
+         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using TFQMR:', option%iter_solver
+         call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      end select
+
+      return
+   end subroutine BPACK_Z_iter_usermatvec_precon
+
+
+
+   !!!!>**** TFQMR kernel for an already left-preconditioned user-supplied tensor matvec
+   subroutine Ztfqmr_MD_usermatvec_precon_kernel(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, ptree, option, stats, ker)
       implicit none
       integer Ndim
       integer ierr
       integer, intent(in)::ntotal
-      integer::iter, itmax, it, nn_loc,nn_loc_md(Ndim)
+      integer::iter, itmax, it, ii, nn_loc,nn_loc_md(Ndim)
       DT, dimension(1:product(nn_loc_md),1)::x, bb, b, ytmp
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md),1)::w, yo, ayo, ye, aye, r, d, v
@@ -1164,13 +1484,16 @@ contains
       DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
-      real(kind=8)::bmag
+      real(kind=8)::bmag, rerr_last, breakdown_tol
+      integer::iter_last
+      logical::breakdown
+      character(len=128)::breakdown_reason
 
       type(Hstat)::stats
 
       type(kernelquant)::ker
       procedure(HMatVec_MD)::blackbox_MVP
-      DT::r0_initial(product(nn_loc_md),1)
+      DT, allocatable::r0_initial(:,:), x_last(:,:)
       type(proctree)::ptree
       type(Hoption)::option
 
@@ -1184,7 +1507,7 @@ contains
       vtmp = x_sum
       call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(myisnan(abs(x_sum)))then
-         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_noprecon, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_precon, an initial guess of x is needed. Setting x=0 as an initial guess. '
          x=0
       endif
 
@@ -1192,7 +1515,7 @@ contains
       vtmp = b_sum
       call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
       if(abs(b_sum)==0d0)then
-         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_noprecon! Returning a trivial solution vector'
+         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_precon! Returning a trivial solution vector'
          x = 0d0
          err = 0d0
          iter = 0
@@ -1200,11 +1523,22 @@ contains
       endif
 
       itmax = iter
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
 
       bb=b
 
 
       if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc,1), x_last(nn_loc,1))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii,1))
+      enddo
+      x_last = x
+      rerr_last = err
+      iter_last = 0
 
       !  set initial values
       !
@@ -1232,7 +1566,24 @@ contains
       ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
       ta = sqrt(abs(ta_sum))
       bmag = sqrt(abs(bmag_sum1))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR has a zero or NaN RHS norm, returning now.'
+         err = 0d0
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
       rerr = ta/bmag
+      if ((rerr /= rerr)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR initial residual is NaN, returning initial guess.'
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      x_last = x
+      rerr_last = rerr
+      iter_last = 0
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
          print *, '# ofiter,error:', 0, rerr
@@ -1241,6 +1592,7 @@ contains
       if (err > rerr) then
          err = rerr
          iter = 0
+         deallocate(r0_initial, x_last)
          return
       endif
 
@@ -1249,19 +1601,44 @@ contains
          amgis_local = dot_product(r0_initial(:,1), v(:,1))
          call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (abs(amgis) <= breakdown_tol .or. myisnan(abs(amgis)) .or. myisnan(abs(rho))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in alpha denominator'
+            exit iters
+         endif
          ahpla = rho/amgis
+         if (myisnan(abs(ahpla))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN alpha'
+            exit iters
+         endif
          ye = yo - ahpla*v
          call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,ye,aye,ker)
+         if (myisnan(sum(abs(aye)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
          !  start odd (2n-1) m loop
          d = yo + (we*we*etha/ahpla)*d
          w = w - ahpla*ayo
          we_local = dot_product(w(:,1), w(:,1))
          call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in odd TFQMR update'
+            exit iters
+         endif
          we = sqrt(abs(we_sum))/ta
          cm = 1.0d0/sqrt(1.0d0 + we*we)
          ta = ta*we*cm
          etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in odd TFQMR update'
+            exit iters
+         endif
          x = x + etha*d
          !  check if the result has converged.
          !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
@@ -1272,18 +1649,21 @@ contains
          we_local = dot_product(w(:,1), w(:,1))
          call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
-         if (ta<=1d-30) then
-            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
-            err = rerr
-            iter = it
-            return
-            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
-         end if
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in even TFQMR update'
+            exit iters
+         endif
 
          we = sqrt(abs(we_sum))/ta
          cm = 1.0d0/sqrt(1.0d0 + we*we)
          ta = ta*we*cm
          etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in even TFQMR update'
+            exit iters
+         endif
          x = x + etha*d
 
          !  check if the result has converged.
@@ -1294,6 +1674,14 @@ contains
             call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
                                ptree%Comm, ierr)
             rerr = sqrt(abs(rerr_sum))/bmag
+            if ((rerr /= rerr)) then
+               breakdown = .true.
+               breakdown_reason = 'NaN residual'
+               exit iters
+            endif
+            x_last = x
+            rerr_last = rerr
+            iter_last = it
 
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
                print *, '# ofiter,error:', it, rerr
@@ -1303,6 +1691,7 @@ contains
             if (err > rerr) then
                err = rerr
                iter = it
+               deallocate(r0_initial, x_last)
 
                ! ! ! if (myid == main_id) then
                ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
@@ -1315,13 +1704,37 @@ contains
          dum_local = dot_product(r0_initial(:,1), w(:,1))
          call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
                             ptree%Comm, ierr)
+         if (abs(rho) <= breakdown_tol .or. myisnan(abs(rho)) .or. myisnan(abs(dum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in beta denominator'
+            exit iters
+         endif
          beta = dum/rho
+         if (myisnan(abs(beta))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN beta'
+            exit iters
+         endif
          rho = dum
          yo = w + beta*ye
          call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,yo,ayo,ker)
+         if (myisnan(sum(abs(ayo)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
          !MAGIC
          v = ayo + beta*(aye + beta*v)
       enddo iters
+      if (breakdown) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR ', trim(breakdown_reason), &
+            ', returning last finite iterate:', iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
       call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,r,ker)
 
       !MAGIC
@@ -1330,17 +1743,787 @@ contains
       call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
                          ierr)
       err = sqrt(abs(err_sum))/bmag
+      if ((err /= err)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR final residual is NaN, returning last finite iterate:', &
+            iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
       iter = itmax
 
       print *, 'Iterative solver is terminated without convergence!!!', it, err
       stop
 
       return
-   end subroutine BPACK_MD_Ztfqmr_usermatvec_noprecon
+   end subroutine Ztfqmr_MD_usermatvec_precon_kernel
+
+
+   !!!>**** expose left-preconditioned TFQMR with separate user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::bb(:,:)
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      allocate(bb(product(nn_loc_MD),1))
+
+      call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, b, bb, ker)
+
+      call Ztfqmr_MD_usermatvec_precon_kernel(Ndim, ntotal, nn_loc_MD, bb, x, err, iter, &
+         blackbox_MVP_precond, ptree, option, stats, ker)
+
+      deallocate(bb)
+
+      return
+
+   contains
+
+      subroutine blackbox_MVP_precond(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         integer::Ndim
+         character trans
+         integer, intent(in)::M(Ndim), N(Ndim), num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+         DT, allocatable::ytmp(:,:)
+
+         allocate(ytmp(product(M),num_vect))
+         call blackbox_MVP(Ndim, trans, M, N, num_vect, Vin, ytmp, ker)
+         call blackbox_precon_MVP(Ndim, trans, M, N, num_vect, ytmp, Vout, ker)
+         deallocate(ytmp)
+
+         return
+      end subroutine blackbox_MVP_precond
+
+   end subroutine BPACK_MD_Ztfqmr_usermatvec_precon
+
+
+   !!!>**** expose left-preconditioned restarted GMRES with separate user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Zgmres_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker, restart_in)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer, intent(in), optional::restart_in
+      integer::iter, itmax, restart, total_iter, inner_iter, nrit
+      integer::i, j, ierr, nn_loc, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::V(:,:), Ax(:,:), b_prec(:,:), hess(:,:), givens_c(:), givens_s(:), g(:), y(:)
+      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol
+      DT::x_sum, b_sum, vtmp, norm_local, norm_sum, dot_local, dot_sum, tmp
+      logical::converged, happy_breakdown
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Zgmres, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0 .and. sqrt(abs(norm_sum))==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Zgmres! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      if (itmax <= 0) itmax = max(1, ntotal)
+
+      restart = 30
+      if (present(restart_in)) restart = restart_in
+      restart = max(1, min(restart, itmax))
+      breakdown_tol = 1d-300
+
+      allocate(V(nn_loc,restart+1), Ax(nn_loc,1), b_prec(nn_loc,1))
+      allocate(hess(restart+1,restart), givens_c(restart), givens_s(restart))
+      allocate(g(restart+1), y(restart))
+
+      call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, b, b_prec, ker)
+
+      rho0 = 0d0
+      relres = 1d0
+      total_iter = 0
+      converged = .false.
+
+      do while (.not. converged .and. total_iter < itmax)
+         call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, Ax, V(:,1:1), ker)
+         V(:,1:1) = b_prec - V(:,1:1)
+
+         norm_local = dot_product(V(:,1), V(:,1))
+         call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         rho = sqrt(abs(norm_sum))
+         if (total_iter == 0) rho0 = rho
+
+         if (rho0 <= breakdown_tol) then
+            err = 0d0
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         relres = rho/rho0
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of GMRES,error:', total_iter, relres, ' restart'
+         end if
+
+         if (relres < tol) then
+            err = relres
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         V(:,1) = V(:,1)/rho
+         hess = 0d0
+         givens_c = 0d0
+         givens_s = 0d0
+         g = 0d0
+         g(1) = rho
+         nrit = 0
+
+         do inner_iter = 1, restart
+            if (total_iter >= itmax) exit
+            total_iter = total_iter + 1
+
+            call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, V(:,inner_iter:inner_iter), Ax, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, Ax, V(:,inner_iter+1:inner_iter+1), ker)
+
+            do i = 1, inner_iter
+               dot_local = dot_product(V(:,i), V(:,inner_iter+1))
+               call MPI_ALLREDUCE(dot_local, dot_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+               hess(i,inner_iter) = dot_sum
+               V(:,inner_iter+1) = V(:,inner_iter+1) - hess(i,inner_iter)*V(:,i)
+            enddo
+
+            norm_local = dot_product(V(:,inner_iter+1), V(:,inner_iter+1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            wnorm = sqrt(abs(norm_sum))
+            hess(inner_iter+1,inner_iter) = wnorm
+            happy_breakdown = (wnorm <= breakdown_tol)
+            if (.not. happy_breakdown) V(:,inner_iter+1) = V(:,inner_iter+1)/wnorm
+
+            do i = 1, inner_iter-1
+               tmp = gmres_md_dt_conjg(givens_c(i))*hess(i,inner_iter) + gmres_md_dt_conjg(givens_s(i))*hess(i+1,inner_iter)
+               hess(i+1,inner_iter) = -givens_s(i)*hess(i,inner_iter) + givens_c(i)*hess(i+1,inner_iter)
+               hess(i,inner_iter) = tmp
+            enddo
+
+            delta = sqrt(abs(hess(inner_iter,inner_iter))**2 + abs(hess(inner_iter+1,inner_iter))**2)
+            if (delta <= breakdown_tol) then
+               givens_c(inner_iter) = 1d0
+               givens_s(inner_iter) = 0d0
+            else
+               givens_c(inner_iter) = hess(inner_iter,inner_iter)/delta
+               givens_s(inner_iter) = hess(inner_iter+1,inner_iter)/delta
+            endif
+
+            hess(inner_iter,inner_iter) = gmres_md_dt_conjg(givens_c(inner_iter))*hess(inner_iter,inner_iter) + &
+               gmres_md_dt_conjg(givens_s(inner_iter))*hess(inner_iter+1,inner_iter)
+            hess(inner_iter+1,inner_iter) = 0d0
+            g(inner_iter+1) = -givens_s(inner_iter)*g(inner_iter)
+            g(inner_iter) = gmres_md_dt_conjg(givens_c(inner_iter))*g(inner_iter)
+
+            rho = abs(g(inner_iter+1))
+            relres = rho/rho0
+            nrit = inner_iter
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of GMRES,error:', total_iter, relres
+            end if
+
+            if (relres < tol .or. total_iter >= itmax .or. happy_breakdown) exit
+         enddo
+
+         if (nrit > 0) then
+            do i = nrit, 1, -1
+               tmp = g(i)
+               do j = i+1, nrit
+                  tmp = tmp - hess(i,j)*y(j)
+               enddo
+               if (abs(hess(i,i)) <= breakdown_tol) then
+                  y(i) = 0d0
+               else
+                  y(i) = tmp/hess(i,i)
+               endif
+            enddo
+
+            do i = 1, nrit
+               x(:,1) = x(:,1) + V(:,i)*y(i)
+            enddo
+         endif
+
+         if (relres < tol) then
+            converged = .true.
+            exit
+         endif
+      enddo
+
+      err = relres
+      iter = total_iter
+      if (.not. converged .and. ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: MD GMRES terminated without reaching tolerance:', err
+      endif
+
+      deallocate(V, Ax, b_prec, hess, givens_c, givens_s, g, y)
+
+      return
+
+   contains
+
+      function gmres_md_dt_conjg(val) result(res)
+         implicit none
+         DT::val, res
+#if DAT==0 || DAT==2
+         res = conjg(val)
+#else
+         res = val
+#endif
+      end function gmres_md_dt_conjg
+
+   end subroutine BPACK_MD_Zgmres_usermatvec_precon
+
+
+   !!!>**** expose iterative refinement with user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Ziterrefine_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, ierr, nn_loc, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::r(:,:), Ax(:,:), dx(:,:), x_best(:,:)
+      real(kind=8)::err, tol, rerr, rerr_best, bmag, breakdown_tol
+      real(kind=8)::stagnation_tol, divergence_factor
+      real(kind=8)::dxnorm, xnorm, dx_abs_sum, ax_abs_sum, x_abs_sum
+      DT::rerr_local, rerr_sum, bmag_local, bmag_sum, b_sum, x_sum, vtmp
+      DT::dxnorm_local, dxnorm_sum, xnorm_local, xnorm_sum
+      integer::halt_code_local, halt_code, stagnate_count, stagnate_max
+      integer, parameter::IR_HALT_NONE = 0, IR_HALT_BAD_PRECON = 1
+      integer, parameter::IR_HALT_TINY_DX = 2, IR_HALT_BAD_X = 3
+      integer, parameter::IR_HALT_BAD_MVP = 4, IR_HALT_BAD_RERR = 5
+      integer, parameter::IR_HALT_DIVERGED = 6, IR_HALT_STAGNATED = 7
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ziterrefine, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ziterrefine! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      breakdown_tol = 1d-30
+      stagnation_tol = max(1d-12, min(1d-2, tol*1d-2))
+      divergence_factor = 1d2
+      stagnate_max = 5
+      stagnate_count = 0
+
+      allocate(r(nn_loc,1), Ax(nn_loc,1), dx(nn_loc,1), x_best(nn_loc,1))
+
+      bmag_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(bmag_local, bmag_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      bmag = sqrt(abs(bmag_sum))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag) .or. bmag > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid RHS norm:', bmag
+         endif
+         x = 0d0
+         if (bmag <= breakdown_tol) then
+            err = 0d0
+         else
+            err = BPACK_Bigvalue
+         endif
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ax_abs_sum = real(sum(abs(Ax)), kind=8)
+      halt_code_local = IR_HALT_NONE
+      if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+      call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                         ptree%Comm, ierr)
+      if (halt_code /= IR_HALT_NONE) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid initial operator output.'
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      r = b - Ax
+      rerr_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      rerr = sqrt(abs(rerr_sum))/bmag
+      if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid initial residual:', rerr
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      rerr_best = rerr
+      x_best = x
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of IR,error:', 0, rerr
+      end if
+
+      if (tol > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      do it = 1, itmax
+         call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, r, dx, ker)
+         dx_abs_sum = real(sum(abs(dx)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((dx_abs_sum /= dx_abs_sum) .or. dx_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_PRECON
+
+         dxnorm_local = dot_product(dx(:,1), dx(:,1))
+         xnorm_local = dot_product(x(:,1), x(:,1))
+         call MPI_ALLREDUCE(dxnorm_local, dxnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xnorm_local, xnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         dxnorm = sqrt(abs(dxnorm_sum))
+         xnorm = sqrt(abs(xnorm_sum))
+         if (halt_code_local == IR_HALT_NONE) then
+            if ((dxnorm /= dxnorm) .or. (xnorm /= xnorm) .or. &
+                dxnorm > huge(1d0)/100d0 .or. xnorm > huge(1d0)/100d0) then
+               halt_code_local = IR_HALT_BAD_PRECON
+            elseif (dxnorm <= stagnation_tol*max(1d0, xnorm)) then
+               halt_code_local = IR_HALT_TINY_DX
+            endif
+         endif
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         x = x + dx
+         x_abs_sum = real(sum(abs(x)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((x_abs_sum /= x_abs_sum) .or. x_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_X
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ax_abs_sum = real(sum(abs(Ax)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+         r = b - Ax
+
+         rerr_local = dot_product(r(:,1), r(:,1))
+         call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         rerr = sqrt(abs(rerr_sum))/bmag
+
+         if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(IR_HALT_BAD_RERR, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of IR,error:', it, rerr
+         end if
+
+         if (rerr < rerr_best*(1d0 - stagnation_tol)) then
+            rerr_best = rerr
+            x_best = x
+            stagnate_count = 0
+         else
+            if (rerr < rerr_best) then
+               rerr_best = rerr
+               x_best = x
+            endif
+            stagnate_count = stagnate_count + 1
+         endif
+
+         halt_code = IR_HALT_NONE
+         if (rerr > divergence_factor*max(rerr_best, breakdown_tol)) then
+            halt_code = IR_HALT_DIVERGED
+         elseif (stagnate_count >= stagnate_max) then
+            halt_code = IR_HALT_STAGNATED
+         endif
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = it
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (tol > rerr) then
+            err = rerr
+            iter = it
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+      enddo
+
+      x = x_best
+      err = rerr_best
+      iter = itmax
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: MD iterative refinement terminated without reaching tolerance:', err
+      endif
+
+      deallocate(r, Ax, dx, x_best)
+
+      return
+
+   contains
+
+      subroutine print_md_ir_halt(halt_code_in, best_err)
+         implicit none
+         integer, intent(in)::halt_code_in
+         real(kind=8), intent(in)::best_err
+
+         select case(halt_code_in)
+         case(IR_HALT_BAD_PRECON)
+            print *, 'Warning: MD IR halts due to invalid preconditioner correction, returning best iterate:', best_err
+         case(IR_HALT_TINY_DX)
+            print *, 'Warning: MD IR halts due to tiny correction, returning best iterate:', best_err
+         case(IR_HALT_BAD_X)
+            print *, 'Warning: MD IR halts due to invalid solution update, returning best iterate:', best_err
+         case(IR_HALT_BAD_MVP)
+            print *, 'Warning: MD IR halts due to invalid operator output, returning best iterate:', best_err
+         case(IR_HALT_BAD_RERR)
+            print *, 'Warning: MD IR halts due to invalid residual, returning best iterate:', best_err
+         case(IR_HALT_DIVERGED)
+            print *, 'Warning: MD IR halts due to residual divergence, returning best iterate:', best_err
+         case(IR_HALT_STAGNATED)
+            print *, 'Warning: MD IR halts due to residual stagnation, returning best iterate:', best_err
+         case default
+            print *, 'Warning: MD IR halts, returning best iterate:', best_err
+         end select
+      end subroutine print_md_ir_halt
+   end subroutine BPACK_MD_Ziterrefine_usermatvec_precon
+
+
+   !!!>**** synonym kept for the full iterative-refinement spelling used by the MD iter_solver dispatcher
+   subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      call BPACK_MD_Ziterrefine_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+         blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon
+
+
+   !!!>**** dispatch tensor usermatvec iterative solves according to option%iter_solver
+   subroutine BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      select case (option%iter_solver)
+      case (GMRES)
+         call BPACK_MD_Zgmres_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (IR)
+         call BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (TFQMR)
+         call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case default
+         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using TFQMR:', option%iter_solver
+         call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      end select
+
+      return
+   end subroutine BPACK_MD_Z_iter_usermatvec_precon
+
+
+   !!!>**** dispatch built-in BPACK iterative solves through the user-matvec preconditioned interface
+   subroutine BPACK_Z_iter(ntotal, nn_loc, b, x, err, iter, bmat, ptree, option, stats)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc), target::x, b
+      DT, pointer::x2(:,:), b2(:,:)
+      real(kind=8)::err
+      type(Bmatrix), target::bmat
+      type(proctree), target::ptree
+      type(Hoption), target::option
+      type(Hstat), target::stats
+      type(kernelquant), target::ker
+      type(quant_bmat), target::quant
+
+      nullify(quant%msh, quant%msh_md)
+      quant%bmat => bmat
+      quant%ptree => ptree
+      quant%option => option
+      quant%stats => stats
+      ! quant%ker => ker
+      ker%QuantApp => quant
+
+      b2(1:nn_loc,1:1) => b
+      x2(1:nn_loc,1:1) => x
+
+      call BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b2, x2, err, iter, &
+         blackbox_BPACK_MVP, blackbox_BPACK_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_Z_iter
+
+
+   !!!>**** dispatch built-in tensor BPACK iterative solves through the user-matvec preconditioned interface
+   subroutine BPACK_MD_Z_iter(Ndim, ntotal, nn_loc_MD, b, x, err, iter, bmat, ptree, option, stats, msh)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim), nn_loc
+      DT, dimension(1:product(nn_loc_MD)), target::x, b
+      DT, pointer::x2(:,:), b2(:,:)
+      real(kind=8)::err
+      type(Bmatrix), target::bmat
+      type(proctree), target::ptree
+      type(Hoption), target::option
+      type(Hstat), target::stats
+      type(mesh), target::msh(Ndim)
+      type(kernelquant), target::ker
+      type(quant_bmat), target::quant
+
+      nn_loc = product(nn_loc_MD)
+
+      nullify(quant%msh)
+      quant%bmat => bmat
+      quant%msh_md => msh
+      quant%ptree => ptree
+      quant%option => option
+      quant%stats => stats
+      quant%ker => ker
+      ker%QuantApp => quant
+
+      b2(1:nn_loc,1:1) => b
+      x2(1:nn_loc,1:1) => x
+
+      call BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b2, x2, err, iter, &
+         blackbox_BPACK_MD_MVP, blackbox_BPACK_MD_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_MD_Z_iter
+
+
+   subroutine blackbox_BPACK_MVP(trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      character trans
+      integer, intent(in)::M, N, num_vect
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         call BPACK_Mult(trans, M, num_vect, Vin, Vout, quant%bmat, quant%ptree, quant%option, quant%stats)
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MVP
+
+
+   subroutine blackbox_BPACK_precon_MVP(trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      character trans
+      integer, intent(in)::M, N, num_vect
+      integer ii
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         do ii = 1, num_vect
+            call BPACK_ApplyPrecon(quant%option%precon, M, Vin(1:M,ii), Vout(1:M,ii), &
+               quant%ptree, quant%bmat, quant%option, quant%stats)
+         enddo
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_precon_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_precon_MVP
+
+
+   subroutine blackbox_BPACK_MD_MVP(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      integer Ndim
+      character trans
+      integer, intent(in)::M(Ndim), N(Ndim), num_vect
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         if (.not. associated(quant%msh_md)) then
+            write(*,*)'Tensor mesh metadata is not associated in blackbox_BPACK_MD_MVP'
+            stop
+         endif
+         call BPACK_MD_Mult(Ndim, trans, M, num_vect, Vin, Vout, quant%bmat, &
+            quant%ptree, quant%option, quant%stats, quant%msh_md)
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MD_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MD_MVP
+
+
+   subroutine blackbox_BPACK_MD_precon_MVP(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      integer Ndim
+      character trans
+      integer, intent(in)::M(Ndim), N(Ndim), num_vect
+      integer ii, nn_loc
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      nn_loc = product(M)
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         do ii = 1, num_vect
+            call BPACK_ApplyPrecon(quant%option%precon, nn_loc, Vin(1:nn_loc,ii), Vout(1:nn_loc,ii), &
+               quant%ptree, quant%bmat, quant%option, quant%stats)
+         enddo
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MD_precon_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MD_precon_MVP
 
 
 
-   subroutine BPACK_Ztfqmr(precond, ntotal, nn_loc, b, x, err, iter, r0_initial, bmat, ptree, option, stats)
+   subroutine deprecated_BPACK_Ztfqmr(precond, ntotal, nn_loc, b, x, err, iter, bmat, ptree, option, stats)
       implicit none
       integer level_c, rowblock, ierr
       integer, intent(in)::ntotal
@@ -1354,7 +2537,7 @@ contains
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
       real(kind=8)::bmag
       real(kind=8)::tim1, tim2
-      integer::kk, ll
+      integer::ii, kk, ll
       ! Variables for storing current
       integer::count_unk, srcbox_id
       DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
@@ -1364,7 +2547,7 @@ contains
 
       ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
       type(Bmatrix)::bmat
-      DT::r0_initial(:)
+      DT, allocatable::r0_initial(:)
       integer precond
       type(proctree)::ptree
       type(Hoption)::option
@@ -1405,6 +2588,11 @@ contains
       ! ! ! end if
 
       if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii))
+      enddo
 
       !  set initial values
       !
@@ -1565,15 +2753,15 @@ contains
       stop
 
       return
-   end subroutine BPACK_Ztfqmr
+   end subroutine deprecated_BPACK_Ztfqmr
 
 
-   subroutine BPACK_MD_Ztfqmr(Ndim, precond, ntotal, nn_loc_md, b, x, err, iter, r0_initial, bmat, ptree, option, stats,msh)
+   subroutine deprecated_BPACK_MD_Ztfqmr(Ndim, precond, ntotal, nn_loc_md, b, x, err, iter, bmat, ptree, option, stats,msh)
       implicit none
       integer Ndim
       integer level_c, rowblock, ierr
       integer, intent(in)::ntotal
-      integer::iter, itmax, it, nn_loc,nn_loc_md(Ndim)
+      integer::iter, itmax, it, ii, nn_loc,nn_loc_md(Ndim)
       DT, dimension(1:product(nn_loc_md))::x, bb, b, ytmp
       real(kind=8)::err, rerr
       DT, dimension(1:product(nn_loc_md))::w, yo, ayo, ye, aye, r, d, v
@@ -1593,7 +2781,7 @@ contains
 
       ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
       type(Bmatrix)::bmat
-      DT::r0_initial(:)
+      DT, allocatable::r0_initial(:)
       integer precond
       type(proctree)::ptree
       type(Hoption)::option
@@ -1636,6 +2824,11 @@ contains
       ! ! ! end if
 
       if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii))
+      enddo
 
       !  set initial values
       !
@@ -1796,7 +2989,7 @@ contains
       stop
 
       return
-   end subroutine BPACK_MD_Ztfqmr
+   end subroutine deprecated_BPACK_MD_Ztfqmr
 
    subroutine BPACK_ApplyPrecon(precond, nn_loc, x, y, ptree, bmat, option, stats)
       implicit none

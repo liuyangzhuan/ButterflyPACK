@@ -32,7 +32,7 @@ set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
 add_executable(ie3d_sp ${FCEXM1})
 target_link_libraries(ie3d_sp ${all_link_libs_c})
 
-set(FCEXM1MP EMSURF_Driver_mp.f90 EMSURF_Module_mp.f90)
+set(FCEXM1MP EMSURF_Driver_mp.f90 EMSURF_Module_mp.f90 EMSURF_Module.f90)
 add_executable(ie3d_mp ${FCEXM1MP})
 target_link_libraries(ie3d_mp ${all_link_libs_c})
 target_link_libraries(ie3d_mp ${all_link_libs_z})
@@ -266,9 +266,16 @@ target_link_libraries(cvie3d_t ${all_link_libs_z})
 add_dependencies(cvie3d_t cvie3d)
 endif()
 
-
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CVIE3DT VIE3D_tensor_Driver_scattereronly.cpp G2D/bessel.cpp)
+add_executable(cvie3d_t_so ${CVIE3DT})
+target_link_libraries(cvie3d_t_so ${all_link_libs_d})
+target_link_libraries(cvie3d_t_so ${all_link_libs_z})
+add_dependencies(cvie3d_t_so cvie3d_t)
 endif()
 
+
+endif()
 
 
 

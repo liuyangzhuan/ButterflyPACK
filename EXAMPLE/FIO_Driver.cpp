@@ -250,6 +250,11 @@ inline void C_FuncHMatVec(char const *trans, int *nin, int *nout, int *nvec, _Co
   delete[] xbuf1;
 }
 
+inline void C_FuncIdentityPrecon(char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
+  int cnt = (*nvec)*(*nout);
+  for (int i=0; i<cnt; i++) xout[i] = xin[i];
+}
+
 
 // The matvec sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncBMatVec(char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant, _Complex double *a, _Complex double *b) {
@@ -688,7 +693,7 @@ if(tst ==3){
 
 
   F2Cptr kerquant_H;
-  z_c_bpack_tfqmr_noprecon(x.data(),rhs.data(),&myseg_m,&nvec,&option, &stats_a, &ptree, &kerquant_H, &C_FuncHMatVec, quant_ptr_H);
+  z_c_bpack_iter_usermatvec_precon(x.data(),rhs.data(),&myseg_m,&nvec,&option, &stats_a, &ptree, &kerquant_H, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_H);
 
   // gather the global solution on all MPI ranks
   for (int nth=0; nth<nvec; nth++){    // this loops over all vectors, currently nvec=1
@@ -843,5 +848,4 @@ if(tst ==1 || tst ==2){
     return 0;
 }
 //------------------------------------------------------------------------------
-
 

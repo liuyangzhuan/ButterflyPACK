@@ -27,7 +27,7 @@ THREADS_PER_RANK=`expr $NTH \* 2`
 
 NODE_VAL=`expr $nmpi / $CORES_PER_NODE \* $NTH`
 
-export EXEC=./EXAMPLE/ie3d
+export EXEC=./EXAMPLE/ie3d_mp
 export OMP_NUM_THREADS=$NTH
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
@@ -68,7 +68,9 @@ knn=0
 forwardN15flag=0
 hextralevel=0
 rankrate=1.2
-
+tol_itersol=1e-12
+errsol=1
+iter_solver=3
 
 
 
@@ -188,7 +190,7 @@ forwardN15flag=0
 ########################################## BLR
 format=5
 elem_extract=2
-precon=1
+precon=3
 pat_comp=3
 blknum=1
 tol=1d-4
@@ -215,11 +217,11 @@ export OMP_NUM_THREADS=$OMP_NUM_THREADS
 # wavelength=2.0
 # filename=sphere_2300
 
-# wavelength=1.0
-# filename=sphere_9000
+wavelength=1.0
+filename=sphere_9000
 
-wavelength=0.28
-filename=sphere_128000
+# wavelength=0.28
+# filename=sphere_128000
 
 # wavelength=0.14
 # filename=sphere_512000
@@ -242,7 +244,7 @@ filename=sphere_128000
 
 logfile=$filename.out_precon_${precon}_sort_${xyzsort}_mpi_${nmpi}_format_${format}_less_adapt_${less_adapt}_tol_rand_${tol_rand}_lrlevel_${LRlevel}_nbundle_${Nbundle}_forwardN15flag_${forwardN15flag}_hextralevel_${hextralevel}_omp${NTH}_parsec${use_parsec}
 
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores /usr/bin/time -f "Time=%E MaxRSS=%M KB" $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --rankrate ${rankrate} --hextralevel ${hextralevel} --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores /usr/bin/time -f "Time=%E MaxRSS=%M KB" $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --errsol $errsol --iter_solver ${iter_solver} --rankrate ${rankrate} --tol_itersol ${tol_itersol} --hextralevel ${hextralevel} --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
 # srun -n $nmpi -N 4 -c $THREADS_PER_RANK --cpu_bind=cores valgrind --leak-check=yes $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
 
 

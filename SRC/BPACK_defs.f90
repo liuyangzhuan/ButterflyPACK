@@ -112,6 +112,11 @@ module BPACK_DEFS
     integer, parameter:: BLR = 5  !< use single-level matrix (lr/bf) solver
     integer, parameter:: HTENSOR = 6  !< use H tensor (lr/bf) solver
 
+
+    integer, parameter:: TFQMR = 1 !< use tfqmr
+    integer, parameter:: GMRES = 2 !< use gmres
+    integer, parameter:: IR = 3 !< use iterative refinement
+
     !>**** construction parameters
     integer, parameter:: SVD = 1
     integer, parameter:: RRQR = 2
@@ -722,6 +727,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_Rdetect  !< tolerance to detect numerical ranks
         real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
+        integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR or IterativeRefinement)
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
         integer::schulzorder !< order (>=2) of schultz iteration
@@ -801,13 +807,16 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(c_funptr), pointer :: C_FuncZmnBlock => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided)
         type(c_funptr), pointer :: C_FuncZmnBlock_MD => null() !< Kernels Defined in C: c_function_pointer to the user-supplied function for computing a list of intersection of indices from Z (data layout needs to be provided) (as tensors)
         type(c_funptr), pointer :: C_FuncHMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+        type(c_funptr), pointer :: C_FuncHPreconMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for applying a preconditioner
         type(c_funptr), pointer :: C_FuncHMatVec_MD => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of Z
+        type(c_funptr), pointer :: C_FuncHPreconMatVec_MD => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for applying a tensor preconditioner
         type(c_funptr), pointer :: C_FuncBMatVec => null() !< Kernels Defined in C: procedure pointer to the user-supplied derived type for computing matvec of a block
     end type kernelquant
 
     type quant_bmat
         type(Bmatrix), pointer::bmat !< Use this metadata in blocked element extraction
         type(mesh), pointer::msh   !< Use this metadata in blocked element extraction
+        type(mesh), pointer::msh_md(:)   !< Use this metadata in tensor matvecs
         type(proctree), pointer::ptree !< Use this metadata in blocked element extraction
         type(Hstat), pointer::stats !< Use this metadata in blocked element extraction
         type(Hoption), pointer::option !< Use this metadata in blocked element extraction

@@ -61,6 +61,27 @@ contains
    end subroutine matvec_user_C
 
 
+!>****** Fortran interface for a C/C++ preconditioner matvec used by blackbox iterative solvers
+   subroutine matvec_precon_user_C(trans, M, N, num_vect, Vin, Vout, ker)
+
+      integer, INTENT(IN):: M, N, num_vect
+      DT::Vin(:, :), Vout(:, :)
+      type(kernelquant)::ker
+      character trans
+
+      procedure(C_HMatVec), POINTER :: proc
+
+      call c_f_procpointer(ker%C_FuncHPreconMatVec, proc)
+      if (trans == 'N') then
+         call proc(trans//c_null_char, N, M, num_vect, Vin, Vout, ker%C_QuantApp)
+      else
+         call proc(trans//c_null_char, M, N, num_vect, Vin, Vout, ker%C_QuantApp)
+      endif
+      return
+
+   end subroutine matvec_precon_user_C
+
+
 !>****** Fortran interface for the matvec function required by BPACK_construction_Matvec, inside which a c++ function pointer ker%C_FuncHMatVec is called \n
    !>******! It is assumed the ker%C_FuncHMatVec interfaces with local input and output vectors, which assume an already ordered hierarchical matrix
    !> @param ker: the structure containing kernel quantities
@@ -89,6 +110,28 @@ contains
       return
 
    end subroutine matvec_user_C_MD
+
+
+!>****** Fortran interface for a C/C++ tensor preconditioner matvec used by blackbox iterative solvers
+   subroutine matvec_precon_user_C_MD(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+
+      integer :: Ndim
+      integer, INTENT(IN):: M(Ndim), N(Ndim), num_vect
+      DT::Vin(:, :), Vout(:, :)
+      type(kernelquant)::ker
+      character trans
+
+      procedure(C_HMatVec_MD), POINTER :: proc
+
+      call c_f_procpointer(ker%C_FuncHPreconMatVec_MD, proc)
+      if (trans == 'N') then
+         call proc(Ndim, trans//c_null_char, N, M, num_vect, Vin, Vout, ker%C_QuantApp)
+      else
+         call proc(Ndim, trans//c_null_char, M, N, num_vect, Vin, Vout, ker%C_QuantApp)
+      endif
+      return
+
+   end subroutine matvec_precon_user_C_MD
 
 
 !>****** Fortran interface for the matvec function required by BF_randomized, inside which a c++ function pointer ker%C_FuncBMatVec is called \n
@@ -506,6 +549,10 @@ contains
          val_d = option%precon
          valid_opt = 1
       endif
+      if (trim(str) == 'iter_solver') then
+         val_d = option%iter_solver
+         valid_opt = 1
+      endif
       if (trim(str) == 'xyzsort') then
          val_d = option%xyzsort
          valid_opt = 1
@@ -758,6 +805,11 @@ contains
       if (trim(str) == 'precon') then
          call c_f_pointer(val_Cptr, val_i)
          option%precon = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'iter_solver') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%iter_solver = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'xyzsort') then
@@ -2685,7 +2737,7 @@ contains
 
 
 
-!>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec
+!>**** C interface of a blackbox iterative solver with separate operator and preconditioner callbacks
    !> @param x: local solution vector
    !> @param b: local RHS
    !> @param Nloc: size of local RHS
@@ -2696,17 +2748,19 @@ contains
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    !> @param ker_Cptr: the structure containing kernel quantities
    !> @param C_FuncHMatVec: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-   subroutine C_BPACK_TFQMR_Noprecon(x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec, C_QuantApp) bind(c, name="c_bpack_tfqmr_noprecon")
+   !> @param C_FuncHPreconMatVec: the C_pointer to user-provided function to apply the preconditioner (in)
+   subroutine C_BPACK_Iter_Usermatvec_Precon(x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec, C_FuncHPreconMatVec, C_QuantApp) bind(c, name="c_bpack_iter_usermatvec_precon")
       implicit none
 
       integer Nloc, Nrhs
-      DT::x(Nloc, Nrhs), b(Nloc, Nrhs), r0_initial(Nloc,1)
+      DT::x(Nloc, Nrhs), b(Nloc, Nrhs)
 
       type(c_ptr), intent(in) :: ptree_Cptr
       type(c_ptr), intent(in) :: option_Cptr
       type(c_ptr), intent(in) :: stats_Cptr
       type(c_ptr) :: ker_Cptr
       type(c_funptr), intent(in), value, target :: C_FuncHMatVec
+      type(c_funptr), intent(in), value, target :: C_FuncHPreconMatVec
       type(c_ptr), intent(in), target :: C_QuantApp
 
       type(Hoption), pointer::option
@@ -2725,36 +2779,34 @@ contains
       !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncHMatVec => C_FuncHMatVec
+      ker%C_FuncHPreconMatVec => C_FuncHPreconMatVec
 
       stats%Flop_Sol = 0
       stats%Time_Sol = 0
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve ......"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Iterative Solve ......"
 
       n1 = MPI_Wtime()
-      do ii = 1, Nloc
-         call random_dp_number(r0_initial(ii,1))
-      end do
-
       do ii = 1, Nrhs
          iter = 0
          rel_error = option%tol_itersol
-         call BPACK_Ztfqmr_usermatvec_noprecon(option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, matvec_user_C, ptree, option, stats, ker)
+         call BPACK_Z_iter_usermatvec_precon(option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, &
+            matvec_user_C, matvec_precon_user_C, ptree, option, stats, ker)
       end do
       n2 = MPI_Wtime()
       stats%Time_Sol = stats%Time_Sol + n2 - n1
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Iterative Solve finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
 
       ker_Cptr = c_loc(ker)
 
-   end subroutine C_BPACK_TFQMR_Noprecon
+   end subroutine C_BPACK_Iter_Usermatvec_Precon
 
 
 
 
-!>**** C interface of a blackbox tfqmr without preconditioner, or assuming preconditioner is applied in the blackbox matvec (tensor)
+!>**** C interface of a blackbox tensor iterative solver with separate operator and preconditioner callbacks
    !> @param x: local solution vector
    !> @param b: local RHS
    !> @param Nloc: size of local RHS
@@ -2765,17 +2817,19 @@ contains
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
    !> @param ker_Cptr: the structure containing kernel quantities
    !> @param C_FuncHMatVec_MD: the C_pointer to user-provided function to multiply A and A* with vectors (in)
-   subroutine C_BPACK_MD_TFQMR_Noprecon(Ndim, x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec_MD, C_QuantApp) bind(c, name="c_bpack_md_tfqmr_noprecon")
+   !> @param C_FuncHPreconMatVec_MD: the C_pointer to user-provided function to apply the tensor preconditioner (in)
+   subroutine C_BPACK_MD_Iter_Usermatvec_Precon(Ndim, x, b, Nloc, Nrhs, option_Cptr, stats_Cptr, ptree_Cptr, ker_Cptr, C_FuncHMatVec_MD, C_FuncHPreconMatVec_MD, C_QuantApp) bind(c, name="c_bpack_md_iter_usermatvec_precon")
       implicit none
       integer Ndim
       integer Nloc(Ndim), Nrhs
-      DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs), r0_initial(product(Nloc),1)
+      DT::x(product(Nloc), Nrhs), b(product(Nloc), Nrhs)
 
       type(c_ptr), intent(in) :: ptree_Cptr
       type(c_ptr), intent(in) :: option_Cptr
       type(c_ptr), intent(in) :: stats_Cptr
       type(c_ptr) :: ker_Cptr
       type(c_funptr), intent(in), value, target :: C_FuncHMatVec_MD
+      type(c_funptr), intent(in), value, target :: C_FuncHPreconMatVec_MD
       type(c_ptr), intent(in), target :: C_QuantApp
 
       type(Hoption), pointer::option
@@ -2794,31 +2848,29 @@ contains
       !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
       ker%C_FuncHMatVec_MD => C_FuncHMatVec_MD
+      ker%C_FuncHPreconMatVec_MD => C_FuncHPreconMatVec_MD
 
       stats%Flop_Sol = 0
       stats%Time_Sol = 0
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve ......"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Iterative Solve ......"
 
       n1 = MPI_Wtime()
-      do ii = 1, product(Nloc)
-         call random_dp_number(r0_initial(ii,1))
-      end do
-
       do ii = 1, Nrhs
          iter = 0
          rel_error = option%tol_itersol
-         call BPACK_MD_Ztfqmr_usermatvec_noprecon(Ndim, option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, r0_initial, matvec_user_C_MD, ptree, option, stats, ker)
+         call BPACK_MD_Z_iter_usermatvec_precon(Ndim, option%n_iter, Nloc, b(:, ii), x(:, ii), rel_error, iter, &
+            matvec_user_C_MD, matvec_precon_user_C_MD, ptree, option, stats, ker)
       end do
       n2 = MPI_Wtime()
       stats%Time_Sol = stats%Time_Sol + n2 - n1
 
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "TFQMR Solve finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Iterative Solve finished"
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
 
       ker_Cptr = c_loc(ker)
 
-   end subroutine C_BPACK_MD_TFQMR_Noprecon
+   end subroutine C_BPACK_MD_Iter_Usermatvec_Precon
 
 
 

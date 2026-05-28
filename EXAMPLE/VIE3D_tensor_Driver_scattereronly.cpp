@@ -106,8 +106,14 @@ int floor_safe(double x){
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
-  g1=-0.2; g2=-0.4; g3=-0.35;
-  s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
+
+  // g1=-0.2; g2=-0.4; g3=-0.35;
+  // s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
+
+  g1 = -0.05;
+  g2 = -0.07;
+  g3 = -0.08;
+  s0 = 4.0;
 
   double A = -0.01;
   if(ivelo==9){
@@ -308,7 +314,7 @@ public:
   int _nx = 0;   // nx
   int _ny = 0;   // ny
   int _nz = 0;   // nz
-  int _scaleGreen = 0; // whether to scale the Green function by pow(k0,2.0)*(pow(s1/s0,2.0)-1)
+  int _scaleGreen = 0; // with v=Q*u unknown: whether to apply h^{-3}/Q diagonal in matvec instead of sampled entries
   double _w = pi;   //angular frequency
   int _idx_off_x = 0;
   int _idx_off_y = 0;
@@ -460,18 +466,30 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 }
 
 
-// Assemble a block of matrix entries from interpolated D1, D2, tau
+// Assemble entries for the scatterer-to-scatterer VIE operator using
+// v = Q u as the unknown, where
+//   Q(x) = k0^2 * ((s(x)/s0)^2 - 1), s0 = 2, k0 = omega*s0.
+//
+// Original u-unknown form:
+//   (h^{-3} I - G Q) u = b.
+// New v=Q*u form:
+//   (h^{-3} Q^{-1} - G) v = b.
+//
+// Therefore the contrast coefficient belongs only to the diagonal/mass term.
+// The off-diagonal Green part is always -G.  The scaleGreen option now only
+// controls whether the diagonal h^{-3}/Q is inserted here (scaleGreen==0) or
+// applied dynamically in C_FuncHMatVec_MD (scaleGreen==1).
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
 
     double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
     double s0=2;
     double k0 = s0*Q->_w;
-    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1); // Q(x2), assumed nonzero
     int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
-        *output = -*output*coef + 1.0/pow(Q->_h,3.0);
+        *output = -*output + 1.0/(pow(Q->_h,3.0)*coef);
       }else{
         *output = -*output ;
       }
@@ -479,11 +497,7 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
       double tau = sqrt(pow(s0,2)* (pow(x1-x2,2) + pow(y1-y2,2) + pow(z1-z2,2)));
-      if(Q->_scaleGreen==0){
-        *output =-coef*Babich(Q->_d, Q->_w, D1, D2, tau);
-      }else{
-        *output =-Babich(Q->_d, Q->_w, D1, D2, tau);
-      }
+      *output =-Babich(Q->_d, Q->_w, D1, D2, tau);
     }
 }
 
@@ -1015,10 +1029,14 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
     double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
 
     for (int nth=0; nth<*nvec; nth++){
-      xbuf1[i+nth*product(nout,*Ndim)]=1.0/pow(Q->_h,3.0)*xin[i+nth*product(nout,*Ndim)];
+      // v = Q*u is the unknown.  The mass/identity contribution is
+      // h^{-3} * Q^{-1} * v.  Keep the sign convention from the sampled
+      // matrix: z_c_bpack_md_mult applies the stored -G operator.
+      xbuf1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]/(pow(Q->_h,3.0)*coef);
     }
     for (int nth=0; nth<*nvec; nth++){
-      xin1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]*coef;
+      // The Green operator acts directly on v, not on Q*u.
+      xin1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)];
     }
   }
   z_c_bpack_md_mult(Ndim,trans,xin1,xout_before_precon,nin,nout,nvec,Q->bmat_bf,Q->option_bf,Q->stats_bf,Q->ptree_bf,Q->msh_bf);
@@ -1732,7 +1750,7 @@ if(myrank==master_rank){
 
 
   	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", 0); // HODLR
-  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 2); // HODLR
+  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 1); // HODLR
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "xyzsort", 1); // KD-tree ordering
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "knn", 0); // HODLR requires no knn
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "precon", 1); // Direct solver
@@ -1928,11 +1946,9 @@ if(myrank==master_rank){
       z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
 
       for (int nth=0; nth<nvec; nth++){
-        double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Nx, Ny, Nz);
-        double s0=2;
-        double k0 = s0*w;
-        double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
-        x_v_glo[i_old_scalar-1+nth*product(Ns,Ndim)]=x_s[i+nth*product(myseg_s2s,Ndim)]*coef;
+        // x_s is already v = Q*u, so do not multiply by coef again before
+        // applying the volume Green operator to compute the scattered field.
+        x_v_glo[i_old_scalar-1+nth*product(Ns,Ndim)]=x_s[i+nth*product(myseg_s2s,Ndim)];
       }
     }
     MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), product(Ns,Ndim)*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
