@@ -6,5 +6,5 @@ Name: @CMAKE_PROJECT_NAME@
 Description: Distributed-memory ButterflyPACK solver
 Version: @PROJECT_VERSION@
 
-Libs: -L${libdir} -lzbutterflypack -ldbutterflypack
+Libs: -L${libdir} -lbutterflypack
 Cflags: -I${includedir}

@@ -14,17 +14,17 @@ include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_SINGLE)
 include_directories( ${ButterflyPACK_BINARY_DIR}/SRC_COMPLEX)
 # Libs linked to all of the examples
 if(enable_mpi)
-set(all_link_libs_z zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
-set(all_link_libs_d dbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_c cbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_s sbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_cpp butterflypack_cpp sbutterflypack dbutterflypack cbutterflypack zbutterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_z butterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
+set(all_link_libs_d butterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_c butterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_s butterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_cpp butterflypack ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 else()
-set(all_link_libs_z zbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
-set(all_link_libs_d dbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_c cbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_s sbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
-set(all_link_libs_cpp butterflypack_cpp sbutterflypack dbutterflypack cbutterflypack zbutterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_z butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB}  m)
+set(all_link_libs_d butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_c butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_s butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
+set(all_link_libs_cpp butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 endif()
 ########################################### single complex Fortran drivers
 
@@ -32,7 +32,7 @@ set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
 add_executable(ie3d_sp ${FCEXM1})
 target_link_libraries(ie3d_sp ${all_link_libs_c})
 
-set(FCEXM1MP EMSURF_Driver_mp.f90 EMSURF_Module_mp.f90 EMSURF_Module.f90)
+set(FCEXM1MP EMSURF_Driver_mp.f90 EMSURF_Module.f90)
 add_executable(ie3d_mp ${FCEXM1MP})
 target_link_libraries(ie3d_mp ${all_link_libs_c})
 target_link_libraries(ie3d_mp ${all_link_libs_z})
@@ -276,6 +276,4 @@ endif()
 
 
 endif()
-
-
 

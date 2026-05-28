@@ -494,8 +494,56 @@ add_subdirectory(SRC_DOUBLE)
 add_subdirectory(SRC_DOUBLECOMPLEX)
 add_subdirectory(SRC_SINGLE)
 add_subdirectory(SRC_COMPLEX)
-add_subdirectory(EXAMPLE)
 add_subdirectory(CPP_INTERFACE)
+
+include(GNUInstallDirs)
+
+add_library(butterflypack
+  $<TARGET_OBJECTS:dbutterflypack>
+  $<TARGET_OBJECTS:zbutterflypack>
+  $<TARGET_OBJECTS:sbutterflypack>
+  $<TARGET_OBJECTS:cbutterflypack>
+  $<TARGET_OBJECTS:butterflypack_cpp>)
+
+if (enable_mpi)
+  target_link_libraries(butterflypack PUBLIC
+    ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES}
+    ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB}
+    ${ARPACK_LIB} ${MAGMA_LIB} m)
+else()
+  target_link_libraries(butterflypack PUBLIC
+    mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB}
+    ${ARPACK_LIB} ${MAGMA_LIB} m)
+endif()
+
+if (enable_parsec)
+  find_package(PaRSEC CONFIG REQUIRED)
+  target_link_libraries(butterflypack PUBLIC PaRSEC::parsec)
+endif()
+
+set_target_properties(butterflypack PROPERTIES
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${VERSION_MAJOR})
+
+target_include_directories(butterflypack PUBLIC
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/CPP_INTERFACE>
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE>
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX>
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_SINGLE>
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_COMPLEX>
+  $<BUILD_INTERFACE:${ButterflyPACK_BINARY_DIR}/CPP_INTERFACE>
+  $<BUILD_INTERFACE:${ButterflyPACK_BINARY_DIR}/SRC_DOUBLE>
+  $<BUILD_INTERFACE:${ButterflyPACK_BINARY_DIR}/SRC_DOUBLECOMPLEX>
+  $<BUILD_INTERFACE:${ButterflyPACK_BINARY_DIR}/SRC_SINGLE>
+  $<BUILD_INTERFACE:${ButterflyPACK_BINARY_DIR}/SRC_COMPLEX>
+  $<INSTALL_INTERFACE:include>)
+
+install(TARGETS butterflypack EXPORT MYBPACKTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+add_subdirectory(EXAMPLE)
 
 
 # Documentation

@@ -40,6 +40,8 @@
 #define bpack_hmat_ptg_diag_release BPACK_HMAT_PTG_CAT(BPACK_HMAT_PTG_PREFIX, bpack_hmat_ptg_diag_release)
 #define bpack_hmat_ptg_u_release BPACK_HMAT_PTG_CAT(BPACK_HMAT_PTG_PREFIX, bpack_hmat_ptg_u_release)
 #define bpack_hmat_ptg_l_release BPACK_HMAT_PTG_CAT(BPACK_HMAT_PTG_PREFIX, bpack_hmat_ptg_l_release)
+#define bpack_hmat_ptg_desc_create BPACK_HMAT_PTG_CAT(BPACK_HMAT_PTG_PREFIX, bpack_hmat_ptg_desc_create)
+#define bpack_hmat_ptg_desc_destroy BPACK_HMAT_PTG_CAT(BPACK_HMAT_PTG_PREFIX, bpack_hmat_ptg_desc_destroy)
 #if !defined(BPACK_HMAT_PTG_NO_PTR_RENAME) && \
     !defined(PARSEC_zparsec_hmat_factorization_ptg_NB_TASK_CLASSES) && \
     !defined(PARSEC_dparsec_hmat_factorization_ptg_NB_TASK_CLASSES) && \

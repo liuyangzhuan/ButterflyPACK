@@ -18,21 +18,20 @@ set(headers
 
 set(sources
     CPPWrapper.cpp
+    m_BPACK_utilities.f90
 )
 
 
 
-add_library(butterflypack_cpp ${sources} ${HEADERS})
+add_library(butterflypack_cpp OBJECT ${sources} ${HEADERS})
+add_dependencies(butterflypack_cpp
+  dbutterflypack
+  zbutterflypack
+  sbutterflypack
+  cbutterflypack)
 
-if (enable_mpi)
-target_link_libraries(butterflypack_cpp zbutterflypack cbutterflypack dbutterflypack sbutterflypack
-                       ${MPI_Fortran_LIBRARIES} ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
-else()
-target_link_libraries(butterflypack_cpp mpi_dummy zbutterflypack cbutterflypack dbutterflypack sbutterflypack ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${ARPACK_LIB} ${MAGMA_LIB} m)
-endif()
-                      set_target_properties(butterflypack_cpp PROPERTIES
-                      VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} 
-)
+set_target_properties(butterflypack_cpp PROPERTIES
+  POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(butterflypack_cpp PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}>
@@ -40,12 +39,6 @@ target_include_directories(butterflypack_cpp PUBLIC
 
 # Define GNU standard installation directories
 include(GNUInstallDirs)
-
-install(TARGETS butterflypack_cpp EXPORT MYBPACKTargets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
 
 install(FILES ${headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 

@@ -1460,8 +1460,8 @@ contains
          call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case default
-         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using TFQMR:', option%iter_solver
-         call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using GMRES:', option%iter_solver
+         call BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       end select
 
@@ -2378,7 +2378,7 @@ contains
       quant%ptree => ptree
       quant%option => option
       quant%stats => stats
-      ! quant%ker => ker
+      quant%ker => ker
       ker%QuantApp => quant
 
       b2(1:nn_loc,1:1) => b

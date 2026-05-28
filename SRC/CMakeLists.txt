@@ -25,9 +25,7 @@ if (enable_parsec)
   list(APPEND headers parsec_hmat_ptg_bridge.h)
 endif ()
 
-set(sources
-MAGMA_offset.c
-MAGMA_utilities.f90
+set(common_lapack_sources
 LAPACK_dtrevc3mod.f
 LAPACK_ztrevc3mod.f
 LAPACK_strevc3mod.f
@@ -44,6 +42,26 @@ LAPACK_sgetrfmod.f
 LAPACK_sgetrf2mod.f
 LAPACK_cgetrfmod.f
 LAPACK_cgetrf2mod.f
+)
+
+set(common_scalapack_sources
+SCALAPACK_pdgeqpfmod.f
+SCALAPACK_pzgeqpfmod.f
+SCALAPACK_psgeqpfmod.f
+SCALAPACK_pcgeqpfmod.f
+SCALAPACK_pdgetrfmod.f
+SCALAPACK_pzgetrfmod.f
+SCALAPACK_psgetrfmod.f
+SCALAPACK_pcgetrfmod.f
+SCALAPACK_pdgetf2mod.f
+SCALAPACK_pzgetf2mod.f
+SCALAPACK_psgetf2mod.f
+SCALAPACK_pcgetf2mod.f
+)
+
+set(sources
+MAGMA_offset.c
+MAGMA_utilities.f90
 MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
@@ -63,18 +81,22 @@ BPACK_wrapper.f90
 C_BPACK_wrapper.cpp
 )
 
+if (CMAKE_CURRENT_SOURCE_DIR MATCHES "/SRC$" OR
+    CMAKE_CURRENT_SOURCE_DIR MATCHES "/SRC_DOUBLE$")
+  list(APPEND sources ${common_lapack_sources})
+  if (enable_mpi)
+    list(APPEND sources ${common_scalapack_sources})
+  endif ()
+endif ()
+
 if (enable_parsec)
   list(APPEND sources
        parsec_hmat_ptg_bridge.c
        parsec_hmat_ptg_bridge_fortran.f90)
 endif ()
 
-if (enable_mpi)
-  list(APPEND sources SCALAPACK_pdgeqpfmod.f SCALAPACK_pzgeqpfmod.f SCALAPACK_psgeqpfmod.f SCALAPACK_pcgeqpfmod.f SCALAPACK_pdgetrfmod.f SCALAPACK_pzgetrfmod.f SCALAPACK_psgetrfmod.f SCALAPACK_pcgetrfmod.f SCALAPACK_pdgetf2mod.f SCALAPACK_pzgetf2mod.f SCALAPACK_psgetf2mod.f SCALAPACK_pcgetf2mod.f)
-endif ()
 
-
-add_library(butterflypack ${sources} ${headers})
+add_library(butterflypack OBJECT ${sources} ${headers})
 
 if (enable_parsec)
   set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)
@@ -112,7 +134,7 @@ if (enable_parsec)
   target_link_libraries(butterflypack PaRSEC::parsec)
 endif ()
                       set_target_properties(butterflypack PROPERTIES
-                      VERSION ${PROJECT_VERSION} SOVERSION ${VERSION_MAJOR} COMPILE_FLAGS "-DDAT"
+                      POSITION_INDEPENDENT_CODE ON COMPILE_FLAGS "-DDAT"
 )
 
 target_include_directories(butterflypack PUBLIC
@@ -136,12 +158,6 @@ endif()
 
 # Define GNU standard installation directories
 include(GNUInstallDirs)
-
-install(TARGETS butterflypack EXPORT MYBPACKTargets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
 
 if (enable_python)
   install(TARGETS butterflypack_python EXPORT MYBPACKTargets

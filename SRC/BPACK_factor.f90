@@ -457,6 +457,24 @@ endif
 
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:h_mat%Maxlevel))
         stats%rankmax_of_level_global_factor = 0
+        if (allocated(stats%Add_random_CNT)) deallocate(stats%Add_random_CNT)
+        if (allocated(stats%Mul_random_CNT)) deallocate(stats%Mul_random_CNT)
+        if (allocated(stats%XLUM_random_CNT)) deallocate(stats%XLUM_random_CNT)
+        if (allocated(stats%Add_random_Time)) deallocate(stats%Add_random_Time)
+        if (allocated(stats%Mul_random_Time)) deallocate(stats%Mul_random_Time)
+        if (allocated(stats%XLUM_random_Time)) deallocate(stats%XLUM_random_Time)
+        allocate(stats%Add_random_CNT(0:h_mat%Maxlevel))
+        allocate(stats%Mul_random_CNT(0:h_mat%Maxlevel))
+        allocate(stats%XLUM_random_CNT(0:h_mat%Maxlevel))
+        allocate(stats%Add_random_Time(0:h_mat%Maxlevel))
+        allocate(stats%Mul_random_Time(0:h_mat%Maxlevel))
+        allocate(stats%XLUM_random_Time(0:h_mat%Maxlevel))
+        stats%Add_random_CNT = 0
+        stats%Mul_random_CNT = 0
+        stats%XLUM_random_CNT = 0
+        stats%Add_random_Time = 0d0
+        stats%Mul_random_Time = 0d0
+        stats%XLUM_random_Time = 0d0
 
 #ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
