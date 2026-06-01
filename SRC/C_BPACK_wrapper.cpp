@@ -71,9 +71,9 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_zfp",         "whether to use zfp compression"},
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
+		{"iter_solver",         "The choice of iterative solvers. 1: TFQMR, 2: GMRES or 3: IterativeRefinement)"},
 		{"help",            "print this help message"}
 	};
-
 
 	double opt_d;
 	int opt_i;
@@ -125,6 +125,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_zfp",         required_argument, 0, 36},
 		{"use_qtt",         required_argument, 0, 37},
 		{"hextralevel",         required_argument, 0, 38},
+		{"iter_solver",         required_argument, 0, 39},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -332,6 +333,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "hextralevel", opt_i);
+		} break;
+		case 39: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "iter_solver", opt_i);
 		} break;
 		default: break;
 		}

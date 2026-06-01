@@ -28,6 +28,7 @@ module BPACK_wrapper
 #endif
    use MISC_Utilities
    use BPACK_Solve_Mul
+   use Bplus_Utilities, only: BF_Switchlevel
    use iso_c_binding
 
 contains
@@ -2705,15 +2706,19 @@ contains
       select case (option%format)
       case (HSS_MD)
          blocks => bmat%hss_bf_md%BP%LL(1)%matrices_block(1)
+         level_butterfly = blocks%level_butterfly
+         levelm = blocks%level_half
+      case (HTENSOR)
+         blocks => bmat%h_mat_md%BP%LL(1)%matrices_block(1)
+         level_butterfly = bmat%h_mat_md%Maxlevel - blocks%level
+         levelm = BF_Switchlevel(level_butterfly, option%pat_comp)
       case default
          write(*,*)'not supported format in C_BPACK_MD_Get_Local_Midlevel_Blocks:', option%format
          stop
       end select
 
 
-      level_butterfly = blocks%level_butterfly
-      levelm = blocks%level_half
-      call GetLocalBlockRange_MD(ptree, blocks%pgno, blocks%level_half, level_butterfly, Ndim, 1, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
+      call GetLocalBlockRange_MD(ptree, blocks%pgno, levelm, level_butterfly, Ndim, 1, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
       call assert(product(inc_c)==1,'inc_c has to be 1 for matrixblock_MD type')
 
       nc_m = nc
