@@ -334,7 +334,7 @@ public:
   int _verbose=0;
   int _vs=1;
   F2Cptr* bmat_scaled_green, *option_bf, *stats_bf, *ptree_bf, *msh_bf;
-  F2Cptr* bmat_diags, *stats_diags, *msh_diags, *kerquant_diags;
+  F2Cptr* bmat_diags, *stats_diags, *msh_diags, *kerquant_diags, *ptree_diags;
   F2Cptr option_diag, ptree_diag;
   C_QuantApp_BF** quant_ptr_diags;
 
@@ -353,6 +353,16 @@ public:
   std::vector<int> _Hperm_m;
   std::vector<int> _headarray;
   int _nc_m[3];
+  int _diag_block_stride = 0;
+  int _nblock_diag = 0;
+  int _bdiag_level = -1;
+  int _outer_idxs[3] = {1, 1, 1};
+  int _outer_idxe_plus1[3] = {1, 1, 1};
+  std::vector<int> _diag_block_info;
+  std::vector<int> _diag_nloc;
+  std::vector<int> _diag_npo;
+  std::vector<MPI_Comm> _diag_comms;
+  std::vector<MPI_Group> _diag_groups;
   std::vector<int> _iHperm_m;
   vector<double> _slowness_array;
 
@@ -895,77 +905,138 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
 inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
   int Ndim = *Ndim_p;
+  int Npo = product(nout,Ndim);
 
   if(nout[0]!=nin[0] || nout[1]!=nin[1] || nout[2]!=nin[2]){
     cout<<"nin should equal nout in C_FuncApplyDiagPrecond"<<endl;
     exit(1);
   }
 
+  for(int i0=0;i0<Npo;i0++){
+    for (int nth=0; nth<*nvec; nth++){
+      xout[i0+nth*Npo] = 0.0;
+    }
+  }
+
   if(Q->_bdiag_precon==1){
-    int nblock = product(Q->_nc_m,Ndim);
+    int nblock = Q->_nblock_diag;
+    int info_stride = Q->_diag_block_stride;
     for (int bb=0; bb<nblock; bb++){
       int nout_diag[3];
-      int offset_diag[3];
-      int cnt=0;
-      int bb_scalar = bb+1;
-      int bb_md[3];
-      z_c_bpack_singleindex_to_multiindex(&Ndim,Q->_nc_m,&bb_scalar,bb_md);
+      int head_g[3];
+      int tail_g[3];
+      int lhead_g[3];
+      int ltail_g[3];
+      int* info = Q->_diag_block_info.data() + bb*info_stride;
       for (int dim_i=0; dim_i<Ndim; dim_i++){
-        offset_diag[dim_i] = Q->_headarray[cnt+bb_md[dim_i]-1];
-        nout_diag[dim_i] = Q->_headarray[cnt+bb_md[dim_i]] - Q->_headarray[cnt+bb_md[dim_i]-1];
-        cnt += Q->_nc_m[dim_i]+1;
+        head_g[dim_i] = info[dim_i];
+        tail_g[dim_i] = info[Ndim + dim_i];
+        lhead_g[dim_i] = info[2*Ndim + dim_i];
+        ltail_g[dim_i] = info[3*Ndim + dim_i];
+        nout_diag[dim_i] = tail_g[dim_i] - head_g[dim_i];
       }
-      int Npo_diag = product(nout_diag,Ndim);
-      int Npo = product(nout,Ndim);
-      int64_t cnt_diag = (*nvec)*Npo_diag;
-      _Complex double* xin_diag = new _Complex double[cnt_diag];
-      _Complex double* xout_diag = new _Complex double[cnt_diag];
+      int local_dims[3];
+      bool has_local_part = true;
+      for (int dim_i=0; dim_i<Ndim; dim_i++){
+        local_dims[dim_i] = ltail_g[dim_i] - lhead_g[dim_i];
+        if(local_dims[dim_i] <= 0)has_local_part = false;
+      }
 
+      int Npo_diag = Q->_diag_npo[bb];
+      int Nloc_diag = Q->_diag_nloc[bb];
+      int cnt_block = (*nvec)*Npo_diag;
+      int cnt_diag = (*nvec)*Nloc_diag;
+      vector<_Complex double> block_in(cnt_block,{0.0,0.0});
+      vector<_Complex double> block_in_sum(cnt_block,{0.0,0.0});
+      vector<_Complex double> block_out(cnt_block,{0.0,0.0});
+      vector<_Complex double> block_out_sum(cnt_block,{0.0,0.0});
+      vector<_Complex double> xin_diag(cnt_diag,{0.0,0.0});
+      vector<_Complex double> xout_diag(cnt_diag,{0.0,0.0});
 
-      for(int i0=0;i0<Npo_diag;i0++){
+      if(has_local_part){
+        int Nlocal_block = product(local_dims,Ndim);
+        for(int i0=0;i0<Nlocal_block;i0++){
+          int i_local_scalar = i0+1;
+          int i_local_md[3];
+          int i_block_md[3];
+          int i_outer_md[3];
+          int i_block_scalar;
+          int i_outer_scalar;
+
+          z_c_bpack_singleindex_to_multiindex(&Ndim,local_dims,&i_local_scalar,i_local_md);
+          for (int dim_i=0; dim_i<Ndim; dim_i++){
+            int global_new = lhead_g[dim_i] + i_local_md[dim_i] - 1;
+            i_block_md[dim_i] = global_new - head_g[dim_i] + 1;
+            i_outer_md[dim_i] = global_new - Q->_outer_idxs[dim_i] + 1;
+          }
+          z_c_bpack_multiindex_to_singleindex(&Ndim,nout_diag,&i_block_scalar,i_block_md);
+          z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_outer_scalar,i_outer_md);
+          for (int nth=0; nth<*nvec; nth++){
+            block_in[(i_block_scalar-1)+nth*Npo_diag] = xin[(i_outer_scalar-1)+nth*Npo];
+          }
+        }
+      }
+
+      MPI_Comm block_comm = Q->_diag_comms[bb];
+      int block_comm_size = 1;
+      MPI_Comm_size(block_comm, &block_comm_size);
+      if(block_comm_size > 1){
+        MPI_Allreduce(block_in.data(), block_in_sum.data(), cnt_block, MPI_C_DOUBLE_COMPLEX, MPI_SUM, block_comm);
+      }else{
+        block_in_sum = block_in;
+      }
+
+      for(int i0=0;i0<Nloc_diag;i0++){
         int i_new_diag_scalar = i0+1;
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
-        int i_old_diag_md[Ndim];
-        int i_new_loc_md[Ndim];
-        int i_new_loc_scalar;
-        int i_old_md[Ndim];
-
-        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&ii,i_old_diag_md);
-        for (int dim_i=0; dim_i<Ndim; dim_i++){
-          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
-        }
-        z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_new_loc_scalar,i_new_loc_md);
         for (int nth=0; nth<*nvec; nth++){
-          xin_diag[i0+nth*Npo_diag] = xin[(i_new_loc_scalar-1)+nth*Npo];
+          xin_diag[i0+nth*Nloc_diag] = block_in_sum[(ii-1)+nth*Npo_diag];
         }
       }
 
-      z_c_bpack_inv_mult("N",xin_diag,xout_diag,&Npo_diag,&Npo_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diag));
+      z_c_bpack_inv_mult("N",xin_diag.data(),xout_diag.data(),&Nloc_diag,&Nloc_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diags[bb]));
 
-      for(int i0=0;i0<Npo_diag;i0++){
+      for(int i0=0;i0<Nloc_diag;i0++){
         int i_new_diag_scalar = i0+1;
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
-        int i_old_diag_md[Ndim];
-        int i_new_loc_md[Ndim];
-        int i_new_loc_scalar;
-        int i_old_md[Ndim];
-
-        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&ii,i_old_diag_md);
-        for (int dim_i=0; dim_i<Ndim; dim_i++){
-          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
-        }
-        z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_new_loc_scalar,i_new_loc_md);
         for (int nth=0; nth<*nvec; nth++){
-          xout[(i_new_loc_scalar-1)+nth*Npo] = xout_diag[i0+nth*Npo_diag];
+          block_out[(ii-1)+nth*Npo_diag] = xout_diag[i0+nth*Nloc_diag];
         }
       }
-      delete[] xin_diag;
-      delete[] xout_diag;
+
+      if(block_comm_size > 1){
+        MPI_Allreduce(block_out.data(), block_out_sum.data(), cnt_block, MPI_C_DOUBLE_COMPLEX, MPI_SUM, block_comm);
+      }else{
+        block_out_sum = block_out;
+      }
+
+      if(has_local_part){
+        int Nlocal_block = product(local_dims,Ndim);
+        for(int i0=0;i0<Nlocal_block;i0++){
+          int i_local_scalar = i0+1;
+          int i_local_md[3];
+          int i_block_md[3];
+          int i_outer_md[3];
+          int i_block_scalar;
+          int i_outer_scalar;
+
+          z_c_bpack_singleindex_to_multiindex(&Ndim,local_dims,&i_local_scalar,i_local_md);
+          for (int dim_i=0; dim_i<Ndim; dim_i++){
+            int global_new = lhead_g[dim_i] + i_local_md[dim_i] - 1;
+            i_block_md[dim_i] = global_new - head_g[dim_i] + 1;
+            i_outer_md[dim_i] = global_new - Q->_outer_idxs[dim_i] + 1;
+          }
+          z_c_bpack_multiindex_to_singleindex(&Ndim,nout_diag,&i_block_scalar,i_block_md);
+          z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_outer_scalar,i_outer_md);
+          for (int nth=0; nth<*nvec; nth++){
+            xout[(i_outer_scalar-1)+nth*Npo] = block_out_sum[(i_block_scalar-1)+nth*Npo_diag];
+          }
+        }
+      }
     }
   }else{
-    int Npo = product(nout,Ndim);
     for(int i0=0;i0<Npo;i0++){
       for (int nth=0; nth<*nvec; nth++){
         xout[i0+nth*Npo]=xin[i0+nth*Npo];
@@ -1118,6 +1189,7 @@ if(myrank==master_rank){
   double smax_ivelo11=3.0;
   int nshape=200;
   int bdiag_precon = 0 ;
+  int bdiag_level = -1 ;
 
   FILE *fout1;
 
@@ -1166,6 +1238,7 @@ if(myrank==master_rank){
       {"smin_ivelo11",        required_argument, 0, 32},
       {"smax_ivelo11",        required_argument, 0, 33},
       {"bdiag_precon",        required_argument, 0, 34},
+      {"bdiag_level",        required_argument, 0, 35},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1311,10 +1384,13 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> bdiag_precon;
     } break;
+    case 35: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_level;
+    } break;
     default: break;
     }
   }
-
 
 	Ndim=3; //data dimension
   int Ns[Ndim];
@@ -1571,6 +1647,7 @@ if(myrank==master_rank){
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
 
 
     // construct hodlr with geometrical points
@@ -1667,27 +1744,27 @@ if(myrank==master_rank){
 
 #else // construct a block-diagonal preconditioner
   MPI_Group world_group;
-  MPI_Group single_group;
-  MPI_Comm single_comm;
   if(bdiag_precon==1){
-    // Construct a MPI communicator with only my rank
     MPI_Comm_group(MPI_COMM_WORLD, &world_group);
-    int ranks[1];
-    ranks[0] = myrank;
-    MPI_Group_incl(world_group, 1, ranks, &single_group);
-    MPI_Comm_create(MPI_COMM_WORLD, single_group, &single_comm);
-    MPI_Fint Fcomm_single;  // the fortran MPI communicator
-    Fcomm_single = MPI_Comm_c2f(single_comm);
 
-    quant_ptr_bf_s2s->_headarray.resize(Nmax_s*Ndim);
-    z_c_bpack_md_get_local_midlevel_blocks(&Ndim, quant_ptr_bf_s2s->_nc_m, quant_ptr_bf_s2s->_headarray.data(), &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
-    // std::cout<< quant_ptr_bf_s2s->_nc_m[0] << " "<< quant_ptr_bf_s2s->_nc_m[1] << " "<< quant_ptr_bf_s2s->_nc_m[2] << std::endl;
+    quant_ptr_bf_s2s->_diag_block_stride = 4*Ndim + 4;
+    int mesh_range[6];
+    int nblock = 0;
+    int dummy_block_info[1];
+    z_c_bpack_md_get_anylevel_blocks(&Ndim, &(quant_ptr_bf_s2s->_bdiag_level), &nblock, dummy_block_info, mesh_range, &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
+    quant_ptr_bf_s2s->_nblock_diag = nblock;
+    quant_ptr_bf_s2s->_diag_block_info.resize(nblock*quant_ptr_bf_s2s->_diag_block_stride);
+    int nblock_capacity = nblock;
+    z_c_bpack_md_get_anylevel_blocks(&Ndim, &(quant_ptr_bf_s2s->_bdiag_level), &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(), mesh_range, &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
+    if(nblock_capacity != nblock){
+      cout<<"nblock changed between C_BPACK_MD_Get_Anylevel_Blocks calls"<<endl;
+      exit(1);
+    }
+    for (int dim_i=0; dim_i<Ndim; dim_i++){
+      quant_ptr_bf_s2s->_outer_idxs[dim_i] = mesh_range[dim_i];
+      quant_ptr_bf_s2s->_outer_idxe_plus1[dim_i] = mesh_range[Ndim+dim_i];
+    }
 
-    int nblock = product(quant_ptr_bf_s2s->_nc_m,Ndim);
-    int size_diag = 1;
-    int* groups_diag = new int[size_diag];
-    groups_diag[0]=0;
-    z_c_bpack_createptree(&size_diag, groups_diag, &Fcomm_single, &(quant_ptr_bf_s2s->ptree_diag));
 	  z_c_bpack_copyoption(&option_bf,&(quant_ptr_bf_s2s->option_diag));
 
 
@@ -1704,7 +1781,12 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s->kerquant_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->stats_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->msh_diags = new F2Cptr[nblock];
+    quant_ptr_bf_s2s->ptree_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->quant_ptr_diags = new C_QuantApp_BF*[nblock];
+    quant_ptr_bf_s2s->_diag_nloc.resize(nblock);
+    quant_ptr_bf_s2s->_diag_npo.resize(nblock);
+    quant_ptr_bf_s2s->_diag_comms.resize(nblock, MPI_COMM_NULL);
+    quant_ptr_bf_s2s->_diag_groups.resize(nblock, MPI_GROUP_NULL);
 
 
     for (int bb=0; bb<nblock; bb++){
@@ -1712,33 +1794,48 @@ if(myrank==master_rank){
       z_c_bpack_createstats(&(quant_ptr_bf_s2s->stats_diags[bb]));
 
       int nout_diag[3];
-      int offset_diag[3];
-      int cnt=0;
-      int bb_scalar = bb+1;
-      int bb_md[3];
-      z_c_bpack_singleindex_to_multiindex(&Ndim,quant_ptr_bf_s2s->_nc_m,&bb_scalar,bb_md);
+      int head_g[3];
+      int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
       for (int dim_i=0; dim_i<Ndim; dim_i++){
-        offset_diag[dim_i] = quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]-1];
-        nout_diag[dim_i] = quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]] - quant_ptr_bf_s2s->_headarray[cnt+bb_md[dim_i]-1];
-        cnt += quant_ptr_bf_s2s->_nc_m[dim_i]+1;
+        head_g[dim_i] = block_info[dim_i];
+        nout_diag[dim_i] = block_info[Ndim+dim_i] - block_info[dim_i];
       }
       int Npo = product(nout_diag,Ndim);
+      quant_ptr_bf_s2s->_diag_npo[bb] = Npo;
       data_geo_diag.resize(Ndim*Npo);
+      int pgrp_head = block_info[4*Ndim];
+      int pgrp_nproc = block_info[4*Ndim+1];
+      int global_block_id = block_info[4*Ndim+3];
 
-      std::cout<<"Rank "<< myrank <<": Constructing HODLR for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo <<std::endl;
+      vector<int> ranks_diag(pgrp_nproc);
+      vector<int> groups_diag(pgrp_nproc);
+      for(int rr=0; rr<pgrp_nproc; rr++){
+        ranks_diag[rr] = pgrp_head + rr;
+        groups_diag[rr] = rr;
+      }
+      MPI_Group_incl(world_group, pgrp_nproc, ranks_diag.data(), &(quant_ptr_bf_s2s->_diag_groups[bb]));
+      MPI_Comm_create_group(MPI_COMM_WORLD, quant_ptr_bf_s2s->_diag_groups[bb], global_block_id, &(quant_ptr_bf_s2s->_diag_comms[bb]));
+      if(quant_ptr_bf_s2s->_diag_comms[bb] == MPI_COMM_NULL){
+        cout<<"Rank "<<myrank<<" failed to create diagonal-block communicator"<<endl;
+        exit(1);
+      }
+      MPI_Fint Fcomm_diag = MPI_Comm_c2f(quant_ptr_bf_s2s->_diag_comms[bb]);
+      z_c_bpack_createptree(&pgrp_nproc, groups_diag.data(), &Fcomm_diag, &(quant_ptr_bf_s2s->ptree_diags[bb]));
+
+      std::cout<<"Rank "<< myrank <<": Constructing HODLR for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
 
       for(int ii=0;ii<Npo;ii++){
         int i_old_diag_md[Ndim];
-        int i_new_loc_md[Ndim];
+        int i_new_glo_md[Ndim];
         int i_old_md[Ndim];
         int i_old_diag_scalar = ii+1;
 
         z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&i_old_diag_scalar,i_old_diag_md);
         for (int dim_i=0; dim_i<Ndim; dim_i++){
-          i_new_loc_md[dim_i] = i_old_diag_md[dim_i] + offset_diag[dim_i] - 1;
+          i_new_glo_md[dim_i] = i_old_diag_md[dim_i] + head_g[dim_i] - 1;
         }
 
-        z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
+        z_c_bpack_md_global_new2old(&Ndim,&msh_bf_s2s,i_new_glo_md,i_old_md);
 
         double xs = data_geo[(i_old_md[0]-1) * Ndim];
         double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
@@ -1763,25 +1860,26 @@ if(myrank==master_rank){
 
     // construct hodlr with geometrical points
     z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1); // suppress prining
-    z_c_bpack_construct_init(&Npo, &Ndim, data_geo_diag.data(), nns_ptr, &nlevel_diag, tree_diag, perms_diag, &myseg_diag, &(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diag), &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+    z_c_bpack_construct_init(&Npo, &Ndim, data_geo_diag.data(), nns_ptr, &nlevel_diag, tree_diag, perms_diag, &myseg_diag, &(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+    quant_ptr_bf_s2s->_diag_nloc[bb] = myseg_diag;
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->_Hperm.resize(Npo);
     std::copy(perms_diag, perms_diag + Npo, quant_ptr_bf_s2s->quant_ptr_diags[bb]->_Hperm.begin());
 
-    if(myrank==master_rank && bb==nblock-1){ // only printing information for the last diagonal block of rank 0
-      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 0); // suppress printing
-      z_c_bpack_printoption(&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->ptree_diag));
+    if(global_block_id == 1){
+      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 0);
+      z_c_bpack_printoption(&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->ptree_diags[bb]));
+      // z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1);
     }
 
-  	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diag), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
-    z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diag),&(quant_ptr_bf_s2s->msh_diags[bb]));
+  	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+    z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diags[bb]),&(quant_ptr_bf_s2s->msh_diags[bb]));
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
 
     delete[] tree_diag;
     delete[] perms_diag;
     }
-    delete[] groups_diag;
   }
 
 
@@ -1890,23 +1988,24 @@ if(myrank==master_rank){
 
 
     if(bdiag_precon){
-      int nblock = product(quant_ptr_bf_s2s->_nc_m,Ndim);
+      int nblock = quant_ptr_bf_s2s->_nblock_diag;
       for (int bb=0; bb<nblock; bb++){
         z_c_bpack_deletestats(&(quant_ptr_bf_s2s->stats_diags[bb]));
         z_c_bpack_deletemesh(&(quant_ptr_bf_s2s->msh_diags[bb]));
         z_c_bpack_deletekernelquant(&(quant_ptr_bf_s2s->kerquant_diags[bb]));
         z_c_bpack_delete(&(quant_ptr_bf_s2s->bmat_diags[bb]));
+        z_c_bpack_deleteproctree(&(quant_ptr_bf_s2s->ptree_diags[bb]));
+        if(quant_ptr_bf_s2s->_diag_comms[bb] != MPI_COMM_NULL) MPI_Comm_free(&(quant_ptr_bf_s2s->_diag_comms[bb]));
+        if(quant_ptr_bf_s2s->_diag_groups[bb] != MPI_GROUP_NULL) MPI_Group_free(&(quant_ptr_bf_s2s->_diag_groups[bb]));
         delete quant_ptr_bf_s2s->quant_ptr_diags[bb];
       }
       z_c_bpack_deleteoption(&(quant_ptr_bf_s2s->option_diag));
-      z_c_bpack_deleteproctree(&(quant_ptr_bf_s2s->ptree_diag));
       delete[] quant_ptr_bf_s2s->bmat_diags;
       delete[] quant_ptr_bf_s2s->kerquant_diags;
       delete[] quant_ptr_bf_s2s->stats_diags;
       delete[] quant_ptr_bf_s2s->msh_diags;
+      delete[] quant_ptr_bf_s2s->ptree_diags;
       delete[] quant_ptr_bf_s2s->quant_ptr_diags;
-      MPI_Comm_free(&single_comm);
-      MPI_Group_free(&single_group);
       MPI_Group_free(&world_group);
     }
 

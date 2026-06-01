@@ -1723,6 +1723,22 @@ contains
    end subroutine C_BPACK_MD_New2Old
 
 
+!>**** C interface of converting from new,global index to old, global index. Both newidx_glo and oldidx are Ndim dimensional.
+   subroutine C_BPACK_MD_Global_New2Old(Ndim, msh_Cptr, newidx_glo, oldidx) bind(c, name="c_bpack_md_global_new2old")
+      implicit none
+      integer Ndim,dim_i
+      integer newidx_glo(Ndim),oldidx(Ndim)
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh(:)
+
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+      do dim_i=1,Ndim
+         oldidx(dim_i) = msh(dim_i)%new2old(newidx_glo(dim_i))
+      enddo
+
+   end subroutine C_BPACK_MD_Global_New2Old
+
+
 
 
 !>**** C interface of converting from old, global index to new, global index, the indexs start from 1
@@ -2739,6 +2755,110 @@ contains
       enddo
 
    end subroutine C_BPACK_MD_Get_Local_Midlevel_Blocks
+
+
+!>**** C interface for getting tensor-product diagonal blocks at an arbitrary tree level
+   !> @param Ndim: dimensionality
+   !> @param level: requested basis-group tree level. If level<0, use the legacy middle-level split
+   !> @param nblock: input capacity of block_info; output number of local/shared blocks touching this rank
+   !> @param block_info: per-block data with stride 4*Ndim+4:
+   !>        global head, global tail+1, local-intersection head, local-intersection tail+1,
+   !>        pgrp head rank, pgrp size, pgrp number, global block id
+   !> @param mesh_range: global local-mesh range for this rank, [idxs(dim)], [idxe(dim)+1]
+   subroutine C_BPACK_MD_Get_Anylevel_Blocks(Ndim, level, nblock, block_info, mesh_range, bmat_Cptr, option_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_md_get_anylevel_blocks")
+      implicit none
+      integer Ndim
+      integer level, nblock, block_info(*), mesh_range(2*Ndim)
+      integer idx_block(Ndim), dims(Ndim), group_n(Ndim), head_g(Ndim), tail_g(Ndim), lhead_g(Ndim), ltail_g(Ndim)
+      integer levelm, level_butterfly, diag_level, maxlevel_mat, bb, cnt, dim_i, pgno, info_stride, pos, nblock_capacity
+
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: msh_Cptr
+
+      type(Hoption), pointer::option
+      type(Bmatrix), pointer::bmat
+      type(mesh), pointer::msh(:)
+      type(matrixblock_MD),pointer::blocks
+      type(proctree), pointer::ptree
+
+      call c_f_pointer(bmat_Cptr, bmat)
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(msh_Cptr, msh, [Ndim])
+
+      select case (option%format)
+      case (HSS_MD)
+         blocks => bmat%hss_bf_md%BP%LL(1)%matrices_block(1)
+         level_butterfly = blocks%level_butterfly
+         levelm = blocks%level_half
+         maxlevel_mat = bmat%hss_bf_md%Maxlevel
+      case (HTENSOR)
+         blocks => bmat%h_mat_md%BP%LL(1)%matrices_block(1)
+         level_butterfly = int((bmat%h_mat_md%Maxlevel - blocks%level)/2)*2
+         levelm = BF_Switchlevel(level_butterfly, option%pat_comp)
+         maxlevel_mat = bmat%h_mat_md%Maxlevel
+      case default
+         write(*,*)'not supported format in C_BPACK_MD_Get_Anylevel_Blocks:', option%format
+         stop
+      end select
+
+      if (level < 0) then
+         diag_level = level_butterfly - levelm
+      else
+         diag_level = level
+      endif
+      call assert(diag_level >= 0 .and. diag_level <= maxlevel_mat, 'invalid level in C_BPACK_MD_Get_Anylevel_Blocks')
+
+      do dim_i=1,Ndim
+         mesh_range(dim_i) = msh(dim_i)%idxs
+         mesh_range(Ndim+dim_i) = msh(dim_i)%idxe + 1
+      enddo
+
+      nblock_capacity = nblock
+      info_stride = 4*Ndim + 4
+      dims = 2**diag_level
+      cnt = 0
+
+      do bb = 1, product(dims)
+         call SingleIndexToMultiIndex(Ndim, dims, bb, idx_block)
+         group_n = blocks%col_group*2**diag_level + idx_block - 1
+         pgno = GetMshGroup_Pgno(ptree, Ndim, group_n)
+         if (IOwnPgrp(ptree, pgno)) then
+            cnt = cnt + 1
+            if (cnt <= nblock_capacity) then
+               pos = (cnt - 1)*info_stride
+               do dim_i=1,Ndim
+                  head_g(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+                  tail_g(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail + 1
+                  lhead_g(dim_i) = max(head_g(dim_i), msh(dim_i)%idxs)
+                  ltail_g(dim_i) = min(tail_g(dim_i), msh(dim_i)%idxe + 1)
+
+                  block_info(pos + dim_i) = head_g(dim_i)
+                  block_info(pos + Ndim + dim_i) = tail_g(dim_i)
+                  block_info(pos + 2*Ndim + dim_i) = lhead_g(dim_i)
+                  block_info(pos + 3*Ndim + dim_i) = ltail_g(dim_i)
+               enddo
+               block_info(pos + 4*Ndim + 1) = ptree%pgrp(pgno)%head
+               block_info(pos + 4*Ndim + 2) = ptree%pgrp(pgno)%nproc
+               block_info(pos + 4*Ndim + 3) = pgno
+               block_info(pos + 4*Ndim + 4) = bb
+            endif
+         endif
+      enddo
+
+      nblock = cnt
+
+      ! if(ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+      !    if(nblock_capacity >= nblock) then
+      !       write(*,*) 'local block count on rank 0 at level', diag_level, ':', nblock, block_info(1:nblock*info_stride)
+      !    else
+      !       write(*,*) 'local block count on rank 0 at level', diag_level, ':', nblock, 'capacity', nblock_capacity
+      !    endif
+      ! endif
+
+   end subroutine C_BPACK_MD_Get_Anylevel_Blocks
 
 
 
