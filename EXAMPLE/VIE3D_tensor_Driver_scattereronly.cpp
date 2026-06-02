@@ -356,17 +356,39 @@ public:
   int _diag_block_stride = 0;
   int _nblock_diag = 0;
   int _bdiag_level = -1;
+  int _nscatter = 0;
+  double _background_s0 = 2.0;
+  double _scatterer_tol = 1e-12;
   int _outer_idxs[3] = {1, 1, 1};
   int _outer_idxe_plus1[3] = {1, 1, 1};
   std::vector<int> _diag_block_info;
+  std::vector<int> _diag_block_offsets;
+  std::vector<int> _diag_tensor_ids;
   std::vector<int> _diag_nloc;
   std::vector<int> _diag_npo;
   std::vector<MPI_Comm> _diag_comms;
   std::vector<MPI_Group> _diag_groups;
   std::vector<int> _iHperm_m;
+  std::vector<int> _tensor_to_scatter;
+  std::vector<int> _scatter_to_tensor;
+  std::vector<int> _tensor_to_local_new;
+  std::vector<int> _local_tensor_ids;
   vector<double> _slowness_array;
 
   C_QuantApp_BF() = default;
+
+  inline bool IsScattererTensorScalar(int tensor_scalar) const {
+    return tensor_scalar >= 1 &&
+           tensor_scalar <= static_cast<int>(_tensor_to_scatter.size()) &&
+           _tensor_to_scatter[tensor_scalar-1] > 0;
+  }
+
+  inline int LocalNewFromTensorScalar(int tensor_scalar) const {
+    if(tensor_scalar >= 1 && tensor_scalar < static_cast<int>(_tensor_to_local_new.size())){
+      return _tensor_to_local_new[tensor_scalar];
+    }
+    return 0;
+  }
 
   // constructor for the tensor operator
   C_QuantApp_BF(vector<double> data, int d, int nx, int ny, int nz, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, int bdiag_precon, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
@@ -453,7 +475,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
     }else{
-      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
+      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,Q->_nx, Q->_ny, Q->_nz);
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
 
@@ -486,7 +508,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 // applied dynamically in C_FuncHMatVec_MD (scaleGreen==1).
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
 
-    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
+    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_nx, Q->_ny, Q->_nz);
     double s0=2;
     double k0 = s0*Q->_w;
     double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1); // Q(x2), assumed nonzero
@@ -494,6 +516,10 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
+        if(fabs(coef) < 1e-30){
+          cout<<"zero contrast in diagonal VIE self term at ("<<x2<<", "<<y2<<", "<<z2<<") with slowness "<<s1<<endl;
+          exit(1);
+        }
         *output = -*output + 1.0/(pow(Q->_h,3.0)*coef);
       }else{
         *output = -*output ;
@@ -930,28 +956,17 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
     int nblock = Q->_nblock_diag;
     int info_stride = Q->_diag_block_stride;
     for (int bb=0; bb<nblock; bb++){
-      int nout_diag[3];
-      int head_g[3];
-      int tail_g[3];
-      int lhead_g[3];
-      int ltail_g[3];
       int* info = Q->_diag_block_info.data() + bb*info_stride;
-      for (int dim_i=0; dim_i<Ndim; dim_i++){
-        head_g[dim_i] = info[dim_i];
-        tail_g[dim_i] = info[Ndim + dim_i];
-        lhead_g[dim_i] = info[2*Ndim + dim_i];
-        ltail_g[dim_i] = info[3*Ndim + dim_i];
-        nout_diag[dim_i] = tail_g[dim_i] - head_g[dim_i];
-      }
-      int local_dims[3];
-      bool has_local_part = true;
-      for (int dim_i=0; dim_i<Ndim; dim_i++){
-        local_dims[dim_i] = ltail_g[dim_i] - lhead_g[dim_i];
-        if(local_dims[dim_i] <= 0)has_local_part = false;
-      }
+      int head_g = info[0];
+      int tail_g = info[1];
+      int Npo_from_block = tail_g - head_g;
 
       int Npo_diag = Q->_diag_npo[bb];
       int Nloc_diag = Q->_diag_nloc[bb];
+      if(Npo_diag != Npo_from_block){
+        cout<<"inconsistent diagonal block size in C_FuncApplyDiagPrecond"<<endl;
+        exit(1);
+      }
       int cnt_block = (*nvec)*Npo_diag;
       int cnt_diag = (*nvec)*Nloc_diag;
       vector<_Complex double> block_in(cnt_block,{0.0,0.0});
@@ -961,26 +976,13 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
       vector<_Complex double> xin_diag(cnt_diag,{0.0,0.0});
       vector<_Complex double> xout_diag(cnt_diag,{0.0,0.0});
 
-      if(has_local_part){
-        int Nlocal_block = product(local_dims,Ndim);
-        for(int i0=0;i0<Nlocal_block;i0++){
-          int i_local_scalar = i0+1;
-          int i_local_md[3];
-          int i_block_md[3];
-          int i_outer_md[3];
-          int i_block_scalar;
-          int i_outer_scalar;
-
-          z_c_bpack_singleindex_to_multiindex(&Ndim,local_dims,&i_local_scalar,i_local_md);
-          for (int dim_i=0; dim_i<Ndim; dim_i++){
-            int global_new = lhead_g[dim_i] + i_local_md[dim_i] - 1;
-            i_block_md[dim_i] = global_new - head_g[dim_i] + 1;
-            i_outer_md[dim_i] = global_new - Q->_outer_idxs[dim_i] + 1;
-          }
-          z_c_bpack_multiindex_to_singleindex(&Ndim,nout_diag,&i_block_scalar,i_block_md);
-          z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_outer_scalar,i_outer_md);
+      int block_offset = Q->_diag_block_offsets[bb];
+      for(int ii=0; ii<Npo_diag; ii++){
+        int tensor_scalar = Q->_diag_tensor_ids[block_offset + ii];
+        int local_new_scalar = Q->LocalNewFromTensorScalar(tensor_scalar);
+        if(local_new_scalar > 0){
           for (int nth=0; nth<*nvec; nth++){
-            block_in[(i_block_scalar-1)+nth*Npo_diag] = xin[(i_outer_scalar-1)+nth*Npo];
+            block_in[ii+nth*Npo_diag] = xin[(local_new_scalar-1)+nth*Npo];
           }
         }
       }
@@ -1020,34 +1022,22 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         block_out_sum = block_out;
       }
 
-      if(has_local_part){
-        int Nlocal_block = product(local_dims,Ndim);
-        for(int i0=0;i0<Nlocal_block;i0++){
-          int i_local_scalar = i0+1;
-          int i_local_md[3];
-          int i_block_md[3];
-          int i_outer_md[3];
-          int i_block_scalar;
-          int i_outer_scalar;
-
-          z_c_bpack_singleindex_to_multiindex(&Ndim,local_dims,&i_local_scalar,i_local_md);
-          for (int dim_i=0; dim_i<Ndim; dim_i++){
-            int global_new = lhead_g[dim_i] + i_local_md[dim_i] - 1;
-            i_block_md[dim_i] = global_new - head_g[dim_i] + 1;
-            i_outer_md[dim_i] = global_new - Q->_outer_idxs[dim_i] + 1;
-          }
-          z_c_bpack_multiindex_to_singleindex(&Ndim,nout_diag,&i_block_scalar,i_block_md);
-          z_c_bpack_multiindex_to_singleindex(&Ndim,nout,&i_outer_scalar,i_outer_md);
+      for(int ii=0; ii<Npo_diag; ii++){
+        int tensor_scalar = Q->_diag_tensor_ids[block_offset + ii];
+        int local_new_scalar = Q->LocalNewFromTensorScalar(tensor_scalar);
+        if(local_new_scalar > 0){
           for (int nth=0; nth<*nvec; nth++){
-            xout[(i_outer_scalar-1)+nth*Npo] = block_out_sum[(i_block_scalar-1)+nth*Npo_diag];
+            xout[(local_new_scalar-1)+nth*Npo] = block_out_sum[ii+nth*Npo_diag];
           }
         }
       }
     }
   }else{
     for(int i0=0;i0<Npo;i0++){
+      bool is_scatterer = i0 < static_cast<int>(Q->_local_tensor_ids.size()) &&
+                          Q->IsScattererTensorScalar(Q->_local_tensor_ids[i0]);
       for (int nth=0; nth<*nvec; nth++){
-        xout[i0+nth*Npo]=xin[i0+nth*Npo];
+        xout[i0+nth*Npo] = is_scatterer ? xin[i0+nth*Npo] : 0.0;
       }
     }
   }
@@ -1080,6 +1070,9 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
 
     z_c_bpack_singleindex_to_multiindex(Ndim,nout,&i_new_loc_scalar,i_new_loc_md);
     z_c_bpack_md_new2old(Ndim,Q->msh_bf,i_new_loc_md,i_old_md);
+    int tensor_scalar;
+    int tensor_dims[3] = {Q->_nx, Q->_ny, Q->_nz};
+    z_c_bpack_multiindex_to_singleindex(Ndim,tensor_dims,&tensor_scalar,i_old_md);
     double x1 = Q->_data[(i_old_md[0]-1) * Q->_d];
     double y1 = Q->_data[(i_old_md[1]-1) * Q->_d+1];
     double z1 = Q->_data[(i_old_md[2]-1) * Q->_d+2];
@@ -1097,23 +1090,34 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
     double s0=2;
     double k0 = s0*Q->_w;
     double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+    bool is_scatterer = Q->IsScattererTensorScalar(tensor_scalar);
 
     for (int nth=0; nth<*nvec; nth++){
       // v = Q*u is the unknown.  The mass/identity contribution is
       // h^{-3} * Q^{-1} * v.  Keep the sign convention from the sampled
       // matrix: z_c_bpack_md_mult applies the stored -G operator.
-      xbuf1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]/(pow(Q->_h,3.0)*coef);
+      if(is_scatterer){
+        xbuf1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]/(pow(Q->_h,3.0)*coef);
+      }else{
+        xbuf1[i+nth*product(nout,*Ndim)]=0.0;
+      }
     }
     for (int nth=0; nth<*nvec; nth++){
       // The Green operator acts directly on v, not on Q*u.
-      xin1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)];
+      xin1[i+nth*product(nout,*Ndim)] = is_scatterer ? xin[i+nth*product(nout,*Ndim)] : 0.0;
     }
   }
   z_c_bpack_md_mult(Ndim,trans,xin1,xout,nin,nout,nvec,Q->bmat_scaled_green,Q->option_bf,Q->stats_bf,Q->ptree_bf,Q->msh_bf);
 
   for (int i=0; i<product(nout,*Ndim); i++){
+    bool is_scatterer = i < static_cast<int>(Q->_local_tensor_ids.size()) &&
+                        Q->IsScattererTensorScalar(Q->_local_tensor_ids[i]);
     for (int nth=0; nth<*nvec; nth++){
-      xout[i+nth*product(nout,*Ndim)]=xout[i+nth*product(nout,*Ndim)] + xbuf1[i+nth*product(nout,*Ndim)];
+      if(is_scatterer){
+        xout[i+nth*product(nout,*Ndim)]=xout[i+nth*product(nout,*Ndim)] + xbuf1[i+nth*product(nout,*Ndim)];
+      }else{
+        xout[i+nth*product(nout,*Ndim)]=0.0;
+      }
     }
   }
   delete[] xbuf1;
@@ -1536,7 +1540,7 @@ if(myrank==master_rank){
 	// create hodlr data structures
 
 	// double* dat_ptr;
-	int* nns_ptr;
+	int* nns_ptr = nullptr;
 
 	Nmin=100; //finest leafsize
 	tol=1e-4; //compression tolerance
@@ -1641,8 +1645,35 @@ if(myrank==master_rank){
       data_geo[(ii) * Ndim+2] = ii*h-W/2+center[2];
     }
 
+    int Ntot_s2s = product(Ns_s,Ndim);
+    double background_s0 = 2.0;
+    double scatterer_tol = 1e-12;
+    vector<int> tensor_to_scatter(Ntot_s2s,0);
+    vector<int> scatter_to_tensor;
+    vector<double> data_geo_scatterer;
+    for(int kk=0; kk<Nz_s; kk++){
+      for(int jj=0; jj<Ny_s; jj++){
+        for(int ii=0; ii<Nx_s; ii++){
+          double xs = ii*h-L/2+center[0];
+          double ys = jj*h-H/2+center[1];
+          double zs = kk*h-W/2+center[2];
+          double s1 = slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint);
+          int tensor_scalar = kk*Nx_s*Ny_s + jj*Nx_s + ii + 1;
+          if(fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
+            tensor_to_scatter[tensor_scalar-1] = static_cast<int>(scatter_to_tensor.size()) + 1;
+            scatter_to_tensor.push_back(tensor_scalar);
+            data_geo_scatterer.push_back(xs);
+            data_geo_scatterer.push_back(ys);
+            data_geo_scatterer.push_back(zs);
+          }
+        }
+      }
+    }
+    int Nscatter = static_cast<int>(scatter_to_tensor.size());
+
       if(myrank==0){
         cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
+        cout<<"Scatterer unknowns: "<<Nscatter<<" out of "<<Ntot_s2s<<endl;
       }
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
@@ -1661,12 +1692,30 @@ if(myrank==master_rank){
     z_c_bpack_createstats(&stats_bf_s2s);
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
+    quant_ptr_bf_s2s->_nscatter = Nscatter;
+    quant_ptr_bf_s2s->_background_s0 = background_s0;
+    quant_ptr_bf_s2s->_scatterer_tol = scatterer_tol;
+    quant_ptr_bf_s2s->_tensor_to_scatter = tensor_to_scatter;
+    quant_ptr_bf_s2s->_scatter_to_tensor = scatter_to_tensor;
 
 
     // construct hodlr with geometrical points
     z_c_bpack_md_construct_init(Ns_s,&Nmax_s, &Ndim, data_geo.data(), perms_bf_s2s, myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncNearFar_BF_MD, quant_ptr_bf_s2s);
     quant_ptr_bf_s2s->_Hperm.resize(Nmax_s*Ndim);
     std::copy(perms_bf_s2s, perms_bf_s2s + Nmax_s*Ndim, quant_ptr_bf_s2s->_Hperm.begin());
+    quant_ptr_bf_s2s->_tensor_to_local_new.assign(Ntot_s2s+1,0);
+    quant_ptr_bf_s2s->_local_tensor_ids.resize(product(myseg_s2s,Ndim));
+    for (int i=0; i<product(myseg_s2s,Ndim); i++){
+      int i_new_loc_scalar = i+1;
+      int i_new_loc_md[Ndim];
+      int i_old_md[Ndim];
+      int i_old_scalar;
+      z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
+      z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
+      quant_ptr_bf_s2s->_tensor_to_local_new[i_old_scalar] = i+1;
+      quant_ptr_bf_s2s->_local_tensor_ids[i] = i_old_scalar;
+    }
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
 
@@ -1757,25 +1806,11 @@ if(myrank==master_rank){
 #else // construct a block-diagonal preconditioner
   MPI_Group world_group;
   if(bdiag_precon==1){
-    MPI_Comm_group(MPI_COMM_WORLD, &world_group);
-
-    quant_ptr_bf_s2s->_diag_block_stride = 4*Ndim + 4;
-    int mesh_range[6];
-    int nblock = 0;
-    int dummy_block_info[1];
-    z_c_bpack_md_get_anylevel_blocks(&Ndim, &(quant_ptr_bf_s2s->_bdiag_level), &nblock, dummy_block_info, mesh_range, &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
-    quant_ptr_bf_s2s->_nblock_diag = nblock;
-    quant_ptr_bf_s2s->_diag_block_info.resize(nblock*quant_ptr_bf_s2s->_diag_block_stride);
-    int nblock_capacity = nblock;
-    z_c_bpack_md_get_anylevel_blocks(&Ndim, &(quant_ptr_bf_s2s->_bdiag_level), &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(), mesh_range, &bmat_bf_s2s, &option_bf, &ptree_bf, &msh_bf_s2s);
-    if(nblock_capacity != nblock){
-      cout<<"nblock changed between C_BPACK_MD_Get_Anylevel_Blocks calls"<<endl;
+    if(Nscatter <= 0){
+      cout<<"No scatterer unknowns found for the block-diagonal preconditioner"<<endl;
       exit(1);
     }
-    for (int dim_i=0; dim_i<Ndim; dim_i++){
-      quant_ptr_bf_s2s->_outer_idxs[dim_i] = mesh_range[dim_i];
-      quant_ptr_bf_s2s->_outer_idxe_plus1[dim_i] = mesh_range[Ndim+dim_i];
-    }
+    MPI_Comm_group(MPI_COMM_WORLD, &world_group);
 
 	  z_c_bpack_copyoption(&option_bf,&(quant_ptr_bf_s2s->option_diag));
 
@@ -1788,6 +1823,42 @@ if(myrank==master_rank){
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "elem_extract", 0); // Need to add elem_extract=2 for the matrix solver
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "RecLR_leaf", 5); // sometimes BACA is not accurate enough
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "Nmin_leaf", 64); // leaf size in the matrix solver
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1); // suppress printing while building the scatterer tree
+
+    F2Cptr bmat_scatterer_blocks;
+    F2Cptr stats_scatterer_blocks;
+    F2Cptr msh_scatterer_blocks;
+    F2Cptr kerquant_scatterer_blocks;
+    z_c_bpack_createstats(&stats_scatterer_blocks);
+    int myseg_scatterer = 0;
+    int* perms_scatterer = new int[Nscatter];
+    int nlevel_scatterer = 0;
+    int* tree_scatterer = new int[1];
+    tree_scatterer[0] = Nscatter;
+    z_c_bpack_construct_init(&Nscatter, &Ndim, data_geo_scatterer.data(), nns_ptr, &nlevel_scatterer, tree_scatterer, perms_scatterer, &myseg_scatterer, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &stats_scatterer_blocks, &msh_scatterer_blocks, &kerquant_scatterer_blocks, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
+
+    quant_ptr_bf_s2s->_diag_block_stride = 8;
+    int mesh_range[2];
+    int nblock = 0;
+    int dummy_block_info[1];
+    z_c_bpack_get_anylevel_blocks(&(quant_ptr_bf_s2s->_bdiag_level), &nblock, dummy_block_info, mesh_range, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &ptree_bf, &msh_scatterer_blocks);
+    quant_ptr_bf_s2s->_nblock_diag = nblock;
+    quant_ptr_bf_s2s->_diag_block_info.resize(nblock*quant_ptr_bf_s2s->_diag_block_stride);
+    int nblock_capacity = nblock;
+    z_c_bpack_get_anylevel_blocks(&(quant_ptr_bf_s2s->_bdiag_level), &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(), mesh_range, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &ptree_bf, &msh_scatterer_blocks);
+    if(nblock_capacity != nblock){
+      cout<<"nblock changed between C_BPACK_Get_Anylevel_Blocks calls"<<endl;
+      exit(1);
+    }
+    quant_ptr_bf_s2s->_outer_idxs[0] = mesh_range[0];
+    quant_ptr_bf_s2s->_outer_idxe_plus1[0] = mesh_range[1];
+
+    quant_ptr_bf_s2s->_diag_block_offsets.assign(nblock+1,0);
+    for (int bb=0; bb<nblock; bb++){
+      int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+      quant_ptr_bf_s2s->_diag_block_offsets[bb+1] = quant_ptr_bf_s2s->_diag_block_offsets[bb] + block_info[1] - block_info[0];
+    }
+    quant_ptr_bf_s2s->_diag_tensor_ids.resize(quant_ptr_bf_s2s->_diag_block_offsets[nblock]);
 
     quant_ptr_bf_s2s->bmat_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->kerquant_diags = new F2Cptr[nblock];
@@ -1805,19 +1876,16 @@ if(myrank==master_rank){
       vector<double> data_geo_diag;
       z_c_bpack_createstats(&(quant_ptr_bf_s2s->stats_diags[bb]));
 
-      int nout_diag[3];
-      int head_g[3];
       int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
-      for (int dim_i=0; dim_i<Ndim; dim_i++){
-        head_g[dim_i] = block_info[dim_i];
-        nout_diag[dim_i] = block_info[Ndim+dim_i] - block_info[dim_i];
-      }
-      int Npo = product(nout_diag,Ndim);
+      int head_g = block_info[0];
+      int tail_g = block_info[1];
+      int Npo = tail_g - head_g;
+      int block_offset = quant_ptr_bf_s2s->_diag_block_offsets[bb];
       quant_ptr_bf_s2s->_diag_npo[bb] = Npo;
       data_geo_diag.resize(Ndim*Npo);
-      int pgrp_head = block_info[4*Ndim];
-      int pgrp_nproc = block_info[4*Ndim+1];
-      int global_block_id = block_info[4*Ndim+3];
+      int pgrp_head = block_info[4];
+      int pgrp_nproc = block_info[5];
+      int global_block_id = block_info[7];
 
       vector<int> ranks_diag(pgrp_nproc);
       vector<int> groups_diag(pgrp_nproc);
@@ -1834,24 +1902,21 @@ if(myrank==master_rank){
       MPI_Fint Fcomm_diag = MPI_Comm_c2f(quant_ptr_bf_s2s->_diag_comms[bb]);
       z_c_bpack_createptree(&pgrp_nproc, groups_diag.data(), &Fcomm_diag, &(quant_ptr_bf_s2s->ptree_diags[bb]));
 
-      std::cout<<"Rank "<< myrank <<": Constructing HODLR for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
+      if(myrank == pgrp_head){
+        std::cout<<"Rank "<< myrank <<": Constructing HODLR for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
+      }
 
       for(int ii=0;ii<Npo;ii++){
-        int i_old_diag_md[Ndim];
-        int i_new_glo_md[Ndim];
-        int i_old_md[Ndim];
-        int i_old_diag_scalar = ii+1;
+        int scatter_old = perms_scatterer[head_g + ii - 1];
+        int tensor_scalar = scatter_to_tensor[scatter_old - 1];
+        quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
 
-        z_c_bpack_singleindex_to_multiindex(&Ndim,nout_diag,&i_old_diag_scalar,i_old_diag_md);
-        for (int dim_i=0; dim_i<Ndim; dim_i++){
-          i_new_glo_md[dim_i] = i_old_diag_md[dim_i] + head_g[dim_i] - 1;
-        }
-
-        z_c_bpack_md_global_new2old(&Ndim,&msh_bf_s2s,i_new_glo_md,i_old_md);
-
-        double xs = data_geo[(i_old_md[0]-1) * Ndim];
-        double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
-        double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
+        int tensor_scalar_tmp = tensor_scalar;
+        int tensor_md[Ndim];
+        z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&tensor_scalar_tmp,tensor_md);
+        double xs = data_geo[(tensor_md[0]-1) * Ndim];
+        double ys = data_geo[(tensor_md[1]-1) * Ndim+1];
+        double zs = data_geo[(tensor_md[2]-1) * Ndim+2];
 
         data_geo_diag[(ii) * Ndim] = xs;
         data_geo_diag[(ii) * Ndim+1] = ys;
@@ -1892,6 +1957,12 @@ if(myrank==master_rank){
     delete[] tree_diag;
     delete[] perms_diag;
     }
+    z_c_bpack_deletekernelquant(&kerquant_scatterer_blocks);
+    z_c_bpack_deletemesh(&msh_scatterer_blocks);
+    z_c_bpack_deletestats(&stats_scatterer_blocks);
+    z_c_bpack_delete(&bmat_scatterer_blocks);
+    delete[] tree_scatterer;
+    delete[] perms_scatterer;
   }
 
 
@@ -1904,8 +1975,11 @@ if(myrank==master_rank){
     if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
     int nin_loc = product(myseg_s2s,Ndim);
     vector<_Complex double> b_s(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
-    for (int i=0; i<product(myseg_s2s,Ndim)*nvec; i++){
-      b_s[i] = -b[i];
+    for (int i=0; i<product(myseg_s2s,Ndim); i++){
+      bool is_scatterer = quant_ptr_bf_s2s->IsScattererTensorScalar(quant_ptr_bf_s2s->_local_tensor_ids[i]);
+      for (int nth=0; nth<nvec; nth++){
+        b_s[i+nth*product(myseg_s2s,Ndim)] = is_scatterer ? -b[i+nth*product(myseg_s2s,Ndim)] : 0.0;
+      }
     }
     int ErrSol=0;
     z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
@@ -1920,6 +1994,14 @@ if(myrank==master_rank){
 
     z_c_bpack_md_iter_usermatvec_precon(&Ndim, x_s.data(),b_s.data(),myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec_MD, &C_FuncApplyDiagPrecond, quant_ptr_bf_s2s);
     z_c_bpack_deletekernelquant(&kerquant_s2s);
+
+    for (int i=0; i<product(myseg_s2s,Ndim); i++){
+      if(!quant_ptr_bf_s2s->IsScattererTensorScalar(quant_ptr_bf_s2s->_local_tensor_ids[i])){
+        for (int nth=0; nth<nvec; nth++){
+          x_s[i+nth*product(myseg_s2s,Ndim)] = 0.0;
+        }
+      }
+    }
 
     vector<_Complex double> x_v(product(myseg_s2s,Ndim)*nvec,{0.0,0.0}),b_v(product(myseg_s2s,Ndim)*nvec,{0.0,0.0});
     for (int i=0; i<product(myseg_s2s,Ndim); i++){

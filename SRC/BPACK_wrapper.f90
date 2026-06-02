@@ -2757,6 +2757,98 @@ contains
    end subroutine C_BPACK_MD_Get_Local_Midlevel_Blocks
 
 
+!>**** C interface for getting matrix diagonal blocks at an arbitrary tree level
+   !> @param level: requested basis-group tree level. If level<0, use a format-dependent default split
+   !> @param nblock: input capacity of block_info; output number of local/shared blocks touching this rank
+   !> @param block_info: per-block data with stride 8:
+   !>        global head, global tail+1, local-intersection head, local-intersection tail+1,
+   !>        pgrp head rank, pgrp size, pgrp number, global block id
+   !> @param mesh_range: global local-mesh range for this rank, [idxs, idxe+1]
+   subroutine C_BPACK_Get_Anylevel_Blocks(level, nblock, block_info, mesh_range, bmat_Cptr, option_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_get_anylevel_blocks")
+      implicit none
+      integer level, nblock, block_info(*), mesh_range(2)
+      integer group_n(1), head_g, tail_g, lhead_g, ltail_g
+      integer levelm, level_butterfly, diag_level, maxlevel_mat, bb, cnt, pgno, info_stride, pos, nblock_capacity
+
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: msh_Cptr
+
+      type(Hoption), pointer::option
+      type(Bmatrix), pointer::bmat
+      type(mesh), pointer::msh
+      type(matrixblock), pointer::blocks
+      type(proctree), pointer::ptree
+
+      call c_f_pointer(bmat_Cptr, bmat)
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(msh_Cptr, msh)
+
+      select case (option%format)
+      case (HSS)
+         blocks => bmat%hss_bf%BP%LL(1)%matrices_block(1)
+         level_butterfly = blocks%level_butterfly
+         levelm = blocks%level_half
+         maxlevel_mat = bmat%hss_bf%Maxlevel
+      case (HODLR)
+         level_butterfly = bmat%ho_bf%Maxlevel
+         levelm = level_butterfly/2
+         maxlevel_mat = bmat%ho_bf%Maxlevel
+      case (HMAT, BLR)
+         level_butterfly = bmat%h_mat%Maxlevel
+         levelm = level_butterfly/2
+         maxlevel_mat = bmat%h_mat%Maxlevel
+      case default
+         write(*,*)'not supported format in C_BPACK_Get_Anylevel_Blocks:', option%format
+         stop
+      end select
+
+      if (level < 0) then
+         diag_level = level_butterfly - levelm
+      else
+         diag_level = level
+      endif
+      call assert(diag_level >= 0 .and. diag_level <= maxlevel_mat, 'invalid level in C_BPACK_Get_Anylevel_Blocks')
+
+      mesh_range(1) = msh%idxs
+      mesh_range(2) = msh%idxe + 1
+
+      nblock_capacity = nblock
+      info_stride = 8
+      cnt = 0
+
+      do bb = 1, 2**diag_level
+         group_n(1) = 2**diag_level + bb - 1
+         pgno = GetMshGroup_Pgno(ptree, 1, group_n)
+         if (IOwnPgrp(ptree, pgno)) then
+            cnt = cnt + 1
+            if (cnt <= nblock_capacity) then
+               pos = (cnt - 1)*info_stride
+
+               head_g = msh%basis_group(group_n(1))%head
+               tail_g = msh%basis_group(group_n(1))%tail + 1
+               lhead_g = max(head_g, msh%idxs)
+               ltail_g = min(tail_g, msh%idxe + 1)
+
+               block_info(pos + 1) = head_g
+               block_info(pos + 2) = tail_g
+               block_info(pos + 3) = lhead_g
+               block_info(pos + 4) = ltail_g
+               block_info(pos + 5) = ptree%pgrp(pgno)%head
+               block_info(pos + 6) = ptree%pgrp(pgno)%nproc
+               block_info(pos + 7) = pgno
+               block_info(pos + 8) = bb
+            endif
+         endif
+      enddo
+
+      nblock = cnt
+
+   end subroutine C_BPACK_Get_Anylevel_Blocks
+
+
 !>**** C interface for getting tensor-product diagonal blocks at an arbitrary tree level
    !> @param Ndim: dimensionality
    !> @param level: requested basis-group tree level. If level<0, use the legacy middle-level split

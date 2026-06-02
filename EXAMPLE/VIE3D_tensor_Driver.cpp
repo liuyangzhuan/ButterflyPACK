@@ -453,7 +453,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
     }else{
-      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
+      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,Q->_nx, Q->_ny, Q->_nz);
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
 
@@ -474,7 +474,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 // Assemble a block of matrix entries from interpolated D1, D2, tau
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
 
-    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
+    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_nx, Q->_ny, Q->_nz);
     double s0=2;
     double k0 = s0*Q->_w;
     double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
