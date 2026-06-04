@@ -953,6 +953,29 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
   }
 
   if(Q->_bdiag_precon==1){
+    int tensor_dims[3] = {Q->_nx, Q->_ny, Q->_nz};
+    int Ntot_tensor = product(tensor_dims,Ndim);
+    int cnt_global = (*nvec)*Ntot_tensor;
+    vector<_Complex double> global_in(cnt_global,{0.0,0.0});
+    vector<_Complex double> global_in_sum(cnt_global,{0.0,0.0});
+    vector<_Complex double> global_out(cnt_global,{0.0,0.0});
+    vector<_Complex double> global_out_sum(cnt_global,{0.0,0.0});
+
+    // The matrix preconditioner tree and the tensor VIE operator tree can
+    // assign the same tensor point to different rank groups. Gather by tensor
+    // index first so each diagonal-block group sees the complete block vector.
+    for(int i0=0;i0<Npo;i0++){
+      if(i0 < static_cast<int>(Q->_local_tensor_ids.size())){
+        int tensor_scalar = Q->_local_tensor_ids[i0];
+        if(Q->IsScattererTensorScalar(tensor_scalar)){
+          for (int nth=0; nth<*nvec; nth++){
+            global_in[(tensor_scalar-1)+nth*Ntot_tensor] = xin[i0+nth*Npo];
+          }
+        }
+      }
+    }
+    MPI_Allreduce(global_in.data(), global_in_sum.data(), cnt_global, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+
     int nblock = Q->_nblock_diag;
     int info_stride = Q->_diag_block_stride;
     for (int bb=0; bb<nblock; bb++){
@@ -970,30 +993,18 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
       int cnt_block = (*nvec)*Npo_diag;
       int cnt_diag = (*nvec)*Nloc_diag;
       vector<_Complex double> block_in(cnt_block,{0.0,0.0});
-      vector<_Complex double> block_in_sum(cnt_block,{0.0,0.0});
       vector<_Complex double> block_out(cnt_block,{0.0,0.0});
-      vector<_Complex double> block_out_sum(cnt_block,{0.0,0.0});
       vector<_Complex double> xin_diag(cnt_diag,{0.0,0.0});
       vector<_Complex double> xout_diag(cnt_diag,{0.0,0.0});
 
       int block_offset = Q->_diag_block_offsets[bb];
       for(int ii=0; ii<Npo_diag; ii++){
         int tensor_scalar = Q->_diag_tensor_ids[block_offset + ii];
-        int local_new_scalar = Q->LocalNewFromTensorScalar(tensor_scalar);
-        if(local_new_scalar > 0){
+        if(Q->IsScattererTensorScalar(tensor_scalar)){
           for (int nth=0; nth<*nvec; nth++){
-            block_in[ii+nth*Npo_diag] = xin[(local_new_scalar-1)+nth*Npo];
+            block_in[ii+nth*Npo_diag] = global_in_sum[(tensor_scalar-1)+nth*Ntot_tensor];
           }
         }
-      }
-
-      MPI_Comm block_comm = Q->_diag_comms[bb];
-      int block_comm_size = 1;
-      MPI_Comm_size(block_comm, &block_comm_size);
-      if(block_comm_size > 1){
-        MPI_Allreduce(block_in.data(), block_in_sum.data(), cnt_block, MPI_C_DOUBLE_COMPLEX, MPI_SUM, block_comm);
-      }else{
-        block_in_sum = block_in;
       }
 
       for(int i0=0;i0<Nloc_diag;i0++){
@@ -1001,7 +1012,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
         for (int nth=0; nth<*nvec; nth++){
-          xin_diag[i0+nth*Nloc_diag] = block_in_sum[(ii-1)+nth*Npo_diag];
+          xin_diag[i0+nth*Nloc_diag] = block_in[(ii-1)+nth*Npo_diag];
         }
       }
 
@@ -1016,18 +1027,23 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         }
       }
 
-      if(block_comm_size > 1){
-        MPI_Allreduce(block_out.data(), block_out_sum.data(), cnt_block, MPI_C_DOUBLE_COMPLEX, MPI_SUM, block_comm);
-      }else{
-        block_out_sum = block_out;
-      }
-
       for(int ii=0; ii<Npo_diag; ii++){
         int tensor_scalar = Q->_diag_tensor_ids[block_offset + ii];
-        int local_new_scalar = Q->LocalNewFromTensorScalar(tensor_scalar);
-        if(local_new_scalar > 0){
+        if(Q->IsScattererTensorScalar(tensor_scalar)){
           for (int nth=0; nth<*nvec; nth++){
-            xout[(local_new_scalar-1)+nth*Npo] = block_out_sum[ii+nth*Npo_diag];
+            global_out[(tensor_scalar-1)+nth*Ntot_tensor] += block_out[ii+nth*Npo_diag];
+          }
+        }
+      }
+    }
+
+    MPI_Allreduce(global_out.data(), global_out_sum.data(), cnt_global, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    for(int i0=0;i0<Npo;i0++){
+      if(i0 < static_cast<int>(Q->_local_tensor_ids.size())){
+        int tensor_scalar = Q->_local_tensor_ids[i0];
+        if(Q->IsScattererTensorScalar(tensor_scalar)){
+          for (int nth=0; nth<*nvec; nth++){
+            xout[i0+nth*Npo] = global_out_sum[(tensor_scalar-1)+nth*Ntot_tensor];
           }
         }
       }
