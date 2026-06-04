@@ -1888,6 +1888,8 @@ contains
       memory_dense = 0
       memory_comp = 0
 
+      if (blocks%trans_invariant_dup == 1) return
+
       level_butterfly = blocks%level_butterfly
       level_half = blocks%level_half
 
@@ -1900,7 +1902,9 @@ contains
                if (level == 0) then
                   do jj = 1, blocks%ButterflyV(bb)%nblk_loc
                      do dim_i=1,Ndim
-                        memory_comp = memory_comp + SIZEOF(blocks%ButterflyV(bb)%blocks(jj,dim_i)%matrix)/1024.0d3
+                        if (associated(blocks%ButterflyV(bb)%blocks(jj,dim_i)%matrix)) then
+                           memory_comp = memory_comp + SIZEOF(blocks%ButterflyV(bb)%blocks(jj,dim_i)%matrix)/1024.0d3
+                        endif
                      enddo
                   enddo
                   if(blocks%ButterflyV(bb)%nblk_loc>0)then
@@ -1918,13 +1922,17 @@ contains
                      dim = idx_MD(Ndim+2)
                      index_j = idx_MD(Ndim+1)
                      call MultiIndexToSingleIndex(Ndim,dim_MD(1:Ndim), index_r_scalar, index_r_vector)
-                     memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R(bb,level)%blocks(index_r_scalar,index_j,dim)%matrix)/1024.0d3
+                     if (associated(blocks%ButterflyKerl_R(bb,level)%blocks(index_r_scalar,index_j,dim)%matrix)) then
+                        memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R(bb,level)%blocks(index_r_scalar,index_j,dim)%matrix)/1024.0d3
+                     endif
                   enddo
                   memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R(bb,level)%blocks)/1024.0d3
                endif
             enddo
             enddo
-            memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R)/1024.0d3
+            if (allocated(blocks%ButterflyKerl_R)) then
+               memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_R)/1024.0d3
+            endif
 
             level_final = level_half + 1
             do bb=1, product(blocks%nr_m)
@@ -1934,7 +1942,9 @@ contains
                elseif (level == level_butterfly + 1) then
                   do ii = 1, blocks%ButterflyU(bb)%nblk_loc
                      do dim_i=1,Ndim
-                        memory_comp = memory_comp + SIZEOF(blocks%ButterflyU(bb)%blocks(ii,dim_i)%matrix)/1024.0d3
+                        if (associated(blocks%ButterflyU(bb)%blocks(ii,dim_i)%matrix)) then
+                           memory_comp = memory_comp + SIZEOF(blocks%ButterflyU(bb)%blocks(ii,dim_i)%matrix)/1024.0d3
+                        endif
                      enddo
                   enddo
                   if(blocks%ButterflyU(bb)%nblk_loc>0)then
@@ -1950,13 +1960,17 @@ contains
                      dim = idx_MD(Ndim+2)
                      index_c_vector = idx_MD(2:Ndim+1)
                      call MultiIndexToSingleIndex(Ndim,dim_MD(2:1+Ndim), index_c_scalar, index_c_vector)
-                     memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L(bb,level)%blocks(index_i,index_c_scalar,dim)%matrix)/1024.0d3
+                     if (associated(blocks%ButterflyKerl_L(bb,level)%blocks(index_i,index_c_scalar,dim)%matrix)) then
+                        memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L(bb,level)%blocks(index_i,index_c_scalar,dim)%matrix)/1024.0d3
+                     endif
                   enddo
                   memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L(bb,level)%blocks)/1024.0d3
                endif
             enddo
             enddo
-            memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L)/1024.0d3
+            if (allocated(blocks%ButterflyKerl_L)) then
+               memory_comp = memory_comp + SIZEOF(blocks%ButterflyKerl_L)/1024.0d3
+            endif
 
             nc=2**(level_butterfly -level_half)
             dim_subtensor(1:Ndim)=blocks%nr_m
@@ -2012,8 +2026,10 @@ contains
       real(kind=8) memory_butterfly, rtemp
       type(matrixblock_MD)::blocks
       integer allflag
+      logical owns_data
 
       level_butterfly = blocks%level_butterfly
+      owns_data = blocks%trans_invariant_dup /= 1
 
 
       if(allocated(blocks%nr_m))then
@@ -2023,7 +2039,7 @@ contains
                if(allocated(blocks%ButterflyU(bb)%blocks))then
                   do index_i_k=1,blocks%ButterflyU(bb)%num_blk
                      do dim_i=1,Ndim
-                        if(associated(blocks%ButterflyU(bb)%blocks(index_i_k,dim_i)%matrix))then
+                        if(associated(blocks%ButterflyU(bb)%blocks(index_i_k,dim_i)%matrix) .and. owns_data)then
                            deallocate(blocks%ButterflyU(bb)%blocks(index_i_k,dim_i)%matrix)
                         endif
                      enddo
@@ -2041,7 +2057,7 @@ contains
                      do index_i_k=1,blocks%ButterflyKerl_L(bb,level)%nr(1)
                         do index_j_k=1,product(blocks%ButterflyKerl_L(bb,level)%nc)
                            do dim_i=1,Ndim
-                              if(associated(blocks%ButterflyKerl_L(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix))then
+                              if(associated(blocks%ButterflyKerl_L(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix) .and. owns_data)then
                                  deallocate(blocks%ButterflyKerl_L(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix)
                               endif
                            enddo
@@ -2067,7 +2083,7 @@ contains
          dim_subtensor(1+Ndim:Ndim*2)=nc
          if(allocated(blocks%ButterflyMiddle))then
             do index_ij = 1, product(dim_subtensor)
-               if(associated(blocks%ButterflyMiddle(index_ij)%matrix))then
+               if(associated(blocks%ButterflyMiddle(index_ij)%matrix) .and. owns_data)then
                   deallocate(blocks%ButterflyMiddle(index_ij)%matrix)
                endif
                if(allocated(blocks%ButterflyMiddle(index_ij)%dims_m))then
@@ -2088,7 +2104,7 @@ contains
                if(allocated(blocks%ButterflyV(bb)%blocks))then
                   do index_i_k=1,blocks%ButterflyV(bb)%num_blk
                      do dim_i=1,Ndim
-                        if(associated(blocks%ButterflyV(bb)%blocks(index_i_k,dim_i)%matrix))then
+                        if(associated(blocks%ButterflyV(bb)%blocks(index_i_k,dim_i)%matrix) .and. owns_data)then
                            deallocate(blocks%ButterflyV(bb)%blocks(index_i_k,dim_i)%matrix)
                         endif
                      enddo
@@ -2106,7 +2122,7 @@ contains
                      do index_j_k=1,blocks%ButterflyKerl_R(bb,level)%nc(1)
                         do index_i_k=1,product(blocks%ButterflyKerl_R(bb,level)%nr)
                            do dim_i=1,Ndim
-                              if(associated(blocks%ButterflyKerl_R(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix))then
+                              if(associated(blocks%ButterflyKerl_R(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix) .and. owns_data)then
                                  deallocate(blocks%ButterflyKerl_R(bb,level)%blocks(index_i_k,index_j_k,dim_i)%matrix)
                               endif
                            enddo
@@ -2131,7 +2147,13 @@ contains
       blocks%rankmax = -1000
       blocks%rankmin = 1000
 
-      if (associated(blocks%fullmat)) deallocate (blocks%fullmat)
+      if (associated(blocks%fullmat)) then
+         if (owns_data) then
+            deallocate (blocks%fullmat)
+         else
+            nullify(blocks%fullmat)
+         endif
+      endif
 #if HAVE_ZFP
       if (allocated(blocks%FullmatZFP%buffer_r)) then
          deallocate (blocks%FullmatZFP%buffer_r)
@@ -2186,6 +2208,8 @@ contains
          if (allocated(blocks%idx_r_m)) deallocate(blocks%idx_r_m)
          if (allocated(blocks%idx_c_m)) deallocate(blocks%idx_c_m)
       endif
+      if (associated(blocks%trans_rep)) nullify(blocks%trans_rep)
+      blocks%trans_invariant_dup = 0
       return
 
    end subroutine BF_MD_delete

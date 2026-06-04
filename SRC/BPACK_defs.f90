@@ -519,6 +519,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         DT, allocatable :: Butterfly_data_MPI(:) !< value message
         type(list):: lstr, lstc !< a list of intersections
         type(intersect), allocatable::inters(:) !< an array of intersections
+        integer:: trans_invariant_dup = 0 !< 1: this HTENSOR block reuses the tensor data of trans_rep
+        type(matrixblock_MD), pointer :: trans_rep => null() !< representative block for translational-invariant tensor kernels
     end type matrixblock_MD
 
 
@@ -721,6 +723,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
         integer:: knn !< number of nearest neighbour points for each point
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
+        integer:: trans_invariant !< 1: HTENSOR tensor blocks come from a translational-invariant kernel on a uniform Cartesian grid
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse

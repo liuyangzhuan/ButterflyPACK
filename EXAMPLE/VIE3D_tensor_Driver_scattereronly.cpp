@@ -17,6 +17,7 @@
 #include <random>
 #include <vector>
 #include <atomic>
+#include <limits>
 #include <mpi.h>
 // #include <complex.h>
 
@@ -99,6 +100,64 @@ int floor_safe(double x){
   }else{
     return floor(x);
   }
+}
+
+// This pads n to something like 2^k*m, where m is an approximate leaf size with leafsize<=m<leafsize*2.
+int pad_to_leaf_power2(int n, int leafsize){
+  if(leafsize <= 1) return n;
+  long long best = std::numeric_limits<long long>::max();
+  for(long long pow2=1; pow2<=std::numeric_limits<int>::max(); pow2*=2){
+    long long m = (n + pow2 - 1)/pow2;
+    m = max<long long>(m, leafsize);
+    if(m < 2LL*leafsize){
+      long long padded = m*pow2;
+      if(padded >= n) best = min(best,padded);
+    }
+    if(best != std::numeric_limits<long long>::max() && pow2 > n) break;
+    if(pow2 > std::numeric_limits<int>::max()/2) break;
+  }
+  if(best > std::numeric_limits<int>::max()){
+    cout<<"pad_to_leaf_power2 overflow for n="<<n<<" leafsize="<<leafsize<<endl;
+    exit(1);
+  }
+  return static_cast<int>(best);
+}
+
+int effective_leaf_size_for_padded_dim(int n, int leafsize){
+  if(leafsize <= 1) return n;
+  int pow2 = 1;
+  while(n%(2*pow2)==0 && n/(2*pow2) >= leafsize){
+    if(pow2 > std::numeric_limits<int>::max()/2) break;
+    pow2 *= 2;
+  }
+  int m = n/pow2;
+  if(m < leafsize || m >= 2*leafsize){
+    cout<<"invalid padded dimension "<<n<<" for leafsize "<<leafsize<<endl;
+    exit(1);
+  }
+  return m;
+}
+
+int tree_levels_for_padded_dim(int n, int leafsize){
+  if(leafsize <= 1) return 0;
+  int pow2 = 1;
+  int levels = 0;
+  while(n%(2*pow2)==0 && n/(2*pow2) >= leafsize){
+    if(pow2 > std::numeric_limits<int>::max()/2) break;
+    pow2 *= 2;
+    levels++;
+  }
+  return levels;
+}
+
+bool in_physical_tensor_domain(int const md[], int nx, int ny, int nz){
+  return md[0] >= 1 && md[0] <= nx &&
+         md[1] >= 1 && md[1] <= ny &&
+         md[2] >= 1 && md[2] <= nz;
+}
+
+int physical_tensor_scalar(int const md[], int nx, int ny){
+  return (md[2]-1)*nx*ny + (md[1]-1)*nx + md[0];
 }
 
 
@@ -309,6 +368,9 @@ public:
   int _nx = 0;   // nx
   int _ny = 0;   // ny
   int _nz = 0;   // nz
+  int _slow_nx = 0;   // slowness-array x dimension, excluding tensor padding
+  int _slow_ny = 0;   // slowness-array y dimension, excluding tensor padding
+  int _slow_nz = 0;   // slowness-array z dimension, excluding tensor padding
   int _scaleGreen = 0; // with v=Q*u unknown: whether to apply h^{-3}/Q diagonal in matvec instead of sampled entries
   double _w = pi;   //angular frequency
   int _idx_off_x = 0;
@@ -391,8 +453,8 @@ public:
   }
 
   // constructor for the tensor operator
-  C_QuantApp_BF(vector<double> data, int d, int nx, int ny, int nz, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, int bdiag_precon, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
-    :_data(move(data)), _d(d), _nx(nx), _ny(ny), _nz(nz), _scaleGreen(scaleGreen), _w(w),_x0min(x0min),_x0max(x0max),_y0min(y0min),_y0max(y0max),_z0min(z0min),_z0max(z0max),_h(h),_dl(dl),_ivelo(ivelo),_slowness_array(move(slowness_array)), _rmax(rmax),_verbose(verbose),_vs(vs),_bdiag_precon(bdiag_precon),_x_cheb(move(x_cheb)),_y_cheb(move(y_cheb)),_z_cheb(move(z_cheb)),_u1_square_int_cheb(move(u1_square_int_cheb)),_D1_int_cheb(move(D1_int_cheb)),_D2_int_cheb(move(D2_int_cheb)){
+  C_QuantApp_BF(vector<double> data, int d, int nx, int ny, int nz, int slow_nx, int slow_ny, int slow_nz, int scaleGreen, double w, double x0min, double x0max, double y0min, double y0max, double z0min, double z0max, double h, double dl, int ivelo, vector<double> slowness_array, int rmax, int verbose, int vs, int bdiag_precon, vector<double> x_cheb, vector<double> y_cheb, vector<double> z_cheb, vector<double> u1_square_int_cheb, vector<double> D1_int_cheb, vector<double> D2_int_cheb)
+    :_data(move(data)), _d(d), _nx(nx), _ny(ny), _nz(nz), _slow_nx(slow_nx), _slow_ny(slow_ny), _slow_nz(slow_nz), _scaleGreen(scaleGreen), _w(w),_x0min(x0min),_x0max(x0max),_y0min(y0min),_y0max(y0max),_z0min(z0min),_z0max(z0max),_h(h),_dl(dl),_ivelo(ivelo),_slowness_array(move(slowness_array)), _rmax(rmax),_verbose(verbose),_vs(vs),_bdiag_precon(bdiag_precon),_x_cheb(move(x_cheb)),_y_cheb(move(y_cheb)),_z_cheb(move(z_cheb)),_u1_square_int_cheb(move(u1_square_int_cheb)),_D1_int_cheb(move(D1_int_cheb)),_D2_int_cheb(move(D2_int_cheb)){
       _TNx = _x_cheb.size();
       _TNy = _y_cheb.size();
       _TNz = _z_cheb.size();
@@ -413,9 +475,12 @@ public:
       _slow_x0 = (_x0min+_x0max)/2.0;
       _slow_y0 = (_y0min+_y0max)/2.0;
       _slow_z0 = (_z0min+_z0max)/2.0;
-      _nx = round((_x0max-_x0min)/_h+1);
-      _ny = round((_y0max-_y0min)/_h+1);
-      _nz = round((_z0max-_z0min)/_h+1);
+      _nx = round((_x0max-_x0min)/_h);
+      _ny = round((_y0max-_y0min)/_h);
+      _nz = round((_z0max-_z0min)/_h);
+      _slow_nx = _nx;
+      _slow_ny = _ny;
+      _slow_nz = _nz;
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D1_int_cheb.begin(),_D1_int_cheb.end());   // concatenate D1 and D2 into u1_square for later interpolation convenience
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D2_int_cheb.begin(),_D2_int_cheb.end());
 	}
@@ -475,7 +540,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
     }else{
-      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,Q->_nx, Q->_ny, Q->_nz);
+      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h,Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
 
@@ -508,14 +573,14 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 // applied dynamically in C_FuncHMatVec_MD (scaleGreen==1).
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
 
-    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_nx, Q->_ny, Q->_nz);
     double s0=2;
-    double k0 = s0*Q->_w;
-    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1); // Q(x2), assumed nonzero
     int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
+        double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
+        double k0 = s0*Q->_w;
+        double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1); // Q(x2), assumed nonzero
         if(fabs(coef) < 1e-30){
           cout<<"zero contrast in diagonal VIE self term at ("<<x2<<", "<<y2<<", "<<z2<<") with slowness "<<s1<<endl;
           exit(1);
@@ -1102,11 +1167,14 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
     // }
 
 
-    double s1 = slowness(x1,y1,z1,Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_nx, Q->_ny, Q->_nz);
-    double s0=2;
-    double k0 = s0*Q->_w;
-    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
     bool is_scatterer = Q->IsScattererTensorScalar(tensor_scalar);
+    double coef = 1.0;
+    if(is_scatterer){
+      double s1 = slowness(x1,y1,z1,Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
+      double s0=2;
+      double k0 = s0*Q->_w;
+      coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+    }
 
     for (int nth=0; nth<*nvec; nth++){
       // v = Q*u is the unknown.  The mass/identity contribution is
@@ -1222,6 +1290,7 @@ if(myrank==master_rank){
   int nshape=200;
   int bdiag_precon = 0 ;
   int bdiag_level = -1 ;
+  int pad_s2s = 0;
 
   FILE *fout1;
 
@@ -1271,6 +1340,7 @@ if(myrank==master_rank){
       {"smax_ivelo11",        required_argument, 0, 33},
       {"bdiag_precon",        required_argument, 0, 34},
       {"bdiag_level",        required_argument, 0, 35},
+      {"pad_s2s",        required_argument, 0, 36},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1420,6 +1490,10 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> bdiag_level;
     } break;
+    case 36: {
+      std::istringstream iss(optarg);
+      iss >> pad_s2s;
+    } break;
     default: break;
     }
   }
@@ -1427,9 +1501,9 @@ if(myrank==master_rank){
 
 	Ndim=3; //data dimension
   int Ns[Ndim];
-  Nx = round((x0max-x0min)/h+1);
-  Ny = round((y0max-y0min)/h+1);
-  Nz = round((z0max-z0min)/h+1);
+  Nx = round((x0max-x0min)/h);
+  Ny = round((y0max-y0min)/h);
+  Nz = round((z0max-z0min)/h);
   Ns[0]=Nx;
   Ns[1]=Ny;
   Ns[2]=Nz;
@@ -1449,8 +1523,8 @@ if(myrank==master_rank){
   slow_z0 = center[2];
 
 
-  // const int64_t I=round((xmax-xmin)/h+1),  J=round((ymax-ymin)/h+1), K=round((zmax-zmin)/h+1);
-  const int64_t Iint=round((x0max-x0min)/h+1),  Jint=round((y0max-y0min)/h+1),Kint=round((z0max-z0min)/h+1);
+  // const int64_t I=round((xmax-xmin)/h),  J=round((ymax-ymin)/h), K=round((zmax-zmin)/h);
+  const int64_t Iint=round((x0max-x0min)/h),  Jint=round((y0max-y0min)/h),Kint=round((z0max-z0min)/h);
 
   int idx_off_x = 0;
   int idx_off_y = 0;
@@ -1483,7 +1557,7 @@ if(myrank==master_rank){
       str2=streamObj2.str();
       str2.erase ( str2.find_last_not_of('0') + 1, std::string::npos ); str2.erase ( str2.find_last_not_of('.') + 1, std::string::npos );
 
-      filename_in ="slowness_map_shapeoutter"+to_string(Iint)+"x"+to_string(Jint)+"x"+to_string(Kint)+"_shape"+to_string(Nx_s)+"x"+to_string(Ny_s)+"x"+to_string(Nz_s)+"_off"+to_string(idx_off_x)+"x"+to_string(idx_off_y)+"x"+to_string(idx_off_z)+"_range"+str1+"_"+str2+"_nshape"+to_string(nshape)+".bin";
+      filename_in ="slowness_map_shapeoutter"+to_string(Iint)+"x"+to_string(Jint)+"x"+to_string(Kint)+"_shape"+to_string(Nx)+"x"+to_string(Ny)+"x"+to_string(Nz)+"_off"+to_string(idx_off_x)+"x"+to_string(idx_off_y)+"x"+to_string(idx_off_z)+"_range"+str1+"_"+str2+"_nshape"+to_string(nshape)+".bin";
       // cout<<filename_in<<endl;
 
       // Open the binary file
@@ -1601,12 +1675,45 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
+  z_c_bpack_getoption(&option_bf, "Nmin_leaf", &opt_d);
+  int tensor_leafsize = max(1, static_cast<int>(round(opt_d)));
+  if(pad_s2s){
+    Nx_s = pad_to_leaf_power2(Nx, tensor_leafsize);
+    Ny_s = pad_to_leaf_power2(Ny, tensor_leafsize);
+    Nz_s = pad_to_leaf_power2(Nz, tensor_leafsize);
+  }else{
+    Nx_s = Nx;
+    Ny_s = Ny;
+    Nz_s = Nz;
+  }
+  Ns_s[0]=Nx_s;
+  Ns_s[1]=Ny_s;
+  Ns_s[2]=Nz_s;
+  Nmax_s = max(max(Nx_s,Ny_s),Nz_s);
+
+  double trans_opt = 0.0;
+  z_c_bpack_getoption(&option_bf, "trans_invariant", &trans_opt);
+  if(myrank==0 && pad_s2s){
+    cout<<"Tensor grid padding: physical "<<Nx<<" x "<<Ny<<" x "<<Nz
+        <<" padded to "<<Nx_s<<" x "<<Ny_s<<" x "<<Nz_s
+        <<" with Nmin_leaf "<<tensor_leafsize
+        <<" effective leaves "<<effective_leaf_size_for_padded_dim(Nx_s,tensor_leafsize)
+        <<" x "<<effective_leaf_size_for_padded_dim(Ny_s,tensor_leafsize)
+        <<" x "<<effective_leaf_size_for_padded_dim(Nz_s,tensor_leafsize)
+        <<" and levels "<<tree_levels_for_padded_dim(Nx_s,tensor_leafsize)
+        <<" x "<<tree_levels_for_padded_dim(Ny_s,tensor_leafsize)
+        <<" x "<<tree_levels_for_padded_dim(Nz_s,tensor_leafsize)<<endl;
+  }
+  if(myrank==0 && trans_opt >= 0.5 && !pad_s2s){
+    cout<<"Warning: trans_invariant is enabled but pad_s2s=0, so the tensor tree may not be uniform/complete."<<endl;
+  }
+
 
 
   double smax=2.0;
-  for(int i=0;i<Nx_s;i++){
-    for(int j=0;j<Ny_s;j++){
-      for(int k=0;k<Nz_s;k++){
+  for(int i=0;i<Nx;i++){
+    for(int j=0;j<Ny;j++){
+      for(int k=0;k<Nz;k++){
         smax = max(smax,slowness(i*h-L/2+center[0],j*h-H/2+center[1],k*h-W/2+center[2],slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
       }
     }
@@ -1673,9 +1780,10 @@ if(myrank==master_rank){
           double xs = ii*h-L/2+center[0];
           double ys = jj*h-H/2+center[1];
           double zs = kk*h-W/2+center[2];
-          double s1 = slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint);
           int tensor_scalar = kk*Nx_s*Ny_s + jj*Nx_s + ii + 1;
-          if(fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
+          bool in_physical = ii < Nx && jj < Ny && kk < Nz;
+          double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
+          if(in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
             tensor_to_scatter[tensor_scalar-1] = static_cast<int>(scatter_to_tensor.size()) + 1;
             scatter_to_tensor.push_back(tensor_scalar);
             data_geo_scatterer.push_back(xs);
@@ -1706,7 +1814,7 @@ if(myrank==master_rank){
 
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
-    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Iint, Jint, Kint, 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, Nz_s, static_cast<int>(Iint), static_cast<int>(Jint), static_cast<int>(Kint), 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
     quant_ptr_bf_s2s->_nscatter = Nscatter;
     quant_ptr_bf_s2s->_background_s0 = background_s0;
@@ -1747,11 +1855,12 @@ if(myrank==master_rank){
 
       z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
-      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
+      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
 
       double xs = data_geo[(i_old_md[0]-1) * Ndim];
       double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
       double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
+      bool in_physical = in_physical_tensor_domain(i_old_md,Nx,Ny,Nz);
       // double xs0=x0max-0.1;
       // double ys0=y0max-0.1;
       // double zs0=z0max-0.1;
@@ -1760,7 +1869,7 @@ if(myrank==master_rank){
       double zs0=0.1;
 
       for (int nth=0; nth<nvec; nth++){
-        x.data()[i+nth*product(myseg_s2s,Ndim)]=source_function(xs,ys,zs, xs0, ys0, zs0, nth,h,w);
+        x.data()[i+nth*product(myseg_s2s,Ndim)]=in_physical ? source_function(xs,ys,zs, xs0, ys0, zs0, nth,h,w) : 0.0;
       }
     }
     z_c_bpack_md_mult(&Ndim,"N",x.data(),b.data(),myseg_s2s,myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf, &msh_bf_s2s);
@@ -1773,7 +1882,8 @@ if(myrank==master_rank){
 
       z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
-      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
+      if(!in_physical_tensor_domain(i_old_md,Nx,Ny,Nz)) continue;
+      i_old_scalar = physical_tensor_scalar(i_old_md,Nx,Ny);
 
       for (int nth=0; nth<nvec; nth++){
         u_inc_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = -b.data()[i+nth*product(myseg_s2s,Ndim)];
@@ -1799,9 +1909,9 @@ if(myrank==master_rank){
         filename += "_tol_"+str+"_nth_"+to_string(nth)+"_tensor.bin";
         fout1=fopen(filename.c_str(),"wb");
 
-        int nx = round((x0max-x0min)/h+1);
-        int ny = round((y0max-y0min)/h+1);
-        int nz = round((z0max-z0min)/h+1);
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
         fwrite(&nx,sizeof(int),1,fout1);
         fwrite(&ny,sizeof(int),1,fout1);
         fwrite(&nz,sizeof(int),1,fout1);
@@ -2036,7 +2146,8 @@ if(myrank==master_rank){
 
       z_c_bpack_singleindex_to_multiindex(&Ndim,myseg_s2s,&i_new_loc_scalar,i_new_loc_md);
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
-      z_c_bpack_multiindex_to_singleindex(&Ndim,Ns,&i_old_scalar,i_old_md);
+      if(!in_physical_tensor_domain(i_old_md,Nx,Ny,Nz)) continue;
+      i_old_scalar = physical_tensor_scalar(i_old_md,Nx,Ny);
       for (int nth=0; nth<nvec; nth++){
         u_sca_glo.data()[i_old_scalar-1+nth*product(Ns,Ndim)] = -b_v.data()[i+nth*product(myseg_s2s,Ndim)];
       }
@@ -2067,9 +2178,9 @@ if(myrank==master_rank){
 #endif
         fout1=fopen(filename.c_str(),"wb");
 
-        int nx = round((x0max-x0min)/h+1);
-        int ny = round((y0max-y0min)/h+1);
-        int nz = round((z0max-z0min)/h+1);
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
         fwrite(&nx,sizeof(int),1,fout1);
         fwrite(&ny,sizeof(int),1,fout1);
         fwrite(&nz,sizeof(int),1,fout1);

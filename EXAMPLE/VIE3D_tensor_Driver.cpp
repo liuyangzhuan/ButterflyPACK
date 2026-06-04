@@ -391,9 +391,9 @@ public:
       _slow_x0 = (_x0min+_x0max)/2.0;
       _slow_y0 = (_y0min+_y0max)/2.0;
       _slow_z0 = (_z0min+_z0max)/2.0;
-      _nx = round((_x0max-_x0min)/_h+1);
-      _ny = round((_y0max-_y0min)/_h+1);
-      _nz = round((_z0max-_z0min)/_h+1);
+      _nx = round((_x0max-_x0min)/_h);
+      _ny = round((_y0max-_y0min)/_h);
+      _nz = round((_z0max-_z0min)/_h);
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D1_int_cheb.begin(),_D1_int_cheb.end());   // concatenate D1 and D2 into u1_square for later interpolation convenience
       _u1_square_int_cheb.insert(_u1_square_int_cheb.end(),_D2_int_cheb.begin(),_D2_int_cheb.end());
 	}
@@ -1394,9 +1394,9 @@ if(myrank==master_rank){
 
 	Ndim=3; //data dimension
   int Ns[Ndim];
-  Nx = round((x0max-x0min)/h+1);
-  Ny = round((y0max-y0min)/h+1);
-  Nz = round((z0max-z0min)/h+1);
+  Nx = round((x0max-x0min)/h);
+  Ny = round((y0max-y0min)/h);
+  Nz = round((z0max-z0min)/h);
   Ns[0]=Nx;
   Ns[1]=Ny;
   Ns[2]=Nz;
@@ -1416,8 +1416,8 @@ if(myrank==master_rank){
   slow_z0 = center[2];
 
 
-  // const int64_t I=round((xmax-xmin)/h+1),  J=round((ymax-ymin)/h+1), K=round((zmax-zmin)/h+1);
-  const int64_t Iint=round((x0max-x0min)/h+1),  Jint=round((y0max-y0min)/h+1),Kint=round((z0max-z0min)/h+1);
+  // const int64_t I=round((xmax-xmin)/h),  J=round((ymax-ymin)/h), K=round((zmax-zmin)/h);
+  const int64_t Iint=round((x0max-x0min)/h),  Jint=round((y0max-y0min)/h),Kint=round((z0max-z0min)/h);
 
   int idx_off_x = 0;
   int idx_off_y = 0;
@@ -1722,9 +1722,9 @@ if(myrank==master_rank){
         filename += "_tol_"+str+"_nth_"+to_string(nth)+"_tensor.bin";
         fout1=fopen(filename.c_str(),"wb");
 
-        int nx = round((x0max-x0min)/h+1);
-        int ny = round((y0max-y0min)/h+1);
-        int nz = round((z0max-z0min)/h+1);
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
         fwrite(&nx,sizeof(int),1,fout1);
         fwrite(&ny,sizeof(int),1,fout1);
         fwrite(&nz,sizeof(int),1,fout1);
@@ -1971,9 +1971,9 @@ if(myrank==master_rank){
 #endif
         fout1=fopen(filename.c_str(),"wb");
 
-        int nx = round((x0max-x0min)/h+1);
-        int ny = round((y0max-y0min)/h+1);
-        int nz = round((z0max-z0min)/h+1);
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
         fwrite(&nx,sizeof(int),1,fout1);
         fwrite(&ny,sizeof(int),1,fout1);
         fwrite(&nz,sizeof(int),1,fout1);

@@ -1945,6 +1945,7 @@ contains
 
       ! Memory_direct_forward=0
       ! Memory_butterfly_forward=0
+      call InitStat(stats)
       tim_tmp = 0
       !tolerance=0.001
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -2115,6 +2116,7 @@ contains
 
       ! Memory_direct_forward=0
       ! Memory_butterfly_forward=0
+      call InitStat(stats)
       tim_tmp = 0
       !tolerance=0.001
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -2204,6 +2206,7 @@ contains
 
       ! Memory_direct_forward=0
       ! Memory_butterfly_forward=0
+      call InitStat(stats)
       tim_tmp = 0
       !tolerance=0.001
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -2297,6 +2300,7 @@ contains
 
       ! Memory_direct_forward=0
       ! Memory_butterfly_forward=0
+      call InitStat(stats)
       tim_tmp = 0
       !tolerance=0.001
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
@@ -2974,7 +2978,7 @@ contains
       implicit none
       integer Ndim
       type(blockplus_MD)::bplus
-      integer:: ii, ll, bb, ierr, pp
+      integer:: ii, ll, bb, ierr, pp, rep_bb, trans_reuse_level
       real(kind=8) Memory, rtemp,rtemp1, error
       integer:: level_butterfly, level_BP, levelm, statflag, knn_tmp
       type(Hoption)::option
@@ -2990,6 +2994,7 @@ contains
       groupm_start0=bplus%LL(1)%matrices_block(1)%row_group
       do ll = 1, bplus%Lplus
          bplus%LL(ll)%rankmax = 0
+         trans_reuse_level = 0
          statflag = 0
          if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
          do bb = 1, bplus%LL(ll)%Nbound_loc
@@ -2998,9 +3003,19 @@ contains
                   write(*,*)'Start compressing BF_MD',bb,' out of #local ', bplus%LL(ll)%Nbound_loc,'on rank',ptree%MyID, 'at level',ll
                endif
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
-                  call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
-                  call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
-                  Memory = Memory + rtemp
+                  rep_bb = 0
+                  if (option%trans_invariant == 1 .and. logn_level_flag == 1) then
+                     call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+                  endif
+                  if (rep_bb > 0) then
+                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
+                     trans_reuse_level = trans_reuse_level + 1
+                  else
+                     call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
+                     call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
+                     Memory = Memory + rtemp
+                  endif
                elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
 
                   level_butterfly = bplus%LL(ll)%matrices_block(bb)%level_butterfly
@@ -3020,10 +3035,20 @@ contains
                   endif
                   call assert(option%forwardN15flag == 0, "only forwardN15flag == 0 can be used for tensor butterfly")
 
-                  call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
-                  ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                  rep_bb = 0
+                  if (option%trans_invariant == 1 .and. logn_level_flag == 1) then
+                     call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+                  endif
+                  if (rep_bb > 0) then
+                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
+                     trans_reuse_level = trans_reuse_level + 1
+                  else
+                     call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
+                     ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
 
-                  Memory = Memory + rtemp
+                     Memory = Memory + rtemp
+                  endif
                   bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
                endif
             endif
@@ -3036,6 +3061,7 @@ contains
          groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
+            if (option%trans_invariant == 1 .and. logn_level_flag == 1) write(*,*)'trans_invariant reused local blocks at this level:', trans_reuse_level
          endif
       end do
 
@@ -3048,6 +3074,192 @@ contains
       return
 
    end subroutine BP_MD_compress_entry
+
+
+   integer function BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+
+      implicit none
+      integer Ndim, ll, bb, rr
+      type(blockplus_MD)::bplus
+      type(proctree)::ptree
+
+      BP_MD_find_trans_rep = 0
+      if (ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%nproc /= 1) return
+      if (.not. allocated(bplus%LL(ll)%matrices_block(bb)%row_group)) return
+      if (.not. allocated(bplus%LL(ll)%matrices_block(bb)%col_group)) return
+
+      do rr = 1, bb - 1
+         if (.not. IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(rr)%pgno)) cycle
+         if (ptree%pgrp(bplus%LL(ll)%matrices_block(rr)%pgno)%nproc /= 1) cycle
+         if (bplus%LL(ll)%matrices_block(rr)%trans_invariant_dup == 1) cycle
+         if (bplus%LL(ll)%matrices_block(rr)%style /= bplus%LL(ll)%matrices_block(bb)%style) cycle
+         if (bplus%LL(ll)%matrices_block(rr)%level /= bplus%LL(ll)%matrices_block(bb)%level) cycle
+         if (bplus%LL(ll)%matrices_block(rr)%level_butterfly /= bplus%LL(ll)%matrices_block(bb)%level_butterfly) cycle
+         if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%row_group)) cycle
+         if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%col_group)) cycle
+         if (.not. all((bplus%LL(ll)%matrices_block(rr)%row_group - bplus%LL(ll)%matrices_block(rr)%col_group) == &
+            (bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group))) cycle
+         if (allocated(bplus%LL(ll)%matrices_block(rr)%M) .and. allocated(bplus%LL(ll)%matrices_block(bb)%M)) then
+            if (.not. all(bplus%LL(ll)%matrices_block(rr)%M == bplus%LL(ll)%matrices_block(bb)%M)) cycle
+         endif
+         if (allocated(bplus%LL(ll)%matrices_block(rr)%N) .and. allocated(bplus%LL(ll)%matrices_block(bb)%N)) then
+            if (.not. all(bplus%LL(ll)%matrices_block(rr)%N == bplus%LL(ll)%matrices_block(bb)%N)) cycle
+         endif
+         if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
+            if (.not. associated(bplus%LL(ll)%matrices_block(rr)%fullmat)) cycle
+         elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
+            if (bplus%LL(ll)%matrices_block(rr)%level_half /= bplus%LL(ll)%matrices_block(bb)%level_half) cycle
+            if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%nr_m)) cycle
+            if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%nc_m)) cycle
+         endif
+         BP_MD_find_trans_rep = rr
+         return
+      enddo
+
+   end function BP_MD_find_trans_rep
+
+
+   subroutine BP_MD_alias_trans_data(Ndim, rep, blk)
+
+      implicit none
+      integer Ndim
+      type(matrixblock_MD), target::rep
+      type(matrixblock_MD), target::blk
+      integer ii, jj
+
+      blk%trans_invariant_dup = 1
+      blk%trans_rep => rep
+      blk%rankmax = rep%rankmax
+      blk%rankmin = rep%rankmin
+      blk%level_half = rep%level_half
+
+      if (blk%style == 1) then
+         blk%fullmat => rep%fullmat
+      elseif (blk%style == 2) then
+         call BP_MD_copy_iarray(rep%nr_m, blk%nr_m)
+         call BP_MD_copy_iarray(rep%nc_m, blk%nc_m)
+         call BP_MD_copy_iarray(rep%idx_r_m, blk%idx_r_m)
+         call BP_MD_copy_iarray(rep%idx_c_m, blk%idx_c_m)
+         if (allocated(rep%ButterflyU)) then
+            allocate(blk%ButterflyU(size(rep%ButterflyU, 1)))
+            do ii = 1, size(rep%ButterflyU, 1)
+               call BP_MD_alias_uv(rep%ButterflyU(ii), blk%ButterflyU(ii), Ndim)
+            enddo
+         endif
+         if (allocated(rep%ButterflyV)) then
+            allocate(blk%ButterflyV(size(rep%ButterflyV, 1)))
+            do ii = 1, size(rep%ButterflyV, 1)
+               call BP_MD_alias_uv(rep%ButterflyV(ii), blk%ButterflyV(ii), Ndim)
+            enddo
+         endif
+         if (allocated(rep%ButterflyMiddle)) then
+            allocate(blk%ButterflyMiddle(size(rep%ButterflyMiddle, 1)))
+            do ii = 1, size(rep%ButterflyMiddle, 1)
+               call BP_MD_alias_butterfly_matrix(rep%ButterflyMiddle(ii), blk%ButterflyMiddle(ii))
+            enddo
+         endif
+         if (allocated(rep%ButterflyKerl_L)) then
+            allocate(blk%ButterflyKerl_L(lbound(rep%ButterflyKerl_L, 1):ubound(rep%ButterflyKerl_L, 1), &
+               lbound(rep%ButterflyKerl_L, 2):ubound(rep%ButterflyKerl_L, 2)))
+            do jj = lbound(rep%ButterflyKerl_L, 2), ubound(rep%ButterflyKerl_L, 2)
+               do ii = lbound(rep%ButterflyKerl_L, 1), ubound(rep%ButterflyKerl_L, 1)
+                  call BP_MD_alias_kerl(rep%ButterflyKerl_L(ii, jj), blk%ButterflyKerl_L(ii, jj))
+               enddo
+            enddo
+         endif
+         if (allocated(rep%ButterflyKerl_R)) then
+            allocate(blk%ButterflyKerl_R(lbound(rep%ButterflyKerl_R, 1):ubound(rep%ButterflyKerl_R, 1), &
+               lbound(rep%ButterflyKerl_R, 2):ubound(rep%ButterflyKerl_R, 2)))
+            do jj = lbound(rep%ButterflyKerl_R, 2), ubound(rep%ButterflyKerl_R, 2)
+               do ii = lbound(rep%ButterflyKerl_R, 1), ubound(rep%ButterflyKerl_R, 1)
+                  call BP_MD_alias_kerl(rep%ButterflyKerl_R(ii, jj), blk%ButterflyKerl_R(ii, jj))
+               enddo
+            enddo
+         endif
+      endif
+
+   end subroutine BP_MD_alias_trans_data
+
+
+   subroutine BP_MD_copy_iarray(src, dst)
+
+      implicit none
+      integer, allocatable, intent(in)::src(:)
+      integer, allocatable, intent(inout)::dst(:)
+
+      if (allocated(dst)) deallocate(dst)
+      if (allocated(src)) then
+         allocate(dst(size(src, 1)))
+         dst = src
+      endif
+
+   end subroutine BP_MD_copy_iarray
+
+
+   subroutine BP_MD_alias_uv(src, dst, Ndim)
+
+      implicit none
+      integer Ndim, ii, dim_i
+      type(butterfly_UV_MD), intent(in)::src
+      type(butterfly_UV_MD), intent(inout)::dst
+
+      dst%num_blk = src%num_blk
+      dst%nblk_loc = src%nblk_loc
+      dst%idx = src%idx
+      dst%inc = src%inc
+      if (allocated(src%blocks)) then
+         allocate(dst%blocks(size(src%blocks, 1), size(src%blocks, 2)))
+         do dim_i = 1, Ndim
+            do ii = 1, size(src%blocks, 1)
+               call BP_MD_alias_butterfly_matrix(src%blocks(ii, dim_i), dst%blocks(ii, dim_i))
+            enddo
+         enddo
+      endif
+
+   end subroutine BP_MD_alias_uv
+
+
+   subroutine BP_MD_alias_kerl(src, dst)
+
+      implicit none
+      integer ii, jj, kk
+      type(butterfly_kerl_MD), intent(in)::src
+      type(butterfly_kerl_MD), intent(inout)::dst
+
+      call BP_MD_copy_iarray(src%num_col, dst%num_col)
+      call BP_MD_copy_iarray(src%num_row, dst%num_row)
+      call BP_MD_copy_iarray(src%nc, dst%nc)
+      call BP_MD_copy_iarray(src%nr, dst%nr)
+      call BP_MD_copy_iarray(src%idx_c, dst%idx_c)
+      call BP_MD_copy_iarray(src%idx_r, dst%idx_r)
+      call BP_MD_copy_iarray(src%inc_c, dst%inc_c)
+      call BP_MD_copy_iarray(src%inc_r, dst%inc_r)
+      if (allocated(src%blocks)) then
+         allocate(dst%blocks(size(src%blocks, 1), size(src%blocks, 2), size(src%blocks, 3)))
+         do kk = 1, size(src%blocks, 3)
+            do jj = 1, size(src%blocks, 2)
+               do ii = 1, size(src%blocks, 1)
+                  call BP_MD_alias_butterfly_matrix(src%blocks(ii, jj, kk), dst%blocks(ii, jj, kk))
+               enddo
+            enddo
+         enddo
+      endif
+
+   end subroutine BP_MD_alias_kerl
+
+
+   subroutine BP_MD_alias_butterfly_matrix(src, dst)
+
+      implicit none
+      type(butterflymatrix), intent(in)::src
+      type(butterflymatrix), intent(inout)::dst
+
+      dst%ndim = src%ndim
+      call BP_MD_copy_iarray(src%dims_m, dst%dims_m)
+      call BP_MD_copy_iarray(src%dims_n, dst%dims_n)
+      if (associated(src%matrix)) dst%matrix => src%matrix
+
+   end subroutine BP_MD_alias_butterfly_matrix
 
 
 

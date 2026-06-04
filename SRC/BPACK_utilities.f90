@@ -1029,6 +1029,7 @@ contains
       option%rmax = 10000
       option%forwardN15flag = 0
       option%fastsample_tensor = 0
+      option%trans_invariant = 0
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
@@ -1103,6 +1104,8 @@ contains
                   read (strings1, *) option%forwardN15flag
                else if (trim(strings) == '--fastsample_tensor') then
                   read (strings1, *) option%fastsample_tensor
+               else if (trim(strings) == '--trans_invariant') then
+                  read (strings1, *) option%trans_invariant
                else if (trim(strings) == '--baca_batch' .or. trim(strings) == '--BACA_Batch') then
                   read (strings1, *) option%BACA_Batch
                else if (trim(strings) == '--reclr_leaf' .or. trim(strings) == '--RecLR_leaf') then
@@ -1236,6 +1239,7 @@ contains
       option1%rmax = option%rmax
       option1%forwardN15flag = option%forwardN15flag
       option1%fastsample_tensor = option%fastsample_tensor
+      option1%trans_invariant = option%trans_invariant
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
@@ -1623,6 +1627,7 @@ contains
                endif
                write (*, '(A18,I8)') 'verbosity', option%verbosity
                write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
+               write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
                write (*, '(A18,I8)') 'elem_extract', option%elem_extract
                write (*, '(A18,I8)') 'cpp', option%cpp
                write (*, '(A18,I8)') 'knn', option%knn
@@ -1661,6 +1666,7 @@ contains
             endif
             write (*, '(A18,I8)') 'verbosity', option%verbosity
             write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
+            write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
             write (*, '(A18,I8)') 'elem_extract', option%elem_extract
             write (*, '(A18,I8)') 'cpp', option%cpp
             write (*, '(A18,I8)') 'knn', option%knn
