@@ -417,8 +417,8 @@ contains
       type(Hstat)::stats
       integer:: ldi, ldo
       DT :: random1(ldi, *), random2(ldo, *)
-      DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
-      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
+	      DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
+	      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
       real(kind=8)::n2,n1
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
       type(vectorsblock_oneL),allocatable::Vin_locs(:),Vout_locs(:)
@@ -788,10 +788,10 @@ contains
       integer:: ldi(Ndim), ldo(Ndim)
       integer:: dim_in(Ndim), dim_out(Ndim)
       DT :: random1(product(ldi), *), random2(product(ldo), *)
-      DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
-      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
-      DT, allocatable::Vin_stack(:, :), Vout_stack(:, :)
-      real(kind=8)::n2,n1
+	      DT, allocatable :: Vout(:, :), Vin_loc(:, :), Vout_loc(:, :)
+	      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
+	      DT, allocatable::Vin_stack(:, :), Vout_stack(:, :)
+	      real(kind=8)::n2,n1,n3,n4
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
       type(vectorsblock_oneL),pointer::Vin_locs(:),Vout_locs(:)
 
@@ -865,14 +865,19 @@ contains
             call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
          endif
       endif
-      n2 = MPI_Wtime()
-      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+	      n2 = MPI_Wtime()
+	      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+	      stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + n2-n1
 
-      do ll = level_s, level_e
-         if (option%trans_invariant /= 0) then
-            call BP_MD_ensure_trans_groups(bplus%LL(ll))
+	      n3 = MPI_Wtime()
+	      do ll = level_s, level_e
+	         if (option%trans_invariant /= 0) then
+	            n1 = MPI_Wtime()
+	            call BP_MD_ensure_trans_groups(Ndim, bplus%LL(ll), option%trans_invariant)
+	            n2 = MPI_Wtime()
+	            stats%Time_C_Mult_TransPlan = stats%Time_C_Mult_TransPlan + n2-n1
 
-            do irep = 1, bplus%LL(ll)%trans_nrep
+	            do irep = 1, bplus%LL(ll)%trans_nrep
                rep_bb = bplus%LL(ll)%trans_rep_list(irep)
                rep_member_start = bplus%LL(ll)%trans_member_offset(irep)
                rep_member_end = bplus%LL(ll)%trans_member_offset(irep + 1) - 1
@@ -893,62 +898,87 @@ contains
 	                  do member_start = rep_member_start, rep_member_end, stack_limit
 	                     member_end = min(rep_member_end, member_start + stack_limit - 1)
 	                     stack_count = member_end - member_start + 1
-	                     allocate(Vin_stack(product(dim_in), Nrnd*stack_count))
-	                     allocate(Vout_stack(product(dim_out), Nrnd*stack_count))
-	                     call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
-	                     call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
-	                     Vout_stack = 0
+		                     n1 = MPI_Wtime()
+		                     allocate(Vin_stack(product(dim_in), Nrnd*stack_count))
+		                     allocate(Vout_stack(product(dim_out), Nrnd*stack_count))
+		                     call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
+		                     call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
+		                     Vout_stack = 0
 
-			                     do rr = 1, stack_count
-			                        cc = bplus%LL(ll)%trans_member_list(member_start + rr - 1)
+#ifdef HAVE_OPENMP
+				                     !$omp parallel do default(shared) private(rr, cc, col_s, col_e, blocks_member) if(stack_count > 1)
+#endif
+				                     do rr = 1, stack_count
+				                        cc = bplus%LL(ll)%trans_member_list(member_start + rr - 1)
 			                        call assert(size(Vin_locs(ll)%vs(cc)%vector, 1) == product(dim_in), 'trans_invariant batched MVP input size mismatch')
 		                        call assert(size(Vout_locs(ll)%vs(cc)%vector, 1) == product(dim_out), 'trans_invariant batched MVP output size mismatch')
 	                        col_s = (rr - 1)*Nrnd + 1
 	                        col_e = rr*Nrnd
-	                        blocks_member => bplus%LL(ll)%matrices_block(cc)
-	                        if (option%trans_invariant == 2) then
-	                           if (chara == 'N') then
-	                              call BP_MD_trans2_copy_to_rep(Ndim, blocks, blocks_member, blocks%N_loc, blocks_member%N_loc, &
-	                                 Nrnd, Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd), Vin_stack(:, col_s:col_e))
-	                           else
-	                              call BP_MD_trans2_copy_to_rep(Ndim, blocks, blocks_member, blocks%M_loc, blocks_member%M_loc, &
-	                                 Nrnd, Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd), Vin_stack(:, col_s:col_e))
-	                           endif
-	                        else
-	                           Vin_stack(:, col_s:col_e) = Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd)
-	                        endif
-		                     enddo
+		                        blocks_member => bplus%LL(ll)%matrices_block(cc)
+		                        if (option%trans_invariant == 2) then
+		                           if (chara == 'N') then
+		                              call BP_MD_trans2_apply_axis_map(Ndim, blocks_member%N_loc, blocks%N_loc, &
+		                                 bplus%LL(ll)%trans_map_n_to_rep(:, cc), bplus%LL(ll)%trans_rev_n_to_rep(:, cc), &
+		                                 Nrnd, Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd), Vin_stack(:, col_s:col_e))
+		                           else
+		                              call BP_MD_trans2_apply_axis_map(Ndim, blocks_member%M_loc, blocks%M_loc, &
+		                                 bplus%LL(ll)%trans_map_m_to_rep(:, cc), bplus%LL(ll)%trans_rev_m_to_rep(:, cc), &
+		                                 Nrnd, Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd), Vin_stack(:, col_s:col_e))
+		                           endif
+		                        else
+		                           Vin_stack(:, col_s:col_e) = Vin_locs(ll)%vs(cc)%vector(:, 1:Nrnd)
+		                        endif
+			                     enddo
+#ifdef HAVE_OPENMP
+				                     !$omp end parallel do
+#endif
+		                     n2 = MPI_Wtime()
+		                     stats%Time_C_Mult_Pack = stats%Time_C_Mult_Pack + n2-n1
 
-	                     if (blocks%style == 1) then
-	                        call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd*stack_count, Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2)
-	                     else
-	                        call BF_MD_block_mvp(chara, Vin_stack, dim_in, Vout_stack, dim_out, Nrnd*stack_count, blocks, Ndim, ptree, stats, msh, option)
-	                     endif
+		                     n1 = MPI_Wtime()
+		                     if (blocks%style == 1) then
+		                        call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd*stack_count, Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2)
+		                     else
+		                        call BF_MD_block_mvp(chara, Vin_stack, dim_in, Vout_stack, dim_out, Nrnd*stack_count, blocks, Ndim, ptree, stats, msh, option)
+		                     endif
+		                     n2 = MPI_Wtime()
+		                     if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
 
-			                     do rr = 1, stack_count
-			                        cc = bplus%LL(ll)%trans_member_list(member_start + rr - 1)
+		                     n1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+				                     !$omp parallel do default(shared) private(rr, cc, col_s, col_e, blocks_member) if(stack_count > 1)
+#endif
+				                     do rr = 1, stack_count
+				                        cc = bplus%LL(ll)%trans_member_list(member_start + rr - 1)
 		                        col_s = (rr - 1)*Nrnd + 1
 		                        col_e = rr*Nrnd
-	                        blocks_member => bplus%LL(ll)%matrices_block(cc)
-	                        if (option%trans_invariant == 2) then
-	                           if (chara == 'N') then
-	                              call BP_MD_trans2_copy_from_rep(Ndim, blocks, blocks_member, blocks%M_loc, blocks_member%M_loc, &
-	                                 Nrnd, Vout_stack(:, col_s:col_e), Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd))
-	                           else
-	                              call BP_MD_trans2_copy_from_rep(Ndim, blocks, blocks_member, blocks%N_loc, blocks_member%N_loc, &
-	                                 Nrnd, Vout_stack(:, col_s:col_e), Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd))
-	                           endif
-	                        else
-	                           Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd) = Vout_stack(:, col_s:col_e)
+		                        blocks_member => bplus%LL(ll)%matrices_block(cc)
+		                        if (option%trans_invariant == 2) then
+		                           if (chara == 'N') then
+		                              call BP_MD_trans2_apply_axis_map(Ndim, blocks%M_loc, blocks_member%M_loc, &
+		                                 bplus%LL(ll)%trans_map_m_from_rep(:, cc), bplus%LL(ll)%trans_rev_m_from_rep(:, cc), &
+		                                 Nrnd, Vout_stack(:, col_s:col_e), Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd))
+		                           else
+		                              call BP_MD_trans2_apply_axis_map(Ndim, blocks%N_loc, blocks_member%N_loc, &
+		                                 bplus%LL(ll)%trans_map_n_from_rep(:, cc), bplus%LL(ll)%trans_rev_n_from_rep(:, cc), &
+		                                 Nrnd, Vout_stack(:, col_s:col_e), Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd))
+		                           endif
+		                        else
+		                           Vout_locs(ll)%vs(cc)%vector(:, 1:Nrnd) = Vout_stack(:, col_s:col_e)
 	                        endif
 		                     enddo
+#ifdef HAVE_OPENMP
+				                     !$omp end parallel do
+#endif
 
 	                     call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
-	                     call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
-	                     deallocate(Vin_stack)
-	                     deallocate(Vout_stack)
-		                  enddo
-		               else
+		                     call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+		                     deallocate(Vin_stack)
+		                     deallocate(Vout_stack)
+		                     n2 = MPI_Wtime()
+		                     stats%Time_C_Mult_Unpack = stats%Time_C_Mult_Unpack + n2-n1
+			                  enddo
+			               else
 		                  do rr = rep_member_start, rep_member_end
 		                     cc = bplus%LL(ll)%trans_member_list(rr)
 		                     blocks => bplus%LL(ll)%matrices_block(cc)
@@ -959,13 +989,16 @@ contains
 	                        dim_in = blocks%M_loc
 	                        dim_out = blocks%N_loc
 	                     endif
-	                     if(blocks%style==1)then
-                        call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(cc)%vector, product(dim_in), Vout_locs(ll)%vs(cc)%vector, product(dim_out), ctemp1, ctemp2)
-                     else
-                        call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(cc)%vector, dim_in, Vout_locs(ll)%vs(cc)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
-                     endif
-	                  enddo
-	               endif
+		                     n1 = MPI_Wtime()
+		                     if(blocks%style==1)then
+	                        call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(cc)%vector, product(dim_in), Vout_locs(ll)%vs(cc)%vector, product(dim_out), ctemp1, ctemp2)
+	                     else
+	                        call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(cc)%vector, dim_in, Vout_locs(ll)%vs(cc)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+	                     endif
+		                     n2 = MPI_Wtime()
+		                     if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
+		                  enddo
+		               endif
 	            enddo
          else
             do bb = 1, bplus%LL(ll)%Nbound_loc
@@ -977,17 +1010,22 @@ contains
                   dim_in = blocks%M_loc
                   dim_out = blocks%N_loc
                endif
-               if(blocks%style==1)then
-                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2)
-               else
-                  call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
-               endif
-            enddo
-         endif
-      enddo
+	               n1 = MPI_Wtime()
+	               if(blocks%style==1)then
+	                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2)
+	               else
+	                  call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+	               endif
+	               n2 = MPI_Wtime()
+	               if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
+	            enddo
+	         endif
+	      enddo
+	      n4 = MPI_Wtime()
+	      stats%Time_C_Mult_Level = stats%Time_C_Mult_Level + n4-n3
 
 
-      n1 = MPI_Wtime()
+	      n1 = MPI_Wtime()
       if (chara == 'N') then
          if (option%trans_invariant /= 0) then
             call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
@@ -1001,13 +1039,15 @@ contains
             call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
          endif
       endif
-      n2 = MPI_Wtime()
-      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+	      n2 = MPI_Wtime()
+	      stats%Time_RedistV = stats%Time_RedistV + n2-n1
+	      stats%Time_C_Mult_RedistOut = stats%Time_C_Mult_RedistOut + n2-n1
 
 
-      if (use_cached_vecs) then
-         nullify(Vin_locs)
-         nullify(Vout_locs)
+	      n1 = MPI_Wtime()
+	      if (use_cached_vecs) then
+	         nullify(Vin_locs)
+	         nullify(Vout_locs)
       else
          do ll = level_s, level_e
             do bb = 1, bplus%LL(ll)%Nbound_loc
@@ -1024,91 +1064,150 @@ contains
          end do
          deallocate(Vin_locs)
          deallocate(Vout_locs)
-      endif
+	      endif
 
-      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
-      call LogMemory(stats, -SIZEOF(Vout)/1024.0d3)
-      deallocate (Vout)
+	      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
+	      call LogMemory(stats, -SIZEOF(Vout)/1024.0d3)
+	      deallocate (Vout)
+	      n2 = MPI_Wtime()
+	      stats%Time_C_Mult_Final = stats%Time_C_Mult_Final + n2-n1
 
-   end subroutine Bplus_MD_block_MVP_dat
+	   end subroutine Bplus_MD_block_MVP_dat
 
 
-   subroutine BP_MD_ensure_trans_groups(lev)
+	   subroutine BP_MD_ensure_trans_groups(Ndim, lev, trans_invariant)
 
-      implicit none
+	      implicit none
 
-      type(onelplus_MD)::lev
-      type(matrixblock_MD), pointer::blocks
-      integer nblock_loc, bb, rr, rep_bb, nrep, member_start
-      integer, allocatable:: rep_of_block(:), member_count(:), member_next(:)
+	      integer Ndim, trans_invariant
+	      type(onelplus_MD)::lev
+	      type(matrixblock_MD), pointer::blocks, rep
+	      integer nblock_loc, bb, rr, rep_bb, nrep, member_start, irep
+	      integer, allocatable:: rep_of_block(:), member_count(:), member_next(:)
+	      logical group_ready, plan_ready
 
-      nblock_loc = lev%Nbound_loc
-      if (allocated(lev%trans_member_list)) then
-         if (size(lev%trans_member_list) == nblock_loc) return
-         deallocate(lev%trans_member_list)
-         if (allocated(lev%trans_rep_list)) deallocate(lev%trans_rep_list)
-         if (allocated(lev%trans_member_offset)) deallocate(lev%trans_member_offset)
-         lev%trans_nrep = 0
-      endif
-      if (nblock_loc <= 0) return
+	      nblock_loc = lev%Nbound_loc
+	      group_ready = allocated(lev%trans_member_list)
+	      if (allocated(lev%trans_member_list)) then
+	         if (size(lev%trans_member_list) /= nblock_loc) then
+	            deallocate(lev%trans_member_list)
+	            if (allocated(lev%trans_rep_list)) deallocate(lev%trans_rep_list)
+	            if (allocated(lev%trans_member_offset)) deallocate(lev%trans_member_offset)
+	            if (allocated(lev%trans_map_n_to_rep)) deallocate(lev%trans_map_n_to_rep)
+	            if (allocated(lev%trans_rev_n_to_rep)) deallocate(lev%trans_rev_n_to_rep)
+	            if (allocated(lev%trans_map_n_from_rep)) deallocate(lev%trans_map_n_from_rep)
+	            if (allocated(lev%trans_rev_n_from_rep)) deallocate(lev%trans_rev_n_from_rep)
+	            if (allocated(lev%trans_map_m_to_rep)) deallocate(lev%trans_map_m_to_rep)
+	            if (allocated(lev%trans_rev_m_to_rep)) deallocate(lev%trans_rev_m_to_rep)
+	            if (allocated(lev%trans_map_m_from_rep)) deallocate(lev%trans_map_m_from_rep)
+	            if (allocated(lev%trans_rev_m_from_rep)) deallocate(lev%trans_rev_m_from_rep)
+	            lev%trans_nrep = 0
+	            lev%trans_plan_ready = 0
+	            group_ready = .false.
+	         endif
+	      endif
+	      if (nblock_loc <= 0) return
+	      if (group_ready .and. trans_invariant /= 2) return
+	      if (group_ready .and. trans_invariant == 2) then
+	         plan_ready = lev%trans_plan_ready == 1 .and. allocated(lev%trans_map_n_to_rep) .and. allocated(lev%trans_rev_n_to_rep) &
+	            .and. allocated(lev%trans_map_n_from_rep) .and. allocated(lev%trans_rev_n_from_rep) &
+	            .and. allocated(lev%trans_map_m_to_rep) .and. allocated(lev%trans_rev_m_to_rep) &
+	            .and. allocated(lev%trans_map_m_from_rep) .and. allocated(lev%trans_rev_m_from_rep)
+	         if (plan_ready) then
+	            plan_ready = size(lev%trans_map_n_to_rep, 1) == Ndim .and. size(lev%trans_map_n_to_rep, 2) == nblock_loc
+	         endif
+	         if (plan_ready) return
+	      endif
 
-      allocate(rep_of_block(nblock_loc))
-      allocate(member_count(nblock_loc))
-      allocate(member_next(nblock_loc))
-      allocate(lev%trans_rep_list(nblock_loc))
-      allocate(lev%trans_member_offset(nblock_loc + 1))
-      allocate(lev%trans_member_list(nblock_loc))
+	      if (.not. group_ready) then
+	         allocate(rep_of_block(nblock_loc))
+	         allocate(member_count(nblock_loc))
+	         allocate(member_next(nblock_loc))
+	         allocate(lev%trans_rep_list(nblock_loc))
+	         allocate(lev%trans_member_offset(nblock_loc + 1))
+	         allocate(lev%trans_member_list(nblock_loc))
 
-      member_count = 0
-      nrep = 0
-      do bb = 1, nblock_loc
-         blocks => lev%matrices_block(bb)
-         rep_bb = bb
-         if (blocks%trans_invariant_dup == 1 .and. associated(blocks%trans_rep)) then
-            rep_bb = blocks%trans_rep_idx
-            if (rep_bb <= 0 .or. rep_bb > nblock_loc) then
-               rep_bb = 0
-               do rr = 1, nblock_loc
-                  if (associated(blocks%trans_rep, lev%matrices_block(rr))) then
-                     rep_bb = rr
-                     exit
-                  endif
-               enddo
-               if (rep_bb == 0) rep_bb = bb
-            endif
-         endif
+	         member_count = 0
+	         nrep = 0
+	         do bb = 1, nblock_loc
+	            blocks => lev%matrices_block(bb)
+	            rep_bb = bb
+	            if (blocks%trans_invariant_dup == 1 .and. associated(blocks%trans_rep)) then
+	               rep_bb = blocks%trans_rep_idx
+	               if (rep_bb <= 0 .or. rep_bb > nblock_loc) then
+	                  rep_bb = 0
+	                  do rr = 1, nblock_loc
+	                     if (associated(blocks%trans_rep, lev%matrices_block(rr))) then
+	                        rep_bb = rr
+	                        exit
+	                     endif
+	                  enddo
+	                  if (rep_bb == 0) rep_bb = bb
+	               endif
+	            endif
 
-         rep_of_block(bb) = rep_bb
-         if (member_count(rep_bb) == 0) then
-            nrep = nrep + 1
-            lev%trans_rep_list(nrep) = rep_bb
-         endif
-         member_count(rep_bb) = member_count(rep_bb) + 1
-      enddo
+	            rep_of_block(bb) = rep_bb
+	            if (member_count(rep_bb) == 0) then
+	               nrep = nrep + 1
+	               lev%trans_rep_list(nrep) = rep_bb
+	            endif
+	            member_count(rep_bb) = member_count(rep_bb) + 1
+	         enddo
 
-      member_next = 0
-      lev%trans_member_offset = 0
-      member_start = 1
-      do rr = 1, nrep
-         rep_bb = lev%trans_rep_list(rr)
-         lev%trans_member_offset(rr) = member_start
-         member_next(rep_bb) = member_start
-         member_start = member_start + member_count(rep_bb)
-      enddo
-      lev%trans_member_offset(nrep + 1) = member_start
+	         member_next = 0
+	         lev%trans_member_offset = 0
+	         member_start = 1
+	         do rr = 1, nrep
+	            rep_bb = lev%trans_rep_list(rr)
+	            lev%trans_member_offset(rr) = member_start
+	            member_next(rep_bb) = member_start
+	            member_start = member_start + member_count(rep_bb)
+	         enddo
+	         lev%trans_member_offset(nrep + 1) = member_start
 
-      do bb = 1, nblock_loc
-         rep_bb = rep_of_block(bb)
-         lev%trans_member_list(member_next(rep_bb)) = bb
-         member_next(rep_bb) = member_next(rep_bb) + 1
-      enddo
-      lev%trans_nrep = nrep
+	         do bb = 1, nblock_loc
+	            rep_bb = rep_of_block(bb)
+	            lev%trans_member_list(member_next(rep_bb)) = bb
+	            member_next(rep_bb) = member_next(rep_bb) + 1
+	         enddo
+	         lev%trans_nrep = nrep
 
-      deallocate(rep_of_block)
-      deallocate(member_count)
-      deallocate(member_next)
+	         deallocate(rep_of_block)
+	         deallocate(member_count)
+	         deallocate(member_next)
+	      endif
 
-   end subroutine BP_MD_ensure_trans_groups
+	      if (trans_invariant /= 2) return
+
+	      if (allocated(lev%trans_map_n_to_rep)) deallocate(lev%trans_map_n_to_rep)
+	      if (allocated(lev%trans_rev_n_to_rep)) deallocate(lev%trans_rev_n_to_rep)
+	      if (allocated(lev%trans_map_n_from_rep)) deallocate(lev%trans_map_n_from_rep)
+	      if (allocated(lev%trans_rev_n_from_rep)) deallocate(lev%trans_rev_n_from_rep)
+	      if (allocated(lev%trans_map_m_to_rep)) deallocate(lev%trans_map_m_to_rep)
+	      if (allocated(lev%trans_rev_m_to_rep)) deallocate(lev%trans_rev_m_to_rep)
+	      if (allocated(lev%trans_map_m_from_rep)) deallocate(lev%trans_map_m_from_rep)
+	      if (allocated(lev%trans_rev_m_from_rep)) deallocate(lev%trans_rev_m_from_rep)
+
+	      allocate(lev%trans_map_n_to_rep(Ndim, nblock_loc), lev%trans_rev_n_to_rep(Ndim, nblock_loc))
+	      allocate(lev%trans_map_n_from_rep(Ndim, nblock_loc), lev%trans_rev_n_from_rep(Ndim, nblock_loc))
+	      allocate(lev%trans_map_m_to_rep(Ndim, nblock_loc), lev%trans_rev_m_to_rep(Ndim, nblock_loc))
+	      allocate(lev%trans_map_m_from_rep(Ndim, nblock_loc), lev%trans_rev_m_from_rep(Ndim, nblock_loc))
+
+	      do irep = 1, lev%trans_nrep
+	         rep_bb = lev%trans_rep_list(irep)
+	         rep => lev%matrices_block(rep_bb)
+	         do rr = lev%trans_member_offset(irep), lev%trans_member_offset(irep + 1) - 1
+	            bb = lev%trans_member_list(rr)
+	            blocks => lev%matrices_block(bb)
+	            call BP_MD_trans2_build_map(Ndim, rep, blocks, rep%N_loc, blocks%N_loc, lev%trans_map_n_to_rep(:, bb), lev%trans_rev_n_to_rep(:, bb))
+	            call BP_MD_trans2_invert_map(Ndim, lev%trans_map_n_to_rep(:, bb), lev%trans_rev_n_to_rep(:, bb), lev%trans_map_n_from_rep(:, bb), lev%trans_rev_n_from_rep(:, bb))
+	            call BP_MD_trans2_build_map(Ndim, rep, blocks, rep%M_loc, blocks%M_loc, lev%trans_map_m_to_rep(:, bb), lev%trans_rev_m_to_rep(:, bb))
+	            call BP_MD_trans2_invert_map(Ndim, lev%trans_map_m_to_rep(:, bb), lev%trans_rev_m_to_rep(:, bb), lev%trans_map_m_from_rep(:, bb), lev%trans_rev_m_from_rep(:, bb))
+	         enddo
+	      enddo
+	      lev%trans_plan_ready = 1
+
+	   end subroutine BP_MD_ensure_trans_groups
 
 
    subroutine BP_MD_trans2_copy_to_rep(Ndim, rep, blk, dims_rep, dims_blk, Nrnd, src, dst)
@@ -1142,12 +1241,29 @@ contains
          map_rep_to_blk(map_blk_to_rep(dim_i)) = dim_i
          reverse_rep_to_blk(map_blk_to_rep(dim_i)) = reverse_blk_to_rep(dim_i)
       enddo
-      call BP_MD_trans2_apply_axis_map(Ndim, dims_rep, dims_blk, map_rep_to_blk, reverse_rep_to_blk, Nrnd, src, dst)
+	      call BP_MD_trans2_apply_axis_map(Ndim, dims_rep, dims_blk, map_rep_to_blk, reverse_rep_to_blk, Nrnd, src, dst)
 
-   end subroutine BP_MD_trans2_copy_from_rep
+	   end subroutine BP_MD_trans2_copy_from_rep
 
 
-   subroutine BP_MD_trans2_build_map(Ndim, rep, blk, dims_rep, dims_blk, map_blk_to_rep, reverse_blk_to_rep)
+	   subroutine BP_MD_trans2_invert_map(Ndim, map_src_to_dst, reverse_src_to_dst, map_dst_to_src, reverse_dst_to_src)
+
+	      implicit none
+	      integer Ndim
+	      integer map_src_to_dst(Ndim), reverse_src_to_dst(Ndim), map_dst_to_src(Ndim), reverse_dst_to_src(Ndim)
+	      integer dim_i
+
+	      map_dst_to_src = 0
+	      reverse_dst_to_src = 0
+	      do dim_i = 1, Ndim
+	         map_dst_to_src(map_src_to_dst(dim_i)) = dim_i
+	         reverse_dst_to_src(map_src_to_dst(dim_i)) = reverse_src_to_dst(dim_i)
+	      enddo
+
+	   end subroutine BP_MD_trans2_invert_map
+
+
+	   subroutine BP_MD_trans2_build_map(Ndim, rep, blk, dims_rep, dims_blk, map_blk_to_rep, reverse_blk_to_rep)
 
       implicit none
       integer Ndim
@@ -15662,7 +15778,8 @@ end subroutine BF_block_MVP_dat_batch_magma
       type(vectorset),allocatable::mats1_1D(:)
       integer sender, receiver
       integer, allocatable::num_nods_i(:), num_nods_j(:)
-      real(kind=8)::n1, n2, n3, n4, n5, n6, n7, t1, t2
+      real(kind=8)::n1, n2, n3, n4, n5, n6, n7, t1, t2, t_start, t_end
+      real(kind=8)::time_reshape, time_gemm
       integer dims_c_m(Ndim),dims_r_m(Ndim),bbm_r,bbm_c,group_n(Ndim),group_n1(Ndim),group_m(Ndim),group_m1(Ndim), dims_MD_old(Ndim*2),dims_MD_new(Ndim*2),dims_ref(Ndim+1),dims_ref_old(Ndim+1),dims_ref_new(Ndim+1),offsets_ref(Ndim+1), dims_in(Ndim),idx_in(Ndim), dims_MD3(Ndim),idx_MD3(Ndim), idxr(Ndim), dim_subtensor(Ndim*2),idx_subtensor(Ndim*2), index_ij, index_scalar,index_vector(Ndim),index_scalar_old,index_vector_old(Ndim)
       real(kind=8)::flop,flops,tol_used,flop_tmp0,flop_tmp_local
       integer, save:: my_tid = 0
@@ -15688,6 +15805,8 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       n1 = MPI_Wtime()
       t1 = MPI_Wtime()
+      time_reshape = 0d0
+      time_gemm = 0d0
 
       pgno = blocks%pgno
       comm = ptree%pgrp(pgno)%comm
@@ -15753,7 +15872,10 @@ end subroutine BF_block_MVP_dat_batch_magma
             enddo
             dims_ref_new(Ndim+1) = Nvec
             offsets_ref(Ndim+1) = 0
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim+1,1,xin, 'T', mat,'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
             allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(size(mat,1),size(mat,2)))
             BFvec(nn)%vec(0)%blocks(1,1)%matrix = mat
             deallocate(mat)
@@ -15947,10 +16069,10 @@ end subroutine BF_block_MVP_dat_batch_magma
 #ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
-         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used) reduction(+:flops)
+         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm)
 #else
 #ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used) reduction(+:flops)
+         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm)
 #endif
 #endif
          do index_ij = 1,product(dim_subtensor)
@@ -15961,7 +16083,10 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1:Ndim) = blocks%ButterflyMiddle(index_ij)%dims_n
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,Ndim+1,BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, 'N', mats(my_tid+1)%vector, 'T',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
 
             allocate(mats1(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec))
             mats1(my_tid+1)%vector=0
@@ -15997,7 +16122,10 @@ end subroutine BF_block_MVP_dat_batch_magma
 
 
             else
+               t_start = MPI_Wtime()
                call gemmf90(blocks%ButterflyMiddle(index_ij)%matrix, product(blocks%ButterflyMiddle(index_ij)%dims_m), mats(my_tid+1)%vector, product(blocks%ButterflyMiddle(index_ij)%dims_n), mats1(my_tid+1)%vector, product(blocks%ButterflyMiddle(index_ij)%dims_m), 'N', 'N', product(blocks%ButterflyMiddle(index_ij)%dims_m), Nvec, product(blocks%ButterflyMiddle(index_ij)%dims_n), BPACK_cone, BPACK_czero, flop)
+               t_end = MPI_Wtime()
+               time_gemm = time_gemm + t_end - t_start
             endif
             flops = flops + flop
 #if HAVE_ZFP
@@ -16011,7 +16139,10 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
             deallocate(mats(my_tid+1)%vector)
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim+1,Ndim,mats1(my_tid+1)%vector, 'T', mats(my_tid+1)%vector, 'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
             allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(size(mats(my_tid+1)%vector,1),size(mats(my_tid+1)%vector,2)))
             BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = mats(my_tid+1)%vector
             deallocate(mats1(my_tid+1)%vector)
@@ -16061,7 +16192,10 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref_old(Ndim+1) = Nvec
             offsets_ref(Ndim+1) = 0
 
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim,Ndim+1,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix, 'N', xout1,'T',0)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
 #ifdef HAVE_TASKLOOP
 !$omp end task
 #endif
@@ -16182,10 +16316,24 @@ end subroutine BF_block_MVP_dat_batch_magma
    endif
       n7 = MPI_Wtime()
       ! time_tmp = time_tmp + n5 - n1
-      if(ptree%MyID==Main_ID .and. option%verbosity>=2)write(*,*)'BF_MD_block_mvp: MyID',ptree%MyID,'allocate',n2-n1,'right_mult',n3-n2,'all2all',n4-n3,'tensor_contract',n5-n4,'left_mult',n6-n5,'deallocate',n7-n6
+	      if(ptree%MyID==Main_ID .and. option%verbosity>=2)write(*,*)'BF_MD_block_mvp: MyID',ptree%MyID,'allocate',n2-n1,'right_mult',n3-n2,'all2all',n4-n3,'tensor_contract',n5-n4,'left_mult',n6-n5,'deallocate',n7-n6
 
-      t2 = MPI_Wtime()
-      flop_tmp_local = stats%Flop_Tmp
+	      if (chara == 'N') then
+	         stats%Time_C_Mult_Init = stats%Time_C_Mult_Init + n2 - n1
+	         stats%Time_C_Mult_Right = stats%Time_C_Mult_Right + n3 - n2
+	         stats%Time_C_Mult_All2All = stats%Time_C_Mult_All2All + n4 - n3
+	         stats%Time_C_Mult_Middle = stats%Time_C_Mult_Middle + n5 - n4
+	         stats%Time_C_Mult_Left = stats%Time_C_Mult_Left + n6 - n5
+	         stats%Time_C_Mult_Cleanup = stats%Time_C_Mult_Cleanup + n7 - n6
+	      endif
+
+	      t2 = MPI_Wtime()
+	      if (chara == 'N') stats%Time_C_Mult_Block = stats%Time_C_Mult_Block + t2 - t1
+	      if (chara == 'N') then
+	         stats%Time_C_Mult_Reshape = stats%Time_C_Mult_Reshape + time_reshape
+	         stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
+	      endif
+	      flop_tmp_local = stats%Flop_Tmp
       stats%Flop_Tmp = flop_tmp0 + flop_tmp_local
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + flop_tmp_local
@@ -17133,13 +17281,15 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
     integer nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
     integer pid, pgno_sub, index_c_scalar, dim_i, dim_ii
     DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
-    real(kind=8)::flop,flops
+    real(kind=8)::flop,flops,t_start,t_end,time_reshape,time_gemm
 
 
     level_butterfly = blocks%level_butterfly
     level_half = blocks%level_half
     levelm = level_half
     offsets_ref=0
+    time_reshape = 0d0
+    time_gemm = 0d0
 
     call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb_m, idx_c_m)
     group_n = blocks%col_group
@@ -17152,7 +17302,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
             enddo
             dims_ref(Ndim+1)=Nvec
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii,dim_ii,BFvec%vec(level)%blocks(1,1)%matrix, 'N', mat, 'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
          else
             do dim_i=1,Ndim
                if(dim_i<dim_ii)then
@@ -17162,7 +17315,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                endif
             enddo
             dims_ref(Ndim+1)=Nvec
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,1)%matrix, 'N', mat, 'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
          endif
 
          if(associated(BFvec%vec(level+1)%blocks(1,1)%matrix))deallocate(BFvec%vec(level+1)%blocks(1,1)%matrix)
@@ -17170,6 +17326,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
          BFvec%vec(level+1)%blocks(1,1)%matrix=0
 
          flops=0
+         t_start = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
          ! !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
          !$omp taskgroup task_reduction(+:flops)
@@ -17200,6 +17357,8 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             !$omp end parallel do
 #endif
 #endif
+         t_end = MPI_Wtime()
+         time_gemm = time_gemm + t_end - t_start
 #ifdef HAVE_TASKLOOP
          !$omp atomic
 #endif
@@ -17223,7 +17382,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                   dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
                enddo
                dims_ref(Ndim+1)=Nvec
+               t_start = MPI_Wtime()
                call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level)%blocks(index_ii_s,1)%matrix, 'N', mat, 'N',1)
+               t_end = MPI_Wtime()
+               time_reshape = time_reshape + t_end - t_start
             else
                do dim_i=1,Ndim
                   if(dim_i<dim_ii)then
@@ -17233,7 +17395,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                   endif
                enddo
                dims_ref(Ndim+1)=Nvec
+               t_start = MPI_Wtime()
                call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, 'N', mat, 'N',1)
+               t_end = MPI_Wtime()
+               time_reshape = time_reshape + t_end - t_start
             endif
 
             if(associated(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix))deallocate(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix)
@@ -17241,6 +17406,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             BFvec%vec(level+1)%blocks(index_i_s,1)%matrix=0
 
             flops=0
+            t_start = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
             !   !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
             !$omp taskgroup task_reduction(+:flops)
@@ -17275,6 +17441,8 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             !$omp end parallel do
 #endif
 #endif
+            t_end = MPI_Wtime()
+            time_gemm = time_gemm + t_end - t_start
 #ifdef HAVE_TASKLOOP
             !$omp atomic
 #endif
@@ -17286,6 +17454,15 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
          enddo
       enddo
    endif
+
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
+   stats%Time_C_Mult_Reshape = stats%Time_C_Mult_Reshape + time_reshape
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
+   stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
 
 end subroutine BF_MD_block_mvp_multiply_right
 
@@ -17306,12 +17483,14 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
     integer nn1, nn2, mm1, mm2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
     integer pid, pgno_sub, index_c_scalar, dim_i, dim_ii
     DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
-    real(kind=8)::flop,flops
+    real(kind=8)::flop,flops,t_start,t_end,time_reshape,time_gemm
 
     level_butterfly = blocks%level_butterfly
     level_half = blocks%level_half
     levelm = level_half
     offsets_ref=0
+    time_reshape = 0d0
+    time_gemm = 0d0
 
     call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb_m, idx_r_m)
     group_m = blocks%row_group
@@ -17324,7 +17503,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
             enddo
             dims_ref(Ndim+1)=Nvec
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(1)%blocks(1,1)%matrix, 'N', mat, 'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
          else
             do dim_i=1,Ndim
                if(dim_i<dim_ii)then
@@ -17334,7 +17516,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                endif
             enddo
             dims_ref(Ndim+1)=Nvec
+            t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(0)%blocks(1,1)%matrix, 'N', mat, 'N',1)
+            t_end = MPI_Wtime()
+            time_reshape = time_reshape + t_end - t_start
          endif
 
          if(associated(BFvec%vec(level)%blocks(1,1)%matrix))deallocate(BFvec%vec(level)%blocks(1,1)%matrix)
@@ -17342,6 +17527,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
          BFvec%vec(level)%blocks(1,1)%matrix=0
 
          flops=0
+         t_start = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
        !  !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
          !$omp taskgroup task_reduction(+:flops)
@@ -17372,6 +17558,8 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             !$omp end parallel do
 #endif
 #endif
+         t_end = MPI_Wtime()
+         time_gemm = time_gemm + t_end - t_start
 #ifdef HAVE_TASKLOOP
             !$omp atomic
 #endif
@@ -17399,7 +17587,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                      dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
                   enddo
                   dims_ref(Ndim+1)=Nvec
+                  t_start = MPI_Wtime()
                   call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1)
+                  t_end = MPI_Wtime()
+                  time_reshape = time_reshape + t_end - t_start
                else
                   do dim_i=1,Ndim
                      if(dim_i<dim_ii)then
@@ -17409,13 +17600,17 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                      endif
                   enddo
                   dims_ref(Ndim+1)=Nvec
+                  t_start = MPI_Wtime()
                   call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1)
+                  t_end = MPI_Wtime()
+                  time_reshape = time_reshape + t_end - t_start
                endif
                deallocate(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix)
                allocate(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s),size(mat,2)))
                BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix=0
 
                flops=0
+               t_start = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
             !   !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
                !$omp taskgroup task_reduction(+:flops)
@@ -17449,6 +17644,8 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             !$omp end parallel do
 #endif
 #endif
+               t_end = MPI_Wtime()
+               time_gemm = time_gemm + t_end - t_start
 #ifdef HAVE_TASKLOOP
                !$omp atomic
 #endif
@@ -17467,6 +17664,15 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
          enddo
       enddo
    endif
+
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
+   stats%Time_C_Mult_Reshape = stats%Time_C_Mult_Reshape + time_reshape
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
+   stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
 
 end subroutine BF_MD_block_mvp_multiply_left
 

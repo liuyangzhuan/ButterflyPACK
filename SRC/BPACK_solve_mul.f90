@@ -4030,7 +4030,7 @@ contains
       integer Ndim
       integer Ns(Ndim)
       integer level_c, rowblock
-      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll, ll_end, level_batch
       integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
       character chara
       real(kind=8) a, b, c, d
@@ -4063,13 +4063,17 @@ contains
    ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
 
 
-#if 0
-      call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
-#else ! the following is more memory efficient
-      do ll=2,h_mat_md%BP%Lplus
-         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
+      level_batch = max(1, option%htensor_mvp_level_batch)
+      ll = 2
+      do while (ll <= h_mat_md%BP%Lplus)
+         ll_end = min(h_mat_md%BP%Lplus, ll + level_batch - 1)
+         if (ll == 2) then
+            call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=ll, level_end=ll_end)
+         else
+            call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll_end)
+         endif
+         ll = ll_end + 1
       enddo
-#endif
 
 
 

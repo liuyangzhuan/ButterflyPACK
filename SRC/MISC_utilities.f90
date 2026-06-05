@@ -4441,8 +4441,9 @@ contains
 subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_old,ld_new,data_in,trans_in,data_out,trans_out,loopnew)
    implicit none
    integer Ndim,loopnew
-   integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar, idx_new(Ndim-1),idx_new_scalar,dims_old(Ndim-1),dims_old_scalar, idx_old(Ndim-1),idx_old_scalar
-   integer ld_old,ld_new, dim_i, i, j, j1
+   integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar,idx_new_scalar,dims_old(Ndim-1),dims_old_scalar,idx_old_scalar
+   integer ld_old,ld_new, dim_i, i, j, j1, prod_old, prod_new, linear_idx, tmp_idx, pos_old, pos_new
+   integer stride_old(Ndim-1), stride_new(Ndim-1), out_dim1, out_dim2
    character::trans_in,trans_out
    DT::data_in(:,:)
    DT,allocatable::data_out(:,:)
@@ -4466,41 +4467,63 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
          dims_new_scalar = dims_ref_new(dim_i)
       endif
    enddo
+
+   prod_old = product(dims_old)
+   prod_new = product(dims_new)
+   stride_old(1) = 1
+   stride_new(1) = 1
+   do i=2,Ndim-1
+      stride_old(i) = stride_old(i-1)*dims_old(i-1)
+      stride_new(i) = stride_new(i-1)*dims_new(i-1)
+   enddo
+
+   if(trans_out=='N')then
+      out_dim1 = dims_new_scalar
+      out_dim2 = prod_new
+   else
+      out_dim1 = prod_new
+      out_dim2 = dims_new_scalar
+   endif
+
    if(.not. allocated(data_out))then
-      if(trans_out=='N')then
-         allocate(data_out(dims_new_scalar,product(dims_new)))
-      else
-         allocate(data_out(product(dims_new),dims_new_scalar))
-      endif
+      allocate(data_out(out_dim1,out_dim2))
       data_out=0
+   endif
+
+   if(ld_old==ld_new .and. all(dims_ref_old==dims_ref_new) .and. all(offsets_ref==0))then
+      if(trans_out==trans_in)then
+         data_out = data_in
+      else
+         data_out = transpose(data_in)
+      endif
+      return
    endif
 
    if(loopnew==1)then
       do idx_new_scalar=1,dims_new_scalar
-      do j=1,product(dims_new)
-         call SingleIndexToMultiIndex(Ndim-1, dims_new, j, idx_new)
-         !! get the Ndim dimensional index idx_ref
-         i=0
+      do j=1,prod_new
+         linear_idx = j - 1
+         tmp_idx = linear_idx
+         pos_new = 0
          do dim_i=1,Ndim
          if(dim_i/=ld_new)then
-            i=i+1
-            idx_ref(dim_i) = idx_new(i) + offsets_ref(dim_i)
+            pos_new = pos_new + 1
+            idx_ref(dim_i) = mod(tmp_idx,dims_new(pos_new)) + 1 + offsets_ref(dim_i)
+            tmp_idx = tmp_idx/dims_new(pos_new)
          else
             idx_ref(dim_i) = idx_new_scalar + offsets_ref(dim_i)
          endif
          enddo
-         !! get the Ndim-1 dimensional index idx_old
-         i=0
+         j1 = 1
+         pos_old = 0
          do dim_i=1,Ndim
          if(dim_i/=ld_old)then
-            i=i+1
-            idx_old(i)=idx_ref(dim_i)
+            pos_old = pos_old + 1
+            j1 = j1 + (idx_ref(dim_i) - 1)*stride_old(pos_old)
          else
             idx_old_scalar=idx_ref(dim_i)
          endif
          enddo
-
-         call MultiIndexToSingleIndex(Ndim-1, dims_old, j1, idx_old)
 
          if(trans_out=='N' .and. trans_in=='N')then
             data_out(idx_new_scalar,j) = data_in(idx_old_scalar,j1)
@@ -4516,30 +4539,29 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
 
    else
       do idx_old_scalar=1,dims_old_scalar
-      do j=1,product(dims_old)
-         call SingleIndexToMultiIndex(Ndim-1, dims_old, j, idx_old)
-         !! get the Ndim dimensional index idx_ref
-         i=0
+      do j=1,prod_old
+         linear_idx = j - 1
+         tmp_idx = linear_idx
+         pos_old = 0
          do dim_i=1,Ndim
          if(dim_i/=ld_old)then
-            i=i+1
-            idx_ref(dim_i) = idx_old(i) + offsets_ref(dim_i)
+            pos_old = pos_old + 1
+            idx_ref(dim_i) = mod(tmp_idx,dims_old(pos_old)) + 1 + offsets_ref(dim_i)
+            tmp_idx = tmp_idx/dims_old(pos_old)
          else
             idx_ref(dim_i) = idx_old_scalar + offsets_ref(dim_i)
          endif
          enddo
-         !! get the Ndim-1 dimensional index idx_new
-         i=0
+         j1 = 1
+         pos_new = 0
          do dim_i=1,Ndim
          if(dim_i/=ld_new)then
-            i=i+1
-            idx_new(i)=idx_ref(dim_i)
+            pos_new = pos_new + 1
+            j1 = j1 + (idx_ref(dim_i) - 1)*stride_new(pos_new)
          else
             idx_new_scalar=idx_ref(dim_i)
          endif
          enddo
-
-         call MultiIndexToSingleIndex(Ndim-1, dims_new, j1, idx_new)
 
          if(trans_out=='N' .and. trans_in=='N')then
             data_out(idx_new_scalar,j1) = data_in(idx_old_scalar,j)

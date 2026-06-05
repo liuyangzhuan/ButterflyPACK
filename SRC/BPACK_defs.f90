@@ -586,6 +586,11 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, allocatable:: trans_rep_list(:) !< representative local block ids
         integer, allocatable:: trans_member_offset(:) !< offsets into trans_member_list for each representative
         integer, allocatable:: trans_member_list(:) !< local block ids grouped by representative
+        integer:: trans_plan_ready = 0 !< 1 when trans_invariant=2 axis maps have been cached
+        integer, allocatable:: trans_map_n_to_rep(:,:), trans_rev_n_to_rep(:,:)
+        integer, allocatable:: trans_map_n_from_rep(:,:), trans_rev_n_from_rep(:,:)
+        integer, allocatable:: trans_map_m_to_rep(:,:), trans_rev_m_to_rep(:,:)
+        integer, allocatable:: trans_map_m_from_rep(:,:), trans_rev_m_from_rep(:,:)
     end type onelplus_MD
 
 
@@ -768,6 +773,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: knn !< number of nearest neighbour points for each point
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
+        integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
@@ -804,7 +810,11 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** statistics
     type Hstat
         real(kind=8) Time_random(5)  !< Intialization, MVP, Reconstruction, Reconstruction of one subblock
-        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
+        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
+        real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
+        real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
+        real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
+        real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_Tmp

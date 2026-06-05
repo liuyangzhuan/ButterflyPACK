@@ -690,6 +690,10 @@ contains
          val_d = option%trans_invariant
          valid_opt = 1
       endif
+      if (trim(str) == 'htensor_mvp_level_batch') then
+         val_d = option%htensor_mvp_level_batch
+         valid_opt = 1
+      endif
       if (trim(str) == 'pat_comp') then
          val_d = option%pat_comp
          valid_opt = 1
@@ -965,6 +969,11 @@ contains
       if (trim(str) == 'trans_invariant') then
          call c_f_pointer(val_Cptr, val_i)
          option%trans_invariant = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'htensor_mvp_level_batch') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%htensor_mvp_level_batch = val_i
          valid_opt = 1
       endif
 
@@ -3149,6 +3158,24 @@ contains
       stats%Flop_Tmp = 0
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
       xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
@@ -3160,6 +3187,7 @@ contains
 
       xout = xout/option%scale_factor
 
+      stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 
@@ -3398,6 +3426,24 @@ contains
 
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3410,6 +3456,7 @@ contains
 
       t2 = MPI_Wtime()
 
+      stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 
@@ -3488,6 +3535,24 @@ contains
 
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3512,6 +3577,7 @@ contains
 
       t2 = MPI_Wtime()
 
+      stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 
@@ -3570,6 +3636,24 @@ contains
 
       stats%Flop_C_Mult = 0
       stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3582,6 +3666,7 @@ contains
 
       t2 = MPI_Wtime()
 
+      stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
       stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
       stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
 

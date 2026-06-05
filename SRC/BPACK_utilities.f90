@@ -444,9 +444,17 @@ contains
                deallocate (hss_bf1_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(hss_bf1_md%BP%LL(ll)%boundary_map)) deallocate (hss_bf1_md%BP%LL(ll)%boundary_map)
-               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rep_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rep_list)
-               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_offset)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_offset)
-               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_list)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rep_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rep_list)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_offset)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_offset)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_list)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)
+	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)
             end if
          end do
          deallocate (hss_bf1_md%BP%LL)
@@ -494,9 +502,17 @@ contains
                deallocate (h_mat_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(h_mat_md%BP%LL(ll)%boundary_map)) deallocate (h_mat_md%BP%LL(ll)%boundary_map)
-               if (allocated(h_mat_md%BP%LL(ll)%trans_rep_list)) deallocate (h_mat_md%BP%LL(ll)%trans_rep_list)
-               if (allocated(h_mat_md%BP%LL(ll)%trans_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_member_offset)
-               if (allocated(h_mat_md%BP%LL(ll)%trans_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_member_list)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_rep_list)) deallocate (h_mat_md%BP%LL(ll)%trans_rep_list)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_member_offset)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_member_list)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_to_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_from_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_to_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_from_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)
             end if
          end do
          deallocate (h_mat_md%BP%LL)
@@ -753,6 +769,24 @@ contains
       stats_o%Time_Sblock = stats_i%Time_Sblock
       stats_o%Time_Sol = stats_i%Time_Sol
       stats_o%Time_C_Mult = stats_i%Time_C_Mult
+      stats_o%Time_C_Mult_Wrapper = stats_i%Time_C_Mult_Wrapper
+      stats_o%Time_C_Mult_Block = stats_i%Time_C_Mult_Block
+      stats_o%Time_C_Mult_Init = stats_i%Time_C_Mult_Init
+      stats_o%Time_C_Mult_Right = stats_i%Time_C_Mult_Right
+      stats_o%Time_C_Mult_All2All = stats_i%Time_C_Mult_All2All
+      stats_o%Time_C_Mult_Middle = stats_i%Time_C_Mult_Middle
+      stats_o%Time_C_Mult_Left = stats_i%Time_C_Mult_Left
+      stats_o%Time_C_Mult_Cleanup = stats_i%Time_C_Mult_Cleanup
+      stats_o%Time_C_Mult_RedistIn = stats_i%Time_C_Mult_RedistIn
+      stats_o%Time_C_Mult_RedistOut = stats_i%Time_C_Mult_RedistOut
+      stats_o%Time_C_Mult_Level = stats_i%Time_C_Mult_Level
+      stats_o%Time_C_Mult_TransPlan = stats_i%Time_C_Mult_TransPlan
+      stats_o%Time_C_Mult_Pack = stats_i%Time_C_Mult_Pack
+      stats_o%Time_C_Mult_Full = stats_i%Time_C_Mult_Full
+      stats_o%Time_C_Mult_Unpack = stats_i%Time_C_Mult_Unpack
+      stats_o%Time_C_Mult_Final = stats_i%Time_C_Mult_Final
+      stats_o%Time_C_Mult_Reshape = stats_i%Time_C_Mult_Reshape
+      stats_o%Time_C_Mult_Gemm = stats_i%Time_C_Mult_Gemm
       stats_o%Time_BLK_MVP = stats_i%Time_BLK_MVP
       stats_o%Time_C_Extract = stats_i%Time_C_Extract
       stats_o%Time_Inv = stats_i%Time_Inv
@@ -843,6 +877,24 @@ contains
       stats%Time_Sblock = 0
       stats%Time_Sol = 0
       stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
       stats%Time_BLK_MVP = 0
       stats%Time_C_Extract = 0
       stats%Time_Inv = 0
@@ -982,6 +1034,63 @@ contains
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2)') 'C_mult flops:', rtemp
       write (200, '(A21,Es14.2)') 'C_mult flops:', stats%Flop_C_Mult
 
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Wrapper, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult wrapper time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult wrapper time:', stats%Time_C_Mult_Wrapper, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Block, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult block time:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult block time:', stats%Time_C_Mult_Block, 'Seconds'
+
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistIn, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist in:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist in:', stats%Time_C_Mult_RedistIn, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistOut, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist out:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist out:', stats%Time_C_Mult_RedistOut, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Level, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult level time:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult level time:', stats%Time_C_Mult_Level, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_TransPlan, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult trans plan:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult trans plan:', stats%Time_C_Mult_TransPlan, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Pack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult pack time:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult pack time:', stats%Time_C_Mult_Pack, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Full, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult full time:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult full time:', stats%Time_C_Mult_Full, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Unpack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult unpack time:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult unpack time:', stats%Time_C_Mult_Unpack, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Final, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult final time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult final time:', stats%Time_C_Mult_Final, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult reshape:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult reshape:', stats%Time_C_Mult_Reshape, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Gemm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult gemm:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult gemm:', stats%Time_C_Mult_Gemm, 'Seconds'
+
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_Init, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult init time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult init time:', stats%Time_C_Mult_Init, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Right, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult right time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult right time:', stats%Time_C_Mult_Right, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_All2All, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult all2all:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult all2all:', stats%Time_C_Mult_All2All, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Middle, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult middle time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult middle time:', stats%Time_C_Mult_Middle, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Left, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult left time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult left time:', stats%Time_C_Mult_Left, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Cleanup, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult clean time:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'C_mult clean time:', stats%Time_C_Mult_Cleanup, 'Seconds'
+
       call MPI_ALLREDUCE(stats%Time_RedistV, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if(ptree%MyID==Main_ID)write(*,'(A21,Es14.2,A8)') 'RedistV time: ', rtemp, 'Seconds'
       write(200,'(A21,Es14.2,A8)') 'RedistV time: ', stats%Time_RedistV, 'Seconds'
@@ -1056,6 +1165,7 @@ contains
       option%forwardN15flag = 0
       option%fastsample_tensor = 0
       option%trans_invariant = 0
+      option%htensor_mvp_level_batch = 1
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
@@ -1132,6 +1242,8 @@ contains
                   read (strings1, *) option%fastsample_tensor
                else if (trim(strings) == '--trans_invariant') then
                   read (strings1, *) option%trans_invariant
+               else if (trim(strings) == '--htensor_mvp_level_batch') then
+                  read (strings1, *) option%htensor_mvp_level_batch
                else if (trim(strings) == '--baca_batch' .or. trim(strings) == '--BACA_Batch') then
                   read (strings1, *) option%BACA_Batch
                else if (trim(strings) == '--reclr_leaf' .or. trim(strings) == '--RecLR_leaf') then
@@ -1266,6 +1378,7 @@ contains
       option1%forwardN15flag = option%forwardN15flag
       option1%fastsample_tensor = option%fastsample_tensor
       option1%trans_invariant = option%trans_invariant
+      option1%htensor_mvp_level_batch = option%htensor_mvp_level_batch
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
@@ -1654,6 +1767,7 @@ contains
                write (*, '(A18,I8)') 'verbosity', option%verbosity
                write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
                write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
+               write (*, '(A18,I8)') 'htensor_mvp_batch', option%htensor_mvp_level_batch
                write (*, '(A18,I8)') 'elem_extract', option%elem_extract
                write (*, '(A18,I8)') 'cpp', option%cpp
                write (*, '(A18,I8)') 'knn', option%knn
@@ -1693,6 +1807,7 @@ contains
             write (*, '(A18,I8)') 'verbosity', option%verbosity
             write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
             write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
+            write (*, '(A18,I8)') 'htensor_mvp_batch', option%htensor_mvp_level_batch
             write (*, '(A18,I8)') 'elem_extract', option%elem_extract
             write (*, '(A18,I8)') 'cpp', option%cpp
             write (*, '(A18,I8)') 'knn', option%knn
