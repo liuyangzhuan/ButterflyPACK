@@ -429,8 +429,9 @@ contains
 
    subroutine HSSBF_MD_delete(hss_bf1_md)
       implicit none
-      integer ll,bb
+      integer ll,bb,cache_i
       type(hssbf_md)::hss_bf1_md
+      type(Hstat)::stats_dummy
 
       if (associated(hss_bf1_md%BP%LL)) then
          do ll = 1, LplusMax
@@ -443,6 +444,9 @@ contains
                deallocate (hss_bf1_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(hss_bf1_md%BP%LL(ll)%boundary_map)) deallocate (hss_bf1_md%BP%LL(ll)%boundary_map)
+               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rep_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rep_list)
+               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_offset)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_offset)
+               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_list)
             end if
          end do
          deallocate (hss_bf1_md%BP%LL)
@@ -453,6 +457,15 @@ contains
       endif
       if(allocated(hss_bf1_md%BP%col_group))then
          deallocate(hss_bf1_md%BP%col_group)
+      endif
+      if(allocated(hss_bf1_md%BP%vec_redist_plans))then
+         deallocate(hss_bf1_md%BP%vec_redist_plans)
+      endif
+      if(allocated(hss_bf1_md%BP%vec_mvp_cache))then
+         do cache_i = 1, size(hss_bf1_md%BP%vec_mvp_cache)
+            call BP_MD_vec_mvp_cache_clear(hss_bf1_md%BP%vec_mvp_cache(cache_i), stats_dummy, .false.)
+         enddo
+         deallocate(hss_bf1_md%BP%vec_mvp_cache)
       endif
       if(allocated(hss_bf1_md%N))then
          deallocate(hss_bf1_md%N)
@@ -466,8 +479,9 @@ contains
 
    subroutine HMAT_MD_delete(h_mat_md)
       implicit none
-      integer ll,bb
+      integer ll,bb,cache_i
       type(Hmat_md)::h_mat_md
+      type(Hstat)::stats_dummy
 
       if (associated(h_mat_md%BP%LL)) then
          do ll = 1, LplusMax
@@ -480,6 +494,9 @@ contains
                deallocate (h_mat_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(h_mat_md%BP%LL(ll)%boundary_map)) deallocate (h_mat_md%BP%LL(ll)%boundary_map)
+               if (allocated(h_mat_md%BP%LL(ll)%trans_rep_list)) deallocate (h_mat_md%BP%LL(ll)%trans_rep_list)
+               if (allocated(h_mat_md%BP%LL(ll)%trans_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_member_offset)
+               if (allocated(h_mat_md%BP%LL(ll)%trans_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_member_list)
             end if
          end do
          deallocate (h_mat_md%BP%LL)
@@ -490,6 +507,15 @@ contains
       endif
       if(allocated(h_mat_md%BP%col_group))then
          deallocate(h_mat_md%BP%col_group)
+      endif
+      if(allocated(h_mat_md%BP%vec_redist_plans))then
+         deallocate(h_mat_md%BP%vec_redist_plans)
+      endif
+      if(allocated(h_mat_md%BP%vec_mvp_cache))then
+         do cache_i = 1, size(h_mat_md%BP%vec_mvp_cache)
+            call BP_MD_vec_mvp_cache_clear(h_mat_md%BP%vec_mvp_cache(cache_i), stats_dummy, .false.)
+         enddo
+         deallocate(h_mat_md%BP%vec_mvp_cache)
       endif
       if(allocated(h_mat_md%N))then
          deallocate(h_mat_md%N)

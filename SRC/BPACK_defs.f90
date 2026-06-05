@@ -182,6 +182,31 @@ module BPACK_DEFS
         type(dat_pack), allocatable::dat_pk(:, :) !< communication buffer
     end type commquant1D
 
+    !>**** cached MD vector redistribution descriptors for one peer
+    type vec_redist_peer_MD
+        integer:: active=0
+        integer:: nitem=0
+        integer(kind=8):: payload_size_base=0_8
+        integer, allocatable:: ll(:)
+        integer, allocatable:: bb_loc(:)
+        integer, allocatable:: offset_s(:,:)
+        integer, allocatable:: offset_r(:,:)
+        integer, allocatable:: sizen(:,:)
+    end type vec_redist_peer_MD
+
+    !>**** cached MD vector redistribution plan for one row/column and direction
+    type vec_redist_plan_MD
+        integer:: ready=0
+        integer:: rowcol=-1
+        integer:: one2all=-1
+        integer:: level_s=-1
+        integer:: level_e=-1
+        integer:: Ndim=0
+        integer:: nproc=0
+        type(vec_redist_peer_MD), allocatable:: send(:)
+        type(vec_redist_peer_MD), allocatable:: recv(:)
+    end type vec_redist_plan_MD
+
     !>**** cluster of points/indices
     type basisgroup
         integer:: head=-1 !< head index
@@ -216,6 +241,18 @@ module BPACK_DEFS
     type vectorsblock_oneL
         type(vectorsblock), allocatable :: vs(:)
     end type vectorsblock_oneL
+
+    !>**** cached local MD MVP work vectors, used to avoid repeated allocation churn
+    type vec_mvp_cache_MD
+        integer:: ready = 0
+        integer:: chara_code = 0
+        integer:: level_s = -1
+        integer:: level_e = -1
+        integer:: Nrnd = -1
+        integer:: Ndim = 0
+        type(vectorsblock_oneL), pointer:: Vin_locs(:) => null()
+        type(vectorsblock_oneL), pointer:: Vout_locs(:) => null()
+    end type vec_mvp_cache_MD
 
 
     !>**** a vector used to extract one element of a butterfly
@@ -520,6 +557,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(list):: lstr, lstc !< a list of intersections
         type(intersect), allocatable::inters(:) !< an array of intersections
         integer:: trans_invariant_dup = 0 !< 1: this HTENSOR block reuses the tensor data of trans_rep
+        integer:: trans_rep_idx = 0 !< local block index of trans_rep on this MPI rank
         type(matrixblock_MD), pointer :: trans_rep => null() !< representative block for translational-invariant tensor kernels
     end type matrixblock_MD
 
@@ -544,6 +582,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
+        integer:: trans_nrep = 0 !< # representative local blocks for translational-invariant MVP batching
+        integer, allocatable:: trans_rep_list(:) !< representative local block ids
+        integer, allocatable:: trans_member_offset(:) !< offsets into trans_member_list for each representative
+        integer, allocatable:: trans_member_list(:) !< local block ids grouped by representative
     end type onelplus_MD
 
 
@@ -569,6 +611,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer Lplus  !< Number of Bplus layers
         integer ind_ll, ind_bk !< iterator of level and block number in a blockplus
         type(onelplus_MD), pointer:: LL(:) => null() !
+        type(vec_redist_plan_MD), allocatable:: vec_redist_plans(:) !< cached MD vector redistribution plans
+        type(vec_mvp_cache_MD), allocatable:: vec_mvp_cache(:) !< cached trans-invariant MD MVP local vectors
     end type blockplus_MD
 
 

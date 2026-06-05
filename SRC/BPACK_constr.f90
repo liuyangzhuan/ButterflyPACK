@@ -3009,7 +3009,7 @@ contains
                      rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
                   endif
                   if (rep_bb > 0) then
-                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
+                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb), rep_bb)
                      trans_reuse_level = trans_reuse_level + 1
                   else
                      call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
@@ -3041,7 +3041,7 @@ contains
                      rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
                   endif
                   if (rep_bb > 0) then
-                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
+                     call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb), rep_bb)
                      trans_reuse_level = trans_reuse_level + 1
                   else
                      call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
@@ -3176,15 +3176,17 @@ contains
    end function BP_MD_trans2_compatible
 
 
-   subroutine BP_MD_alias_trans_data(Ndim, rep, blk)
+   subroutine BP_MD_alias_trans_data(Ndim, rep, blk, rep_idx)
 
       implicit none
       integer Ndim
+      integer, optional:: rep_idx
       type(matrixblock_MD), target::rep
       type(matrixblock_MD), target::blk
       integer ii, jj
 
       blk%trans_invariant_dup = 1
+      if (present(rep_idx)) blk%trans_rep_idx = rep_idx
       blk%trans_rep => rep
       blk%rankmax = rep%rankmax
       blk%rankmin = rep%rankmin
