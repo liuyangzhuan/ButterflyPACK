@@ -3176,6 +3176,11 @@ contains
       stats%Time_C_Mult_Final = 0
       stats%Time_C_Mult_Reshape = 0
       stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
       xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
@@ -3444,6 +3449,11 @@ contains
       stats%Time_C_Mult_Final = 0
       stats%Time_C_Mult_Reshape = 0
       stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3553,6 +3563,11 @@ contains
       stats%Time_C_Mult_Final = 0
       stats%Time_C_Mult_Reshape = 0
       stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3654,6 +3669,11 @@ contains
       stats%Time_C_Mult_Final = 0
       stats%Time_C_Mult_Reshape = 0
       stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 

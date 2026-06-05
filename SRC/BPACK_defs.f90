@@ -815,6 +815,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
+        real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_Tmp

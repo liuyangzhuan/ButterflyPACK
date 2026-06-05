@@ -8857,6 +8857,92 @@ contains
    end subroutine BP_MD_vec_1Dto1D_plan_build
 
 
+   subroutine BP_MD_vec_pack_payload(Ndim, dims_md, offset_s, sizen, Nrnd, source, buffer, cursor)
+
+      implicit none
+      integer Ndim, Nrnd, cursor
+      integer dims_md(Ndim), offset_s(Ndim), sizen(Ndim)
+      DT::source(:, :), buffer(:, :)
+      integer cc, iii, i1, i2, i3, n1, n2, n3, stride2, stride3, base, idx_s_scalar
+      integer idx_MD(Ndim), idx_s_MD(Ndim)
+
+      if (Ndim == 3) then
+         n1 = sizen(1)
+         n2 = sizen(2)
+         n3 = sizen(3)
+         stride2 = dims_md(1)
+         stride3 = dims_md(1)*dims_md(2)
+         do cc = 1, Nrnd
+            do i3 = 1, n3
+               do i2 = 1, n2
+                  base = 1 + offset_s(1) + (offset_s(2) + i2 - 1)*stride2 + (offset_s(3) + i3 - 1)*stride3
+                  buffer(cursor + 1:cursor + n1, 1) = source(base:base + n1 - 1, cc)
+                  cursor = cursor + n1
+               enddo
+            enddo
+         enddo
+      else
+         do cc = 1, Nrnd
+            do iii = 1, product(sizen)
+               call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+               idx_s_MD = idx_MD + offset_s
+               call MultiIndexToSingleIndex(Ndim, dims_md, idx_s_scalar, idx_s_MD)
+               cursor = cursor + 1
+               buffer(cursor, 1) = source(idx_s_scalar, cc)
+            enddo
+         enddo
+      endif
+
+   end subroutine BP_MD_vec_pack_payload
+
+
+   subroutine BP_MD_vec_unpack_payload(Ndim, dims_md, offset_r, sizen, Nrnd, buffer, cursor, target, addflag)
+
+      implicit none
+      integer Ndim, Nrnd, cursor, addflag
+      integer dims_md(Ndim), offset_r(Ndim), sizen(Ndim)
+      DT::buffer(:, :), target(:, :)
+      integer cc, iii, i2, i3, n1, n2, n3, stride2, stride3, base, idx_r_scalar
+      integer idx_MD(Ndim), idx_r_MD(Ndim)
+
+      if (Ndim == 3) then
+         n1 = sizen(1)
+         n2 = sizen(2)
+         n3 = sizen(3)
+         stride2 = dims_md(1)
+         stride3 = dims_md(1)*dims_md(2)
+         do cc = 1, Nrnd
+            do i3 = 1, n3
+               do i2 = 1, n2
+                  base = 1 + offset_r(1) + (offset_r(2) + i2 - 1)*stride2 + (offset_r(3) + i3 - 1)*stride3
+                  if (addflag == 1) then
+                     target(base:base + n1 - 1, cc) = target(base:base + n1 - 1, cc) + buffer(cursor + 1:cursor + n1, 1)
+                  else
+                     target(base:base + n1 - 1, cc) = buffer(cursor + 1:cursor + n1, 1)
+                  endif
+                  cursor = cursor + n1
+               enddo
+            enddo
+         enddo
+      else
+         do cc = 1, Nrnd
+            do iii = 1, product(sizen)
+               call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
+               idx_r_MD = idx_MD + offset_r
+               call MultiIndexToSingleIndex(Ndim, dims_md, idx_r_scalar, idx_r_MD)
+               cursor = cursor + 1
+               if (addflag == 1) then
+                  target(idx_r_scalar, cc) = target(idx_r_scalar, cc) + buffer(cursor, 1)
+               else
+                  target(idx_r_scalar, cc) = buffer(cursor, 1)
+               endif
+            enddo
+         enddo
+      endif
+
+   end subroutine BP_MD_vec_unpack_payload
+
+
    subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc)
 
       implicit none
@@ -8866,7 +8952,7 @@ contains
       integer::one2all
       integer:: level_s, level_e
       integer ld1(Ndim),Nrnd
-      DT::dat_1(product(ld1), *)
+      DT::dat_1(product(ld1), Nrnd)
       type(vectorsblock_oneL)::vecs(level_s:level_e)
       type(proctree)::ptree
       type(mesh)::msh(Ndim)
@@ -8881,7 +8967,7 @@ contains
       integer::recvid, sendid, send_size, recv_size
       integer::offset_s(Ndim), offset_r(Ndim), sizen(Ndim)
       integer::idx_MD(Ndim), idx_s_MD(Ndim), idx_r_MD(Ndim), dims_md(Ndim)
-      integer::idx_s_scalar, idx_r_scalar
+      integer::idx_s_scalar, idx_r_scalar, cursor
       integer(kind=8)::payload_size
 
       blocks_1 => BP%LL(1)%matrices_block(1)
@@ -8944,19 +9030,13 @@ contains
                      dims_md = blocks%N_loc
                   endif
                endif
-               do iii = 1, product(sizen)
-                  call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
-                  idx_s_MD = idx_MD + offset_s
-                  call MultiIndexToSingleIndex(Ndim, dims_md, idx_s_scalar, idx_s_MD)
-                  do cc = 1, Nrnd
-                     sendquant(pp)%size = sendquant(pp)%size + 1
-                     if (one2all == 1) then
-                        sendquant(pp)%dat(sendquant(pp)%size, 1) = dat_1(idx_s_scalar, cc)
-                     else
-                        sendquant(pp)%dat(sendquant(pp)%size, 1) = vecs(ll)%vs(bb_loc)%vector(idx_s_scalar, cc)
-                     endif
-                  enddo
-               enddo
+               cursor = sendquant(pp)%size
+               if (one2all == 1) then
+                  call BP_MD_vec_pack_payload(Ndim, dims_md, offset_s, sizen, Nrnd, dat_1, sendquant(pp)%dat, cursor)
+               else
+                  call BP_MD_vec_pack_payload(Ndim, dims_md, offset_s, sizen, Nrnd, vecs(ll)%vs(bb_loc)%vector, sendquant(pp)%dat, cursor)
+               endif
+               sendquant(pp)%size = cursor
             enddo
          endif
       enddo
@@ -9006,19 +9086,13 @@ contains
                else
                   dims_md = ld1
                endif
-               do iii = 1, product(sizen)
-                  call SingleIndexToMultiIndex(Ndim, sizen, iii, idx_MD)
-                  idx_r_MD = idx_MD + offset_r
-                  call MultiIndexToSingleIndex(Ndim, dims_md, idx_r_scalar, idx_r_MD)
-                  do cc = 1, Nrnd
-                     recvquant(pp)%size = recvquant(pp)%size + 1
-                     if (one2all == 1) then
-                        vecs(ll)%vs(bb_loc)%vector(idx_r_scalar, cc) = recvquant(pp)%dat(recvquant(pp)%size, 1)
-                     else
-                        dat_1(idx_r_scalar, cc) = dat_1(idx_r_scalar, cc) + recvquant(pp)%dat(recvquant(pp)%size, 1)
-                     endif
-                  enddo
-               enddo
+               cursor = recvquant(pp)%size
+               if (one2all == 1) then
+                  call BP_MD_vec_unpack_payload(Ndim, dims_md, offset_r, sizen, Nrnd, recvquant(pp)%dat, cursor, vecs(ll)%vs(bb_loc)%vector, 0)
+               else
+                  call BP_MD_vec_unpack_payload(Ndim, dims_md, offset_r, sizen, Nrnd, recvquant(pp)%dat, cursor, dat_1, 1)
+               endif
+               recvquant(pp)%size = cursor
             enddo
          endif
       enddo
@@ -15780,6 +15854,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer, allocatable::num_nods_i(:), num_nods_j(:)
       real(kind=8)::n1, n2, n3, n4, n5, n6, n7, t1, t2, t_start, t_end
       real(kind=8)::time_reshape, time_gemm
+      real(kind=8)::time_reshape_init, time_reshape_middle, time_reshape_final
       integer dims_c_m(Ndim),dims_r_m(Ndim),bbm_r,bbm_c,group_n(Ndim),group_n1(Ndim),group_m(Ndim),group_m1(Ndim), dims_MD_old(Ndim*2),dims_MD_new(Ndim*2),dims_ref(Ndim+1),dims_ref_old(Ndim+1),dims_ref_new(Ndim+1),offsets_ref(Ndim+1), dims_in(Ndim),idx_in(Ndim), dims_MD3(Ndim),idx_MD3(Ndim), idxr(Ndim), dim_subtensor(Ndim*2),idx_subtensor(Ndim*2), index_ij, index_scalar,index_vector(Ndim),index_scalar_old,index_vector_old(Ndim)
       real(kind=8)::flop,flops,tol_used,flop_tmp0,flop_tmp_local
       integer, save:: my_tid = 0
@@ -15807,6 +15882,9 @@ end subroutine BF_block_MVP_dat_batch_magma
       t1 = MPI_Wtime()
       time_reshape = 0d0
       time_gemm = 0d0
+      time_reshape_init = 0d0
+      time_reshape_middle = 0d0
+      time_reshape_final = 0d0
 
       pgno = blocks%pgno
       comm = ptree%pgrp(pgno)%comm
@@ -15876,6 +15954,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim+1,1,xin, 'T', mat,'N',1)
             t_end = MPI_Wtime()
             time_reshape = time_reshape + t_end - t_start
+            time_reshape_init = time_reshape_init + t_end - t_start
             allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(size(mat,1),size(mat,2)))
             BFvec(nn)%vec(0)%blocks(1,1)%matrix = mat
             deallocate(mat)
@@ -16069,10 +16148,10 @@ end subroutine BF_block_MVP_dat_batch_magma
 #ifdef HAVE_TASKLOOP
          !$omp parallel
          !$omp single
-         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm)
+         !$omp taskloop default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm,time_reshape_middle)
 #else
 #ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm)
+         !$omp parallel do default(shared) private(index_ij,idx_subtensor,mm,j,dims_ref,offsets_ref,tol_used,t_start,t_end) reduction(+:flops,time_reshape,time_gemm,time_reshape_middle)
 #endif
 #endif
          do index_ij = 1,product(dim_subtensor)
@@ -16087,6 +16166,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,Ndim+1,BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, 'N', mats(my_tid+1)%vector, 'T',1)
             t_end = MPI_Wtime()
             time_reshape = time_reshape + t_end - t_start
+            time_reshape_middle = time_reshape_middle + t_end - t_start
 
             allocate(mats1(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec))
             mats1(my_tid+1)%vector=0
@@ -16143,6 +16223,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim+1,Ndim,mats1(my_tid+1)%vector, 'T', mats(my_tid+1)%vector, 'N',1)
             t_end = MPI_Wtime()
             time_reshape = time_reshape + t_end - t_start
+            time_reshape_middle = time_reshape_middle + t_end - t_start
             allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(size(mats(my_tid+1)%vector,1),size(mats(my_tid+1)%vector,2)))
             BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = mats(my_tid+1)%vector
             deallocate(mats1(my_tid+1)%vector)
@@ -16193,9 +16274,16 @@ end subroutine BF_block_MVP_dat_batch_magma
             offsets_ref(Ndim+1) = 0
 
             t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim,Ndim+1,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix, 'N', xout1,'T',0)
+            call TensorUnfoldingReshape_FinalScatter(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout1)
             t_end = MPI_Wtime()
+#ifdef HAVE_TASKLOOP
+!$omp atomic
+#endif
             time_reshape = time_reshape + t_end - t_start
+#ifdef HAVE_TASKLOOP
+!$omp atomic
+#endif
+            time_reshape_final = time_reshape_final + t_end - t_start
 #ifdef HAVE_TASKLOOP
 !$omp end task
 #endif
@@ -16332,6 +16420,9 @@ end subroutine BF_block_MVP_dat_batch_magma
 	      if (chara == 'N') then
 	         stats%Time_C_Mult_Reshape = stats%Time_C_Mult_Reshape + time_reshape
 	         stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
+	         stats%Time_C_Mult_Reshape_Init = stats%Time_C_Mult_Reshape_Init + time_reshape_init
+	         stats%Time_C_Mult_Reshape_Middle = stats%Time_C_Mult_Reshape_Middle + time_reshape_middle
+	         stats%Time_C_Mult_Reshape_Final = stats%Time_C_Mult_Reshape_Final + time_reshape_final
 	      endif
 	      flop_tmp_local = stats%Flop_Tmp
       stats%Flop_Tmp = flop_tmp0 + flop_tmp_local
@@ -17462,6 +17553,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 #ifdef HAVE_OPENMP
    !$omp atomic
 #endif
+   stats%Time_C_Mult_Reshape_Right = stats%Time_C_Mult_Reshape_Right + time_reshape
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
    stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
 
 end subroutine BF_MD_block_mvp_multiply_right
@@ -17669,6 +17764,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
    !$omp atomic
 #endif
    stats%Time_C_Mult_Reshape = stats%Time_C_Mult_Reshape + time_reshape
+#ifdef HAVE_OPENMP
+   !$omp atomic
+#endif
+   stats%Time_C_Mult_Reshape_Left = stats%Time_C_Mult_Reshape_Left + time_reshape
 #ifdef HAVE_OPENMP
    !$omp atomic
 #endif

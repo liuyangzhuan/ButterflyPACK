@@ -787,6 +787,11 @@ contains
       stats_o%Time_C_Mult_Final = stats_i%Time_C_Mult_Final
       stats_o%Time_C_Mult_Reshape = stats_i%Time_C_Mult_Reshape
       stats_o%Time_C_Mult_Gemm = stats_i%Time_C_Mult_Gemm
+      stats_o%Time_C_Mult_Reshape_Init = stats_i%Time_C_Mult_Reshape_Init
+      stats_o%Time_C_Mult_Reshape_Right = stats_i%Time_C_Mult_Reshape_Right
+      stats_o%Time_C_Mult_Reshape_Middle = stats_i%Time_C_Mult_Reshape_Middle
+      stats_o%Time_C_Mult_Reshape_Left = stats_i%Time_C_Mult_Reshape_Left
+      stats_o%Time_C_Mult_Reshape_Final = stats_i%Time_C_Mult_Reshape_Final
       stats_o%Time_BLK_MVP = stats_i%Time_BLK_MVP
       stats_o%Time_C_Extract = stats_i%Time_C_Extract
       stats_o%Time_Inv = stats_i%Time_Inv
@@ -895,6 +900,11 @@ contains
       stats%Time_C_Mult_Final = 0
       stats%Time_C_Mult_Reshape = 0
       stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
       stats%Time_BLK_MVP = 0
       stats%Time_C_Extract = 0
       stats%Time_Inv = 0
@@ -1068,6 +1078,21 @@ contains
       call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult reshape:', rtemp, 'Seconds'
       write (200, '(A21,Es14.2,A8)') 'C_mult reshape:', stats%Time_C_Mult_Reshape, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape_Init, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'reshape init:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'reshape init:', stats%Time_C_Mult_Reshape_Init, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape_Right, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'reshape right:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'reshape right:', stats%Time_C_Mult_Reshape_Right, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape_Middle, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'reshape middle:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'reshape middle:', stats%Time_C_Mult_Reshape_Middle, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape_Left, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'reshape left:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'reshape left:', stats%Time_C_Mult_Reshape_Left, 'Seconds'
+      call MPI_ALLREDUCE(stats%Time_C_Mult_Reshape_Final, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'reshape final:', rtemp, 'Seconds'
+      write (200, '(A21,Es14.2,A8)') 'reshape final:', stats%Time_C_Mult_Reshape_Final, 'Seconds'
       call MPI_ALLREDUCE(stats%Time_C_Mult_Gemm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult gemm:', rtemp, 'Seconds'
       write (200, '(A21,Es14.2,A8)') 'C_mult gemm:', stats%Time_C_Mult_Gemm, 'Seconds'
