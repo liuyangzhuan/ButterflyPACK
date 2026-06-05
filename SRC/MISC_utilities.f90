@@ -4443,6 +4443,8 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
    integer Ndim,loopnew
    integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar,idx_new_scalar,dims_old(Ndim-1),dims_old_scalar,idx_old_scalar
    integer ld_old,ld_new, dim_i, i, j, j1, prod_old, prod_new, linear_idx, tmp_idx, pos_old, pos_new, carry_dim
+   integer lo_dim, hi_dim, nlo, nhi, prefix_size, suffix_size, iprefix, isuffix, ilo, ihi
+   integer old_scalar_fast, new_scalar_fast, old_col_fast, new_col_fast
    integer stride_old(Ndim-1), stride_new(Ndim-1), stride_new_by_dim(Ndim), out_dim1, out_dim2
    character::trans_in,trans_out
    DT::data_in(:,:)
@@ -4485,6 +4487,9 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
       out_dim2 = dims_new_scalar
    endif
 
+   if(allocated(data_out))then
+      if(size(data_out,1)/=out_dim1 .or. size(data_out,2)/=out_dim2)deallocate(data_out)
+   endif
    if(.not. allocated(data_out))then
       allocate(data_out(out_dim1,out_dim2))
       data_out=0
@@ -4500,6 +4505,52 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
    endif
 
    if(all(dims_ref_old==dims_ref_new) .and. all(offsets_ref==0))then
+      if(abs(ld_old-ld_new)==1)then
+         lo_dim = min(ld_old, ld_new)
+         hi_dim = max(ld_old, ld_new)
+         nlo = dims_ref_old(lo_dim)
+         nhi = dims_ref_old(hi_dim)
+         prefix_size = 1
+         do i = 1, lo_dim - 1
+            prefix_size = prefix_size*dims_ref_old(i)
+         enddo
+         suffix_size = 1
+         do i = hi_dim + 1, Ndim
+            suffix_size = suffix_size*dims_ref_old(i)
+         enddo
+
+         do isuffix = 0, suffix_size - 1
+            do iprefix = 0, prefix_size - 1
+               do ihi = 1, nhi
+                  do ilo = 1, nlo
+                     if(ld_old==lo_dim)then
+                        old_scalar_fast = ilo
+                        old_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
+                        new_scalar_fast = ihi
+                        new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
+                     else
+                        old_scalar_fast = ihi
+                        old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
+                        new_scalar_fast = ilo
+                        new_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
+                     endif
+
+                     if(trans_out=='N' .and. trans_in=='N')then
+                        data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
+                     else if(trans_out=='N' .and. trans_in=='T')then
+                        data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
+                     else if(trans_out=='T' .and. trans_in=='N')then
+                        data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
+                     else if(trans_out=='T' .and. trans_in=='T')then
+                        data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
+                     endif
+                  enddo
+               enddo
+            enddo
+         enddo
+         return
+      endif
+
       stride_new_by_dim = 0
       pos_new = 0
       do dim_i=1,Ndim

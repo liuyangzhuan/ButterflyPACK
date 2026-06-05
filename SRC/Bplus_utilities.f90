@@ -8943,6 +8943,25 @@ contains
    end subroutine BP_MD_vec_unpack_payload
 
 
+   subroutine BP_MD_reset_matrix_ptr(matrix, nrow, ncol)
+
+      implicit none
+      integer nrow, ncol
+      DT, pointer::matrix(:, :)
+
+      if (associated(matrix)) then
+         if (size(matrix, 1) /= nrow .or. size(matrix, 2) /= ncol) then
+            deallocate(matrix)
+            allocate(matrix(nrow, ncol))
+         endif
+      else
+         allocate(matrix(nrow, ncol))
+      endif
+      matrix = 0
+
+   end subroutine BP_MD_reset_matrix_ptr
+
+
    subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc)
 
       implicit none
@@ -16168,7 +16187,10 @@ end subroutine BF_block_MVP_dat_batch_magma
             time_reshape = time_reshape + t_end - t_start
             time_reshape_middle = time_reshape_middle + t_end - t_start
 
-            allocate(mats1(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec))
+            if (allocated(mats1(my_tid+1)%vector)) then
+               if (size(mats1(my_tid+1)%vector, 1) /= product(blocks%ButterflyMiddle(index_ij)%dims_m) .or. size(mats1(my_tid+1)%vector, 2) /= Nvec) deallocate(mats1(my_tid+1)%vector)
+            endif
+            if (.not. allocated(mats1(my_tid+1)%vector)) allocate(mats1(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec))
             mats1(my_tid+1)%vector=0
 
 #if HAVE_ZFP
@@ -16181,11 +16203,13 @@ end subroutine BF_block_MVP_dat_batch_magma
 
             if(allocated(blocks%MiddleQTT))then
 
-               allocate(mats1_1D(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m)*Nvec))
+               if (allocated(mats1_1D(my_tid+1)%vector)) then
+                  if (size(mats1_1D(my_tid+1)%vector) /= product(blocks%ButterflyMiddle(index_ij)%dims_m)*Nvec) deallocate(mats1_1D(my_tid+1)%vector)
+               endif
+               if (.not. allocated(mats1_1D(my_tid+1)%vector)) allocate(mats1_1D(my_tid+1)%vector(product(blocks%ButterflyMiddle(index_ij)%dims_m)*Nvec))
                mats1_1D(my_tid+1)%vector=0
                call QTT_Apply_Fullvec(blocks%MiddleQTT(index_ij),reshape(mats(my_tid+1)%vector,[product(blocks%ButterflyMiddle(index_ij)%dims_n)*Nvec]),mats1_1D(my_tid+1)%vector)
                mats1(my_tid+1)%vector = reshape(mats1_1D(my_tid+1)%vector,[product(blocks%ButterflyMiddle(index_ij)%dims_m),Nvec])
-               deallocate(mats1_1D(my_tid+1)%vector)
                ! write(*,*)'fnorm of output (QTT_Apply):', sqrt(sum(abs(mats1(my_tid+1)%vector)**2d0))
 
 
@@ -16218,7 +16242,6 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1:Ndim) = blocks%ButterflyMiddle(index_ij)%dims_m
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
-            deallocate(mats(my_tid+1)%vector)
             t_start = MPI_Wtime()
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim+1,Ndim,mats1(my_tid+1)%vector, 'T', mats(my_tid+1)%vector, 'N',1)
             t_end = MPI_Wtime()
@@ -16226,8 +16249,6 @@ end subroutine BF_block_MVP_dat_batch_magma
             time_reshape_middle = time_reshape_middle + t_end - t_start
             allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(size(mats(my_tid+1)%vector,1),size(mats(my_tid+1)%vector,2)))
             BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = mats(my_tid+1)%vector
-            deallocate(mats1(my_tid+1)%vector)
-            deallocate(mats(my_tid+1)%vector)
          enddo
 #ifdef HAVE_TASKLOOP
          !$omp end taskloop
@@ -16241,6 +16262,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          stats%Flop_Tmp = stats%Flop_Tmp + flops
          deallocate(mats)
          deallocate(mats1)
+         deallocate(mats1_1D)
 
          n5 = MPI_Wtime()
 
@@ -17412,9 +17434,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             time_reshape = time_reshape + t_end - t_start
          endif
 
-         if(associated(BFvec%vec(level+1)%blocks(1,1)%matrix))deallocate(BFvec%vec(level+1)%blocks(1,1)%matrix)
-         allocate(BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1),size(mat,2)))
-         BFvec%vec(level+1)%blocks(1,1)%matrix=0
+         call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(1,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1), size(mat,2))
 
          flops=0
          t_start = MPI_Wtime()
@@ -17457,7 +17477,6 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 #ifdef HAVE_TASKLOOP
          !$omp end atomic
 #endif
-         deallocate(mat)
       enddo
    else
       nr=2**(level)
@@ -17492,9 +17511,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                time_reshape = time_reshape + t_end - t_start
             endif
 
-            if(associated(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix))deallocate(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix)
-            allocate(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1),size(mat,2)))
-            BFvec%vec(level+1)%blocks(index_i_s,1)%matrix=0
+            call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1), size(mat,2))
 
             flops=0
             t_start = MPI_Wtime()
@@ -17541,7 +17558,6 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 #ifdef HAVE_TASKLOOP
             !$omp end atomic
 #endif
-            deallocate(mat)
          enddo
       enddo
    endif
@@ -17617,9 +17633,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             time_reshape = time_reshape + t_end - t_start
          endif
 
-         if(associated(BFvec%vec(level)%blocks(1,1)%matrix))deallocate(BFvec%vec(level)%blocks(1,1)%matrix)
-         allocate(BFvec%vec(level)%blocks(1,1)%matrix(BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1),size(mat,2)))
-         BFvec%vec(level)%blocks(1,1)%matrix=0
+         call BP_MD_reset_matrix_ptr(BFvec%vec(level)%blocks(1,1)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1), size(mat,2))
 
          flops=0
          t_start = MPI_Wtime()
@@ -17662,7 +17676,6 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 #ifdef HAVE_TASKLOOP
             !$omp end atomic
 #endif
-         deallocate(mat)
       enddo
    else
       nc=2**(level-1)
@@ -17700,9 +17713,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                   t_end = MPI_Wtime()
                   time_reshape = time_reshape + t_end - t_start
                endif
-               deallocate(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix)
-               allocate(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s),size(mat,2)))
-               BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix=0
+               call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s), size(mat,2))
 
                flops=0
                t_start = MPI_Wtime()
@@ -17748,7 +17759,6 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 #ifdef HAVE_TASKLOOP
                !$omp end atomic
 #endif
-               deallocate(mat)
             enddo
 
             if(.not. associated(BFvec%vec(level)%blocks(1,index_j_s)%matrix))then
