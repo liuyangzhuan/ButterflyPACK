@@ -68,6 +68,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"sample_para_outer","oversampling factor for the outtermost factor matrices in the nlogn entry-evaluation-based butterfly algorithm, default to 2"},
 		{"elem_extract",    "0: evaluating entries one by one 1: evaluating entries block by block (may requires communication inside the callback function) 2: evaluating entries block by block (no communication allowed inside the callback function)"},
 		{"fastsample_tensor","0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance"},
+		{"trans_invariant", "1: reuse HTENSOR blocks for translational-invariant tensor kernels on uniform Cartesian grids"},
 		{"use_zfp",         "whether to use zfp compression"},
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
@@ -126,6 +127,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         required_argument, 0, 37},
 		{"hextralevel",         required_argument, 0, 38},
 		{"iter_solver",         required_argument, 0, 39},
+		{"trans_invariant",         required_argument, 0, 40},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -318,6 +320,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "fastsample_tensor", opt_i);
+		} break;
+		case 40: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "trans_invariant", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);

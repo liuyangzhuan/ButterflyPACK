@@ -3997,10 +3997,10 @@ contains
    ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
 
 #if 0
-      call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
+      call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
 #else ! the following is more memory efficient
       do ll=1,hss_bf_md1%BP%Lplus
-         call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
+         call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
       enddo
 #endif
 
@@ -4064,10 +4064,10 @@ contains
 
 
 #if 0
-      call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
+      call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=2, level_end=h_mat_md%BP%Lplus)
 #else ! the following is more memory efficient
       do ll=2,h_mat_md%BP%Lplus
-         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
+         call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
       enddo
 #endif
 

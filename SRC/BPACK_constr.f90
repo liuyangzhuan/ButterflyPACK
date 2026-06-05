@@ -3004,9 +3004,9 @@ contains
                endif
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
                   rep_bb = 0
-                  if (option%trans_invariant == 1 .and. logn_level_flag == 1) then
+                  if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
                      call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
-                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
                   endif
                   if (rep_bb > 0) then
                      call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
@@ -3036,9 +3036,9 @@ contains
                   call assert(option%forwardN15flag == 0, "only forwardN15flag == 0 can be used for tensor butterfly")
 
                   rep_bb = 0
-                  if (option%trans_invariant == 1 .and. logn_level_flag == 1) then
+                  if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
                      call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
-                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
                   endif
                   if (rep_bb > 0) then
                      call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb))
@@ -3061,7 +3061,7 @@ contains
          groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
-            if (option%trans_invariant == 1 .and. logn_level_flag == 1) write(*,*)'trans_invariant reused local blocks at this level:', trans_reuse_level
+            if (option%trans_invariant /= 0 .and. logn_level_flag == 1) write(*,*)'trans_invariant reused local blocks at this level:', trans_reuse_level
          endif
       end do
 
@@ -3076,10 +3076,11 @@ contains
    end subroutine BP_MD_compress_entry
 
 
-   integer function BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree)
+   integer function BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, trans_invariant)
 
       implicit none
-      integer Ndim, ll, bb, rr
+      integer Ndim, ll, bb, rr, trans_invariant
+      integer(kind=8) dist_rr, dist_bb
       type(blockplus_MD)::bplus
       type(proctree)::ptree
 
@@ -3097,13 +3098,24 @@ contains
          if (bplus%LL(ll)%matrices_block(rr)%level_butterfly /= bplus%LL(ll)%matrices_block(bb)%level_butterfly) cycle
          if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%row_group)) cycle
          if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%col_group)) cycle
-         if (.not. all((bplus%LL(ll)%matrices_block(rr)%row_group - bplus%LL(ll)%matrices_block(rr)%col_group) == &
-            (bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group))) cycle
-         if (allocated(bplus%LL(ll)%matrices_block(rr)%M) .and. allocated(bplus%LL(ll)%matrices_block(bb)%M)) then
-            if (.not. all(bplus%LL(ll)%matrices_block(rr)%M == bplus%LL(ll)%matrices_block(bb)%M)) cycle
+         if (trans_invariant == 1) then
+            if (.not. all((bplus%LL(ll)%matrices_block(rr)%row_group - bplus%LL(ll)%matrices_block(rr)%col_group) == &
+               (bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group))) cycle
+         elseif (trans_invariant == 2) then
+            dist_rr = sum(int(bplus%LL(ll)%matrices_block(rr)%row_group - bplus%LL(ll)%matrices_block(rr)%col_group, kind=8)**2)
+            dist_bb = sum(int(bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group, kind=8)**2)
+            if (dist_rr /= dist_bb) cycle
+            if (.not. BP_MD_trans2_compatible(Ndim, bplus%LL(ll)%matrices_block(rr), bplus%LL(ll)%matrices_block(bb))) cycle
+         else
+            cycle
          endif
-         if (allocated(bplus%LL(ll)%matrices_block(rr)%N) .and. allocated(bplus%LL(ll)%matrices_block(bb)%N)) then
-            if (.not. all(bplus%LL(ll)%matrices_block(rr)%N == bplus%LL(ll)%matrices_block(bb)%N)) cycle
+         if (trans_invariant /= 2) then
+            if (allocated(bplus%LL(ll)%matrices_block(rr)%M) .and. allocated(bplus%LL(ll)%matrices_block(bb)%M)) then
+               if (.not. all(bplus%LL(ll)%matrices_block(rr)%M == bplus%LL(ll)%matrices_block(bb)%M)) cycle
+            endif
+            if (allocated(bplus%LL(ll)%matrices_block(rr)%N) .and. allocated(bplus%LL(ll)%matrices_block(bb)%N)) then
+               if (.not. all(bplus%LL(ll)%matrices_block(rr)%N == bplus%LL(ll)%matrices_block(bb)%N)) cycle
+            endif
          endif
          if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
             if (.not. associated(bplus%LL(ll)%matrices_block(rr)%fullmat)) cycle
@@ -3117,6 +3129,51 @@ contains
       enddo
 
    end function BP_MD_find_trans_rep
+
+
+   logical function BP_MD_trans2_compatible(Ndim, rep, blk)
+
+      implicit none
+      integer Ndim
+      type(matrixblock_MD)::rep, blk
+      integer used_rep(Ndim)
+      integer dim_blk, dim_rep, delta_blk, delta_rep
+      logical found
+
+      BP_MD_trans2_compatible = .false.
+      if (.not. allocated(rep%row_group) .or. .not. allocated(rep%col_group)) return
+      if (.not. allocated(blk%row_group) .or. .not. allocated(blk%col_group)) return
+
+      used_rep = 0
+      do dim_blk = 1, Ndim
+         delta_blk = blk%row_group(dim_blk) - blk%col_group(dim_blk)
+         found = .false.
+         do dim_rep = 1, Ndim
+            if (used_rep(dim_rep) == 1) cycle
+            delta_rep = rep%row_group(dim_rep) - rep%col_group(dim_rep)
+            if (abs(delta_rep) /= abs(delta_blk)) cycle
+            if (allocated(rep%M) .and. allocated(blk%M)) then
+               if (rep%M(dim_rep) /= blk%M(dim_blk)) cycle
+            endif
+            if (allocated(rep%N) .and. allocated(blk%N)) then
+               if (rep%N(dim_rep) /= blk%N(dim_blk)) cycle
+            endif
+            if (allocated(rep%M_loc) .and. allocated(blk%M_loc)) then
+               if (rep%M_loc(dim_rep) /= blk%M_loc(dim_blk)) cycle
+            endif
+            if (allocated(rep%N_loc) .and. allocated(blk%N_loc)) then
+               if (rep%N_loc(dim_rep) /= blk%N_loc(dim_blk)) cycle
+            endif
+            used_rep(dim_rep) = 1
+            found = .true.
+            exit
+         enddo
+         if (.not. found) return
+      enddo
+
+      BP_MD_trans2_compatible = .true.
+
+   end function BP_MD_trans2_compatible
 
 
    subroutine BP_MD_alias_trans_data(Ndim, rep, blk)

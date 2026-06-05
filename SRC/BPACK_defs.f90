@@ -723,7 +723,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: cpp !< 1: use user-defined c/cpp functions 0: use user-defined fortran functions
         integer:: knn !< number of nearest neighbour points for each point
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
-        integer:: trans_invariant !< 1: HTENSOR tensor blocks come from a translational-invariant kernel on a uniform Cartesian grid
+        integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
