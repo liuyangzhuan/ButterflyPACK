@@ -1945,7 +1945,7 @@ end function distance_geo
 
       integer Ndim
       integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, gg2, sortdirec, ii_sch, pgno_bplus
-      integer level, edge, patch, node, group, group_touch,furhter_partition
+      integer level, edge, patch, node, group, group_touch,furhter_partition, near_far, nchild
       integer rank, index_near, m, n, length, flag, itemp, cnt, detection, dim_i
       real T0
       real(kind=8):: tolerance, rtemp, rel_error, seperator, dist
@@ -1965,6 +1965,7 @@ end function distance_geo
       character(len=1024)  :: strings
       type(proctree)::ptree
       integer,allocatable::boundary_map(:,:)
+      integer, allocatable::child_offset(:,:), row_group_child(:,:), row_gg2(:), row_further(:)
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
       type(nil_onelevel_MD),allocatable:: flist_MD(:)
       integer pgno, bb_loc
@@ -2060,6 +2061,14 @@ end function distance_geo
                groupm_start_global = h_mat_md%BP%row_group * Nboundall ! this is the ID of the first group at level ll+levelm
                groupm_start = h_mat_md%BP%row_group * 2**(level_ll - level_BP) ! this is the ID of the first group at level ll
                dims2 = Nboundall
+               Nboundall1 = 2**levelm
+               dims1 = Nboundall1
+               nchild = Nboundall1**Ndim
+               allocate(child_offset(nchild,Ndim), row_group_child(nchild,Ndim))
+               allocate(row_gg2(nchild), row_further(nchild))
+               do bb = 1, nchild
+                  call SingleIndexToMultiIndex(Ndim,dims1, bb, child_offset(bb,:))
+               enddo
                nlist_MD(ll+1)%len = Nboundall**Ndim
                allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
                call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
@@ -2081,39 +2090,35 @@ end function distance_geo
                do gg=1,product(dims)
                   call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
                   group_m1 = group_m1 + groupm_start -1
+                  groupm_start1 = group_m1*2**levelm
+                  do bb = 1, nchild
+                     row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                     pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                     level = GetTreelevel(row_group_child(bb,1)) - 1
+                     row_further(bb) = 0
+                     if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                     group_m = row_group_child(bb,:) - groupm_start_global + 1
+                     call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
+                  enddo
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
-                     Nboundall1 = 2**(levelm)
-                     groupm_start1 = group_m1*2**levelm
                      groupn_start1 = group_n1*2**levelm
-                     dims1 = Nboundall1
-                     do bb = 1, Nboundall1**Ndim
-                     do cc = 1, Nboundall1**Ndim
-                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
-                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
-                        ! write(*,*)ll,group_m,groupm_start1,groupm_start_global,groupn_start1,'dd',group_n1,ll,gg,nn
-                        group_m = group_m + groupm_start1 - 1
-                        group_n = group_n + groupn_start1 - 1
+                     do bb = 1, nchild
+                     do cc = 1, nchild
+                        group_m = row_group_child(bb,:)
+                        group_n = child_offset(cc,:) + groupn_start1 - 1
+                        furhter_partition = row_further(bb)
+                        gg2 = row_gg2(bb)
+                        near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
 
-                        furhter_partition=0
-                        pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
-                        level = GetTreelevel(group_m(1)) - 1
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) then
-                           furhter_partition=1  ! This indicates that the block is low-rank, but shared by multiple MPI ranks
-                        endif
-
-                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
-                           group_m = group_m - groupm_start_global + 1
-                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                        if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
                            Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
                            Ninadmissible_tot = Ninadmissible_tot +1
                         else
-                           group_m = group_m - groupm_start_global + 1
-                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
                            Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
-                           if(near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0)then
+                           if(near_far == 0)then
                               Ninadmissible_tot = Ninadmissible_tot +1
                            else
                               Nadmissible_tot = Nadmissible_tot +1
@@ -2140,35 +2145,32 @@ end function distance_geo
                do gg=1,product(dims)
                   call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
                   group_m1 = group_m1 + groupm_start -1
+                  groupm_start1 = group_m1*2**levelm
+                  do bb = 1, nchild
+                     row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                     pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                     level = GetTreelevel(row_group_child(bb,1)) - 1
+                     row_further(bb) = 0
+                     if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                     group_m = row_group_child(bb,:) - groupm_start_global + 1
+                     call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
+                  enddo
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
-                     Nboundall1 = 2**(levelm)
-                     groupm_start1 = group_m1*2**levelm
                      groupn_start1 = group_n1*2**levelm
-                     dims1 = Nboundall1
-                     do bb = 1, Nboundall1**Ndim
-                     do cc = 1, Nboundall1**Ndim
-                        call SingleIndexToMultiIndex(Ndim,dims1, bb, group_m)
-                        call SingleIndexToMultiIndex(Ndim,dims1, cc, group_n)
-                        group_m = group_m + groupm_start1 - 1
-                        group_n = group_n + groupn_start1 - 1
+                     do bb = 1, nchild
+                     do cc = 1, nchild
+                        group_m = row_group_child(bb,:)
+                        group_n = child_offset(cc,:) + groupn_start1 - 1
+                        furhter_partition = row_further(bb)
+                        gg2 = row_gg2(bb)
+                        near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
 
-                        furhter_partition=0
-                        pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
-                        level = GetTreelevel(group_m(1)) - 1
-                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) then
-                           furhter_partition=1  ! This indicates that the block is low-rank, but shared by multiple MPI ranks
-                        endif
-
-                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
-                           group_m = group_m - groupm_start_global + 1
-                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
+                        if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
                            nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
                            ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
                         else
-                           group_m = group_m - groupm_start_global + 1
-                           call MultiIndexToSingleIndex(Ndim,dims2, gg2, group_m)
                            flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
                            flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
                         endif
@@ -2265,6 +2267,7 @@ end function distance_geo
                   level_butterfly_ll = h_mat_md%Maxlevel - level_ll
                endif
                h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
+               deallocate(child_offset, row_group_child, row_gg2, row_further)
             end if
          else
             exit

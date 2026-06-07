@@ -2978,9 +2978,10 @@ contains
       implicit none
       integer Ndim
       type(blockplus_MD)::bplus
-      integer:: ii, ll, bb, ierr, pp, rep_bb, trans_reuse_level
+      integer:: ii, ll, bb, ierr, pp, rep_bb, trans_reuse_level, trans_nrep_level
       real(kind=8) Memory, rtemp,rtemp1, error
       integer:: level_butterfly, level_BP, levelm, statflag, knn_tmp
+      integer, allocatable:: trans_rep_candidates(:)
       type(Hoption)::option
       type(Hstat)::stats
       type(mesh)::msh(Ndim)
@@ -2995,6 +2996,10 @@ contains
       do ll = 1, bplus%Lplus
          bplus%LL(ll)%rankmax = 0
          trans_reuse_level = 0
+         trans_nrep_level = 0
+         if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
+            allocate(trans_rep_candidates(max(1, bplus%LL(ll)%Nbound_loc)))
+         endif
          statflag = 0
          if (ll == 1 .or. option%bp_cnt_lr == 1) statflag = 1  !!! only record the rank of the top-layer butterfly in a bplus
          do bb = 1, bplus%LL(ll)%Nbound_loc
@@ -3006,7 +3011,8 @@ contains
                   rep_bb = 0
                   if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
                      call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
-                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant, &
+                        trans_rep_candidates, trans_nrep_level)
                   endif
                   if (rep_bb > 0) then
                      call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb), rep_bb)
@@ -3015,6 +3021,11 @@ contains
                      call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
                      call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
                      Memory = Memory + rtemp
+                     if (option%trans_invariant /= 0 .and. logn_level_flag == 1 .and. &
+                        ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%nproc == 1) then
+                        trans_nrep_level = trans_nrep_level + 1
+                        trans_rep_candidates(trans_nrep_level) = bb
+                     endif
                   endif
                elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
 
@@ -3038,7 +3049,8 @@ contains
                   rep_bb = 0
                   if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
                      call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
-                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant)
+                     rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant, &
+                        trans_rep_candidates, trans_nrep_level)
                   endif
                   if (rep_bb > 0) then
                      call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb), rep_bb)
@@ -3048,6 +3060,11 @@ contains
                      ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
 
                      Memory = Memory + rtemp
+                     if (option%trans_invariant /= 0 .and. logn_level_flag == 1 .and. &
+                        ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%nproc == 1) then
+                        trans_nrep_level = trans_nrep_level + 1
+                        trans_rep_candidates(trans_nrep_level) = bb
+                     endif
                   endif
                   bplus%LL(ll)%rankmax = max(bplus%LL(ll)%rankmax, bplus%LL(ll)%matrices_block(bb)%rankmax)
                endif
@@ -3060,9 +3077,13 @@ contains
          endif
          groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
-            write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, rankmax at this level:', bplus%LL(ll)%rankmax
-            if (option%trans_invariant /= 0 .and. logn_level_flag == 1) write(*,*)'trans_invariant reused local blocks at this level:', trans_reuse_level
+            write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, level_butterfly:', &
+               bplus%LL(ll)%level_butterfly, 'rankmax at this level:', bplus%LL(ll)%rankmax
+            if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
+               write(*,*)'trans_invariant unique/reused local blocks at this level:', trans_nrep_level, trans_reuse_level
+            endif
          endif
+         if (allocated(trans_rep_candidates)) deallocate(trans_rep_candidates)
       end do
 
       ! ! !!!!!!! check error
@@ -3076,10 +3097,11 @@ contains
    end subroutine BP_MD_compress_entry
 
 
-   integer function BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, trans_invariant)
+   integer function BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, trans_invariant, rep_candidates, nrep)
 
       implicit none
-      integer Ndim, ll, bb, rr, trans_invariant
+      integer Ndim, ll, bb, rr, trans_invariant, kk, nsearch
+      integer, optional, intent(in)::rep_candidates(:), nrep
       integer(kind=8) dist_rr, dist_bb
       type(blockplus_MD)::bplus
       type(proctree)::ptree
@@ -3089,7 +3111,14 @@ contains
       if (.not. allocated(bplus%LL(ll)%matrices_block(bb)%row_group)) return
       if (.not. allocated(bplus%LL(ll)%matrices_block(bb)%col_group)) return
 
-      do rr = 1, bb - 1
+      nsearch = bb - 1
+      if (present(rep_candidates) .and. present(nrep)) nsearch = nrep
+      do kk = 1, nsearch
+         if (present(rep_candidates) .and. present(nrep)) then
+            rr = rep_candidates(kk)
+         else
+            rr = kk
+         endif
          if (.not. IOwnPgrp(ptree, bplus%LL(ll)%matrices_block(rr)%pgno)) cycle
          if (ptree%pgrp(bplus%LL(ll)%matrices_block(rr)%pgno)%nproc /= 1) cycle
          if (bplus%LL(ll)%matrices_block(rr)%trans_invariant_dup == 1) cycle
@@ -3183,7 +3212,6 @@ contains
       integer, optional:: rep_idx
       type(matrixblock_MD), target::rep
       type(matrixblock_MD), target::blk
-      integer ii, jj
 
       blk%trans_invariant_dup = 1
       if (present(rep_idx)) blk%trans_rep_idx = rep_idx
@@ -3192,49 +3220,10 @@ contains
       blk%rankmin = rep%rankmin
       blk%level_half = rep%level_half
 
+      ! Duplicate blocks retain only their block-specific geometry/layout.
+      ! Trans-invariant MVP groups apply rep's numerical factors directly.
       if (blk%style == 1) then
          blk%fullmat => rep%fullmat
-      elseif (blk%style == 2) then
-         call BP_MD_copy_iarray(rep%nr_m, blk%nr_m)
-         call BP_MD_copy_iarray(rep%nc_m, blk%nc_m)
-         call BP_MD_copy_iarray(rep%idx_r_m, blk%idx_r_m)
-         call BP_MD_copy_iarray(rep%idx_c_m, blk%idx_c_m)
-         if (allocated(rep%ButterflyU)) then
-            allocate(blk%ButterflyU(size(rep%ButterflyU, 1)))
-            do ii = 1, size(rep%ButterflyU, 1)
-               call BP_MD_alias_uv(rep%ButterflyU(ii), blk%ButterflyU(ii), Ndim)
-            enddo
-         endif
-         if (allocated(rep%ButterflyV)) then
-            allocate(blk%ButterflyV(size(rep%ButterflyV, 1)))
-            do ii = 1, size(rep%ButterflyV, 1)
-               call BP_MD_alias_uv(rep%ButterflyV(ii), blk%ButterflyV(ii), Ndim)
-            enddo
-         endif
-         if (allocated(rep%ButterflyMiddle)) then
-            allocate(blk%ButterflyMiddle(size(rep%ButterflyMiddle, 1)))
-            do ii = 1, size(rep%ButterflyMiddle, 1)
-               call BP_MD_alias_butterfly_matrix(rep%ButterflyMiddle(ii), blk%ButterflyMiddle(ii))
-            enddo
-         endif
-         if (allocated(rep%ButterflyKerl_L)) then
-            allocate(blk%ButterflyKerl_L(lbound(rep%ButterflyKerl_L, 1):ubound(rep%ButterflyKerl_L, 1), &
-               lbound(rep%ButterflyKerl_L, 2):ubound(rep%ButterflyKerl_L, 2)))
-            do jj = lbound(rep%ButterflyKerl_L, 2), ubound(rep%ButterflyKerl_L, 2)
-               do ii = lbound(rep%ButterflyKerl_L, 1), ubound(rep%ButterflyKerl_L, 1)
-                  call BP_MD_alias_kerl(rep%ButterflyKerl_L(ii, jj), blk%ButterflyKerl_L(ii, jj))
-               enddo
-            enddo
-         endif
-         if (allocated(rep%ButterflyKerl_R)) then
-            allocate(blk%ButterflyKerl_R(lbound(rep%ButterflyKerl_R, 1):ubound(rep%ButterflyKerl_R, 1), &
-               lbound(rep%ButterflyKerl_R, 2):ubound(rep%ButterflyKerl_R, 2)))
-            do jj = lbound(rep%ButterflyKerl_R, 2), ubound(rep%ButterflyKerl_R, 2)
-               do ii = lbound(rep%ButterflyKerl_R, 1), ubound(rep%ButterflyKerl_R, 1)
-                  call BP_MD_alias_kerl(rep%ButterflyKerl_R(ii, jj), blk%ButterflyKerl_R(ii, jj))
-               enddo
-            enddo
-         endif
       endif
 
    end subroutine BP_MD_alias_trans_data
