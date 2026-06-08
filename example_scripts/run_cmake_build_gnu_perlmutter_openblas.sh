@@ -4,7 +4,7 @@ module load python/3.11
 module unload cray-libsci
 
 cd ..
-sed -i 's/^M$//' PrecisionPreprocessing.sh
+sed -i 's/\r$//' PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
@@ -54,3 +54,5 @@ make frankben_t -j16
 make cifio2dsb -j16  
 make cvie2d -j16  
 make cvie2d_t -j16
+make cvie3d_t -j16
+make cvie3d_t_so -j16

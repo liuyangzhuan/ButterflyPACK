@@ -591,6 +591,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, allocatable:: trans_map_n_from_rep(:,:), trans_rev_n_from_rep(:,:)
         integer, allocatable:: trans_map_m_to_rep(:,:), trans_rev_m_to_rep(:,:)
         integer, allocatable:: trans_map_m_from_rep(:,:), trans_rev_m_from_rep(:,:)
+        integer:: trans_ndup = 0 !< # compact single-rank occurrences that reuse representative blocks
+        integer, allocatable:: trans_dup_row_group(:,:), trans_dup_col_group(:,:)
+        integer, allocatable:: trans_dup_rep(:)
+        integer, allocatable:: trans_dup_member_offset(:), trans_dup_member_list(:)
     end type onelplus_MD
 
 

@@ -513,6 +513,11 @@ contains
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_from_rep)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_row_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_row_group)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_col_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_col_group)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_rep)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_member_offset)
+	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_member_list)
             end if
          end do
          deallocate (h_mat_md%BP%LL)

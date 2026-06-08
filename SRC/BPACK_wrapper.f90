@@ -1559,7 +1559,7 @@ contains
       type(proctree), pointer::ptree
       integer seed_myid(50)
       integer times(8)
-      real(kind=8) t1, t2, x, y, z, r, theta, phi
+      real(kind=8) t1, t2, structure_time, structure_time_max, x, y, z, r, theta, phi
       real(kind=8):: Memory = 0d0, error
       character(len=1024)  :: strings
       integer(kind=8) idx,kk,knn
@@ -1643,9 +1643,13 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
       call Cluster_partition_MD(Ndim, bmat, option, msh, ker, stats, ptree)
       call BPACK_structuring_MD(Ndim, bmat, option, msh, ker, ptree, stats)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
       t2 = MPI_Wtime()
+      structure_time = t2 - t1
+      call MPI_Allreduce(structure_time, structure_time_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, i)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) &
+         "Hierarchical format time:", structure_time_max, "Seconds"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
 
       !>**** return the permutation vector
       Permutation=-1

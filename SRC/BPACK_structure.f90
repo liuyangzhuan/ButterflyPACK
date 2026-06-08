@@ -1666,7 +1666,6 @@ end function distance_geo
       integer,allocatable::boundary_map(:,:)
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
       integer pgno, bb_loc
-
       Maxgrp = 2**(ptree%nlevel) - 1
 
       hss_bf1_md%BP%level = 0
@@ -1965,10 +1964,13 @@ end function distance_geo
       character(len=1024)  :: strings
       type(proctree)::ptree
       integer,allocatable::boundary_map(:,:)
-      integer, allocatable::child_offset(:,:), row_group_child(:,:), row_gg2(:), row_further(:)
+      integer, allocatable::child_offset(:,:), row_group_child(:,:), row_gg2(:), row_further(:), row_pgno(:)
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
       type(nil_onelevel_MD),allocatable:: flist_MD(:)
       integer pgno, bb_loc
+      integer rep_capacity, trans_nrep_key, rep_slot, new_rep
+      integer Nblock_data_loc, Nblock_dup_loc, dup_idx
+      integer, allocatable::rep_row_key(:,:), rep_col_key(:,:), rep_style_key(:), rep_block_idx(:)
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -2065,27 +2067,38 @@ end function distance_geo
                dims1 = Nboundall1
                nchild = Nboundall1**Ndim
                allocate(child_offset(nchild,Ndim), row_group_child(nchild,Ndim))
-               allocate(row_gg2(nchild), row_further(nchild))
+               allocate(row_gg2(nchild), row_further(nchild), row_pgno(nchild))
+               rep_capacity = 64
+               trans_nrep_key = 0
+               allocate(rep_row_key(Ndim,rep_capacity), rep_col_key(Ndim,rep_capacity))
+               allocate(rep_style_key(rep_capacity), rep_block_idx(rep_capacity))
                do bb = 1, nchild
                   call SingleIndexToMultiIndex(Ndim,dims1, bb, child_offset(bb,:))
                enddo
                nlist_MD(ll+1)%len = Nboundall**Ndim
                allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
                call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
-               flist_MD(ll+1)%len = Nboundall**Ndim
-               allocate(flist_MD(ll+1)%list(Nboundall**Ndim))
-               call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list)/1024.0d3)
+               if (option%trans_invariant == 0) then
+                  flist_MD(ll+1)%len = Nboundall**Ndim
+                  allocate(flist_MD(ll+1)%list(Nboundall**Ndim))
+                  call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list)/1024.0d3)
+               else
+                  flist_MD(ll+1)%len = 0
+               endif
 
 
                do bb = 1, Nboundall**Ndim
                   nlist_MD(ll+1)%list(bb)%nn=0
-                  flist_MD(ll+1)%list(bb)%nn=0
+                  if (option%trans_invariant == 0) flist_MD(ll+1)%list(bb)%nn=0
                enddo
 
                Ninadmissible_max=0
                Ninadmissible_tot=0
                Nadmissible_max=0
                Nadmissible_tot=0
+               Nadmissible_tot_loc=0
+               Nblock_data_loc=0
+               Nblock_dup_loc=0
                dims = 2**(level_ll)
                do gg=1,product(dims)
                   call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
@@ -2094,6 +2107,7 @@ end function distance_geo
                   do bb = 1, nchild
                      row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
                      pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                     row_pgno(bb) = pgno
                      level = GetTreelevel(row_group_child(bb,1)) - 1
                      row_further(bb) = 0
                      if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
@@ -2116,8 +2130,23 @@ end function distance_geo
                            Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
                            Ninadmissible_tot = Ninadmissible_tot +1
                         else
-                           flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
-                           Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
+                           if (option%trans_invariant == 0) then
+                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                              Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
+                           elseif (IOwnPgrp(ptree, row_pgno(bb))) then
+                              if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                 call HMAT_MD_find_trans_key(Ndim, group_m, group_n, merge(2,1,near_far == 1), &
+                                    option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                    rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                 if (new_rep == 1) then
+                                    Nblock_data_loc = Nblock_data_loc + 1
+                                 else
+                                    Nblock_dup_loc = Nblock_dup_loc + 1
+                                 endif
+                              else
+                                 Nblock_data_loc = Nblock_data_loc + 1
+                              endif
+                           endif
                            if(near_far == 0)then
                               Ninadmissible_tot = Ninadmissible_tot +1
                            else
@@ -2133,13 +2162,40 @@ end function distance_geo
                endif
 
                do bb = 1, Nboundall**Ndim
-                  allocate(nlist_MD(ll+1)%list(bb)%nlist(max(1,nlist_MD(ll+1)%list(bb)%nn),Ndim))
-                  call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                  if (nlist_MD(ll+1)%list(bb)%nn > 0) then
+                     allocate(nlist_MD(ll+1)%list(bb)%nlist(nlist_MD(ll+1)%list(bb)%nn,Ndim))
+                     call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                  endif
                   nlist_MD(ll+1)%list(bb)%nn=0
-                  allocate(flist_MD(ll+1)%list(bb)%nlist(max(1,flist_MD(ll+1)%list(bb)%nn),Ndim))
-                  call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
-                  flist_MD(ll+1)%list(bb)%nn=0
+                  if (option%trans_invariant == 0) then
+                     if (flist_MD(ll+1)%list(bb)%nn > 0) then
+                        allocate(flist_MD(ll+1)%list(bb)%nlist(flist_MD(ll+1)%list(bb)%nn,Ndim))
+                        call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                     endif
+                     flist_MD(ll+1)%list(bb)%nn=0
+                  endif
                enddo
+
+               if (option%trans_invariant /= 0) then
+                  h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot
+                  h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nblock_data_loc
+                  h_mat_md%BP%LL(ll + 1)%trans_ndup = Nblock_dup_loc
+                  if (Nblock_data_loc > 0) then
+                     allocate(h_mat_md%BP%LL(ll + 1)%matrices_block(Nblock_data_loc))
+                     call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
+                  endif
+                  if (Nblock_dup_loc > 0) then
+                     allocate(h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(Ndim,Nblock_dup_loc))
+                     allocate(h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(Ndim,Nblock_dup_loc))
+                     allocate(h_mat_md%BP%LL(ll + 1)%trans_dup_rep(Nblock_dup_loc))
+                     call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%trans_dup_row_group)/1024.0d3)
+                     call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%trans_dup_col_group)/1024.0d3)
+                     call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%trans_dup_rep)/1024.0d3)
+                  endif
+                  Nadmissible_tot_loc = 0
+                  dup_idx = 0
+                  trans_nrep_key = 0
+               endif
 
                dims = 2**(level_ll)
                do gg=1,product(dims)
@@ -2149,6 +2205,7 @@ end function distance_geo
                   do bb = 1, nchild
                      row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
                      pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                     row_pgno(bb) = pgno
                      level = GetTreelevel(row_group_child(bb,1)) - 1
                      row_further(bb) = 0
                      if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
@@ -2171,94 +2228,85 @@ end function distance_geo
                            nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
                            ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
                         else
-                           flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
-                           flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
-                        endif
-                     enddo
-                     enddo
-                  enddo
-               enddo
-
-               allocate (h_mat_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Nadmissible_max,Ndim+2))
-               h_mat_md%BP%LL(ll + 1)%boundary_map=-1
-               call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
-
-               Nadmissible_tot_loc=0
-               Nadmissible_tot=0
-               do bb = 1, Nboundall**Ndim
-                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
-                  group_m = group_m + groupm_start_global - 1
-                  pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
-                  do nn=1,flist_MD(ll+1)%list(bb)%nn
-                     group_n = flist_MD(ll+1)%list(bb)%nlist(nn,:)
-                     h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1:Ndim)=group_n
-                     Nadmissible_tot = Nadmissible_tot + 1
-                     h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,2+Ndim)=Nadmissible_tot
-                     if (IOwnPgrp(ptree, pgno)) then
-                        Nadmissible_tot_loc = Nadmissible_tot_loc + 1
-                        h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1+Ndim)=Nadmissible_tot_loc
-                     endif
-                  enddo
-               enddo
-               h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot
-               h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nadmissible_tot_loc
-               !!!!!!!!!!!!! The following is suspicious, do we need this assertion? !!!!!
-
-               ! call assert(Nadmissible_tot_loc>0, 'BP%LL(ll + 1)%Nbound_loc needs to be at least 1')
-               if(Nadmissible_tot_loc>0)then
-                  allocate (h_mat_md%BP%LL(ll + 1)%matrices_block(h_mat_md%BP%LL(ll + 1)%Nbound_loc))
-                  call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
-               endif
-
-               do bb = 1, Nboundall**Ndim
-                  call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
-                  group_m = group_m + groupm_start_global - 1
-                  do jj=1,Nadmissible_max
-                     bb_loc = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1+Ndim)
-                     if (bb_loc /= -1) then
-                        group_n = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1:Ndim)
-                        blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(bb_loc)
-                        blocks%Ndim = Ndim
-                        allocate(blocks%row_group(Ndim))
-                        allocate(blocks%col_group(Ndim))
-                        blocks%row_group = group_m
-                        blocks%col_group = group_n
-                        blocks%level = GetTreelevel(group_m(1)) - 1
-                        if (blocks%level >= option%LRlevel) then
-                           blocks%level_butterfly = 0
-                        else
-                           blocks%level_butterfly = h_mat_md%Maxlevel - blocks%level
-                        endif
-                        blocks%pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
-
-                        allocate(blocks%M(Ndim))
-                        allocate(blocks%N(Ndim))
-                        allocate(blocks%headm(Ndim))
-                        allocate(blocks%headn(Ndim))
-
-                        do dim_i=1,Ndim
-                           blocks%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - msh(dim_i)%basis_group(group_m(dim_i))%head + 1
-                           blocks%N(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - msh(dim_i)%basis_group(group_n(dim_i))%head + 1
-                           blocks%headm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
-                           blocks%headn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
-                        enddo
-
-                        call ComputeParallelIndices_MD(blocks, blocks%pgno, Ndim, ptree, msh)
-                        if (near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para) == 1) then
-                           blocks%style = 2
-                        else
-                           blocks%style = 1  ! leaflevel or leaflevel+1 is dense
-                           if(ptree%pgrp(blocks%pgno)%nproc>1)then
-                              write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
-                              stop
+                           if (option%trans_invariant == 0) then
+                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                              flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                           elseif (IOwnPgrp(ptree, row_pgno(bb))) then
+                              if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                 call HMAT_MD_find_trans_key(Ndim, group_m, group_n, merge(2,1,near_far == 1), &
+                                    option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                    rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                              else
+                                 new_rep = 1
+                                 rep_slot = 0
+                              endif
+                              if (new_rep == 1) then
+                                 Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                                 blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
+                                 call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
+                                 if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
+                              else
+                                 dup_idx = dup_idx + 1
+                                 h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(:,dup_idx) = group_m
+                                 h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(:,dup_idx) = group_n
+                                 h_mat_md%BP%LL(ll + 1)%trans_dup_rep(dup_idx) = rep_block_idx(rep_slot)
+                              endif
                            endif
                         endif
-
-                        call LogMemory(stats, SIZEOF(blocks)/1024.0d3)
-
-                     end if
+                     enddo
+                     enddo
                   enddo
-               end do
+               enddo
+
+               if (option%trans_invariant == 0) then
+                  allocate (h_mat_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Nadmissible_max,Ndim+2))
+                  h_mat_md%BP%LL(ll + 1)%boundary_map=-1
+                  call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
+
+                  Nadmissible_tot_loc=0
+                  Nadmissible_tot=0
+                  do bb = 1, Nboundall**Ndim
+                     call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                     group_m = group_m + groupm_start_global - 1
+                     pgno = GetMshGroup_Pgno(ptree, Ndim,  group_m)
+                     do nn=1,flist_MD(ll+1)%list(bb)%nn
+                        group_n = flist_MD(ll+1)%list(bb)%nlist(nn,:)
+                        h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1:Ndim)=group_n
+                        Nadmissible_tot = Nadmissible_tot + 1
+                        h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,2+Ndim)=Nadmissible_tot
+                        if (IOwnPgrp(ptree, pgno)) then
+                           Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                           h_mat_md%BP%LL(ll + 1)%boundary_map(bb,nn,1+Ndim)=Nadmissible_tot_loc
+                        endif
+                     enddo
+                  enddo
+                  h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot
+                  h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nadmissible_tot_loc
+                  if(Nadmissible_tot_loc>0)then
+                     allocate (h_mat_md%BP%LL(ll + 1)%matrices_block(h_mat_md%BP%LL(ll + 1)%Nbound_loc))
+                     call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%matrices_block)/1024.0d3)
+                  endif
+
+                  do bb = 1, Nboundall**Ndim
+                     call SingleIndexToMultiIndex(Ndim,dims2, bb, group_m)
+                     group_m = group_m + groupm_start_global - 1
+                     do jj=1,Nadmissible_max
+                        bb_loc = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1+Ndim)
+                        if (bb_loc /= -1) then
+                           group_n = h_mat_md%BP%LL(ll + 1)%boundary_map(bb,jj,1:Ndim)
+                           blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(bb_loc)
+                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+                           call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
+                        end if
+                     enddo
+                  end do
+               else
+                  call assert(Nadmissible_tot_loc == h_mat_md%BP%LL(ll + 1)%Nbound_loc, &
+                     'local HTENSOR block count changed between structuring passes')
+                  call assert(dup_idx == h_mat_md%BP%LL(ll + 1)%trans_ndup, &
+                     'compact HTENSOR duplicate count changed between structuring passes')
+                  call HMAT_MD_group_trans_duplicates(h_mat_md%BP%LL(ll + 1), stats)
+               endif
                groupm_ll = groupm_ll*2**levelm
                level_ll = GetTreelevel(groupm_ll(1)) - 1
                if (level_ll >= option%LRlevel) then
@@ -2267,8 +2315,11 @@ end function distance_geo
                   level_butterfly_ll = h_mat_md%Maxlevel - level_ll
                endif
                h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
-               deallocate(child_offset, row_group_child, row_gg2, row_further)
+               deallocate(child_offset, row_group_child, row_gg2, row_further, row_pgno)
+               deallocate(rep_row_key, rep_col_key, rep_style_key, rep_block_idx)
             end if
+            call HMAT_MD_clear_nil_level(nlist_MD(ll), stats)
+            call HMAT_MD_clear_nil_level(flist_MD(ll), stats)
          else
             exit
          end if
@@ -2321,6 +2372,210 @@ end function distance_geo
       enddo
 
    end subroutine HMAT_MD_structuring
+
+
+   subroutine HMAT_MD_clear_nil_level(onelevel, stats)
+
+      implicit none
+      type(nil_onelevel_MD)::onelevel
+      type(Hstat)::stats
+      integer bb
+
+      if (.not. allocated(onelevel%list)) then
+         onelevel%len = 0
+         return
+      endif
+      do bb = 1, onelevel%len
+         if (allocated(onelevel%list(bb)%nlist)) then
+            call LogMemory(stats, -SIZEOF(onelevel%list(bb)%nlist)/1024.0d3)
+            deallocate(onelevel%list(bb)%nlist)
+            onelevel%list(bb)%nn = 0
+         endif
+      enddo
+      call LogMemory(stats, -SIZEOF(onelevel%list)/1024.0d3)
+      deallocate(onelevel%list)
+      onelevel%len = 0
+
+   end subroutine HMAT_MD_clear_nil_level
+
+
+   subroutine HMAT_MD_init_block(Ndim, block, group_m, group_n, Maxlevel, near_far, option, msh, ptree, stats)
+
+      implicit none
+      integer Ndim, Maxlevel, near_far, dim_i
+      integer group_m(Ndim), group_n(Ndim)
+      type(matrixblock_MD)::block
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+      type(proctree)::ptree
+      type(Hstat)::stats
+
+      block%Ndim = Ndim
+      allocate(block%row_group(Ndim))
+      allocate(block%col_group(Ndim))
+      block%row_group = group_m
+      block%col_group = group_n
+      block%level = GetTreelevel(group_m(1)) - 1
+      if (block%level >= option%LRlevel) then
+         block%level_butterfly = 0
+      else
+         block%level_butterfly = Maxlevel - block%level
+      endif
+      block%pgno = GetMshGroup_Pgno(ptree, Ndim, group_m)
+
+      allocate(block%M(Ndim))
+      allocate(block%N(Ndim))
+      allocate(block%headm(Ndim))
+      allocate(block%headn(Ndim))
+      do dim_i = 1, Ndim
+         block%M(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%tail - &
+            msh(dim_i)%basis_group(group_m(dim_i))%head + 1
+         block%N(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%tail - &
+            msh(dim_i)%basis_group(group_n(dim_i))%head + 1
+         block%headm(dim_i) = msh(dim_i)%basis_group(group_m(dim_i))%head
+         block%headn(dim_i) = msh(dim_i)%basis_group(group_n(dim_i))%head
+      enddo
+
+      call ComputeParallelIndices_MD(block, block%pgno, Ndim, ptree, msh)
+      if (near_far == 1) then
+         block%style = 2
+      else
+         block%style = 1
+         if (ptree%pgrp(block%pgno)%nproc > 1) then
+            write(*,*)'more than one process sharing a dense block, try to reduce number of processes'
+            stop
+         endif
+      endif
+      call LogMemory(stats, SIZEOF(block)/1024.0d3)
+
+   end subroutine HMAT_MD_init_block
+
+
+   subroutine HMAT_MD_find_trans_key(Ndim, group_m, group_n, style, trans_invariant, msh, &
+      rep_row, rep_col, rep_style, rep_block, nrep, capacity, rep_slot, new_rep)
+
+      implicit none
+      integer Ndim, style, trans_invariant, nrep, capacity, rep_slot, new_rep
+      integer group_m(Ndim), group_n(Ndim)
+      integer, allocatable, intent(inout)::rep_row(:,:), rep_col(:,:), rep_style(:), rep_block(:)
+      type(mesh)::msh(Ndim)
+      integer rr, dim_i, dim_j, delta_i, delta_j, used(Ndim)
+      integer(kind=8) dist_group, dist_rep
+      integer, allocatable::row_tmp(:,:), col_tmp(:,:), style_tmp(:), block_tmp(:)
+      logical compatible, found
+
+      rep_slot = 0
+      new_rep = 0
+      dist_group = sum(int(group_m - group_n,kind=8)**2)
+      do rr = 1, nrep
+         if (rep_style(rr) /= style) cycle
+         if (trans_invariant == 1) then
+            if (.not. all(rep_row(:,rr) - rep_col(:,rr) == group_m - group_n)) cycle
+            compatible = .true.
+            do dim_i = 1, Ndim
+               if (msh(dim_i)%basis_group(rep_row(dim_i,rr))%tail - &
+                   msh(dim_i)%basis_group(rep_row(dim_i,rr))%head /= &
+                   msh(dim_i)%basis_group(group_m(dim_i))%tail - &
+                   msh(dim_i)%basis_group(group_m(dim_i))%head) compatible = .false.
+               if (msh(dim_i)%basis_group(rep_col(dim_i,rr))%tail - &
+                   msh(dim_i)%basis_group(rep_col(dim_i,rr))%head /= &
+                   msh(dim_i)%basis_group(group_n(dim_i))%tail - &
+                   msh(dim_i)%basis_group(group_n(dim_i))%head) compatible = .false.
+            enddo
+            if (.not. compatible) cycle
+         elseif (trans_invariant == 2) then
+            dist_rep = sum(int(rep_row(:,rr) - rep_col(:,rr),kind=8)**2)
+            if (dist_rep /= dist_group) cycle
+            used = 0
+            compatible = .true.
+            do dim_i = 1, Ndim
+               delta_i = group_m(dim_i) - group_n(dim_i)
+               found = .false.
+               do dim_j = 1, Ndim
+                  if (used(dim_j) == 1) cycle
+                  delta_j = rep_row(dim_j,rr) - rep_col(dim_j,rr)
+                  if (abs(delta_i) /= abs(delta_j)) cycle
+                  if (msh(dim_i)%basis_group(group_m(dim_i))%tail - &
+                      msh(dim_i)%basis_group(group_m(dim_i))%head /= &
+                      msh(dim_j)%basis_group(rep_row(dim_j,rr))%tail - &
+                      msh(dim_j)%basis_group(rep_row(dim_j,rr))%head) cycle
+                  if (msh(dim_i)%basis_group(group_n(dim_i))%tail - &
+                      msh(dim_i)%basis_group(group_n(dim_i))%head /= &
+                      msh(dim_j)%basis_group(rep_col(dim_j,rr))%tail - &
+                      msh(dim_j)%basis_group(rep_col(dim_j,rr))%head) cycle
+                  used(dim_j) = 1
+                  found = .true.
+                  exit
+               enddo
+               if (.not. found) compatible = .false.
+            enddo
+            if (.not. compatible) cycle
+         else
+            cycle
+         endif
+         rep_slot = rr
+         return
+      enddo
+
+      if (nrep == capacity) then
+         allocate(row_tmp(Ndim,2*capacity), col_tmp(Ndim,2*capacity), style_tmp(2*capacity), block_tmp(2*capacity))
+         row_tmp(:,1:capacity) = rep_row
+         col_tmp(:,1:capacity) = rep_col
+         style_tmp(1:capacity) = rep_style
+         block_tmp(1:capacity) = rep_block
+         call move_alloc(row_tmp, rep_row)
+         call move_alloc(col_tmp, rep_col)
+         call move_alloc(style_tmp, rep_style)
+         call move_alloc(block_tmp, rep_block)
+         capacity = 2*capacity
+      endif
+      nrep = nrep + 1
+      rep_row(:,nrep) = group_m
+      rep_col(:,nrep) = group_n
+      rep_style(nrep) = style
+      rep_slot = nrep
+      new_rep = 1
+
+   end subroutine HMAT_MD_find_trans_key
+
+
+   subroutine HMAT_MD_group_trans_duplicates(level, stats)
+
+      implicit none
+      type(onelplus_MD)::level
+      type(Hstat)::stats
+      integer, allocatable::counts(:), next_member(:)
+      integer bb, rep_bb, cursor
+
+      if (level%trans_ndup <= 0) return
+      allocate(counts(level%Nbound_loc), next_member(level%Nbound_loc))
+      counts = 0
+      do bb = 1, level%trans_ndup
+         rep_bb = level%trans_dup_rep(bb)
+         call assert(rep_bb > 0 .and. rep_bb <= level%Nbound_loc, 'invalid compact HTENSOR representative')
+         counts(rep_bb) = counts(rep_bb) + 1
+      enddo
+
+      allocate(level%trans_dup_member_offset(level%Nbound_loc + 1))
+      allocate(level%trans_dup_member_list(level%trans_ndup))
+      level%trans_dup_member_offset(1) = 1
+      do rep_bb = 1, level%Nbound_loc
+         level%trans_dup_member_offset(rep_bb + 1) = level%trans_dup_member_offset(rep_bb) + counts(rep_bb)
+      enddo
+      next_member = level%trans_dup_member_offset(1:level%Nbound_loc)
+      do bb = 1, level%trans_ndup
+         rep_bb = level%trans_dup_rep(bb)
+         cursor = next_member(rep_bb)
+         level%trans_dup_member_list(cursor) = bb
+         next_member(rep_bb) = cursor + 1
+      enddo
+      call LogMemory(stats, SIZEOF(level%trans_dup_member_offset)/1024.0d3)
+      call LogMemory(stats, SIZEOF(level%trans_dup_member_list)/1024.0d3)
+      call LogMemory(stats, -SIZEOF(level%trans_dup_rep)/1024.0d3)
+      deallocate(level%trans_dup_rep)
+      deallocate(counts, next_member)
+
+   end subroutine HMAT_MD_group_trans_duplicates
 
 
 

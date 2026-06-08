@@ -2118,7 +2118,7 @@ contains
       level_butterfly = block_rand%level_butterfly
       num_blocks = 2**level_butterfly
 
-      num_vect = 16
+      num_vect = 1
 
       mm = block_rand%M_loc
       nn = block_rand%N_loc
@@ -2558,7 +2558,6 @@ contains
          ! Vin_tmp = Vin(1:mi,1:nv)
 
          allocate (V_tmp1(nn, num_vect_sub))
-         V_tmp1 = 0
          allocate (V_tmp2(nn, num_vect_sub))
          ! V_tmp2 = 0
 
@@ -2665,7 +2664,6 @@ contains
          ! Vout(1:mv,1:nv) = 0
 
          allocate (Vbuff(nn, num_vect_sub))
-         Vbuff = 0
 
          if (trans == 'N') then
             ctemp1 = 1.0d0; ctemp2 = 0.0d0
@@ -2992,7 +2990,6 @@ contains
                mm = block_o%M_loc
 
                allocate (Vbuff(mm, num_vect_sub))
-               Vbuff = 0
 
                ! get the right multiplied vectors
                pp = ptree%myid - ptree%pgrp(block_o%pgno)%head + 1
@@ -3221,8 +3218,10 @@ contains
 
 
             if (trans == 'N') then
-               allocate (Vout_tmp(mv, nv))
-               Vout_tmp = Vout(1:mv,1:nv)
+               if (abs(b) > BPACK_SafeUnderflow) then
+                  allocate (Vout_tmp(mv, nv))
+                  Vout_tmp = Vout(1:mv,1:nv)
+               endif
 
                level_butterfly = block_o%level_butterfly
                ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here
@@ -3230,7 +3229,6 @@ contains
                ! groupm = block_o%row_group  ! Note: row_group and col_group interchanged here
                mm = block_o%M_loc
                allocate (Vbuff(mm, num_vect_sub))
-               Vbuff = 0
 
                ! get the right multiplied vectors
                pp = ptree%myid - ptree%pgrp(block_o%pgno)%head + 1
@@ -3254,8 +3252,12 @@ contains
                n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2 - n1
                deallocate (Vbuff)
-               Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
-               deallocate (Vout_tmp)
+               if (allocated(Vout_tmp)) then
+                  Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv) + b*Vout_tmp
+                  deallocate (Vout_tmp)
+               else if (abs(a - BPACK_cone) > BPACK_SafeUnderflow) then
+                  Vout(1:mv,1:nv) = a*Vout(1:mv,1:nv)
+               endif
             else
                level_butterfly = block_o%level_butterfly
                ! groupn = block_o%col_group  ! Note: row_group and col_group interchanged here

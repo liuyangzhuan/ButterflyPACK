@@ -224,7 +224,7 @@ contains
       real(kind=8) para
       real(kind=8) tolerance
       integer nn, mm, Maxlevel, give, need
-      integer i, j, k, ii, edge, Dimn, kk, dim_i
+      integer i, j, k, ii, edge, Dimn, kk, dim_i, ierr
       integer nlevel, level
       integer Permutation(:,:)
       integer, optional:: tree(:,:)
@@ -237,7 +237,7 @@ contains
       type(Bmatrix)::bmat
       type(proctree)::ptree
 
-      real(kind=8) t1, t2
+      real(kind=8) t1, t2, structure_time, structure_time_max
       character(len=1024)  :: strings
       integer threads_num
 
@@ -325,9 +325,13 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format......"
       call Cluster_partition_MD(Ndim, bmat, option, msh, ker, stats, ptree)
       call BPACK_structuring_MD(Ndim, bmat, option, msh, ker, ptree, stats)
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
-      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
       t2 = MPI_Wtime()
+      structure_time = t2 - t1
+      call MPI_Allreduce(structure_time, structure_time_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Hierarchical format finished"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) &
+         "Hierarchical format time:", structure_time_max, "Seconds"
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "    "
 
       if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
          call assert(present(nns), 'nearest neighbours should be provided if option%nogeo==3 or 4')
@@ -3080,7 +3084,8 @@ contains
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, level_butterfly:', &
                bplus%LL(ll)%level_butterfly, 'rankmax at this level:', bplus%LL(ll)%rankmax
             if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
-               write(*,*)'trans_invariant unique/reused local blocks at this level:', trans_nrep_level, trans_reuse_level
+               write(*,*)'trans_invariant unique/compact local blocks at this level:', &
+                  trans_nrep_level, bplus%LL(ll)%trans_ndup
             endif
          endif
          if (allocated(trans_rep_candidates)) deallocate(trans_rep_candidates)

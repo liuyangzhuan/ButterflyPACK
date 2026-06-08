@@ -91,6 +91,10 @@ endif()
 include(CheckFortranCompilerFlag)
 include(CheckCXXCompilerFlag)
 
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_Fortran_FLAGS "-DNDEBUG ${CMAKE_Fortran_FLAGS}")
+endif()
+
 check_fortran_compiler_flag("-ffree-line-length-none" COMPILER_GNU)
 if(COMPILER_GNU)
   set(CMAKE_Fortran_FLAGS "-cpp -ffree-line-length-none -ffixed-line-length-none -fimplicit-none -lpthread ${CMAKE_Fortran_FLAGS}")

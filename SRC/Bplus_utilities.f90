@@ -1043,6 +1043,11 @@ contains
 	      stats%Time_RedistV = stats%Time_RedistV + n2-n1
 	      stats%Time_C_Mult_RedistOut = stats%Time_C_Mult_RedistOut + n2-n1
 
+      if (option%trans_invariant /= 0) then
+         call Bplus_MD_compact_dup_MVP(Ndim, bplus, chara, level_s, level_e, ldi, M, N, Nrnd, &
+            random1, Vout, ptree, stats, msh, option)
+      endif
+
 
 	      n1 = MPI_Wtime()
 	      if (use_cached_vecs) then
@@ -1073,6 +1078,367 @@ contains
 	      stats%Time_C_Mult_Final = stats%Time_C_Mult_Final + n2-n1
 
 	   end subroutine Bplus_MD_block_MVP_dat
+
+
+   subroutine Bplus_MD_compact_dup_MVP(Ndim, bplus, chara, level_s, level_e, ldi, Mout, Nout, &
+      Nrnd, Vin, Vout, ptree, stats, msh, option)
+
+      implicit none
+      integer Ndim, level_s, level_e, Nrnd
+      integer ldi(Ndim), Mout(Ndim), Nout(Ndim)
+      character chara
+      type(blockplus_MD)::bplus
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      type(Hoption)::option
+      DT::Vin(product(ldi),Nrnd), Vout(:,:)
+      type(matrixblock_MD), pointer::rep, blocks_1
+      integer ll, rep_bb, member, dup_idx, rr, batch_start, batch_end, batch_count
+      integer stack_limit, col_s, col_e, total_dup, total_dup_global, nproc, mypp, pp, ierr
+      integer input_group(Ndim), output_group(Ndim), dims_dup_in(Ndim), dims_dup_out(Ndim)
+      integer delta_dup(Ndim), delta_rep(Ndim)
+      integer head_dup_in(Ndim), head_dup_out(Ndim), owner_start(Ndim), owner_dims(Ndim)
+      integer dim_in(Ndim), dim_out(Ndim), owner_pp, local_size, recv_size
+      integer, allocatable::recvcounts(:), displs(:)
+      DT, allocatable::Vin_all(:), Vout_all(:), recvbuf(:)
+      DT, allocatable::Vin_stack(:,:), Vout_stack(:,:)
+      DT ctemp1, ctemp2
+      real(kind=8) t1, t2
+
+      blocks_1 => bplus%LL(1)%matrices_block(1)
+      total_dup = 0
+      do ll = level_s, level_e
+         total_dup = total_dup + bplus%LL(ll)%trans_ndup
+      enddo
+      call MPI_Allreduce(total_dup, total_dup_global, 1, MPI_INTEGER, MPI_SUM, &
+         ptree%pgrp(blocks_1%pgno)%Comm, ierr)
+      if (total_dup_global == 0) return
+
+      nproc = ptree%pgrp(blocks_1%pgno)%nproc
+      mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
+      allocate(recvcounts(nproc), displs(nproc))
+      do pp = 1, nproc
+         if (chara == 'N') then
+            owner_dims = blocks_1%N_p(pp,2,:) - blocks_1%N_p(pp,1,:) + 1
+         else
+            owner_dims = blocks_1%M_p(pp,2,:) - blocks_1%M_p(pp,1,:) + 1
+         endif
+         recvcounts(pp) = product(owner_dims)*Nrnd
+      enddo
+      displs(1) = 0
+      do pp = 2, nproc
+         displs(pp) = displs(pp-1) + recvcounts(pp-1)
+      enddo
+      allocate(Vin_all(sum(recvcounts)))
+      call LogMemory(stats, SIZEOF(Vin_all)/1024.0d3)
+      t1 = MPI_Wtime()
+      call MPI_Allgatherv(Vin, product(ldi)*Nrnd, MPI_DT, Vin_all, recvcounts, displs, MPI_DT, &
+         ptree%pgrp(blocks_1%pgno)%Comm, ierr)
+      t2 = MPI_Wtime()
+      stats%Time_RedistV = stats%Time_RedistV + t2 - t1
+      stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + t2 - t1
+
+      if (chara /= 'N') then
+         allocate(Vout_all(sum(recvcounts)))
+         call LogMemory(stats, SIZEOF(Vout_all)/1024.0d3)
+         Vout_all = 0
+      endif
+      ctemp1 = 1.0d0
+      ctemp2 = 0.0d0
+
+      do ll = level_s, level_e
+         if (bplus%LL(ll)%trans_ndup == 0) cycle
+         do rep_bb = 1, bplus%LL(ll)%Nbound_loc
+            if (bplus%LL(ll)%trans_dup_member_offset(rep_bb+1) == &
+                bplus%LL(ll)%trans_dup_member_offset(rep_bb)) cycle
+            rep => bplus%LL(ll)%matrices_block(rep_bb)
+            if (chara == 'N') then
+               dim_in = rep%N_loc
+               dim_out = rep%M_loc
+            else
+               dim_in = rep%M_loc
+               dim_out = rep%N_loc
+            endif
+            stack_limit = max(1, option%BACA_Batch)
+            do batch_start = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
+               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, stack_limit
+               batch_end = min(bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, &
+                  batch_start + stack_limit - 1)
+               batch_count = batch_end - batch_start + 1
+               allocate(Vin_stack(product(dim_in),Nrnd*batch_count))
+               allocate(Vout_stack(product(dim_out),Nrnd*batch_count))
+               call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
+               call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
+               Vout_stack = 0
+
+               t1 = MPI_Wtime()
+               do rr = 1, batch_count
+                  member = batch_start + rr - 1
+                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
+                  col_s = (rr-1)*Nrnd + 1
+                  col_e = rr*Nrnd
+                  if (chara == 'N') then
+                     input_group = bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+                  else
+                     input_group = bplus%LL(ll)%trans_dup_row_group(:,dup_idx)
+                  endif
+                  delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
+                     bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+                  delta_rep = rep%row_group - rep%col_group
+                  call Bplus_MD_compact_group_geometry(Ndim, input_group, msh, dims_dup_in, head_dup_in)
+                  owner_pp = ptree%pgrp(GetMshGroup_Pgno(ptree,Ndim,input_group))%head - &
+                     ptree%pgrp(blocks_1%pgno)%head + 1
+                  if (chara == 'N') then
+                     owner_start = blocks_1%headn + blocks_1%N_p(owner_pp,1,:)
+                     owner_dims = blocks_1%N_p(owner_pp,2,:) - blocks_1%N_p(owner_pp,1,:) + 1
+                  else
+                     owner_start = blocks_1%headm + blocks_1%M_p(owner_pp,1,:)
+                     owner_dims = blocks_1%M_p(owner_pp,2,:) - blocks_1%M_p(owner_pp,1,:) + 1
+                  endif
+                  local_size = product(owner_dims)
+                  call Bplus_MD_compact_pack(Ndim, option%trans_invariant, delta_dup, &
+                     delta_rep, dims_dup_in, dim_in, &
+                     head_dup_in, owner_start, owner_dims, Nrnd, Vin_all, displs(owner_pp), &
+                     local_size, Vin_stack(:,col_s:col_e))
+               enddo
+               t2 = MPI_Wtime()
+               stats%Time_C_Mult_Pack = stats%Time_C_Mult_Pack + t2 - t1
+
+               if (rep%style == 1) then
+                  call Full_block_MD_MVP_dat(rep, chara, product(rep%M_loc), Nrnd*batch_count, &
+                     Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2)
+               else
+                  call BF_MD_block_mvp(chara, Vin_stack, dim_in, Vout_stack, dim_out, &
+                     Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option)
+               endif
+
+               t1 = MPI_Wtime()
+               do rr = 1, batch_count
+                  member = batch_start + rr - 1
+                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
+                  col_s = (rr-1)*Nrnd + 1
+                  col_e = rr*Nrnd
+                  if (chara == 'N') then
+                     output_group = bplus%LL(ll)%trans_dup_row_group(:,dup_idx)
+                  else
+                     output_group = bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+                  endif
+                  delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
+                     bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+                  delta_rep = rep%row_group - rep%col_group
+                  call Bplus_MD_compact_group_geometry(Ndim, output_group, msh, dims_dup_out, head_dup_out)
+                  owner_pp = ptree%pgrp(GetMshGroup_Pgno(ptree,Ndim,output_group))%head - &
+                     ptree%pgrp(blocks_1%pgno)%head + 1
+                  if (chara == 'N') then
+                     owner_start = blocks_1%headm + blocks_1%M_p(owner_pp,1,:)
+                     owner_dims = blocks_1%M_p(owner_pp,2,:) - blocks_1%M_p(owner_pp,1,:) + 1
+                     call Bplus_MD_compact_unpack_local(Ndim, option%trans_invariant, &
+                        delta_rep, delta_dup, dim_out, dims_dup_out, head_dup_out, &
+                        owner_start, owner_dims, Nrnd, Vout_stack(:,col_s:col_e), Vout)
+                  else
+                     owner_start = blocks_1%headn + blocks_1%N_p(owner_pp,1,:)
+                     owner_dims = blocks_1%N_p(owner_pp,2,:) - blocks_1%N_p(owner_pp,1,:) + 1
+                     local_size = product(owner_dims)
+                     call Bplus_MD_compact_unpack_global(Ndim, option%trans_invariant, &
+                        delta_rep, delta_dup, dim_out, dims_dup_out, head_dup_out, &
+                        owner_start, owner_dims, Nrnd, Vout_stack(:,col_s:col_e), Vout_all, &
+                        displs(owner_pp), local_size)
+                  endif
+               enddo
+               t2 = MPI_Wtime()
+               stats%Time_C_Mult_Unpack = stats%Time_C_Mult_Unpack + t2 - t1
+               call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
+               call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+               deallocate(Vin_stack, Vout_stack)
+            enddo
+         enddo
+      enddo
+
+      if (chara /= 'N') then
+         recv_size = recvcounts(mypp)
+         allocate(recvbuf(recv_size))
+         call LogMemory(stats, SIZEOF(recvbuf)/1024.0d3)
+         t1 = MPI_Wtime()
+         call MPI_Reduce_scatter(Vout_all, recvbuf, recvcounts, MPI_DT, MPI_SUM, &
+            ptree%pgrp(blocks_1%pgno)%Comm, ierr)
+         t2 = MPI_Wtime()
+         stats%Time_RedistV = stats%Time_RedistV + t2 - t1
+         stats%Time_C_Mult_RedistOut = stats%Time_C_Mult_RedistOut + t2 - t1
+         Vout = Vout + reshape(recvbuf,shape(Vout))
+         call LogMemory(stats, -SIZEOF(recvbuf)/1024.0d3)
+         call LogMemory(stats, -SIZEOF(Vout_all)/1024.0d3)
+         deallocate(recvbuf, Vout_all)
+      endif
+      call LogMemory(stats, -SIZEOF(Vin_all)/1024.0d3)
+      deallocate(Vin_all, recvcounts, displs)
+
+   end subroutine Bplus_MD_compact_dup_MVP
+
+
+   subroutine Bplus_MD_compact_group_geometry(Ndim, group, msh, dims, head)
+
+      implicit none
+      integer Ndim, group(Ndim), dims(Ndim), head(Ndim), dim_i
+      type(mesh)::msh(Ndim)
+
+      do dim_i = 1, Ndim
+         dims(dim_i) = msh(dim_i)%basis_group(group(dim_i))%tail - &
+            msh(dim_i)%basis_group(group(dim_i))%head + 1
+         head(dim_i) = msh(dim_i)%basis_group(group(dim_i))%head
+      enddo
+
+   end subroutine Bplus_MD_compact_group_geometry
+
+
+   subroutine Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+      dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+
+      implicit none
+      integer Ndim, trans_invariant
+      integer group_dup(Ndim), group_rep(Ndim), dims_dup(Ndim), dims_rep(Ndim)
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer used(Ndim), dim_dup, dim_rep, delta_dup, delta_rep
+      logical found
+
+      map_dup_to_rep = 0
+      reverse_dup_to_rep = 0
+      if (trans_invariant == 1) then
+         do dim_dup = 1, Ndim
+            map_dup_to_rep(dim_dup) = dim_dup
+         enddo
+         return
+      endif
+
+      used = 0
+      do dim_dup = 1, Ndim
+         delta_dup = group_dup(dim_dup)
+         found = .false.
+         do dim_rep = 1, Ndim
+            if (used(dim_rep) == 1) cycle
+            delta_rep = group_rep(dim_rep)
+            if (abs(delta_dup) /= abs(delta_rep)) cycle
+            if (dims_dup(dim_dup) /= dims_rep(dim_rep)) cycle
+            used(dim_rep) = 1
+            map_dup_to_rep(dim_dup) = dim_rep
+            if (delta_dup /= 0 .and. delta_rep == -delta_dup) reverse_dup_to_rep(dim_dup) = 1
+            found = .true.
+            exit
+         enddo
+         call assert(found, 'compact trans_invariant=2 axis map is incompatible')
+      enddo
+
+   end subroutine Bplus_MD_compact_axis_map
+
+
+   subroutine Bplus_MD_compact_pack(Ndim, trans_invariant, group_dup, group_rep, dims_dup, dims_rep, &
+      head_dup, owner_start, owner_dims, Nrnd, source_all, source_base, source_stride, target)
+
+      implicit none
+      integer Ndim, trans_invariant, Nrnd, source_base, source_stride
+      integer group_dup(Ndim), group_rep(Ndim), dims_dup(Ndim), dims_rep(Ndim)
+      integer head_dup(Ndim), owner_start(Ndim), owner_dims(Ndim)
+      DT source_all(:), target(:,:)
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer delta_dup(Ndim), delta_rep(Ndim)
+      integer idx_dup(Ndim), idx_rep(Ndim), idx_owner(Ndim)
+      integer ii, jj, dim_i, dim_rep, scalar_rep, scalar_owner
+
+      delta_dup = group_dup
+      delta_rep = group_rep
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, delta_dup, delta_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      do ii = 1, product(dims_dup)
+         call SingleIndexToMultiIndex(Ndim, dims_dup, ii, idx_dup)
+         idx_owner = head_dup + idx_dup - owner_start + 1
+         call MultiIndexToSingleIndex(Ndim, owner_dims, scalar_owner, idx_owner)
+         do dim_i = 1, Ndim
+            dim_rep = map_dup_to_rep(dim_i)
+            if (reverse_dup_to_rep(dim_i) == 1) then
+               idx_rep(dim_rep) = dims_dup(dim_i) - idx_dup(dim_i) + 1
+            else
+               idx_rep(dim_rep) = idx_dup(dim_i)
+            endif
+         enddo
+         call MultiIndexToSingleIndex(Ndim, dims_rep, scalar_rep, idx_rep)
+         do jj = 1, Nrnd
+            target(scalar_rep,jj) = source_all(source_base + (jj-1)*source_stride + scalar_owner)
+         enddo
+      enddo
+
+   end subroutine Bplus_MD_compact_pack
+
+
+   subroutine Bplus_MD_compact_unpack_local(Ndim, trans_invariant, group_rep, group_dup, &
+      dims_rep, dims_dup, head_dup, owner_start, owner_dims, Nrnd, source, target)
+
+      implicit none
+      integer Ndim, trans_invariant, Nrnd
+      integer group_rep(Ndim), group_dup(Ndim), dims_rep(Ndim), dims_dup(Ndim)
+      integer head_dup(Ndim), owner_start(Ndim), owner_dims(Ndim)
+      DT source(:,:), target(:,:)
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer idx_dup(Ndim), idx_rep(Ndim), idx_owner(Ndim)
+      integer ii, jj, dim_i, dim_rep, scalar_rep, scalar_owner
+
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      do ii = 1, product(dims_dup)
+         call SingleIndexToMultiIndex(Ndim, dims_dup, ii, idx_dup)
+         idx_owner = head_dup + idx_dup - owner_start + 1
+         call MultiIndexToSingleIndex(Ndim, owner_dims, scalar_owner, idx_owner)
+         do dim_i = 1, Ndim
+            dim_rep = map_dup_to_rep(dim_i)
+            if (reverse_dup_to_rep(dim_i) == 1) then
+               idx_rep(dim_rep) = dims_dup(dim_i) - idx_dup(dim_i) + 1
+            else
+               idx_rep(dim_rep) = idx_dup(dim_i)
+            endif
+         enddo
+         call MultiIndexToSingleIndex(Ndim, dims_rep, scalar_rep, idx_rep)
+         do jj = 1, Nrnd
+            target(scalar_owner,jj) = target(scalar_owner,jj) + source(scalar_rep,jj)
+         enddo
+      enddo
+
+   end subroutine Bplus_MD_compact_unpack_local
+
+
+   subroutine Bplus_MD_compact_unpack_global(Ndim, trans_invariant, group_rep, group_dup, &
+      dims_rep, dims_dup, head_dup, owner_start, owner_dims, Nrnd, source, target_all, &
+      target_base, target_stride)
+
+      implicit none
+      integer Ndim, trans_invariant, Nrnd, target_base, target_stride
+      integer group_rep(Ndim), group_dup(Ndim), dims_rep(Ndim), dims_dup(Ndim)
+      integer head_dup(Ndim), owner_start(Ndim), owner_dims(Ndim)
+      DT source(:,:), target_all(:)
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer idx_dup(Ndim), idx_rep(Ndim), idx_owner(Ndim)
+      integer ii, jj, dim_i, dim_rep, scalar_rep, scalar_owner, target_idx
+
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      do ii = 1, product(dims_dup)
+         call SingleIndexToMultiIndex(Ndim, dims_dup, ii, idx_dup)
+         idx_owner = head_dup + idx_dup - owner_start + 1
+         call MultiIndexToSingleIndex(Ndim, owner_dims, scalar_owner, idx_owner)
+         do dim_i = 1, Ndim
+            dim_rep = map_dup_to_rep(dim_i)
+            if (reverse_dup_to_rep(dim_i) == 1) then
+               idx_rep(dim_rep) = dims_dup(dim_i) - idx_dup(dim_i) + 1
+            else
+               idx_rep(dim_rep) = idx_dup(dim_i)
+            endif
+         enddo
+         call MultiIndexToSingleIndex(Ndim, dims_rep, scalar_rep, idx_rep)
+         do jj = 1, Nrnd
+            target_idx = target_base + (jj-1)*target_stride + scalar_owner
+            target_all(target_idx) = target_all(target_idx) + source(scalar_rep,jj)
+         enddo
+      enddo
+
+   end subroutine Bplus_MD_compact_unpack_global
 
 
 	   subroutine BP_MD_ensure_trans_groups(Ndim, lev, trans_invariant)
@@ -9809,7 +10175,7 @@ contains
       type(butterfly_vec) :: BFvec
       integer ldi,ldo
       DT :: random1(ldi, *), random2(ldo, *)
-      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
+      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
@@ -9834,34 +10200,36 @@ contains
          call assert(rank > 0, 'rank incorrect in blocks%ButterflyU')
          allocate (matrixtemp(rank, Nrnd))
          matrixtemp = 0
-         allocate (matrixtemp1(rank, Nrnd))
-         matrixtemp1 = 0
-         ! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1
+         if (ptree%pgrp(pgno)%nproc > 1) then
+            allocate (matrixtemp1(rank, Nrnd))
+            matrixtemp1 = 0
+         endif
          if (chara == 'N') then !Vout=U*V^T*Vin
-            allocate (Vout_tmp(M,Nrnd))
-            Vout_tmp = 0
             call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
-            call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
+            if (ptree%pgrp(pgno)%nproc > 1) then
+               call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            else
+               call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            endif
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
-            allocate (Vout_tmp(N,Nrnd))
-            Vout_tmp = 0
             call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
-            call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
+            if (ptree%pgrp(pgno)%nproc > 1) then
+               call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            else
+               call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            endif
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
 
          deallocate (matrixtemp)
-         deallocate (matrixtemp1)
-         deallocate (Vout_tmp)
+         if (allocated(matrixtemp1)) deallocate (matrixtemp1)
 
       else
 #ifdef HAVE_TASKLOOP
