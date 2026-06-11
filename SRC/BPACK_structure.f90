@@ -1951,6 +1951,7 @@ end function distance_geo
       real(kind=8) Memory_direct_forward, Memory_butterfly_forward
       integer mm, nn, header_m, header_n, edge_m, edge_n, group_m(Ndim), group_n(Ndim), group_m1(Ndim), group_n1(Ndim), group_m2, group_n2, levelm, groupm_start(Ndim), groupm_start_global(Ndim), groupm_start1(Ndim), groupn_start1(Ndim), index_i_m, index_j_m
       integer level_c, iter, level_cc, level_BP, Nboundall, Nboundall1, Ninadmissible_max, Ninadmissible_tot, Ninadmissible_tot_loc, Nadmissible_max, Nadmissible_tot, Nadmissible_tot_loc, level_butterfly, level_butterfly_ll,groupm_ll(Ndim), level_ll, dims(Ndim),dims1(Ndim),dims2(Ndim)
+      integer(kind=8) Ninadmissible_tot_8, Nadmissible_tot_8
       type(matrixblock_MD), pointer::blocks, block_f
       real(kind=8)::minbound, theta, phi, r, rmax, phi_tmp, measure
       real(kind=8), allocatable::Centroid_M(:, :), Centroid_N(:, :)
@@ -1971,6 +1972,8 @@ end function distance_geo
       integer rep_capacity, trans_nrep_key, rep_slot, new_rep
       integer Nblock_data_loc, Nblock_dup_loc, dup_idx
       integer, allocatable::rep_row_key(:,:), rep_col_key(:,:), rep_style_key(:), rep_block_idx(:)
+      integer cache_slot, trans_cache_size, trans_cache_capacity
+      integer, allocatable::trans_cache_delta(:,:), trans_cache_nearfar(:,:,:)
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -2068,6 +2071,8 @@ end function distance_geo
                nchild = Nboundall1**Ndim
                allocate(child_offset(nchild,Ndim), row_group_child(nchild,Ndim))
                allocate(row_gg2(nchild), row_further(nchild), row_pgno(nchild))
+               trans_cache_size = 0
+               trans_cache_capacity = 0
                rep_capacity = 64
                trans_nrep_key = 0
                allocate(rep_row_key(Ndim,rep_capacity), rep_col_key(Ndim,rep_capacity))
@@ -2094,8 +2099,10 @@ end function distance_geo
 
                Ninadmissible_max=0
                Ninadmissible_tot=0
+               Ninadmissible_tot_8=0
                Nadmissible_max=0
                Nadmissible_tot=0
+               Nadmissible_tot_8=0
                Nadmissible_tot_loc=0
                Nblock_data_loc=0
                Nblock_dup_loc=0
@@ -2117,18 +2124,28 @@ end function distance_geo
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                      groupn_start1 = group_n1*2**levelm
+                     if (option%trans_invariant /= 0) then
+                        call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
+                           group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
+                           trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
+                     endif
                      do bb = 1, nchild
                      do cc = 1, nchild
                         group_m = row_group_child(bb,:)
                         group_n = child_offset(cc,:) + groupn_start1 - 1
                         furhter_partition = row_further(bb)
                         gg2 = row_gg2(bb)
-                        near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+                        if (option%trans_invariant /= 0) then
+                           near_far = trans_cache_nearfar(bb,cc,cache_slot)
+                        else
+                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+                        endif
 
                         if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
                            Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
                            Ninadmissible_tot = Ninadmissible_tot +1
+                           Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
                         else
                            if (option%trans_invariant == 0) then
                               flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
@@ -2149,8 +2166,10 @@ end function distance_geo
                            endif
                            if(near_far == 0)then
                               Ninadmissible_tot = Ninadmissible_tot +1
+                              Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
                            else
                               Nadmissible_tot = Nadmissible_tot +1
+                              Nadmissible_tot_8 = Nadmissible_tot_8 + 1_8
                            endif
                         endif
                      enddo
@@ -2158,7 +2177,7 @@ end function distance_geo
                   enddo
                enddo
                if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
-                  write(*,*)'#admissible',Nadmissible_tot,'#inadmissible',Ninadmissible_tot
+                  write(*,*)'#admissible',Nadmissible_tot_8,'#inadmissible',Ninadmissible_tot_8
                endif
 
                do bb = 1, Nboundall**Ndim
@@ -2177,7 +2196,7 @@ end function distance_geo
                enddo
 
                if (option%trans_invariant /= 0) then
-                  h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot
+                  h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot_8
                   h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nblock_data_loc
                   h_mat_md%BP%LL(ll + 1)%trans_ndup = Nblock_dup_loc
                   if (Nblock_data_loc > 0) then
@@ -2215,13 +2234,22 @@ end function distance_geo
                   do nn=1,nlist_MD(ll)%list(gg)%nn
                      group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                      groupn_start1 = group_n1*2**levelm
+                     if (option%trans_invariant /= 0) then
+                        call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
+                           group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
+                           trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
+                     endif
                      do bb = 1, nchild
                      do cc = 1, nchild
                         group_m = row_group_child(bb,:)
                         group_n = child_offset(cc,:) + groupn_start1 - 1
                         furhter_partition = row_further(bb)
                         gg2 = row_gg2(bb)
-                        near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+                        if (option%trans_invariant /= 0) then
+                           near_far = trans_cache_nearfar(bb,cc,cache_slot)
+                        else
+                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+                        endif
 
                         if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
                            nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
@@ -2317,6 +2345,8 @@ end function distance_geo
                h_mat_md%BP%LL(ll+1)%level_butterfly=level_butterfly_ll
                deallocate(child_offset, row_group_child, row_gg2, row_further, row_pgno)
                deallocate(rep_row_key, rep_col_key, rep_style_key, rep_block_idx)
+               if (allocated(trans_cache_delta)) deallocate(trans_cache_delta)
+               if (allocated(trans_cache_nearfar)) deallocate(trans_cache_nearfar)
             end if
             call HMAT_MD_clear_nil_level(nlist_MD(ll), stats)
             call HMAT_MD_clear_nil_level(flist_MD(ll), stats)
@@ -2449,6 +2479,66 @@ end function distance_geo
       call LogMemory(stats, SIZEOF(block)/1024.0d3)
 
    end subroutine HMAT_MD_init_block
+
+
+   subroutine HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
+      group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
+      trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
+
+      implicit none
+
+      integer Ndim, nchild
+      integer child_offset(nchild,Ndim), row_group_child(nchild,Ndim)
+      integer group_m1(Ndim), group_n1(Ndim), groupn_start1(Ndim)
+      type(mesh)::msh(Ndim)
+      type(Hoption)::option
+      type(kernelquant)::ker
+      integer, allocatable, intent(inout)::trans_cache_delta(:,:), trans_cache_nearfar(:,:,:)
+      integer, intent(inout)::trans_cache_size, trans_cache_capacity
+      integer, intent(out)::cache_slot
+      integer bb, cc, ii, new_capacity
+      integer group_delta(Ndim), group_m(Ndim), group_n(Ndim)
+      integer, allocatable::delta_tmp(:,:), nearfar_tmp(:,:,:)
+
+      group_delta = group_m1 - group_n1
+      cache_slot = 0
+      do ii = 1, trans_cache_size
+         if (all(trans_cache_delta(:,ii) == group_delta)) then
+            cache_slot = ii
+            exit
+         endif
+      enddo
+
+      if (cache_slot == 0) then
+         if (trans_cache_capacity == 0) then
+            trans_cache_capacity = 128
+            allocate(trans_cache_delta(Ndim,trans_cache_capacity))
+            allocate(trans_cache_nearfar(nchild,nchild,trans_cache_capacity))
+         elseif (trans_cache_size == trans_cache_capacity) then
+            new_capacity = trans_cache_capacity*2
+            allocate(delta_tmp(Ndim,new_capacity))
+            allocate(nearfar_tmp(nchild,nchild,new_capacity))
+            delta_tmp(:,1:trans_cache_capacity) = trans_cache_delta
+            nearfar_tmp(:,:,1:trans_cache_capacity) = trans_cache_nearfar
+            call move_alloc(delta_tmp, trans_cache_delta)
+            call move_alloc(nearfar_tmp, trans_cache_nearfar)
+            trans_cache_capacity = new_capacity
+         endif
+
+         trans_cache_size = trans_cache_size + 1
+         cache_slot = trans_cache_size
+         trans_cache_delta(:,cache_slot) = group_delta
+         do bb = 1, nchild
+         do cc = 1, nchild
+            group_m = row_group_child(bb,:)
+            group_n = child_offset(cc,:) + groupn_start1 - 1
+            trans_cache_nearfar(bb,cc,cache_slot) = &
+               near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+         enddo
+         enddo
+      endif
+
+   end subroutine HMAT_MD_get_trans_nearfar_table
 
 
    subroutine HMAT_MD_find_trans_key(Ndim, group_m, group_n, style, trans_invariant, msh, &

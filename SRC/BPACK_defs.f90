@@ -584,7 +584,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
     !>**** one layer in a Bplus
     type onelplus_MD
-        integer Nbound !< # of corrected blocks that are further decomposed into deeper layers
+        integer(kind=8) Nbound !< # of corrected blocks that are further decomposed into deeper layers
         integer Nbound_loc !< # local # of corrected blocks that are further decomposed into deeper layers
         integer Nboundall
         integer level_butterfly !< # butterlfy level for all blocks on this level
