@@ -1887,8 +1887,9 @@ if(myrank==master_rank){
     exit(1);
   }
 
-    vector<double> slowness_array(Iint*Jint*Kint,2.0);;
+    vector<double> slowness_array;
     if(ivelo==11){
+      slowness_array.resize(Iint*Jint*Kint,2.0);
       string filename_in, str1, str2;
       std::ostringstream streamObj1,streamObj2;
       // cout<<smin_ivelo11 <<" "<<smax_ivelo11<<endl;
@@ -1910,6 +1911,8 @@ if(myrank==master_rank){
       }
       file.read(reinterpret_cast<char*>(slowness_array.data()), Iint*Jint*Kint * sizeof(double));
       file.close();
+    }else{
+      slowness_array.resize(1,2.0);
     }
 
     // generate the chebyshev nodes
@@ -2112,25 +2115,27 @@ if(myrank==master_rank){
       data_geo[(ii) * Ndim+2] = ii*h-W/2+center[2];
     }
 
-    int Ntot_s2s = product(Ns_s,Ndim);
+    int64_t Ntot_s2s = static_cast<int64_t>(Nx_s)*Ny_s*Nz_s;
     double background_s0 = 2.0;
     double scatterer_tol = 1e-12;
     vector<int> scatter_to_tensor;
     vector<double> data_geo_scatterer;
-    for(int kk=0; kk<Nz_s; kk++){
-      for(int jj=0; jj<Ny_s; jj++){
-        for(int ii=0; ii<Nx_s; ii++){
-          double xs = ii*h-L/2+center[0];
-          double ys = jj*h-H/2+center[1];
-          double zs = kk*h-W/2+center[2];
-          int tensor_scalar = kk*Nx_s*Ny_s + jj*Nx_s + ii + 1;
-          bool in_physical = ii < Nx && jj < Ny && kk < Nz;
-          double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
-          if(in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
-            scatter_to_tensor.push_back(tensor_scalar);
-            data_geo_scatterer.push_back(xs);
-            data_geo_scatterer.push_back(ys);
-            data_geo_scatterer.push_back(zs);
+    if(bdiag_precon==1){
+      for(int kk=0; kk<Nz_s; kk++){
+        for(int jj=0; jj<Ny_s; jj++){
+          for(int ii=0; ii<Nx_s; ii++){
+            double xs = ii*h-L/2+center[0];
+            double ys = jj*h-H/2+center[1];
+            double zs = kk*h-W/2+center[2];
+            int tensor_scalar = kk*Nx_s*Ny_s + jj*Nx_s + ii + 1;
+            bool in_physical = ii < Nx && jj < Ny && kk < Nz;
+            double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
+            if(in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
+              scatter_to_tensor.push_back(tensor_scalar);
+              data_geo_scatterer.push_back(xs);
+              data_geo_scatterer.push_back(ys);
+              data_geo_scatterer.push_back(zs);
+            }
           }
         }
       }
@@ -2139,7 +2144,6 @@ if(myrank==master_rank){
 
       if(myrank==0){
         cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
-        cout<<"Scatterer unknowns: "<<Nscatter<<" out of "<<Ntot_s2s<<endl;
       }
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
@@ -2170,6 +2174,7 @@ if(myrank==master_rank){
     std::copy(perms_bf_s2s, perms_bf_s2s + Nmax_s*Ndim, quant_ptr_bf_s2s->_Hperm.begin());
     quant_ptr_bf_s2s->_local_tensor_ids.resize(product(myseg_s2s,Ndim));
     quant_ptr_bf_s2s->_local_scatter_ids.resize(product(myseg_s2s,Ndim),0);
+    long long Nscatter_loc = 0;
     for (int i=0; i<product(myseg_s2s,Ndim); i++){
       int i_new_loc_scalar = i+1;
       int i_new_loc_md[Ndim];
@@ -2179,7 +2184,27 @@ if(myrank==master_rank){
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
       z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
       quant_ptr_bf_s2s->_local_tensor_ids[i] = i_old_scalar;
-      quant_ptr_bf_s2s->_local_scatter_ids[i] = quant_ptr_bf_s2s->ScatterIndexFromTensorScalar(i_old_scalar);
+      if(bdiag_precon==1){
+        quant_ptr_bf_s2s->_local_scatter_ids[i] = quant_ptr_bf_s2s->ScatterIndexFromTensorScalar(i_old_scalar);
+      }else{
+        bool in_physical = in_physical_tensor_domain(i_old_md,Nx,Ny,Nz);
+        double xs = data_geo[(i_old_md[0]-1) * Ndim];
+        double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
+        double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
+        double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
+        bool is_scatterer = in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0));
+        quant_ptr_bf_s2s->_local_scatter_ids[i] = is_scatterer ? 1 : 0;
+        if(is_scatterer) Nscatter_loc++;
+      }
+    }
+    if(bdiag_precon==0){
+      long long Nscatter_glo = 0;
+      MPI_Allreduce(&Nscatter_loc,&Nscatter_glo,1,MPI_LONG_LONG,MPI_SUM,MPI_COMM_WORLD);
+      if(myrank==0){
+        cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
+      }
+    }else if(myrank==0){
+      cout<<"Scatterer unknowns: "<<Nscatter<<" out of "<<Ntot_s2s<<endl;
     }
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
