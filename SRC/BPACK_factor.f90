@@ -244,6 +244,22 @@ endif
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Init:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(2), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_MVP:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     BF_MVP_Gemm:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm_Leaf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Gemm_Leaf:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm_Kernel, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Gemm_Kern:', rtemp
+        call MPI_ALLREDUCE(stats%Flop_BF_MVP_Gemm_Leaf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Flop_Leaf:', rtemp
+        call MPI_ALLREDUCE(stats%Flop_BF_MVP_Gemm_Kernel, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Flop_Kern:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Exchange, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ' BF_MVP_Exchange:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_All2All, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '  BF_MVP_All2All:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Other, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '    BF_MVP_Other:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(3), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Reconstruct:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(4), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -353,6 +369,22 @@ endif
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Init:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(2), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_MVP:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     BF_MVP_Gemm:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm_Leaf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Gemm_Leaf:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Gemm_Kernel, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Gemm_Kern:', rtemp
+        call MPI_ALLREDUCE(stats%Flop_BF_MVP_Gemm_Leaf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Flop_Leaf:', rtemp
+        call MPI_ALLREDUCE(stats%Flop_BF_MVP_Gemm_Kernel, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'BF_MVP_Flop_Kern:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Exchange, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ' BF_MVP_Exchange:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_All2All, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '  BF_MVP_All2All:', rtemp
+        call MPI_ALLREDUCE(stats%Time_BF_MVP_Other, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '    BF_MVP_Other:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(3), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Reconstruct:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(4), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)

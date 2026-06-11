@@ -337,6 +337,7 @@ public:
   F2Cptr* bmat_diags, *stats_diags, *msh_diags, *kerquant_diags, *ptree_diags;
   F2Cptr option_diag, ptree_diag;
   C_QuantApp_BF** quant_ptr_diags;
+  MPI_Comm _elem_extract_comm = MPI_COMM_WORLD;
 
 
 
@@ -897,6 +898,99 @@ inline void C_FuncZmn_BF_S2S(int *m, int *n, _Complex double *val, C2Fptr quant)
 // The extraction sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+
+    int myrank, size;
+    MPI_Comm_size(Q->_elem_extract_comm, &size);
+    MPI_Comm_rank(Q->_elem_extract_comm, &myrank);
+    int64_t idx_row=0;
+    int64_t idx_col=0;
+    int64_t idx_val=0;
+    int NinterNew=0;
+    int nrmax=0;
+    int ncmax=0;
+    int nvalmax=0;
+    vector<int64_t> idx_row_map(*Ninter,0);
+    vector<int64_t> idx_col_map(*Ninter,0);
+    vector<int64_t> idx_val_map(*Ninter,0);
+    vector<int64_t> inter_map(*Ninter,0);
+
+    time_t start, end;
+    time(&start);
+    for (int nn=0;nn<*Ninter;nn++){
+      int pp = pgidx[nn];
+      int nprow = pmaps[pp];
+      int npcol = pmaps[*Npmap+pp];
+      int pid = pmaps[(*Npmap)*2+pp];
+      int nr = rowidx[nn];
+      int nc = colidx[nn];
+
+      if(nprow*npcol==1){
+        if(*Npmap==1 || myrank==pid){
+          idx_row_map[NinterNew]=idx_row;
+          idx_col_map[NinterNew]=idx_col;
+          idx_val_map[NinterNew]=idx_val;
+          idx_val+=nr*nc;
+          inter_map[NinterNew]=nn;
+          NinterNew++;
+        }
+        idx_row+=nr;
+        idx_col+=nc;
+        nrmax = max(nr,nrmax);
+        ncmax = max(nc,ncmax);
+        nvalmax = max(nc*nr,nvalmax);
+      }else{
+        std::cout<<"nprow*npcol>1 in C_FuncZmnBlock_BF_S2S"<<std::endl;
+        exit(0);
+      }
+    }
+    idx_row_map.resize(NinterNew);
+    idx_col_map.resize(NinterNew);
+    idx_val_map.resize(NinterNew);
+    inter_map.resize(NinterNew);
+
+    double *x1,*y1,*z1;
+    double *x2,*y2,*z2;
+    double *fr;
+    #pragma omp parallel private(x1,y1,z1,x2,y2,z2,fr)
+    {
+    #pragma omp for
+    for (int nn1=0;nn1<NinterNew;nn1++){
+      x1= (double*)malloc(nrmax*sizeof(double));
+      y1= (double*)malloc(nrmax*sizeof(double));
+      z1= (double*)malloc(nrmax*sizeof(double));
+      x2= (double*)malloc(ncmax*sizeof(double));
+      y2= (double*)malloc(ncmax*sizeof(double));
+      z2= (double*)malloc(ncmax*sizeof(double));
+      fr= (double*)malloc(nvalmax*3*sizeof(double));
+      int nn =inter_map[nn1];
+      int nr = rowidx[nn];
+      int nc = colidx[nn];
+
+      for (int idxr=0;idxr<nr;idxr++){
+        int m=allrows[idx_row_map[nn1]+idxr];
+        x1[idxr] = Q->_data[(m-1) * Q->_d];
+        y1[idxr] = Q->_data[(m-1) * Q->_d+1];
+        z1[idxr] = Q->_data[(m-1) * Q->_d+2];
+      }
+      for (int idxc=0;idxc<nc;idxc++){
+        int n=allcols[idx_col_map[nn1]+idxc];
+        x2[idxc] = Q->_data[(n-1) * Q->_d];
+        y2[idxc] = Q->_data[(n-1) * Q->_d+1];
+        z2[idxc] = Q->_data[(n-1) * Q->_d+2];
+      }
+
+      assemble_fromD1D2Tau_block_s2s(nn1,nr,nc,x1,x2,y1,y2,z1,z2,alldat_loc,idx_val_map.data(),fr,Q);
+      free(x1);
+      free(y1);
+      free(z1);
+      free(x2);
+      free(y2);
+      free(z2);
+      free(fr);
+    }
+    }
+time(&end);
+timer += difftime(end,start);
 }
 
 
@@ -1190,6 +1284,13 @@ if(myrank==master_rank){
   int nshape=200;
   int bdiag_precon = 0 ;
   int bdiag_level = -1 ;
+  int bdiag_lrlevel = 2;
+  int bdiag_knn = 20;
+  int bdiag_elem_extract = 2;
+  double bdiag_tol_rand = 1e-2;
+  double bdiag_tol_Rdetect = -1.0;
+  double bdiag_sample_para = 2.01;
+  double bdiag_sample_para_outer = 2.01;
 
   FILE *fout1;
 
@@ -1239,6 +1340,13 @@ if(myrank==master_rank){
       {"smax_ivelo11",        required_argument, 0, 33},
       {"bdiag_precon",        required_argument, 0, 34},
       {"bdiag_level",        required_argument, 0, 35},
+      {"bdiag_lrlevel",        required_argument, 0, 37},
+      {"bdiag_knn",        required_argument, 0, 38},
+      {"bdiag_tol_rand",        required_argument, 0, 39},
+      {"bdiag_tol_Rdetect",        required_argument, 0, 40},
+      {"bdiag_sample_para",        required_argument, 0, 41},
+      {"bdiag_sample_para_outer",        required_argument, 0, 42},
+      {"bdiag_elem_extract",        required_argument, 0, 43},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1387,6 +1495,34 @@ if(myrank==master_rank){
     case 35: {
       std::istringstream iss(optarg);
       iss >> bdiag_level;
+    } break;
+    case 37: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_lrlevel;
+    } break;
+    case 38: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_knn;
+    } break;
+    case 39: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_tol_rand;
+    } break;
+    case 40: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_tol_Rdetect;
+    } break;
+    case 41: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_sample_para;
+    } break;
+    case 42: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_sample_para_outer;
+    } break;
+    case 43: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_elem_extract;
     } break;
     default: break;
     }
@@ -1768,14 +1904,20 @@ if(myrank==master_rank){
 	  z_c_bpack_copyoption(&option_bf,&(quant_ptr_bf_s2s->option_diag));
 
 
-  	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", 0); // HODLR
+    if(bdiag_tol_Rdetect < 0.0) bdiag_tol_Rdetect = bdiag_tol_rand*3e-1;
+
+    z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", bdiag_lrlevel);
   	z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 1); // HODLR
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "xyzsort", 1); // KD-tree ordering
-	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "knn", 0); // HODLR requires no knn
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "knn", bdiag_knn);
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "precon", 1); // Direct solver
-	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "elem_extract", 0); // Need to add elem_extract=2 for the matrix solver
+	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "elem_extract", bdiag_elem_extract);
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "RecLR_leaf", 5); // sometimes BACA is not accurate enough
 	  z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "Nmin_leaf", 64); // leaf size in the matrix solver
+    z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "tol_rand", bdiag_tol_rand);
+    z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "tol_Rdetect", bdiag_tol_Rdetect);
+    z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "sample_para", bdiag_sample_para);
+    z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "sample_para_outer", bdiag_sample_para_outer);
 
     quant_ptr_bf_s2s->bmat_diags = new F2Cptr[nblock];
     quant_ptr_bf_s2s->kerquant_diags = new F2Cptr[nblock];
@@ -1850,6 +1992,7 @@ if(myrank==master_rank){
 
     // create hodlr data structures
     quant_ptr_bf_s2s->quant_ptr_diags[bb]=new C_QuantApp_BF(data_geo_diag, Ndim, 0, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    quant_ptr_bf_s2s->quant_ptr_diags[bb]->_elem_extract_comm = quant_ptr_bf_s2s->_diag_comms[bb];
 
 
   	int myseg_diag=0;     // local number of unknowns

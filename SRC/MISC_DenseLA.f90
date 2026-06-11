@@ -2524,15 +2524,89 @@ contains
       if (present(flop)) flop = flops_ztrsm(side, m, n)
    end subroutine ctrsmf90
 
-#ifdef HAVE_MKL
-   subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop)
+#if defined(HAVE_MKL) || defined(HAVE_OPENBLAS_BATCH)
+   subroutine gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop, transa_iwork, transb_iwork)
       character*1::transa_array(:),transb_array(:)
       DT::alpha_array(:),beta_array(:)
       integer::group_size(:),m_array(:),n_array(:),k_array(:),lda_array(:),ldb_array(:),ldc_array(:)
       integer(c_intptr_t)::a_array(:),b_array(:),c_array(:)
       real(kind=8), optional::flop
+      integer(c_int), optional, target, intent(inout) :: transa_iwork(:), transb_iwork(:)
       integer m,n,k,group_count,ii
 
+#ifdef HAVE_OPENBLAS_BATCH
+      integer(c_int), allocatable, target :: transa_c_alloc(:), transb_c_alloc(:)
+      integer(c_int), pointer :: transa_c(:), transb_c(:)
+
+      interface
+#if DAT==0
+         subroutine cblas_gemm_batch(order, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, ngroup, groups) bind(C, name="cblas_zgemm_batch")
+            use iso_c_binding
+            integer(c_int), value :: order, ngroup
+            integer(c_int), intent(in) :: transa(*), transb(*), m(*), n(*), k(*), lda(*), ldb(*), ldc(*), groups(*)
+            complex(c_double_complex), intent(in) :: alpha(*), beta(*)
+            integer(c_intptr_t), intent(in) :: a(*), b(*), c(*)
+         end subroutine cblas_gemm_batch
+#elif DAT==1
+         subroutine cblas_gemm_batch(order, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, ngroup, groups) bind(C, name="cblas_dgemm_batch")
+            use iso_c_binding
+            integer(c_int), value :: order, ngroup
+            integer(c_int), intent(in) :: transa(*), transb(*), m(*), n(*), k(*), lda(*), ldb(*), ldc(*), groups(*)
+            real(c_double), intent(in) :: alpha(*), beta(*)
+            integer(c_intptr_t), intent(in) :: a(*), b(*), c(*)
+         end subroutine cblas_gemm_batch
+#elif DAT==2
+         subroutine cblas_gemm_batch(order, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, ngroup, groups) bind(C, name="cblas_cgemm_batch")
+            use iso_c_binding
+            integer(c_int), value :: order, ngroup
+            integer(c_int), intent(in) :: transa(*), transb(*), m(*), n(*), k(*), lda(*), ldb(*), ldc(*), groups(*)
+            complex(c_float_complex), intent(in) :: alpha(*), beta(*)
+            integer(c_intptr_t), intent(in) :: a(*), b(*), c(*)
+         end subroutine cblas_gemm_batch
+#else
+         subroutine cblas_gemm_batch(order, transa, transb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, ngroup, groups) bind(C, name="cblas_sgemm_batch")
+            use iso_c_binding
+            integer(c_int), value :: order, ngroup
+            integer(c_int), intent(in) :: transa(*), transb(*), m(*), n(*), k(*), lda(*), ldb(*), ldc(*), groups(*)
+            real(c_float), intent(in) :: alpha(*), beta(*)
+            integer(c_intptr_t), intent(in) :: a(*), b(*), c(*)
+         end subroutine cblas_gemm_batch
+#endif
+      end interface
+
+      if (present(transa_iwork) .and. present(transb_iwork)) then
+         if (size(transa_iwork) < group_count .or. size(transb_iwork) < group_count) then
+            error stop 'gemm_batch_mkl: transpose workspace is too small'
+         endif
+         transa_c => transa_iwork(1:group_count)
+         transb_c => transb_iwork(1:group_count)
+      else
+         allocate(transa_c_alloc(group_count), transb_c_alloc(group_count))
+         transa_c => transa_c_alloc
+         transb_c => transb_c_alloc
+      endif
+      do ii = 1, group_count
+         select case (transa_array(ii))
+         case ('N', 'n')
+            transa_c(ii) = 111
+         case ('T', 't')
+            transa_c(ii) = 112
+         case default
+            transa_c(ii) = 113
+         end select
+         select case (transb_array(ii))
+         case ('N', 'n')
+            transb_c(ii) = 111
+         case ('T', 't')
+            transb_c(ii) = 112
+         case default
+            transb_c(ii) = 113
+         end select
+      enddo
+      call cblas_gemm_batch(102_c_int, transa_c, transb_c, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
+      if (allocated(transa_c_alloc)) deallocate(transa_c_alloc)
+      if (allocated(transb_c_alloc)) deallocate(transb_c_alloc)
+#else
 #if DAT==0
       call zgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
 #elif DAT==1
@@ -2542,6 +2616,7 @@ contains
 #elif DAT==3
       call sgemm_batch(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size)
 #endif
+#endif
 
       if (present(flop))then
       flop=0
@@ -2549,7 +2624,7 @@ contains
          m=m_array(ii)
          n=n_array(ii)
          k=k_array(ii)
-         flop = flop + flops_gemm(m, n, k)
+         flop = flop + group_size(ii)*flops_gemm(m, n, k)
       enddo
       endif
    end subroutine gemm_batch_mkl

@@ -25,6 +25,93 @@ module Bplus_Utilities
    use magma_utilities
 contains
 
+   subroutine BFvec_pool_acquire(kerls, block, nrow, ncol)
+
+
+      implicit none
+      type(butterfly_kerl), intent(inout) :: kerls
+      type(butterflymatrix), intent(inout) :: block
+      integer, intent(in) :: nrow, ncol
+      integer :: chunk, old_size, new_size, element_bytes
+      integer(kind=8) :: first, last, nelement, chunk_capacity
+      type(butterfly_vec_pool_chunk), allocatable :: pool_new(:)
+
+      if (associated(block%matrix)) return
+      nelement = int(nrow, kind=8)*int(ncol, kind=8)
+      call assert(nelement > 0, 'BFvec_pool_acquire requires a nonempty matrix')
+
+      !$omp critical(BFvec_pool_allocator)
+      if (.not. associated(block%matrix)) then
+         chunk = kerls%vec_pool_nchunk
+         if (chunk == 0 .or. kerls%vec_pool(chunk)%capacity - kerls%vec_pool(chunk)%used < nelement) then
+            kerls%vec_pool_nchunk = kerls%vec_pool_nchunk + 1
+            chunk = kerls%vec_pool_nchunk
+            if (.not. allocated(kerls%vec_pool)) then
+               allocate(kerls%vec_pool(4))
+            elseif (chunk > size(kerls%vec_pool)) then
+               old_size = size(kerls%vec_pool)
+               new_size = max(chunk, 2*old_size)
+               allocate(pool_new(new_size))
+               pool_new(1:old_size) = kerls%vec_pool
+               call move_alloc(pool_new, kerls%vec_pool)
+            endif
+
+            element_bytes = max(1, storage_size(BPACK_czero)/8)
+            chunk_capacity = max(nelement, int(1024*1024/element_bytes, kind=8))
+            allocate(kerls%vec_pool(chunk)%data(chunk_capacity))
+            kerls%vec_pool(chunk)%used = 0
+            kerls%vec_pool(chunk)%capacity = chunk_capacity
+         endif
+
+         first = kerls%vec_pool(chunk)%used + 1
+         last = first + nelement - 1
+         kerls%vec_pool(chunk)%used = last
+         block%matrix(1:nrow, 1:ncol) => kerls%vec_pool(chunk)%data(first:last)
+      endif
+      !$omp end critical(BFvec_pool_allocator)
+
+   end subroutine BFvec_pool_acquire
+
+
+   subroutine BFvec_level_release(kerls, release_blocks)
+
+
+      implicit none
+      type(butterfly_kerl), intent(inout) :: kerls
+      logical, intent(in), optional :: release_blocks
+      logical :: drop_blocks
+      integer :: i, j, chunk
+
+      drop_blocks = .false.
+      if (present(release_blocks)) drop_blocks = release_blocks
+
+      if (allocated(kerls%blocks)) then
+         do j = 1, size(kerls%blocks, 2)
+            do i = 1, size(kerls%blocks, 1)
+               if (associated(kerls%blocks(i, j)%matrix)) then
+                  if (allocated(kerls%vec_pool)) then
+                     nullify(kerls%blocks(i, j)%matrix)
+                  else
+                     deallocate(kerls%blocks(i, j)%matrix)
+                  endif
+               endif
+            enddo
+         enddo
+      endif
+
+      if (allocated(kerls%vec_pool)) then
+         do chunk = 1, kerls%vec_pool_nchunk
+            if (associated(kerls%vec_pool(chunk)%data)) deallocate(kerls%vec_pool(chunk)%data)
+         enddo
+         deallocate(kerls%vec_pool)
+      endif
+      kerls%vec_pool_nchunk = 0
+
+      if (drop_blocks .and. allocated(kerls%blocks)) deallocate(kerls%blocks)
+
+   end subroutine BFvec_level_release
+
+
    subroutine Bplus_delete(bplus)
 
 
@@ -4573,7 +4660,7 @@ contains
 
    end subroutine BF_exchange_extraction
 
-   subroutine BF_exchange_matvec(blocks, kerls, stats, ptree, level, mode, collect)
+   subroutine BF_exchange_matvec(blocks, kerls, stats, ptree, level, mode, collect, use_pool)
 
 
       implicit none
@@ -4605,10 +4692,14 @@ contains
       integer, allocatable:: statuss(:, :), statusr(:, :)
       integer rr, cc
       character mode, modetrans, collect
+      logical, optional :: use_pool
+      logical :: pooled
 
       real(kind=8)::n1, n2
 
       n1 = MPI_Wtime()
+      pooled = .false.
+      if (present(use_pool)) pooled = use_pool
 
       if (mode == 'R') modetrans = 'C'
       if (mode == 'C') modetrans = 'R'
@@ -4766,10 +4857,11 @@ contains
             sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
             sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
             sendquant(pp)%size = sendquant(pp)%size + 4
-            do i = 1, Nrow*Ncol
-               rr = mod(i - 1, Nrow) + 1
-               cc = (i - 1)/Nrow + 1
-               sendquant(pp)%dat(sendquant(pp)%size + i, 1) = kerls%blocks(ii, jj)%matrix(rr, cc)
+            do cc = 1, Ncol
+               !$omp simd
+               do rr = 1, Nrow
+                  sendquant(pp)%dat(sendquant(pp)%size + (cc - 1)*Nrow + rr, 1) = kerls%blocks(ii, jj)%matrix(rr, cc)
+               enddo
             enddo
             sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
          endif
@@ -4822,13 +4914,18 @@ contains
             i = i + 1
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             if (.not. associated(kerls%blocks(ii, jj)%matrix)) then
-               allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
+               if (pooled) then
+                  call BFvec_pool_acquire(kerls, kerls%blocks(ii, jj), Nrow, Ncol)
+               else
+                  allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
+               endif
                kerls%blocks(ii, jj)%matrix = 0
             endif
-            do j = 1, Nrow*Ncol
-               rr = mod(j - 1, Nrow) + 1
-               cc = (j - 1)/Nrow + 1
-               kerls%blocks(ii, jj)%matrix(rr, cc) = kerls%blocks(ii, jj)%matrix(rr, cc) + recvquant(pp)%dat(i + j, 1)
+            do cc = 1, Ncol
+               !$omp simd
+               do rr = 1, Nrow
+                  kerls%blocks(ii, jj)%matrix(rr, cc) = kerls%blocks(ii, jj)%matrix(rr, cc) + recvquant(pp)%dat(i + (cc - 1)*Nrow + rr, 1)
+               enddo
             enddo
             i = i + Nrow*Ncol
          enddo
@@ -5595,7 +5692,7 @@ contains
 
 
    !>***** switching the matvecs/temporary buffer/kernels from row/col distributions to col/row distributions, kerflag=1: kernels, kerflag=0: matvecs and buffer
-   subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new, kerflag)
+   subroutine BF_all2all_vec_n_ker(blocks, kerls, stats, ptree, nproc, level, mode, mode_new, kerflag, use_pool)
 
 
       implicit none
@@ -5633,8 +5730,12 @@ contains
       integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
       DT, allocatable::sendbufall2all(:), recvbufall2all(:)
       integer::dist, kerflag
+      logical, optional :: use_pool
+      logical :: pooled
 
       n1 = MPI_Wtime()
+      pooled = .false.
+      if (present(use_pool)) pooled = use_pool
 
       call assert(mode /= mode_new, 'only row2col or col2row is supported')
 
@@ -5804,16 +5905,21 @@ contains
          sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
          sendquant(pp)%dat(sendquant(pp)%size + 4, 1) = Ncol
          sendquant(pp)%size = sendquant(pp)%size + 4
-         do i = 1, Nrow*Ncol
-            rr = mod(i - 1, Nrow) + 1
-            cc = (i - 1)/Nrow + 1
-            sendquant(pp)%dat(sendquant(pp)%size + i, 1) = kerls%blocks(ii, jj)%matrix(rr, cc)
+         do cc = 1, Ncol
+            !$omp simd
+            do rr = 1, Nrow
+               sendquant(pp)%dat(sendquant(pp)%size + (cc - 1)*Nrow + rr, 1) = kerls%blocks(ii, jj)%matrix(rr, cc)
+            enddo
          enddo
          sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
-         deallocate (kerls%blocks(ii, jj)%matrix)
+         if (.not. pooled) deallocate (kerls%blocks(ii, jj)%matrix)
       enddo
       enddo
-      deallocate (kerls%blocks)
+      if (pooled) then
+         call BFvec_level_release(kerls, .true.)
+      else
+         deallocate (kerls%blocks)
+      endif
 
       kerls%idx_r = idx_r
       kerls%idx_c = idx_c
@@ -5869,12 +5975,17 @@ contains
             i = i + 1
             Ncol = NINT(dble(recvquant(pp)%dat(i, 1)))
             call assert(.not. associated(kerls%blocks(ii, jj)%matrix), 'receiving dat alreay exists locally')
-            allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
+            if (pooled) then
+               call BFvec_pool_acquire(kerls, kerls%blocks(ii, jj), Nrow, Ncol)
+            else
+               allocate (kerls%blocks(ii, jj)%matrix(Nrow, Ncol))
+            endif
             do cc = 1, Ncol
+               !$omp simd
                do rr = 1, Nrow
-                  i = i + 1
-                  kerls%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i, 1)
+                  kerls%blocks(ii, jj)%matrix(rr, cc) = recvquant(pp)%dat(i + rr, 1)
                enddo
+               i = i + Nrow
             enddo
          enddo
       enddo
@@ -10136,14 +10247,29 @@ contains
       DT :: a, b
       type(proctree)::ptree
       type(Hstat)::stats
+      integer, save :: batch_mode = -1
+      integer :: env_status
+      character(len=16) :: batch_env
 
 #ifdef HAVE_MAGMA
    call BF_block_MVP_dat_batch_magma(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #else
 
-! #ifdef HAVE_MKL
-#if 0
-      call BF_block_MVP_dat_batch_mkl(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+#if defined(HAVE_MKL) || defined(HAVE_OPENBLAS_BATCH)
+      if (batch_mode == -1) then
+         batch_env = ''
+         call get_environment_variable('BPACK_BF_MVP_BATCH', batch_env, status=env_status)
+         if (env_status == 0 .and. trim(batch_env) == '1') then
+            batch_mode = 1
+         else
+            batch_mode = 0
+         endif
+      endif
+      if (batch_mode == 1) then
+         call BF_block_MVP_dat_batch_mkl(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+      else
+         call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
+      endif
 #else
       call BF_block_MVP_dat_nonbatch(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 #endif
@@ -10170,6 +10296,8 @@ contains
       integer pgno, comm, ierr
       type(Hstat)::stats
       real(kind=8)::flop, flops,n1,n2,n3,n4,n5,n6
+      real(kind=8)::t_gemm, t_gemm_leaf, t_gemm_kernel, t_exchange, t_all2all
+      real(kind=8)::flops_gemm_leaf, flops_gemm_kernel
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
 
       type(butterfly_vec) :: BFvec
@@ -10180,6 +10308,13 @@ contains
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
       n1 = MPI_Wtime()
+      t_gemm = 0d0
+      t_gemm_leaf = 0d0
+      t_gemm_kernel = 0d0
+      t_exchange = 0d0
+      t_all2all = 0d0
+      flops_gemm_leaf = 0d0
+      flops_gemm_kernel = 0d0
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -10199,32 +10334,52 @@ contains
          rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
          call assert(rank > 0, 'rank incorrect in blocks%ButterflyU')
          allocate (matrixtemp(rank, Nrnd))
-         matrixtemp = 0
          if (ptree%pgrp(pgno)%nproc > 1) then
             allocate (matrixtemp1(rank, Nrnd))
-            matrixtemp1 = 0
          endif
          if (chara == 'N') then !Vout=U*V^T*Vin
+            n3 = MPI_Wtime()
             call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             if (ptree%pgrp(pgno)%nproc > 1) then
                call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               n3 = MPI_Wtime()
                call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
             else
+               n3 = MPI_Wtime()
                call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
             endif
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
          else if (chara == 'T') then !Vout=V*U^T*Vin
+            n3 = MPI_Wtime()
             call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             if (ptree%pgrp(pgno)%nproc > 1) then
                call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               n3 = MPI_Wtime()
                call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
             else
+               n3 = MPI_Wtime()
                call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
             endif
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
          endif
 
@@ -10254,17 +10409,21 @@ contains
 
          num_vectors = Nrnd
 
+#ifndef NDEBUG
          if (BF_checkNAN(blocks)) then
             write (*, *) 'NAN in 0 BF_block_MVP_dat'
             stop
          end if
+#endif
 
          if (chara == 'N') then
             n5 = MPI_Wtime()
+#ifndef NDEBUG
             if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
             end if
+#endif
 
             level_butterfly = blocks%level_butterfly
             num_blocks = 2**level_butterfly
@@ -10313,30 +10472,26 @@ contains
                      flops = 0
                      n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
-                     !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
+                     !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
 #endif
                      do j = 1, blocks%ButterflyV%nblk_loc
                         index_j = (j - 1)*inc_c + idx_c
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
                         rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
                         nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
-                        allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
-                        BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(1), BFvec%vec(1)%blocks(1, index_j_loc_s), rank, num_vectors)
 
                         call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, random1(1 + arr_acc_n(j), 1), ldi, BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix, rank, 'T', 'N', rank, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
                      enddo
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_leaf = t_gemm_leaf + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -10358,7 +10513,7 @@ contains
                      n3 = MPI_Wtime()
                      flops = 0
 #ifdef HAVE_TASKLOOP
-                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
 #endif
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
@@ -10380,55 +10535,47 @@ contains
                         nn2 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
                         mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
 
-                        allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                        BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
 
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn1, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix, nn2, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn2, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
                      enddo
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
-               do j = 1, BFvec%vec(level)%nc
-                  do i = 1, BFvec%vec(level)%nr
-                     if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level))
 
                ! n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
+            n3 = MPI_Wtime()
             if (level_half + 1 /= 0) then
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0, .true.)
             else
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0, .true.)
             endif
+            n4 = MPI_Wtime()
+            t_all2all = t_all2all + n4 - n3
 
             n5 = MPI_Wtime()
             do level = level_half + 1, level_butterfly + 1
@@ -10484,22 +10631,23 @@ contains
                         mm = size(blocks%ButterflyU%blocks(1)%matrix, 1)
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                         allocate (matrixtemp(rank, num_vectors))
-                        matrixtemp = 0
                         if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
                            index_i = idx_r0
                            index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
                            matrixtemp = BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix
                         endif
                         call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
-                        allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
-                        BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
+                        n3 = MPI_Wtime()
                         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, random2(1 + arr_acc_m(1), 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
+                        n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
-                     n3 = MPI_Wtime()
+                        n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop)
+                        !$omp taskloop default(shared) private(i,index_i,index_i_loc_s,rank,mm,flop) reduction(+:flops)
 #endif
                         do i = 1, nr0
                            index_i = (i - 1)*inc_r0 + idx_r0
@@ -10507,26 +10655,20 @@ contains
 
                            rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                            mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                           allocate (BFvec%vec(level + 1)%blocks(i, 1)%matrix(mm, num_vectors))
-                           BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
-
                            call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, rank, random2(1 + arr_acc_m(i), 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
                         enddo
 #ifdef HAVE_TASKLOOP
                         !$omp end taskloop
 #endif
                         n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         ! time_tmp = time_tmp + n4-n3
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                   else
 
                      n3 = MPI_Wtime()
@@ -10535,7 +10677,7 @@ contains
                      if (nc0 > 1 .and. inc_c0 == 1) then  ! this special treatment makes sure two threads do not write to the same address simultaneously
                         ! n1 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+                        !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,index_j_loc0,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop,ctemp) reduction(+:flops)
 #endif
                         do index_ij = 1, nr0*nc0/2
                            index_j_loc0 = (index_ij - 1)/nr0 + 1
@@ -10558,34 +10700,26 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                               if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                                 BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                              !$omp atomic
-#endif
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, ctemp, flop=flop)
                               flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                              !$omp end atomic
-#endif
 
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
                               ! !$omp critical
                               if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix(mm, num_vectors))
-                                 BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s), mm, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
                               ! !$omp end critical
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                              !$omp atomic
-#endif
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, ctemp, flop=flop)
                               flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                              !$omp end atomic
-#endif
                            enddo
                         enddo
 #ifdef HAVE_TASKLOOP
@@ -10597,7 +10731,7 @@ contains
 
                      else
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+                        !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop,ctemp) reduction(+:flops)
 #endif
                         do index_ij = 1, nr0*nc0
                            index_j_loc = (index_ij - 1)/nr0 + 1       !index_i_loc is local index of column-wise ordering at current level
@@ -10618,34 +10752,26 @@ contains
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                            if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                              BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, ctemp, flop=flop)
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 2)
                            ! !$omp critical
                            if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix(mm, num_vectors))
-                              BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s), mm, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            ! !$omp end critical
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s)%matrix, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, ctemp, flop=flop)
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
 
                         enddo
 #ifdef HAVE_TASKLOOP
@@ -10654,35 +10780,41 @@ contains
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
 
-               do j = 1, BFvec%vec(level)%nc
-                  do i = 1, BFvec%vec(level)%nr
-                     if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level))
 
                if (level /= level_butterfly + 1) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
 
+#ifndef NDEBUG
             if (isnanMat(random2(1:M,1:1),M,1)) then
                write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
             !deallocate (BFvec%vec)
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
          elseif (chara == 'T') then
+#ifndef NDEBUG
             if (isnanMat(random1(1:M,1:1),M,1)) then
                write (*, *) 'NAN in 3 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
 
             level_butterfly = blocks%level_butterfly
             num_blocks = 2**level_butterfly
@@ -10731,7 +10863,7 @@ contains
                      flops = 0
                      n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
-                     !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s)
+                     !$omp taskloop default(shared) private(i,rank,mm,flop,index_i,index_i_loc_s) reduction(+:flops)
 #endif
                      do i = 1, blocks%ButterflyU%nblk_loc
                         index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
@@ -10739,25 +10871,21 @@ contains
 
                         rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                         mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                        allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
-                        BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(1), BFvec%vec(1)%blocks(index_i_loc_s, 1), rank, num_vectors)
 
                         call gemmf90(blocks%ButterflyU%blocks(i)%matrix, mm, random1(1 + arr_acc_m(i), 1), ldi, BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix, rank, 'T', 'N', rank, num_vectors, mm, BPACK_cone, BPACK_czero, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
 
                      enddo
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_leaf = t_gemm_leaf + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
@@ -10778,7 +10906,7 @@ contains
                      n3=MPI_Wtime()
                      flops = 0
 #ifdef HAVE_TASKLOOP
-                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
+                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
 #endif
                      do index_ij = 1, nr*nc
                         index_j_loc = (index_ij - 1)/nr + 1
@@ -10799,53 +10927,45 @@ contains
                         mm1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                         mm2 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, 1)
                         nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
-                        allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                        BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
 
-                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
+                        call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm1, BPACK_cone, BPACK_czero, flop=flop)
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
                         call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k + 1, index_j_loc_k)%matrix, mm2, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc + 1, index_jj_loc)%matrix, mm2, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm2, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                        !$omp atomic
-#endif
                         flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                        !$omp end atomic
-#endif
 
                      enddo
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
-               do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
-                  do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-                     if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level_butterfly - level + 1))
 
                if (level_half + 1 /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
+            n3 = MPI_Wtime()
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0, .true.)
             else
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0, .true.)
             endif
+            n4 = MPI_Wtime()
+            t_all2all = t_all2all + n4 - n3
 
             n5 = MPI_Wtime()
             do level = level_half, 0, -1
@@ -10899,12 +11019,10 @@ contains
                      flops = 0
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
-                     n3=MPI_Wtime()
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
                         nn = size(blocks%ButterflyV%blocks(1)%matrix, 1)
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                         allocate (matrixtemp(rank, num_vectors))
-                        matrixtemp = 0
                         if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
                            index_j = blocks%ButterflyV%idx
                            index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
@@ -10912,14 +11030,17 @@ contains
                            matrixtemp = BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix
                         endif
                         call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
-                        allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
-                        BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
+                        n3 = MPI_Wtime()
                         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, random2(1 + arr_acc_n(1), 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
+                        n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
+                        n3 = MPI_Wtime()
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s)
+                        !$omp taskloop default(shared) private(j,rank,nn,flop,index_j,index_j_loc_s) reduction(+:flops)
 #endif
                         do j = 1, blocks%ButterflyV%nblk_loc
                            index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
@@ -10927,23 +11048,18 @@ contains
 
                            nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                            rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
-                           allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
-                           BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
                            call gemmf90(blocks%ButterflyV%blocks(j)%matrix, nn, BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, rank, random2(1 + arr_acc_n(j), 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
                         enddo
 #ifdef HAVE_TASKLOOP
                         !$omp end taskloop
 #endif
+                        n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
-                     n4 = MPI_Wtime()
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                      ! time_tmp = time_tmp + n4-n3
                   else
 
@@ -10951,7 +11067,7 @@ contains
                      n3 = MPI_Wtime()
                      if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop)
+                        !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,index_i_loc0,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
 #endif
                         do index_ij = 1, nr0*nc0/2
                            index_i_loc0 = (index_ij - 1)/nc0 + 1
@@ -10974,35 +11090,27 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                               if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                                 BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
                               ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                              !$omp atomic
-#endif
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, ctemp, flop=flop)
                               flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                              !$omp end atomic
-#endif
 
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
                               ! !$omp critical
                               if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
-                                 allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
-                                 BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1), nn, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
                               ! !$omp end critical
-                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                              !$omp atomic
-#endif
+                              call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, ctemp, flop=flop)
                               flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                              !$omp end atomic
-#endif
                            enddo
                         enddo
 #ifdef HAVE_TASKLOOP
@@ -11010,7 +11118,7 @@ contains
 #endif
                      else
 #ifdef HAVE_TASKLOOP
-                        !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
+                        !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop) reduction(+:flops)
 #endif
                         do index_ij = 1, nr0*nc0
                            index_j_loc = (index_ij - 1)/nr0 + 1
@@ -11031,33 +11139,25 @@ contains
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                            if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                              BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            ! write(*,*)index_ii_loc,index_jj_loc,shape(BFvec%vec(level_butterfly-level+1)%blocks),index_i_loc_s,index_j_loc_s,shape(BFvec%vec(level_butterfly-level+2)%blocks),'lv:',level,shape(blocks%ButterflyKerl(level)%blocks)
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, ctemp, flop=flop)
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
 
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
                            if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
-                              allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
-                              BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1), nn, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
-                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, BPACK_cone, flop=flop)
-#ifdef HAVE_TASKLOOP
-                           !$omp atomic
-#endif
+                           call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix, nn, 'T', 'N', nn, num_vectors, mm, BPACK_cone, ctemp, flop=flop)
                            flops = flops + flop
-#ifdef HAVE_TASKLOOP
-                           !$omp end atomic
-#endif
                         enddo
 #ifdef HAVE_TASKLOOP
                         !$omp end taskloop
@@ -11066,38 +11166,36 @@ contains
                      endif
 
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
 
-               do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
-                  do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-                     if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level_butterfly - level + 1))
 
                if (level /= 0) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
 
+#ifndef NDEBUG
             if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
          endif
 
          do level = 0, level_butterfly + 2
-            do j = 1, BFvec%vec(level)%nc
-               do i = 1, BFvec%vec(level)%nr
-                  if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-               enddo
-            enddo
-
-            if (allocated(BFvec%vec(level)%blocks))deallocate (BFvec%vec(level)%blocks)
+            call BFvec_level_release(BFvec%vec(level), .true.)
          enddo
 
          deallocate (BFvec%vec)
@@ -11110,6 +11208,14 @@ contains
       endif
 
       n2 = MPI_Wtime()
+      stats%Time_BF_MVP_Gemm = stats%Time_BF_MVP_Gemm + t_gemm
+      stats%Time_BF_MVP_Gemm_Leaf = stats%Time_BF_MVP_Gemm_Leaf + t_gemm_leaf
+      stats%Time_BF_MVP_Gemm_Kernel = stats%Time_BF_MVP_Gemm_Kernel + t_gemm_kernel
+      stats%Time_BF_MVP_Exchange = stats%Time_BF_MVP_Exchange + t_exchange
+      stats%Time_BF_MVP_All2All = stats%Time_BF_MVP_All2All + t_all2all
+      stats%Time_BF_MVP_Other = stats%Time_BF_MVP_Other + max(0d0, n2 - n1 - t_gemm - t_exchange - t_all2all)
+      stats%Flop_BF_MVP_Gemm_Leaf = stats%Flop_BF_MVP_Gemm_Leaf + flops_gemm_leaf
+      stats%Flop_BF_MVP_Gemm_Kernel = stats%Flop_BF_MVP_Gemm_Kernel + flops_gemm_kernel
       ! time_tmp = time_tmp + n2-n1
       time_tmp2 = time_tmp2 + n2-n1
       return
@@ -11118,7 +11224,7 @@ contains
 
 
 
-#ifdef HAVE_MKL
+#if defined(HAVE_MKL) || defined(HAVE_OPENBLAS_BATCH)
 
    subroutine BF_block_MVP_dat_batch_mkl(blocks, chara, M, N, Nrnd, random1, ldi, random2, ldo, a, b, ptree, stats)
 
@@ -11140,23 +11246,33 @@ contains
       integer pgno, comm, ierr
       type(Hstat)::stats
       real(kind=8)::flop, flops,n1,n2,n3,n4,n5,n6
+      real(kind=8)::t_gemm, t_gemm_leaf, t_gemm_kernel, t_exchange, t_all2all
+      real(kind=8)::flops_gemm_leaf, flops_gemm_kernel
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
       integer*8:: cnta,cntb,cntc
       character*1,allocatable::transa_array(:),transb_array(:),transc_array(:)
       DT,allocatable::alpha_array(:),beta_array(:)
       integer,allocatable::group_size(:),m_array(:),n_array(:),k_array(:),lda_array(:),ldb_array(:),ldc_array(:)
       integer(c_intptr_t),allocatable::a_array(:),b_array(:),c_array(:)
-      integer group_count,cnt
+      integer(c_int),allocatable::transa_iwork(:),transb_iwork(:)
+      integer group_count,cnt,batch_capacity
 
       type(butterfly_vec) :: BFvec
       integer ldi,ldo
       DT,target :: random1(ldi, *), random2(ldo, *)
       DT, pointer :: random1_p(:, :),random2_p(:, :)
-      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
+      DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :)
 
       integer, allocatable:: arr_acc_m(:), arr_acc_n(:)
 
       n1 = MPI_Wtime()
+      t_gemm = 0d0
+      t_gemm_leaf = 0d0
+      t_gemm_kernel = 0d0
+      t_exchange = 0d0
+      t_all2all = 0d0
+      flops_gemm_leaf = 0d0
+      flops_gemm_kernel = 0d0
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -11172,39 +11288,86 @@ contains
          return
       endif
 
+      if (level_butterfly > 0) then
+         batch_capacity = max(1, blocks%ButterflyV%nblk_loc, blocks%ButterflyU%nblk_loc)
+         do level = 1, blocks%level_half
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'R')
+            if (nr > 1 .and. inc_r == 1) then
+               batch_capacity = max(batch_capacity, nr*nc)
+            else
+               batch_capacity = max(batch_capacity, 2*nr*nc)
+            endif
+         enddo
+         do level = blocks%level_half + 1, level_butterfly
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r, inc_r, nr, idx_c, inc_c, nc, 'C')
+            if (nc > 1 .and. inc_c == 1) then
+               batch_capacity = max(batch_capacity, nr*nc)
+            else
+               batch_capacity = max(batch_capacity, 2*nr*nc)
+            endif
+         enddo
+         allocate(transa_array(batch_capacity), transb_array(batch_capacity), alpha_array(batch_capacity), beta_array(batch_capacity))
+         allocate(group_size(batch_capacity), m_array(batch_capacity), n_array(batch_capacity), k_array(batch_capacity))
+         allocate(lda_array(batch_capacity), ldb_array(batch_capacity), ldc_array(batch_capacity))
+         allocate(a_array(batch_capacity), b_array(batch_capacity), c_array(batch_capacity))
+         allocate(transa_iwork(batch_capacity), transb_iwork(batch_capacity))
+      endif
+
       if (level_butterfly == 0) then
          rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
          call assert(rank > 0, 'rank incorrect in blocks%ButterflyU')
          allocate (matrixtemp(rank, Nrnd))
-         matrixtemp = 0
-         allocate (matrixtemp1(rank, Nrnd))
-         matrixtemp1 = 0
-         ! for implementation simplicity, MPI_ALLREDUCE is used even when nproc==1
+         if (ptree%pgrp(pgno)%nproc > 1) then
+            allocate (matrixtemp1(rank, Nrnd))
+         endif
          if (chara == 'N') then !Vout=U*V^T*Vin
-            allocate (Vout_tmp(M,Nrnd))
-            Vout_tmp = 0
+            n3 = MPI_Wtime()
             call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyV%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
-            call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, M, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
+            if (ptree%pgrp(pgno)%nproc > 1) then
+               call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               n3 = MPI_Wtime()
+               call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            else
+               n3 = MPI_Wtime()
+               call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyU%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            endif
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2(1:M,1:Nrnd) = b*random2(1:M,1:Nrnd) + a*Vout_tmp
          else if (chara == 'T') then !Vout=V*U^T*Vin
-            allocate (Vout_tmp(N,Nrnd))
-            Vout_tmp = 0
+            n3 = MPI_Wtime()
             call gemmf90(blocks%ButterflyU%blocks(1)%matrix, size(blocks%ButterflyU%blocks(1)%matrix, 1), random1, ldi, matrixtemp, rank, 'T', 'N', rank, Nrnd, size(blocks%ButterflyU%blocks(1)%matrix, 1), BPACK_cone, BPACK_czero, flop)
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
-            call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
-            call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, Vout_tmp, N, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, BPACK_cone, BPACK_czero, flop)
+            if (ptree%pgrp(pgno)%nproc > 1) then
+               call MPI_ALLREDUCE(matrixtemp, matrixtemp1, rank*Nrnd, MPI_DT, MPI_SUM, comm, ierr)
+               n3 = MPI_Wtime()
+               call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp1, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            else
+               n3 = MPI_Wtime()
+               call gemmf90(blocks%ButterflyV%blocks(1)%matrix, size(blocks%ButterflyV%blocks(1)%matrix, 1), matrixtemp, rank, random2, ldo, 'N', 'N', size(blocks%ButterflyV%blocks(1)%matrix, 1), Nrnd, rank, a, b, flop)
+            endif
+            n4 = MPI_Wtime()
+            t_gemm = t_gemm + n4 - n3
+            t_gemm_leaf = t_gemm_leaf + n4 - n3
+            flops_gemm_leaf = flops_gemm_leaf + flop
             stats%Flop_Tmp = stats%Flop_Tmp + flop
-            random2(1:N,1:Nrnd) = b*random2(1:N,1:Nrnd) + a*Vout_tmp
          endif
 
          deallocate (matrixtemp)
-         deallocate (matrixtemp1)
-         deallocate (Vout_tmp)
+         if (allocated(matrixtemp1)) deallocate (matrixtemp1)
 
       else
 
@@ -11228,17 +11391,21 @@ contains
 
          num_vectors = Nrnd
 
+#ifndef NDEBUG
          if (BF_checkNAN(blocks)) then
             write (*, *) 'NAN in 0 BF_block_MVP_dat'
             stop
          end if
+#endif
 
          if (chara == 'N') then
 
+#ifndef NDEBUG
             if (isnanMat(random1(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 1 BF_block_MVP_dat'
                stop
             end if
+#endif
 
             level_butterfly = blocks%level_butterfly
             num_blocks = 2**level_butterfly
@@ -11289,12 +11456,11 @@ contains
 
                      n3 = MPI_Wtime()
                      group_count=blocks%ButterflyV%nblk_loc
-                     allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                     transa_array='T'
-                     transb_array='N'
-                     alpha_array=BPACK_cone
-                     beta_array=BPACK_cone
-                     group_size=1
+                     transa_array(1:group_count)='T'
+                     transb_array(1:group_count)='N'
+                     alpha_array(1:group_count)=BPACK_cone
+                     beta_array(1:group_count)=BPACK_czero
+                     group_size(1:group_count)=1
 
                      cnt=0
                      do j = 1, blocks%ButterflyV%nblk_loc
@@ -11302,8 +11468,7 @@ contains
                         index_j_loc_s = (index_j - BFvec%vec(level + 1)%idx_c)/BFvec%vec(level + 1)%inc_c + 1
                         rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
                         nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
-                        allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(rank, num_vectors))
-                        BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(1), BFvec%vec(1)%blocks(1, index_j_loc_s), rank, num_vectors)
                         cnt=cnt+1
                         m_array(cnt)=rank
                         n_array(cnt)=num_vectors
@@ -11315,11 +11480,13 @@ contains
                         b_array(cnt)=LOC(random1(1 + arr_acc_n(j), 1))
                         c_array(cnt)=LOC(BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(1,1))
                      enddo
-                     call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
 
-                     deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_leaf = t_gemm_leaf + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
 
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
@@ -11341,14 +11508,17 @@ contains
 
                      n3 = MPI_Wtime()
                      group_count=nr*nc
-                     allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                     transa_array='N'
-                     transb_array='N'
-                     alpha_array=BPACK_cone
-                     beta_array=BPACK_cone
-                     group_size=1
+                     transa_array(1:group_count)='N'
+                     transb_array(1:group_count)='N'
+                     alpha_array(1:group_count)=BPACK_cone
+                     group_size(1:group_count)=1
 
                      do j=1,2
+                        if (j == 1) then
+                           beta_array = BPACK_czero
+                        else
+                           beta_array = BPACK_cone
+                        endif
                         cnt=0
                         do index_ij = 1, nr*nc
                            index_j_loc = (index_ij - 1)/nr + 1
@@ -11370,8 +11540,7 @@ contains
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
 
                            if(.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix))then
-                              allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                              BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
                            endif
                            cnt=cnt+1
                            m_array(cnt)=mm
@@ -11384,36 +11553,40 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+j-1)%matrix(1,1))
                            c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
+                        flops_gemm_kernel = flops_gemm_kernel + flops
                      enddo
-                     deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
-               do j = 1, BFvec%vec(level)%nc
-                  do i = 1, BFvec%vec(level)%nr
-                     if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level))
 
                ! n2 = MPI_Wtime()
                ! time_tmp = time_tmp + n2-n1
 
                if (level_half /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'B', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
 
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
+            n3 = MPI_Wtime()
             if (level_half + 1 /= 0) then
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'R', 'C', 0, .true.)
             else
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'R', 'C', 0, .true.)
             endif
+            n4 = MPI_Wtime()
+            t_all2all = t_all2all + n4 - n3
 
             n5 = MPI_Wtime()
             do level = level_half + 1, level_butterfly + 1
@@ -11466,17 +11639,17 @@ contains
                         mm = size(blocks%ButterflyU%blocks(1)%matrix, 1)
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
                         allocate (matrixtemp(rank, num_vectors))
-                        matrixtemp = 0
                         if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
                            index_i = idx_r0
                            index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
                            matrixtemp = BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix
                         endif
                         call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
-                        allocate (BFvec%vec(level + 1)%blocks(1, 1)%matrix(mm, num_vectors))
-                        BFvec%vec(level + 1)%blocks(1, 1)%matrix = 0
+                        n3 = MPI_Wtime()
                         call gemmf90(blocks%ButterflyU%blocks(1)%matrix, mm, matrixtemp, rank, random2(arr_acc_m(1)+1, 1), ldo, 'N', 'N', mm, num_vectors, rank, a, b, flop=flop)
-
+                        n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
@@ -11484,12 +11657,11 @@ contains
 
                         n3 = MPI_Wtime()
                         group_count=nr0
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='N'
-                        transb_array='N'
-                        alpha_array=a
-                        beta_array=b
-                        group_size=1
+                        transa_array(1:group_count)='N'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=a
+                        beta_array(1:group_count)=b
+                        group_size(1:group_count)=1
                         cnt=0
                         do i = 1, nr0
 
@@ -11498,9 +11670,6 @@ contains
 
                            rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                            mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                           allocate (BFvec%vec(level + 1)%blocks(i, 1)%matrix(mm, num_vectors))
-                           BFvec%vec(level + 1)%blocks(i, 1)%matrix = 0
-
                            cnt=cnt+1
 
                            m_array(cnt)=mm
@@ -11513,24 +11682,24 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix(1,1))
                            c_array(cnt)=LOC(random2(arr_acc_m(i)+1, 1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
 
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                         n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         ! time_tmp = time_tmp + n4-n3
 
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                   else
                      n3=MPI_Wtime()
                      if (nc0 > 1 .and. inc_c0 == 1) then
                         group_count=nr0*nc0
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='N'
-                        transb_array='N'
-                        alpha_array=BPACK_cone
-                        beta_array=BPACK_cone
-                        group_size=1
+                        transa_array(1:group_count)='N'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=BPACK_cone
+                        group_size(1:group_count)=1
 
 
                         do jj=1,2
@@ -11556,10 +11725,13 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                               if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                                 BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
                               cnt = cnt +1
+                              beta_array(cnt)=ctemp
                               m_array(cnt)=mm
                               n_array(cnt)=num_vectors
                               k_array(cnt)=nn
@@ -11574,10 +11746,13 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
                               if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(mm, num_vectors))
-                                 BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s), mm, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
                               cnt = cnt +1
+                              beta_array(cnt)=ctemp
                               m_array(cnt)=mm
                               n_array(cnt)=num_vectors
                               k_array(cnt)=nn
@@ -11588,20 +11763,18 @@ contains
                               b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
                               c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
                            enddo
-                           call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                           call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                            stats%Flop_Tmp = stats%Flop_Tmp + flops
+                           flops_gemm_kernel = flops_gemm_kernel + flops
                         enddo
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
 
                      else
 
                         group_count=nr0*nc0*2
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='N'
-                        transb_array='N'
-                        alpha_array=BPACK_cone
-                        beta_array=BPACK_cone
-                        group_size=1
+                        transa_array(1:group_count)='N'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=BPACK_cone
+                        group_size(1:group_count)=1
 
                         cnt=0
                         do index_ij = 1, nr0*nc0
@@ -11626,10 +11799,13 @@ contains
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                            ! !$omp critical
                            if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix(mm, num_vectors))
-                              BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s, index_j_loc_s), mm, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            cnt = cnt +1
+                           beta_array(cnt)=ctemp
                            m_array(cnt)=mm
                            n_array(cnt)=num_vectors
                            k_array(cnt)=nn
@@ -11645,10 +11821,13 @@ contains
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, 2)
                            ! !$omp critical
                            if (.not. associated(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(mm, num_vectors))
-                              BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level + 1), BFvec%vec(level + 1)%blocks(index_i_loc_s + 1, index_j_loc_s), mm, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            cnt = cnt +1
+                           beta_array(cnt)=ctemp
                            m_array(cnt)=mm
                            n_array(cnt)=num_vectors
                            k_array(cnt)=nn
@@ -11659,31 +11838,34 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
                            c_array(cnt)=LOC(BFvec%vec(level + 1)%blocks(index_i_loc_s+1, index_j_loc_s)%matrix(1,1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
+                        flops_gemm_kernel = flops_gemm_kernel + flops
 
                      endif
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
 
-               do j = 1, BFvec%vec(level)%nc
-                  do i = 1, BFvec%vec(level)%nr
-                     if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level))
 
                if (level /= level_butterfly + 1) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level + 1), stats, ptree, level, 'R', 'R', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
 
+#ifndef NDEBUG
             if (isnanMat(random2(1:M,1:1),M,1)) then
                write (*, *) ptree%MyID, 'NAN in 2 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
             !deallocate (BFvec%vec)
 
             n6 = MPI_Wtime()
@@ -11692,10 +11874,12 @@ contains
 
 
          elseif (chara == 'T') then
+#ifndef NDEBUG
             if (isnanMat(random1(1:M,1:1),M,1)) then
                write (*, *) 'NAN in 3 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
 
             level_butterfly = blocks%level_butterfly
             num_blocks = 2**level_butterfly
@@ -11743,12 +11927,11 @@ contains
                   if (level == level_butterfly + 1) then
                      n3=MPI_Wtime()
                      group_count=blocks%ButterflyU%nblk_loc
-                     allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                     transa_array='T'
-                     transb_array='N'
-                     alpha_array=BPACK_cone
-                     beta_array=BPACK_cone
-                     group_size=1
+                     transa_array(1:group_count)='T'
+                     transb_array(1:group_count)='N'
+                     alpha_array(1:group_count)=BPACK_cone
+                     beta_array(1:group_count)=BPACK_czero
+                     group_size(1:group_count)=1
                      cnt=0
                      do i = 1, blocks%ButterflyU%nblk_loc
 
@@ -11757,8 +11940,7 @@ contains
 
                         rank = size(blocks%ButterflyU%blocks(i)%matrix, 2)
                         mm = size(blocks%ButterflyU%blocks(i)%matrix, 1)
-                        allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(rank, num_vectors))
-                        BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = 0
+                        call BFvec_pool_acquire(BFvec%vec(1), BFvec%vec(1)%blocks(index_i_loc_s, 1), rank, num_vectors)
                         cnt=cnt+1
                         m_array(cnt)=rank
                         n_array(cnt)=num_vectors
@@ -11770,11 +11952,12 @@ contains
                         b_array(cnt)=LOC(random1(1 + arr_acc_m(i), 1))
                         c_array(cnt)=LOC(BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(1,1))
                      enddo
-                     call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                     call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      n4 = MPI_Wtime()
-                     ! time_tmp = time_tmp + n4-n3
-                     deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_leaf = t_gemm_leaf + n4 - n3
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                      call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
                      if (ptree%pgrp(pgno_sub)%nproc > 1) then
                         rank = size(blocks%ButterflyU%blocks(1)%matrix, 2)
@@ -11793,14 +11976,17 @@ contains
                   else
                      n3=MPI_Wtime()
                      group_count=nr*nc
-                     allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                     transa_array='T'
-                     transb_array='N'
-                     alpha_array=BPACK_cone
-                     beta_array=BPACK_cone
-                     group_size=1
+                     transa_array(1:group_count)='T'
+                     transb_array(1:group_count)='N'
+                     alpha_array(1:group_count)=BPACK_cone
+                     group_size(1:group_count)=1
 
                      do i=1,2
+                        if (i == 1) then
+                           beta_array = BPACK_czero
+                        else
+                           beta_array = BPACK_cone
+                        endif
                         cnt=0
                         do index_ij = 1, nr*nc
 
@@ -11822,8 +12008,7 @@ contains
                            mm1 = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k +i-1, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                            if(.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix))then
-                              allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                              BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
                            endif
                            cnt=cnt+1
                            m_array(cnt)=nn
@@ -11836,32 +12021,36 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+i-1, index_jj_loc)%matrix(1,1))
                            c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(1,1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
+                        flops_gemm_kernel = flops_gemm_kernel + flops
                      enddo
-                     deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
-               do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
-                  do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-                     if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level_butterfly - level + 1))
 
                if (level_half + 1 /= level) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'B', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
+            n3 = MPI_Wtime()
             if (level_half /= level_butterfly + 1) then
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0, .true.)
             else
-               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0)
+               call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half, 'C', 'R', 0, .true.)
             endif
+            n4 = MPI_Wtime()
+            t_all2all = t_all2all + n4 - n3
 
             n5 = MPI_Wtime()
             do level = level_half, 0, -1
@@ -11917,7 +12106,6 @@ contains
                         nn = size(blocks%ButterflyV%blocks(1)%matrix, 1)
                         rank = size(blocks%ButterflyV%blocks(1)%matrix, 2)
                         allocate (matrixtemp(rank, num_vectors))
-                        matrixtemp = 0
                         if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
                            index_j = blocks%ButterflyV%idx
                            index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
@@ -11925,28 +12113,27 @@ contains
                            matrixtemp = BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix
                         endif
                         call MPI_Bcast(matrixtemp, rank*num_vectors, MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
-                        allocate (BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix(nn, num_vectors))
-                        BFvec%vec(level_butterfly + 2)%blocks(1, 1)%matrix = 0
+                        n3 = MPI_Wtime()
                         call gemmf90(blocks%ButterflyV%blocks(1)%matrix, nn, matrixtemp, rank, random2(arr_acc_n(1)+1, 1), ldo, 'N', 'N', nn, num_vectors, rank, a, b, flop=flop)
+                        n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         flops = flops + flop
                         deallocate (matrixtemp)
                      else
                         n3=MPI_Wtime()
                         group_count=blocks%ButterflyV%nblk_loc
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='N'
-                        transb_array='N'
-                        alpha_array=a
-                        beta_array=b
-                        group_size=1
+                        transa_array(1:group_count)='N'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=a
+                        beta_array(1:group_count)=b
+                        group_size(1:group_count)=1
                         cnt=0
                         do j = 1, blocks%ButterflyV%nblk_loc
                            index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
                            index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
                            nn = size(blocks%ButterflyV%blocks(j)%matrix, 1)
                            rank = size(blocks%ButterflyV%blocks(j)%matrix, 2)
-                           allocate (BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix(nn, num_vectors))
-                           BFvec%vec(level_butterfly + 2)%blocks(1, j)%matrix = 0
                            cnt=cnt+1
 
                            m_array(cnt)=nn
@@ -11959,22 +12146,22 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix(1,1))
                            c_array(cnt)=LOC(random2(arr_acc_n(j)+1, 1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                         n4 = MPI_Wtime()
+                        t_gemm = t_gemm + n4 - n3
+                        t_gemm_leaf = t_gemm_leaf + n4 - n3
                         ! time_tmp = time_tmp + n4-n3
                      endif
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
+                     flops_gemm_leaf = flops_gemm_leaf + flops
                   else
                      n3=MPI_Wtime()
                      if (nr0 > 1 .and. inc_r0 == 1) then ! this special treatment makes sure two threads do not write to the same address simultaneously
                         group_count=nr0*nc0
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='T'
-                        transb_array='N'
-                        alpha_array=BPACK_cone
-                        beta_array=BPACK_cone
-                        group_size=1
+                        transa_array(1:group_count)='T'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=BPACK_cone
+                        group_size(1:group_count)=1
 
                         do ii = 1, 2
                            cnt=0
@@ -11998,11 +12185,14 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                               if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                                 allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                                 BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
 
                               cnt = cnt +1
+                              beta_array(cnt)=ctemp
                               m_array(cnt)=nn
                               n_array(cnt)=num_vectors
                               k_array(cnt)=mm
@@ -12016,11 +12206,14 @@ contains
                               mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                               nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
                               if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
-                                 allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
-                                 BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                                 call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1), nn, num_vectors)
+                                 ctemp = BPACK_czero
+                              else
+                                 ctemp = BPACK_cone
                               endif
 
                               cnt = cnt +1
+                              beta_array(cnt)=ctemp
                               m_array(cnt)=nn
                               n_array(cnt)=num_vectors
                               k_array(cnt)=mm
@@ -12031,19 +12224,17 @@ contains
                               b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
                               c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
                            enddo
-                           call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                           call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                            stats%Flop_Tmp = stats%Flop_Tmp + flops
+                           flops_gemm_kernel = flops_gemm_kernel + flops
                         enddo
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
 
                      else
                         group_count=nr0*nc0*2
-                        allocate(transa_array(group_count),transb_array(group_count),alpha_array(group_count),beta_array(group_count),group_size(group_count),m_array(group_count),n_array(group_count),k_array(group_count),lda_array(group_count), ldb_array(group_count), ldc_array(group_count),a_array(group_count),b_array(group_count), c_array(group_count))
-                        transa_array='T'
-                        transb_array='N'
-                        alpha_array=BPACK_cone
-                        beta_array=BPACK_cone
-                        group_size=1
+                        transa_array(1:group_count)='T'
+                        transb_array(1:group_count)='N'
+                        alpha_array(1:group_count)=BPACK_cone
+                        group_size(1:group_count)=1
 
                         cnt=0
                         do index_ij = 1, nr0*nc0
@@ -12065,10 +12256,13 @@ contains
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, 2)
                            if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix)) then
-                              allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix(nn, num_vectors))
-                              BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s), nn, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            cnt = cnt + 1
+                           beta_array(cnt)=ctemp
                            m_array(cnt)=nn
                            n_array(cnt)=num_vectors
                            k_array(cnt)=mm
@@ -12083,10 +12277,13 @@ contains
                            mm = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 1)
                            nn = size(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, 2)
                            if (.not. associated(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix)) then
-                              allocate (BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix(nn, num_vectors))
-                              BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1)%matrix = 0
+                              call BFvec_pool_acquire(BFvec%vec(level_butterfly - level + 2), BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s + 1), nn, num_vectors)
+                              ctemp = BPACK_czero
+                           else
+                              ctemp = BPACK_cone
                            endif
                            cnt = cnt + 1
+                           beta_array(cnt)=ctemp
                            m_array(cnt)=nn
                            n_array(cnt)=num_vectors
                            k_array(cnt)=mm
@@ -12097,42 +12294,40 @@ contains
                            b_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix(1,1))
                            c_array(cnt)=LOC(BFvec%vec(level_butterfly - level + 2)%blocks(index_i_loc_s, index_j_loc_s+1)%matrix(1,1))
                         enddo
-                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size,flop=flops)
+                        call gemm_batch_mkl(transa_array, transb_array, m_array, n_array, k_array, alpha_array, a_array, lda_array, b_array, ldb_array, beta_array, c_array, ldc_array, group_count, group_size, flop=flops, transa_iwork=transa_iwork, transb_iwork=transb_iwork)
                         stats%Flop_Tmp = stats%Flop_Tmp + flops
-                        deallocate(transa_array,transb_array,alpha_array,beta_array,group_size,m_array,n_array,k_array,lda_array,ldb_array,ldc_array,a_array,b_array,c_array)
+                        flops_gemm_kernel = flops_gemm_kernel + flops
                      endif
                      n4 = MPI_Wtime()
+                     t_gemm = t_gemm + n4 - n3
+                     t_gemm_kernel = t_gemm_kernel + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
                   endif
                endif
 
-               do j = 1, BFvec%vec(level_butterfly - level + 1)%nc
-                  do i = 1, BFvec%vec(level_butterfly - level + 1)%nr
-                     if (associated(BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level_butterfly - level + 1)%blocks(i, j)%matrix)
-                  enddo
-               enddo
+               call BFvec_level_release(BFvec%vec(level_butterfly - level + 1))
 
                if (level /= 0) then
-                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R')
+                  n3 = MPI_Wtime()
+                  call BF_exchange_matvec(blocks, BFvec%vec(level_butterfly - level + 2), stats, ptree, level, 'C', 'R', .true.)
+                  n4 = MPI_Wtime()
+                  t_exchange = t_exchange + n4 - n3
                endif
             enddo
             n6 = MPI_Wtime()
             time_tmp1 = time_tmp1 + n6-n5
 
+#ifndef NDEBUG
             if (isnanMat(random2(1:N,1:1),N,1)) then
                write (*, *) 'NAN in 4 BF_block_MVP_dat', blocks%row_group, blocks%col_group, blocks%level, blocks%level_butterfly
                stop
             end if
+#endif
 
          endif
 
          do level = 0, level_butterfly + 2
-            do j = 1, BFvec%vec(level)%nc
-               do i = 1, BFvec%vec(level)%nr
-                  if (associated(BFvec%vec(level)%blocks(i, j)%matrix)) deallocate (BFvec%vec(level)%blocks(i, j)%matrix)
-               enddo
-            enddo
-            if (allocated(BFvec%vec(level)%blocks)) deallocate (BFvec%vec(level)%blocks)
+            call BFvec_level_release(BFvec%vec(level), .true.)
          enddo
 
          deallocate (BFvec%vec)
@@ -12144,6 +12339,19 @@ contains
       n2 = MPI_Wtime()
       ! time_tmp = time_tmp + n2-n1
       time_tmp2 = time_tmp2 + n2-n1
+      stats%Time_BF_MVP_Gemm = stats%Time_BF_MVP_Gemm + t_gemm
+      stats%Time_BF_MVP_Gemm_Leaf = stats%Time_BF_MVP_Gemm_Leaf + t_gemm_leaf
+      stats%Time_BF_MVP_Gemm_Kernel = stats%Time_BF_MVP_Gemm_Kernel + t_gemm_kernel
+      stats%Time_BF_MVP_Exchange = stats%Time_BF_MVP_Exchange + t_exchange
+      stats%Time_BF_MVP_All2All = stats%Time_BF_MVP_All2All + t_all2all
+      stats%Time_BF_MVP_Other = stats%Time_BF_MVP_Other + max(0d0, n2 - n1 - t_gemm - t_exchange - t_all2all)
+      stats%Flop_BF_MVP_Gemm_Leaf = stats%Flop_BF_MVP_Gemm_Leaf + flops_gemm_leaf
+      stats%Flop_BF_MVP_Gemm_Kernel = stats%Flop_BF_MVP_Gemm_Kernel + flops_gemm_kernel
+      if (allocated(transa_array)) then
+         deallocate(transa_array, transb_array, alpha_array, beta_array)
+         deallocate(group_size, m_array, n_array, k_array, lda_array, ldb_array, ldc_array)
+         deallocate(a_array, b_array, c_array, transa_iwork, transb_iwork)
+      endif
       return
 
    end subroutine BF_block_MVP_dat_batch_mkl

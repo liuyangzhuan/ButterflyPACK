@@ -315,6 +315,13 @@ module BPACK_DEFS
         integer,allocatable ::dims_m(:), dims_n(:) !< dimensions of the rows and columns (used in BF_MD)
     end type butterflymatrix
 
+    !>**** pooled storage for temporary butterfly vectors
+    type butterfly_vec_pool_chunk
+        DT, pointer :: data(:) => null()
+        integer(kind=8) :: used = 0
+        integer(kind=8) :: capacity = 0
+    end type butterfly_vec_pool_chunk
+
     !>**** index set for one butterfly block
     type butterflyindex
         integer:: size !< length of array
@@ -346,6 +353,8 @@ module BPACK_DEFS
         integer:: idx_c = 0, idx_r = 0 !< column and row number of the first local block
         integer:: inc_c = 0, inc_r = 0 !< increment of local block row and columns
         type(butterflymatrix), allocatable :: blocks(:, :)
+        type(butterfly_vec_pool_chunk), allocatable :: vec_pool(:)
+        integer :: vec_pool_nchunk = 0
         type(list):: lst!< a list of active blocks
         integer, allocatable::index(:, :) !< an array of id of active blocks
 integer, allocatable::index_MD(:, :, :) !< an array of block offsets
@@ -820,9 +829,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
+        real(kind=8) Time_BF_MVP_Gemm, Time_BF_MVP_Gemm_Leaf, Time_BF_MVP_Gemm_Kernel, Time_BF_MVP_Exchange, Time_BF_MVP_All2All, Time_BF_MVP_Other
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
-        real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_Tmp
+        real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_BF_MVP_Gemm_Leaf, Flop_BF_MVP_Gemm_Kernel, Flop_Tmp
         integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization

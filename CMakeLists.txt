@@ -233,6 +233,12 @@ if(BLAS_FOUND)
     set(CMAKE_Fortran_FLAGS "-DHAVE_MKL ${CMAKE_Fortran_FLAGS}")
     message("-- Using MKL VSL and batch GEMM")
   endif()
+  string(TOLOWER "${BLAS_LIB_STR}" BLAS_LIB_STR_LOWER)
+  string(FIND "${BLAS_LIB_STR_LOWER}" "openblas" BUTTERFLYPACK_USE_OPENBLAS)
+  if(BUTTERFLYPACK_USE_OPENBLAS GREATER -1)
+    set(CMAKE_Fortran_FLAGS "-DHAVE_OPENBLAS_BATCH ${CMAKE_Fortran_FLAGS}")
+    message("-- Enabling opt-in OpenBLAS batch GEMM")
+  endif()
 endif()
 
 #--------------------- LAPACK ---------------------

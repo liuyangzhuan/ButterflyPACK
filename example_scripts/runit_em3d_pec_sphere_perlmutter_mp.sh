@@ -18,16 +18,16 @@ ulimit -s unlimited
 
 
 
-for nmpi in 64
+for nmpi in 512
 do
 
-NTH=8
+NTH=1
 CORES_PER_NODE=128
 THREADS_PER_RANK=`expr $NTH \* 2`								 
 
 NODE_VAL=`expr $nmpi / $CORES_PER_NODE \* $NTH`
 
-export EXEC=./EXAMPLE/ie3d
+export EXEC=./EXAMPLE/ie3d_mp
 export OMP_NUM_THREADS=$NTH
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
@@ -40,8 +40,6 @@ export CRAY_LIBSCI_NUM_THREADS=1
 
 export PARSEC_MCA_runtime_warn_slow_binding=0
 export PARSEC_MCA_runtime_num_cores=$NTH
-
-# export BPACK_BF_MVP_BATCH=1 # whether to use batched BF MVP (MKL or OpenBLAS) 
 
 #### The Default parameters
 format=1
@@ -95,7 +93,7 @@ bACAbatch=16
 LRlevel=100
 leafsize=200
 para=0.01	  
-Nbundle=4		  
+Nbundle=2		  
 bp_cnt_lr=1
 less_adapt=1
 
@@ -114,8 +112,8 @@ less_adapt=1
 samplepara=2
 sample_para_outer=2    # this is performance critical for nlogn algorithm
 knn=40
-forwardN15flag=3
-pat_comp=1
+forwardN15flag=0
+
 
 
 
@@ -189,24 +187,24 @@ pat_comp=1
 
 
 
-# ########################################## BLR
-# format=5
-# elem_extract=2
-# precon=3
-# pat_comp=3
-# blknum=1
-# tol=1d-4
-# tol_rand=1d-4
-# errcheck=0
-# lrcomp=5
-# bACAbatch=16
-# LRlevel=0
-# leafsize=200
-# para=2.01
-# bp_cnt_lr=1
-# knn=0
-# hextralevel=2
-# rankrate=2.0
+########################################## BLR
+format=5
+elem_extract=2
+precon=3
+pat_comp=3
+blknum=1
+tol=1d-4
+tol_rand=1d-4
+errcheck=0
+lrcomp=5
+bACAbatch=16
+LRlevel=0
+leafsize=200
+para=2.01
+bp_cnt_lr=1
+knn=0
+hextralevel=2
+rankrate=2.0
 
 
 
@@ -219,11 +217,11 @@ export OMP_NUM_THREADS=$OMP_NUM_THREADS
 # wavelength=2.0
 # filename=sphere_2300
 
-# wavelength=1.0
-# filename=sphere_9000
+wavelength=1.0
+filename=sphere_9000
 
-wavelength=0.28
-filename=sphere_128000
+# wavelength=0.28
+# filename=sphere_128000
 
 # wavelength=0.14
 # filename=sphere_512000
