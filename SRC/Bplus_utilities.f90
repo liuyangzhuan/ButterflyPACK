@@ -905,7 +905,11 @@ contains
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
 
-      use_cached_vecs = option%trans_invariant /= 0
+      ! Keep the dense trans-invariant MVP vector cache only when multiple
+      ! levels are intentionally grouped in one call. For level-by-level MVP,
+      ! caching these vectors keeps one dense workspace per level alive and can
+      ! defeat the memory cap that the level batching is supposed to provide.
+      use_cached_vecs = option%trans_invariant /= 0 .and. option%htensor_mvp_level_batch > 1
       if (use_cached_vecs) then
          if (.not. allocated(bplus%vec_mvp_cache)) allocate(bplus%vec_mvp_cache(2*(LplusMax + 1)))
          cache_slot = BP_MD_vec_mvp_cache_slot(chara, level_s, level_e)
@@ -1181,27 +1185,27 @@ contains
       type(Hoption)::option
       DT::Vin(product(ldi),Nrnd), Vout(:,:)
       type(matrixblock_MD), pointer::rep, blocks_1
-      integer ll, rep_bb, member, dup_idx, rr, batch_count
-      integer stack_limit, col_s, col_e, total_dup, total_dup_global, nproc, mypp, pp, ierr
-      integer source_pp, input_owner, member_scan
+      integer ll, rep_bb, member, dup_idx, rr, batch_count, batch_start, batch_end
+      integer stack_limit, col_s, col_e, nproc, mypp, pp, ierr
+      integer(kind=8) total_dup, total_dup_global
       integer input_group(Ndim), output_group(Ndim), dims_dup_in(Ndim), dims_dup_out(Ndim)
       integer delta_dup(Ndim), delta_rep(Ndim)
       integer head_dup_in(Ndim), head_dup_out(Ndim), owner_start(Ndim), owner_dims(Ndim)
       integer dim_in(Ndim), dim_out(Ndim), owner_pp, local_size, recv_size
-      integer, allocatable::recvcounts(:), displs(:), owner_needed(:), owner_needed_global(:), batch_members(:)
-      DT, allocatable::Vin_owner(:), Vout_all(:), recvbuf(:)
+      integer, allocatable::recvcounts(:), displs(:)
+      DT, allocatable::Vin_all(:), Vout_all(:), recvbuf(:)
       DT, allocatable::Vin_stack(:,:), Vout_stack(:,:)
       DT ctemp1, ctemp2
       real(kind=8) t1, t2
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
-      total_dup = 0
+      total_dup = 0_8
       do ll = level_s, level_e
-         total_dup = total_dup + bplus%LL(ll)%trans_ndup
+         total_dup = total_dup + int(bplus%LL(ll)%trans_ndup, kind=8)
       enddo
-      call MPI_Allreduce(total_dup, total_dup_global, 1, MPI_INTEGER, MPI_SUM, &
+      call MPI_Allreduce(total_dup, total_dup_global, 1, MPI_INTEGER8, MPI_SUM, &
          ptree%pgrp(blocks_1%pgno)%Comm, ierr)
-      if (total_dup_global == 0) return
+      if (total_dup_global == 0_8) return
 
       nproc = ptree%pgrp(blocks_1%pgno)%nproc
       mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
@@ -1218,27 +1222,14 @@ contains
       do pp = 2, nproc
          displs(pp) = displs(pp-1) + recvcounts(pp-1)
       enddo
-      allocate(owner_needed(nproc), owner_needed_global(nproc))
-      owner_needed = 0
-      do ll = level_s, level_e
-         if (bplus%LL(ll)%trans_ndup == 0) cycle
-         do rep_bb = 1, bplus%LL(ll)%Nbound_loc
-            do member = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
-               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1
-               dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
-               if (chara == 'N') then
-                  input_group = bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
-               else
-                  input_group = bplus%LL(ll)%trans_dup_row_group(:,dup_idx)
-               endif
-               owner_pp = ptree%pgrp(GetMshGroup_Pgno(ptree,Ndim,input_group))%head - &
-                  ptree%pgrp(blocks_1%pgno)%head + 1
-               owner_needed(owner_pp) = 1
-            enddo
-         enddo
-      enddo
-      call MPI_Allreduce(owner_needed, owner_needed_global, nproc, MPI_INTEGER, MPI_MAX, &
+      allocate(Vin_all(sum(recvcounts)))
+      call LogMemory(stats, SIZEOF(Vin_all)/1024.0d3)
+      t1 = MPI_Wtime()
+      call MPI_Allgatherv(Vin, product(ldi)*Nrnd, MPI_DT, Vin_all, recvcounts, displs, MPI_DT, &
          ptree%pgrp(blocks_1%pgno)%Comm, ierr)
+      t2 = MPI_Wtime()
+      stats%Time_RedistV = stats%Time_RedistV + t2 - t1
+      stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + t2 - t1
 
       if (chara /= 'N') then
          allocate(Vout_all(sum(recvcounts)))
@@ -1248,55 +1239,25 @@ contains
       ctemp1 = 1.0d0
       ctemp2 = 0.0d0
 
-      do source_pp = 1, nproc
-         if (owner_needed_global(source_pp) == 0) cycle
-         recv_size = recvcounts(source_pp)
-         allocate(Vin_owner(recv_size))
-         call LogMemory(stats, SIZEOF(Vin_owner)/1024.0d3)
-         if (source_pp == mypp) Vin_owner = reshape(Vin, shape(Vin_owner))
-         t1 = MPI_Wtime()
-         call MPI_Bcast(Vin_owner, recv_size, MPI_DT, source_pp - 1, &
-            ptree%pgrp(blocks_1%pgno)%Comm, ierr)
-         t2 = MPI_Wtime()
-         stats%Time_RedistV = stats%Time_RedistV + t2 - t1
-         stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + t2 - t1
-
-         do ll = level_s, level_e
-            if (bplus%LL(ll)%trans_ndup == 0) cycle
-            do rep_bb = 1, bplus%LL(ll)%Nbound_loc
-               if (bplus%LL(ll)%trans_dup_member_offset(rep_bb+1) == &
-                   bplus%LL(ll)%trans_dup_member_offset(rep_bb)) cycle
-               rep => bplus%LL(ll)%matrices_block(rep_bb)
-               if (chara == 'N') then
-                  dim_in = rep%N_loc
-                  dim_out = rep%M_loc
-               else
-                  dim_in = rep%M_loc
-                  dim_out = rep%N_loc
-               endif
-               stack_limit = max(1, option%BACA_Batch)
-               allocate(batch_members(stack_limit))
-               member_scan = bplus%LL(ll)%trans_dup_member_offset(rep_bb)
-               do while (member_scan <= bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1)
-                  batch_count = 0
-                  do while (member_scan <= bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1 .and. &
-                     batch_count < stack_limit)
-                     member = member_scan
-                     member_scan = member_scan + 1
-                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
-                     if (chara == 'N') then
-                        input_group = bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
-                     else
-                        input_group = bplus%LL(ll)%trans_dup_row_group(:,dup_idx)
-                     endif
-                     input_owner = ptree%pgrp(GetMshGroup_Pgno(ptree,Ndim,input_group))%head - &
-                        ptree%pgrp(blocks_1%pgno)%head + 1
-                     if (input_owner == source_pp) then
-                        batch_count = batch_count + 1
-                        batch_members(batch_count) = member
-                     endif
-                  enddo
-                  if (batch_count == 0) cycle
+      do ll = level_s, level_e
+         if (bplus%LL(ll)%trans_ndup == 0) cycle
+         do rep_bb = 1, bplus%LL(ll)%Nbound_loc
+            if (bplus%LL(ll)%trans_dup_member_offset(rep_bb+1) == &
+                bplus%LL(ll)%trans_dup_member_offset(rep_bb)) cycle
+            rep => bplus%LL(ll)%matrices_block(rep_bb)
+            if (chara == 'N') then
+               dim_in = rep%N_loc
+               dim_out = rep%M_loc
+            else
+               dim_in = rep%M_loc
+               dim_out = rep%N_loc
+            endif
+            stack_limit = max(1, option%BACA_Batch)
+            do batch_start = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
+               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, stack_limit
+               batch_end = min(bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, &
+                  batch_start + stack_limit - 1)
+               batch_count = batch_end - batch_start + 1
                   allocate(Vin_stack(product(dim_in),Nrnd*batch_count))
                   allocate(Vout_stack(product(dim_out),Nrnd*batch_count))
                   call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
@@ -1305,7 +1266,7 @@ contains
 
                   t1 = MPI_Wtime()
                   do rr = 1, batch_count
-                     member = batch_members(rr)
+                     member = batch_start + rr - 1
                      dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
                      col_s = (rr-1)*Nrnd + 1
                      col_e = rr*Nrnd
@@ -1318,7 +1279,8 @@ contains
                         bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
                      delta_rep = rep%row_group - rep%col_group
                      call Bplus_MD_compact_group_geometry(Ndim, input_group, msh, dims_dup_in, head_dup_in)
-                     owner_pp = source_pp
+                     owner_pp = ptree%pgrp(GetMshGroup_Pgno(ptree,Ndim,input_group))%head - &
+                        ptree%pgrp(blocks_1%pgno)%head + 1
                      if (chara == 'N') then
                         owner_start = blocks_1%headn + blocks_1%N_p(owner_pp,1,:)
                         owner_dims = blocks_1%N_p(owner_pp,2,:) - blocks_1%N_p(owner_pp,1,:) + 1
@@ -1329,7 +1291,7 @@ contains
                      local_size = product(owner_dims)
                      call Bplus_MD_compact_pack(Ndim, option%trans_invariant, delta_dup, &
                         delta_rep, dims_dup_in, dim_in, &
-                        head_dup_in, owner_start, owner_dims, Nrnd, Vin_owner, 0, &
+                        head_dup_in, owner_start, owner_dims, Nrnd, Vin_all, displs(owner_pp), &
                         local_size, Vin_stack(:,col_s:col_e))
                   enddo
                   t2 = MPI_Wtime()
@@ -1345,7 +1307,7 @@ contains
 
                   t1 = MPI_Wtime()
                   do rr = 1, batch_count
-                     member = batch_members(rr)
+                     member = batch_start + rr - 1
                      dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
                      col_s = (rr-1)*Nrnd + 1
                      col_e = rr*Nrnd
@@ -1382,12 +1344,8 @@ contains
                   call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
                   deallocate(Vin_stack, Vout_stack)
                enddo
-               deallocate(batch_members)
             enddo
          enddo
-         call LogMemory(stats, -SIZEOF(Vin_owner)/1024.0d3)
-         deallocate(Vin_owner)
-      enddo
 
       if (chara /= 'N') then
          recv_size = recvcounts(mypp)
@@ -1404,7 +1362,8 @@ contains
          call LogMemory(stats, -SIZEOF(Vout_all)/1024.0d3)
          deallocate(recvbuf, Vout_all)
       endif
-      deallocate(owner_needed, owner_needed_global, recvcounts, displs)
+      call LogMemory(stats, -SIZEOF(Vin_all)/1024.0d3)
+      deallocate(Vin_all, recvcounts, displs)
 
    end subroutine Bplus_MD_compact_dup_MVP
 
