@@ -1942,6 +1942,11 @@ end function distance_geo
 
       implicit none
 
+      type nil_key_onelevel_MD
+         integer::capacity = 0
+         integer, allocatable::keys(:,:)
+      end type nil_key_onelevel_MD
+
       integer Ndim
       integer i, j, ii, jj, kk, iii, jjj, ll, bb, cc, gg, gg2, sortdirec, ii_sch, pgno_bplus
       integer level, edge, patch, node, group, group_touch,furhter_partition, near_far, nchild
@@ -1968,12 +1973,18 @@ end function distance_geo
       integer, allocatable::child_offset(:,:), row_group_child(:,:), row_gg2(:), row_further(:), row_pgno(:)
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
       type(nil_onelevel_MD),allocatable:: flist_MD(:)
+      type(nil_key_onelevel_MD),allocatable:: nlist_key_MD(:)
       integer pgno, bb_loc
       integer rep_capacity, trans_nrep_key, rep_slot, new_rep
       integer Nblock_data_loc, Nblock_dup_loc, dup_idx
       integer, allocatable::rep_row_key(:,:), rep_col_key(:,:), rep_style_key(:), rep_block_idx(:)
       integer cache_slot, trans_cache_size, trans_cache_capacity
       integer, allocatable::trans_cache_delta(:,:), trans_cache_nearfar(:,:,:)
+      integer, allocatable::trans_cache_nnear(:,:), trans_cache_near_cc(:,:,:)
+      integer, allocatable::trans_cache_nfar(:,:), trans_cache_far_cc(:,:,:)
+      integer ii_pair, nadd, ierr, nlist_capacity
+      integer, allocatable::child_counts(:), child_local_idx(:)
+      logical row_owned, row_count_owner
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
@@ -1992,6 +2003,7 @@ end function distance_geo
 
       allocate(nlist_MD(LplusMax))
       allocate(flist_MD(LplusMax))
+      allocate(nlist_key_MD(LplusMax))
 
       h_mat_md%BP%LL(1)%Nbound = 1
       h_mat_md%BP%LL(1)%Nbound_loc = 1
@@ -2043,6 +2055,9 @@ end function distance_geo
       nlist_MD(1)%list(1)%nn=1
       allocate(nlist_MD(1)%list(1)%nlist(1,Ndim))
       nlist_MD(1)%list(1)%nlist(1,:)=block_f%col_group
+      nlist_key_MD(1)%capacity=1
+      allocate(nlist_key_MD(1)%keys(Ndim,1))
+      nlist_key_MD(1)%keys(:,1)=block_f%row_group
       flist_MD(1)%len=0
       if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
          write(*,*)'#admissible',0,'#inadmissible',0
@@ -2080,21 +2095,29 @@ end function distance_geo
                do bb = 1, nchild
                   call SingleIndexToMultiIndex(Ndim,dims1, bb, child_offset(bb,:))
                enddo
-               nlist_MD(ll+1)%len = Nboundall**Ndim
-               allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
-               call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
-               if (option%trans_invariant == 0) then
+               if (option%trans_invariant /= 0) then
+                  nlist_capacity = max(1,nlist_MD(ll)%len*nchild)
+                  nlist_MD(ll+1)%len = 0
+                  allocate(nlist_MD(ll+1)%list(nlist_capacity))
+                  nlist_key_MD(ll+1)%capacity = nlist_capacity
+                  allocate(nlist_key_MD(ll+1)%keys(Ndim,nlist_capacity))
+                  call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
+                  flist_MD(ll+1)%len = 0
+               else
+                  nlist_MD(ll+1)%len = Nboundall**Ndim
+                  allocate(nlist_MD(ll+1)%list(Nboundall**Ndim))
+                  call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list)/1024.0d3)
                   flist_MD(ll+1)%len = Nboundall**Ndim
                   allocate(flist_MD(ll+1)%list(Nboundall**Ndim))
                   call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list)/1024.0d3)
-               else
-                  flist_MD(ll+1)%len = 0
                endif
 
 
-               do bb = 1, Nboundall**Ndim
+               do bb = 1, nlist_MD(ll+1)%len
                   nlist_MD(ll+1)%list(bb)%nn=0
-                  if (option%trans_invariant == 0) flist_MD(ll+1)%list(bb)%nn=0
+               enddo
+               do bb = 1, flist_MD(ll+1)%len
+                  flist_MD(ll+1)%list(bb)%nn=0
                enddo
 
                Ninadmissible_max=0
@@ -2107,95 +2130,160 @@ end function distance_geo
                Nblock_data_loc=0
                Nblock_dup_loc=0
                dims = 2**(level_ll)
-               do gg=1,product(dims)
-                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
-                  group_m1 = group_m1 + groupm_start -1
-                  groupm_start1 = group_m1*2**levelm
-                  do bb = 1, nchild
-                     row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
-                     pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
-                     row_pgno(bb) = pgno
-                     level = GetTreelevel(row_group_child(bb,1)) - 1
-                     row_further(bb) = 0
-                     if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
-                     group_m = row_group_child(bb,:) - groupm_start_global + 1
-                     call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
-                  enddo
-                  do nn=1,nlist_MD(ll)%list(gg)%nn
-                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
-                     groupn_start1 = group_n1*2**levelm
-                     if (option%trans_invariant /= 0) then
+               if (option%trans_invariant /= 0) then
+                  allocate(child_counts(nchild), child_local_idx(nchild))
+                  do gg=1,nlist_MD(ll)%len
+                     group_m1 = nlist_key_MD(ll)%keys(:,gg)
+                     groupm_start1 = group_m1*2**levelm
+                     do bb = 1, nchild
+                        row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                        pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                        row_pgno(bb) = pgno
+                        level = GetTreelevel(row_group_child(bb,1)) - 1
+                        row_further(bb) = 0
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        group_m = row_group_child(bb,:) - groupm_start_global + 1
+                        call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
+                     enddo
+
+                     child_counts = 0
+                     child_local_idx = 0
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                        groupn_start1 = group_n1*2**levelm
                         call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
                            group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
-                           trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
-                     endif
-                     do bb = 1, nchild
-                     do cc = 1, nchild
-                        group_m = row_group_child(bb,:)
-                        group_n = child_offset(cc,:) + groupn_start1 - 1
-                        furhter_partition = row_further(bb)
-                        gg2 = row_gg2(bb)
-                        if (option%trans_invariant /= 0) then
-                           near_far = trans_cache_nearfar(bb,cc,cache_slot)
-                        else
-                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
-                        endif
-
-                        if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
-                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
-                           Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
-                           Ninadmissible_tot = Ninadmissible_tot +1
-                           Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
-                        else
-                           if (option%trans_invariant == 0) then
-                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
-                              Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
-                           elseif (IOwnPgrp(ptree, row_pgno(bb))) then
-                              if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
-                                 call HMAT_MD_find_trans_key(Ndim, group_m, group_n, merge(2,1,near_far == 1), &
-                                    option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
-                                    rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
-                                 if (new_rep == 1) then
-                                    Nblock_data_loc = Nblock_data_loc + 1
+                           trans_cache_nearfar, trans_cache_nnear, trans_cache_near_cc, trans_cache_nfar, &
+                           trans_cache_far_cc, trans_cache_size, trans_cache_capacity, cache_slot)
+                        do bb = 1, nchild
+                           group_m = row_group_child(bb,:)
+                           furhter_partition = row_further(bb)
+                           row_owned = IOwnPgrp(ptree, row_pgno(bb))
+                           row_count_owner = (ptree%MyID == ptree%pgrp(row_pgno(bb))%head)
+                           if (furhter_partition == 1) then
+                              nadd = nchild
+                              if (row_owned) child_counts(bb) = child_counts(bb) + nadd
+                              if (row_count_owner) Ninadmissible_tot_8 = Ninadmissible_tot_8 + int(nadd,kind=8)
+                           elseif (ll+1 < h_mat_md%Maxlevel+1) then
+                              nadd = trans_cache_nnear(bb,cache_slot)
+                              if (row_owned) child_counts(bb) = child_counts(bb) + nadd
+                              if (row_count_owner) then
+                                 Ninadmissible_tot_8 = Ninadmissible_tot_8 + int(nadd,kind=8)
+                                 Nadmissible_tot_8 = Nadmissible_tot_8 + int(trans_cache_nfar(bb,cache_slot),kind=8)
+                              endif
+                              if (row_owned) then
+                                 if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                    do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
+                                       cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
+                                       group_n = child_offset(cc,:) + groupn_start1 - 1
+                                       call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 2, &
+                                          option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                          rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                       if (new_rep == 1) then
+                                          Nblock_data_loc = Nblock_data_loc + 1
+                                       else
+                                          Nblock_dup_loc = Nblock_dup_loc + 1
+                                       endif
+                                    enddo
                                  else
-                                    Nblock_dup_loc = Nblock_dup_loc + 1
+                                    Nblock_data_loc = Nblock_data_loc + trans_cache_nfar(bb,cache_slot)
                                  endif
-                              else
-                                 Nblock_data_loc = Nblock_data_loc + 1
+                              endif
+                           else
+                              if (row_count_owner) then
+                                 Ninadmissible_tot_8 = Ninadmissible_tot_8 + int(trans_cache_nnear(bb,cache_slot),kind=8)
+                                 Nadmissible_tot_8 = Nadmissible_tot_8 + int(trans_cache_nfar(bb,cache_slot),kind=8)
+                              endif
+                              if (row_owned) then
+                                 if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                    do ii_pair = 1, trans_cache_nnear(bb,cache_slot)
+                                       cc = trans_cache_near_cc(bb,ii_pair,cache_slot)
+                                       group_n = child_offset(cc,:) + groupn_start1 - 1
+                                       call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 1, &
+                                          option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                          rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                       if (new_rep == 1) then
+                                          Nblock_data_loc = Nblock_data_loc + 1
+                                       else
+                                          Nblock_dup_loc = Nblock_dup_loc + 1
+                                       endif
+                                    enddo
+                                    do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
+                                       cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
+                                       group_n = child_offset(cc,:) + groupn_start1 - 1
+                                       call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 2, &
+                                          option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                          rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                       if (new_rep == 1) then
+                                          Nblock_data_loc = Nblock_data_loc + 1
+                                       else
+                                          Nblock_dup_loc = Nblock_dup_loc + 1
+                                       endif
+                                    enddo
+                                 else
+                                    Nblock_data_loc = Nblock_data_loc + trans_cache_nnear(bb,cache_slot) + &
+                                       trans_cache_nfar(bb,cache_slot)
+                                 endif
                               endif
                            endif
-                           if(near_far == 0)then
-                              Ninadmissible_tot = Ninadmissible_tot +1
-                              Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
-                           else
-                              Nadmissible_tot = Nadmissible_tot +1
-                              Nadmissible_tot_8 = Nadmissible_tot_8 + 1_8
-                           endif
-                        endif
+                        enddo
                      enddo
-                     enddo
-                  enddo
-               enddo
-               if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
-                  write(*,*)'#admissible',Nadmissible_tot_8,'#inadmissible',Ninadmissible_tot_8
-               endif
 
-               do bb = 1, Nboundall**Ndim
-                  if (nlist_MD(ll+1)%list(bb)%nn > 0) then
-                     allocate(nlist_MD(ll+1)%list(bb)%nlist(nlist_MD(ll+1)%list(bb)%nn,Ndim))
-                     call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
-                  endif
-                  nlist_MD(ll+1)%list(bb)%nn=0
-                  if (option%trans_invariant == 0) then
-                     if (flist_MD(ll+1)%list(bb)%nn > 0) then
-                        allocate(flist_MD(ll+1)%list(bb)%nlist(flist_MD(ll+1)%list(bb)%nn,Ndim))
-                        call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                     if (ll+1 < h_mat_md%Maxlevel+1) then
+                        do bb = 1, nchild
+                           if (child_counts(bb) <= 0) cycle
+                           nlist_MD(ll+1)%len = nlist_MD(ll+1)%len + 1
+                           call assert(nlist_MD(ll+1)%len <= nlist_key_MD(ll+1)%capacity, &
+                              'local HTENSOR near-list capacity exceeded')
+                           child_local_idx(bb) = nlist_MD(ll+1)%len
+                           nlist_key_MD(ll+1)%keys(:,child_local_idx(bb)) = row_group_child(bb,:)
+                           allocate(nlist_MD(ll+1)%list(child_local_idx(bb))%nlist(child_counts(bb),Ndim))
+                           call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(child_local_idx(bb))%nlist)/1024.0d3)
+                           nlist_MD(ll+1)%list(child_local_idx(bb))%nn = 0
+                           Ninadmissible_max = max(Ninadmissible_max, child_counts(bb))
+                        enddo
+
+                        do nn=1,nlist_MD(ll)%list(gg)%nn
+                           group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                           groupn_start1 = group_n1*2**levelm
+                           call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
+                              group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
+                              trans_cache_nearfar, trans_cache_nnear, trans_cache_near_cc, trans_cache_nfar, &
+                              trans_cache_far_cc, trans_cache_size, trans_cache_capacity, cache_slot)
+                           do bb = 1, nchild
+                              if (child_local_idx(bb) <= 0) cycle
+                              if (row_further(bb) == 1) then
+                                 do cc = 1, nchild
+                                    group_n = child_offset(cc,:) + groupn_start1 - 1
+                                    nlist_MD(ll+1)%list(child_local_idx(bb))%nn = &
+                                       nlist_MD(ll+1)%list(child_local_idx(bb))%nn + 1
+                                    nlist_MD(ll+1)%list(child_local_idx(bb))%nlist( &
+                                       nlist_MD(ll+1)%list(child_local_idx(bb))%nn,:) = group_n
+                                 enddo
+                              else
+                                 do ii_pair = 1, trans_cache_nnear(bb,cache_slot)
+                                    cc = trans_cache_near_cc(bb,ii_pair,cache_slot)
+                                    group_n = child_offset(cc,:) + groupn_start1 - 1
+                                    nlist_MD(ll+1)%list(child_local_idx(bb))%nn = &
+                                       nlist_MD(ll+1)%list(child_local_idx(bb))%nn + 1
+                                    nlist_MD(ll+1)%list(child_local_idx(bb))%nlist( &
+                                       nlist_MD(ll+1)%list(child_local_idx(bb))%nn,:) = group_n
+                                 enddo
+                              endif
+                           enddo
+                        enddo
                      endif
-                     flist_MD(ll+1)%list(bb)%nn=0
-                  endif
-               enddo
+                  enddo
 
-               if (option%trans_invariant /= 0) then
+                  call MPI_ALLREDUCE(MPI_IN_PLACE, Nadmissible_tot_8, 1, MPI_INTEGER8, MPI_SUM, &
+                     ptree%pgrp(h_mat_md%BP%pgno)%Comm, ierr)
+                  call MPI_ALLREDUCE(MPI_IN_PLACE, Ninadmissible_tot_8, 1, MPI_INTEGER8, MPI_SUM, &
+                     ptree%pgrp(h_mat_md%BP%pgno)%Comm, ierr)
+
+                  if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
+                     write(*,*)'#admissible',Nadmissible_tot_8,'#inadmissible',Ninadmissible_tot_8
+                  endif
+
                   h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot_8
                   h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nblock_data_loc
                   h_mat_md%BP%LL(ll + 1)%trans_ndup = Nblock_dup_loc
@@ -2214,79 +2302,215 @@ end function distance_geo
                   Nadmissible_tot_loc = 0
                   dup_idx = 0
                   trans_nrep_key = 0
-               endif
 
-               dims = 2**(level_ll)
-               do gg=1,product(dims)
-                  call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
-                  group_m1 = group_m1 + groupm_start -1
-                  groupm_start1 = group_m1*2**levelm
-                  do bb = 1, nchild
-                     row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
-                     pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
-                     row_pgno(bb) = pgno
-                     level = GetTreelevel(row_group_child(bb,1)) - 1
-                     row_further(bb) = 0
-                     if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
-                     group_m = row_group_child(bb,:) - groupm_start_global + 1
-                     call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
-                  enddo
-                  do nn=1,nlist_MD(ll)%list(gg)%nn
-                     group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
-                     groupn_start1 = group_n1*2**levelm
-                     if (option%trans_invariant /= 0) then
+                  do gg=1,nlist_MD(ll)%len
+                     group_m1 = nlist_key_MD(ll)%keys(:,gg)
+                     groupm_start1 = group_m1*2**levelm
+                     do bb = 1, nchild
+                        row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                        pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                        row_pgno(bb) = pgno
+                        level = GetTreelevel(row_group_child(bb,1)) - 1
+                        row_further(bb) = 0
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                     enddo
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                        groupn_start1 = group_n1*2**levelm
                         call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
                            group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
-                           trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
-                     endif
-                     do bb = 1, nchild
-                     do cc = 1, nchild
-                        group_m = row_group_child(bb,:)
-                        group_n = child_offset(cc,:) + groupn_start1 - 1
-                        furhter_partition = row_further(bb)
-                        gg2 = row_gg2(bb)
-                        if (option%trans_invariant /= 0) then
-                           near_far = trans_cache_nearfar(bb,cc,cache_slot)
-                        else
-                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
-                        endif
-
-                        if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
-                           nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
-                           nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
-                           ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
-                        else
-                           if (option%trans_invariant == 0) then
-                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
-                              flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
-                           elseif (IOwnPgrp(ptree, row_pgno(bb))) then
-                              if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
-                                 call HMAT_MD_find_trans_key(Ndim, group_m, group_n, merge(2,1,near_far == 1), &
-                                    option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
-                                    rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
-                              else
-                                 new_rep = 1
-                                 rep_slot = 0
-                              endif
-                              if (new_rep == 1) then
-                                 Nadmissible_tot_loc = Nadmissible_tot_loc + 1
-                                 blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
-                                 call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
-                                 if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
-                              else
-                                 dup_idx = dup_idx + 1
-                                 h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(:,dup_idx) = group_m
-                                 h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(:,dup_idx) = group_n
-                                 h_mat_md%BP%LL(ll + 1)%trans_dup_rep(dup_idx) = rep_block_idx(rep_slot)
-                              endif
+                           trans_cache_nearfar, trans_cache_nnear, trans_cache_near_cc, trans_cache_nfar, &
+                           trans_cache_far_cc, trans_cache_size, trans_cache_capacity, cache_slot)
+                        do bb = 1, nchild
+                           group_m = row_group_child(bb,:)
+                           row_owned = IOwnPgrp(ptree, row_pgno(bb))
+                           if (.not. row_owned) cycle
+                           if (row_further(bb) /= 1 .and. ll+1 < h_mat_md%Maxlevel+1) then
+                              do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
+                                 cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
+                                 group_n = child_offset(cc,:) + groupn_start1 - 1
+                                 near_far = 1
+                                 if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                    call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 2, &
+                                       option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                       rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                 else
+                                    new_rep = 1
+                                    rep_slot = 0
+                                 endif
+                                 if (new_rep == 1) then
+                                    Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                                    blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
+                                    if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
+                                 else
+                                    dup_idx = dup_idx + 1
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(:,dup_idx) = group_m
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(:,dup_idx) = group_n
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_rep(dup_idx) = rep_block_idx(rep_slot)
+                                 endif
+                              enddo
+                           elseif (ll+1 >= h_mat_md%Maxlevel+1) then
+                              do ii_pair = 1, trans_cache_nnear(bb,cache_slot)
+                                 cc = trans_cache_near_cc(bb,ii_pair,cache_slot)
+                                 group_n = child_offset(cc,:) + groupn_start1 - 1
+                                 near_far = 0
+                                 if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                    call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 1, &
+                                       option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                       rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                 else
+                                    new_rep = 1
+                                    rep_slot = 0
+                                 endif
+                                 if (new_rep == 1) then
+                                    Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                                    blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
+                                    if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
+                                 else
+                                    dup_idx = dup_idx + 1
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(:,dup_idx) = group_m
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(:,dup_idx) = group_n
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_rep(dup_idx) = rep_block_idx(rep_slot)
+                                 endif
+                              enddo
+                              do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
+                                 cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
+                                 group_n = child_offset(cc,:) + groupn_start1 - 1
+                                 near_far = 1
+                                 if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
+                                    call HMAT_MD_find_trans_key(Ndim, group_m, group_n, 2, &
+                                       option%trans_invariant, msh, rep_row_key, rep_col_key, rep_style_key, &
+                                       rep_block_idx, trans_nrep_key, rep_capacity, rep_slot, new_rep)
+                                 else
+                                    new_rep = 1
+                                    rep_slot = 0
+                                 endif
+                                 if (new_rep == 1) then
+                                    Nadmissible_tot_loc = Nadmissible_tot_loc + 1
+                                    blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
+                                    if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
+                                 else
+                                    dup_idx = dup_idx + 1
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_row_group(:,dup_idx) = group_m
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_col_group(:,dup_idx) = group_n
+                                    h_mat_md%BP%LL(ll + 1)%trans_dup_rep(dup_idx) = rep_block_idx(rep_slot)
+                                 endif
+                              enddo
                            endif
-                        endif
-                     enddo
+                        enddo
                      enddo
                   enddo
-               enddo
 
-               if (option%trans_invariant == 0) then
+                  call assert(Nadmissible_tot_loc == h_mat_md%BP%LL(ll + 1)%Nbound_loc, &
+                     'local HTENSOR block count changed between structuring passes')
+                  call assert(dup_idx == h_mat_md%BP%LL(ll + 1)%trans_ndup, &
+                     'compact HTENSOR duplicate count changed between structuring passes')
+                  call HMAT_MD_group_trans_duplicates(h_mat_md%BP%LL(ll + 1), stats)
+                  deallocate(child_counts, child_local_idx)
+               else
+                  do gg=1,product(dims)
+                     call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                     group_m1 = group_m1 + groupm_start -1
+                     groupm_start1 = group_m1*2**levelm
+                     do bb = 1, nchild
+                        row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                        pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                        row_pgno(bb) = pgno
+                        level = GetTreelevel(row_group_child(bb,1)) - 1
+                        row_further(bb) = 0
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        group_m = row_group_child(bb,:) - groupm_start_global + 1
+                        call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
+                     enddo
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                        groupn_start1 = group_n1*2**levelm
+                        do bb = 1, nchild
+                        do cc = 1, nchild
+                           group_m = row_group_child(bb,:)
+                           group_n = child_offset(cc,:) + groupn_start1 - 1
+                           furhter_partition = row_further(bb)
+                           gg2 = row_gg2(bb)
+                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+
+                           if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
+                              nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                              Ninadmissible_max = max(Ninadmissible_max,nlist_MD(ll+1)%list(gg2)%nn)
+                              Ninadmissible_tot = Ninadmissible_tot +1
+                              Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
+                           else
+                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                              Nadmissible_max = max(Nadmissible_max,flist_MD(ll+1)%list(gg2)%nn)
+                              if(near_far == 0)then
+                                 Ninadmissible_tot = Ninadmissible_tot +1
+                                 Ninadmissible_tot_8 = Ninadmissible_tot_8 + 1_8
+                              else
+                                 Nadmissible_tot = Nadmissible_tot +1
+                                 Nadmissible_tot_8 = Nadmissible_tot_8 + 1_8
+                              endif
+                           endif
+                        enddo
+                        enddo
+                     enddo
+                  enddo
+                  if(ptree%MyID==Main_ID .and. option%verbosity >= 0) then
+                     write(*,*)'#admissible',Nadmissible_tot_8,'#inadmissible',Ninadmissible_tot_8
+                  endif
+
+                  do bb = 1, Nboundall**Ndim
+                     if (nlist_MD(ll+1)%list(bb)%nn > 0) then
+                        allocate(nlist_MD(ll+1)%list(bb)%nlist(nlist_MD(ll+1)%list(bb)%nn,Ndim))
+                        call LogMemory(stats, SIZEOF(nlist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                     endif
+                     nlist_MD(ll+1)%list(bb)%nn=0
+                     if (flist_MD(ll+1)%list(bb)%nn > 0) then
+                        allocate(flist_MD(ll+1)%list(bb)%nlist(flist_MD(ll+1)%list(bb)%nn,Ndim))
+                        call LogMemory(stats, SIZEOF(flist_MD(ll+1)%list(bb)%nlist)/1024.0d3)
+                     endif
+                     flist_MD(ll+1)%list(bb)%nn=0
+                  enddo
+
+                  do gg=1,product(dims)
+                     call SingleIndexToMultiIndex(Ndim,dims, gg, group_m1)
+                     group_m1 = group_m1 + groupm_start -1
+                     groupm_start1 = group_m1*2**levelm
+                     do bb = 1, nchild
+                        row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
+                        pgno = GetMshGroup_Pgno(ptree, Ndim, row_group_child(bb,:))
+                        row_pgno(bb) = pgno
+                        level = GetTreelevel(row_group_child(bb,1)) - 1
+                        row_further(bb) = 0
+                        if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
+                        group_m = row_group_child(bb,:) - groupm_start_global + 1
+                        call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
+                     enddo
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
+                        groupn_start1 = group_n1*2**levelm
+                        do bb = 1, nchild
+                        do cc = 1, nchild
+                           group_m = row_group_child(bb,:)
+                           group_n = child_offset(cc,:) + groupn_start1 - 1
+                           furhter_partition = row_further(bb)
+                           gg2 = row_gg2(bb)
+                           near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+
+                           if (near_far == 0 .and. ll+1 < h_mat_md%Maxlevel+1 .or. furhter_partition==1)then
+                              nlist_MD(ll+1)%list(gg2)%nn = nlist_MD(ll+1)%list(gg2)%nn + 1
+                              nlist_MD(ll+1)%list(gg2)%nlist(nlist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                              ! if(ll+1==2 .and. gg2==1 .and. nlist_MD(ll+1)%list(gg2)%nn==1)write(*,*)group_n,'dddd',groupn_start1,groupm_start_global
+                           else
+                              flist_MD(ll+1)%list(gg2)%nn = flist_MD(ll+1)%list(gg2)%nn + 1
+                              flist_MD(ll+1)%list(gg2)%nlist(flist_MD(ll+1)%list(gg2)%nn,:) = group_n
+                           endif
+                        enddo
+                        enddo
+                     enddo
+                  enddo
+
                   allocate (h_mat_md%BP%LL(ll + 1)%boundary_map(Nboundall**Ndim,Nadmissible_max,Ndim+2))
                   h_mat_md%BP%LL(ll + 1)%boundary_map=-1
                   call LogMemory(stats, SIZEOF(h_mat_md%BP%LL(ll + 1)%boundary_map)/1024.0d3)
@@ -2328,12 +2552,6 @@ end function distance_geo
                         end if
                      enddo
                   end do
-               else
-                  call assert(Nadmissible_tot_loc == h_mat_md%BP%LL(ll + 1)%Nbound_loc, &
-                     'local HTENSOR block count changed between structuring passes')
-                  call assert(dup_idx == h_mat_md%BP%LL(ll + 1)%trans_ndup, &
-                     'compact HTENSOR duplicate count changed between structuring passes')
-                  call HMAT_MD_group_trans_duplicates(h_mat_md%BP%LL(ll + 1), stats)
                endif
                groupm_ll = groupm_ll*2**levelm
                level_ll = GetTreelevel(groupm_ll(1)) - 1
@@ -2347,13 +2565,23 @@ end function distance_geo
                deallocate(rep_row_key, rep_col_key, rep_style_key, rep_block_idx)
                if (allocated(trans_cache_delta)) deallocate(trans_cache_delta)
                if (allocated(trans_cache_nearfar)) deallocate(trans_cache_nearfar)
+               if (allocated(trans_cache_nnear)) deallocate(trans_cache_nnear)
+               if (allocated(trans_cache_near_cc)) deallocate(trans_cache_near_cc)
+               if (allocated(trans_cache_nfar)) deallocate(trans_cache_nfar)
+               if (allocated(trans_cache_far_cc)) deallocate(trans_cache_far_cc)
             end if
             call HMAT_MD_clear_nil_level(nlist_MD(ll), stats)
             call HMAT_MD_clear_nil_level(flist_MD(ll), stats)
+            if (allocated(nlist_key_MD(ll)%keys)) deallocate(nlist_key_MD(ll)%keys)
          else
             exit
          end if
       end do
+
+      do ll = 1, LplusMax
+         if (allocated(nlist_key_MD(ll)%keys)) deallocate(nlist_key_MD(ll)%keys)
+      enddo
+      deallocate(nlist_key_MD)
 
       do ll = 1, LplusMax
       do bb = 1, nlist_MD(ll)%len
@@ -2483,7 +2711,8 @@ end function distance_geo
 
    subroutine HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
       group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
-      trans_cache_nearfar, trans_cache_size, trans_cache_capacity, cache_slot)
+      trans_cache_nearfar, trans_cache_nnear, trans_cache_near_cc, trans_cache_nfar, &
+      trans_cache_far_cc, trans_cache_size, trans_cache_capacity, cache_slot)
 
       implicit none
 
@@ -2494,11 +2723,14 @@ end function distance_geo
       type(Hoption)::option
       type(kernelquant)::ker
       integer, allocatable, intent(inout)::trans_cache_delta(:,:), trans_cache_nearfar(:,:,:)
+      integer, allocatable, intent(inout)::trans_cache_nnear(:,:), trans_cache_near_cc(:,:,:)
+      integer, allocatable, intent(inout)::trans_cache_nfar(:,:), trans_cache_far_cc(:,:,:)
       integer, intent(inout)::trans_cache_size, trans_cache_capacity
       integer, intent(out)::cache_slot
       integer bb, cc, ii, new_capacity
-      integer group_delta(Ndim), group_m(Ndim), group_n(Ndim)
+      integer group_delta(Ndim), group_m(Ndim), group_n(Ndim), near_far
       integer, allocatable::delta_tmp(:,:), nearfar_tmp(:,:,:)
+      integer, allocatable::nnear_tmp(:,:), near_cc_tmp(:,:,:), nfar_tmp(:,:), far_cc_tmp(:,:,:)
 
       group_delta = group_m1 - group_n1
       cache_slot = 0
@@ -2514,26 +2746,51 @@ end function distance_geo
             trans_cache_capacity = 128
             allocate(trans_cache_delta(Ndim,trans_cache_capacity))
             allocate(trans_cache_nearfar(nchild,nchild,trans_cache_capacity))
+            allocate(trans_cache_nnear(nchild,trans_cache_capacity))
+            allocate(trans_cache_near_cc(nchild,nchild,trans_cache_capacity))
+            allocate(trans_cache_nfar(nchild,trans_cache_capacity))
+            allocate(trans_cache_far_cc(nchild,nchild,trans_cache_capacity))
          elseif (trans_cache_size == trans_cache_capacity) then
             new_capacity = trans_cache_capacity*2
             allocate(delta_tmp(Ndim,new_capacity))
             allocate(nearfar_tmp(nchild,nchild,new_capacity))
+            allocate(nnear_tmp(nchild,new_capacity))
+            allocate(near_cc_tmp(nchild,nchild,new_capacity))
+            allocate(nfar_tmp(nchild,new_capacity))
+            allocate(far_cc_tmp(nchild,nchild,new_capacity))
             delta_tmp(:,1:trans_cache_capacity) = trans_cache_delta
             nearfar_tmp(:,:,1:trans_cache_capacity) = trans_cache_nearfar
+            nnear_tmp(:,1:trans_cache_capacity) = trans_cache_nnear
+            near_cc_tmp(:,:,1:trans_cache_capacity) = trans_cache_near_cc
+            nfar_tmp(:,1:trans_cache_capacity) = trans_cache_nfar
+            far_cc_tmp(:,:,1:trans_cache_capacity) = trans_cache_far_cc
             call move_alloc(delta_tmp, trans_cache_delta)
             call move_alloc(nearfar_tmp, trans_cache_nearfar)
+            call move_alloc(nnear_tmp, trans_cache_nnear)
+            call move_alloc(near_cc_tmp, trans_cache_near_cc)
+            call move_alloc(nfar_tmp, trans_cache_nfar)
+            call move_alloc(far_cc_tmp, trans_cache_far_cc)
             trans_cache_capacity = new_capacity
          endif
 
          trans_cache_size = trans_cache_size + 1
          cache_slot = trans_cache_size
          trans_cache_delta(:,cache_slot) = group_delta
+         trans_cache_nnear(:,cache_slot) = 0
+         trans_cache_nfar(:,cache_slot) = 0
          do bb = 1, nchild
          do cc = 1, nchild
             group_m = row_group_child(bb,:)
             group_n = child_offset(cc,:) + groupn_start1 - 1
-            trans_cache_nearfar(bb,cc,cache_slot) = &
-               near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+            near_far = near_or_far_user_MD(group_m, group_n, Ndim, msh, option, ker, option%near_para)
+            trans_cache_nearfar(bb,cc,cache_slot) = near_far
+            if (near_far == 0) then
+               trans_cache_nnear(bb,cache_slot) = trans_cache_nnear(bb,cache_slot) + 1
+               trans_cache_near_cc(bb,trans_cache_nnear(bb,cache_slot),cache_slot) = cc
+            else
+               trans_cache_nfar(bb,cache_slot) = trans_cache_nfar(bb,cache_slot) + 1
+               trans_cache_far_cc(bb,trans_cache_nfar(bb,cache_slot),cache_slot) = cc
+            endif
          enddo
          enddo
       endif
