@@ -42,11 +42,15 @@ extern "C"{
 
 void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0);
 
+void c_bpack_construct_element_compute_fortran(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
+void c_bpack_construct_init_fortran(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_construct_init_gram(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr),  C2Fptr C_QuantApp);
 void c_bpack_construct_matvec_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncHMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), C2Fptr C_QuantApp);
+void c_bpack_factor_fortran(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh);
 void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh);
+void c_bpack_solve_fortran(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_iter_usermatvec_precon(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*ker, void (*C_FuncHMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), void (*C_FuncHPreconMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr), C2Fptr C_QuantApp);
 void c_bpack_md_iter_usermatvec_precon(int* Ndim, C_DT *x, C_DT *b, int*Nloc, int*Nrhs, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*ker, void (*C_FuncHMatVec_MD)(int*, char const *, int*, int*, int*, C_DT  const*,C_DT *,C2Fptr), void (*C_FuncHPreconMatVec_MD)(int*, char const *, int*, int*, int*, C_DT  const*,C_DT *,C2Fptr), C2Fptr C_QuantApp);
@@ -65,7 +69,9 @@ void c_bpack_md_vector_local2global(F2Cptr* ptree, F2Cptr* msh, int* Ndim, int* 
 
 void c_bpack_singleindex_to_multiindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
 void c_bpack_multiindex_to_singleindex(int* Ndim, int* dims, int* single_index_in, int* multi_index);
+void c_bpack_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+void c_bpack_logdet_fortran(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);

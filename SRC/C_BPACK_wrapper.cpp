@@ -612,3 +612,74 @@ free(m_loc);
 free(m);
 
 }
+
+
+void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp){
+
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
+  }
+}
+
+
+void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp){
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_construct_element_compute_fortran(bmat, option, stats, msh, ker, ptree, C_FuncZmn, C_FuncZmnBlock, C_QuantApp);
+  }
+}
+
+
+void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh){
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_factor_fortran(bmat, option, stats, ptree, msh);
+  }
+}
+
+void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree){
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_solve_fortran(x, b, Nloc, Nrhs, bmat, option, stats, ptree);
+  }
+}
+
+void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  }
+}
+
+
+void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat){
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+
+  }else{
+	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
+  }
+}

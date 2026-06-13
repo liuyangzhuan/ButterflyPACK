@@ -1135,7 +1135,7 @@ contains
    !> @param C_FuncZmn: the C_pointer to user-provided function to sample mn^th entry of the matrix
    !> @param C_FuncZmnBlock: the C_pointer to user-provided function to sample a list of intersections of entries of the matrix
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-   subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bpack_construct_element_compute")
+   subroutine C_BPACK_Construct_Element_Compute(bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bpack_construct_element_compute_fortran")
       implicit none
 
       real(kind=8) para
@@ -1302,7 +1302,7 @@ contains
    !> @param C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
    !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
-   subroutine C_BPACK_Construct_Init(N, Ndim, Locations, nns, nlevel, tree, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bpack_construct_init")
+   subroutine C_BPACK_Construct_Init(N, Ndim, Locations, nns, nlevel, tree, Permutation, N_loc, bmat_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bpack_construct_init_fortran")
       implicit none
       integer N, Ndim
       real(kind=8) Locations(*)
@@ -2535,7 +2535,7 @@ contains
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
    !> @param msh_Cptr: the structure containing points and ordering information (in)
-   subroutine C_BPACK_Factor(bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_factor")
+   subroutine C_BPACK_Factor(bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr, msh_Cptr) bind(c, name="c_bpack_factor_fortran")
       implicit none
 
       type(c_ptr), intent(inout) :: bmat_Cptr
@@ -2577,7 +2577,7 @@ contains
    !> @param option_Cptr: the structure containing option
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
-   subroutine C_BPACK_Solve(x, b, Nloc, Nrhs, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_solve")
+   subroutine C_BPACK_Solve(x, b, Nloc, Nrhs, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_solve_fortran")
       implicit none
 
       integer Nloc, Nrhs
@@ -3395,7 +3395,7 @@ contains
    !> @param stats_Cptr: the structure containing statistics
    !> @param ptree_Cptr: the structure containing process tree
    !> @param trans: 'N', 'C' or 'T'
-   subroutine C_BPACK_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_mult")
+   subroutine C_BPACK_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bpack_mult_fortran")
       implicit none
       real(kind=8) t1, t2
       integer Ninloc, Noutloc, Ncol
@@ -3864,7 +3864,7 @@ contains
    !> @param logabsdet: log of magnitude of determinant
    !> @param bmat_Cptr: the structure containing BPACK
    !> @param option_Cptr: the structure containing option
-   subroutine C_BPACK_Logdet(phase, logabsdet, option_Cptr, bmat_Cptr) bind(c, name="c_bpack_logdet")
+   subroutine C_BPACK_Logdet(phase, logabsdet, option_Cptr, bmat_Cptr) bind(c, name="c_bpack_logdet_fortran")
       implicit none
       DTR:: logabsdet
       DT:: phase

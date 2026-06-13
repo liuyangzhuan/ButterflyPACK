@@ -111,6 +111,7 @@ module BPACK_DEFS
     integer, parameter:: HSS_MD = 4  !< use hss_bf_md/shn_bf_md solver
     integer, parameter:: BLR = 5  !< use single-level matrix (lr/bf) solver
     integer, parameter:: HTENSOR = 6  !< use H tensor (lr/bf) solver
+    integer, parameter:: H2 = 7  !< use H2 matrix (lr) solver
 
 
     integer, parameter:: TFQMR = 1 !< use tfqmr
