@@ -3093,7 +3093,7 @@ contains
                      call BF_MD_compress_N(Ndim,blocks, bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree,statflag, 1)
                      call BF_MD_get_rank(Ndim, blocks, ptree)
 
-                     if(blocks%level_butterfly==0)then ! this makes LR compression more robust when rmax is too small   
+                     if(blocks%level_butterfly==0)then ! this makes LR compression more robust when rmax is too small
                         rmax_start = option%rmax
                         ntrial = option%itermax
                         do while (ntrial > 1)
@@ -3113,7 +3113,7 @@ contains
                      dist_bb = sum(int(bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group, kind=8)**2)
                      call MPI_ALLREDUCE(rtemp, rtemp1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%Comm, ierr)
                      if(option%verbosity>=2 .and. ptree%MyID==ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head)write(*,*)'Compressed block:', bb, 'Memory used:', rtemp1,'dist',dist_bb,'lb',blocks%level_butterfly,'min_rank',blocks%rankmin,'max_rank',blocks%rankmax
-                     
+
                      Memory = Memory + rtemp
                      Memory_perlevel = Memory_perlevel + rtemp
                      if (option%trans_invariant /= 0 .and. logn_level_flag == 1 .and. &

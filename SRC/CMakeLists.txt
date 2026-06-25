@@ -160,7 +160,7 @@ endif()
 include(GNUInstallDirs)
 
 if (enable_python)
-  install(TARGETS butterflypack_python EXPORT MYBPACKTargets
+  install(TARGETS butterflypack_python
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

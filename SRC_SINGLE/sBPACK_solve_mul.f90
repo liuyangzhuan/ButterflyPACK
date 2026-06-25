@@ -1,0 +1,4856 @@
+! “ButterflyPACK” Copyright (c) 2018, The Regents of the University of California, through
+! Lawrence Berkeley National Laboratory (subject to receipt of any required approvals from the
+! U.S. Dept. of Energy). All rights reserved.
+
+! If you have questions about your rights to use or distribute this software, please contact
+! Berkeley Lab's Intellectual Property Office at  IPO@lbl.gov.
+
+! NOTICE.  This Software was developed under funding from the U.S. Department of Energy and the
+! U.S. Government consequently retains certain rights. As such, the U.S. Government has been
+! granted for itself and others acting on its behalf a paid-up, nonexclusive, irrevocable
+! worldwide license in the Software to reproduce, distribute copies to the public, prepare
+! derivative works, and perform publicly and display publicly, and to permit other to do so.
+
+! Developers: Yang Liu
+!             (Lawrence Berkeley National Lab, Computational Research Division).
+
+!> @file BPACK_solve_mul.f90
+!> @brief Top-level subroutines for multiplying a BPACK (H/HODBF/HODLR/HSS-BF) matrix (or its inverse or triangular factors) with vectors and associated communication routines
+
+#include "sButterflyPACK_config.fi"
+module s_BPACK_Solve_Mul
+   use s_BPACK_DEFS
+   use s_Bplus_compress
+
+contains
+
+!>**** eigen solver using ARPACK
+   !bmat_shift,option_sh,ptree_sh,stats_sh: matrix, option, process tree and statistics for A-sigmaI or A-sigma*B and its inverse, not referenced if SI=0
+   !bmat_A,option_A,ptree_A,stats_A: matrix, option, process tree and statistics for A
+   !bmat_B,option_B,ptree_B,stats_B: matrix, option, process tree and statistics for B, not referenced if CMmode=0
+   !CMmode: 0: solve the eigen mode with AV=VD; 1: solve the characteristic mode with AV=BVD, B=real(A)
+   !SI: 0: regular mode 1: shift-invert mode
+   !Nunk: size of A
+   !Nunk_loc: local size of A
+   !nev: number of eigen value required
+   !nconv: number of eigen value converged
+   !tol: tolerance in ARPACK
+   !shift: shift value, not referenced if SI=0
+   !eigval: returned eigenvalues of size(nev)
+   !eigvec: returned eigenvectors  of size(Nunk_loc x nev)
+   !which: which eigenvlaues are computed: 'LM', 'SM', LR', 'SR', LI', 'SI'
+   subroutine BPACK_Eigen(bmat_A, option_A, ptree_A, stats_A, bmat_B, option_B, ptree_B, stats_B, bmat_sh, option_sh, ptree_sh, stats_sh, Nunk, Nunk_loc, nev, tol, CMmode, SI, shift, which, nconv, eigval, eigvec)
+
+
+      implicit none
+
+      integer Nunk, Nunk_loc, nev, nconv, CMmode, SI
+      character(len=2) which
+      complex(kind=8) shift
+      complex(kind=8) eigval(nev)
+      complex(kind=8) eigvec(Nunk_loc, nev)
+      integer i, j, ii, jj, iii, jjj
+      real(kind=8):: rel_error, t1, t2
+      type(Hoption)::option_sh, option_A, option_B
+      type(proctree)::ptree_sh, ptree_A, ptree_B
+      type(Hstat)::stats_sh, stats_A, stats_B
+      type(Bmatrix)::bmat_sh, bmat_A, bmat_B
+      real(kind=8) n1, n2, rtemp
+
+      integer maxn, maxnev, maxncv, ldv, ierr
+      integer iparam(11), ipntr(14)
+      logical, allocatable:: select(:)
+      complex(kind=8), allocatable:: ax(:), mx(:), d(:), v(:, :), workd(:), workev(:), resid(:), workl(:)
+      real(kind=8), allocatable:: rwork(:), rd(:, :)
+
+      character bmattype
+      integer ido, n, nx, ncv, lworkl, info, maxitr, ishfts, mode
+      complex(kind=8) sigma
+      real(kind=8) tol
+      logical rvec
+      real(kind=8), external :: pdznorm2, dlapy2
+
+      nconv = 0
+
+#ifdef HAVE_ARPACK
+
+#if DAT==0
+
+      t1 = MPI_Wtime()
+      maxn = Nunk
+      ldv = Nunk_loc
+      maxnev = nev
+      ! maxncv = nev*2
+      maxncv = min(nev*4,Nunk)
+
+      !!!! the following if test has been disabled. Make sure "else if (ncv .le. nev+1 .or.  ncv .gt. n) then" in pzneupd.f is changed to "else if (ncv .le. nev+1) then"
+      ! if(maxncv>Nunk_loc)then
+      !    if(ptree_A%MyID==Main_ID)print *, ' PARPACK requires ncv<=Nunk_loc. Please reduce MPI count or nev'
+      !    stop
+      ! endif
+
+      n = maxn
+      ncv = maxncv
+      lworkl = 3*ncv**2 + 5*ncv
+      ido = 0
+      info = 0
+
+      ishfts = 1
+      maxitr = 3000
+      iparam(1) = ishfts
+      iparam(3) = maxitr
+
+      allocate (select(maxncv))
+      allocate (ax(Nunk_loc))
+      allocate (mx(Nunk_loc))
+      allocate (d(maxn))
+      allocate (v(ldv, maxncv))
+      allocate (workd(3*Nunk_loc))
+      workd=0
+      allocate (workev(3*maxncv))
+      allocate (resid(maxn))
+      allocate (workl(3*maxncv*maxncv + 5*maxncv))
+      allocate (rwork(maxncv))
+      allocate (rd(maxncv, 3))
+
+      if (CMmode == 0) then ! solve the eigen mode
+
+         do while (ido /= 99)
+
+            if (SI == 0) then  ! regular mode
+               bmattype = 'I'
+               ! which='LM'  ! largest eigenvalues
+               iparam(7) = 1
+               sigma = 0d0
+               call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, info)
+               if (ido == -1 .or. ido == 1) then !Perform  y <--- OP*x = A*x
+                  call BPACK_Mult('N', Nunk_loc, 1, workd(ipntr(1)), workd(ipntr(2)), bmat_A, ptree_A, option_A, stats_A)
+               endif
+            else                ! shift-invert mode
+               bmattype = 'I'
+               ! which='LM' ! eigenvalues closest to the shifts
+               iparam(7) = 3
+               sigma = shift
+               call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, info)
+               if (ido == -1 .or. ido == 1) then !Perform  y <--- OP*x = inv[A-SIGMA*I]*x
+                  call BPACK_Solution(bmat_sh, workd(ipntr(2)), workd(ipntr(1)), Nunk_loc, 1, option_sh, ptree_sh, stats_sh)
+               endif
+            endif
+
+         enddo
+
+         if (info < 0) then
+            print *, ' '
+            print *, ' Error with _naupd, info = ', info
+            print *, ' Check the documentation of _naupd.'
+            print *, ' '
+         else
+            rvec = .true.
+            call pzneupd(ptree_A%Comm, rvec, 'A', select, d, v, ldv, sigma, workev, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, ierr)
+            if (ierr /= 0) then
+               print *, ' '
+               print *, ' Error with _neupd, info = ', ierr
+               print *, ' Check the documentation of _neupd. '
+               print *, ' '
+               if(ierr==-3)then
+                  print *, ' Consider modifying pzneupd.f in PARPACK to disable this error'
+               endif
+            else
+               nconv = iparam(5)
+               do j = 1, nconv
+
+                  call BPACK_Mult('N', Nunk_loc, 1, v(1, j), ax, bmat_A, ptree_A, option_A, stats_A)
+                  mx(1:Nunk_loc) = v(1:Nunk_loc, j)
+                  call zaxpy(Nunk_loc, -d(j), mx, 1, ax, 1)
+                  rd(j, 1) = dble(d(j))
+                  rd(j, 2) = dimag(d(j))
+                  rd(j, 3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
+                  rd(j, 3) = rd(j, 3)/dlapy2(rd(j, 1), rd(j, 2))
+               enddo
+               if (option_A%verbosity>=0) call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
+
+               eigval(1:nconv) = d(1:nconv)
+               eigvec(1:Nunk_loc, 1:nconv) = v(1:Nunk_loc, 1:nconv)
+
+            end if
+
+            if (ptree_A%MyID == Main_ID .and. option_A%verbosity>=0) then
+               ! write(*,*)resid(1:nconv)
+               if (info .eq. 1) then
+                  print *, ' '
+                  print *, ' Maximum number of iterations reached.'
+                  print *, ' '
+               else if (info .eq. 3) then
+                  print *, ' '
+                  print *, ' No shifts could be applied during implicit Arnoldi update, try increasing NCV.'
+                  print *, ' '
+               end if
+               print *, ' '
+               print *, '_NDRV1'
+               print *, '====== '
+               print *, ' '
+               print *, ' Size of the matrix is ', n
+               print *, ' The number of processors is ', ptree_A%nproc
+               print *, ' The number of Ritz values requested is ', nev
+               print *, ' The number of Arnoldi vectors generated', ' (NCV) is ', ncv
+               print *, ' What portion of the spectrum: ', which
+               print *, ' The number of converged Ritz values is ', nconv
+               print *, ' The number of Implicit Arnoldi update', ' iterations taken is ', iparam(3)
+               print *, ' The number of OP*x is ', iparam(9)
+               print *, ' The convergence criterion is ', tol
+               print *, ' '
+            endif
+         end if
+
+      else if (CMmode == 1) then ! solve the characteristic mode
+         do while (ido /= 99)
+
+            if (SI == 0) then ! regular mode
+               bmattype = 'G'
+               ! which='LM'         ! largest eigenvalues
+               iparam(7) = 2
+               sigma = 0
+               call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, info)
+               if (ido == -1 .or. ido == -1) then !Perform  y <--- OP*x = inv[M]*A*x
+                  call BPACK_Mult('N', Nunk_loc, 1, workd(ipntr(1)), workd(ipntr(2) + Nunk_loc), bmat_A, ptree_A, option_A, stats_A)
+                  call BPACK_Solution(bmat_B, workd(ipntr(2)), workd(ipntr(2) + Nunk_loc), Nunk_loc, 1, option_B, ptree_B, stats_B)
+               else if (ido == 2) then !Perform  y <--- M*x
+                  call BPACK_Mult('N', Nunk_loc, 1, workd(ipntr(1)), workd(ipntr(2)), bmat_B, ptree_B, option_B, stats_B)
+               endif
+            else ! shift-invert mode
+               bmattype = 'G'
+               ! which='LM'        ! eigenvalues closest to the shifts
+               iparam(7) = 3
+               sigma = shift
+               call pznaupd(ptree_A%Comm, ido, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, info)
+               if (ido == -1) then !Perform  y <--- OP*x = inv[A-SIGMA*M]*M*x
+                  call BPACK_Mult('N', Nunk_loc, 1, workd(ipntr(1)), workd(ipntr(2) + Nunk_loc), bmat_B, ptree_B, option_B, stats_B)
+                  call BPACK_Solution(bmat_sh, workd(ipntr(2)), workd(ipntr(2) + Nunk_loc), Nunk_loc, 1, option_sh, ptree_sh, stats_sh)
+               else if (ido == 1) then !Perform y <-- OP*x = inv[A-sigma*M]*M*x, M*x has been saved in workd(ipntr(3))
+                  call BPACK_Solution(bmat_sh, workd(ipntr(2)), workd(ipntr(3)), Nunk_loc, 1, option_sh, ptree_sh, stats_sh)
+               else if (ido == 2) then !Perform  y <--- M*x
+                  call BPACK_Mult('N', Nunk_loc, 1, workd(ipntr(1)), workd(ipntr(2)), bmat_B, ptree_B, option_B, stats_B)
+               endif
+            endif
+         enddo
+
+         if (info < 0) then
+            print *, ' '
+            print *, ' Error with _naupd, info = ', info
+            print *, ' Check the documentation of _naupd.'
+            print *, ' '
+         else
+            rvec = .true.
+            call pzneupd(ptree_A%Comm, rvec, 'A', select, d, v, ldv, sigma, workev, bmattype, Nunk_loc, which, nev, tol, resid, ncv, v, ldv, iparam, ipntr, workd, workl, lworkl, rwork, ierr)
+            if (ierr /= 0) then
+               print *, ' '
+               print *, ' Error with _neupd, info = ', ierr
+               print *, ' Check the documentation of _neupd. '
+               print *, ' '
+            else
+               nconv = iparam(5)
+               do j = 1, nconv
+
+                  call BPACK_Mult('N', Nunk_loc, 1, v(1, j), ax, bmat_A, ptree_A, option_A, stats_A)
+                  call BPACK_Mult('N', Nunk_loc, 1, v(1, j), mx, bmat_B, ptree_B, option_B, stats_B)
+                  call zaxpy(Nunk_loc, -d(j), mx, 1, ax, 1)
+                  rd(j, 1) = dble(d(j))
+                  rd(j, 2) = dimag(d(j))
+                  rd(j, 3) = pdznorm2(ptree_A%Comm, Nunk_loc, ax, 1)
+                  rd(j, 3) = rd(j, 3)/dlapy2(rd(j, 1), rd(j, 2))
+               enddo
+               if (option_A%verbosity>=0) call pdmout(ptree_A%Comm, 6, nconv, 3, rd, maxncv, -6, 'Ritz values (Real, Imag) and direct residuals')
+               eigval(1:nconv) = d(1:nconv)
+               eigvec(1:Nunk_loc, 1:nconv) = v(1:Nunk_loc, 1:nconv)
+            end if
+
+            if (ptree_A%MyID == Main_ID .and. option_A%verbosity>=0) then
+               if (info .eq. 1) then
+                  print *, ' '
+                  print *, ' Maximum number of iterations reached.'
+                  print *, ' '
+               else if (info .eq. 3) then
+                  print *, ' '
+                  print *, ' No shifts could be applied during implicit Arnoldi update, try increasing NCV.'
+                  print *, ' '
+               end if
+               print *, ' '
+               print *, '_NDRV1'
+               print *, '====== '
+               print *, ' '
+               print *, ' Size of the matrix is ', n
+               print *, ' The number of processors is ', ptree_A%nproc
+               print *, ' The number of Ritz values requested is ', nev
+               print *, ' The number of Arnoldi vectors generated', ' (NCV) is ', ncv
+               print *, ' What portion of the spectrum: ', which
+               print *, ' The number of converged Ritz values is ', nconv
+               print *, ' The number of Implicit Arnoldi update', ' iterations taken is ', iparam(3)
+               print *, ' The number of OP*x is ', iparam(9)
+               print *, ' The convergence criterion is ', tol
+               print *, ' '
+            endif
+         end if
+
+      endif
+      t2 = MPI_Wtime()
+      if (ptree_A%MyID == Main_ID .and. option_A%verbosity >= 0) write (*, *) 'Eigen Solve time: ', t2 - t1
+
+      deallocate (select)
+      deallocate (ax)
+      deallocate (mx)
+      deallocate (d)
+      deallocate (v)
+      deallocate (workd)
+      deallocate (workev)
+      deallocate (resid)
+      deallocate (workl)
+      deallocate (rwork)
+      deallocate (rd)
+
+#else
+      if (ptree_A%MyID == Main_ID) write (*, *) 'eigen driver for real matrices are not yet implemented'
+#endif
+
+#else
+      if (ptree_A%MyID == Main_ID) write (*, *) 'arpack not found, returning nconv=0'
+#endif
+
+   end subroutine BPACK_Eigen
+
+
+
+   subroutine BPACK_Convert2Dense(bmat,option,stats,msh,ker,ptree)
+      implicit none
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer num_vect,Nloc,ii
+      DT,allocatable :: RandVectIn(:, :), RandVectOut(:, :), mat2D(:,:)
+      type(matrixblock)::block_dummy
+      integer pgno
+      integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
+      integer::descsMat1D(9), descsMat2D(9)
+
+
+      ! construct a dummy block for auxiliary purposes
+      pgno=1
+      block_dummy%level = 0
+      block_dummy%row_group = 1
+      block_dummy%col_group = 1
+      block_dummy%pgno = 1
+      block_dummy%M = msh%Nunk
+      block_dummy%N = msh%Nunk
+      block_dummy%headm = 1
+      block_dummy%headn = 1
+      call ComputeParallelIndices(block_dummy, block_dummy%pgno, ptree, msh)
+
+
+      num_vect = msh%Nunk
+      Nloc = msh%idxe - msh%idxs + 1
+      allocate (RandVectIn(Nloc, num_vect))
+      RandVectIn=0
+      allocate (RandVectOut(Nloc, num_vect))
+      RandVectOut=0
+      do ii=1,msh%Nunk
+         if(ii>=msh%idxs .and. ii<=msh%idxe)then
+            RandVectIn(ii-msh%idxs+1,ii)=1d0
+         endif
+      enddo
+      call BPACK_Mult('N', Nloc, num_vect, RandVectIn, RandVectOut, bmat, ptree, option, stats)
+
+
+      !!!!>**** generate 2D grid blacs quantities
+      ctxt = ptree%pgrp(pgno)%ctxt
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
+         myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
+         call descinit_wp(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (mat2D(max(1,myArows), max(1,myAcols)))
+         mat2D = 0
+      else
+         descsMat2D(2) = -1
+         allocate (mat2D(1, 1))
+         mat2D = 0
+      endif
+
+      !!!!>**** redistribution of input matrix
+      call Redistribute1Dto2D(RandVectOut, block_dummy%M_p, 0, pgno, mat2D, block_dummy%M, 0, pgno, block_dummy%N, ptree)
+      deallocate(RandVectIn)
+      deallocate(RandVectOut)
+      call BF_delete(block_dummy, 1)
+
+      if (associated(bmat%h_mat)) then
+         allocate(bmat%h_mat%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%h_mat%fullmat2D=mat2D
+      endif
+      if (associated(bmat%ho_bf)) then
+         allocate(bmat%ho_bf%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%ho_bf%fullmat2D=mat2D
+      endif
+      if (associated(bmat%hss_bf)) then
+         allocate(bmat%hss_bf%fullmat2D(size(mat2D,1),size(mat2D,2)))
+         bmat%hss_bf%fullmat2D=mat2D
+      endif
+      deallocate(mat2D)
+
+   end subroutine BPACK_Convert2Dense
+
+
+   subroutine BPACK_Eigen_Dense(bmat,option,stats,msh,ker,ptree,eigval,eigvec)
+      implicit none
+      DTC eigval(:)
+      DT eigvec(:, :)
+      DT,allocatable:: eigvec2d(:, :)
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(Bmatrix)::bmat
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      integer num_vect,Nloc,ii
+      DT,allocatable :: RandVectIn(:, :), RandVectOut(:, :), mat2D(:,:)
+      type(matrixblock)::block_dummy
+      integer pgno
+      integer tempi, ctxt, info, iproc, jproc, myi, myj, myArows, myAcols, myrow, mycol, nprow, npcol, M, N, mnmin
+      integer::descsMat1D(9), descsMat2D(9)
+
+      ! construct a dummy block for auxiliary purposes
+      pgno=1
+      block_dummy%level = 0
+      block_dummy%row_group = 1
+      block_dummy%col_group = 1
+      block_dummy%pgno = 1
+      block_dummy%M = msh%Nunk
+      block_dummy%N = msh%Nunk
+      block_dummy%headm = 1
+      block_dummy%headn = 1
+      call ComputeParallelIndices(block_dummy, block_dummy%pgno, ptree, msh)
+
+      !!!!>**** generate 2D grid blacs quantities
+      ctxt = ptree%pgrp(pgno)%ctxt
+      call blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
+      if (myrow /= -1 .and. mycol /= -1) then
+         myArows = numroc_wp(block_dummy%M, nbslpk, myrow, 0, nprow)
+         myAcols = numroc_wp(block_dummy%N, nbslpk, mycol, 0, npcol)
+         call descinit_wp(descsMat2D, block_dummy%M, block_dummy%N, nbslpk, nbslpk, 0, 0, ctxt, max(myArows, 1), info)
+         allocate (mat2D(max(1,myArows), max(1,myAcols)))
+         if (associated(bmat%h_mat)) then
+            mat2D=bmat%h_mat%fullmat2D
+         endif
+         if (associated(bmat%ho_bf)) then
+            mat2D=bmat%ho_bf%fullmat2D
+         endif
+         if (associated(bmat%hss_bf)) then
+            mat2D=bmat%hss_bf%fullmat2D
+         endif
+         allocate(eigvec2d(max(1,myArows), max(1,myAcols)))
+      else
+         descsMat2D(2) = -1
+         allocate (mat2D(1, 1))
+         mat2D = 0
+         allocate(eigvec2d(1,1))
+      endif
+
+      call pgeeigf90(mat2D, block_dummy%M, descsMat2D, eigval, eigvec2d, ptree%pgrp(pgno)%ctxt, ptree%pgrp(pgno)%ctxt_head)
+
+      !!!!>**** redistribution of input matrix
+      call Redistribute2Dto1D(eigvec2d, block_dummy%M, 0, pgno, eigvec, block_dummy%M_p, 0, pgno, block_dummy%N, ptree)
+	   deallocate(eigvec2d)
+      deallocate(mat2D)
+      call BF_delete(block_dummy, 1)
+
+
+   end subroutine BPACK_Eigen_Dense
+
+
+
+   subroutine BPACK_Solution(bmat, x, b, Ns_loc, num_vectors, option, ptree, stats)
+
+
+      implicit none
+
+      integer i, j, ii, jj, iii, jjj
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, Ns_loc, num_vectors
+      real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+      real T0
+      real(kind=8):: rel_error
+      type(Hoption)::option
+      type(proctree)::ptree
+      type(Hstat)::stats
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT::x(Ns_loc, num_vectors), b(Ns_loc, num_vectors)
+      real(kind=8) n1, n2, rtemp
+
+      n1 = MPI_Wtime()
+
+      if (option%precon /= DIRECT) then
+         do ii = 1, num_vectors
+            iter = 0
+            rel_error = option%tol_itersol
+            call BPACK_Z_iter(option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, bmat, ptree, option, stats)
+         end do
+      else
+         call BPACK_Inv_Mult('N', Ns_loc, num_vectors, b, x, bmat, ptree, option, stats)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      end if
+
+      n2 = MPI_Wtime()
+      stats%Time_Sol = stats%Time_Sol + n2 - n1
+
+      return
+
+   end subroutine BPACK_Solution
+
+
+
+
+   subroutine BPACK_MD_Solution(Ndim, bmat, x, b, Ns_loc, num_vectors, option, ptree, stats, msh)
+
+      implicit none
+      integer Ndim
+      integer i, j, ii, jj, iii, jjj
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, Ns_loc(Ndim), num_vectors
+      real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+      real T0
+      real(kind=8):: rel_error
+      type(Hoption)::option
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(mesh)::msh(Ndim)
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT::x(product(Ns_loc), num_vectors), b(product(Ns_loc), num_vectors)
+      real(kind=8) n1, n2, rtemp
+
+      n1 = MPI_Wtime()
+
+      if (option%precon /= DIRECT) then
+         do ii = 1, num_vectors
+            iter = 0
+            rel_error = option%tol_itersol
+            call BPACK_MD_Z_iter(Ndim, option%n_iter, Ns_loc, b(:, ii), x(:, ii), rel_error, iter, bmat, ptree, option, stats, msh)
+         end do
+      else
+         write(*,*)'not yet implemented'
+      end if
+
+      n2 = MPI_Wtime()
+      stats%Time_Sol = stats%Time_Sol + n2 - n1
+
+      return
+
+   end subroutine BPACK_MD_Solution
+
+
+
+   !!!>**** TFQMR kernel for an already left-preconditioned user-supplied matvec
+   subroutine Ztfqmr_usermatvec_precon_kernel(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, ptree, option, stats, ker)
+      implicit none
+      integer level_c, rowblock, ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc
+      DT, dimension(1:nn_loc,1)::x, bb, b, ytmp
+      real(kind=8)::err, rerr
+      DT, dimension(1:nn_loc,1)::w, yo, ayo, ye, aye, r, d, v
+      real(kind=8)::ta, we, cm
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
+      DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+      DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+      real(kind=8)::bmag, rerr_last, breakdown_tol
+      real(kind=8)::tim1, tim2
+      integer::ii, kk, ll, iter_last
+      logical::breakdown
+      character(len=128)::breakdown_reason
+      ! Variables for storing current
+      integer::count_unk, srcbox_id
+      DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
+      real(kind=8)::mem_est
+      character:: trans
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+
+      DT, allocatable::r0_initial(:,:), x_last(:,:)
+      type(proctree)::ptree
+      type(Hoption)::option
+
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp=x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+
+      itmax = iter
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
+
+      ! call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
+      bb=b
+
+      ! ! ! if (myid == main_id) then
+      ! ! ! call cpu_time(tim1)
+      ! ! ! open(unit=32,file='iterations.out',status='unknown')
+      ! ! ! end if
+
+      if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc,1), x_last(nn_loc,1))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii,1))
+      enddo
+      x_last = x
+      rerr_last = err
+      iter_last = 0
+
+      !  set initial values
+      !
+      d = 0d0
+      ! write(*,*)'1'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+      r=ytmp
+
+      r = bb - r !residual from the initial guess
+      w = r
+      yo = r
+      ! ! write(*,*)'2'
+      ! ! if(myisnan(sum(abs(yo)**2)))then
+      ! ! write(*,*)'shitddd'
+      ! ! stop
+      ! ! end if
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+      call blackbox_MVP('N',nn_loc,nn_loc,1,yo,ytmp,ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+      ayo = ytmp
+
+      v = ayo
+      we = 0d0
+      etha = 0d0
+
+      ta_local = dot_product(r(:,1), r(:,1))
+      rho_local = dot_product(r0_initial(:,1), r(:,1))
+      bmag_local = dot_product(bb(:,1), bb(:,1))
+
+      dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+      call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+                         MPI_SUM, ptree%Comm, ierr)
+      ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+      ta = sqrt(abs(ta_sum))
+      bmag = sqrt(abs(bmag_sum1))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR has a zero or NaN RHS norm, returning now.'
+         err = 0d0
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      rerr = ta/bmag
+      if ((rerr /= rerr)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR initial residual is NaN, returning initial guess.'
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      x_last = x
+      rerr_last = rerr
+      iter_last = 0
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      iters: do it = 1, itmax
+         amgis_local = dot_product(r0_initial(:,1), v(:,1))
+         call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (abs(amgis) <= breakdown_tol .or. myisnan(abs(amgis)) .or. myisnan(abs(rho))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in alpha denominator'
+            exit iters
+         endif
+         ahpla = rho/amgis
+         if (myisnan(abs(ahpla))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN alpha'
+            exit iters
+         endif
+         ye = yo - ahpla*v
+         ! write(*,*)'3'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
+         call blackbox_MVP('N',nn_loc,nn_loc,1,ye,ytmp,ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
+         aye=ytmp
+         if (myisnan(sum(abs(aye)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
+
+         !  start odd (2n-1) m loop
+         d = yo + (we*we*etha/ahpla)*d
+         w = w - ahpla*ayo
+         we_local = dot_product(w(:,1), w(:,1))
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in odd TFQMR update'
+            exit iters
+         endif
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in odd TFQMR update'
+            exit iters
+         endif
+         x = x + etha*d
+         !  check if the result has converged.
+         !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+         !
+         !  start even (2n)  m loop
+         d = ye + (we*we*etha/ahpla)*d
+         w = w - ahpla*aye
+         we_local = dot_product(w(:,1), w(:,1))
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in even TFQMR update'
+            exit iters
+         endif
+
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in even TFQMR update'
+            exit iters
+         endif
+         x = x + etha*d
+
+         !  check if the result has converged.
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+            ! write(*,*)'4'
+            ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+            call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+            r=ytmp
+
+            r = bb - r
+            rerr_local = dot_product(r(:,1), r(:,1))
+            call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                               ptree%Comm, ierr)
+            rerr = sqrt(abs(rerr_sum))/bmag
+            if ((rerr /= rerr)) then
+               breakdown = .true.
+               breakdown_reason = 'NaN residual'
+               exit iters
+            endif
+            x_last = x
+            rerr_last = rerr
+            iter_last = it
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# ofiter,error:', it, rerr
+               ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+            end if
+
+            if (err > rerr) then
+               err = rerr
+               iter = it
+               deallocate(r0_initial, x_last)
+
+               ! ! ! if (myid == main_id) then
+               ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+               ! ! ! end if
+
+               return
+            endif
+         end if
+         !  make preparations for next iteration
+         dum_local = dot_product(r0_initial(:,1), w(:,1))
+         call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (abs(rho) <= breakdown_tol .or. myisnan(abs(rho)) .or. myisnan(abs(dum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in beta denominator'
+            exit iters
+         endif
+         beta = dum/rho
+         if (myisnan(abs(beta))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN beta'
+            exit iters
+         endif
+         rho = dum
+         yo = w + beta*ye
+         ! write(*,*)'5'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+         call blackbox_MVP('N',nn_loc,nn_loc,1,yo,ytmp,ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+         ayo=ytmp
+         if (myisnan(sum(abs(ayo)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
+
+         !MAGIC
+         v = ayo + beta*(aye + beta*v)
+      enddo iters
+      if (breakdown) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR ', trim(breakdown_reason), &
+            ', returning last finite iterate:', iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      ! write(*,*)'6'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call blackbox_MVP('N',nn_loc,nn_loc,1,x,ytmp,ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ! call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+      r=ytmp
+
+      !MAGIC
+      r = bb - r
+      err_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+                         ierr)
+      err = sqrt(abs(err_sum))/bmag
+      if ((err /= err)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR final residual is NaN, returning last finite iterate:', &
+            iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      iter = itmax
+
+      print *, 'Iterative solver is terminated without convergence!!!', it, err
+      stop
+
+      return
+   end subroutine Ztfqmr_usermatvec_precon_kernel
+
+
+   !!!>**** expose left-preconditioned TFQMR with separate user-supplied operator and preconditioner matvecs
+   subroutine BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::bb(:,:)
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      allocate(bb(nn_loc,1))
+
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, b, bb, ker)
+
+      call Ztfqmr_usermatvec_precon_kernel(ntotal, nn_loc, bb, x, err, iter, &
+         blackbox_MVP_precond, ptree, option, stats, ker)
+
+      deallocate(bb)
+
+      return
+
+   contains
+
+      subroutine blackbox_MVP_precond(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+         DT, allocatable::ytmp(:,:)
+
+         allocate(ytmp(M,num_vect))
+         call blackbox_MVP(trans, M, N, num_vect, Vin, ytmp, ker)
+         call blackbox_precon_MVP(trans, M, N, num_vect, ytmp, Vout, ker)
+         deallocate(ytmp)
+
+         return
+      end subroutine blackbox_MVP_precond
+
+   end subroutine BPACK_Ztfqmr_usermatvec_precon
+
+
+   !!!>**** expose left-preconditioned restarted GMRES with separate user-supplied operator and preconditioner matvecs
+   subroutine BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker, restart_in)
+      implicit none
+      integer, intent(in)::ntotal, nn_loc
+      integer, intent(in), optional::restart_in
+      integer::iter, itmax, restart, total_iter, inner_iter, nrit
+      integer::i, j, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::V(:,:), Ax(:,:), b_prec(:,:), hess(:,:), givens_c(:), givens_s(:), g(:), y(:)
+      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol
+      DT::x_sum, b_sum, vtmp, norm_local, norm_sum, dot_local, dot_sum, tmp
+      logical::converged, happy_breakdown
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Zgmres, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0 .and. sqrt(abs(norm_sum))==0d0)then
+         write(*,*)'Zero RHS in BPACK_Zgmres! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      if (itmax <= 0) itmax = max(1, ntotal)
+
+      restart = 30
+      if (present(restart_in)) restart = restart_in
+      restart = max(1, min(restart, itmax))
+      breakdown_tol = 1d-300
+
+      allocate(V(nn_loc,restart+1), Ax(nn_loc,1), b_prec(nn_loc,1))
+      allocate(hess(restart+1,restart), givens_c(restart), givens_s(restart))
+      allocate(g(restart+1), y(restart))
+
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, b, b_prec, ker)
+
+      rho0 = 0d0
+      relres = 1d0
+      total_iter = 0
+      converged = .false.
+
+      do while (.not. converged .and. total_iter < itmax)
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, Ax, V(:,1:1), ker)
+         V(:,1:1) = b_prec - V(:,1:1)
+
+         norm_local = dot_product(V(:,1), V(:,1))
+         call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         rho = sqrt(abs(norm_sum))
+         if (total_iter == 0) rho0 = rho
+
+         if (rho0 <= breakdown_tol) then
+            err = 0d0
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         relres = rho/rho0
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of GMRES,error:', total_iter, relres, ' restart'
+         end if
+
+         if (relres < tol) then
+            err = relres
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         V(:,1) = V(:,1)/rho
+         hess = 0d0
+         givens_c = 0d0
+         givens_s = 0d0
+         g = 0d0
+         g(1) = rho
+         nrit = 0
+
+         do inner_iter = 1, restart
+            if (total_iter >= itmax) exit
+            total_iter = total_iter + 1
+
+            call blackbox_MVP('N', nn_loc, nn_loc, 1, V(:,inner_iter:inner_iter), Ax, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, Ax, V(:,inner_iter+1:inner_iter+1), ker)
+
+            do i = 1, inner_iter
+               dot_local = dot_product(V(:,i), V(:,inner_iter+1))
+               call MPI_ALLREDUCE(dot_local, dot_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+               hess(i,inner_iter) = dot_sum
+               V(:,inner_iter+1) = V(:,inner_iter+1) - hess(i,inner_iter)*V(:,i)
+            enddo
+
+            norm_local = dot_product(V(:,inner_iter+1), V(:,inner_iter+1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            wnorm = sqrt(abs(norm_sum))
+            hess(inner_iter+1,inner_iter) = wnorm
+            happy_breakdown = (wnorm <= breakdown_tol)
+            if (.not. happy_breakdown) V(:,inner_iter+1) = V(:,inner_iter+1)/wnorm
+
+            do i = 1, inner_iter-1
+               tmp = gmres_dt_conjg(givens_c(i))*hess(i,inner_iter) + gmres_dt_conjg(givens_s(i))*hess(i+1,inner_iter)
+               hess(i+1,inner_iter) = -givens_s(i)*hess(i,inner_iter) + givens_c(i)*hess(i+1,inner_iter)
+               hess(i,inner_iter) = tmp
+            enddo
+
+            delta = sqrt(abs(hess(inner_iter,inner_iter))**2 + abs(hess(inner_iter+1,inner_iter))**2)
+            if (delta <= breakdown_tol) then
+               givens_c(inner_iter) = 1d0
+               givens_s(inner_iter) = 0d0
+            else
+               givens_c(inner_iter) = hess(inner_iter,inner_iter)/delta
+               givens_s(inner_iter) = hess(inner_iter+1,inner_iter)/delta
+            endif
+
+            hess(inner_iter,inner_iter) = gmres_dt_conjg(givens_c(inner_iter))*hess(inner_iter,inner_iter) + &
+               gmres_dt_conjg(givens_s(inner_iter))*hess(inner_iter+1,inner_iter)
+            hess(inner_iter+1,inner_iter) = 0d0
+            g(inner_iter+1) = -givens_s(inner_iter)*g(inner_iter)
+            g(inner_iter) = gmres_dt_conjg(givens_c(inner_iter))*g(inner_iter)
+
+            rho = abs(g(inner_iter+1))
+            relres = rho/rho0
+            nrit = inner_iter
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of GMRES,error:', total_iter, relres
+            end if
+
+            if (relres < tol .or. total_iter >= itmax .or. happy_breakdown) exit
+         enddo
+
+         if (nrit > 0) then
+            do i = nrit, 1, -1
+               tmp = g(i)
+               do j = i+1, nrit
+                  tmp = tmp - hess(i,j)*y(j)
+               enddo
+               if (abs(hess(i,i)) <= breakdown_tol) then
+                  y(i) = 0d0
+               else
+                  y(i) = tmp/hess(i,i)
+               endif
+            enddo
+
+            do i = 1, nrit
+               x(:,1) = x(:,1) + V(:,i)*y(i)
+            enddo
+         endif
+
+         if (relres < tol) then
+            converged = .true.
+            exit
+         endif
+      enddo
+
+      err = relres
+      iter = total_iter
+      if (.not. converged .and. ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: GMRES terminated without reaching tolerance:', err
+      endif
+
+      deallocate(V, Ax, b_prec, hess, givens_c, givens_s, g, y)
+
+      return
+
+   contains
+
+      function gmres_dt_conjg(val) result(res)
+         implicit none
+         DT::val, res
+#if DAT==0 || DAT==2
+         res = conjg(val)
+#else
+         res = val
+#endif
+      end function gmres_dt_conjg
+
+   end subroutine BPACK_Zgmres_usermatvec_precon
+
+
+   !!!>**** expose iterative refinement with a user-supplied operator and preconditioner
+   subroutine BPACK_Ziterrefine_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::r(:,:), Ax(:,:), dx(:,:), x_best(:,:)
+      real(kind=8)::err, tol, rerr, rerr_best, bmag, breakdown_tol
+      real(kind=8)::stagnation_tol, divergence_factor
+      real(kind=8)::dxnorm, xnorm, dx_abs_sum, ax_abs_sum, x_abs_sum
+      DT::rerr_local, rerr_sum, bmag_local, bmag_sum, b_sum, x_sum, vtmp
+      DT::dxnorm_local, dxnorm_sum, xnorm_local, xnorm_sum
+      integer::halt_code_local, halt_code, stagnate_count, stagnate_max
+      integer, parameter::IR_HALT_NONE = 0, IR_HALT_BAD_PRECON = 1
+      integer, parameter::IR_HALT_TINY_DX = 2, IR_HALT_BAD_X = 3
+      integer, parameter::IR_HALT_BAD_MVP = 4, IR_HALT_BAD_RERR = 5
+      integer, parameter::IR_HALT_DIVERGED = 6, IR_HALT_STAGNATED = 7
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ziterrefine, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ziterrefine! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      breakdown_tol = 1d-30
+      stagnation_tol = max(1d-12, min(1d-2, tol*1d-2))
+      divergence_factor = 1d2
+      stagnate_max = 5
+      stagnate_count = 0
+
+      allocate(r(nn_loc,1), Ax(nn_loc,1), dx(nn_loc,1), x_best(nn_loc,1))
+
+      bmag_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(bmag_local, bmag_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      bmag = sqrt(abs(bmag_sum))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag) .or. bmag > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid RHS norm:', bmag
+         endif
+         x = 0d0
+         if (bmag <= breakdown_tol) then
+            err = 0d0
+         else
+            err = BPACK_Bigvalue
+         endif
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ax_abs_sum = real(sum(abs(Ax)), kind=8)
+      halt_code_local = IR_HALT_NONE
+      if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+      call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                         ptree%Comm, ierr)
+      if (halt_code /= IR_HALT_NONE) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid initial operator output.'
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      r = b - Ax
+      rerr_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      rerr = sqrt(abs(rerr_sum))/bmag
+      if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: IR halts due to invalid initial residual:', rerr
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      rerr_best = rerr
+      x_best = x
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of IR,error:', 0, rerr
+      end if
+
+      if (tol > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      do it = 1, itmax
+         call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, dx, ker)
+         dx_abs_sum = real(sum(abs(dx)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((dx_abs_sum /= dx_abs_sum) .or. dx_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_PRECON
+
+         dxnorm_local = dot_product(dx(:,1), dx(:,1))
+         xnorm_local = dot_product(x(:,1), x(:,1))
+         call MPI_ALLREDUCE(dxnorm_local, dxnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xnorm_local, xnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         dxnorm = sqrt(abs(dxnorm_sum))
+         xnorm = sqrt(abs(xnorm_sum))
+         if (halt_code_local == IR_HALT_NONE) then
+            if ((dxnorm /= dxnorm) .or. (xnorm /= xnorm) .or. &
+                dxnorm > huge(1d0)/100d0 .or. xnorm > huge(1d0)/100d0) then
+               halt_code_local = IR_HALT_BAD_PRECON
+            elseif (dxnorm <= stagnation_tol*max(1d0, xnorm)) then
+               halt_code_local = IR_HALT_TINY_DX
+            endif
+         endif
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         x = x + dx
+         x_abs_sum = real(sum(abs(x)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((x_abs_sum /= x_abs_sum) .or. x_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_X
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ax_abs_sum = real(sum(abs(Ax)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+         r = b - Ax
+
+         rerr_local = dot_product(r(:,1), r(:,1))
+         call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         rerr = sqrt(abs(rerr_sum))/bmag
+
+         if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(IR_HALT_BAD_RERR, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of IR,error:', it, rerr
+         end if
+
+         if (rerr < rerr_best*(1d0 - stagnation_tol)) then
+            rerr_best = rerr
+            x_best = x
+            stagnate_count = 0
+         else
+            if (rerr < rerr_best) then
+               rerr_best = rerr
+               x_best = x
+            endif
+            stagnate_count = stagnate_count + 1
+         endif
+
+         halt_code = IR_HALT_NONE
+         if (rerr > divergence_factor*max(rerr_best, breakdown_tol)) then
+            halt_code = IR_HALT_DIVERGED
+         elseif (stagnate_count >= stagnate_max) then
+            halt_code = IR_HALT_STAGNATED
+         endif
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = it
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (tol > rerr) then
+            err = rerr
+            iter = it
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+      enddo
+
+      x = x_best
+      err = rerr_best
+      iter = itmax
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: iterative refinement terminated without reaching tolerance:', err
+      endif
+
+      deallocate(r, Ax, dx, x_best)
+
+      return
+
+   contains
+
+      subroutine print_ir_halt(halt_code_in, best_err)
+         implicit none
+         integer, intent(in)::halt_code_in
+         real(kind=8), intent(in)::best_err
+
+         select case(halt_code_in)
+         case(IR_HALT_BAD_PRECON)
+            print *, 'Warning: IR halts due to invalid preconditioner correction, returning best iterate:', best_err
+         case(IR_HALT_TINY_DX)
+            print *, 'Warning: IR halts due to tiny correction, returning best iterate:', best_err
+         case(IR_HALT_BAD_X)
+            print *, 'Warning: IR halts due to invalid solution update, returning best iterate:', best_err
+         case(IR_HALT_BAD_MVP)
+            print *, 'Warning: IR halts due to invalid operator output, returning best iterate:', best_err
+         case(IR_HALT_BAD_RERR)
+            print *, 'Warning: IR halts due to invalid residual, returning best iterate:', best_err
+         case(IR_HALT_DIVERGED)
+            print *, 'Warning: IR halts due to residual divergence, returning best iterate:', best_err
+         case(IR_HALT_STAGNATED)
+            print *, 'Warning: IR halts due to residual stagnation, returning best iterate:', best_err
+         case default
+            print *, 'Warning: IR halts, returning best iterate:', best_err
+         end select
+      end subroutine print_ir_halt
+   end subroutine BPACK_Ziterrefine_usermatvec_precon
+
+
+   !!!>**** synonym kept for the full iterative-refinement spelling used by the iter_solver dispatcher
+   subroutine BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      call BPACK_Ziterrefine_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+         blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_Ziterativerefinement_usermatvec_precon
+
+
+   !!!>**** dispatch usermatvec iterative solves according to option%iter_solver
+   subroutine BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc,1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      select case (option%iter_solver)
+      case (GMRES)
+         call BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (IR)
+         call BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (TFQMR)
+         call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case default
+         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using GMRES:', option%iter_solver
+         call BPACK_Zgmres_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      end select
+
+      return
+   end subroutine BPACK_Z_iter_usermatvec_precon
+
+
+
+   !!!!>**** TFQMR kernel for an already left-preconditioned user-supplied tensor matvec
+   subroutine Ztfqmr_MD_usermatvec_precon_kernel(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, ii, nn_loc,nn_loc_md(Ndim)
+      DT, dimension(1:product(nn_loc_md),1)::x, bb, b, ytmp
+      real(kind=8)::err, rerr
+      DT, dimension(1:product(nn_loc_md),1)::w, yo, ayo, ye, aye, r, d, v
+      real(kind=8)::ta, we, cm
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
+      DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+      DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+      real(kind=8)::bmag, rerr_last, breakdown_tol
+      integer::iter_last
+      logical::breakdown
+      character(len=128)::breakdown_reason
+
+      type(Hstat)::stats
+
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      DT, allocatable::r0_initial(:,:), x_last(:,:)
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_md)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr_usermatvec_precon, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr_usermatvec_precon! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      itmax = iter
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
+
+      bb=b
+
+
+      if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc,1), x_last(nn_loc,1))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii,1))
+      enddo
+      x_last = x
+      rerr_last = err
+      iter_last = 0
+
+      !  set initial values
+      !
+      d = 0d0
+
+      call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,r,ker)
+
+      r = bb - r !residual from the initial guess
+      w = r
+      yo = r
+
+      call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,yo,ayo,ker)
+
+      v = ayo
+      we = 0d0
+      etha = 0d0
+
+      ta_local = dot_product(r(:,1), r(:,1))
+      rho_local = dot_product(r0_initial(:,1), r(:,1))
+      bmag_local = dot_product(bb(:,1), bb(:,1))
+
+      dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+      call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+                         MPI_SUM, ptree%Comm, ierr)
+      ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+      ta = sqrt(abs(ta_sum))
+      bmag = sqrt(abs(bmag_sum1))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR has a zero or NaN RHS norm, returning now.'
+         err = 0d0
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      rerr = ta/bmag
+      if ((rerr /= rerr)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR initial residual is NaN, returning initial guess.'
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      x_last = x
+      rerr_last = rerr
+      iter_last = 0
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r0_initial, x_last)
+         return
+      endif
+
+
+      iters: do it = 1, itmax
+         amgis_local = dot_product(r0_initial(:,1), v(:,1))
+         call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (abs(amgis) <= breakdown_tol .or. myisnan(abs(amgis)) .or. myisnan(abs(rho))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in alpha denominator'
+            exit iters
+         endif
+         ahpla = rho/amgis
+         if (myisnan(abs(ahpla))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN alpha'
+            exit iters
+         endif
+         ye = yo - ahpla*v
+         call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,ye,aye,ker)
+         if (myisnan(sum(abs(aye)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
+         !  start odd (2n-1) m loop
+         d = yo + (we*we*etha/ahpla)*d
+         w = w - ahpla*ayo
+         we_local = dot_product(w(:,1), w(:,1))
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in odd TFQMR update'
+            exit iters
+         endif
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in odd TFQMR update'
+            exit iters
+         endif
+         x = x + etha*d
+         !  check if the result has converged.
+         !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+         !
+         !  start even (2n)  m loop
+         d = ye + (we*we*etha/ahpla)*d
+         w = w - ahpla*aye
+         we_local = dot_product(w(:,1), w(:,1))
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta <= breakdown_tol .or. (ta /= ta) .or. myisnan(abs(we_sum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in even TFQMR update'
+            exit iters
+         endif
+
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         if ((we /= we) .or. (cm /= cm) .or. (ta /= ta) .or. myisnan(abs(etha))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN in even TFQMR update'
+            exit iters
+         endif
+         x = x + etha*d
+
+         !  check if the result has converged.
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+            call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,r,ker)
+            r = bb - r
+            rerr_local = dot_product(r(:,1), r(:,1))
+            call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                               ptree%Comm, ierr)
+            rerr = sqrt(abs(rerr_sum))/bmag
+            if ((rerr /= rerr)) then
+               breakdown = .true.
+               breakdown_reason = 'NaN residual'
+               exit iters
+            endif
+            x_last = x
+            rerr_last = rerr
+            iter_last = it
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# ofiter,error:', it, rerr
+               ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+            end if
+
+            if (err > rerr) then
+               err = rerr
+               iter = it
+               deallocate(r0_initial, x_last)
+
+               ! ! ! if (myid == main_id) then
+               ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+               ! ! ! end if
+
+               return
+            endif
+         end if
+         !  make preparations for next iteration
+         dum_local = dot_product(r0_initial(:,1), w(:,1))
+         call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (abs(rho) <= breakdown_tol .or. myisnan(abs(rho)) .or. myisnan(abs(dum))) then
+            breakdown = .true.
+            breakdown_reason = 'breakdown in beta denominator'
+            exit iters
+         endif
+         beta = dum/rho
+         if (myisnan(abs(beta))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN beta'
+            exit iters
+         endif
+         rho = dum
+         yo = w + beta*ye
+         call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,yo,ayo,ker)
+         if (myisnan(sum(abs(ayo)))) then
+            breakdown = .true.
+            breakdown_reason = 'NaN matvec output'
+            exit iters
+         endif
+         !MAGIC
+         v = ayo + beta*(aye + beta*v)
+      enddo iters
+      if (breakdown) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR ', trim(breakdown_reason), &
+            ', returning last finite iterate:', iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,r,ker)
+
+      !MAGIC
+      r = bb - r
+      err_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+                         ierr)
+      err = sqrt(abs(err_sum))/bmag
+      if ((err /= err)) then
+         if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR final residual is NaN, returning last finite iterate:', &
+            iter_last, rerr_last
+         x = x_last
+         err = rerr_last
+         iter = iter_last
+         deallocate(r0_initial, x_last)
+         return
+      endif
+      iter = itmax
+
+      print *, 'Iterative solver is terminated without convergence!!!', it, err
+      stop
+
+      return
+   end subroutine Ztfqmr_MD_usermatvec_precon_kernel
+
+
+   !!!>**** expose left-preconditioned TFQMR with separate user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::bb(:,:)
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      allocate(bb(product(nn_loc_MD),1))
+
+      call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, b, bb, ker)
+
+      call Ztfqmr_MD_usermatvec_precon_kernel(Ndim, ntotal, nn_loc_MD, bb, x, err, iter, &
+         blackbox_MVP_precond, ptree, option, stats, ker)
+
+      deallocate(bb)
+
+      return
+
+   contains
+
+      subroutine blackbox_MVP_precond(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         integer::Ndim
+         character trans
+         integer, intent(in)::M(Ndim), N(Ndim), num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+         DT, allocatable::ytmp(:,:)
+
+         allocate(ytmp(product(M),num_vect))
+         call blackbox_MVP(Ndim, trans, M, N, num_vect, Vin, ytmp, ker)
+         call blackbox_precon_MVP(Ndim, trans, M, N, num_vect, ytmp, Vout, ker)
+         deallocate(ytmp)
+
+         return
+      end subroutine blackbox_MVP_precond
+
+   end subroutine BPACK_MD_Ztfqmr_usermatvec_precon
+
+
+   !!!>**** expose left-preconditioned restarted GMRES with separate user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Zgmres_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker, restart_in)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer, intent(in), optional::restart_in
+      integer::iter, itmax, restart, total_iter, inner_iter, nrit
+      integer::i, j, ierr, nn_loc, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::V(:,:), Ax(:,:), b_prec(:,:), hess(:,:), givens_c(:), givens_s(:), g(:), y(:)
+      real(kind=8)::err, tol, rho, rho0, relres, wnorm, delta, breakdown_tol
+      DT::x_sum, b_sum, vtmp, norm_local, norm_sum, dot_local, dot_sum, tmp
+      logical::converged, happy_breakdown
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Zgmres, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0 .and. sqrt(abs(norm_sum))==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Zgmres! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      if (itmax <= 0) itmax = max(1, ntotal)
+
+      restart = 30
+      if (present(restart_in)) restart = restart_in
+      restart = max(1, min(restart, itmax))
+      breakdown_tol = 1d-300
+
+      allocate(V(nn_loc,restart+1), Ax(nn_loc,1), b_prec(nn_loc,1))
+      allocate(hess(restart+1,restart), givens_c(restart), givens_s(restart))
+      allocate(g(restart+1), y(restart))
+
+      call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, b, b_prec, ker)
+
+      rho0 = 0d0
+      relres = 1d0
+      total_iter = 0
+      converged = .false.
+
+      do while (.not. converged .and. total_iter < itmax)
+         call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, Ax, V(:,1:1), ker)
+         V(:,1:1) = b_prec - V(:,1:1)
+
+         norm_local = dot_product(V(:,1), V(:,1))
+         call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         rho = sqrt(abs(norm_sum))
+         if (total_iter == 0) rho0 = rho
+
+         if (rho0 <= breakdown_tol) then
+            err = 0d0
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         relres = rho/rho0
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of GMRES,error:', total_iter, relres, ' restart'
+         end if
+
+         if (relres < tol) then
+            err = relres
+            iter = total_iter
+            converged = .true.
+            exit
+         endif
+
+         V(:,1) = V(:,1)/rho
+         hess = 0d0
+         givens_c = 0d0
+         givens_s = 0d0
+         g = 0d0
+         g(1) = rho
+         nrit = 0
+
+         do inner_iter = 1, restart
+            if (total_iter >= itmax) exit
+            total_iter = total_iter + 1
+
+            call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, V(:,inner_iter:inner_iter), Ax, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, Ax, V(:,inner_iter+1:inner_iter+1), ker)
+
+            do i = 1, inner_iter
+               dot_local = dot_product(V(:,i), V(:,inner_iter+1))
+               call MPI_ALLREDUCE(dot_local, dot_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+               hess(i,inner_iter) = dot_sum
+               V(:,inner_iter+1) = V(:,inner_iter+1) - hess(i,inner_iter)*V(:,i)
+            enddo
+
+            norm_local = dot_product(V(:,inner_iter+1), V(:,inner_iter+1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            wnorm = sqrt(abs(norm_sum))
+            hess(inner_iter+1,inner_iter) = wnorm
+            happy_breakdown = (wnorm <= breakdown_tol)
+            if (.not. happy_breakdown) V(:,inner_iter+1) = V(:,inner_iter+1)/wnorm
+
+            do i = 1, inner_iter-1
+               tmp = gmres_md_dt_conjg(givens_c(i))*hess(i,inner_iter) + gmres_md_dt_conjg(givens_s(i))*hess(i+1,inner_iter)
+               hess(i+1,inner_iter) = -givens_s(i)*hess(i,inner_iter) + givens_c(i)*hess(i+1,inner_iter)
+               hess(i,inner_iter) = tmp
+            enddo
+
+            delta = sqrt(abs(hess(inner_iter,inner_iter))**2 + abs(hess(inner_iter+1,inner_iter))**2)
+            if (delta <= breakdown_tol) then
+               givens_c(inner_iter) = 1d0
+               givens_s(inner_iter) = 0d0
+            else
+               givens_c(inner_iter) = hess(inner_iter,inner_iter)/delta
+               givens_s(inner_iter) = hess(inner_iter+1,inner_iter)/delta
+            endif
+
+            hess(inner_iter,inner_iter) = gmres_md_dt_conjg(givens_c(inner_iter))*hess(inner_iter,inner_iter) + &
+               gmres_md_dt_conjg(givens_s(inner_iter))*hess(inner_iter+1,inner_iter)
+            hess(inner_iter+1,inner_iter) = 0d0
+            g(inner_iter+1) = -givens_s(inner_iter)*g(inner_iter)
+            g(inner_iter) = gmres_md_dt_conjg(givens_c(inner_iter))*g(inner_iter)
+
+            rho = abs(g(inner_iter+1))
+            relres = rho/rho0
+            nrit = inner_iter
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of GMRES,error:', total_iter, relres
+            end if
+
+            if (relres < tol .or. total_iter >= itmax .or. happy_breakdown) exit
+         enddo
+
+         if (nrit > 0) then
+            do i = nrit, 1, -1
+               tmp = g(i)
+               do j = i+1, nrit
+                  tmp = tmp - hess(i,j)*y(j)
+               enddo
+               if (abs(hess(i,i)) <= breakdown_tol) then
+                  y(i) = 0d0
+               else
+                  y(i) = tmp/hess(i,i)
+               endif
+            enddo
+
+            do i = 1, nrit
+               x(:,1) = x(:,1) + V(:,i)*y(i)
+            enddo
+         endif
+
+         if (relres < tol) then
+            converged = .true.
+            exit
+         endif
+      enddo
+
+      err = relres
+      iter = total_iter
+      if (.not. converged .and. ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: MD GMRES terminated without reaching tolerance:', err
+      endif
+
+      deallocate(V, Ax, b_prec, hess, givens_c, givens_s, g, y)
+
+      return
+
+   contains
+
+      function gmres_md_dt_conjg(val) result(res)
+         implicit none
+         DT::val, res
+#if DAT==0 || DAT==2
+         res = conjg(val)
+#else
+         res = val
+#endif
+      end function gmres_md_dt_conjg
+
+   end subroutine BPACK_MD_Zgmres_usermatvec_precon
+
+
+   !!!>**** expose iterative refinement with user-supplied tensor operator and preconditioner matvecs
+   subroutine BPACK_MD_Ziterrefine_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, ierr, nn_loc, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      DT, allocatable::r(:,:), Ax(:,:), dx(:,:), x_best(:,:)
+      real(kind=8)::err, tol, rerr, rerr_best, bmag, breakdown_tol
+      real(kind=8)::stagnation_tol, divergence_factor
+      real(kind=8)::dxnorm, xnorm, dx_abs_sum, ax_abs_sum, x_abs_sum
+      DT::rerr_local, rerr_sum, bmag_local, bmag_sum, b_sum, x_sum, vtmp
+      DT::dxnorm_local, dxnorm_sum, xnorm_local, xnorm_sum
+      integer::halt_code_local, halt_code, stagnate_count, stagnate_max
+      integer, parameter::IR_HALT_NONE = 0, IR_HALT_BAD_PRECON = 1
+      integer, parameter::IR_HALT_TINY_DX = 2, IR_HALT_BAD_X = 3
+      integer, parameter::IR_HALT_BAD_MVP = 4, IR_HALT_BAD_RERR = 5
+      integer, parameter::IR_HALT_DIVERGED = 6, IR_HALT_STAGNATED = 7
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ziterrefine, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x = 0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ziterrefine! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      tol = err
+      itmax = iter
+      if (iter .eq. 0) itmax = ntotal
+      breakdown_tol = 1d-30
+      stagnation_tol = max(1d-12, min(1d-2, tol*1d-2))
+      divergence_factor = 1d2
+      stagnate_max = 5
+      stagnate_count = 0
+
+      allocate(r(nn_loc,1), Ax(nn_loc,1), dx(nn_loc,1), x_best(nn_loc,1))
+
+      bmag_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(bmag_local, bmag_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      bmag = sqrt(abs(bmag_sum))
+      if (bmag <= breakdown_tol .or. (bmag /= bmag) .or. bmag > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid RHS norm:', bmag
+         endif
+         x = 0d0
+         if (bmag <= breakdown_tol) then
+            err = 0d0
+         else
+            err = BPACK_Bigvalue
+         endif
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      ax_abs_sum = real(sum(abs(Ax)), kind=8)
+      halt_code_local = IR_HALT_NONE
+      if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+      call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                         ptree%Comm, ierr)
+      if (halt_code /= IR_HALT_NONE) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid initial operator output.'
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      r = b - Ax
+      rerr_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                         ptree%Comm, ierr)
+      rerr = sqrt(abs(rerr_sum))/bmag
+      if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: MD IR halts due to invalid initial residual:', rerr
+         endif
+         err = BPACK_Bigvalue
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+      rerr_best = rerr
+      x_best = x
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of IR,error:', 0, rerr
+      end if
+
+      if (tol > rerr) then
+         err = rerr
+         iter = 0
+         deallocate(r, Ax, dx, x_best)
+         return
+      endif
+
+      do it = 1, itmax
+         call blackbox_precon_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, r, dx, ker)
+         dx_abs_sum = real(sum(abs(dx)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((dx_abs_sum /= dx_abs_sum) .or. dx_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_PRECON
+
+         dxnorm_local = dot_product(dx(:,1), dx(:,1))
+         xnorm_local = dot_product(x(:,1), x(:,1))
+         call MPI_ALLREDUCE(dxnorm_local, dxnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         call MPI_ALLREDUCE(xnorm_local, xnorm_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         dxnorm = sqrt(abs(dxnorm_sum))
+         xnorm = sqrt(abs(xnorm_sum))
+         if (halt_code_local == IR_HALT_NONE) then
+            if ((dxnorm /= dxnorm) .or. (xnorm /= xnorm) .or. &
+                dxnorm > huge(1d0)/100d0 .or. xnorm > huge(1d0)/100d0) then
+               halt_code_local = IR_HALT_BAD_PRECON
+            elseif (dxnorm <= stagnation_tol*max(1d0, xnorm)) then
+               halt_code_local = IR_HALT_TINY_DX
+            endif
+         endif
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         x = x + dx
+         x_abs_sum = real(sum(abs(x)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((x_abs_sum /= x_abs_sum) .or. x_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_X
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         call blackbox_MVP(Ndim, 'N', nn_loc_MD, nn_loc_MD, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         ax_abs_sum = real(sum(abs(Ax)), kind=8)
+         halt_code_local = IR_HALT_NONE
+         if ((ax_abs_sum /= ax_abs_sum) .or. ax_abs_sum > huge(1d0)/100d0) halt_code_local = IR_HALT_BAD_MVP
+         call MPI_ALLREDUCE(halt_code_local, halt_code, 1, MPI_INTEGER, MPI_MAX, &
+                            ptree%Comm, ierr)
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+         r = b - Ax
+
+         rerr_local = dot_product(r(:,1), r(:,1))
+         call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         rerr = sqrt(abs(rerr_sum))/bmag
+
+         if ((rerr /= rerr) .or. rerr > huge(1d0)/100d0) then
+            x = x_best
+            err = rerr_best
+            iter = max(0, it - 1)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(IR_HALT_BAD_RERR, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# of IR,error:', it, rerr
+         end if
+
+         if (rerr < rerr_best*(1d0 - stagnation_tol)) then
+            rerr_best = rerr
+            x_best = x
+            stagnate_count = 0
+         else
+            if (rerr < rerr_best) then
+               rerr_best = rerr
+               x_best = x
+            endif
+            stagnate_count = stagnate_count + 1
+         endif
+
+         halt_code = IR_HALT_NONE
+         if (rerr > divergence_factor*max(rerr_best, breakdown_tol)) then
+            halt_code = IR_HALT_DIVERGED
+         elseif (stagnate_count >= stagnate_max) then
+            halt_code = IR_HALT_STAGNATED
+         endif
+         if (halt_code /= IR_HALT_NONE) then
+            x = x_best
+            err = rerr_best
+            iter = it
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) call print_md_ir_halt(halt_code, err)
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+
+         if (tol > rerr) then
+            err = rerr
+            iter = it
+            deallocate(r, Ax, dx, x_best)
+            return
+         endif
+      enddo
+
+      x = x_best
+      err = rerr_best
+      iter = itmax
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, 'Warning: MD iterative refinement terminated without reaching tolerance:', err
+      endif
+
+      deallocate(r, Ax, dx, x_best)
+
+      return
+
+   contains
+
+      subroutine print_md_ir_halt(halt_code_in, best_err)
+         implicit none
+         integer, intent(in)::halt_code_in
+         real(kind=8), intent(in)::best_err
+
+         select case(halt_code_in)
+         case(IR_HALT_BAD_PRECON)
+            print *, 'Warning: MD IR halts due to invalid preconditioner correction, returning best iterate:', best_err
+         case(IR_HALT_TINY_DX)
+            print *, 'Warning: MD IR halts due to tiny correction, returning best iterate:', best_err
+         case(IR_HALT_BAD_X)
+            print *, 'Warning: MD IR halts due to invalid solution update, returning best iterate:', best_err
+         case(IR_HALT_BAD_MVP)
+            print *, 'Warning: MD IR halts due to invalid operator output, returning best iterate:', best_err
+         case(IR_HALT_BAD_RERR)
+            print *, 'Warning: MD IR halts due to invalid residual, returning best iterate:', best_err
+         case(IR_HALT_DIVERGED)
+            print *, 'Warning: MD IR halts due to residual divergence, returning best iterate:', best_err
+         case(IR_HALT_STAGNATED)
+            print *, 'Warning: MD IR halts due to residual stagnation, returning best iterate:', best_err
+         case default
+            print *, 'Warning: MD IR halts, returning best iterate:', best_err
+         end select
+      end subroutine print_md_ir_halt
+   end subroutine BPACK_MD_Ziterrefine_usermatvec_precon
+
+
+   !!!>**** synonym kept for the full iterative-refinement spelling used by the MD iter_solver dispatcher
+   subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      call BPACK_MD_Ziterrefine_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+         blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon
+
+
+   !!!>**** dispatch tensor usermatvec iterative solves according to option%iter_solver
+   subroutine BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim)
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      select case (option%iter_solver)
+      case (GMRES)
+         call BPACK_MD_Zgmres_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (IR)
+         call BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (TFQMR)
+         call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case default
+         if (ptree%MyID == Main_ID) write(*,*) 'Unknown iter_solver, using TFQMR:', option%iter_solver
+         call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      end select
+
+      return
+   end subroutine BPACK_MD_Z_iter_usermatvec_precon
+
+
+   !!!>**** dispatch built-in BPACK iterative solves through the user-matvec preconditioned interface
+   subroutine BPACK_Z_iter(ntotal, nn_loc, b, x, err, iter, bmat, ptree, option, stats)
+      implicit none
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc
+      DT, dimension(1:nn_loc), target::x, b
+      DT, pointer::x2(:,:), b2(:,:)
+      real(kind=8)::err
+      type(Bmatrix), target::bmat
+      type(proctree), target::ptree
+      type(Hoption), target::option
+      type(Hstat), target::stats
+      type(kernelquant), target::ker
+      type(quant_bmat), target::quant
+
+      nullify(quant%msh, quant%msh_md)
+      quant%bmat => bmat
+      quant%ptree => ptree
+      quant%option => option
+      quant%stats => stats
+      quant%ker => ker
+      ker%QuantApp => quant
+
+      b2(1:nn_loc,1:1) => b
+      x2(1:nn_loc,1:1) => x
+
+      call BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b2, x2, err, iter, &
+         blackbox_BPACK_MVP, blackbox_BPACK_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_Z_iter
+
+
+   !!!>**** dispatch built-in tensor BPACK iterative solves through the user-matvec preconditioned interface
+   subroutine BPACK_MD_Z_iter(Ndim, ntotal, nn_loc_MD, b, x, err, iter, bmat, ptree, option, stats, msh)
+      implicit none
+      integer Ndim
+      integer, intent(in)::ntotal
+      integer::iter, nn_loc_MD(Ndim), nn_loc
+      DT, dimension(1:product(nn_loc_MD)), target::x, b
+      DT, pointer::x2(:,:), b2(:,:)
+      real(kind=8)::err
+      type(Bmatrix), target::bmat
+      type(proctree), target::ptree
+      type(Hoption), target::option
+      type(Hstat), target::stats
+      type(mesh), target::msh(Ndim)
+      type(kernelquant), target::ker
+      type(quant_bmat), target::quant
+
+      nn_loc = product(nn_loc_MD)
+
+      nullify(quant%msh)
+      quant%bmat => bmat
+      quant%msh_md => msh
+      quant%ptree => ptree
+      quant%option => option
+      quant%stats => stats
+      quant%ker => ker
+      ker%QuantApp => quant
+
+      b2(1:nn_loc,1:1) => b
+      x2(1:nn_loc,1:1) => x
+
+      call BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b2, x2, err, iter, &
+         blackbox_BPACK_MD_MVP, blackbox_BPACK_MD_precon_MVP, ptree, option, stats, ker)
+
+      return
+   end subroutine BPACK_MD_Z_iter
+
+
+   subroutine blackbox_BPACK_MVP(trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      character trans
+      integer, intent(in)::M, N, num_vect
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         call BPACK_Mult(trans, M, num_vect, Vin, Vout, quant%bmat, quant%ptree, quant%option, quant%stats)
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MVP
+
+
+   subroutine blackbox_BPACK_precon_MVP(trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      character trans
+      integer, intent(in)::M, N, num_vect
+      integer ii
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         do ii = 1, num_vect
+            call BPACK_ApplyPrecon(quant%option%precon, M, Vin(1:M,ii), Vout(1:M,ii), &
+               quant%ptree, quant%bmat, quant%option, quant%stats)
+         enddo
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_precon_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_precon_MVP
+
+
+   subroutine blackbox_BPACK_MD_MVP(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      integer Ndim
+      character trans
+      integer, intent(in)::M(Ndim), N(Ndim), num_vect
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         if (.not. associated(quant%msh_md)) then
+            write(*,*)'Tensor mesh metadata is not associated in blackbox_BPACK_MD_MVP'
+            stop
+         endif
+         call BPACK_MD_Mult(Ndim, trans, M, num_vect, Vin, Vout, quant%bmat, &
+            quant%ptree, quant%option, quant%stats, quant%msh_md)
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MD_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MD_MVP
+
+
+   subroutine blackbox_BPACK_MD_precon_MVP(Ndim, trans, M, N, num_vect, Vin, Vout, ker)
+      implicit none
+      integer Ndim
+      character trans
+      integer, intent(in)::M(Ndim), N(Ndim), num_vect
+      integer ii, nn_loc
+      DT::Vin(:,:), Vout(:,:)
+      type(kernelquant)::ker
+
+      nn_loc = product(M)
+
+      select type (quant => ker%QuantApp)
+      type is (quant_bmat)
+         do ii = 1, num_vect
+            call BPACK_ApplyPrecon(quant%option%precon, nn_loc, Vin(1:nn_loc,ii), Vout(1:nn_loc,ii), &
+               quant%ptree, quant%bmat, quant%option, quant%stats)
+         enddo
+      class default
+         write(*,*)'Unexpected QuantApp type in blackbox_BPACK_MD_precon_MVP'
+         stop
+      end select
+
+      return
+   end subroutine blackbox_BPACK_MD_precon_MVP
+
+
+
+   subroutine deprecated_BPACK_Ztfqmr(precond, ntotal, nn_loc, b, x, err, iter, bmat, ptree, option, stats)
+      implicit none
+      integer level_c, rowblock, ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, nn_loc
+      DT, dimension(1:nn_loc)::x, bb, b, ytmp
+      real(kind=8)::err, rerr
+      DT, dimension(1:nn_loc)::w, yo, ayo, ye, aye, r, d, v
+      real(kind=8)::ta, we, cm
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum, vtmp
+      DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+      DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+      real(kind=8)::bmag
+      real(kind=8)::tim1, tim2
+      integer::ii, kk, ll
+      ! Variables for storing current
+      integer::count_unk, srcbox_id
+      DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
+      real(kind=8)::mem_est
+      character:: trans
+      type(Hstat)::stats
+
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT, allocatable::r0_initial(:)
+      integer precond
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+
+      x_sum = sum(x)
+      vtmp = x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+
+
+      itmax = iter
+
+      call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
+
+      ! ! ! if (myid == main_id) then
+      ! ! ! call cpu_time(tim1)
+      ! ! ! open(unit=32,file='iterations.out',status='unknown')
+      ! ! ! end if
+
+      if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii))
+      enddo
+
+      !  set initial values
+      !
+      d = 0d0
+      ! write(*,*)'1'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_Mult('N', nn_loc, 1, x, ytmp, bmat, ptree, option, stats)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      r = bb - r !residual from the initial guess
+      w = r
+      yo = r
+      ! ! write(*,*)'2'
+      ! ! if(myisnan(sum(abs(yo)**2)))then
+      ! ! write(*,*)'shitddd'
+      ! ! stop
+      ! ! end if
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+      call BPACK_Mult('N', nn_loc, 1, yo, ytmp, bmat, ptree, option, stats)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+      v = ayo
+      we = 0d0
+      etha = 0d0
+
+      ta_local = dot_product(r, r)
+      rho_local = dot_product(r0_initial, r)
+      bmag_local = dot_product(bb, bb)
+
+      dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+      call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+                         MPI_SUM, ptree%Comm, ierr)
+      ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+      ta = sqrt(abs(ta_sum))
+      bmag = sqrt(abs(bmag_sum1))
+      rerr = ta/bmag
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         return
+      endif
+
+
+      iters: do it = 1, itmax
+         amgis_local = dot_product(r0_initial, v)
+         call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         ahpla = rho/amgis
+         ye = yo - ahpla*v
+         ! write(*,*)'3'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
+         call BPACK_Mult('N', nn_loc, 1, ye, ytmp, bmat, ptree, option, stats)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
+
+         !  start odd (2n-1) m loop
+         d = yo + (we*we*etha/ahpla)*d
+         w = w - ahpla*ayo
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+         !  check if the result has converged.
+         !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+         !
+         !  start even (2n)  m loop
+         d = ye + (we*we*etha/ahpla)*d
+         w = w - ahpla*aye
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta<=1d-30) then
+            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
+            err = rerr
+            iter = it
+            return
+            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+         end if
+
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+
+         !  check if the result has converged.
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+            ! write(*,*)'4'
+            ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+            call BPACK_Mult('N', nn_loc, 1, x, ytmp, bmat, ptree, option, stats)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+            r = bb - r
+            rerr_local = dot_product(r, r)
+            call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                               ptree%Comm, ierr)
+            rerr = sqrt(abs(rerr_sum))/bmag
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# ofiter,error:', it, rerr
+               ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+            end if
+
+            if (err > rerr) then
+               err = rerr
+               iter = it
+
+               ! ! ! if (myid == main_id) then
+               ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+               ! ! ! end if
+
+               return
+            endif
+         end if
+         !  make preparations for next iteration
+         dum_local = dot_product(r0_initial, w)
+         call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         beta = dum/rho
+         rho = dum
+         yo = w + beta*ye
+         ! write(*,*)'5'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+         call BPACK_Mult('N', nn_loc, 1, yo, ytmp, bmat, ptree, option, stats)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+         !MAGIC
+         v = ayo + beta*(aye + beta*v)
+      enddo iters
+      ! write(*,*)'6'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_Mult('N', nn_loc, 1, x, ytmp, bmat, ptree, option, stats)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      !MAGIC
+      r = bb - r
+      err_local = dot_product(r, r)
+      call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+                         ierr)
+      err = sqrt(abs(err_sum))/bmag
+      iter = itmax
+
+      print *, 'Iterative solver is terminated without convergence!!!', it, err
+      stop
+
+      return
+   end subroutine deprecated_BPACK_Ztfqmr
+
+
+   subroutine deprecated_BPACK_MD_Ztfqmr(Ndim, precond, ntotal, nn_loc_md, b, x, err, iter, bmat, ptree, option, stats,msh)
+      implicit none
+      integer Ndim
+      integer level_c, rowblock, ierr
+      integer, intent(in)::ntotal
+      integer::iter, itmax, it, ii, nn_loc,nn_loc_md(Ndim)
+      DT, dimension(1:product(nn_loc_md))::x, bb, b, ytmp
+      real(kind=8)::err, rerr
+      DT, dimension(1:product(nn_loc_md))::w, yo, ayo, ye, aye, r, d, v
+      real(kind=8)::ta, we, cm
+      DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
+      DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
+      DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
+      real(kind=8)::bmag
+      real(kind=8)::tim1, tim2
+      integer::kk, ll
+      ! Variables for storing current
+      integer::count_unk, srcbox_id
+      DT, dimension(:), allocatable::curr_coefs_dum_local, curr_coefs_dum_global
+      real(kind=8)::mem_est
+      character:: trans
+      type(Hstat)::stats
+
+      ! type(cascadingfactors)::cascading_factors_forward(:),cascading_factors_inverse(:)
+      type(Bmatrix)::bmat
+      DT, allocatable::r0_initial(:)
+      integer precond
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      nn_loc = product(nn_loc_md)
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write(*,*)' '
+      endif
+
+      x_sum = sum(x)
+      vtmp=x_sum
+      call MPI_ALLREDUCE(vtmp, x_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(myisnan(abs(x_sum)))then
+         if(ptree%MyID == Main_ID)write(*,*)'In BPACK_MD_Ztfqmr, an initial guess of x is needed. Setting x=0 as an initial guess. '
+         x=0
+      endif
+
+      b_sum = sum(b)
+      vtmp = b_sum
+      call MPI_ALLREDUCE(vtmp, b_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if(abs(b_sum)==0d0)then
+         write(*,*)'Zero RHS in BPACK_MD_Ztfqmr! Returning a trivial solution vector'
+         x = 0d0
+         err = 0d0
+         iter = 0
+         return
+      endif
+
+      itmax = iter
+      if(option%precon==BPACKPRECON)then
+         write(*,*)"BPACK_ApplyPrecon has not been changed to BPACK_MD_ApplyPrecon!!"
+      endif
+      call BPACK_ApplyPrecon(precond, nn_loc, b, bb, ptree, bmat, option, stats)
+
+      ! ! ! if (myid == main_id) then
+      ! ! ! call cpu_time(tim1)
+      ! ! ! open(unit=32,file='iterations.out',status='unknown')
+      ! ! ! end if
+
+      if (iter .eq. 0) itmax = ntotal
+
+      allocate(r0_initial(nn_loc))
+      do ii = 1, nn_loc
+         call random_dp_number(r0_initial(ii))
+      enddo
+
+      !  set initial values
+      !
+      d = 0d0
+      ! write(*,*)'1'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats, msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      r = bb - r !residual from the initial guess
+      w = r
+      yo = r
+      ! ! write(*,*)'2'
+      ! ! if(myisnan(sum(abs(yo)**2)))then
+      ! ! write(*,*)'shitddd'
+      ! ! stop
+      ! ! end if
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, yo, ytmp, bmat, ptree, option, stats, msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+      v = ayo
+      we = 0d0
+      etha = 0d0
+
+      ta_local = dot_product(r, r)
+      rho_local = dot_product(r0_initial, r)
+      bmag_local = dot_product(bb, bb)
+
+      dumb_ali(1:3) = (/ta_local, rho_local, bmag_local/)
+      call MPI_ALLREDUCE(dumb_ali(1:3), dumb_ali(4:6), 3, MPI_DT, &
+                         MPI_SUM, ptree%Comm, ierr)
+      ta_sum = dumb_ali(4); rho = dumb_ali(5); bmag_sum1 = dumb_ali(6)
+      ta = sqrt(abs(ta_sum))
+      bmag = sqrt(abs(bmag_sum1))
+      rerr = ta/bmag
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# ofiter,error:', 0, rerr
+         ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+      end if
+      if (err > rerr) then
+         err = rerr
+         iter = 0
+         return
+      endif
+
+
+      iters: do it = 1, itmax
+         amgis_local = dot_product(r0_initial, v)
+         call MPI_ALLREDUCE(amgis_local, amgis, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         ahpla = rho/amgis
+         ye = yo - ahpla*v
+         ! write(*,*)'3'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,ye,aye)
+         call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, ye, ytmp, bmat, ptree, option, stats,msh)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, aye, ptree, bmat, option, stats)
+
+         !  start odd (2n-1) m loop
+         d = yo + (we*we*etha/ahpla)*d
+         w = w - ahpla*ayo
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+         !  check if the result has converged.
+         !a        if (err*bmag .gt. ta*sqrt(2.*it)) then
+         !
+         !  start even (2n)  m loop
+         d = ye + (we*we*etha/ahpla)*d
+         w = w - ahpla*aye
+         we_local = dot_product(w, w)
+         call MPI_ALLREDUCE(we_local, we_sum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         if (ta<=1d-30) then
+            if (ptree%MyID == Main_ID) print *, 'Warning: TFQMR halts, returning now.'
+            err = rerr
+            iter = it
+            return
+            ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+         end if
+
+         we = sqrt(abs(we_sum))/ta
+         cm = 1.0d0/sqrt(1.0d0 + we*we)
+         ta = ta*we*cm
+         etha = ahpla*cm*cm
+         x = x + etha*d
+
+         !  check if the result has converged.
+         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+            ! write(*,*)'4'
+            ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+            call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats,msh)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+            call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+            r = bb - r
+            rerr_local = dot_product(r, r)
+            call MPI_ALLREDUCE(rerr_local, rerr_sum, 1, MPI_DT, MPI_SUM, &
+                               ptree%Comm, ierr)
+            rerr = sqrt(abs(rerr_sum))/bmag
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# ofiter,error:', it, rerr
+               ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
+            end if
+
+            if (err > rerr) then
+               err = rerr
+               iter = it
+
+               ! ! ! if (myid == main_id) then
+               ! ! ! print*,'Total number of iterations and achieved residual :::',it,err
+               ! ! ! end if
+
+               return
+            endif
+         end if
+         !  make preparations for next iteration
+         dum_local = dot_product(r0_initial, w)
+         call MPI_ALLREDUCE(dum_local, dum, 1, MPI_DT, MPI_SUM, &
+                            ptree%Comm, ierr)
+         beta = dum/rho
+         rho = dum
+         yo = w + beta*ye
+         ! write(*,*)'5'
+         ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,yo,ayo)
+         call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, yo, ytmp, bmat, ptree, option, stats,msh)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         call BPACK_ApplyPrecon(precond, nn_loc, ytmp, ayo, ptree, bmat, option, stats)
+
+         !MAGIC
+         v = ayo + beta*(aye + beta*v)
+      enddo iters
+      ! write(*,*)'6'
+      ! call SmartMultifly(trans,nn_loc,level_c,rowblock,1,x,r)
+      call BPACK_MD_Mult(Ndim,'N', nn_loc_md, 1, x, ytmp, bmat, ptree, option, stats,msh)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_ApplyPrecon(precond, nn_loc, ytmp, r, ptree, bmat, option, stats)
+
+      !MAGIC
+      r = bb - r
+      err_local = dot_product(r, r)
+      call MPI_ALLREDUCE(err_local, err_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, &
+                         ierr)
+      err = sqrt(abs(err_sum))/bmag
+      iter = itmax
+
+      print *, 'Iterative solver is terminated without convergence!!!', it, err
+      stop
+
+      return
+   end subroutine deprecated_BPACK_MD_Ztfqmr
+
+   subroutine BPACK_ApplyPrecon(precond, nn_loc, x, y, ptree, bmat, option, stats)
+      implicit none
+      integer nn_loc
+      DT, dimension(1:nn_loc)::x, y
+      integer precond
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      if (precond == NOPRECON) then
+         y = x
+      else if (precond == BPACKPRECON) then
+         call BPACK_Inv_Mult('N', nn_loc, 1, x, y, bmat, ptree, option, stats)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      endif
+   end subroutine BPACK_ApplyPrecon
+
+   subroutine BPACK_Test_Solve_error(bmat, N_unk_loc, option, ptree, stats)
+
+
+
+      implicit none
+
+      integer i, j, ii, jj, iii, jjj, ierr
+      integer level, blocks, edge, patch, node, group
+      integer rank, index_near, m, n, length, flag, num_sample, n_iter_max, iter, N_unk, N_unk_loc
+      real(kind=8) theta, phi, dphi, rcs_V, rcs_H
+      real T0
+      real(kind=8) n1, n2, rtemp
+      DT value_Z
+      DT, allocatable:: Voltage_pre(:), x(:, :), xtrue(:, :), b(:, :), btrue(:, :)
+      real(kind=8):: rel_error, rtemp1, rtemp2, rtemp3, rtemp4, norm1, norm2, norm3, norm4
+      type(Hoption)::option
+      ! type(mesh)::msh
+      ! type(kernelquant)::ker
+      type(proctree)::ptree
+      type(Bmatrix)::bmat
+      type(Hstat)::stats
+      DT, allocatable:: current(:), voltage(:)
+      integer idxs, idxe
+
+      allocate (x(N_unk_loc, 1))
+      x = 0
+      allocate (xtrue(N_unk_loc, 1))
+      xtrue = 0
+      call RandomMat(N_unk_loc, 1, 1, xtrue, 0)
+      allocate (btrue(N_unk_loc, 1))
+      btrue = 0
+      allocate (b(N_unk_loc, 1))
+      b = 0
+      call BPACK_Mult('N', N_unk_loc, 1, xtrue, btrue, bmat, ptree, option, stats)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+      call BPACK_Solution(bmat, x, btrue, N_unk_loc, 1, option, ptree, stats)
+      call BPACK_Mult('N', N_unk_loc, 1, x, b, bmat, ptree, option, stats)
+      stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+
+      rtemp1 = fnorm(xtrue - x, N_unk_loc, 1)**2d0;
+      rtemp2 = fnorm(xtrue, N_unk_loc, 1)**2d0;
+      call MPI_ALLREDUCE(rtemp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rtemp2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write (*, *) '||X_t-H\(H*X_t)||_F/||X_t||_F: ', sqrt(norm1/norm2)
+      endif
+
+      rtemp3 = fnorm(btrue - b, N_unk_loc, 1)**2d0;
+      rtemp4 = fnorm(btrue, N_unk_loc, 1)**2d0;
+      call MPI_ALLREDUCE(rtemp3, norm3, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rtemp4, norm4, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         write (*, *) '||B-H*(H\B)||_F/||B||_F: ', sqrt(norm3/norm4)
+      endif
+
+      deallocate (x)
+      deallocate (xtrue)
+      deallocate (btrue)
+      deallocate (b)
+
+   end subroutine BPACK_Test_Solve_error
+
+   subroutine BPACK_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats)
+      implicit none
+
+      integer Ns
+      character trans
+      integer num_vectors
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      select case (option%format)
+      case (HODLR)
+         call HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%ho_bf, ptree, option, stats)
+      case (HSS)
+         call HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
+      case (HMAT,BLR)
+         call Hmat_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%h_mat, ptree, option, stats)
+      end select
+
+   end subroutine BPACK_Inv_Mult
+
+   subroutine Test_BPACK_Mult(Ns, bmat, ptree, option, stats)
+
+      implicit none
+      integer Ns
+      DT::Vin(Ns, 1), Vout(Ns, 1)
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      real(kind=8)::rtemp0, fnorm0
+      integer ierr
+
+      Vin = 1d0
+      call BPACK_Mult('N', Ns, 1, Vin, Vout, bmat, ptree, option, stats)
+      rtemp0 = fnorm(Vout, Ns, 1)**2d0
+      call MPI_ALLREDUCE(rtemp0, fnorm0, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, *) 'Test_BPACK_Mult: |Ax|_F: ', fnorm0
+
+      Vin = 1d0
+      call BPACK_Mult('T', Ns, 1, Vin, Vout, bmat, ptree, option, stats)
+      rtemp0 = fnorm(Vout, Ns, 1)**2d0
+      call MPI_ALLREDUCE(rtemp0, fnorm0, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) write (*, *) 'Test_BPACK_Mult: |A^Tx|_F: ', fnorm0
+
+   end subroutine Test_BPACK_Mult
+
+   subroutine BPACK_Mult(trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats, use_blockcopy)
+
+      implicit none
+      character trans
+      integer Ns
+      integer num_vectors
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      integer,optional::use_blockcopy
+
+      select case (option%format)
+      case (HODLR)
+         call HODLR_Mult(trans, Ns, num_vectors, 1, bmat%ho_bf%Maxlevel + 1, Vin, Vout, bmat%ho_bf, ptree, option, stats)
+      case (HMAT,BLR)
+         if(present(use_blockcopy))then
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,use_blockcopy)
+         else
+            call Hmat_Mult(trans, Ns, num_vectors, 1, bmat%h_mat%Maxlevel + 1, Vin, Vout, bmat%h_mat, ptree, option, stats,1)
+         endif
+      case (HSS)
+         call HSS_Mult(trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf, ptree, option, stats)
+      end select
+
+   end subroutine BPACK_Mult
+
+
+   subroutine BPACK_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat, ptree, option, stats, msh)
+
+      implicit none
+      character trans
+      integer Ndim
+      integer Ns(Ndim)
+      integer num_vectors
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(Bmatrix)::bmat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      select case (option%format)
+      case (HSS_MD)
+         call HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%hss_bf_md, ptree, option, stats, msh)
+      case (HTENSOR)
+         call HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, bmat%h_mat_md, ptree, option, stats, msh)
+      case default
+         write(*,*)'not supported format in BPACK_MD_Mult:', option%format
+         stop
+      end select
+
+   end subroutine BPACK_MD_Mult
+
+
+   subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+
+
+
+      implicit none
+
+      integer Ns
+      integer level_c, rowblock, head, tail
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, pp
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character trans, trans_tmp
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      type(matrixblock), pointer::block_o
+
+      ! type(vectorsblock), pointer :: random1, random2
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:),Vout(:)
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      integer istart, iend, iinc
+
+      idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
+
+      stats%Flop_Tmp = 0
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      ! get the right multiplied vectors
+      ctemp1 = 1.0d0; ctemp2 = 0.0d0
+      ! allocate(vec_old(Ns,num_vectors))
+      allocate (vec_new(Ns, num_vectors))
+      Vout = Vin
+      ! write(*,*)'ddddd',Ns,num_vectors
+      ! write(*,*)'begin'
+
+      if (trans == 'N') then
+         istart = ho_bf1%Maxlevel + 1
+         iend = 1
+         iinc = -1
+      else
+         istart = 1
+         iend = ho_bf1%Maxlevel + 1
+         iinc = 1
+      endif
+
+      do level = istart, iend, iinc
+         vec_new = 0
+         do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+            pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level)%BP_inverse(ii)%pgno)%head + 1
+            head = ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_p(pp, 1) + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%headn - 1
+            tail = head + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_loc - 1
+            idx_start_loc = head - idx_start_glo + 1
+            idx_end_loc = tail - idx_start_glo + 1
+
+            if (level == ho_bf1%Maxlevel + 1) then
+               call Full_block_MVP_dat(ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1), trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors,&
+&Vout(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2)
+               stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
+            else
+               call Bplus_block_MVP_inverse_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vout(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ptree, stats)
+
+            endif
+         end do
+         Vout = vec_new
+      end do
+      ! Vout = vec_new(1:Ns,1)
+      ! deallocate(vec_old)
+      deallocate (vec_new)
+
+      ! do ii=1,Ns
+      ! write(131,*)abs(Vout(ii,1))
+      ! enddo
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout = Vout*option%scale_factor
+
+      return
+
+   end subroutine HODLR_Inv_Mult
+
+   subroutine HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
+
+
+
+      implicit none
+
+      integer Ns
+      integer level_c, rowblock, head, tail
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, pp
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character trans, trans_tmp
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      type(matrixblock), pointer::block_o
+
+      ! type(vectorsblock), pointer :: random1, random2
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_loc, idx_end_loc
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:),Vout(:)
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(hssbf)::hss_bf1
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+      integer istart, iend, iinc
+
+      stats%Flop_Tmp = 0
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      call Bplus_block_MVP_dat(hss_bf1%BP_inverse, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats)
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout = Vout*option%scale_factor
+
+      return
+
+   end subroutine HSS_Inv_Mult
+
+   subroutine HODLR_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, ho_bf1, ptree, option, stats)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ns, level_start, level_end
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(hobf)::ho_bf1
+
+      idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      ! get the right multiplied vectors
+      ctemp1 = 1.0d0; ctemp2 = 1.0d0
+      ! allocate(vec_old(Ns,num_vectors))
+      allocate (vec_new(Ns, num_vectors))
+      ! vec_old(1:Ns,1:num_vectors) = Vin
+      vec_new = 0
+      stats%Flop_Tmp = 0
+
+      do level = level_start, level_end !ho_bf1%Maxlevel+1
+         do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+
+            pp = ptree%MyID - ptree%pgrp(ho_bf1%levels(level)%BP_inverse(ii)%pgno)%head + 1
+            head = ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_p(pp, 1) + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%headn - 1
+            tail = head + ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)%N_loc - 1
+            idx_start_loc = head - idx_start_glo + 1
+            idx_end_loc = tail - idx_start_glo + 1
+
+            if (level == ho_bf1%Maxlevel + 1) then
+               call Full_block_MVP_dat(ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1), trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors,&
+&Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2)
+               stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(idx_end_loc - idx_start_loc + 1, num_vectors, idx_end_loc - idx_start_loc + 1)
+            else
+               call Bplus_block_MVP_twoforward_dat(ho_bf1, level, ii, trans_tmp, idx_end_loc - idx_start_loc + 1, num_vectors, Vin(idx_start_loc, 1), Ns, vec_new(idx_start_loc, 1), Ns, ctemp1, ctemp2, ptree, stats)
+            endif
+
+         end do
+      end do
+
+      Vout = vec_new(1:Ns, 1:num_vectors)
+      ! deallocate(vec_old)
+      deallocate (vec_new)
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HODLR_Mult
+
+
+
+   !>***** redistribute the vector fed to Hmat from 1D to 2D layouts
+   subroutine Hmat_Redistribute1Dto2D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
+
+      implicit none
+      integer Ns, num_vectors, i,i1, j, j1, gg, iproc, jproc, myrow, mycol, nprow, npcol, myi, myj, offr, offs, num_blocks
+      integer ii, jj, ij, pp, tt
+      integer level
+      DT::Vin(Ns, num_vectors)
+      type(vectorsblock):: vector2D(:)
+      type(Hmat)::h_mat
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable::jpvt(:)
+      integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
+      integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
+      character::mode
+      real(kind=8)::n1, n2
+      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+      type(butterfly_kerl)::kerls
+      integer rr, cc
+      logical all2all
+      integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+      DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer::dist, kerflag
+      integer::idxs_i,idxe_i, idxs_o,idxe_o
+
+      n1 = MPI_Wtime()
+      Ncol = num_vectors
+      tag = 1
+
+      ! allocation of communication quantities
+      do ii = 1, nproc
+         sendquant(ii)%size = 0
+         sendquant(ii)%active = 0
+      enddo
+      do ii = 1, nproc
+         recvquant(ii)%size = 0
+         recvquant(ii)%active = 0
+      enddo
+
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      nprow = ptree%pgrp(1)%nprow
+      npcol = ptree%pgrp(1)%npcol
+      num_blocks = 2**h_mat%Dist_level
+      do ii = 1, nproc
+         idxs_i = h_mat%N_p(ii, 1)
+         idxe_i = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_o = h_mat%basis_group(gg)%head
+            idxe_o = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         sendquant(pp)%size = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+      enddo
+
+
+      ! pack the send buffer in the second pass
+      do ii = 1, nproc
+         idxs_i = h_mat%N_p(ii, 1)
+         idxe_i = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_o = h_mat%basis_group(gg)%head
+            idxe_o = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = Vin(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = Vin(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size)
+            i = i + 1
+            gg = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            offr = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+
+            if(mode=='C')then
+               call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     i = i + 1
+                     vector2D(myj)%vector(offr+rr,cc) = recvquant(pp)%dat(i, 1)
+                  enddo
+               enddo
+            else
+               call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+               do cc = 1, Ncol
+                  do rr = 1, Nrow
+                     i = i + 1
+                     vector2D(myi)%vector(offr+rr,cc) = recvquant(pp)%dat(i, 1)
+                  enddo
+               enddo
+            endif
+         enddo
+      enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+      enddo
+
+      n2 = MPI_Wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+
+   end subroutine Hmat_Redistribute1Dto2D_Vector
+
+
+
+   !>***** redistribute the vector fed to Hmat from 2D to 1D layouts
+   subroutine Hmat_Redistribute2Dto1D_Vector(Vin, Ns, num_vectors, vector2D, h_mat, ptree, nproc, stats, mode)
+
+      implicit none
+      integer Ns, num_vectors, i,i1, j, j1, gg, iproc, jproc, myrow, mycol, nprow, npcol, myi, myj, offr, offs, num_blocks
+      integer ii, jj, ij, pp, tt
+      integer level
+      DT::Vin(Ns, num_vectors)
+      type(vectorsblock):: vector2D(:)
+      type(Hmat)::h_mat
+      type(Hstat)::stats
+      type(proctree)::ptree
+
+      integer, allocatable::jpvt(:)
+      integer ierr, nsendrecv, pgno_sub, pgno_sub_mine, pid, tag, nproc, Ncol, Nrow, Nreqr, Nreqs, recvid, sendid, tmpi
+      integer idx_r, idx_c, inc_r, inc_c, nr, nc, level_new
+
+      type(commquant1D)::sendquant(nproc), recvquant(nproc)
+      integer::sendactive(nproc), recvactive(nproc)
+      integer::S_req(nproc),R_req(nproc)
+      integer:: statuss(MPI_status_size, nproc), statusr(MPI_status_size,nproc)
+      integer::sendIDactive(nproc), recvIDactive(nproc)
+      character::mode
+      real(kind=8)::n1, n2
+      integer Nsendactive, Nrecvactive, Nsendactive_min, Nrecvactive_min
+      type(butterfly_kerl)::kerls
+      integer rr, cc
+      logical all2all
+      integer, allocatable::sdispls(:), sendcounts(:), rdispls(:), recvcounts(:)
+      DT, allocatable::sendbufall2all(:), recvbufall2all(:)
+      integer::dist, kerflag
+      integer::idxs_i,idxe_i, idxs_o,idxe_o
+
+      n1 = MPI_Wtime()
+      Vin=0
+      tag = 1
+      Ncol = num_vectors
+
+      ! allocation of communication quantities
+      do ii = 1, nproc
+         sendquant(ii)%size = 0
+         sendquant(ii)%active = 0
+      enddo
+      do ii = 1, nproc
+         recvquant(ii)%size = 0
+         recvquant(ii)%active = 0
+      enddo
+
+      Nsendactive = 0
+      Nrecvactive = 0
+
+      call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+      nprow = ptree%pgrp(1)%nprow
+      npcol = ptree%pgrp(1)%npcol
+      num_blocks = 2**h_mat%Dist_level
+      do ii = 1, nproc
+         idxs_o = h_mat%N_p(ii, 1)
+         idxe_o = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_i = h_mat%basis_group(gg)%head
+            idxe_i = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, i1-1, jproc)
+                        pp = pid+1
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+                        if (sendquant(pp)%active == 0) then
+                           sendquant(pp)%active = 1
+                           Nsendactive = Nsendactive + 1
+                           sendIDactive(Nsendactive) = pp
+                        endif
+                        sendquant(pp)%size = sendquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                     if(ii==ptree%MyID+1)then
+                        pid = blacs_pnum_wp(nprow,npcol, iproc, j1-1)
+                        pp = pid+1
+                        if (recvquant(pp)%active == 0) then
+                           recvquant(pp)%active = 1
+                           Nrecvactive = Nrecvactive + 1
+                           recvIDactive(Nrecvactive) = pp
+                        endif
+                        recvquant(pp)%size = recvquant(pp)%size + 3 + (min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1)*num_vectors
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         allocate (sendquant(pp)%dat(sendquant(pp)%size, 1))
+         sendquant(pp)%size = 0
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         allocate (recvquant(pp)%dat(recvquant(pp)%size, 1))
+      enddo
+
+
+      ! pack the send buffer in the second pass
+      do ii = 1, nproc
+         idxs_o = h_mat%N_p(ii, 1)
+         idxe_o = h_mat%N_p(ii, 2)
+         do gg = 1, num_blocks
+            idxs_i = h_mat%basis_group(gg)%head
+            idxe_i = h_mat%basis_group(gg)%tail
+            if (idxs_o <= idxe_i .and. idxe_o >= idxs_i) then
+               if(mode=='C')then
+                  call g2l(gg, num_blocks, npcol, 1, jproc, myj)
+                  do i1=1,nprow
+                     if(i1-1==myrow .and. jproc==mycol)then
+                        pp=ii
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = vector2D(myj)%vector(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               else
+                  call g2l(gg, num_blocks, nprow, 1, iproc, myi)
+                  do j1=1,npcol
+                     if(iproc==myrow .and. j1-1==mycol)then
+                        pp=ii
+
+                        Nrow = min(idxe_i, idxe_o) - max(idxs_i, idxs_o) + 1
+                        offs = max(idxs_i, idxs_o) - idxs_i
+                        sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = gg
+                        sendquant(pp)%dat(sendquant(pp)%size + 2, 1) = max(idxs_i, idxs_o) - idxs_o
+                        sendquant(pp)%dat(sendquant(pp)%size + 3, 1) = Nrow
+                        sendquant(pp)%size = sendquant(pp)%size + 3
+                        do i = 1, Nrow*Ncol
+                           rr = mod(i - 1, Nrow) + 1
+                           cc = (i - 1)/Nrow + 1
+                           sendquant(pp)%dat(sendquant(pp)%size + i, 1) = vector2D(myi)%vector(offs+rr,cc)
+                        enddo
+                        sendquant(pp)%size = sendquant(pp)%size + Nrow*Ncol
+                     endif
+                  enddo
+               endif
+            endif
+         enddo
+      enddo
+
+      Nreqs = 0
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         recvid = pp - 1
+         if (recvid /= ptree%MyID) then
+            Nreqs = Nreqs + 1
+            call MPI_Isend(sendquant(pp)%dat, sendquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, S_req(Nreqs), ierr)
+         else
+            if (sendquant(pp)%size > 0) recvquant(pp)%dat = sendquant(pp)%dat
+         endif
+      enddo
+
+      Nreqr = 0
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         sendid = pp - 1
+         if (sendid /= ptree%MyID) then
+            Nreqr = Nreqr + 1
+            call MPI_Irecv(recvquant(pp)%dat, recvquant(pp)%size, MPI_DT, pp - 1, tag, ptree%Comm, R_req(Nreqr), ierr)
+         endif
+      enddo
+
+      ! copy data from buffer to target
+      do tt = 1, Nrecvactive
+         if(tt==1 .and. Nreqr+1== Nrecvactive)then
+            pp = ptree%MyID + 1
+         else
+            call MPI_waitany(Nreqr, R_req, sendid, statusr(:,1), ierr)
+            pp = statusr(MPI_SOURCE, 1) + 1
+         endif
+         i = 0
+         do while (i < recvquant(pp)%size)
+            i = i + 1
+            gg = NINT(dble(recvquant(pp)%dat(i, 1)))  ! this information is not needed for 2D-to-1D
+            i = i + 1
+            offr = NINT(dble(recvquant(pp)%dat(i, 1)))
+            i = i + 1
+            Nrow = NINT(dble(recvquant(pp)%dat(i, 1)))
+
+            do cc = 1, Ncol
+               do rr = 1, Nrow
+                  i = i + 1
+                  Vin(offr+rr,cc) = Vin(offr+rr,cc) + recvquant(pp)%dat(i, 1)
+               enddo
+            enddo
+         enddo
+      enddo
+
+      if (Nreqs > 0) then
+         call MPI_waitall(Nreqs, S_req, statuss, ierr)
+      endif
+
+      ! deallocation
+      do tt = 1, Nsendactive
+         pp = sendIDactive(tt)
+         if (allocated(sendquant(pp)%dat)) deallocate (sendquant(pp)%dat)
+      enddo
+      do tt = 1, Nrecvactive
+         pp = recvIDactive(tt)
+         if (allocated(recvquant(pp)%dat)) deallocate (recvquant(pp)%dat)
+      enddo
+
+      n2 = MPI_Wtime()
+      ! time_tmp = time_tmp + n2 - n1
+
+
+   end subroutine Hmat_Redistribute2Dto1D_Vector
+
+
+
+   subroutine HSS_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ns
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(hssbf)::hss_bf1
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+      call Bplus_block_MVP_dat(hss_bf1%BP, trans, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats)
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HSS_Mult
+
+
+
+
+   subroutine HSS_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, hss_bf_md1, ptree, option, stats,msh)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ndim
+      integer Ns(Ndim)
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+      type(matrixblock_MD), pointer::blocks
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(hssbf_md)::hss_bf_md1
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+
+   ! blocks => hss_bf_md1%BP%LL(1)%matrices_block(1)
+   ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
+
+#if 0
+      call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option)
+#else ! the following is more memory efficient
+      do ll=1,hss_bf_md1%BP%Lplus
+         call Bplus_MD_block_MVP_dat(Ndim, hss_bf_md1%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll)
+      enddo
+#endif
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HSS_MD_Mult
+
+
+
+
+
+
+   subroutine HMAT_MD_Mult(Ndim, trans, Ns, num_vectors, Vin, Vout, h_mat_md, ptree, option, stats,msh)
+
+      implicit none
+
+      character trans, trans_tmp
+      integer Ndim
+      integer Ns(Ndim)
+      integer level_c, rowblock
+      integer i, j, k, level, ii, jj, kk, test, num_vectors, ll, ll_end, level_batch
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) a, b, c, d
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      ! type(vectorsblock), pointer :: random1, random2
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(mesh)::msh(Ndim)
+
+      integer idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc
+      type(matrixblock_MD), pointer::blocks
+
+      DT, allocatable::vec_old(:, :), vec_new(:, :)
+      ! complex(kind=8)::Vin(:,:),Vout(:,:)
+      DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
+      type(Hmat_md)::h_mat_md
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+      Vout=0
+      stats%Flop_Tmp = 0
+
+   ! blocks => h_mat_md%BP%LL(1)%matrices_block(1)
+   ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
+
+
+      level_batch = max(1, option%htensor_mvp_level_batch)
+      ll = 2
+      do while (ll <= h_mat_md%BP%Lplus)
+         ll_end = min(h_mat_md%BP%Lplus, ll + level_batch - 1)
+         if (ll == 2) then
+            call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_czero, ptree, stats,msh,option,level_start=ll, level_end=ll_end)
+         else
+            call Bplus_MD_block_MVP_dat(Ndim, h_mat_md%BP, trans_tmp, Ns, Ns, num_vectors, Vin, Ns, Vout, Ns, BPACK_cone, BPACK_cone, ptree, stats,msh,option,level_start=ll, level_end=ll_end)
+         endif
+         ll = ll_end + 1
+      enddo
+
+
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout/option%scale_factor
+
+      ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",fnorm(Vout,Ns,num_vectors)**2d0
+
+      return
+
+   end subroutine HMAT_MD_Mult
+
+
+
+
+   subroutine Hmat_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, h_mat, ptree, option, stats)
+      implicit none
+
+      integer Ns, ii
+      character trans, trans_tmp
+      integer num_vectors
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(Hmat)::h_mat
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      stats%Flop_Tmp = 0
+
+      trans_tmp = trans
+      if (trans == 'C') then
+         trans_tmp = 'T'
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vin
+
+      if (trans == 'N') then
+         ! write(*,*)fnorm(Vout,Ns,num_vectors),'before L solve'
+         call Hmat_Lsolve_Toplevel(h_mat, trans_tmp, Vout, Ns, num_vectors, ptree, stats)
+         ! write(*,*)fnorm(Vout,Ns,num_vectors),'before U solve',abs(Vout)
+         call Hmat_Usolve_Toplevel(h_mat, trans_tmp, Vout, Ns, num_vectors, ptree, stats)
+         ! write(*,*)fnorm(Vout,Ns,num_vectors),'after LU solve'
+         ! do ii=1,Ns
+         ! write(130,*)abs(Vout(ii,1))
+         ! enddo
+      else
+         call Hmat_Usolve_Toplevel(h_mat, trans_tmp, Vout, Ns, num_vectors, ptree, stats)
+         call Hmat_Lsolve_Toplevel(h_mat, trans_tmp, Vout, Ns, num_vectors, ptree, stats)
+      endif
+
+      if (trans == 'C') then
+         Vout = conjg(cmplx(Vout, kind=8))
+         Vin = conjg(cmplx(Vin, kind=8))
+      endif
+
+      Vout = Vout*option%scale_factor
+
+   end subroutine Hmat_Inv_Mult
+
+   subroutine Hmat_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, h_mat, ptree, option, stats, use_blockcopy)
+
+      implicit none
+      integer level_start, level_end
+      character trans, trans_tmp
+      integer Ns
+      integer level_c, rowblock
+      integer i, j, k, level, num_blocks, ii, jj, kk, test, num_vectors
+      integer mm, nn, mn, blocks1, blocks2, blocks3, level_butterfly, groupm, groupn, groupm_diag
+      character chara
+      real(kind=8) vecnorm, n1, n2
+      DT ctemp, ctemp1, ctemp2
+      ! type(matrixblock),pointer::block_o
+      type(blockplus), pointer::bplus_o
+      type(proctree)::ptree
+      type(Hstat)::stats
+      type(Hoption)::option
+
+      integer use_blockcopy, idx_start_glo, N_diag, idx_start_diag, idx_start_m, idx_end_m, idx_start_n, idx_end_n, pp, head, tail, idx_start_loc, idx_end_loc, Nmax, Nmsg,N_glo
+      type(matrixblock), pointer :: blocks_i, blocks_j
+      type(matrixblock) :: blocks_dummy
+      DT, allocatable::vec_old(:, :), vec_new(:, :), vin_tmp(:, :), vout_tmp(:, :), vec_buffer(:, :), Vout_glo(:, :), Vin_glo(:, :)
+
+      ! DT::Vin(:,:),Vout(:,:)
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      type(Hmat)::h_mat
+      integer ierr, m_size
+      integer, allocatable::status_all(:, :), srequest_all(:)
+      integer :: status(MPI_Status_size)
+      type(vectorsblock),allocatable:: vector2D_i(:),vector2D_o(:)
+      integer:: nprow, npcol, myrow, mycol
+      character mode_i,mode_o
+
+      if (ptree%Comm /= MPI_COMM_NULL) then
+
+         trans_tmp = trans
+         if (trans == 'C') then
+            trans_tmp = 'T'
+            Vin = conjg(cmplx(Vin, kind=8))
+         endif
+
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         num_blocks = 2**h_mat%Dist_level
+         if (trans == 'N') then
+            mode_i='C'
+            mode_o='R'
+            allocate(vector2D_i(max(h_mat%myAcols,1)))
+            allocate(vector2D_o(max(h_mat%myArows,1)))
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+            do j = 1, h_mat%myAcols
+               call l2g(j, mycol, num_blocks, npcol, 1, jj)
+               blocks_i => h_mat%Local_blocks(j, 1)
+               allocate(vector2D_i(j)%vector(blocks_i%N,num_vectors))
+               vector2D_i(j)%vector=0
+            enddo
+            do i = 1, h_mat%myArows
+               call l2g(i, myrow, num_blocks, nprow, 1, ii)
+               blocks_i => h_mat%Local_blocks(1, i)
+               allocate(vector2D_o(i)%vector(blocks_i%M,num_vectors))
+               vector2D_o(i)%vector=0
+            enddo
+            endif
+         else
+            mode_i='R'
+            mode_o='C'
+            allocate(vector2D_i(max(h_mat%myArows,1)))
+            allocate(vector2D_o(max(h_mat%myAcols,1)))
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+            do i = 1, h_mat%myArows
+               call l2g(i, myrow, num_blocks, nprow, 1, ii)
+               blocks_i => h_mat%Local_blocks(1, i)
+               allocate(vector2D_i(i)%vector(blocks_i%M,num_vectors))
+               vector2D_i(i)%vector=0
+            enddo
+            do j = 1, h_mat%myAcols
+               call l2g(j, mycol, num_blocks, npcol, 1, jj)
+               blocks_i => h_mat%Local_blocks(j, 1)
+               allocate(vector2D_o(j)%vector(blocks_i%N,num_vectors))
+               vector2D_o(j)%vector=0
+            enddo
+            endif
+         endif
+
+
+         call Hmat_Redistribute1Dto2D_Vector(Vin, Ns, num_vectors, vector2D_i, h_mat, ptree, ptree%nproc, stats, mode_i)
+
+         ! call MPI_barrier(ptree%Comm, ierr)
+
+         n1 = MPI_Wtime()
+
+         do i = 1, h_mat%myArows
+            do j = 1, h_mat%myAcols
+               if(use_blockcopy==1)then
+                  blocks_i => h_mat%Local_blocks_copy(j, i)
+               else
+                  blocks_i => h_mat%Local_blocks(j, i)
+               endif
+               if (trans == 'N') then
+                  call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vector2D_i(j)%vector, blocks_i%N, vector2D_o(i)%vector, blocks_i%M, BPACK_cone, ptree, stats,level_start, level_end)
+               else
+                  call Hmat_block_MVP_dat(blocks_i, trans_tmp, blocks_i%headm, blocks_i%headn, num_vectors, vector2D_i(i)%vector, blocks_i%M, vector2D_o(j)%vector, blocks_i%N, BPACK_cone, ptree, stats,level_start, level_end)
+               endif
+            enddo
+         enddo
+
+         call Hmat_Redistribute2Dto1D_Vector(Vout, Ns, num_vectors, vector2D_o, h_mat, ptree, ptree%nproc, stats, mode_o)
+
+         if (trans == 'N') then
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+            do j = 1, h_mat%myAcols
+               deallocate(vector2D_i(j)%vector)
+            enddo
+            do i = 1, h_mat%myArows
+               deallocate(vector2D_o(i)%vector)
+            enddo
+            endif
+            deallocate(vector2D_i)
+            deallocate(vector2D_o)
+         else
+            if(h_mat%myAcols>0 .and. h_mat%myArows>0)then
+            do i = 1, h_mat%myArows
+               deallocate(vector2D_i(i)%vector)
+            enddo
+            do j = 1, h_mat%myAcols
+               deallocate(vector2D_o(j)%vector)
+            enddo
+            endif
+            deallocate(vector2D_i)
+            deallocate(vector2D_o)
+         endif
+
+
+         if (trans == 'C') then
+            Vout = conjg(cmplx(Vout, kind=8))
+            Vin = conjg(cmplx(Vin, kind=8))
+         endif
+
+         Vout = Vout/option%scale_factor
+
+         call MPI_barrier(ptree%Comm, ierr)
+         n2 = MPI_Wtime()
+
+         ! vecnorm = fnorm(Vout, Ns, num_vectors)**2d0
+         ! call MPI_AllREDUCE(MPI_IN_PLACE, vecnorm, 1, MPI_double, MPI_SUM, ptree%Comm, ierr)
+         ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*)"output norm: ",sqrt(vecnorm)
+      endif
+
+      return
+
+   end subroutine Hmat_Mult
+
+   subroutine Hmat_Lsolve_Toplevel(h_mat, trans, xloc, nloc, nvec, ptree, stats)
+      implicit none
+
+      type(Hmat)::h_mat
+      character::trans
+      type(proctree)::ptree
+      type(Hstat)::stats
+
+      integer i,i1, j, k, ii, jj, kk, iii, jjj, pp, num_blocks, mm, nn, groupm, groupn
+      integer vectors_start, vectors_x, vectors_y, id_l, nvec, nloc, tag
+
+      type(matrixblock), pointer :: blocks_l
+      integer Nreq, Nmod, Bufsize
+      DT, allocatable::recv_buf(:), vin(:, :)
+      DT::xloc(:, :)
+      DT,allocatable::xglo(:,:)
+      integer :: status(MPI_Status_size)
+      integer, allocatable::status_all(:, :), request_all(:)
+      integer idx_start,m_size
+      integer ierr,num_vectors,selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo
+      integer,allocatable:: fmod(:), frecv(:),sendflagarray(:), receiverlists(:,:)
+      type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
+      integer,allocatable:: tags(:)
+      integer tagij
+
+      if (trans == 'N') then
+         Nreq=0
+         num_blocks = 2**h_mat%Dist_level
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         nrecvx=0
+         nrecvmod=0
+         N_glo = h_mat%N
+         allocate(xglo(N_glo,nvec))
+         xglo=0
+         xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+
+         allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
+         receiverlists=0
+
+         allocate(sendbufx(max(h_mat%myAcols,1)))
+         allocate(sendbufmod(max(h_mat%myArows,1)))
+
+         do j = 1, h_mat%myAcols
+            selflag=0
+            call l2g(j, mycol, num_blocks, npcol, 1, jj)
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  selflag=1
+                  allocate(sendbufx(j)%vector(blocks_l%N,nvec))
+                  sendbufx(j)%vector = xglo(blocks_l%headn:blocks_l%headn+blocks_l%N-1,:)
+                  do ii=1,num_blocks
+                     if(ii>jj)then
+                        call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+                        receiverlists(iproc+1,j)=1
+                     endif
+                  enddo
+                  do ii=1,nprow
+                     if(receiverlists(ii,j)==1)then
+                        Nreq = Nreq+1
+                     endif
+                  enddo
+               endif
+            enddo
+
+            offflag=0
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group>blocks_l%col_group)then
+                  offflag=1
+                  exit
+               endif
+            enddo
+            if(offflag==1)then
+               nrecvx = nrecvx + 1
+            endif
+         enddo
+
+         allocate(fmod(max(h_mat%myArows,1)))
+         fmod=0
+         allocate(frecv(max(h_mat%myArows,1)))
+         frecv=0
+         allocate(sendflagarray(num_blocks))
+         sendflagarray=0
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group>blocks_l%col_group)then
+                  fmod(i) = fmod(i) + 1
+                  sendflagarray(ii)=1
+               endif
+            enddo
+            if(sendflagarray(ii)==1)then
+               Nreq = Nreq+1
+               blocks_l => h_mat%Local_blocks(1, i)
+               allocate(sendbufmod(i)%vector(blocks_l%M,nvec))
+               sendbufmod(i)%vector=0
+            endif
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  nrecvmod = nrecvmod + sendflagarray(ii)
+                  frecv(i) = frecv(i) + sendflagarray(ii)
+               endif
+            enddo
+         enddo
+         deallocate(sendflagarray)
+
+         if (Nreq > 0) then
+            allocate (status_all(MPI_status_size, Nreq))
+            allocate (request_all(Nreq))
+         end if
+         Nreq=0
+
+         ii=1
+         jj=1
+         call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+         call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
+         if(iproc==myrow .and. jproc==mycol)then
+            blocks_l => h_mat%Local_blocks(myj, myi)
+
+            idx_start = blocks_l%headn
+            call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, sendbufx(myj)%vector, blocks_l%N, ptree, stats)
+
+            do i=1,nprow
+               if(receiverlists(i,myj)==1)then
+                  receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
+                  Nreq = Nreq + 1
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_l%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij +1
+                     tags(tagij) = jj
+                  endif
+               endif
+            enddo
+         endif
+         do nrecv=1, nrecvx+nrecvmod
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  nn = size(sendbufmod(ii)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufmod(ii)%vector
+               endif
+            endif
+            if(tag<=num_blocks)then
+               jj=tag
+               call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+               do i = 1, h_mat%myArows
+                  call l2g(i, myrow, num_blocks, nprow, 1, ii)
+                  if(ii>jj)then
+                     blocks_l => h_mat%Local_blocks(myj, i)
+                     nn = blocks_l%N
+
+                     call Hmat_block_MVP_dat(blocks_l, 'N', blocks_l%headm, blocks_l%headn, nvec, vin, nn, sendbufmod(i)%vector, blocks_l%M,-BPACK_cone, ptree, stats)
+                     fmod(i) = fmod(i)-1
+
+                     if(fmod(i)==0)then
+                        call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+
+                        ! offdiagonal block: send right to diagonal block
+                        receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
+                        Nreq = Nreq + 1
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_l%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii+num_blocks
+                        endif
+                     endif
+                  endif
+               enddo
+            else ! diagonal block: solve the diagonal block, send down to off-digonal blocks
+               ii=tag-num_blocks
+               call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+               call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+               if(ptree%nproc>1 .or. ii>1)then
+                  sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               endif
+               frecv(myi) = frecv(myi)-1
+               if(frecv(myi)==0 .and. fmod(myi)==0)then
+                  blocks_l => h_mat%Local_blocks(myj1, myi)
+                  idx_start = blocks_l%headn
+                  call Hmat_Lsolve(blocks_l, 'N', idx_start, nvec, sendbufx(myj1)%vector, blocks_l%N, ptree, stats)
+
+                  do i1=1,nprow
+                     if(receiverlists(i1,myj1)==1)then
+                        receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
+                        Nreq = Nreq + 1
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_l%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij +1
+                           tags(tagij) = ii
+                        endif
+                     endif
+                  enddo
+               endif
+            endif
+            deallocate (vin)
+
+         enddo
+
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
+            call MPI_waitall(Nreq, request_all, status_all, ierr)
+            deallocate (status_all)
+            deallocate (request_all)
+         endif
+
+         xglo=0
+         do j = 1, h_mat%myAcols
+            do i = 1, h_mat%myArows
+               blocks_l => h_mat%Local_blocks(j, i)
+               if(blocks_l%row_group==blocks_l%col_group)then
+                  xglo(blocks_l%headn:blocks_l%headn+blocks_l%N-1,:) = sendbufx(j)%vector
+               endif
+            enddo
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
+         deallocate(xglo)
+         deallocate(fmod)
+         deallocate(frecv)
+         deallocate(receiverlists)
+
+         do j=1,h_mat%myAcols
+            if(allocated(sendbufx(j)%vector))deallocate(sendbufx(j)%vector)
+         enddo
+         deallocate(sendbufx)
+
+         do i=1,h_mat%myArows
+            if(allocated(sendbufmod(i)%vector))deallocate(sendbufmod(i)%vector)
+         enddo
+         deallocate(sendbufmod)
+      else
+         write (*, *) 'XxL^-1 with MPI is not yet implemented'
+         stop
+      endif
+
+      call MPI_barrier(ptree%Comm, ierr)
+      return
+
+   end subroutine Hmat_Lsolve_Toplevel
+
+   subroutine Hmat_Usolve_Toplevel(h_mat, trans, xloc, nloc, nvec, ptree, stats)
+
+      implicit none
+
+      type(Hmat)::h_mat
+      character::trans
+      type(proctree)::ptree
+      type(Hstat)::stats
+
+      integer i,i1, j, k, ii, jj, kk, pp, iii, jjj, num_blocks, mm, nn, idx_start, nvec, nloc
+      integer vectors_start, vectors_x, vectors_y, id_u, groupm, groupn, ierr
+
+      type(matrixblock), pointer :: blocks_u
+      integer :: status(MPI_Status_size)
+      integer Nreq, Nmod, Bufsize, m_size
+      DT, allocatable::recv_buf(:), vin(:, :)
+      DT::xloc(:, :)
+      DT,allocatable::xglo(:,:)
+      integer, allocatable::status_all(:, :), request_all(:)
+
+      integer selflag,offflag,nrecvx,nrecvmod,nprow, npcol, myrow, mycol,iproc,myi,jproc,myj,jproc1,myj1,receiver, nrecv, N_glo,tag
+      integer,allocatable:: bmod(:), brecv(:),sendflagarray(:), receiverlists(:,:)
+      type(vectorsblock),allocatable:: sendbufx(:),sendbufmod(:)
+      integer,allocatable:: tags(:)
+      integer tagij
+
+
+      if (trans == 'N') then
+
+         Nreq=0
+         num_blocks = 2**h_mat%Dist_level
+         call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
+         nrecvx=0
+         nrecvmod=0
+         N_glo = h_mat%N
+         allocate(xglo(N_glo,nvec))
+         xglo=0
+         xglo(h_mat%idxs:h_mat%idxe,:) = xloc(1:nloc,:)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+
+         allocate(receiverlists(max(1,nprow),max(1,h_mat%myAcols)))
+         receiverlists=0
+
+         allocate(sendbufx(max(h_mat%myAcols,1)))
+         allocate(sendbufmod(max(h_mat%myArows,1)))
+
+         do j = 1, h_mat%myAcols
+            selflag=0
+            call l2g(j, mycol, num_blocks, npcol, 1, jj)
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  selflag=1
+                  allocate(sendbufx(j)%vector(blocks_u%N,nvec))
+                  sendbufx(j)%vector = xglo(blocks_u%headn:blocks_u%headn+blocks_u%N-1,:)
+                  do ii=1,num_blocks
+                     if(ii<jj)then
+                        call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+                        receiverlists(iproc+1,j)=1
+                     endif
+                  enddo
+                  do ii=1,nprow
+                     if(receiverlists(ii,j)==1)then
+                        Nreq = Nreq+1
+                     endif
+                  enddo
+               endif
+            enddo
+
+            offflag=0
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group<blocks_u%col_group)then
+                  offflag=1
+                  exit
+               endif
+            enddo
+            if(offflag==1)then
+               nrecvx = nrecvx + 1
+            endif
+         enddo
+
+         allocate(bmod(max(h_mat%myArows,1)))
+         bmod=0
+         allocate(brecv(max(h_mat%myArows,1)))
+         brecv=0
+         allocate(sendflagarray(num_blocks))
+         sendflagarray=0
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group<blocks_u%col_group)then
+                  bmod(i) = bmod(i) + 1
+                  sendflagarray(ii)=1
+               endif
+            enddo
+            if(sendflagarray(ii)==1)then
+               Nreq = Nreq+1
+               blocks_u => h_mat%Local_blocks(1, i)
+               allocate(sendbufmod(i)%vector(blocks_u%M,nvec))
+               sendbufmod(i)%vector=0
+            endif
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, sendflagarray, num_blocks, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+         do i = 1, h_mat%myArows
+            call l2g(i, myrow, num_blocks, nprow, 1, ii)
+            do j = 1, h_mat%myAcols
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  nrecvmod = nrecvmod + sendflagarray(ii)
+                  brecv(i) = brecv(i) + sendflagarray(ii)
+               endif
+            enddo
+         enddo
+         deallocate(sendflagarray)
+
+         if (Nreq > 0) then
+            allocate (status_all(MPI_status_size, Nreq))
+            allocate (request_all(Nreq))
+         end if
+         Nreq=0
+
+         ii=num_blocks
+         jj=num_blocks
+         call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+         call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+
+         if(ptree%nproc==1)then
+            tagij=0
+            if(nrecvx+nrecvmod>0)then
+               allocate(tags(nrecvx+nrecvmod))
+               tags=0
+            endif
+         endif
+
+         if(iproc==myrow .and. jproc==mycol)then
+            blocks_u => h_mat%Local_blocks(myj, myi)
+
+            idx_start = blocks_u%headn
+            call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, sendbufx(myj)%vector, blocks_u%N, ptree, stats)
+
+            do i=1,nprow
+               if(receiverlists(i,myj)==1)then
+                  receiver = blacs_pnum_wp(nprow,npcol, i-1, jproc)
+                  Nreq = Nreq + 1
+                  if(ptree%nproc>1)then
+                     call MPI_Isend(sendbufx(myj)%vector, blocks_u%N*nvec, MPI_DT, receiver, jj, ptree%Comm, request_all(Nreq), ierr)
+                  else
+                     tagij = tagij + 1
+                     tags(tagij)=jj
+                  endif
+               endif
+            enddo
+         endif
+
+         do nrecv=1, nrecvx+nrecvmod
+            if(ptree%nproc>1)then
+               call MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, ptree%Comm, status,ierr)
+               pp = status(MPI_SOURCE)
+               tag = status(MPI_TAG)
+               call MPI_Get_count(status, MPI_DT, m_size,ierr)
+               nn = m_size/nvec
+               allocate (vin(nn, nvec))
+               call MPI_Recv(vin, m_size, MPI_DT, pp, tag, ptree%Comm, status, ierr)
+            else
+               tag = tags(nrecv)
+               pp = 0
+               if(tag<=num_blocks)then
+                  jj=tag
+                  nn = size(sendbufx(jj)%vector,1)
+                  allocate (vin(nn, nvec))
+                  vin = sendbufx(jj)%vector
+               else
+                  ii=tag-num_blocks
+                  if(ii<num_blocks)then
+                     nn = size(sendbufmod(ii)%vector,1)
+                     allocate (vin(nn, nvec))
+                     vin = sendbufmod(ii)%vector
+                  endif
+               endif
+            endif
+
+
+            if(tag<=num_blocks)then
+               jj=tag
+               call g2l(jj, num_blocks, npcol, 1, jproc, myj)
+               do i = 1, h_mat%myArows
+                  call l2g(i, myrow, num_blocks, nprow, 1, ii)
+                  if(ii<jj)then
+                     blocks_u => h_mat%Local_blocks(myj, i)
+                     nn = blocks_u%N
+
+
+                     call Hmat_block_MVP_dat(blocks_u, 'N', blocks_u%headm, blocks_u%headn, nvec, vin, nn, sendbufmod(i)%vector, blocks_u%M,-BPACK_cone, ptree, stats)
+                     bmod(i) = bmod(i)-1
+
+                     if(bmod(i)==0)then
+                        call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+                        ! offdiagonal block: send left to diagonal block
+                        receiver = blacs_pnum_wp(nprow,npcol, myrow, jproc1)
+                        Nreq = Nreq + 1
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufmod(i)%vector, blocks_u%M*nvec, MPI_DT, receiver, ii+num_blocks, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii+num_blocks
+                        endif
+                     endif
+                  endif
+               enddo
+            else ! diagonal block: solve the diagonal block, send left to off-digonal blocks
+               ii=tag-num_blocks
+               call g2l(ii, num_blocks, nprow, 1, iproc, myi)
+               call g2l(ii, num_blocks, npcol, 1, jproc1, myj1)
+               sendbufx(myj1)%vector = sendbufx(myj1)%vector + vin
+               brecv(myi) = brecv(myi)-1
+               if(brecv(myi)==0 .and. bmod(myi)==0)then
+                  blocks_u => h_mat%Local_blocks(myj1, myi)
+                  idx_start = blocks_u%headn
+                  call Hmat_Usolve(blocks_u, 'N', idx_start, nvec, sendbufx(myj1)%vector, blocks_u%N, ptree, stats)
+
+                  do i1=1,nprow
+                     if(receiverlists(i1,myj1)==1)then
+                        receiver = blacs_pnum_wp(nprow,npcol, i1-1, jproc1)
+                        Nreq = Nreq + 1
+                        if(ptree%nproc>1)then
+                           call MPI_Isend(sendbufx(myj1)%vector, blocks_u%N*nvec, MPI_DT, receiver, ii, ptree%Comm, request_all(Nreq), ierr)
+                        else
+                           tagij = tagij + 1
+                           tags(tagij)=ii
+                        endif
+                     endif
+                  enddo
+               endif
+            endif
+            deallocate (vin)
+         enddo
+
+         if(ptree%nproc==1)then
+            if(nrecvx+nrecvmod>0)then
+               deallocate(tags)
+            endif
+         else if (Nreq > 0) then
+            call MPI_waitall(Nreq, request_all, status_all, ierr)
+            deallocate (status_all)
+            deallocate (request_all)
+         endif
+
+
+         xglo=0
+         do j = 1, h_mat%myAcols
+            do i = 1, h_mat%myArows
+               blocks_u => h_mat%Local_blocks(j, i)
+               if(blocks_u%row_group==blocks_u%col_group)then
+                  xglo(blocks_u%headn:blocks_u%headn+blocks_u%N-1,:) = sendbufx(j)%vector
+               endif
+            enddo
+         enddo
+         call MPI_ALLREDUCE(MPI_IN_PLACE, xglo, N_glo*nvec, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+         xloc(1:nloc,:) = xglo(h_mat%idxs:h_mat%idxe,:)
+         deallocate(xglo)
+         deallocate(bmod)
+         deallocate(brecv)
+         deallocate(receiverlists)
+
+         do j=1,h_mat%myAcols
+            if(allocated(sendbufx(j)%vector))deallocate(sendbufx(j)%vector)
+         enddo
+         deallocate(sendbufx)
+
+         do i=1,h_mat%myArows
+            if(allocated(sendbufmod(i)%vector))deallocate(sendbufmod(i)%vector)
+         enddo
+         deallocate(sendbufmod)
+
+      else
+         write (*, *) 'XxU^-1 with MPI is not yet implemented'
+         stop
+      endif
+
+      call MPI_barrier(ptree%Comm, ierr)
+      return
+   end subroutine Hmat_Usolve_Toplevel
+
+end module s_BPACK_Solve_Mul
