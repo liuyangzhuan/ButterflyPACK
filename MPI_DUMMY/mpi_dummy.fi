@@ -29,6 +29,8 @@
 
   integer mpi_integer
   parameter ( mpi_integer = 1 )
+  integer MPI_INTEGER8
+  parameter ( MPI_INTEGER8 = mpi_integer )
   integer mpi_double_precision
   parameter ( mpi_double_precision = 3 )
   integer MPI_COMPLEX
@@ -71,4 +73,3 @@
 
   external MPI_WTIME, MPI_WTICK , PMPI_WTICK, PMPI_WTIME
   double precision MPI_WTIME, MPI_WTICK , PMPI_WTICK, PMPI_WTIME
-
