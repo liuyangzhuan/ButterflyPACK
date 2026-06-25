@@ -1831,10 +1831,10 @@ contains
                write (*, *) ' '
             endif
          else if(option%format==HTENSOR)then
-            if(option%LRlevel==0)then
-               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-LR'
+            if(option%LRlevel>0)then
+               write (*, '(A18,A11)') 'algorithm', 'HTENSOR-BF'
             else
-               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-BF'
+               write (*, '(A18,A11)') 'algorithm', 'HTENSOR-LR'
             endif
             write (*, '(A18,Es14.7)') 'near_para', option%near_para
             write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
@@ -1850,6 +1850,8 @@ contains
                write (*, '(A18,Es14.7)') 'period2', option%periods(2)
                write (*, '(A18,Es14.7)') 'period3', option%periods(3)
             endif
+
+            write (*, '(A18,I8)') 'itermax', option%itermax
             write (*, '(A18,I8)') 'verbosity', option%verbosity
             write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
             write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
@@ -1862,6 +1864,7 @@ contains
             write (*, '(A18,I8)') 'iter_solver', option%iter_solver
             write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
+            write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
             write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
             write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
             write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para

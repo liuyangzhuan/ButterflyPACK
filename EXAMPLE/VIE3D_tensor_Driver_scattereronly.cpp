@@ -246,7 +246,7 @@ void write_tensor_slices_file(const string& filename, int nx, int ny, int nz, do
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, const double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
-  g1=-0.2; g2=-0.4; g3=-0.35;
+  g1=-0.1; g2=-0.2; g3=-0.17;
   s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
 
   double A = -0.01;
@@ -2056,8 +2056,8 @@ if(myrank==master_rank){
   }
 
 
-
-  double smax=2.0;
+  double s0=2;
+  double smax=s0;
   for(int i=0;i<Nx;i++){
     for(int j=0;j<Ny;j++){
       for(int k=0;k<Nz;k++){
@@ -2091,9 +2091,6 @@ if(myrank==master_rank){
     }
     for(int ii=0;ii<Nz;ii++){
       data_geo[(ii) * Ndim+2] = ii*h+z0min;
-    }
-    if(myrank==0){
-      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx <<" x "<< Ny <<" x "<< Nz <<" To: "<< Nx <<" x "<< Ny <<" x "<< Nz <<endl;
     }
   }else{
     cout<<"vs=0 is not implemented in 3D code"<<endl;
@@ -2143,7 +2140,7 @@ if(myrank==master_rank){
     int Nscatter = static_cast<int>(scatter_to_tensor.size());
 
       if(myrank==0){
-        cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
+        cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" PPW(s0): "<<2*pi/(w*s0)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
       }
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR

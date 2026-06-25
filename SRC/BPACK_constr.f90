@@ -1553,7 +1553,7 @@ contains
       integer Maxlevel,Ndim,dim_i
       integer i, j, k, ii, edge, threads_num, nth, Dimn, nmpi, ninc, acam
       integer, allocatable:: groupmembers(:)
-      integer level
+      integer level,rmax_start,ntrial
 
       type(Hoption)::option
       type(Hstat)::stats
@@ -1565,10 +1565,10 @@ contains
       integer seed_myid(50)
       integer times(8)
       real(kind=8) t1, t2, error, Memory, tol_comp_tmp
-      integer ierr,pp,knn_tmp
+      integer ierr,pp,knn_tmp, level_butterfly_tmp
       integer:: boundary_map(1,1,Ndim)
-      integer groupm_start(Ndim), Nboundall,Ninadmissible
-      blocks_1 => blocks
+      integer groupm_start(Ndim), Nboundall,Ninadmissible, format_tmp
+
       do dim_i =1,Ndim
          if (allocated(msh(dim_i)%xyz)) deallocate (msh(dim_i)%xyz)
       enddo
@@ -1576,18 +1576,39 @@ contains
       t1 = MPI_Wtime()
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction......"
-
+      format_tmp = option%format
+      option%format = HTENSOR
       groupm_start = 0
       Nboundall = 0
       Ninadmissible = 0
       if (option%forwardN15flag == 0) then
 
          call BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree,1, 0)
+         call BF_MD_get_rank(Ndim, blocks, ptree)
+
+         if(blocks%level_butterfly==0)then ! this makes LR compression more robust when rmax is too small
+            rmax_start = option%rmax
+            ntrial = option%itermax
+            do while (ntrial > 1)
+               call BF_MD_get_rank(Ndim, blocks, ptree)
+               if(blocks%rankmin>=option%rmax)then
+                  option%rmax = option%rmax*option%rankrate
+                  call BF_MD_delete(Ndim, blocks, 0)
+                  call BF_MD_compress_N(Ndim,blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree,1, 0)
+               else
+                  exit
+               endif
+               ntrial = ntrial - 1
+            enddo
+            option%rmax = rmax_start
+         endif
+
       else
          write(*,*)'forwardN15flag=',option%forwardN15flag,'is not supported in BF_MD_Construct_Element_Compute'
       end if
 
       ! !!!! the following functions can be expensive as it extracts complete middle-level blocks, currently enabled with option%verbosity >= 2
+      blocks_1 => blocks
       if (option%verbosity >= 2)call BF_MD_checkError(Ndim, blocks_1, option, msh, ker, stats, ptree, 0, option%verbosity)
       stats%Mem_Comp_for=Memory
       ! call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
@@ -1604,6 +1625,8 @@ contains
       t2 = MPI_Wtime()
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "EntryExtraction-based BF construction finished in", t2-t1, 'Seconds with', Memory,'MB Memory'
+
+      option%format = format_tmp
 
       if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
       if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
@@ -2983,7 +3006,7 @@ contains
       integer Ndim
       type(blockplus_MD)::bplus
       integer:: ii, ll, bb, ierr, pp, rep_bb, trans_reuse_level, trans_nrep_level
-      real(kind=8) Memory, rtemp,rtemp1, error
+      real(kind=8) Memory, Memory_perlevel, rtemp,rtemp1, error
       integer:: level_butterfly, level_BP, levelm, statflag, knn_tmp
       integer, allocatable:: trans_rep_candidates(:)
       type(Hoption)::option
@@ -2991,13 +3014,18 @@ contains
       type(mesh)::msh(Ndim)
       type(kernelquant)::ker
       type(proctree)::ptree
-      type(matrixblock), pointer::blocks
+      type(matrixblock_MD), pointer::blocks
       integer groupm_start(Ndim), groupm_start0(Ndim),Nboundall,Ninadmissible
       integer logn_level_flag
+      real(kind=8):: n1,n2
+      integer level_butterfly_tmp, ntrial, rmax_start
+      integer(kind=8) dist_bb
 
       Memory = 0
       groupm_start0=bplus%LL(1)%matrices_block(1)%row_group
       do ll = 1, bplus%Lplus
+         Memory_perlevel = 0
+         n1 = MPI_Wtime()
          bplus%LL(ll)%rankmax = 0
          trans_reuse_level = 0
          trans_nrep_level = 0
@@ -3014,7 +3042,7 @@ contains
                if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
                   rep_bb = 0
                   if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
-                     call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
+                     ! call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
                      rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant, &
                         trans_rep_candidates, trans_nrep_level)
                   endif
@@ -3025,6 +3053,7 @@ contains
                      call Full_construction_MD(Ndim, bplus%LL(ll)%matrices_block(bb), msh, ker, stats, option, ptree)
                      call BF_MD_ComputeMemory(Ndim, bplus%LL(ll)%matrices_block(bb), rtemp,rtemp1)
                      Memory = Memory + rtemp
+                     Memory_perlevel = Memory_perlevel + rtemp
                      if (option%trans_invariant /= 0 .and. logn_level_flag == 1 .and. &
                         ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%nproc == 1) then
                         trans_nrep_level = trans_nrep_level + 1
@@ -3052,7 +3081,7 @@ contains
 
                   rep_bb = 0
                   if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
-                     call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
+                     ! call assert(option%use_zfp == 0 .and. option%use_qtt == 0, "trans_invariant currently requires use_zfp=0 and use_qtt=0")
                      rep_bb = BP_MD_find_trans_rep(Ndim, bplus, ll, bb, ptree, option%trans_invariant, &
                         trans_rep_candidates, trans_nrep_level)
                   endif
@@ -3060,10 +3089,33 @@ contains
                      call BP_MD_alias_trans_data(Ndim, bplus%LL(ll)%matrices_block(rep_bb), bplus%LL(ll)%matrices_block(bb), rep_bb)
                      trans_reuse_level = trans_reuse_level + 1
                   else
-                     call BF_MD_compress_N(Ndim,bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag, 1)
-                     ! call BF_compress_NlogN(bplus%LL(ll)%matrices_block(bb), bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree, statflag)
+                     blocks=>bplus%LL(ll)%matrices_block(bb)
+                     call BF_MD_compress_N(Ndim,blocks, bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree,statflag, 1)
+                     call BF_MD_get_rank(Ndim, blocks, ptree)
 
+                     if(blocks%level_butterfly==0)then ! this makes LR compression more robust when rmax is too small   
+                        rmax_start = option%rmax
+                        ntrial = option%itermax
+                        do while (ntrial > 1)
+                           call BF_MD_get_rank(Ndim, blocks, ptree)
+                           if(blocks%rankmin>=option%rmax)then
+                              option%rmax = option%rmax*option%rankrate
+                              call BF_MD_delete(Ndim, blocks, 0)
+                              call BF_MD_compress_N(Ndim,blocks, bplus%LL(ll + 1)%boundary_map, Nboundall, Ninadmissible, groupm_start, option, rtemp, stats, msh, ker, ptree,statflag, 1)
+                           else
+                              exit
+                           endif
+                           ntrial = ntrial - 1
+                        enddo
+                        option%rmax = rmax_start
+                     endif
+
+                     dist_bb = sum(int(bplus%LL(ll)%matrices_block(bb)%row_group - bplus%LL(ll)%matrices_block(bb)%col_group, kind=8)**2)
+                     call MPI_ALLREDUCE(rtemp, rtemp1, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%Comm, ierr)
+                     if(option%verbosity>=2 .and. ptree%MyID==ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%head)write(*,*)'Compressed block:', bb, 'Memory used:', rtemp1,'dist',dist_bb,'lb',blocks%level_butterfly,'min_rank',blocks%rankmin,'max_rank',blocks%rankmax
+                     
                      Memory = Memory + rtemp
+                     Memory_perlevel = Memory_perlevel + rtemp
                      if (option%trans_invariant /= 0 .and. logn_level_flag == 1 .and. &
                         ptree%pgrp(bplus%LL(ll)%matrices_block(bb)%pgno)%nproc == 1) then
                         trans_nrep_level = trans_nrep_level + 1
@@ -3079,10 +3131,11 @@ contains
          else
             levelm = 1
          endif
+         n2 = MPI_Wtime()
          groupm_start0 = groupm_start0*2**levelm
          if(option%verbosity>=1 .and. ptree%MyID==ptree%pgrp(bplus%LL(1)%matrices_block(1)%pgno)%head)then
             write(*,*)'Finishing level ', ll, 'in BP_MD_compress_entry, level_butterfly:', &
-               bplus%LL(ll)%level_butterfly, 'rankmax at this level:', bplus%LL(ll)%rankmax
+               bplus%LL(ll)%level_butterfly, 'rankmax at this level:', bplus%LL(ll)%rankmax, 'time:', n2-n1, 'mem(rank0):', Memory_perlevel
             if (option%trans_invariant /= 0 .and. logn_level_flag == 1) then
                write(*,*)'trans_invariant unique/compact local blocks at this level:', &
                   trans_nrep_level, bplus%LL(ll)%trans_ndup

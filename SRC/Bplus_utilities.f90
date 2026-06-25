@@ -3221,6 +3221,10 @@ contains
       if (associated(blocks%ms)) deallocate (blocks%ms)
       if (associated(blocks%ns)) deallocate (blocks%ns)
 
+      if (allocated(blocks%nr_m)) deallocate(blocks%nr_m)
+      if (allocated(blocks%nc_m)) deallocate(blocks%nc_m)
+      if (allocated(blocks%idx_r_m)) deallocate(blocks%idx_r_m)
+      if (allocated(blocks%idx_c_m)) deallocate(blocks%idx_c_m)
 
       if (allflag == 1) then
          if (associated(blocks%N_p)) deallocate (blocks%N_p)
@@ -3233,10 +3237,6 @@ contains
          if (allocated(blocks%N_loc)) deallocate(blocks%N_loc)
          if (allocated(blocks%headm)) deallocate(blocks%headm)
          if (allocated(blocks%headn)) deallocate(blocks%headn)
-         if (allocated(blocks%nr_m)) deallocate(blocks%nr_m)
-         if (allocated(blocks%nc_m)) deallocate(blocks%nc_m)
-         if (allocated(blocks%idx_r_m)) deallocate(blocks%idx_r_m)
-         if (allocated(blocks%idx_c_m)) deallocate(blocks%idx_c_m)
       endif
       if (associated(blocks%trans_rep)) nullify(blocks%trans_rep)
       blocks%trans_invariant_dup = 0

@@ -448,7 +448,7 @@ end function distance_geo
                   if (blocks%sons(i, j)%level > option%LRlevel) then
                      blocks%sons(i, j)%level_butterfly = 0 ! low rank below LRlevel
                   else
-                     blocks%sons(i, j)%level_butterfly = Maxlevel - blocks%sons(i, j)%level   ! butterfly
+                     blocks%sons(i, j)%level_butterfly = min(Maxlevel,option%LRlevel) - blocks%sons(i, j)%level   ! butterfly
                   endif
 
                   group_m = blocks%sons(i, j)%row_group
@@ -2015,7 +2015,7 @@ end function distance_geo
       if (block_f%level >= option%LRlevel) then
          block_f%level_butterfly = 0 ! low rank below LRlevel
       else
-         block_f%level_butterfly = h_mat_md%Maxlevel - block_f%level
+         block_f%level_butterfly = min(h_mat_md%Maxlevel,option%LRlevel) - block_f%level
       endif
 
       allocate(block_f%col_group(Ndim))
@@ -2677,7 +2677,7 @@ end function distance_geo
       if (block%level >= option%LRlevel) then
          block%level_butterfly = 0
       else
-         block%level_butterfly = Maxlevel - block%level
+         block%level_butterfly = min(Maxlevel,option%LRlevel) - block%level
       endif
       block%pgno = GetMshGroup_Pgno(ptree, Ndim, group_m)
 
@@ -3234,7 +3234,7 @@ end function distance_geo
             block_inv%M = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
             block_inv%N = msh%basis_group(col_group)%tail - msh%basis_group(col_group)%head + 1
 
-            block_inv%level_butterfly = ho_bf1%Maxlevel - block_inv%level
+            block_inv%level_butterfly = min(ho_bf1%Maxlevel,option%LRlevel) - block_inv%level
 
             call ComputeParallelIndices(block_inv, block_inv%pgno, ptree, msh)
 
@@ -3382,9 +3382,9 @@ end function distance_geo
                   block_f%level_butterfly = 0 ! low rank below LRlevel
                else
                   if (ho_bf1%Maxlevel - block_f%level < option%lnoBP) then
-                     block_f%level_butterfly = ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly
+                     block_f%level_butterfly = min(ho_bf1%Maxlevel,option%LRlevel) - ho_bf1%levels(level_c)%BP(ii)%level   ! butterfly
                   else
-                     block_f%level_butterfly = int((ho_bf1%Maxlevel - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels
+                     block_f%level_butterfly = int((min(ho_bf1%Maxlevel,option%LRlevel) - ho_bf1%levels(level_c)%BP(ii)%level)/2)*2 ! butterfly plus needs even number of levels
                   endif
                endif
 
@@ -3809,7 +3809,7 @@ end function distance_geo
                if (blocks%level > option%LRlevel) then
                   blocks%level_butterfly = 0 ! low rank below LRlevel
                else
-                  blocks%level_butterfly = h_mat%Maxlevel - blocks%level   ! butterfly
+                  blocks%level_butterfly = min(h_mat%Maxlevel,option%LRlevel) - blocks%level   ! butterfly
                endif
 
                nullify (blocks%father)
