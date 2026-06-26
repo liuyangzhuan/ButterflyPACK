@@ -43,7 +43,15 @@ contains
       !$omp critical(BFvec_pool_allocator)
       if (.not. associated(block%matrix)) then
          chunk = kerls%vec_pool_nchunk
-         if (chunk == 0 .or. kerls%vec_pool(chunk)%capacity - kerls%vec_pool(chunk)%used < nelement) then
+         if (chunk > 0) then
+            if (kerls%vec_pool(chunk)%capacity - kerls%vec_pool(chunk)%used >= nelement) then
+               first = kerls%vec_pool(chunk)%used + 1
+               last = first + nelement - 1
+               kerls%vec_pool(chunk)%used = last
+               block%matrix(1:nrow, 1:ncol) => kerls%vec_pool(chunk)%data(first:last)
+            endif
+         endif
+         if (.not. associated(block%matrix)) then
             kerls%vec_pool_nchunk = kerls%vec_pool_nchunk + 1
             chunk = kerls%vec_pool_nchunk
             if (.not. allocated(kerls%vec_pool)) then
@@ -61,12 +69,12 @@ contains
             allocate(kerls%vec_pool(chunk)%data(chunk_capacity))
             kerls%vec_pool(chunk)%used = 0
             kerls%vec_pool(chunk)%capacity = chunk_capacity
-         endif
 
-         first = kerls%vec_pool(chunk)%used + 1
-         last = first + nelement - 1
-         kerls%vec_pool(chunk)%used = last
-         block%matrix(1:nrow, 1:ncol) => kerls%vec_pool(chunk)%data(first:last)
+            first = kerls%vec_pool(chunk)%used + 1
+            last = first + nelement - 1
+            kerls%vec_pool(chunk)%used = last
+            block%matrix(1:nrow, 1:ncol) => kerls%vec_pool(chunk)%data(first:last)
+         endif
       endif
       !$omp end critical(BFvec_pool_allocator)
 
