@@ -13,7 +13,7 @@ def read_pids_from_file(filename, local_hostname, timeout=60, poll_interval=0.01
     Reads PIDs from file, returns only those on local hostname.
     Format: rank_0:hostname:545760
     """
-    
+
     elapsed=0
     while not os.path.exists(filename):
         if elapsed >= timeout:
@@ -71,7 +71,7 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: python bpack_monitor.py <pid_file_path>", file=sys.stderr)
         sys.exit(1)
-    
+
     local_hostname = get_local_hostname()
     # print(f"Local hostname: {local_hostname}")
 
@@ -79,7 +79,7 @@ def main():
 
     pid_file = sys.argv[1]
     processes = read_pids_from_file(pid_file, local_hostname)
-    
+
     if len(processes) == 0:
         print(f"No PIDs to monitor on this host ({local_hostname})")
         sys.exit(0)

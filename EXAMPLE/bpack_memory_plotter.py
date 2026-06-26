@@ -17,11 +17,11 @@ all_nRanks = []
 
 for host in hosts:
     filename = f'bpack_monitor_{host}.txt'
-    
+
     if not os.path.isfile(filename):
         print(f'Warning: {filename} not found, skipping')
         continue
-    
+
     # Read first non-comment line to detect number of columns
     with open(filename, 'r') as f:
         firstline = f.readline()
@@ -29,19 +29,19 @@ for host in hosts:
             dataline = f.readline()
         else:
             dataline = firstline
-    
+
     # Count columns by splitting on whitespace (ignore the ':')
     dataline = dataline.replace(':', ' ')
     cols = dataline.strip().split()
     nCols = len(cols)
     nRanksLocal = nCols - 1  # first column is time
-    
+
     print(f'{filename}: {nRanksLocal} ranks')
-    
+
     # Read data, skipping header if present
     with open(filename, 'r') as f:
         lines = f.readlines()
-    
+
     data_lines = []
     for line in lines:
         line = line.strip()
@@ -49,7 +49,7 @@ for host in hosts:
             line = line.replace(':', ' ')
             values = [float(x) for x in line.split()]
             data_lines.append(values)
-    
+
     stamps = np.array(data_lines)
     all_stamps.append(stamps)
     all_nRanks.append(nRanksLocal)

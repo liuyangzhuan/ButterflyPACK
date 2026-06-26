@@ -5,7 +5,7 @@
 ######################################################################
 
 # Required version
-cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.14...4.3)
 
 # SET(CMAKE_INSTALL_PREFIX < install_path >)
 
