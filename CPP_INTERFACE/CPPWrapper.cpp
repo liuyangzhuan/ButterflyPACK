@@ -33,6 +33,21 @@
 #include <complex>
 #include <iomanip>
 
+#include <unistd.h>
+#include <limits.h>
+
+#if defined(__APPLE__)
+#include <sys/param.h>
+#endif
+
+#ifndef HOST_NAME_MAX
+#ifdef MAXHOSTNAMELEN
+#define HOST_NAME_MAX (MAXHOSTNAMELEN - 1)
+#else
+#define HOST_NAME_MAX 1024
+#endif
+#endif
+
 
 #define OMPI_SKIP_MPICXX 1
 #ifdef HAVE_MPI
