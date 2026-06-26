@@ -1536,6 +1536,66 @@ subroutine mpi_reduce_real ( data1, data2, n, operation, ierror )
 end
 
 
+subroutine mpi_reduce_scatter ( sendbuf, recvbuf, recvcounts, datatype, operation, comm, ierror )
+
+!*****************************************************************************80
+!
+!! MPI_REDUCE_SCATTER carries out a reduction and scatter operation.
+!
+!  Discussion:
+!
+!    In a single-process (non-MPI) context, this is equivalent to
+!    copying the first recvcounts(1) elements of sendbuf into recvbuf.
+!
+!  Parameters:
+!
+!    Input, DATATYPE SENDBUF(*), the data to be reduced and scattered.
+!
+!    Output, DATATYPE RECVBUF(*), the portion of the result for this process.
+!
+!    Input, integer RECVCOUNTS(*), the number of elements for each process.
+!
+!    Input, integer DATATYPE, indicates the datatype of SENDBUF and RECVBUF.
+!
+!    Input, integer OPERATION, the reduction operation (MPI_SUM, etc.).
+!
+!    Input, integer COMM, the MPI communicator.
+!
+!    Output, integer IERROR, is nonzero if an error occurred.
+!
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer sendbuf(*)
+  integer recvbuf(*)
+  integer recvcounts(*)
+  integer datatype
+  integer operation
+  integer comm
+  integer ierror
+  integer n
+
+  ierror = MPI_SUCCESS
+  n = recvcounts(1)
+
+  if ( datatype == mpi_double_precision ) then
+    call mpi_copy_double_precision ( sendbuf, recvbuf, n, ierror )
+  else if ( datatype == mpi_integer ) then
+    call mpi_copy_integer ( sendbuf, recvbuf, n, ierror )
+  else if ( datatype == mpi_real ) then
+    call mpi_copy_real ( sendbuf, recvbuf, n, ierror )
+  else if ( datatype == mpi_complex ) then
+    call mpi_copy_complex ( sendbuf, recvbuf, n, ierror )
+  else if ( datatype == mpi_double_complex ) then
+    call mpi_copy_double_complex ( sendbuf, recvbuf, n, ierror )
+  else
+    ierror = MPI_FAILURE
+  end if
+
+  return
+end subroutine mpi_reduce_scatter
+
 subroutine mpi_wait ( request, status, ierror )
   implicit none
 
