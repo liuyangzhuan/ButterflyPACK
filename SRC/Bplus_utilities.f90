@@ -43,7 +43,10 @@ contains
       !$omp critical(BFvec_pool_allocator)
       if (.not. associated(block%matrix)) then
          chunk = kerls%vec_pool_nchunk
-         if (chunk == 0 .or. kerls%vec_pool(chunk)%capacity - kerls%vec_pool(chunk)%used < nelement) then
+         if (chunk > 0) then
+            if (kerls%vec_pool(chunk)%capacity - kerls%vec_pool(chunk)%used < nelement) chunk = 0
+         end if
+         if (chunk == 0) then
             kerls%vec_pool_nchunk = kerls%vec_pool_nchunk + 1
             chunk = kerls%vec_pool_nchunk
             if (.not. allocated(kerls%vec_pool)) then
