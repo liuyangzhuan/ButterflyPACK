@@ -592,15 +592,6 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
-        integer:: trans_nrep = 0 !< # representative local blocks for translational-invariant MVP batching
-        integer, allocatable:: trans_rep_list(:) !< representative local block ids
-        integer, allocatable:: trans_member_offset(:) !< offsets into trans_member_list for each representative
-        integer, allocatable:: trans_member_list(:) !< local block ids grouped by representative
-        integer:: trans_plan_ready = 0 !< 1 when trans_invariant=2 axis maps have been cached
-        integer, allocatable:: trans_map_n_to_rep(:,:), trans_rev_n_to_rep(:,:)
-        integer, allocatable:: trans_map_n_from_rep(:,:), trans_rev_n_from_rep(:,:)
-        integer, allocatable:: trans_map_m_to_rep(:,:), trans_rev_m_to_rep(:,:)
-        integer, allocatable:: trans_map_m_from_rep(:,:), trans_rev_m_from_rep(:,:)
         integer:: trans_ndup = 0 !< # compact single-rank occurrences that reuse representative blocks
         integer, allocatable:: trans_dup_row_group(:,:), trans_dup_col_group(:,:)
         integer, allocatable:: trans_dup_rep(:)
@@ -827,6 +818,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
         real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
+        real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final

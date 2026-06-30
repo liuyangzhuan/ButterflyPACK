@@ -444,17 +444,6 @@ contains
                deallocate (hss_bf1_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(hss_bf1_md%BP%LL(ll)%boundary_map)) deallocate (hss_bf1_md%BP%LL(ll)%boundary_map)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rep_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rep_list)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_offset)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_offset)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_list)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)
             end if
          end do
          deallocate (hss_bf1_md%BP%LL)
@@ -502,17 +491,6 @@ contains
                deallocate (h_mat_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(h_mat_md%BP%LL(ll)%boundary_map)) deallocate (h_mat_md%BP%LL(ll)%boundary_map)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rep_list)) deallocate (h_mat_md%BP%LL(ll)%trans_rep_list)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_member_offset)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_member_list)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_row_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_row_group)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_col_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_col_group)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_rep)
@@ -786,6 +764,10 @@ contains
       stats_o%Time_C_Mult_RedistOut = stats_i%Time_C_Mult_RedistOut
       stats_o%Time_C_Mult_Level = stats_i%Time_C_Mult_Level
       stats_o%Time_C_Mult_TransPlan = stats_i%Time_C_Mult_TransPlan
+      stats_o%Time_C_Mult_RedistSelf = stats_i%Time_C_Mult_RedistSelf
+      stats_o%Time_C_Mult_RedistPack = stats_i%Time_C_Mult_RedistPack
+      stats_o%Time_C_Mult_RedistMPI = stats_i%Time_C_Mult_RedistMPI
+      stats_o%Time_C_Mult_RedistUnpack = stats_i%Time_C_Mult_RedistUnpack
       stats_o%Time_C_Mult_Pack = stats_i%Time_C_Mult_Pack
       stats_o%Time_C_Mult_Full = stats_i%Time_C_Mult_Full
       stats_o%Time_C_Mult_Unpack = stats_i%Time_C_Mult_Unpack
@@ -907,6 +889,10 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -1084,6 +1070,18 @@ contains
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_TransPlan, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult trans plan:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult trans plan:', stats%Time_C_Mult_TransPlan, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSelf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist self:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist self:', stats%Time_C_Mult_RedistSelf, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistPack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist pack:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist pack:', stats%Time_C_Mult_RedistPack, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistMPI, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist MPI:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist MPI:', stats%Time_C_Mult_RedistMPI, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistUnpack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist unpack:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist unpack:', stats%Time_C_Mult_RedistUnpack, 'Seconds'
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_Pack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult pack time:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult pack time:', stats%Time_C_Mult_Pack, 'Seconds'

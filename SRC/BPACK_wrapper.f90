@@ -3174,6 +3174,10 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3447,6 +3451,10 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3561,6 +3569,10 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3667,6 +3679,10 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
