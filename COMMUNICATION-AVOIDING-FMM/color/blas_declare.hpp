@@ -481,7 +481,7 @@ static void zsytrf_chol_unblocked_(
 //   LDA:  leading dimension of A
 //   INFO: 0 on success, k if pivot k is zero (1-based)
 //   NB:   block size (optional tuning parameter, default 64)
-void zsychol_(
+inline void zsychol_(
     const char* UPLO,
     const int* N_,
     std::complex<double>* A,
@@ -561,7 +561,7 @@ void zsychol_(
 //   B:     on entry, RHS; on exit, solution
 //   LDB:   leading dimension of B
 //   INFO:  0 on success
-void zsychol_solve_(
+inline void zsychol_solve_(
     const char* UPLO,
     const int* N,
     const int* NRHS,
