@@ -688,14 +688,13 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     // construct H2 solver
     // To Do: need to add CoordType and DataType
 	//auto H2_solver = std::make_unique<H2<double, C_DT>>();
-    butterfly::H2<double, C_DT>*  H2_solver = new H2<double, C_DT>();
+    butterfly::H2<double, C_DT>*  H2_solver = new butterfly::H2<double, C_DT>();
 
     int fcomm;
     c_bpack_get_comm(ptree, &fcomm);
     MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
     H2_solver->comm = mpi_comm;
     //*bmat = static_cast<F2Cptr>(H2_solver.release());
-	*bmat = static_cast<F2Cptr>(H2_solver);
     
 	int rank = 0;
     int size = 1;
@@ -716,7 +715,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     
     butterfly::ProgramOptions h2_options;
     try {
-      h2_options = butterfly::parse_program_options(Npo, Ndim, Locations, option, stats, ker);
+	  double tolerance;
+	  c_bpack_getoption(option, "tol_comp", &tolerance);
+      h2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance);
     } catch (const std::exception& e) {
         if (rank == 0) {
             std::cerr << "Argument error: " << e.what() << std::endl;
@@ -727,30 +728,31 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     try {
       if (rank == 0) {
 
-        std::cout << "Run configuration: kernel=" << kernel_kind_to_string(h2_options.kernel_kind)
-                  << ", number_type=" << number_kind_to_string(h2_options.number_kind)
+        std::cout << "Run configuration: kernel=" << butterfly::kernel_kind_to_string(h2_options.kernel_kind)
+                  << ", number_type=" << butterfly::number_kind_to_string(h2_options.number_kind)
                   << ", dimension=" << h2_options.dimension
                   << ", reduction_threshold=" << h2_options.reduction_threshold
                   << ", num_proxy=" << h2_options.num_proxy;
-        if (h2_options.kernel_kind == fmm::KernelKind::MATERN52) {
+        if (h2_options.kernel_kind == butterfly::KernelKind::MATERN52) {
           std::cout << ", length_scale=" << h2_options.length_scale
                     << ", nugget=" << h2_options.nugget;
         }
-        if (h2_options.kernel_kind == fmm::KernelKind::YUKAWA) {
+        if (h2_options.kernel_kind == butterfly::KernelKind::YUKAWA) {
           std::cout << ", kappa=" << h2_options.kappa;
         }
         std::cout << std::endl;
       }
       
-      butterfly::h2_initiate<double, C_DT>(bmat, h2_options, Locations, rank);
+      butterfly::h2_initiate<double, C_DT>(H2_solver, h2_options, Locations, rank);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(H2_solver->comm, 1);
     }
-
+	*bmat = static_cast<F2Cptr>(H2_solver);
 	//temporary
 	delete H2_solver;
 	H2_solver = nullptr;
+	*bmat = nullptr;
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
   }
@@ -802,6 +804,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
     try {
       // To Do: need to convert bmat format to the format for hierarchical_factorization_parallel
       H2<double, C_DT>* H2_solver = static_cast<H2<double, C_DT>*>(*bmat);
+	  
       // preset because solver can only solve these right now
       is_symmetric = true;
       is_Hermitian = false;

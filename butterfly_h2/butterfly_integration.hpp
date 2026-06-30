@@ -18,9 +18,6 @@
 #include <chrono>
 #include <cstdio>
 
-// Butterfy PACK C Interface
-#include "BPACK_wrapper.h"
-
 // FMM 
 #include "factorization.hpp"
 #include "solver.hpp"
@@ -291,7 +288,7 @@ inline std::string reduction_threshold_pattern(int dimension) {
   // double kappa = 10.0;         // Yukawa screening parameter κ
   // int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
 inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locations, 
-  F2Cptr* option, F2Cptr* stats, F2Cptr* ker) {
+  double tolerance) {
 
     ProgramOptions h2_options;
     
@@ -329,9 +326,7 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
     h2_options.num_levels = default_num_levels(grid_size);
 
     // need to check DataType: want to support double and double complex
-    double tmp;
-    c_bpack_getoption(option, "tol_comp", &tmp);
-    h2_options.tolerance = tmp;
+    h2_options.tolerance = tolerance;
 
 
     // H2QuantApp* quant = static_cast<H2QuantApp*> (C_QuantApp);
@@ -425,8 +420,7 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
 }
 
 template<typename CoordType, typename DataType>
-int h2_initiate(F2Cptr* bmat, const ProgramOptions& options, double* Locations, int rank) {
-  H2<CoordType, DataType>* H2_solver = static_cast<H2<CoordType, DataType>*>(*bmat);
+int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, double* Locations, int rank) {
   // from H2 struct, set typename CoordType, DataType
   // from H2 struct, get kernel
   // from H2 struct, get rank, size
@@ -478,121 +472,121 @@ int h2_initiate(F2Cptr* bmat, const ProgramOptions& options, double* Locations, 
 }
 
 // provide booleans for whether to do certain checks
-inline int h2_verification(F2Cptr*bmat, const ProgramOptions& options, bool verify_solution, bool verify_factorization, bool condition_number) {
-  // pass in tree and h2 options
+// inline int h2_verification(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, bool verify_solution, bool verify_factorization, bool condition_number) {
+//   // pass in tree and h2 options
 
-  // Step 1: verify solution x from Ax=b is reasonable
-  auto grid_points = fmm::build_grid_points_from_tree(tree.get(), options.grid_size);
-  int can_run_fft_verification = 0;
-  if (rank == 0 && !grid_points.empty()) {
-    can_run_fft_verification = 1;
-  }
-  MPI_Bcast(&can_run_fft_verification, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  if (can_run_fft_verification) {
-    const auto verify_fft_start = std::chrono::high_resolution_clock::now();
-    const auto solve_metrics = fmm::verify_solution_fft(
-      tree.get(),
-      aggregated_rhs,
-      solution,
-      grid_points,
-      options.grid_size,
-      options.kernel_kind,
-      options.dimension,
-      options.wave_divisor,
-      options.length_scale,
-      options.nugget,
-      options.kappa,
-      true);
-    const auto verify_fft_end = std::chrono::high_resolution_clock::now();
-    const auto verify_fft_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-      verify_fft_end - verify_fft_start);
+//   // Step 1: verify solution x from Ax=b is reasonable
+//   auto grid_points = fmm::build_grid_points_from_tree(tree.get(), options.grid_size);
+//   int can_run_fft_verification = 0;
+//   if (rank == 0 && !grid_points.empty()) {
+//     can_run_fft_verification = 1;
+//   }
+//   MPI_Bcast(&can_run_fft_verification, 1, MPI_INT, 0, MPI_COMM_WORLD);
+//   if (can_run_fft_verification) {
+//     const auto verify_fft_start = std::chrono::high_resolution_clock::now();
+//     const auto solve_metrics = fmm::verify_solution_fft(
+//       tree.get(),
+//       aggregated_rhs,
+//       solution,
+//       grid_points,
+//       options.grid_size,
+//       options.kernel_kind,
+//       options.dimension,
+//       options.wave_divisor,
+//       options.length_scale,
+//       options.nugget,
+//       options.kappa,
+//       true);
+//     const auto verify_fft_end = std::chrono::high_resolution_clock::now();
+//     const auto verify_fft_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+//       verify_fft_end - verify_fft_start);
 
-    if (rank == 0) {
-      std::cout << "FFT verification time: " << verify_fft_duration.count() << " ms" << std::endl;
-      fflush(stdout);
-    }
+//     if (rank == 0) {
+//       std::cout << "FFT verification time: " << verify_fft_duration.count() << " ms" << std::endl;
+//       fflush(stdout);
+//     }
 
-    // verify Forward error via multiply: ||F*x - A*x|| / ||A*x|| (no condition number amplification)
-    const double forward_relative_error = fmm::verify_forward_error_fft(
-      tree.get(),
-      grid_points,
-      options.grid_size,
-      options.kernel_kind,
-      options.dimension,
-      options.wave_divisor,
-      options.length_scale,
-      options.nugget,
-      options.kappa,
-      true);
-    if (rank == 0) {
-      const std::streamsize fwd_old_precision = std::cout.precision();
-      const std::ios::fmtflags fwd_old_flags = std::cout.flags();
-      std::cout << "Forward relative error: " << std::scientific
-                << std::setprecision(std::numeric_limits<double>::max_digits10)
-                << forward_relative_error
-                << std::setprecision(fwd_old_precision);
-      std::cout.flags(fwd_old_flags);
-      std::cout << std::endl;
-      fflush(stdout);
-    }
+//     // verify Forward error via multiply: ||F*x - A*x|| / ||A*x|| (no condition number amplification)
+//     const double forward_relative_error = fmm::verify_forward_error_fft(
+//       tree.get(),
+//       grid_points,
+//       options.grid_size,
+//       options.kernel_kind,
+//       options.dimension,
+//       options.wave_divisor,
+//       options.length_scale,
+//       options.nugget,
+//       options.kappa,
+//       true);
+//     if (rank == 0) {
+//       const std::streamsize fwd_old_precision = std::cout.precision();
+//       const std::ios::fmtflags fwd_old_flags = std::cout.flags();
+//       std::cout << "Forward relative error: " << std::scientific
+//                 << std::setprecision(std::numeric_limits<double>::max_digits10)
+//                 << forward_relative_error
+//                 << std::setprecision(fwd_old_precision);
+//       std::cout.flags(fwd_old_flags);
+//       std::cout << std::endl;
+//       fflush(stdout);
+//     }
 
-    // verify solution x from Ax=b is reasonable, this is the ground truth comparison for smaller matrices
-    if (options.N <= 4096) {
-      const double direct_error = fmm::verify_solution_direct(
-        &kernel,
-        aggregated_rhs,
-        solution,
-        grid_points,
-        tree->num_points,
-        options.dimension,
-        true);
-      if (rank == 0) {
-        std::cout << "verifying with direct matrix vector multiply since N <= 4096" << std::endl;
-        std::cout << "Direct error: " << direct_error << std::endl;
-      }
-    }
+//     // verify solution x from Ax=b is reasonable, this is the ground truth comparison for smaller matrices
+//     if (options.N <= 4096) {
+//       const double direct_error = fmm::verify_solution_direct(
+//         &kernel,
+//         aggregated_rhs,
+//         solution,
+//         grid_points,
+//         tree->num_points,
+//         options.dimension,
+//         true);
+//       if (rank == 0) {
+//         std::cout << "verifying with direct matrix vector multiply since N <= 4096" << std::endl;
+//         std::cout << "Direct error: " << direct_error << std::endl;
+//       }
+//     }
 
-    if (rank == 0) {
-      const std::streamsize old_precision = std::cout.precision();
-      const std::ios::fmtflags old_flags = std::cout.flags();
-      std::cout << "\nBackward residual: " << std::scientific
-                << std::setprecision(std::numeric_limits<double>::max_digits10)
-                << solve_metrics.relative_residual
-                << std::setprecision(old_precision);
-      std::cout.flags(old_flags);
-      std::cout << std::endl;
-    }
+//     if (rank == 0) {
+//       const std::streamsize old_precision = std::cout.precision();
+//       const std::ios::fmtflags old_flags = std::cout.flags();
+//       std::cout << "\nBackward residual: " << std::scientific
+//                 << std::setprecision(std::numeric_limits<double>::max_digits10)
+//                 << solve_metrics.relative_residual
+//                 << std::setprecision(old_precision);
+//       std::cout.flags(old_flags);
+//       std::cout << std::endl;
+//     }
 
 
-    // Estimate Condition Number
-    if (options.cond_samples > 0) {
-      const double kappa_est = fmm::estimate_condition_number(
-        tree.get(),
-        grid_points,
-        options.grid_size,
-        options.kernel_kind,
-        options.dimension,
-        options.cond_samples,
-        options.wave_divisor,
-        options.length_scale,
-        options.nugget,
-        options.kappa);
-      if (rank == 0) {
-        const std::streamsize be_old_precision = std::cout.precision();
-        const std::ios::fmtflags be_old_flags = std::cout.flags();
-        std::cout << "Backward relative error (rough estimate, uses ||A|| approx ||Ax||/||x||): "
-                  << std::scientific
-                  << std::setprecision(std::numeric_limits<double>::max_digits10)
-                  << solve_metrics.backward_error
-                  << std::setprecision(be_old_precision);
-        std::cout.flags(be_old_flags);
-        std::cout << std::endl;
-        std::cout << "Estimated condition number: " << std::scientific
-                  << std::setprecision(6) << kappa_est << std::endl;
-      }
-    }
-  }
+//     // Estimate Condition Number
+//     if (options.cond_samples > 0) {
+//       const double kappa_est = fmm::estimate_condition_number(
+//         tree.get(),
+//         grid_points,
+//         options.grid_size,
+//         options.kernel_kind,
+//         options.dimension,
+//         options.cond_samples,
+//         options.wave_divisor,
+//         options.length_scale,
+//         options.nugget,
+//         options.kappa);
+//       if (rank == 0) {
+//         const std::streamsize be_old_precision = std::cout.precision();
+//         const std::ios::fmtflags be_old_flags = std::cout.flags();
+//         std::cout << "Backward relative error (rough estimate, uses ||A|| approx ||Ax||/||x||): "
+//                   << std::scientific
+//                   << std::setprecision(std::numeric_limits<double>::max_digits10)
+//                   << solve_metrics.backward_error
+//                   << std::setprecision(be_old_precision);
+//         std::cout.flags(be_old_flags);
+//         std::cout << std::endl;
+//         std::cout << "Estimated condition number: " << std::scientific
+//                   << std::setprecision(6) << kappa_est << std::endl;
+//       }
+//     }
+//   }
 
-  return 0;
-}
+//   return 0;
+// }
 }
