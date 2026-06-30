@@ -16,8 +16,6 @@ rm -rf cmake_install.cmake
 rm -rf CMakeFiles
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="" \
-	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
-	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_mpi=OFF \
@@ -41,3 +39,5 @@ make cvie2d_t -j16
 make install
 
 	# -DTPL_ARPACK_LIBRARIES="/global/homes/l/liuyangz/Perlmutter/my_research/arpack-ng-gnu_libsci/build/lib/libparpack.so"
+	# -DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
+	# -DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \

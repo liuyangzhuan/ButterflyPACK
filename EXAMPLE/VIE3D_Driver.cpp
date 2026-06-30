@@ -1047,6 +1047,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "rmax", rmax);
 	z_c_bpack_set_I_option(&option_bf, "ErrSol", 1);
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
+  z_c_bpack_set_I_option(&option_bf, "format", 7);
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
 
@@ -1162,335 +1163,335 @@ if(myrank==master_rank){
     quant_ptr_bf->_Hperm.resize(Npo);
     std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf->_Hperm.begin());
 
-	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
+	  // z_c_bpack_printoption(&option_bf,&ptree_bf);
+  	// z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
-    if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    int nvec=1;
-    vector<_Complex double> b(myseg*nvec,{0.0,0.0});
-    vector<_Complex double> x(myseg*nvec,{0.0,0.0});
-    for (int i=0; i<myseg; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-      double xs = data_geo[(i_old-1) * Ndim];
-      double ys = data_geo[(i_old-1) * Ndim+1];
-      double zs = data_geo[(i_old-1) * Ndim+2];
+    // if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
+    // int nvec=1;
+    // vector<_Complex double> b(myseg*nvec,{0.0,0.0});
+    // vector<_Complex double> x(myseg*nvec,{0.0,0.0});
+    // for (int i=0; i<myseg; i++){
+    //   int i_new_loc = i+1;
+    //   int i_old;
+    //   z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+    //   double xs = data_geo[(i_old-1) * Ndim];
+    //   double ys = data_geo[(i_old-1) * Ndim+1];
+    //   double zs = data_geo[(i_old-1) * Ndim+2];
 
-      double xs0=x0max-0.1;
-      double ys0=y0max-0.1;
-      double zs0=z0max-0.1;
+    //   double xs0=x0max-0.1;
+    //   double ys0=y0max-0.1;
+    //   double zs0=z0max-0.1;
 
-      // double xs0=slow_x0;
-      // double ys0=slow_y0;
-      // double zs0=slow_z0;
-      for (int nth=0; nth<nvec; nth++){
-        x.data()[i+nth*myseg]=source_function(xs,ys,zs,xs0,ys0,zs0,nth,h,w);  // generate a source distribution
-      }
-    }
-    z_c_bpack_mult("N",x.data(),b.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
-    vector<_Complex double> u_inc_glo(Npo*nvec,{0.0,0.0});
-    for (int i=0; i<myseg; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-      for (int nth=0; nth<nvec; nth++){
-        u_inc_glo.data()[i_old-1+nth*Npo] = b.data()[i+nth*myseg];
-      }
-    }
-    MPI_Allreduce(MPI_IN_PLACE,u_inc_glo.data(), Npo*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    //   // double xs0=slow_x0;
+    //   // double ys0=slow_y0;
+    //   // double zs0=slow_z0;
+    //   for (int nth=0; nth<nvec; nth++){
+    //     x.data()[i+nth*myseg]=source_function(xs,ys,zs,xs0,ys0,zs0,nth,h,w);  // generate a source distribution
+    //   }
+    // }
+    // z_c_bpack_mult("N",x.data(),b.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
+    // vector<_Complex double> u_inc_glo(Npo*nvec,{0.0,0.0});
+    // for (int i=0; i<myseg; i++){
+    //   int i_new_loc = i+1;
+    //   int i_old;
+    //   z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+    //   for (int nth=0; nth<nvec; nth++){
+    //     u_inc_glo.data()[i_old-1+nth*Npo] = b.data()[i+nth*myseg];
+    //   }
+    // }
+    // MPI_Allreduce(MPI_IN_PLACE,u_inc_glo.data(), Npo*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-    if(myrank==master_rank){
-      for(int nth=0; nth<nvec; nth++){
-        string filename, str;
-        filename = "./VIE_F_inc_f_";
-        str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename +=str+"_vs_"+to_string(vs)+"_ivelo_"+to_string(ivelo);
-        std::ostringstream streamObj;
-        streamObj << h;
-        str=streamObj.str();
-        // str=to_string(h); // this only has 6-digit precision
-        str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_h_"+str;
-        double opt_d;
-        z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
+    // if(myrank==master_rank){
+    //   for(int nth=0; nth<nvec; nth++){
+    //     string filename, str;
+    //     filename = "./VIE_F_inc_f_";
+    //     str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+    //     filename +=str+"_vs_"+to_string(vs)+"_ivelo_"+to_string(ivelo);
+    //     std::ostringstream streamObj;
+    //     streamObj << h;
+    //     str=streamObj.str();
+    //     // str=to_string(h); // this only has 6-digit precision
+    //     str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+    //     filename += "_h_"+str;
+    //     double opt_d;
+    //     z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
-        str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
-        fout1=fopen(filename.c_str(),"wb");
+    //     str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+    //     filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
+    //     fout1=fopen(filename.c_str(),"wb");
 
-        int nx = round((x0max-x0min)/h);
-        int ny = round((y0max-y0min)/h);
-        int nz = round((z0max-z0min)/h);
-        fwrite(&nx,sizeof(int),1,fout1);
-        fwrite(&ny,sizeof(int),1,fout1);
-        fwrite(&nz,sizeof(int),1,fout1);
-        fwrite(&h,sizeof(double),1,fout1);
-        fwrite(&u_inc_glo.data()[nth*Npo],sizeof(_Complex double),Npo,fout1);
-        fclose(fout1);
-      }
-    }
+    //     int nx = round((x0max-x0min)/h);
+    //     int ny = round((y0max-y0min)/h);
+    //     int nz = round((z0max-z0min)/h);
+    //     fwrite(&nx,sizeof(int),1,fout1);
+    //     fwrite(&ny,sizeof(int),1,fout1);
+    //     fwrite(&nz,sizeof(int),1,fout1);
+    //     fwrite(&h,sizeof(double),1,fout1);
+    //     fwrite(&u_inc_glo.data()[nth*Npo],sizeof(_Complex double),Npo,fout1);
+    //     fclose(fout1);
+    //   }
+    // }
 
-    vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
-    Npo=0;
-    int Npo_o=0;
+    // vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
+    // Npo=0;
+    // int Npo_o=0;
 
-    for(int ii=0;ii<N;ii++){
+    // for(int ii=0;ii<N;ii++){
 
-      int idx0=ii;
+    //   int idx0=ii;
 
-      // int idx_y = idx0 / (Kint * Iint);
-      // idx0 -= (idx_y * Kint * Iint);
-      // int idx_x = idx0 / Kint;
-      // int idx_z = idx0 % Kint;
+    //   // int idx_y = idx0 / (Kint * Iint);
+    //   // idx0 -= (idx_y * Kint * Iint);
+    //   // int idx_x = idx0 / Kint;
+    //   // int idx_z = idx0 % Kint;
 
-      int idx_z = idx0 / (Iint * Jint);
-      idx0 -= (idx_z * Iint * Jint);
-      int idx_y = idx0 / Iint;
-      int idx_x = idx0 % Iint;
-
-
-      double x_glo = idx_x*h+x0min;
-      double y_glo = idx_y*h+y0min;
-      double z_glo = idx_z*h+z0min;
-
-      int domain = subdomain_detection(x_glo, y_glo, z_glo, center, shape, radius_max, L, H, W);
-      if(domain==0){
-        v_glo2sub[ii]=Npo;
-        v_sub2glo[Npo]=ii;
-        Npo++;
-      }else{
-        v_glo2sub[ii]=-1;
-        v_sub2glo_o[Npo_o]=ii;
-        Npo_o++;
-      }
-    }
-    v_sub2glo.resize(Npo);
-    v_sub2glo_o.resize(Npo_o);
-    int* nns_ptr_s2s=new int[(int64_t)knn_pre*(int64_t)Npo];
-    for(int ii=0;ii<Npo*knn_pre;ii++){
-      nns_ptr_s2s[ii]=-1;
-    }
-    data_geo.resize(Ndim*Npo);
-    for(int ii=0;ii<Npo;ii++){
-      int ii_glo = v_sub2glo[ii];
-      int idx0=ii_glo;
-
-      // int idx_y = idx0 / (Kint * Iint);
-      // idx0 -= (idx_y * Kint * Iint);
-      // int idx_x = idx0 / Kint;
-      // int idx_z = idx0 % Kint;
-
-      int idx_z = idx0 / (Iint * Jint);
-      idx0 -= (idx_z * Iint * Jint);
-      int idx_y = idx0 / Iint;
-      int idx_x = idx0 % Iint;
-
-      data_geo[(ii) * Ndim] = idx_x*h+x0min;
-      data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
-      data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
-
-      int idxnn=0;
-      for(int iii=-layer;iii<=layer;iii++){
-      for(int jjj=-layer;jjj<=layer;jjj++){
-      for(int kkk=-layer;kkk<=layer;kkk++){
-          // int ii1 = (idx_z+kkk)+Kint*(idx_x+iii)+Kint*Iint*(idx_y+jjj);
-          int ii1 = (idx_x+iii)+Iint*(idx_y+jjj)+Jint*Iint*(idx_z+kkk);
-
-          int ii_loc=-1;
-          if(ii1>=0 && ii1<N){ii_loc= v_glo2sub[ii1];}
-          if(ii_loc>-1){
-            nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=ii_loc+1;
-          }else{
-            nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=0;
-          }
-          idxnn++;
-      }
-      }
-      }
-    }
+    //   int idx_z = idx0 / (Iint * Jint);
+    //   idx0 -= (idx_z * Iint * Jint);
+    //   int idx_y = idx0 / Iint;
+    //   int idx_x = idx0 % Iint;
 
 
-  	C_QuantApp_BF *quant_ptr_bf_s2s;
+    //   double x_glo = idx_x*h+x0min;
+    //   double y_glo = idx_y*h+y0min;
+    //   double z_glo = idx_z*h+z0min;
+
+    //   int domain = subdomain_detection(x_glo, y_glo, z_glo, center, shape, radius_max, L, H, W);
+    //   if(domain==0){
+    //     v_glo2sub[ii]=Npo;
+    //     v_sub2glo[Npo]=ii;
+    //     Npo++;
+    //   }else{
+    //     v_glo2sub[ii]=-1;
+    //     v_sub2glo_o[Npo_o]=ii;
+    //     Npo_o++;
+    //   }
+    // }
+    // v_sub2glo.resize(Npo);
+    // v_sub2glo_o.resize(Npo_o);
+    // int* nns_ptr_s2s=new int[(int64_t)knn_pre*(int64_t)Npo];
+    // for(int ii=0;ii<Npo*knn_pre;ii++){
+    //   nns_ptr_s2s[ii]=-1;
+    // }
+    // data_geo.resize(Ndim*Npo);
+    // for(int ii=0;ii<Npo;ii++){
+    //   int ii_glo = v_sub2glo[ii];
+    //   int idx0=ii_glo;
+
+    //   // int idx_y = idx0 / (Kint * Iint);
+    //   // idx0 -= (idx_y * Kint * Iint);
+    //   // int idx_x = idx0 / Kint;
+    //   // int idx_z = idx0 % Kint;
+
+    //   int idx_z = idx0 / (Iint * Jint);
+    //   idx0 -= (idx_z * Iint * Jint);
+    //   int idx_y = idx0 / Iint;
+    //   int idx_x = idx0 % Iint;
+
+    //   data_geo[(ii) * Ndim] = idx_x*h+x0min;
+    //   data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
+    //   data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
+
+    //   int idxnn=0;
+    //   for(int iii=-layer;iii<=layer;iii++){
+    //   for(int jjj=-layer;jjj<=layer;jjj++){
+    //   for(int kkk=-layer;kkk<=layer;kkk++){
+    //       // int ii1 = (idx_z+kkk)+Kint*(idx_x+iii)+Kint*Iint*(idx_y+jjj);
+    //       int ii1 = (idx_x+iii)+Iint*(idx_y+jjj)+Jint*Iint*(idx_z+kkk);
+
+    //       int ii_loc=-1;
+    //       if(ii1>=0 && ii1<N){ii_loc= v_glo2sub[ii1];}
+    //       if(ii_loc>-1){
+    //         nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=ii_loc+1;
+    //       }else{
+    //         nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=0;
+    //       }
+    //       idxnn++;
+    //   }
+    //   }
+    //   }
+    // }
 
 
-    F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
-    F2Cptr stats_bf_s2s;      //statistics structure returned by Fortran code
-    F2Cptr msh_bf_s2s;		   //d_mesh structure returned by Fortran code
-    F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
-    int myseg_s2s;
-
-    // create hodlr data structures
-    z_c_bpack_createstats(&stats_bf_s2s);
-    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
-
-    if(myrank==0){
-      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
-    }
-    // construct hodlr with geometrical points
-    z_c_bpack_construct_init(&Npo, &Ndim, data_geo.data(), nns_ptr_s2s,&nlevel, tree_bf, perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
-    quant_ptr_bf_s2s->_Hperm.resize(Npo);
-    std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
-
-	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
+  	// C_QuantApp_BF *quant_ptr_bf_s2s;
 
 
-    if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
-    // factor hodlr
+    // F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
+    // F2Cptr stats_bf_s2s;      //statistics structure returned by Fortran code
+    // F2Cptr msh_bf_s2s;		   //d_mesh structure returned by Fortran code
+    // F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
+    // int myseg_s2s;
+
+    // // create hodlr data structures
+    // z_c_bpack_createstats(&stats_bf_s2s);
+    // quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+
+    // if(myrank==0){
+    //   cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
+    // }
+    // // construct hodlr with geometrical points
+    // z_c_bpack_construct_init(&Npo, &Ndim, data_geo.data(), nns_ptr_s2s,&nlevel, tree_bf, perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
+    // quant_ptr_bf_s2s->_Hperm.resize(Npo);
+    // std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
+
+	  // z_c_bpack_printoption(&option_bf,&ptree_bf);
+  	// z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
 
 
-    z_c_bpack_getoption(&option_bf, "precon", &opt_d);
-    int precon=round(opt_d);
-    if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
+    // if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
+    // // factor hodlr
 
 
-    if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
-    vector<_Complex double> b_s(myseg_s2s*nvec,{0.0,0.0});
-    for (int i=0; i<myseg_s2s; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
-      for (int nth=0; nth<nvec; nth++){
-        b_s[i+nth*myseg_s2s]=u_inc_glo[v_sub2glo[i_old-1]+nth*N];
-      }
-    }
-    int ErrSol=0;
-    z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
-    vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
+    // z_c_bpack_getoption(&option_bf, "precon", &opt_d);
+    // int precon=round(opt_d);
+    // if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
 
 
-    if(scaleGreen==1){
-      quant_ptr_bf_s2s->bmat_bf = &bmat_bf_s2s;
-      quant_ptr_bf_s2s->option_bf = &option_bf;
-      quant_ptr_bf_s2s->stats_bf = &stats_bf_s2s;
-      quant_ptr_bf_s2s->ptree_bf = &ptree_bf;
-      quant_ptr_bf_s2s->msh_bf = &msh_bf_s2s;
-      F2Cptr kerquant_s2s;
-      z_c_bpack_iter_usermatvec_precon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_bf_s2s);
-
-      // vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
-      // vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
-      // C_FuncHMatVec("N", &myseg_s2s, &myseg_s2s, &nvec, xx_s.data(),bb_s.data(), quant_ptr_bf_s2s);
-
-      // double tmp=0;
-      // for (int i=0; i<myseg_s2s; i++){
-      //   for (int nth=0; nth<nvec; nth++){
-      //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
-      //   }
-      // }
-      // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-      // if(myrank==master_rank){
-      //   cout<<"norm"<<tmp<<endl;
-      // }
-    }else{
-      z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
+    // if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
+    // vector<_Complex double> b_s(myseg_s2s*nvec,{0.0,0.0});
+    // for (int i=0; i<myseg_s2s; i++){
+    //   int i_new_loc = i+1;
+    //   int i_old;
+    //   z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+    //   for (int nth=0; nth<nvec; nth++){
+    //     b_s[i+nth*myseg_s2s]=u_inc_glo[v_sub2glo[i_old-1]+nth*N];
+    //   }
+    // }
+    // int ErrSol=0;
+    // z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
+    // vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
 
 
-      vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
-      vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
-      z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
+    // if(scaleGreen==1){
+    //   quant_ptr_bf_s2s->bmat_bf = &bmat_bf_s2s;
+    //   quant_ptr_bf_s2s->option_bf = &option_bf;
+    //   quant_ptr_bf_s2s->stats_bf = &stats_bf_s2s;
+    //   quant_ptr_bf_s2s->ptree_bf = &ptree_bf;
+    //   quant_ptr_bf_s2s->msh_bf = &msh_bf_s2s;
+    //   F2Cptr kerquant_s2s;
+    //   z_c_bpack_iter_usermatvec_precon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_bf_s2s);
 
-      // double tmp=0;
-      // for (int i=0; i<myseg_s2s; i++){
-      //   for (int nth=0; nth<nvec; nth++){
-      //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
-      //   }
-      // }
-      // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-      // if(myrank==master_rank){
-      //   cout<<"norm"<<tmp<<endl;
-      // }
-    }
+    //   // vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
+    //   // vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
+    //   // C_FuncHMatVec("N", &myseg_s2s, &myseg_s2s, &nvec, xx_s.data(),bb_s.data(), quant_ptr_bf_s2s);
+
+    //   // double tmp=0;
+    //   // for (int i=0; i<myseg_s2s; i++){
+    //   //   for (int nth=0; nth<nvec; nth++){
+    //   //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
+    //   //   }
+    //   // }
+    //   // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    //   // if(myrank==master_rank){
+    //   //   cout<<"norm"<<tmp<<endl;
+    //   // }
+    // }else{
+    //   z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
 
+    //   vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
+    //   vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
+    //   z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
+
+    //   // double tmp=0;
+    //   // for (int i=0; i<myseg_s2s; i++){
+    //   //   for (int nth=0; nth<nvec; nth++){
+    //   //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
+    //   //   }
+    //   // }
+    //   // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    //   // if(myrank==master_rank){
+    //   //   cout<<"norm"<<tmp<<endl;
+    //   // }
+    // }
 
 
 
 
-    vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
-    for (int i=0; i<myseg_s2s; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
-      for (int nth=0; nth<nvec; nth++){
-        double xs = data_geo[(i_old-1) * Ndim];
-        double ys = data_geo[(i_old-1) * Ndim+1];
-        double zs = data_geo[(i_old-1) * Ndim+2];
-        double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
-        double s0=2;
-        double k0 = s0*w;
-        double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
-        x_v_glo[v_sub2glo[i_old-1]+nth*N]=x_s[i+nth*myseg_s2s]*coef;
-      }
-    }
-    MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
 
-    vector<_Complex double> x_v(myseg*nvec,{0.0,0.0}),b_v(myseg*nvec,{0.0,0.0});
-    for (int i=0; i<myseg; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-      for (int nth=0; nth<nvec; nth++){
-        x_v[i+nth*myseg] = x_v_glo[i_old-1+nth*N];
-      }
-    }
-
-    z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
-    vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
-    for (int i=0; i<myseg; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-      for (int nth=0; nth<nvec; nth++){
-        u_sca_glo.data()[i_old-1+nth*N] = b_v.data()[i+nth*myseg];
-      }
-    }
-    MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+//     vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
+//     for (int i=0; i<myseg_s2s; i++){
+//       int i_new_loc = i+1;
+//       int i_old;
+//       z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+//       for (int nth=0; nth<nvec; nth++){
+//         double xs = data_geo[(i_old-1) * Ndim];
+//         double ys = data_geo[(i_old-1) * Ndim+1];
+//         double zs = data_geo[(i_old-1) * Ndim+2];
+//         double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
+//         double s0=2;
+//         double k0 = s0*w;
+//         double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
+//         x_v_glo[v_sub2glo[i_old-1]+nth*N]=x_s[i+nth*myseg_s2s]*coef;
+//       }
+//     }
+//     MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
 
-    if(myrank==master_rank){
-      for(int nth=0; nth<nvec; nth++){
-        string filename, str;
-        filename = "./VIE_F_sca_f_";
-        str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename +=str+"_vs_"+to_string((int)0)+"_ivelo_"+to_string(ivelo);
-        if(shape>0)
-          filename +="_shape_"+to_string(shape);
-        std::ostringstream streamObj;
-        streamObj << h;
-        str=streamObj.str();
-        // str=to_string(h); // this only has 6-digit precision
-        str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_h_"+str;
-        double opt_d;
-        z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
+//     vector<_Complex double> x_v(myseg*nvec,{0.0,0.0}),b_v(myseg*nvec,{0.0,0.0});
+//     for (int i=0; i<myseg; i++){
+//       int i_new_loc = i+1;
+//       int i_old;
+//       z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+//       for (int nth=0; nth<nvec; nth++){
+//         x_v[i+nth*myseg] = x_v_glo[i_old-1+nth*N];
+//       }
+//     }
 
-        str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
-#ifdef IVELO9_CONST
-        filename +="_ivelo9_const";
-#endif
-        fout1=fopen(filename.c_str(),"wb");
+//     z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
+//     vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
+//     for (int i=0; i<myseg; i++){
+//       int i_new_loc = i+1;
+//       int i_old;
+//       z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+//       for (int nth=0; nth<nvec; nth++){
+//         u_sca_glo.data()[i_old-1+nth*N] = b_v.data()[i+nth*myseg];
+//       }
+//     }
+//     MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-        int nx = round((x0max-x0min)/h);
-        int ny = round((y0max-y0min)/h);
-        int nz = round((z0max-z0min)/h);
-        fwrite(&nx,sizeof(int),1,fout1);
-        fwrite(&ny,sizeof(int),1,fout1);
-        fwrite(&nz,sizeof(int),1,fout1);
-        fwrite(&h,sizeof(double),1,fout1);
-        fwrite(&u_sca_glo.data()[nth*N],sizeof(_Complex double),N,fout1);
-        fclose(fout1);
-      }
-    }
 
-    if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the volume-volume operator: "<<std::endl;
-    z_c_bpack_printstats(&stats_bf,&ptree_bf);
+//     if(myrank==master_rank){
+//       for(int nth=0; nth<nvec; nth++){
+//         string filename, str;
+//         filename = "./VIE_F_sca_f_";
+//         str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+//         filename +=str+"_vs_"+to_string((int)0)+"_ivelo_"+to_string(ivelo);
+//         if(shape>0)
+//           filename +="_shape_"+to_string(shape);
+//         std::ostringstream streamObj;
+//         streamObj << h;
+//         str=streamObj.str();
+//         // str=to_string(h); // this only has 6-digit precision
+//         str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+//         filename += "_h_"+str;
+//         double opt_d;
+//         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
-    if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
-    z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
+//         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+//         filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
+// #ifdef IVELO9_CONST
+//         filename +="_ivelo9_const";
+// #endif
+//         fout1=fopen(filename.c_str(),"wb");
+
+//         int nx = round((x0max-x0min)/h);
+//         int ny = round((y0max-y0min)/h);
+//         int nz = round((z0max-z0min)/h);
+//         fwrite(&nx,sizeof(int),1,fout1);
+//         fwrite(&ny,sizeof(int),1,fout1);
+//         fwrite(&nz,sizeof(int),1,fout1);
+//         fwrite(&h,sizeof(double),1,fout1);
+//         fwrite(&u_sca_glo.data()[nth*N],sizeof(_Complex double),N,fout1);
+//         fclose(fout1);
+//       }
+//     }
+
+//     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the volume-volume operator: "<<std::endl;
+//     z_c_bpack_printstats(&stats_bf,&ptree_bf);
+
+//     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
+//     z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
 
 
 
@@ -1505,9 +1506,11 @@ if(myrank==master_rank){
 
 	z_c_bpack_deletestats(&stats_bf);
 	z_c_bpack_deleteproctree(&ptree_bf);
-	z_c_bpack_deletemesh(&msh_bf);
-	z_c_bpack_deletekernelquant(&kerquant_bf);
-	z_c_bpack_delete(&bmat_bf);
+
+  //temporary!!!!!
+	// z_c_bpack_deletemesh(&msh_bf);
+	// z_c_bpack_deletekernelquant(&kerquant_bf);
+	// z_c_bpack_delete(&bmat_bf);
 	z_c_bpack_deleteoption(&option_bf);
 
 	delete[] perms_bf;

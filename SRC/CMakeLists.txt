@@ -97,7 +97,10 @@ endif ()
 
 
 add_library(butterflypack OBJECT ${sources} ${headers})
-
+target_include_directories(butterflypack PRIVATE
+  ${CMAKE_SOURCE_DIR}/butterfly_h2
+  ${CMAKE_SOURCE_DIR}/COMMUNICATION-AVOIDING-FMM/color)
+  
 if (enable_parsec)
   set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)
   get_filename_component(PARSEC_HMAT_PTG_NAME ${PARSEC_HMAT_PTG_JDF} NAME_WE)

@@ -1,34 +1,32 @@
 module load PrgEnv-gnu
 module load cmake
 module load python/3.11
-module unload cray-libsci
+module load cray-libsci
 
 cd ..
-sed -i 's/\r$//' PrecisionPreprocessing.sh
+sed -i 's/^M$//' PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
-export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
-export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
-export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
-export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
-export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
+export ZFP_INSTALL_DIR=$HOME/zfp-install
+#export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
+#export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
+#export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
+#export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
 
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
 rm -rf CTestTestfile.cmake
 rm -rf cmake_install.cmake
 rm -rf CMakeFiles
+rm -rf SRC_DOUBLE SRC_DOUBLECOMPLEX SRC_SINGLE SRC_COMPLEX
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE" \
-	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
-	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
-	-Denable_python=ON \
-	-Denable_parsec=ON \
+	-Denable_python=OFF \
+	-Denable_parsec=OFF \
 	-Denable_toplevel_openmp=OFF \
-	-DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
@@ -40,9 +38,11 @@ cmake .. \
 	-DOpenMP_Fortran_FLAGS="-fopenmp" \
 	-DOpenMP_Fortran_LIB_NAMES="gomp" \
 	-DOpenMP_omp_LIBRARY=$(gcc --print-file-name=libgomp.so) \
-	-DTPL_BLAS_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
-	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/scalapack-2.2.0/build/install/lib/libscalapack.so"
+	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
+	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
+	-DTPL_BLAS_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
+	-DTPL_LAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so"
 
 make ie2d -j16
 make ie3d -j16
@@ -54,5 +54,6 @@ make frankben_t -j16
 make cifio2dsb -j16  
 make cvie2d -j16  
 make cvie2d_t -j16
-make cvie3d_t -j16
-make cvie3d_t_so -j16
+
+
+#       -DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \
