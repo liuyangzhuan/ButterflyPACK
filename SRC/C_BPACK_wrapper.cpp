@@ -13,6 +13,7 @@
 #include <getopt.h>
 #include <iomanip>
 #include <stdlib.h>
+#include <type_traits>
 
 using namespace std;
 
@@ -772,6 +773,7 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	static_assert(std::is_same_v<C2Fptr, void*>, "H2::kernel assumes C2Fptr == void*; update butterfly_integration.hpp if this changes");
 	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
 	H2_solver->kernel = C_FuncZmn;
 

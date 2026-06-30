@@ -56,7 +56,7 @@ struct H2 {
     //fmm::HierarchicalFactorization<CoordType, C_DT, KernelType> factorizer;
     
     //temporary comment
-    //void (*kernel)(int*, int*, C_DT*,C2Fptr);
+    void (*kernel)(int*, int*, DataType*, void*);
     std::unique_ptr<fmm::ParallelTree<CoordType, DataType>> tree;
     //std::unique_ptr<ButterflyPACKKernel> kernel;
 
