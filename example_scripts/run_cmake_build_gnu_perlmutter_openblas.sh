@@ -1,6 +1,7 @@
 module load PrgEnv-gnu
 module load cmake
 module load python/3.11
+module load cray-fftw 
 module load cray-libsci
 
 cd ..

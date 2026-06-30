@@ -772,7 +772,7 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-	H2<double, C_DT>* H2_solver = static_cast<H2<double, C_DT>*>(*bmat);
+	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
 	H2_solver->kernel = C_FuncZmn;
 
 	// save C_FuncZmnBlock in bmat, low priority right now
@@ -801,42 +801,42 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    try {
-      // To Do: need to convert bmat format to the format for hierarchical_factorization_parallel
-      H2<double, C_DT>* H2_solver = static_cast<H2<double, C_DT>*>(*bmat);
+    // try {
+    //   // To Do: need to convert bmat format to the format for hierarchical_factorization_parallel
+    //   butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
 	  
-      // preset because solver can only solve these right now
-      is_symmetric = true;
-      is_Hermitian = false;
-      auto total_start = std::chrono::high_resolution_clock::now();
+    //   // preset because solver can only solve these right now
+    //   is_symmetric = true;
+    //   is_Hermitian = false;
+    //   auto total_start = std::chrono::high_resolution_clock::now();
 
-      fmm::hierarchical_factorization_parallel(
-        tree.get(),
-        &kernel,
-        options.tolerance,
-        is_symmetric,
-        is_hermitian,
-        factorization_method,
-        unit_proxy,
-        num_proxy,
-        2.5,
-        true);
+    //   fmm::hierarchical_factorization_parallel(
+    //     tree.get(),
+    //     &kernel,
+    //     options.tolerance,
+    //     is_symmetric,
+    //     is_hermitian,
+    //     factorization_method,
+    //     unit_proxy,
+    //     num_proxy,
+    //     2.5,
+    //     true);
 
-      auto total_end = std::chrono::high_resolution_clock::now();
-      auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        total_end - total_start);
+    //   auto total_end = std::chrono::high_resolution_clock::now();
+    //   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    //     total_end - total_start);
 
-      if (rank == 0) {
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-        std::cout << "========================================\n" << std::endl;
-      }
+    //   if (rank == 0) {
+    //     std::cout << "\n========================================" << std::endl;
+    //     std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
+    //     std::cout << "========================================\n" << std::endl;
+    //   }
 
-    } catch (const std::exception& e) {
-        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
+    // } catch (const std::exception& e) {
+    //     std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+    //     MPI_Abort(MPI_COMM_WORLD, 1);
+    // }
+    // MPI_Barrier(MPI_COMM_WORLD);
   }else{
 	c_bpack_factor_fortran(bmat, option, stats, ptree, msh);
   }
@@ -872,37 +872,37 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    try {
-      //To Do: pass in b to and redistribute to rhs, either do this here or in construct_init
-      // pass in tree and rhs to solve_parallel
-      std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>> solve_data(
-            options.num_levels);
-        fmm::hierarchical_solve_parallel(tree.get(), rhs, solve_data, true);
+    // try {
+    //   //To Do: pass in b to and redistribute to rhs, either do this here or in construct_init
+    //   // pass in tree and rhs to solve_parallel
+    //   std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>> solve_data(
+    //         options.num_levels);
+    //     fmm::hierarchical_solve_parallel(tree.get(), rhs, solve_data, true);
 
-        std::vector<DataType> solution;
-        std::vector<DataType> aggregated_rhs;
-        const auto gather_verify_start = std::chrono::high_resolution_clock::now();
-        fmm::gather_solution_to_root(tree.get(), solve_data, solution, aggregated_rhs);
-        const auto gather_verify_end = std::chrono::high_resolution_clock::now();
-        const double gather_verify_ms =
-            std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
-                gather_verify_end - gather_verify_start).count();
-        double gather_verify_max_ms = 0.0;
-        MPI_Reduce(&gather_verify_ms, &gather_verify_max_ms, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-        if (rank == 0) {
-            std::cout << "Gather communication time for solve verification: "
-                      << gather_verify_max_ms << " ms" << std::endl;
-        }
+    //     std::vector<DataType> solution;
+    //     std::vector<DataType> aggregated_rhs;
+    //     const auto gather_verify_start = std::chrono::high_resolution_clock::now();
+    //     fmm::gather_solution_to_root(tree.get(), solve_data, solution, aggregated_rhs);
+    //     const auto gather_verify_end = std::chrono::high_resolution_clock::now();
+    //     const double gather_verify_ms =
+    //         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
+    //             gather_verify_end - gather_verify_start).count();
+    //     double gather_verify_max_ms = 0.0;
+    //     MPI_Reduce(&gather_verify_ms, &gather_verify_max_ms, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    //     if (rank == 0) {
+    //         std::cout << "Gather communication time for solve verification: "
+    //                   << gather_verify_max_ms << " ms" << std::endl;
+    //     }
 
-      // can conduct h2_verification, only if uniform points
+    //   // can conduct h2_verification, only if uniform points
 
-      // must call at the end of the program. Idk if solve ends it all or if another function.
-      // maybe create another construct_cleanup() function
-      // MPI_Finalize();
-    } catch (const std::exception& e) {
-        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    //   // must call at the end of the program. Idk if solve ends it all or if another function.
+    //   // maybe create another construct_cleanup() function
+    //   // MPI_Finalize();
+    // } catch (const std::exception& e) {
+    //     std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+    //     MPI_Abort(MPI_COMM_WORLD, 1);
+    // }
 
   }else{
 	c_bpack_solve_fortran(x, b, Nloc, Nrhs, bmat, option, stats, ptree);
@@ -922,12 +922,12 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    H2* h2 = reinterpret_cast<H2*>(*bmat); 
-    bool verbose = true;
-    // need to pass in rhs from bmat
-    // need to pass in h2 tree from bmat
+    // butterfly::H2<double, C_DT>* h2 = reinterpret_cast<butterfly::H2<double, C_DT>*>(*bmat); 
+    // bool verbose = true;
+    // // need to pass in rhs from bmat
+    // // need to pass in h2 tree from bmat
 
-    hierarchical_mul_parallel(tree, rhs, solve_data, verbose); // can only handle matrix vector multiplication right now
+    // fmm::hierarchical_mul_parallel(tree, rhs, solve_data, verbose); // can only handle matrix vector multiplication right now
 	
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
@@ -945,3 +945,14 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
   }
 }
+
+// void c_bpack_delete(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat){
+//   double tmp;
+//   c_bpack_getoption(option, "format", &tmp);
+//   int format=(int)tmp;
+//   if(format==7){
+
+//   }else{
+// 	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
+//   }
+// }

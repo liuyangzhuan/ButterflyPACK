@@ -420,7 +420,7 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
 }
 
 template<typename CoordType, typename DataType>
-int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, double* Locations, int rank) {
+int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, CoordType* Locations, int rank) {
   // from H2 struct, set typename CoordType, DataType
   // from H2 struct, get kernel
   // from H2 struct, get rank, size
