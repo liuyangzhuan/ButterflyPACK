@@ -1163,153 +1163,153 @@ if(myrank==master_rank){
     quant_ptr_bf->_Hperm.resize(Npo);
     std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf->_Hperm.begin());
 
-	  // z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	// z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
+	  z_c_bpack_printoption(&option_bf,&ptree_bf);
+  	z_c_bpack_construct_element_compute(&bmat_bf, &option_bf, &stats_bf, &msh_bf, &kerquant_bf, &ptree_bf, &C_FuncZmn_BF_V2V, &C_FuncZmnBlock_BF_V2V, quant_ptr_bf);
 
-    // if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
-    // int nvec=1;
-    // vector<_Complex double> b(myseg*nvec,{0.0,0.0});
-    // vector<_Complex double> x(myseg*nvec,{0.0,0.0});
-    // for (int i=0; i<myseg; i++){
-    //   int i_new_loc = i+1;
-    //   int i_old;
-    //   z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-    //   double xs = data_geo[(i_old-1) * Ndim];
-    //   double ys = data_geo[(i_old-1) * Ndim+1];
-    //   double zs = data_geo[(i_old-1) * Ndim+2];
+    if(myrank==master_rank)std::cout<<"\n\nGenerating the incident fields: "<<std::endl;
+    int nvec=1;
+    vector<_Complex double> b(myseg*nvec,{0.0,0.0});
+    vector<_Complex double> x(myseg*nvec,{0.0,0.0});
+    for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+      double xs = data_geo[(i_old-1) * Ndim];
+      double ys = data_geo[(i_old-1) * Ndim+1];
+      double zs = data_geo[(i_old-1) * Ndim+2];
 
-    //   double xs0=x0max-0.1;
-    //   double ys0=y0max-0.1;
-    //   double zs0=z0max-0.1;
+      double xs0=x0max-0.1;
+      double ys0=y0max-0.1;
+      double zs0=z0max-0.1;
 
-    //   // double xs0=slow_x0;
-    //   // double ys0=slow_y0;
-    //   // double zs0=slow_z0;
-    //   for (int nth=0; nth<nvec; nth++){
-    //     x.data()[i+nth*myseg]=source_function(xs,ys,zs,xs0,ys0,zs0,nth,h,w);  // generate a source distribution
-    //   }
-    // }
-    // z_c_bpack_mult("N",x.data(),b.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
-    // vector<_Complex double> u_inc_glo(Npo*nvec,{0.0,0.0});
-    // for (int i=0; i<myseg; i++){
-    //   int i_new_loc = i+1;
-    //   int i_old;
-    //   z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-    //   for (int nth=0; nth<nvec; nth++){
-    //     u_inc_glo.data()[i_old-1+nth*Npo] = b.data()[i+nth*myseg];
-    //   }
-    // }
-    // MPI_Allreduce(MPI_IN_PLACE,u_inc_glo.data(), Npo*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+      // double xs0=slow_x0;
+      // double ys0=slow_y0;
+      // double zs0=slow_z0;
+      for (int nth=0; nth<nvec; nth++){
+        x.data()[i+nth*myseg]=source_function(xs,ys,zs,xs0,ys0,zs0,nth,h,w);  // generate a source distribution
+      }
+    }
+    z_c_bpack_mult("N",x.data(),b.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
+    vector<_Complex double> u_inc_glo(Npo*nvec,{0.0,0.0});
+    for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+      for (int nth=0; nth<nvec; nth++){
+        u_inc_glo.data()[i_old-1+nth*Npo] = b.data()[i+nth*myseg];
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE,u_inc_glo.data(), Npo*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-    // if(myrank==master_rank){
-    //   for(int nth=0; nth<nvec; nth++){
-    //     string filename, str;
-    //     filename = "./VIE_F_inc_f_";
-    //     str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-    //     filename +=str+"_vs_"+to_string(vs)+"_ivelo_"+to_string(ivelo);
-    //     std::ostringstream streamObj;
-    //     streamObj << h;
-    //     str=streamObj.str();
-    //     // str=to_string(h); // this only has 6-digit precision
-    //     str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-    //     filename += "_h_"+str;
-    //     double opt_d;
-    //     z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
+    if(myrank==master_rank){
+      for(int nth=0; nth<nvec; nth++){
+        string filename, str;
+        filename = "./VIE_F_inc_f_";
+        str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename +=str+"_vs_"+to_string(vs)+"_ivelo_"+to_string(ivelo);
+        std::ostringstream streamObj;
+        streamObj << h;
+        str=streamObj.str();
+        // str=to_string(h); // this only has 6-digit precision
+        str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename += "_h_"+str;
+        double opt_d;
+        z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
-    //     str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-    //     filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
-    //     fout1=fopen(filename.c_str(),"wb");
+        str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
+        fout1=fopen(filename.c_str(),"wb");
 
-    //     int nx = round((x0max-x0min)/h);
-    //     int ny = round((y0max-y0min)/h);
-    //     int nz = round((z0max-z0min)/h);
-    //     fwrite(&nx,sizeof(int),1,fout1);
-    //     fwrite(&ny,sizeof(int),1,fout1);
-    //     fwrite(&nz,sizeof(int),1,fout1);
-    //     fwrite(&h,sizeof(double),1,fout1);
-    //     fwrite(&u_inc_glo.data()[nth*Npo],sizeof(_Complex double),Npo,fout1);
-    //     fclose(fout1);
-    //   }
-    // }
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
+        fwrite(&nx,sizeof(int),1,fout1);
+        fwrite(&ny,sizeof(int),1,fout1);
+        fwrite(&nz,sizeof(int),1,fout1);
+        fwrite(&h,sizeof(double),1,fout1);
+        fwrite(&u_inc_glo.data()[nth*Npo],sizeof(_Complex double),Npo,fout1);
+        fclose(fout1);
+      }
+    }
 
-    // vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
-    // Npo=0;
-    // int Npo_o=0;
+    vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
+    Npo=0;
+    int Npo_o=0;
 
-    // for(int ii=0;ii<N;ii++){
+    for(int ii=0;ii<N;ii++){
 
-    //   int idx0=ii;
+      int idx0=ii;
 
-    //   // int idx_y = idx0 / (Kint * Iint);
-    //   // idx0 -= (idx_y * Kint * Iint);
-    //   // int idx_x = idx0 / Kint;
-    //   // int idx_z = idx0 % Kint;
+      // int idx_y = idx0 / (Kint * Iint);
+      // idx0 -= (idx_y * Kint * Iint);
+      // int idx_x = idx0 / Kint;
+      // int idx_z = idx0 % Kint;
 
-    //   int idx_z = idx0 / (Iint * Jint);
-    //   idx0 -= (idx_z * Iint * Jint);
-    //   int idx_y = idx0 / Iint;
-    //   int idx_x = idx0 % Iint;
+      int idx_z = idx0 / (Iint * Jint);
+      idx0 -= (idx_z * Iint * Jint);
+      int idx_y = idx0 / Iint;
+      int idx_x = idx0 % Iint;
 
 
-    //   double x_glo = idx_x*h+x0min;
-    //   double y_glo = idx_y*h+y0min;
-    //   double z_glo = idx_z*h+z0min;
+      double x_glo = idx_x*h+x0min;
+      double y_glo = idx_y*h+y0min;
+      double z_glo = idx_z*h+z0min;
 
-    //   int domain = subdomain_detection(x_glo, y_glo, z_glo, center, shape, radius_max, L, H, W);
-    //   if(domain==0){
-    //     v_glo2sub[ii]=Npo;
-    //     v_sub2glo[Npo]=ii;
-    //     Npo++;
-    //   }else{
-    //     v_glo2sub[ii]=-1;
-    //     v_sub2glo_o[Npo_o]=ii;
-    //     Npo_o++;
-    //   }
-    // }
-    // v_sub2glo.resize(Npo);
-    // v_sub2glo_o.resize(Npo_o);
-    // int* nns_ptr_s2s=new int[(int64_t)knn_pre*(int64_t)Npo];
-    // for(int ii=0;ii<Npo*knn_pre;ii++){
-    //   nns_ptr_s2s[ii]=-1;
-    // }
-    // data_geo.resize(Ndim*Npo);
-    // for(int ii=0;ii<Npo;ii++){
-    //   int ii_glo = v_sub2glo[ii];
-    //   int idx0=ii_glo;
+      int domain = subdomain_detection(x_glo, y_glo, z_glo, center, shape, radius_max, L, H, W);
+      if(domain==0){
+        v_glo2sub[ii]=Npo;
+        v_sub2glo[Npo]=ii;
+        Npo++;
+      }else{
+        v_glo2sub[ii]=-1;
+        v_sub2glo_o[Npo_o]=ii;
+        Npo_o++;
+      }
+    }
+    v_sub2glo.resize(Npo);
+    v_sub2glo_o.resize(Npo_o);
+    int* nns_ptr_s2s=new int[(int64_t)knn_pre*(int64_t)Npo];
+    for(int ii=0;ii<Npo*knn_pre;ii++){
+      nns_ptr_s2s[ii]=-1;
+    }
+    data_geo.resize(Ndim*Npo);
+    for(int ii=0;ii<Npo;ii++){
+      int ii_glo = v_sub2glo[ii];
+      int idx0=ii_glo;
 
-    //   // int idx_y = idx0 / (Kint * Iint);
-    //   // idx0 -= (idx_y * Kint * Iint);
-    //   // int idx_x = idx0 / Kint;
-    //   // int idx_z = idx0 % Kint;
+      // int idx_y = idx0 / (Kint * Iint);
+      // idx0 -= (idx_y * Kint * Iint);
+      // int idx_x = idx0 / Kint;
+      // int idx_z = idx0 % Kint;
 
-    //   int idx_z = idx0 / (Iint * Jint);
-    //   idx0 -= (idx_z * Iint * Jint);
-    //   int idx_y = idx0 / Iint;
-    //   int idx_x = idx0 % Iint;
+      int idx_z = idx0 / (Iint * Jint);
+      idx0 -= (idx_z * Iint * Jint);
+      int idx_y = idx0 / Iint;
+      int idx_x = idx0 % Iint;
 
-    //   data_geo[(ii) * Ndim] = idx_x*h+x0min;
-    //   data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
-    //   data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
+      data_geo[(ii) * Ndim] = idx_x*h+x0min;
+      data_geo[(ii) * Ndim+1] = idx_y*h+y0min;
+      data_geo[(ii) * Ndim+2] = idx_z*h+z0min;
 
-    //   int idxnn=0;
-    //   for(int iii=-layer;iii<=layer;iii++){
-    //   for(int jjj=-layer;jjj<=layer;jjj++){
-    //   for(int kkk=-layer;kkk<=layer;kkk++){
-    //       // int ii1 = (idx_z+kkk)+Kint*(idx_x+iii)+Kint*Iint*(idx_y+jjj);
-    //       int ii1 = (idx_x+iii)+Iint*(idx_y+jjj)+Jint*Iint*(idx_z+kkk);
+      int idxnn=0;
+      for(int iii=-layer;iii<=layer;iii++){
+      for(int jjj=-layer;jjj<=layer;jjj++){
+      for(int kkk=-layer;kkk<=layer;kkk++){
+          // int ii1 = (idx_z+kkk)+Kint*(idx_x+iii)+Kint*Iint*(idx_y+jjj);
+          int ii1 = (idx_x+iii)+Iint*(idx_y+jjj)+Jint*Iint*(idx_z+kkk);
 
-    //       int ii_loc=-1;
-    //       if(ii1>=0 && ii1<N){ii_loc= v_glo2sub[ii1];}
-    //       if(ii_loc>-1){
-    //         nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=ii_loc+1;
-    //       }else{
-    //         nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=0;
-    //       }
-    //       idxnn++;
-    //   }
-    //   }
-    //   }
-    // }
+          int ii_loc=-1;
+          if(ii1>=0 && ii1<N){ii_loc= v_glo2sub[ii1];}
+          if(ii_loc>-1){
+            nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=ii_loc+1;
+          }else{
+            nns_ptr_s2s[(int64_t)idxnn+(int64_t)ii*(int64_t)knn_pre]=0;
+          }
+          idxnn++;
+      }
+      }
+      }
+    }
 
 
   	// C_QuantApp_BF *quant_ptr_bf_s2s;

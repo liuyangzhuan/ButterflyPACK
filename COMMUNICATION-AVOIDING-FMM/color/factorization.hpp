@@ -466,15 +466,14 @@ void apply_left_inverse_in_place(
  * @tparam DataType Matrix data type (can be complex)
  * @tparam KernelType Kernel evaluator type
  */
-template<typename CoordType, typename DataType, typename KernelType>
+template<typename CoordType, typename DataType>
 class HierarchicalFactorization {
 private:
     int64_t N_points;              ///< Total number of points
     MatrixProperty property;        ///< Matrix symmetry property
     FactorizationMethod factorization_method;  ///< Method for matrix factorization
-    KernelType* kernel;            ///< Kernel evaluator (non-owning pointer)
     int dimension;                 ///< Spatial dimension (2 or 3)
-    
+    void (*kernel)(int*, int*, DataType*, void*); /// Kernel evaluation function
     // Proxy point configuration
     int num_proxy_points;          ///< Number of proxy points per box
     std::vector<CoordType> unit_proxy_points;  ///< Unit circle/sphere proxy points (dim × num_proxy)
@@ -502,7 +501,7 @@ public:
     HierarchicalFactorization(
         int64_t N,
         MatrixProperty prop,
-        KernelType* kernel_func,
+        void (*kernel_func)(int*, int*, DataType*, void*),
         int dim,
         FactorizationMethod factorization_type = FactorizationMethod::CHOLESKY,
         int num_proxy = -1,
@@ -516,9 +515,9 @@ public:
           tolerance(tol),
           proxy_radius_factor(proxy_factor) {
         
-        if (kernel == nullptr) {
-            throw std::invalid_argument("Kernel cannot be null");
-        }
+        // if (kernel == nullptr) {
+        //     throw std::invalid_argument("Kernel cannot be null");
+        // }
         
         if (dim != 2 && dim != 3) {
             throw std::invalid_argument("Dimension must be 2 or 3");

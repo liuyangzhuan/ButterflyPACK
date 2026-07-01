@@ -619,7 +619,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, 
 	void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), 
 	void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp){
-	// C_FuncDistmn: defines distance
+	// To Do: need to compute msh (idxs, idxe, new2old), Npo_locs, perms
+    // C_FuncDistmn: defines distance
 	// C_FuncNearFar:
 
   // correspond to create_uniform_tree
@@ -714,11 +715,12 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     //   }
     // }
     
-    butterfly::ProgramOptions h2_options;
+    butterfly::ProgramOptions H2_options;
     try {
 	  double tolerance;
 	  c_bpack_getoption(option, "tol_comp", &tolerance);
-      h2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance);
+      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance);
+	  H2_solver->options = H2_options;
     } catch (const std::exception& e) {
         if (rank == 0) {
             std::cerr << "Argument error: " << e.what() << std::endl;
@@ -729,31 +731,28 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     try {
       if (rank == 0) {
 
-        std::cout << "Run configuration: kernel=" << butterfly::kernel_kind_to_string(h2_options.kernel_kind)
-                  << ", number_type=" << butterfly::number_kind_to_string(h2_options.number_kind)
-                  << ", dimension=" << h2_options.dimension
-                  << ", reduction_threshold=" << h2_options.reduction_threshold
-                  << ", num_proxy=" << h2_options.num_proxy;
-        if (h2_options.kernel_kind == butterfly::KernelKind::MATERN52) {
-          std::cout << ", length_scale=" << h2_options.length_scale
-                    << ", nugget=" << h2_options.nugget;
+        std::cout << "Run configuration: kernel=" << butterfly::kernel_kind_to_string(H2_options.kernel_kind)
+                  << ", number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
+                  << ", dimension=" << H2_options.dimension
+                  << ", reduction_threshold=" << H2_options.reduction_threshold
+                  << ", num_proxy=" << H2_options.num_proxy;
+        if (H2_options.kernel_kind == butterfly::KernelKind::MATERN52) {
+          std::cout << ", length_scale=" << H2_options.length_scale
+                    << ", nugget=" << H2_options.nugget;
         }
-        if (h2_options.kernel_kind == butterfly::KernelKind::YUKAWA) {
-          std::cout << ", kappa=" << h2_options.kappa;
+        if (H2_options.kernel_kind == butterfly::KernelKind::YUKAWA) {
+          std::cout << ", kappa=" << H2_options.kappa;
         }
         std::cout << std::endl;
       }
       
-      butterfly::h2_initiate<double, C_DT>(H2_solver, h2_options, Locations, rank);
+      butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(H2_solver->comm, 1);
     }
 	*bmat = static_cast<F2Cptr>(H2_solver);
-	//temporary
-	delete H2_solver;
-	H2_solver = nullptr;
-	*bmat = nullptr;
+	
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
   }
@@ -768,7 +767,7 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   // C_FuncZmn: returns value at (i,j)th element of matrix -- need to update this to work for kernel
   // C_FuncZmnBlock: returns a block, low priority
 
-	
+  // To do: need to define stats and msh or else need to redefine c_bpack_delete for these to pointers
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
@@ -798,47 +797,67 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   // proxy_radius: 
 
   // bmat: can contain tree, and kernel function
-  // proxy points may have some difficulties, we can discuss more next week
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    // try {
-    //   // To Do: need to convert bmat format to the format for hierarchical_factorization_parallel
-    //   butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
+    try {
+      butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
 	  
-    //   // preset because solver can only solve these right now
-    //   is_symmetric = true;
-    //   is_Hermitian = false;
-    //   auto total_start = std::chrono::high_resolution_clock::now();
+      const int leaf_level = H2_solver->options.num_levels - 1;
+      const auto factorization_method =
+        (butterfly::is_complex_v<C_DT>)
+          ? fmm::FactorizationMethod::COMPLEX_SYM
+          : fmm::FactorizationMethod::LU;
+      fmm::HierarchicalFactorization<double, C_DT> factorizer(
+        H2_solver->options.N,
+        fmm::MatrixProperty::SYMMETRIC,
+        H2_solver->kernel,
+        H2_solver->options.dimension,
+        factorization_method,
+        H2_solver->options.num_proxy);
 
-    //   fmm::hierarchical_factorization_parallel(
-    //     tree.get(),
-    //     &kernel,
-    //     options.tolerance,
-    //     is_symmetric,
-    //     is_hermitian,
-    //     factorization_method,
-    //     unit_proxy,
-    //     num_proxy,
-    //     2.5,
-    //     true);
+      const auto& unit_proxy = factorizer.get_unit_proxy_points();
+      const int num_proxy = factorizer.get_num_proxy_points();
 
-    //   auto total_end = std::chrono::high_resolution_clock::now();
-    //   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-    //     total_end - total_start);
+      const bool is_symmetric = true;
+      const bool is_hermitian = false;
 
-    //   if (rank == 0) {
-    //     std::cout << "\n========================================" << std::endl;
-    //     std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-    //     std::cout << "========================================\n" << std::endl;
-    //   }
+      auto total_start = std::chrono::high_resolution_clock::now();
 
-    // } catch (const std::exception& e) {
-    //     std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-    //     MPI_Abort(MPI_COMM_WORLD, 1);
-    // }
-    // MPI_Barrier(MPI_COMM_WORLD);
+	  //To do: provide factorization method, and KERNEL!!!!
+      butterfly::hierarchical_factorization_parallel(
+        H2_solver->tree.get(),
+        H2_solver->kernel,
+        H2_solver->options.tolerance,
+        is_symmetric,
+        is_hermitian,
+        factorization_method,
+        unit_proxy,
+        num_proxy,
+        2.5,
+        true);
+
+      auto total_end = std::chrono::high_resolution_clock::now();
+      auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        total_end - total_start);
+
+      if (rank == 0) {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+      }
+
+      //temporary
+      delete H2_solver;
+      H2_solver = nullptr;
+      *bmat = nullptr;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+        throw;
+    }
+	
   }else{
 	c_bpack_factor_fortran(bmat, option, stats, ptree, msh);
   }
@@ -869,7 +888,6 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 	
   // note to self: figure out aggregated_rhs, solution, solve_data; and mpi stuff (mpi stuff probably ask Tianyu)
   // need to redistribute x into H2, and then call mul_parallel, then extract mul_data, the nredistribute to Butterfly
-  // discuss about proxy points with Yang next week
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
@@ -919,6 +937,8 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
   // 
 
   // can call fft_matvec for uniform grid
+
+
 	
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
