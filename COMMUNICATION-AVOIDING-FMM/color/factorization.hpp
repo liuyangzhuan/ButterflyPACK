@@ -464,7 +464,6 @@ void apply_left_inverse_in_place(
  * 
  * @tparam CoordType Coordinate type (float or double)
  * @tparam DataType Matrix data type (can be complex)
- * @tparam KernelType Kernel evaluator type
  */
 template<typename CoordType, typename DataType>
 class HierarchicalFactorization {
