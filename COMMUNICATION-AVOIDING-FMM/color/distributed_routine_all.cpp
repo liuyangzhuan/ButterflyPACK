@@ -4664,6 +4664,7 @@ int run_with_configuration(const ProgramOptions& options, KernelType& kernel,
 
     double bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, (options.dimension == 2) ? 0.0 : 1.0};
 
+    std::vector<int> idx_map;
     auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
         fmm::create_uniform_tree<CoordType, DataType>(
             nullptr,
@@ -4672,6 +4673,7 @@ int run_with_configuration(const ProgramOptions& options, KernelType& kernel,
             bounds,
             options.dimension,
             MPI_COMM_WORLD,
+            idx_map,
             options.reduction_threshold));
 
     const int leaf_level = options.num_levels - 1;

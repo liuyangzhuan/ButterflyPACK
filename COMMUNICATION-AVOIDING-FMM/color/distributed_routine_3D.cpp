@@ -2255,8 +2255,9 @@ int main(int argc, char* argv[]) {
         double bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
         int64_t reduction_threshold = (dimension == 2) ? 64 : 4096;
      
+        std::vector<int> idx_map;
         auto tree = fmm::create_uniform_tree<double, double>(
-            nullptr, N, num_levels, bounds, dimension, MPI_COMM_WORLD, reduction_threshold);
+            nullptr, N, num_levels, bounds, dimension, MPI_COMM_WORLD, idx_map, reduction_threshold);
         
         int leaf_level = num_levels - 1;
         
