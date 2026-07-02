@@ -430,8 +430,66 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
     return h2_options;
 }
 
+
+
+static void allgather_idx_map_to_new2old(
+    MPI_Comm comm,
+    const std::vector<int>& idx_map,
+    int N_global,
+    std::vector<int>& new2old,
+    int& idxs,
+    int& idxe)
+{
+    int rank, size;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+
+    int send_count = static_cast<int>(idx_map.size());
+
+    std::vector<int> recv_counts(size, 0);
+
+    MPI_Allgather(
+        &send_count, 1, MPI_INT,
+        recv_counts.data(), 1, MPI_INT,
+        comm
+    );
+
+    std::vector<int> displs(size, 0);
+    for (int r = 1; r < size; ++r) {
+        displs[r] = displs[r - 1] + recv_counts[r - 1];
+    }
+
+    int total_count = displs[size - 1] + recv_counts[size - 1];
+
+    if (total_count != N_global) {
+        throw std::runtime_error(
+            "allgather_idx_map_to_new2old: total gathered idx_map size != N_global"
+        );
+    }
+
+    // This rank's global-new-index range, zero-based and inclusive
+    idxs = displs[rank];
+
+    if (send_count > 0) {
+        idxe = idxs + send_count - 1;
+    } else {
+        idxe = idxs - 1;   // empty local range
+    }
+
+    new2old.resize(total_count);
+
+    MPI_Allgatherv(
+        idx_map.data(), send_count, MPI_INT,
+        new2old.data(), recv_counts.data(), displs.data(), MPI_INT,
+        comm
+    );
+}
+
+
+
+
 template<typename CoordType, typename DataType>
-int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, CoordType* Locations, int rank) {
+int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, CoordType* Locations, int rank, std::vector<int> new2old, int idxs, int idxe) {
   // from H2 struct, set typename CoordType, DataType
   // from H2 struct, get kernel
   // from H2 struct, get rank, size
@@ -443,7 +501,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   }
 
   double bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, (options.dimension == 2) ? 0.0 : 1.0};
-
+  std::vector<int> idx_map;
   // Provide Locations to nullptr, check compatibility
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
       fmm::create_uniform_tree<CoordType, DataType>(
@@ -453,9 +511,26 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
           bounds,
           options.dimension,
           H2_solver->comm,
+          idx_map,
           options.reduction_threshold));
 
   H2_solver->tree = std::move(tree); 
+
+
+  
+  idxs = 0;
+  idxe = -1;
+  allgather_idx_map_to_new2old(
+    H2_solver->comm,
+    idx_map,
+    static_cast<int>(options.N),
+    new2old,
+    idxs,
+    idxe
+  );
+  idxs++;// this is to convert from 0-based index to 1-based index for Fortran compatibility
+  idxe++;
+
 
   // To Do: maybe put this section and below to c_bpack_factor
   return 0;

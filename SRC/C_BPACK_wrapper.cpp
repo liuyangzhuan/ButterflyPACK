@@ -745,14 +745,24 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         }
         std::cout << std::endl;
       }
-      
-      butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank);
+      std::vector<int> new2old; 
+	  int idxs = 0; 
+	  int idxe = -1;
+      butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
+	  c_bpack_set_mesh_h2(N, new2old, idxs, idxe, msh);
+	  *Npo_loc=idxe-idxs+1;
+	  if (perms != nullptr) {
+		std::copy(new2old.begin(), new2old.end(), perms);
+	  }
+	  new2old.clear();
+
+
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(H2_solver->comm, 1);
     }
 	*bmat = static_cast<F2Cptr>(H2_solver);
-	
+	s
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
   }

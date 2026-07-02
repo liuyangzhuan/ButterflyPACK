@@ -1510,6 +1510,23 @@ contains
 
 
 
+  subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
+      implicit none
+      integer N
+      integer new2old(N)
+      integer idxs, idxe
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+
+      call c_f_pointer(msh_Cptr, msh)
+
+      msh%Nunk = N
+      allocate (msh%new2old(N))
+      msh%new2old = new2old
+      msh%idxs = idxs
+      msh%idxe = idxe
+  end subroutine C_BPACK_Set_Mesh_H2
+
 
 !>**** C interface of multi-dimensional BF construction via entry evaluation
    !> @param Ns: size for each dimension (in)

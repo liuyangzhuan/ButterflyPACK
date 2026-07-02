@@ -753,6 +753,7 @@ template<typename CoordType, typename DataType>
 void assign_points_to_boxes(
     const CoordType* point_coords,
     int64_t num_points,
+    std::vector<int> idx_map,
     ParallelTree<CoordType, DataType>* tree) {
     
     if (num_points == 0) {
@@ -830,8 +831,12 @@ void assign_points_to_boxes(
         if (n > 0) {
             box.point_indices = box_point_indices[i];
             box.point_coords = box_point_coords[i];
+            for (int global_pt_idx : box.point_indices) {
+                idx_map.push_back(global_pt_idx);
+            }
         }
     }
+
 }
 
 /**
@@ -1516,6 +1521,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     int32_t dimension = 3,
     MPI_Comm comm = MPI_COMM_WORLD,
     int64_t reduction_threshold = 64,
+    std::vector<int> idx_map, 
     ReductionPattern pattern = ReductionPattern::UNIFORM) {  // NEW parameter
     
     // Validate inputs
@@ -1559,10 +1565,10 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
         distribute_boxes(level, tree);
         
     }
-    
+
     // Step 4: Assign points to leaf boxes
     if (point_coords != nullptr && num_points > 0) {
-        assign_points_to_boxes(point_coords, num_points, tree);
+        assign_points_to_boxes(point_coords, num_points, idx_map, tree);
     }
     else if (num_points > 0) {
         assign_uniform_points(num_points, tree);
