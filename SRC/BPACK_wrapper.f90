@@ -31,6 +31,13 @@ module BPACK_wrapper
    use Bplus_Utilities, only: BF_Switchlevel
    use iso_c_binding
 
+interface
+   subroutine c_bpack_h2_delete(h2_ptr) bind(c, name="c_bpack_h2_delete")
+      use iso_c_binding
+      type(c_ptr), value :: h2_ptr
+   end subroutine
+end interface
+
 contains
 
 !>****** Fortran interface for the matvec function required by BPACK_construction_Matvec, inside which a c++ function pointer ker%C_FuncHMatVec is called \n
@@ -1508,6 +1515,27 @@ contains
    end subroutine C_BPACK_Construct_Init
 
 
+
+   subroutine C_BPACK_Wrap_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_wrap_h2")
+      use iso_c_binding
+      implicit none
+      type(c_ptr)         :: bmat_Cptr   
+      type(c_ptr), value  :: h2_ptr  
+      type(Bmatrix), pointer :: bmat
+      allocate(bmat)
+      bmat%h2   = h2_ptr
+      bmat_Cptr = c_loc(bmat)
+   end subroutine C_BPACK_Wrap_H2
+
+   subroutine C_BPACK_Get_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_get_h2")
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: bmat_Cptr   
+      type(c_ptr)        :: h2_ptr      
+      type(Bmatrix), pointer :: bmat
+      call c_f_pointer(bmat_Cptr, bmat)
+      h2_ptr = bmat%h2
+   end subroutine C_BPACK_Get_H2
 
 
   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
@@ -3801,6 +3829,12 @@ contains
       type(Bmatrix), pointer::bmat
 
       call c_f_pointer(bmat_Cptr, bmat)
+      if (c_associated(bmat%h2)) then
+         call c_bpack_h2_delete(bmat%h2)   
+         deallocate(bmat)
+         bmat_Cptr = c_null_ptr
+         return
+      end if
       call BPACK_delete(bmat)
       deallocate (bmat)
       bmat_Cptr = c_null_ptr

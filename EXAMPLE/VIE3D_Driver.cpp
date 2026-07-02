@@ -1047,7 +1047,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "rmax", rmax);
 	z_c_bpack_set_I_option(&option_bf, "ErrSol", 1);
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
-  z_c_bpack_set_I_option(&option_bf, "format", 7);
+  // z_c_bpack_set_I_option(&option_bf, "format", 7); // not this matrix! Xiaomian
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
 
@@ -1313,6 +1313,7 @@ if(myrank==master_rank){
 
 
   	// C_QuantApp_BF *quant_ptr_bf_s2s;
+    // z_c_bpack_set_I_option(&option_bf, "format", 7); // change this one! Xiaomian
 
 
     // F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
@@ -1387,11 +1388,11 @@ if(myrank==master_rank){
     // }else{
     //   z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
-
     //   vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
     //   vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
-    //   z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
+    //   // This line is not needed - Xiaomian
+    //   // z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
     //   // double tmp=0;
     //   // for (int i=0; i<myseg_s2s; i++){
     //   //   for (int nth=0; nth<nvec; nth++){
@@ -1437,7 +1438,7 @@ if(myrank==master_rank){
 //         x_v[i+nth*myseg] = x_v_glo[i_old-1+nth*N];
 //       }
 //     }
-
+//     z_c_bpack_set_I_option(&option_bf, "format", 1); // don't change this matrix! Xiaomian
 //     z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
 //     vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
 //     for (int i=0; i<myseg; i++){
@@ -1508,9 +1509,9 @@ if(myrank==master_rank){
 	z_c_bpack_deleteproctree(&ptree_bf);
 
   //temporary!!!!!
-	// z_c_bpack_deletemesh(&msh_bf);
-	// z_c_bpack_deletekernelquant(&kerquant_bf);
-	// z_c_bpack_delete(&bmat_bf);
+	z_c_bpack_deletemesh(&msh_bf);
+	z_c_bpack_deletekernelquant(&kerquant_bf);
+	z_c_bpack_delete(&bmat_bf);
 	z_c_bpack_deleteoption(&option_bf);
 
 	delete[] perms_bf;

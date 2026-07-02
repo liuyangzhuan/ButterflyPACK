@@ -745,10 +745,13 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         }
         std::cout << std::endl;
       }
+
+	  // Setting up mesh and permutation variables
       std::vector<int> new2old; 
 	  int idxs = 0; 
 	  int idxe = -1;
       butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
+	  // convert to perms and Npo_loc 
 	  c_bpack_set_mesh_h2(N, new2old, idxs, idxe, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
@@ -761,8 +764,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(H2_solver->comm, 1);
     }
-	*bmat = static_cast<F2Cptr>(H2_solver);
-	s
+	c_bpack_wrap_h2(bmat, static_cast<C2Fptr>(H2_solver));   // *bmat now = c_loc(Fortran Bmatrix)
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
   }
@@ -783,7 +785,9 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   int format=(int)tmp;
   if(format==7){
 	static_assert(std::is_same_v<C2Fptr, void*>, "H2::kernel assumes C2Fptr == void*; update butterfly_integration.hpp if this changes");
-	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
+	void* H2_raw = nullptr;
+	c_bpack_get_h2(*bmat, &H2_raw);
+	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
 	H2_solver->kernel = C_FuncZmn;
 
 	// save C_FuncZmnBlock in bmat, low priority right now
@@ -811,9 +815,13 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	int rank = 0;
+	MPI_Comm_rank(H2_solver->comm, &rank);
     try {
-      butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
-	  
+      void* H2_raw = nullptr;
+	  c_bpack_get_h2(*bmat, &H2_raw);
+	  butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
+
       const int leaf_level = H2_solver->options.num_levels - 1;
       const auto factorization_method =
         (butterfly::is_complex_v<C_DT>)
@@ -852,16 +860,14 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
       auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         total_end - total_start);
 
+	  
       if (rank == 0) {
         std::cout << "\n========================================" << std::endl;
         std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
         std::cout << "========================================\n" << std::endl;
       }
 
-      //temporary
-      delete H2_solver;
-      H2_solver = nullptr;
-      *bmat = nullptr;
+      
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
@@ -978,13 +984,21 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
   }
 }
 
-// void c_bpack_delete(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat){
+extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
+    delete static_cast<butterfly::H2<double,C_DT>*>(h2_ptr);
+}
+
+
+// void c_bpack_delete(F2Cptr* option, F2Cptr*bmat) {
 //   double tmp;
 //   c_bpack_getoption(option, "format", &tmp);
 //   int format=(int)tmp;
 //   if(format==7){
-
-//   }else{
-// 	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
+// 	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(*bmat);
+// 	delete H2_solver;
+// 	H2_solver = nullptr;
+// 	*bmat = nullptr;
+//   }else{ 
+// 	c_bpack_delete_fortran(bmat);
 //   }
 // }
