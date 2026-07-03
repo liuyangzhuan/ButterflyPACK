@@ -58,6 +58,8 @@ trans_invariant=0
 nbundle=8
 bdiag_lrlevel=0
 bdiag_tol_rand=1e-2
+rankrate=1.2
+itermax=10
 
 
 
@@ -106,12 +108,12 @@ bdiag_tol_rand=1e-2
 # z0max=0.8
 
 
-omega=201.06192983 # 100.5309649148734 #50.265482457436690  #25.132741228718345
+omega=100.5309649148734 # 201.06192983 # 100.5309649148734 #50.265482457436690  #25.132741228718345
 ivelo=11
 tol_comp=1e-5
 tol_itersol=1e-3
 scaleGreen=1
-h=0.0025 # 0.005 #0.01 #0.02 
+h=0.005 # 0.005 #0.01 #0.02 
 x0max=0.8
 y0max=0.8
 z0max=0.8
@@ -185,17 +187,20 @@ pad_s2s=1
 trans_invariant=2
 rmax=4
 LRlevel=0
-
+rankrate=2.0
+itermax=1
+use_zfp=0
+use_qtt=0
 
 
 # bdiag_precon=0
-# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t_so --ivelo ${ivelo} --scaleGreen ${scaleGreen} --omega ${omega} --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max --bdiag_precon ${bdiag_precon} --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --n_iter ${n_iter} --format ${format} --iter_solver ${iter_solver} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 0 --use_qtt 0 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_bdiag_precon_${bdiag_precon}
+# srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t_so --ivelo ${ivelo} --pad_s2s ${pad_s2s} --trans_invariant ${trans_invariant} --scaleGreen ${scaleGreen} --omega ${omega} --htensor_mvp_level_batch 1 --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max --bdiag_level ${bdiag_level} --bdiag_precon ${bdiag_precon} --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --nbundle ${nbundle} --n_iter ${n_iter} --format ${format} --iter_solver ${iter_solver} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp ${use_zfp} --use_qtt ${use_qtt} --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --rankrate ${rankrate} --itermax ${itermax} --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --bdiag_lrlevel ${bdiag_lrlevel} --bdiag_tol_rand ${bdiag_tol_rand} --tol_itersol ${tol_itersol} --precon ${precon} | tee a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_bdiag_${bdiag_precon}_format_${format}_trans${trans_invariant}_LRlevel_${LRlevel}_z${use_zfp}_q${use_qtt}_${nmpi}
 
 bdiag_precon=1
 bdiag_level=8
 bdiag_lrlevel=0
 bdiag_tol_rand=1e-2
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t_so --ivelo ${ivelo} --pad_s2s ${pad_s2s} --trans_invariant ${trans_invariant} --scaleGreen ${scaleGreen} --omega ${omega} --htensor_mvp_level_batch 10 --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max --bdiag_level ${bdiag_level} --bdiag_precon ${bdiag_precon} --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --nbundle ${nbundle} --n_iter ${n_iter} --format ${format} --iter_solver ${iter_solver} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp 0 --use_qtt 0 --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --bdiag_lrlevel ${bdiag_lrlevel} --bdiag_tol_rand ${bdiag_tol_rand} --tol_itersol ${tol_itersol} --precon ${precon} | tee grep a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_bdiag_precon_${bdiag_precon}_format_${format}_cvie3d_t_so_trans_invariant${trans_invariant}
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores  ./EXAMPLE/cvie3d_t_so --ivelo ${ivelo} --pad_s2s ${pad_s2s} --trans_invariant ${trans_invariant} --scaleGreen ${scaleGreen} --omega ${omega} --htensor_mvp_level_batch 1 --h ${h} --x0max $x0max --y0max $y0max --z0max $z0max --bdiag_level ${bdiag_level} --bdiag_precon ${bdiag_precon} --L ${L} --H ${H} --W ${W} --nshape ${nshape} --smin_ivelo11 ${slowness_min} --smax_ivelo11 ${slowness_max} --vs ${vs} --shape ${shape} --knn ${knn} --lrlevel ${LRlevel} --nbundle ${nbundle} --n_iter ${n_iter} --format ${format} --iter_solver ${iter_solver} --baca_batch ${BACA_Batch} --knn_near_para ${knn_near_para} --elem_extract ${elem_extract} --near_para ${near_para} --use_zfp ${use_zfp} --use_qtt ${use_qtt} --xyzsort ${xyzsort} --nmin_leaf ${nmin_leaf_t} --sample_para_outer ${sample_para_outer} --sample_para ${sample_para} --rmax $rmax --rankrate ${rankrate} --itermax ${itermax} --tol_comp ${tol_comp} --tol_rand ${tol_rand} --tol_Rdetect ${tol_Rdetect} --fastsample_tensor ${fastsample_tensor} --verbosity ${verbosity} --bdiag_lrlevel ${bdiag_lrlevel} --bdiag_tol_rand ${bdiag_tol_rand} --tol_itersol ${tol_itersol} --precon ${precon} | tee a.out_tensor_ivelo_${ivelo}3D_omega_${omega}_h_${h}_h0_${h0}_knn_${knn}_knn_near_para_${knn_near_para}_nmin_leaf_${nmin_leaf_t}_vs_${vs}_shape_${shape}_sample_para_${sample_para}_sample_para_outer_${sample_para_outer}_tol_comp${tol_comp}_tol_itersol_${tol_itersol}_precon_${precon}_bdiag_${bdiag_precon}_format_${format}_trans${trans_invariant}_LRlevel_${LRlevel}_z${use_zfp}_q${use_qtt}_${nmpi}
 
 
 # bdiag_precon=1

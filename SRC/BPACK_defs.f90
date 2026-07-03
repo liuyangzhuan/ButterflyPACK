@@ -204,6 +204,7 @@ module BPACK_DEFS
         integer:: level_e=-1
         integer:: Ndim=0
         integer:: nproc=0
+        integer:: compact_slots=0
         type(vec_redist_peer_MD), allocatable:: send(:)
         type(vec_redist_peer_MD), allocatable:: recv(:)
     end type vec_redist_plan_MD
@@ -242,6 +243,14 @@ module BPACK_DEFS
     type vectorsblock_oneL
         type(vectorsblock), allocatable :: vs(:)
     end type vectorsblock_oneL
+
+    !>**** local map from per-block MD vector slots to unique row/column-group slots
+    type vec_redist_groupmap_MD
+        integer:: nslot = 0
+        integer:: nuniq = 0
+        integer, allocatable:: slot_map(:)
+        integer, allocatable:: owner_slot(:)
+    end type vec_redist_groupmap_MD
 
     !>**** cached local MD MVP work vectors, used to avoid repeated allocation churn
     type vec_mvp_cache_MD
@@ -819,6 +828,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
         real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack
+        real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final

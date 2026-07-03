@@ -25,18 +25,29 @@ module Bplus_Utilities
    use magma_utilities
 contains
 
-   subroutine BFvec_pool_acquire(kerls, block, nrow, ncol)
+   subroutine BFvec_pool_acquire(kerls, block, nrow, ncol, zero_new)
 
 
       implicit none
       type(butterfly_kerl), intent(inout) :: kerls
       type(butterflymatrix), intent(inout) :: block
       integer, intent(in) :: nrow, ncol
+      logical, intent(in), optional :: zero_new
+      logical :: do_zero
       integer :: chunk, old_size, new_size, element_bytes
       integer(kind=8) :: first, last, nelement, chunk_capacity
       type(butterfly_vec_pool_chunk), allocatable :: pool_new(:)
 
-      if (associated(block%matrix)) return
+      do_zero = .false.
+      if (present(zero_new)) do_zero = zero_new
+      if (associated(block%matrix)) then
+         if (size(block%matrix, 1) == nrow .and. size(block%matrix, 2) == ncol) return
+         if (allocated(kerls%vec_pool)) then
+            nullify(block%matrix)
+         else
+            deallocate(block%matrix)
+         endif
+      endif
       nelement = int(nrow, kind=8)*int(ncol, kind=8)
       call assert(nelement > 0, 'BFvec_pool_acquire requires a nonempty matrix')
 
@@ -67,6 +78,7 @@ contains
             element_bytes = max(1, storage_size(BPACK_czero)/8)
             chunk_capacity = max(nelement, int(1024*1024/element_bytes, kind=8))
             allocate(kerls%vec_pool(chunk)%data(chunk_capacity))
+            if (do_zero) kerls%vec_pool(chunk)%data = BPACK_czero
             kerls%vec_pool(chunk)%used = 0
             kerls%vec_pool(chunk)%capacity = chunk_capacity
 
@@ -79,6 +91,42 @@ contains
       !$omp end critical(BFvec_pool_allocator)
 
    end subroutine BFvec_pool_acquire
+
+
+   subroutine BFvec_pool_reset(kerls)
+
+
+      implicit none
+      type(butterfly_kerl), intent(inout) :: kerls
+      integer :: chunk
+
+      if (allocated(kerls%vec_pool)) then
+         do chunk = 1, kerls%vec_pool_nchunk
+            kerls%vec_pool(chunk)%used = 0
+         enddo
+      endif
+
+   end subroutine BFvec_pool_reset
+
+
+   subroutine BFvec_level_nullify_matrices(kerls)
+
+
+      implicit none
+      type(butterfly_kerl), intent(inout) :: kerls
+      integer :: i, j
+
+      if (allocated(kerls%blocks)) then
+         do j = 1, size(kerls%blocks, 2)
+            do i = 1, size(kerls%blocks, 1)
+               if (associated(kerls%blocks(i, j)%matrix)) deallocate(kerls%blocks(i, j)%matrix)
+            enddo
+         enddo
+         deallocate(kerls%blocks)
+      endif
+      if (allocated(kerls%index_MD)) deallocate(kerls%index_MD)
+
+   end subroutine BFvec_level_nullify_matrices
 
 
    subroutine BFvec_level_release(kerls, release_blocks)
@@ -821,6 +869,105 @@ contains
    end subroutine BP_MD_vec_dup_slot_allocate
 
 
+   subroutine BP_MD_vec_groupmap_clear(map)
+
+      implicit none
+      type(vec_redist_groupmap_MD)::map
+
+      if (allocated(map%slot_map)) deallocate(map%slot_map)
+      if (allocated(map%owner_slot)) deallocate(map%owner_slot)
+      map%nslot = 0
+      map%nuniq = 0
+
+   end subroutine BP_MD_vec_groupmap_clear
+
+
+   subroutine BP_MD_vec_slot_group(Ndim, BP, ll, bb_loc, rowcol, group_md)
+
+      implicit none
+      integer Ndim, ll, bb_loc, rowcol
+      type(blockplus_MD)::BP
+      integer group_md(Ndim), dup_idx
+      type(matrixblock_MD), pointer::blocks
+
+      if (bb_loc <= BP%LL(ll)%Nbound_loc) then
+         blocks => BP%LL(ll)%matrices_block(bb_loc)
+         if (rowcol == 1) then
+            group_md = blocks%row_group
+         else
+            group_md = blocks%col_group
+         endif
+      else
+         dup_idx = bb_loc - BP%LL(ll)%Nbound_loc
+         call assert(dup_idx > 0 .and. dup_idx <= BP%LL(ll)%trans_ndup, &
+            'invalid compact duplicate vector slot')
+         if (rowcol == 1) then
+            group_md = BP%LL(ll)%trans_dup_row_group(:,dup_idx)
+         else
+            group_md = BP%LL(ll)%trans_dup_col_group(:,dup_idx)
+         endif
+      endif
+
+   end subroutine BP_MD_vec_slot_group
+
+
+   subroutine BP_MD_vec_build_unique_map(Ndim, BP, ll, rowcol, one2all, ptree, msh, map)
+
+      implicit none
+      integer Ndim, ll, rowcol, one2all
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::map
+
+      integer bb_loc, uu, nslot
+      integer group_md(Ndim), idxs(Ndim), idxe(Ndim)
+      integer, allocatable::uniq_group(:,:), uniq_idxs(:,:), uniq_idxe(:,:)
+      logical owned, found
+
+      call BP_MD_vec_groupmap_clear(map)
+      nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
+      map%nslot = nslot
+      if (nslot <= 0) return
+
+      allocate(map%slot_map(nslot))
+      allocate(map%owner_slot(nslot))
+      allocate(uniq_group(Ndim,nslot))
+      allocate(uniq_idxs(Ndim,nslot))
+      allocate(uniq_idxe(Ndim,nslot))
+      map%slot_map = 0
+      map%owner_slot = 0
+      map%nuniq = 0
+
+      do bb_loc = 1, nslot
+         call BP_MD_vec_slot_group(Ndim, BP, ll, bb_loc, rowcol, group_md)
+         call BP_MD_vec_slot_box(Ndim, BP, ll, bb_loc, rowcol, ptree, msh, idxs, idxe, owned)
+         call assert(owned, 'local MD vector slot should be owned when building unique map')
+
+         found = .false.
+         do uu = 1, map%nuniq
+            if (ALL(group_md == uniq_group(:,uu)) .and. ALL(idxs == uniq_idxs(:,uu)) .and. &
+                ALL(idxe == uniq_idxe(:,uu))) then
+               map%slot_map(bb_loc) = uu
+               found = .true.
+               exit
+            endif
+         enddo
+         if (.not. found) then
+            map%nuniq = map%nuniq + 1
+            map%slot_map(bb_loc) = map%nuniq
+            map%owner_slot(map%nuniq) = bb_loc
+            uniq_group(:,map%nuniq) = group_md
+            uniq_idxs(:,map%nuniq) = idxs
+            uniq_idxe(:,map%nuniq) = idxe
+         endif
+      enddo
+
+      deallocate(uniq_group, uniq_idxs, uniq_idxe)
+
+   end subroutine BP_MD_vec_build_unique_map
+
+
    subroutine BP_MD_vec_mvp_cache_ensure(Ndim, bplus, chara, level_s, level_e, Nrnd, stats, cache, msh)
 
       implicit none
@@ -907,7 +1054,7 @@ contains
       character chara
       type(matrixblock_MD), pointer::blocks, blocks_1
       type(blockplus_MD)::bplus
-	      integer ll, bb, total_slots, dup_idx, slot
+		      integer ll, bb, total_slots, dup_idx, slot, in_slot, out_slot, owner_slot
       integer, optional:: level_start, level_end
       integer:: level_s, level_e
       type(proctree)::ptree
@@ -927,7 +1074,8 @@ contains
 
       integer Nboundall,dims2(Ndim),group_m(Ndim),group_n(Ndim),groupm_start_global(Ndim),Ninadmissible,bb_loc,tt
       integer cache_slot
-      logical use_cached_vecs
+      logical use_cached_vecs, use_unique_vecs
+      type(vec_redist_groupmap_MD), allocatable::Vin_maps(:), Vout_maps(:)
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
 
@@ -944,59 +1092,95 @@ contains
       ctemp1 = 1.0d0; ctemp2 = 0.0d0
 
 
-      ! Keep the dense trans-invariant MVP vector cache only when multiple
-      ! levels are intentionally grouped in one call. For level-by-level MVP,
-      ! caching these vectors keeps one dense workspace per level alive and can
-      ! defeat the memory cap that the level batching is supposed to provide.
-      use_cached_vecs = option%trans_invariant /= 0 .and. option%htensor_mvp_level_batch > 1
+	      use_unique_vecs = option%trans_invariant /= 0 .and. chara == 'N'
+
+	      ! Keep the dense trans-invariant MVP vector cache only when multiple
+	      ! levels are intentionally grouped in one call. For level-by-level MVP,
+	      ! caching these vectors keeps one dense workspace per level alive and can
+	      ! defeat the memory cap that the level batching is supposed to provide.
+	      use_cached_vecs = option%trans_invariant /= 0 .and. option%htensor_mvp_level_batch > 1 .and. &
+	         .not. use_unique_vecs
       if (use_cached_vecs) then
          if (.not. allocated(bplus%vec_mvp_cache)) allocate(bplus%vec_mvp_cache(2*(LplusMax + 1)))
          cache_slot = BP_MD_vec_mvp_cache_slot(chara, level_s, level_e)
 	         call BP_MD_vec_mvp_cache_ensure(Ndim, bplus, chara, level_s, level_e, Nrnd, stats, bplus%vec_mvp_cache(cache_slot), msh)
          Vin_locs => bplus%vec_mvp_cache(cache_slot)%Vin_locs
          Vout_locs => bplus%vec_mvp_cache(cache_slot)%Vout_locs
-      else
-         allocate(Vin_locs(level_s:level_e))
-         allocate(Vout_locs(level_s:level_e))
+	      else
+	         allocate(Vin_locs(level_s:level_e))
+	         allocate(Vout_locs(level_s:level_e))
+	         if (use_unique_vecs) then
+	            allocate(Vin_maps(level_s:level_e))
+	            allocate(Vout_maps(level_s:level_e))
+	         endif
 
-	         do ll = level_s, level_e
-	            total_slots = bplus%LL(ll)%Nbound_loc
-	            if (chara == 'N') total_slots = total_slots + bplus%LL(ll)%trans_ndup
-	            allocate(Vin_locs(ll)%vs(total_slots))
-	            call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs)/1024.0d3)
-	            allocate(Vout_locs(ll)%vs(total_slots))
-	            call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
-	            do bb = 1, bplus%LL(ll)%Nbound_loc
-               blocks => bplus%LL(ll)%matrices_block(bb)
-               if (chara == 'N') then
-                  allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
-                  Vout_locs(ll)%vs(bb)%vector=0
-                  allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
-               else
-                  allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
-                  Vout_locs(ll)%vs(bb)%vector=0
-                  allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
-               endif
-	               call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
-	               call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
-	            enddo
-	            if (chara == 'N') then
-	               do dup_idx = 1, bplus%LL(ll)%trans_ndup
-	                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
-	                  call BP_MD_vec_dup_slot_allocate(Ndim, bplus, ll, dup_idx, Nrnd, &
-	                     Vin_locs(ll)%vs(slot)%vector, Vout_locs(ll)%vs(slot)%vector, stats, msh)
-	               enddo
-	            endif
-	         enddo
-	      endif
+		         do ll = level_s, level_e
+		            if (use_unique_vecs) then
+		               call BP_MD_vec_build_unique_map(Ndim, bplus, ll, 0, 1, ptree, msh, Vin_maps(ll))
+		               call BP_MD_vec_build_unique_map(Ndim, bplus, ll, 1, 0, ptree, msh, Vout_maps(ll))
+		               total_slots = Vin_maps(ll)%nuniq
+		            else
+		               total_slots = bplus%LL(ll)%Nbound_loc
+		               if (chara == 'N') total_slots = total_slots + bplus%LL(ll)%trans_ndup
+		            endif
+		            allocate(Vin_locs(ll)%vs(total_slots))
+		            call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs)/1024.0d3)
+		            if (use_unique_vecs) then
+		               total_slots = Vout_maps(ll)%nuniq
+		            endif
+		            allocate(Vout_locs(ll)%vs(total_slots))
+		            call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
+		            if (use_unique_vecs) then
+		               do slot = 1, Vin_maps(ll)%nuniq
+		                  owner_slot = Vin_maps(ll)%owner_slot(slot)
+		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 0, msh, dim_in)
+		                  allocate (Vin_locs(ll)%vs(slot)%vector(product(dim_in), Nrnd))
+		                  call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(slot)%vector)/1024.0d3)
+		               enddo
+		               do slot = 1, Vout_maps(ll)%nuniq
+		                  owner_slot = Vout_maps(ll)%owner_slot(slot)
+		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 1, msh, dim_out)
+		                  allocate (Vout_locs(ll)%vs(slot)%vector(product(dim_out), Nrnd))
+		                  Vout_locs(ll)%vs(slot)%vector=0
+		                  call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs(slot)%vector)/1024.0d3)
+		               enddo
+		            else
+		               do bb = 1, bplus%LL(ll)%Nbound_loc
+		                  blocks => bplus%LL(ll)%matrices_block(bb)
+		                  if (chara == 'N') then
+		                     allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
+		                     Vout_locs(ll)%vs(bb)%vector=0
+		                     allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
+		                  else
+		                     allocate (Vout_locs(ll)%vs(bb)%vector(product(blocks%N_loc), Nrnd))
+		                     Vout_locs(ll)%vs(bb)%vector=0
+		                     allocate (Vin_locs(ll)%vs(bb)%vector(product(blocks%M_loc), Nrnd))
+		                  endif
+		                  call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+		                  call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
+		               enddo
+		               if (chara == 'N') then
+		                  do dup_idx = 1, bplus%LL(ll)%trans_ndup
+		                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
+		                     call BP_MD_vec_dup_slot_allocate(Ndim, bplus, ll, dup_idx, Nrnd, &
+		                        Vin_locs(ll)%vs(slot)%vector, Vout_locs(ll)%vs(slot)%vector, stats, msh)
+		                  enddo
+		               endif
+		            endif
+		         enddo
+		      endif
 
       n1 = MPI_Wtime()
-      if (chara == 'N') then
-         if (option%trans_invariant /= 0) then
-            call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
-         else
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
-         endif
+	      if (chara == 'N') then
+	         if (option%trans_invariant /= 0) then
+	            if (use_unique_vecs) then
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vin_maps)
+	            else
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
+	            endif
+	         else
+	            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
+	         endif
       else
          if (option%trans_invariant /= 0) then
             call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 1, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
@@ -1012,42 +1196,83 @@ contains
 		      do ll = level_s, level_e
 		         do bb = 1, bplus%LL(ll)%Nbound_loc
 		            blocks => bplus%LL(ll)%matrices_block(bb)
-		            if (chara == 'N') then
-		               dim_in = blocks%N_loc
-		               dim_out = blocks%M_loc
-		            else
-		               dim_in = blocks%M_loc
-		               dim_out = blocks%N_loc
-		            endif
-		            n1 = MPI_Wtime()
-		            if(blocks%style==1)then
-		               call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2, stats)
-		            else
-		               call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
-		            endif
-		            n2 = MPI_Wtime()
-		            if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
-		         enddo
-		      enddo
-            if (option%trans_invariant /= 0) then
-               if(chara == 'N')then
-               call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-                  Vin_locs, Vout_locs, ptree, stats, msh, option)
-               else
-                  write(*,*)"Bplus_MD_compact_dup_MVP_local_T is not yet implemented"
-               endif
-            endif
+			            if (chara == 'N') then
+			               dim_in = blocks%N_loc
+			               dim_out = blocks%M_loc
+			            else
+			               dim_in = blocks%M_loc
+			               dim_out = blocks%N_loc
+			            endif
+			            in_slot = bb
+			            out_slot = bb
+			            if (use_unique_vecs) then
+			               in_slot = Vin_maps(ll)%slot_map(bb)
+			               out_slot = Vout_maps(ll)%slot_map(bb)
+			               if (allocated(Vout_loc)) then
+			                  if (size(Vout_loc,1) /= product(dim_out) .or. size(Vout_loc,2) /= Nrnd) then
+			                     call LogMemory(stats, -SIZEOF(Vout_loc)/1024.0d3)
+			                     deallocate(Vout_loc)
+			                  endif
+			               endif
+			               if (.not. allocated(Vout_loc)) then
+			                  allocate(Vout_loc(product(dim_out), Nrnd))
+			                  call LogMemory(stats, SIZEOF(Vout_loc)/1024.0d3)
+			               endif
+			               Vout_loc = 0
+			            endif
+			            n1 = MPI_Wtime()
+			            if(blocks%style==1)then
+			               if (use_unique_vecs) then
+			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(in_slot)%vector, product(dim_in), Vout_loc, product(dim_out), ctemp1, ctemp2, stats)
+			               else
+			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2, stats)
+			               endif
+			            else
+			               if (use_unique_vecs) then
+			                  call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(in_slot)%vector, dim_in, Vout_loc, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+			               else
+			                  call BF_MD_block_mvp(chara, Vin_locs(ll)%vs(bb)%vector, dim_in, Vout_locs(ll)%vs(bb)%vector, dim_out, Nrnd, blocks, Ndim, ptree, stats,msh,option)
+			               endif
+			            endif
+			            if (use_unique_vecs) then
+			               Vout_locs(ll)%vs(out_slot)%vector = Vout_locs(ll)%vs(out_slot)%vector + Vout_loc
+			            endif
+			            n2 = MPI_Wtime()
+			            if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
+			         enddo
+			      enddo
+	            if (option%trans_invariant /= 0) then
+	               if(chara == 'N')then
+	                  if (use_unique_vecs) then
+	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
+	                        Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
+	                  else
+	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
+	                        Vin_locs, Vout_locs, ptree, stats, msh, option)
+	                  endif
+	               else
+	                  write(*,*)"Bplus_MD_compact_dup_MVP_local_T is not yet implemented"
+	               endif
+	            endif
+	            if (allocated(Vout_loc)) then
+	               call LogMemory(stats, -SIZEOF(Vout_loc)/1024.0d3)
+	               deallocate(Vout_loc)
+	            endif
 		      n4 = MPI_Wtime()
 		      stats%Time_C_Mult_Level = stats%Time_C_Mult_Level + n4-n3
 
 
 	      n1 = MPI_Wtime()
-      if (chara == 'N') then
-         if (option%trans_invariant /= 0) then
-            call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
-         else
-            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
-         endif
+	      if (chara == 'N') then
+	         if (option%trans_invariant /= 0) then
+	            if (use_unique_vecs) then
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vout_maps)
+	            else
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
+	            endif
+	         else
+	            call Bplus_MD_vec_1Dto1D(Ndim, bplus, 1, 0, level_s, level_e, M, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
+	         endif
       else
          if (option%trans_invariant /= 0) then
             call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 0, level_s, level_e, N, Vout, Nrnd, Vout_locs, ptree, msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
@@ -1064,21 +1289,31 @@ contains
 	      if (use_cached_vecs) then
 	         nullify(Vin_locs)
 	         nullify(Vout_locs)
-      else
-         do ll = level_s, level_e
-	            do bb = 1, size(Vin_locs(ll)%vs)
-	               call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+	      else
+		         do ll = level_s, level_e
+		            do bb = 1, size(Vin_locs(ll)%vs)
+		               call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+	               deallocate (Vin_locs(ll)%vs(bb)%vector)
+	            end do
+	            do bb = 1, size(Vout_locs(ll)%vs)
 	               call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
-               deallocate (Vout_locs(ll)%vs(bb)%vector)
-               deallocate (Vin_locs(ll)%vs(bb)%vector)
-            end do
+	               deallocate (Vout_locs(ll)%vs(bb)%vector)
+	            end do
             call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs)/1024.0d3)
             call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
-            deallocate(Vin_locs(ll)%vs)
-            deallocate(Vout_locs(ll)%vs)
-         end do
-         deallocate(Vin_locs)
-         deallocate(Vout_locs)
+		            deallocate(Vin_locs(ll)%vs)
+	            deallocate(Vout_locs(ll)%vs)
+	         end do
+	         if (allocated(Vin_maps)) then
+	            do ll = level_s, level_e
+	               call BP_MD_vec_groupmap_clear(Vin_maps(ll))
+	               call BP_MD_vec_groupmap_clear(Vout_maps(ll))
+	            enddo
+	            deallocate(Vin_maps)
+	            deallocate(Vout_maps)
+	         endif
+	         deallocate(Vin_locs)
+	         deallocate(Vout_locs)
 	      endif
 
 	      random2(1:size(Vout,1),1:Nrnd) = random2(1:size(Vout,1),1:Nrnd)*b + Vout*a
@@ -1091,7 +1326,7 @@ contains
 
 
    subroutine Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-      Vin_locs, Vout_locs, ptree, stats, msh, option)
+      Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
 
       implicit none
       integer Ndim, level_s, level_e, Nrnd
@@ -1101,6 +1336,7 @@ contains
       type(Hstat)::stats
       type(mesh)::msh(Ndim)
       type(Hoption)::option
+      type(vec_redist_groupmap_MD), optional::Vin_maps(level_s:level_e), Vout_maps(level_s:level_e)
       type(matrixblock_MD), pointer::rep
       integer ll, rep_bb, member, dup_idx, rr, batch_count, batch_start, batch_end
       integer stack_limit, col_s, col_e, slot
@@ -1109,11 +1345,24 @@ contains
       DT, allocatable::Vin_stack(:,:), Vout_stack(:,:)
       DT ctemp1, ctemp2
       real(kind=8) t1, t2
+      logical use_unique_vecs
+#ifdef HAVE_OPENMP
+      integer(kind=omp_lock_kind), allocatable::out_locks(:)
+#endif
 
       ctemp1 = 1.0d0
       ctemp2 = 0.0d0
+      use_unique_vecs = present(Vin_maps) .and. present(Vout_maps)
       do ll = level_s, level_e
          if (bplus%LL(ll)%trans_ndup == 0) cycle
+#ifdef HAVE_OPENMP
+         if (use_unique_vecs) then
+            allocate(out_locks(size(Vout_locs(ll)%vs)))
+            do slot = 1, size(out_locks)
+               call omp_init_lock(out_locks(slot))
+            enddo
+         endif
+#endif
          do rep_bb = 1, bplus%LL(ll)%Nbound_loc
             if (bplus%LL(ll)%trans_dup_member_offset(rep_bb+1) == &
                 bplus%LL(ll)%trans_dup_member_offset(rep_bb)) cycle
@@ -1136,10 +1385,11 @@ contains
 !$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_in, head_tmp) schedule(static)
 	               do rr = 1, batch_count
-	                  member = batch_start + rr - 1
-	                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
-                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
-                  col_s = (rr-1)*Nrnd + 1
+		                  member = batch_start + rr - 1
+		                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
+	                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
+	                  if (use_unique_vecs) slot = Vin_maps(ll)%slot_map(slot)
+	                  col_s = (rr-1)*Nrnd + 1
                   col_e = rr*Nrnd
                   delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
                      bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
@@ -1162,32 +1412,72 @@ contains
                      Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option)
                endif
 
-	               t1 = MPI_Wtime()
+		               t1 = MPI_Wtime()
+	               if (use_unique_vecs) then
+#ifdef HAVE_OPENMP
 !$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
-	               do rr = 1, batch_count
-	                  member = batch_start + rr - 1
-	                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
-                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
-                  col_s = (rr-1)*Nrnd + 1
-                  col_e = rr*Nrnd
-                  delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
-                     bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
-                  delta_rep = rep%row_group - rep%col_group
-                  call Bplus_MD_compact_group_geometry(Ndim, bplus%LL(ll)%trans_dup_row_group(:,dup_idx), &
-                     msh, dims_dup_out, head_tmp)
-	                  call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
-	                     delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
-	                     Vout_locs(ll)%vs(slot)%vector)
-	               enddo
+#endif
+		                  do rr = 1, batch_count
+		                     member = batch_start + rr - 1
+		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
+	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
+	                     slot = Vout_maps(ll)%slot_map(slot)
+	                     col_s = (rr-1)*Nrnd + 1
+	                     col_e = rr*Nrnd
+	                     delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
+	                        bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+	                     delta_rep = rep%row_group - rep%col_group
+	                     call Bplus_MD_compact_group_geometry(Ndim, bplus%LL(ll)%trans_dup_row_group(:,dup_idx), &
+	                        msh, dims_dup_out, head_tmp)
+#ifdef HAVE_OPENMP
+	                     call omp_set_lock(out_locks(slot))
+#endif
+		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
+		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
+		                        Vout_locs(ll)%vs(slot)%vector)
+#ifdef HAVE_OPENMP
+	                     call omp_unset_lock(out_locks(slot))
+#endif
+		                  enddo
+#ifdef HAVE_OPENMP
 !$omp end parallel do
-	               t2 = MPI_Wtime()
+#endif
+	               else
+	!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+	!$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
+		                  do rr = 1, batch_count
+		                     member = batch_start + rr - 1
+		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
+	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
+	                     col_s = (rr-1)*Nrnd + 1
+	                     col_e = rr*Nrnd
+	                     delta_dup = bplus%LL(ll)%trans_dup_row_group(:,dup_idx) - &
+	                        bplus%LL(ll)%trans_dup_col_group(:,dup_idx)
+	                     delta_rep = rep%row_group - rep%col_group
+	                     call Bplus_MD_compact_group_geometry(Ndim, bplus%LL(ll)%trans_dup_row_group(:,dup_idx), &
+	                        msh, dims_dup_out, head_tmp)
+		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
+		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
+		                        Vout_locs(ll)%vs(slot)%vector)
+		                  enddo
+	!$omp end parallel do
+	               endif
+		               t2 = MPI_Wtime()
 	               stats%Time_C_Mult_Unpack = stats%Time_C_Mult_Unpack + t2 - t1
                call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
                call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
                deallocate(Vin_stack, Vout_stack)
             enddo
          enddo
+#ifdef HAVE_OPENMP
+         if (use_unique_vecs) then
+            do slot = 1, size(out_locks)
+               call omp_destroy_lock(out_locks(slot))
+            enddo
+            deallocate(out_locks)
+         endif
+#endif
       enddo
 
    end subroutine Bplus_MD_compact_dup_MVP_local_N
@@ -9018,6 +9308,7 @@ contains
       plan%level_e = -1
       plan%Ndim = 0
       plan%nproc = 0
+      plan%compact_slots = 0
 
    end subroutine BP_MD_vec_plan_delete
 
@@ -9172,7 +9463,7 @@ contains
    end subroutine BP_MD_vec_slot_box
 
 
-   subroutine BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, ptree, msh, nproc, plan)
+   subroutine BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, ptree, msh, nproc, plan, slot_maps)
 
       implicit none
       integer Ndim, rowcol, one2all, level_s, level_e, nproc
@@ -9180,8 +9471,9 @@ contains
       type(proctree)::ptree
       type(mesh)::msh(Ndim)
       type(vec_redist_plan_MD)::plan
+      type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
 
-      integer ll, bb_loc, dim_i, ii, jj, pp, ipass, nslot
+      integer ll, bb_loc, bb_owner, dim_i, ii, jj, pp, ipass, nslot, compact_slots
       integer nproc_i, nproc_o, meta_nint, ierr, tag
       integer idxs_i(Ndim), idxe_i(Ndim), idxs_o(Ndim), idxe_o(Ndim)
       integer head_i(Ndim), head_o(Ndim), offset_s(Ndim), offset_r(Ndim), sizen(Ndim)
@@ -9194,6 +9486,8 @@ contains
       logical slot_owned
 
       call BP_MD_vec_plan_delete(plan)
+      compact_slots = 0
+      if (present(slot_maps)) compact_slots = 1
 
       blocks_1 => BP%LL(1)%matrices_block(1)
       tag = blocks_1%pgno + 1100 + 10*rowcol + one2all
@@ -9218,10 +9512,16 @@ contains
             nproc_i = ptree%pgrp(blocks_1%pgno)%nproc
 	            call assert(nproc_i == nproc, 'nproc should equal nproc_i in MD vector plan build')
 	            do ll = level_s, level_e
-	               nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
-	               do bb_loc = 1, nslot
-	                  call BP_MD_vec_slot_box(Ndim, BP, ll, bb_loc, rowcol, ptree, msh, &
-	                     idxs_o, idxe_o, slot_owned)
+               if (present(slot_maps)) then
+                  nslot = slot_maps(ll)%nuniq
+               else
+                  nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
+               endif
+               do bb_loc = 1, nslot
+                  bb_owner = bb_loc
+                  if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+                  call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
+                     idxs_o, idxe_o, slot_owned)
 	                  if (slot_owned) then
 	                     do ii = 1, nproc_i
                         if (rowcol == 1) then
@@ -9254,10 +9554,16 @@ contains
             nproc_o = ptree%pgrp(blocks_1%pgno)%nproc
 	            call assert(nproc_o == nproc, 'nproc should equal nproc_o in MD vector plan build')
 	            do ll = level_s, level_e
-	               nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
-	               do bb_loc = 1, nslot
-	                  call BP_MD_vec_slot_box(Ndim, BP, ll, bb_loc, rowcol, ptree, msh, &
-	                     idxs_i, idxe_i, slot_owned)
+               if (present(slot_maps)) then
+                  nslot = slot_maps(ll)%nuniq
+               else
+                  nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
+               endif
+               do bb_loc = 1, nslot
+                  bb_owner = bb_loc
+                  if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+                  call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
+                     idxs_i, idxe_i, slot_owned)
 	                  if (slot_owned) then
                      do ii = 1, nproc_o
                         if (rowcol == 1) then
@@ -9351,6 +9657,7 @@ contains
       plan%level_e = level_e
       plan%Ndim = Ndim
       plan%nproc = nproc
+      plan%compact_slots = compact_slots
 
    end subroutine BP_MD_vec_1Dto1D_plan_build
 
@@ -9519,8 +9826,26 @@ contains
 
    end subroutine BP_MD_reset_matrix_ptr
 
+   subroutine BP_MD_ensure_matrix_ptr(matrix, nrow, ncol)
 
-   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc)
+      implicit none
+      integer nrow, ncol
+      DT, pointer::matrix(:, :)
+
+      if (associated(matrix)) then
+         if (size(matrix, 1) /= nrow .or. size(matrix, 2) /= ncol) then
+            deallocate(matrix)
+            allocate(matrix(nrow, ncol))
+            matrix = 0
+         endif
+      else
+         allocate(matrix(nrow, ncol))
+         matrix = 0
+      endif
+
+   end subroutine BP_MD_ensure_matrix_ptr
+
+   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc, slot_maps)
 
       implicit none
       integer Ndim
@@ -9535,23 +9860,29 @@ contains
       type(mesh)::msh(Ndim)
       type(Hstat)::stats
       integer nproc
+      type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
 
       type(matrixblock_MD), pointer::blocks, blocks_1
       type(commquant1D)::sendquant(nproc), recvquant(nproc)
       integer::S_req(nproc), R_req(nproc)
       integer::statuss(MPI_status_size, nproc), statusr(MPI_status_size, nproc)
-      integer::slot, pp, item, ll, bb_loc, iii, cc, ierr, tag, Nreqs, Nreqr, mypp
+      integer::slot, pp, item, ll, bb_loc, bb_owner, iii, cc, ierr, tag, Nreqs, Nreqr, mypp
       integer::recvid, sendid, send_size, recv_size
       integer::offset_s(Ndim), offset_r(Ndim), sizen(Ndim)
       integer::idx_MD(Ndim), idx_s_MD(Ndim), idx_r_MD(Ndim), dims_md(Ndim), dims_s_md(Ndim), dims_r_md(Ndim)
       integer::idx_s_scalar, idx_r_scalar, cursor
       integer(kind=8)::payload_size
-      real(kind=8)::t0, t1
+      real(kind=8)::t0, t1, t_total
+      integer::compact_slots
 
+      t_total = MPI_Wtime()
+      t0 = t_total
       blocks_1 => BP%LL(1)%matrices_block(1)
       tag = blocks_1%pgno + 1200 + 10*rowcol + one2all
       slot = 1 + rowcol + 2*one2all
       mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
+      compact_slots = 0
+      if (present(slot_maps)) compact_slots = 1
 
       if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4))
       if (BP%vec_redist_plans(slot)%ready /= 1 .or. &
@@ -9560,8 +9891,15 @@ contains
           BP%vec_redist_plans(slot)%level_s /= level_s .or. &
           BP%vec_redist_plans(slot)%level_e /= level_e .or. &
           BP%vec_redist_plans(slot)%Ndim /= Ndim .or. &
-          BP%vec_redist_plans(slot)%nproc /= nproc) then
-	         call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, ptree, msh, nproc, BP%vec_redist_plans(slot))
+          BP%vec_redist_plans(slot)%nproc /= nproc .or. &
+          BP%vec_redist_plans(slot)%compact_slots /= compact_slots) then
+         if (present(slot_maps)) then
+            call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
+               ptree, msh, nproc, BP%vec_redist_plans(slot), slot_maps)
+         else
+            call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
+               ptree, msh, nproc, BP%vec_redist_plans(slot))
+         endif
       endif
 
       do pp = 1, nproc
@@ -9571,6 +9909,10 @@ contains
          recvquant(pp)%active = 0
       enddo
 
+      t1 = MPI_Wtime()
+      stats%Time_C_Mult_RedistSetup = stats%Time_C_Mult_RedistSetup + t1 - t0
+
+      t0 = MPI_Wtime()
       do pp = 1, nproc
          if (BP%vec_redist_plans(slot)%send(pp)%active == 1 .and. pp /= mypp) then
             payload_size = BP%vec_redist_plans(slot)%send(pp)%payload_size_base*int(Nrnd, kind=8)
@@ -9591,6 +9933,8 @@ contains
             recvquant(pp)%size = recv_size
          endif
       enddo
+      t1 = MPI_Wtime()
+      stats%Time_C_Mult_RedistAlloc = stats%Time_C_Mult_RedistAlloc + t1 - t0
 
       if (mypp >= 1 .and. mypp <= nproc) then
          if (BP%vec_redist_plans(slot)%send(mypp)%active == 1 .or. &
@@ -9606,16 +9950,20 @@ contains
                offset_s = BP%vec_redist_plans(slot)%send(mypp)%offset_s(:, item)
                offset_r = BP%vec_redist_plans(slot)%send(mypp)%offset_r(:, item)
                sizen = BP%vec_redist_plans(slot)%send(mypp)%sizen(:, item)
-               if (one2all == 1) then
-                  dims_s_md = ld1
-                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_loc, rowcol, msh, dims_r_md)
-                  call BP_MD_vec_copy_payload(Ndim, dims_s_md, offset_s, dims_r_md, offset_r, &
-                     sizen, Nrnd, dat_1, vecs(ll)%vs(bb_loc)%vector, 0)
-               else
-                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_loc, rowcol, msh, dims_s_md)
-                  dims_r_md = ld1
-                  call BP_MD_vec_copy_payload(Ndim, dims_s_md, offset_s, dims_r_md, offset_r, &
-                     sizen, Nrnd, vecs(ll)%vs(bb_loc)%vector, dat_1, 1)
+	               if (one2all == 1) then
+	                  dims_s_md = ld1
+                     bb_owner = bb_loc
+                     if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+	                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_owner, rowcol, msh, dims_r_md)
+	                  call BP_MD_vec_copy_payload(Ndim, dims_s_md, offset_s, dims_r_md, offset_r, &
+	                     sizen, Nrnd, dat_1, vecs(ll)%vs(bb_loc)%vector, 0)
+	               else
+                     bb_owner = bb_loc
+                     if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+	                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_owner, rowcol, msh, dims_s_md)
+	                  dims_r_md = ld1
+	                  call BP_MD_vec_copy_payload(Ndim, dims_s_md, offset_s, dims_r_md, offset_r, &
+	                     sizen, Nrnd, vecs(ll)%vs(bb_loc)%vector, dat_1, 1)
                endif
             enddo
             t1 = MPI_Wtime()
@@ -9631,11 +9979,13 @@ contains
                bb_loc = BP%vec_redist_plans(slot)%send(pp)%bb_loc(item)
                offset_s = BP%vec_redist_plans(slot)%send(pp)%offset_s(:, item)
                sizen = BP%vec_redist_plans(slot)%send(pp)%sizen(:, item)
-	               if (one2all == 1) then
-	                  dims_md = ld1
-	               else
-	                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_loc, rowcol, msh, dims_md)
-	               endif
+		               if (one2all == 1) then
+		                  dims_md = ld1
+		               else
+                     bb_owner = bb_loc
+                     if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+		                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_owner, rowcol, msh, dims_md)
+		               endif
                cursor = sendquant(pp)%size
                if (one2all == 1) then
                   call BP_MD_vec_pack_payload(Ndim, dims_md, offset_s, sizen, Nrnd, dat_1, sendquant(pp)%dat, cursor)
@@ -9688,11 +10038,13 @@ contains
                bb_loc = BP%vec_redist_plans(slot)%recv(pp)%bb_loc(item)
                offset_r = BP%vec_redist_plans(slot)%recv(pp)%offset_r(:, item)
                sizen = BP%vec_redist_plans(slot)%recv(pp)%sizen(:, item)
-	               if (one2all == 1) then
-	                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_loc, rowcol, msh, dims_md)
-	               else
-	                  dims_md = ld1
-	               endif
+		               if (one2all == 1) then
+                     bb_owner = bb_loc
+                     if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
+		                  call BP_MD_vec_slot_dims(Ndim, BP, ll, bb_owner, rowcol, msh, dims_md)
+		               else
+		                  dims_md = ld1
+		               endif
                cursor = recvquant(pp)%size
                if (one2all == 1) then
                   call BP_MD_vec_unpack_payload(Ndim, dims_md, offset_r, sizen, Nrnd, recvquant(pp)%dat, cursor, vecs(ll)%vs(bb_loc)%vector, 0)
@@ -9706,6 +10058,7 @@ contains
       t1 = MPI_Wtime()
       stats%Time_C_Mult_RedistUnpack = stats%Time_C_Mult_RedistUnpack + t1 - t0
 
+      t0 = MPI_Wtime()
       do pp = 1, nproc
          if (allocated(sendquant(pp)%dat)) then
             call LogMemory(stats, -SIZEOF(sendquant(pp)%dat)/1024.0d3)
@@ -9716,6 +10069,9 @@ contains
             deallocate(recvquant(pp)%dat)
          endif
       enddo
+      t1 = MPI_Wtime()
+      stats%Time_C_Mult_RedistFree = stats%Time_C_Mult_RedistFree + t1 - t0
+      stats%Time_C_Mult_RedistTotal = stats%Time_C_Mult_RedistTotal + t1 - t_total
 
    end subroutine Bplus_MD_vec_1Dto1D_plan
 
@@ -16609,7 +16965,6 @@ end subroutine BF_block_MVP_dat_batch_magma
 
       ! write(*,*)blocks%row_group,blocks%col_group,ptree%MyID,'inin'
       if(chara=='N')then
-
          !>******* preallocate BFvec and BFvec1, number of blocks are exactly those in BF_block_MVP_dat, BFvec for the first 0:level_half+1 levels and BFvec for the next level_half+1 to level_butterfly+2 levels,note that level level_half+1 is duplicated for all2all communication
          allocate(BFvec(product(blocks%nc_m)))
          allocate(BFvec1(product(blocks%nr_m)))
@@ -17069,13 +17424,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          do nn=1,product(blocks%nc_m)
             if(allocated(BFvec(nn)%vec))then
                do level=0,level_half + 1
-                  if(allocated(BFvec(nn)%vec(level)%blocks))then
-                  do ii=1,BFvec(nn)%vec(level)%nr
-                     if(associated(BFvec(nn)%vec(level)%blocks(ii,1)%matrix))deallocate(BFvec(nn)%vec(level)%blocks(ii,1)%matrix)
-                  enddo
-                  deallocate(BFvec(nn)%vec(level)%blocks)
-                  deallocate(BFvec(nn)%vec(level)%index_MD)
-                  endif
+                  call BFvec_level_nullify_matrices(BFvec(nn)%vec(level))
                enddo
                deallocate(BFvec(nn)%vec)
             endif
@@ -17084,25 +17433,13 @@ end subroutine BF_block_MVP_dat_batch_magma
          do nn=1,product(blocks%nr_m)
             if(allocated(BFvec1(nn)%vec))then
                do level=0,level_butterfly-level_half + 1
-                  if(allocated(BFvec1(nn)%vec(level)%blocks))then
-                  do jj=1,BFvec1(nn)%vec(level)%nc
-                     if(associated(BFvec1(nn)%vec(level)%blocks(1,jj)%matrix))deallocate(BFvec1(nn)%vec(level)%blocks(1,jj)%matrix)
-                  enddo
-                  deallocate(BFvec1(nn)%vec(level)%blocks)
-                  deallocate(BFvec1(nn)%vec(level)%index_MD)
-                  endif
+                  call BFvec_level_nullify_matrices(BFvec1(nn)%vec(level))
                enddo
                deallocate(BFvec1(nn)%vec)
             endif
 
             if(allocated(BFvec_transposed(nn)%vec))then
-               if(allocated(BFvec_transposed(nn)%vec(1)%blocks))then
-               do jj=1,BFvec_transposed(nn)%vec(1)%nc
-                  if(associated(BFvec_transposed(nn)%vec(1)%blocks(1,jj)%matrix))deallocate(BFvec_transposed(nn)%vec(1)%blocks(1,jj)%matrix)
-               enddo
-               deallocate(BFvec_transposed(nn)%vec(1)%blocks)
-               deallocate(BFvec_transposed(nn)%vec(1)%index_MD)
-               endif
+               call BFvec_level_nullify_matrices(BFvec_transposed(nn)%vec(1))
                deallocate(BFvec_transposed(nn)%vec)
             endif
          enddo
@@ -18082,7 +18419,9 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
     integer group_m(Ndim), group_n(Ndim), mm, index_i, index_i0, index_i_k, index_j_k, index_i_loc_k, index_i_s, index_ii_s, index_j_s, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ij, tt, nvec1, Nvec
     integer nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
     integer pid, pgno_sub, index_c_scalar, dim_i, dim_ii
-    DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
+    DT, allocatable::mat1(:, :), mat2(:, :)
+    DT, allocatable, target::mat(:, :)
+    DT, pointer::matp(:, :)
     real(kind=8)::flop,flops,t_start,t_end,time_reshape,time_gemm
 
 
@@ -18104,10 +18443,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
             enddo
             dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii,dim_ii,BFvec%vec(level)%blocks(1,1)%matrix, 'N', mat, 'N',1)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
+            matp => BFvec%vec(level)%blocks(1,1)%matrix
          else
             do dim_i=1,Ndim
                if(dim_i<dim_ii)then
@@ -18121,9 +18457,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,1)%matrix, 'N', mat, 'N',1)
             t_end = MPI_Wtime()
             time_reshape = time_reshape + t_end - t_start
+            matp => mat
          endif
 
-         call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(1,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1), size(mat,2))
+         call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1), size(matp,2))
 
          flops=0
          t_start = MPI_Wtime()
@@ -18139,11 +18476,11 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             index_j_k = index_j_s
             mm = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,2)
             nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
-            nvec1 = size(mat,2)
+            nvec1 = size(matp,2)
 #ifdef HAVE_TASKLOOP
             !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k)
 #endif
-            call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, mat(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
+            call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, matp(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
             flops = flops + flops_gemm(mm, nvec1, nn1)
 #ifdef HAVE_TASKLOOP
             !$omp end task
@@ -18185,6 +18522,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level)%blocks(index_ii_s,1)%matrix, 'N', mat, 'N',1)
                t_end = MPI_Wtime()
                time_reshape = time_reshape + t_end - t_start
+               matp => mat
             else
                do dim_i=1,Ndim
                   if(dim_i<dim_ii)then
@@ -18198,9 +18536,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, 'N', mat, 'N',1)
                t_end = MPI_Wtime()
                time_reshape = time_reshape + t_end - t_start
+               matp => mat
             endif
 
-            call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1), size(mat,2))
+            call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1), size(matp,2))
 
             flops=0
             t_start = MPI_Wtime()
@@ -18217,13 +18556,13 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
                nn1 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 2)
                nn2 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, 2)
                mm = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 1)
-               nvec1 = size(mat,2)
+               nvec1 = size(matp,2)
 #ifdef HAVE_TASKLOOP
                !$omp task default(shared) firstprivate(mm,nn1,nn2,nvec1,index_j_k)
 #endif
-               call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
+               call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,1), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn1)
-               call gemmf77('N', 'N', mm, nvec1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, mat(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,1), size(mat,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
+               call gemmf77('N', 'N', mm, nvec1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,1), size(matp,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
                flops = flops + flops_gemm(mm, nvec1, nn2)
 #ifdef HAVE_TASKLOOP
                !$omp end task
@@ -18322,7 +18661,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             time_reshape = time_reshape + t_end - t_start
          endif
 
-         call BP_MD_reset_matrix_ptr(BFvec%vec(level)%blocks(1,1)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1), size(mat,2))
+         call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,1)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1), size(mat,2))
 
          flops=0
          t_start = MPI_Wtime()
@@ -18402,7 +18741,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
                   t_end = MPI_Wtime()
                   time_reshape = time_reshape + t_end - t_start
                endif
-               call BP_MD_reset_matrix_ptr(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s), size(mat,2))
+               call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s), size(mat,2))
 
                flops=0
                t_start = MPI_Wtime()
@@ -18451,7 +18790,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             enddo
 
             if(.not. associated(BFvec%vec(level)%blocks(1,index_j_s)%matrix))then
-               allocate(BFvec%vec(level)%blocks(1,index_j_s)%matrix(size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,1),size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,2)))
+               call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,index_j_s)%matrix, size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,1),size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,2))
                BFvec%vec(level)%blocks(1,index_j_s)%matrix=0
             endif
             BFvec%vec(level)%blocks(1,index_j_s)%matrix = BFvec%vec(level)%blocks(1,index_j_s)%matrix + BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix
@@ -18471,7 +18810,6 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
    !$omp atomic
 #endif
    stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
-
 end subroutine BF_MD_block_mvp_multiply_left
 
 

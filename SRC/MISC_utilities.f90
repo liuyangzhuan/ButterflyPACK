@@ -4443,7 +4443,8 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
    integer Ndim,loopnew
    integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar,idx_new_scalar,dims_old(Ndim-1),dims_old_scalar,idx_old_scalar
    integer ld_old,ld_new, dim_i, i, j, j1, prod_old, prod_new, linear_idx, tmp_idx, pos_old, pos_new, carry_dim
-   integer lo_dim, hi_dim, nlo, nhi, prefix_size, suffix_size, iprefix, isuffix, ilo, ihi
+   integer nspatial, tail_prod, rhs, tail, old_base, n1
+   integer lo_dim, hi_dim, nlo, nhi, prefix_size, suffix_size, middle_size, iprefix, isuffix, imiddle, ilo, ihi
    integer old_scalar_fast, new_scalar_fast, old_col_fast, new_col_fast
    integer stride_old(Ndim-1), stride_new(Ndim-1), stride_new_by_dim(Ndim), out_dim1, out_dim2
    character::trans_in,trans_out
@@ -4495,6 +4496,37 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
       data_out=0
    endif
 
+   if(ld_old==Ndim .and. ld_new==1 .and. trans_in=='T' .and. trans_out=='N' .and. loopnew==1 .and. &
+      dims_ref_old(Ndim)==dims_ref_new(Ndim) .and. offsets_ref(Ndim)==0)then
+      nspatial = Ndim - 1
+      n1 = dims_ref_new(1)
+      tail_prod = 1
+      do dim_i = 2, nspatial
+         tail_prod = tail_prod*dims_ref_new(dim_i)
+      enddo
+      idx_ref = 1
+      do rhs = 1, dims_ref_new(Ndim)
+         idx_ref = 1
+         do tail = 1, tail_prod
+            old_base = 1 + offsets_ref(1)
+            do dim_i = 2, nspatial
+               old_base = old_base + (idx_ref(dim_i) + offsets_ref(dim_i) - 1)*stride_old(dim_i)
+            enddo
+            j = tail + (rhs - 1)*tail_prod
+            do i = 1, n1
+               data_out(i,j) = data_in(old_base + i - 1, rhs)
+            enddo
+
+            do carry_dim = 2, nspatial
+               idx_ref(carry_dim) = idx_ref(carry_dim) + 1
+               if(idx_ref(carry_dim)<=dims_ref_new(carry_dim))exit
+               idx_ref(carry_dim) = 1
+            enddo
+         enddo
+      enddo
+      return
+   endif
+
    if(ld_old==ld_new .and. all(dims_ref_old==dims_ref_new) .and. all(offsets_ref==0))then
       if(trans_out==trans_in)then
          data_out = data_in
@@ -4544,6 +4576,58 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
                      else if(trans_out=='T' .and. trans_in=='T')then
                         data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
                      endif
+                  enddo
+               enddo
+            enddo
+         enddo
+         return
+      endif
+
+      if(abs(ld_old-ld_new)>1)then
+         lo_dim = min(ld_old, ld_new)
+         hi_dim = max(ld_old, ld_new)
+         nlo = dims_ref_old(lo_dim)
+         nhi = dims_ref_old(hi_dim)
+         prefix_size = 1
+         do i = 1, lo_dim - 1
+            prefix_size = prefix_size*dims_ref_old(i)
+         enddo
+         middle_size = 1
+         do i = lo_dim + 1, hi_dim - 1
+            middle_size = middle_size*dims_ref_old(i)
+         enddo
+         suffix_size = 1
+         do i = hi_dim + 1, Ndim
+            suffix_size = suffix_size*dims_ref_old(i)
+         enddo
+
+         do isuffix = 0, suffix_size - 1
+            do imiddle = 0, middle_size - 1
+               do iprefix = 0, prefix_size - 1
+                  do ihi = 1, nhi
+                     do ilo = 1, nlo
+                        if(ld_new<ld_old)then
+                           old_scalar_fast = ihi
+                           old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
+                           new_scalar_fast = ilo
+                           new_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
+                        else
+                           old_scalar_fast = ilo
+                           old_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
+                           new_scalar_fast = ihi
+                           new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
+                        endif
+
+                        if(trans_out=='N' .and. trans_in=='N')then
+                           data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
+                        else if(trans_out=='N' .and. trans_in=='T')then
+                           data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
+                        else if(trans_out=='T' .and. trans_in=='N')then
+                           data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
+                        else if(trans_out=='T' .and. trans_in=='T')then
+                           data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
+                        endif
+                     enddo
                   enddo
                enddo
             enddo
@@ -4694,6 +4778,8 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
    integer idx_front(Ndim), stride_out(Ndim-1)
    integer dim_i, front, prod_front, rhs_old, rhs_out, in_col
    integer idx_old_scalar, out_row, base_out, carry_dim, out_dim1, out_dim2
+   integer, allocatable::front_out(:)
+   logical full_front
 
    out_dim1 = product(dims_ref_new(1:Ndim-1))
    out_dim2 = dims_ref_new(Ndim)
@@ -4712,28 +4798,50 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
       prod_front = prod_front*dims_ref_old(dim_i)
    enddo
 
+   full_front = all(offsets_ref(1:Ndim-2)==0) .and. all(dims_ref_old(1:Ndim-2)==dims_ref_new(1:Ndim-2))
+   if(full_front)then
+      do rhs_old=1,dims_ref_old(Ndim)
+         rhs_out = rhs_old + offsets_ref(Ndim)
+         do idx_old_scalar=1,dims_ref_old(Ndim-1)
+            base_out = 1 + (idx_old_scalar + offsets_ref(Ndim-1) - 1)*stride_out(Ndim-1)
+            in_col = 1 + (rhs_old-1)*prod_front
+            do front=1,prod_front
+               data_out(base_out + front - 1,rhs_out) = data_in(idx_old_scalar,in_col + front - 1)
+            enddo
+         enddo
+      enddo
+      return
+   endif
+
+   allocate(front_out(prod_front))
+   idx_front = 1
+   do front=1,prod_front
+      base_out = 1
+      do dim_i=1,Ndim-2
+         base_out = base_out + (idx_front(dim_i) + offsets_ref(dim_i) - 1)*stride_out(dim_i)
+      enddo
+      front_out(front) = base_out
+
+      do carry_dim=1,Ndim-2
+         idx_front(carry_dim) = idx_front(carry_dim) + 1
+         if(idx_front(carry_dim)<=dims_ref_old(carry_dim))exit
+         idx_front(carry_dim) = 1
+      enddo
+   enddo
+
    do rhs_old=1,dims_ref_old(Ndim)
       rhs_out = rhs_old + offsets_ref(Ndim)
-      idx_front = 1
       do front=1,prod_front
-         base_out = 1
-         do dim_i=1,Ndim-2
-            base_out = base_out + (idx_front(dim_i) + offsets_ref(dim_i) - 1)*stride_out(dim_i)
-         enddo
+         base_out = front_out(front)
 
          in_col = front + (rhs_old-1)*prod_front
          do idx_old_scalar=1,dims_ref_old(Ndim-1)
             out_row = base_out + (idx_old_scalar + offsets_ref(Ndim-1) - 1)*stride_out(Ndim-1)
             data_out(out_row,rhs_out) = data_in(idx_old_scalar,in_col)
          enddo
-
-         do carry_dim=1,Ndim-2
-            idx_front(carry_dim) = idx_front(carry_dim) + 1
-            if(idx_front(carry_dim)<=dims_ref_old(carry_dim))exit
-            idx_front(carry_dim) = 1
-         enddo
       enddo
    enddo
+   deallocate(front_out)
 
 end subroutine TensorUnfoldingReshape_FinalScatter
 
