@@ -53,28 +53,6 @@ template <typename T> struct is_complex : std::false_type {};                 //
 template <typename T> struct is_complex<std::complex<T>> : std::true_type {}; // (2) specialization
 template <typename T> inline constexpr bool is_complex_v = is_complex<T>::value; // (3) alias
 
-
-// construct b_mat
-template<typename CoordType, typename DataType>
-struct H2 {
-    //using CoordType = double;
-    MPI_Comm comm;
-    int64_t N;
-    int dimension;
-    //temporary comment
-    //fmm::HierarchicalFactorization<CoordType, C_DT, KernelType> factorizer;
-    
-    //temporary comment
-    void (*kernel)(int*, int*, DataType*, void*);
-    std::unique_ptr<fmm::ParallelTree<CoordType, DataType>> tree;
-    ProgramOptions options;
-    //std::unique_ptr<ButterflyPACKKernel> kernel;
-
-    //temporary comment
-    //RedistributionPlan redistribution;
-    bool factorized = false;
-};
-
 // // in butterfly_h2/h2_quant.hpp — YOU define this, the user fills it
 // struct H2QuantApp {
 //     fmm::KernelKind kernel_kind = fmm::KernelKind::LAPLACE;  // default member initializers
@@ -143,6 +121,26 @@ struct ProgramOptions {
     int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
 };
 
+// construct b_mat
+template<typename CoordType, typename DataType>
+struct H2 {
+    //using CoordType = double;
+    MPI_Comm comm;
+    int64_t N;
+    int dimension;
+    //temporary comment
+    //fmm::HierarchicalFactorization<CoordType, C_DT, KernelType> factorizer;
+    
+    //temporary comment
+    void (*kernel)(int*, int*, DataType*, void*);
+    std::unique_ptr<fmm::ParallelTree<CoordType, DataType>> tree;
+    ProgramOptions options;
+    //std::unique_ptr<ButterflyPACKKernel> kernel;
+
+    //temporary comment
+    //RedistributionPlan redistribution;
+    bool factorized = false;
+};
 
 inline int default_num_levels(int64_t grid_size) {
   int k = 0;

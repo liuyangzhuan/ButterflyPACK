@@ -752,7 +752,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  int idxe = -1;
       butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
 	  // convert to perms and Npo_loc 
-	  c_bpack_set_mesh_h2(N, new2old, idxs, idxe, msh);
+	  c_bpack_set_mesh_h2(H2_solver->N, new2old, idxs, idxe, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
