@@ -509,8 +509,8 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
           bounds,
           options.dimension,
           H2_solver->comm,
-          idx_map,
-          options.reduction_threshold));
+          options.reduction_threshold, 
+          idx_map));
 
   H2_solver->tree = std::move(tree); 
 
@@ -526,6 +526,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
     idxs,
     idxe
   );
+  
   idxs++;// this is to convert from 0-based index to 1-based index for Fortran compatibility
   idxe++;
 

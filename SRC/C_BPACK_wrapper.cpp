@@ -752,7 +752,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  int idxe = -1;
       butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
 	  // convert to perms and Npo_loc 
-	  c_bpack_set_mesh_h2(H2_solver->N, new2old, idxs, idxe, msh);
+	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
@@ -815,13 +815,14 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	void* H2_raw = nullptr;
+	c_bpack_get_h2(*bmat, &H2_raw);
+	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
+
 	int rank = 0;
 	MPI_Comm_rank(H2_solver->comm, &rank);
     try {
-      void* H2_raw = nullptr;
-	  c_bpack_get_h2(*bmat, &H2_raw);
-	  butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
-
+      
       const int leaf_level = H2_solver->options.num_levels - 1;
       const auto factorization_method =
         (butterfly::is_complex_v<C_DT>)
