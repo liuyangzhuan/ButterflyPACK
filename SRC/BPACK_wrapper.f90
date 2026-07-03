@@ -35,7 +35,7 @@ interface
    subroutine c_bpack_h2_delete(h2_ptr) bind(c, name="c_bpack_h2_delete")
       use iso_c_binding
       type(c_ptr), value :: h2_ptr
-   end subroutine
+   end subroutine c_bpack_h2_delete
 end interface
 
 contains
@@ -1538,7 +1538,7 @@ contains
    end subroutine C_BPACK_Get_H2
 
 
-  subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
+   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
       implicit none
       integer N
       integer new2old(N)
@@ -1553,7 +1553,7 @@ contains
       msh%new2old = new2old
       msh%idxs = idxs
       msh%idxe = idxe
-  end subroutine C_BPACK_Set_Mesh_H2
+   end subroutine C_BPACK_Set_Mesh_H2
 
 
 !>**** C interface of multi-dimensional BF construction via entry evaluation

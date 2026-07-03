@@ -1521,7 +1521,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     int32_t dimension = 3,
     MPI_Comm comm = MPI_COMM_WORLD,
     int64_t reduction_threshold = 64,
-    std::vector<int> idx_map, 
+    std::vector<int> idx_map = std::vector<int>(), 
     ReductionPattern pattern = ReductionPattern::UNIFORM) {  // NEW parameter
     
     // Validate inputs

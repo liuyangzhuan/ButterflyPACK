@@ -843,29 +843,29 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
       auto total_start = std::chrono::high_resolution_clock::now();
 
-	  //To do: provide factorization method, and KERNEL!!!!
-      butterfly::hierarchical_factorization_parallel(
-        H2_solver->tree.get(),
-        H2_solver->kernel,
-        H2_solver->options.tolerance,
-        is_symmetric,
-        is_hermitian,
-        factorization_method,
-        unit_proxy,
-        num_proxy,
-        2.5,
-        true);
+	//   //To do: provide factorization method, and KERNEL!!!!
+    //   butterfly::hierarchical_factorization_parallel(
+    //     H2_solver->tree.get(),
+    //     H2_solver->kernel,
+    //     H2_solver->options.tolerance,
+    //     is_symmetric,
+    //     is_hermitian,
+    //     factorization_method,
+    //     unit_proxy,
+    //     num_proxy,
+    //     2.5,
+    //     true);
 
-      auto total_end = std::chrono::high_resolution_clock::now();
-      auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        total_end - total_start);
+    //   auto total_end = std::chrono::high_resolution_clock::now();
+    //   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    //     total_end - total_start);
 
 	  
-      if (rank == 0) {
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-        std::cout << "========================================\n" << std::endl;
-      }
+    //   if (rank == 0) {
+    //     std::cout << "\n========================================" << std::endl;
+    //     std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
+    //     std::cout << "========================================\n" << std::endl;
+    //   }
 
       
 
