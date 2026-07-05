@@ -828,7 +828,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
         real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack
-        real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
+        real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistSetupLocal, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final

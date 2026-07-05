@@ -769,6 +769,7 @@ contains
       stats_o%Time_C_Mult_RedistMPI = stats_i%Time_C_Mult_RedistMPI
       stats_o%Time_C_Mult_RedistUnpack = stats_i%Time_C_Mult_RedistUnpack
       stats_o%Time_C_Mult_RedistSetup = stats_i%Time_C_Mult_RedistSetup
+      stats_o%Time_C_Mult_RedistSetupLocal = stats_i%Time_C_Mult_RedistSetupLocal
       stats_o%Time_C_Mult_RedistAlloc = stats_i%Time_C_Mult_RedistAlloc
       stats_o%Time_C_Mult_RedistFree = stats_i%Time_C_Mult_RedistFree
       stats_o%Time_C_Mult_RedistTotal = stats_i%Time_C_Mult_RedistTotal
@@ -898,6 +899,7 @@ contains
       stats%Time_C_Mult_RedistMPI = 0
       stats%Time_C_Mult_RedistUnpack = 0
       stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
       stats%Time_C_Mult_RedistAlloc = 0
       stats%Time_C_Mult_RedistFree = 0
       stats%Time_C_Mult_RedistTotal = 0
@@ -1093,6 +1095,9 @@ contains
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSetup, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist setup:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult redist setup:', stats%Time_C_Mult_RedistSetup, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSetupLocal, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult rsetup local:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult rsetup local:', stats%Time_C_Mult_RedistSetupLocal, 'Seconds'
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistAlloc, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist alloc:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult redist alloc:', stats%Time_C_Mult_RedistAlloc, 'Seconds'
