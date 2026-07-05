@@ -20,9 +20,110 @@
 #include "ButterflyPACK_config.fi"
 
 module Bplus_Utilities
+   use iso_c_binding
    use BPACK_DEFS
    use MISC_Utilities
    use magma_utilities
+
+#if HAVE_FFTW
+   integer(c_int), parameter :: BP_FFTW_FORWARD = -1
+   integer(c_int), parameter :: BP_FFTW_BACKWARD = 1
+   integer(c_int), parameter :: BP_FFTW_ESTIMATE = 64
+
+   interface
+#if DAT<2
+      type(c_ptr) function BP_fftw_plan_dft(rank, n, in, out, sign, flags) &
+         bind(C, name="fftw_plan_dft")
+         import :: c_int, c_ptr, c_double_complex
+         integer(c_int), value :: rank, sign, flags
+         integer(c_int) :: n(*)
+         complex(c_double_complex) :: in(*), out(*)
+      end function BP_fftw_plan_dft
+      subroutine BP_fftw_execute_dft(plan, in, out) bind(C, name="fftw_execute_dft")
+         import :: c_ptr, c_double_complex
+         type(c_ptr), value :: plan
+         complex(c_double_complex) :: in(*), out(*)
+      end subroutine BP_fftw_execute_dft
+      type(c_ptr) function BP_fftw_plan_dft_r2c(rank, n, in, out, flags) &
+         bind(C, name="fftw_plan_dft_r2c")
+         import :: c_int, c_ptr, c_double, c_double_complex
+         integer(c_int), value :: rank, flags
+         integer(c_int) :: n(*)
+         real(c_double) :: in(*)
+         complex(c_double_complex) :: out(*)
+      end function BP_fftw_plan_dft_r2c
+      type(c_ptr) function BP_fftw_plan_dft_c2r(rank, n, in, out, flags) &
+         bind(C, name="fftw_plan_dft_c2r")
+         import :: c_int, c_ptr, c_double, c_double_complex
+         integer(c_int), value :: rank, flags
+         integer(c_int) :: n(*)
+         complex(c_double_complex) :: in(*)
+         real(c_double) :: out(*)
+      end function BP_fftw_plan_dft_c2r
+      subroutine BP_fftw_execute_dft_r2c(plan, in, out) bind(C, name="fftw_execute_dft_r2c")
+         import :: c_ptr, c_double, c_double_complex
+         type(c_ptr), value :: plan
+         real(c_double) :: in(*)
+         complex(c_double_complex) :: out(*)
+      end subroutine BP_fftw_execute_dft_r2c
+      subroutine BP_fftw_execute_dft_c2r(plan, in, out) bind(C, name="fftw_execute_dft_c2r")
+         import :: c_ptr, c_double, c_double_complex
+         type(c_ptr), value :: plan
+         complex(c_double_complex) :: in(*)
+         real(c_double) :: out(*)
+      end subroutine BP_fftw_execute_dft_c2r
+      subroutine BP_fftw_destroy_plan(plan) bind(C, name="fftw_destroy_plan")
+         import :: c_ptr
+         type(c_ptr), value :: plan
+      end subroutine BP_fftw_destroy_plan
+#else
+      type(c_ptr) function BP_fftw_plan_dft(rank, n, in, out, sign, flags) &
+         bind(C, name="fftwf_plan_dft")
+         import :: c_int, c_ptr, c_float_complex
+         integer(c_int), value :: rank, sign, flags
+         integer(c_int) :: n(*)
+         complex(c_float_complex) :: in(*), out(*)
+      end function BP_fftw_plan_dft
+      subroutine BP_fftw_execute_dft(plan, in, out) bind(C, name="fftwf_execute_dft")
+         import :: c_ptr, c_float_complex
+         type(c_ptr), value :: plan
+         complex(c_float_complex) :: in(*), out(*)
+      end subroutine BP_fftw_execute_dft
+      type(c_ptr) function BP_fftw_plan_dft_r2c(rank, n, in, out, flags) &
+         bind(C, name="fftwf_plan_dft_r2c")
+         import :: c_int, c_ptr, c_float, c_float_complex
+         integer(c_int), value :: rank, flags
+         integer(c_int) :: n(*)
+         real(c_float) :: in(*)
+         complex(c_float_complex) :: out(*)
+      end function BP_fftw_plan_dft_r2c
+      type(c_ptr) function BP_fftw_plan_dft_c2r(rank, n, in, out, flags) &
+         bind(C, name="fftwf_plan_dft_c2r")
+         import :: c_int, c_ptr, c_float, c_float_complex
+         integer(c_int), value :: rank, flags
+         integer(c_int) :: n(*)
+         complex(c_float_complex) :: in(*)
+         real(c_float) :: out(*)
+      end function BP_fftw_plan_dft_c2r
+      subroutine BP_fftw_execute_dft_r2c(plan, in, out) bind(C, name="fftwf_execute_dft_r2c")
+         import :: c_ptr, c_float, c_float_complex
+         type(c_ptr), value :: plan
+         real(c_float) :: in(*)
+         complex(c_float_complex) :: out(*)
+      end subroutine BP_fftw_execute_dft_r2c
+      subroutine BP_fftw_execute_dft_c2r(plan, in, out) bind(C, name="fftwf_execute_dft_c2r")
+         import :: c_ptr, c_float, c_float_complex
+         type(c_ptr), value :: plan
+         complex(c_float_complex) :: in(*)
+         real(c_float) :: out(*)
+      end subroutine BP_fftw_execute_dft_c2r
+      subroutine BP_fftw_destroy_plan(plan) bind(C, name="fftwf_destroy_plan")
+         import :: c_ptr
+         type(c_ptr), value :: plan
+      end subroutine BP_fftw_destroy_plan
+#endif
+   end interface
+#endif
 contains
 
    subroutine BFvec_pool_acquire(kerls, block, nrow, ncol, zero_new)
@@ -1223,9 +1324,14 @@ contains
 			            n1 = MPI_Wtime()
 			            if(blocks%style==1)then
 			               if (use_unique_vecs) then
-			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(in_slot)%vector, product(dim_in), Vout_loc, product(dim_out), ctemp1, ctemp2, stats)
+			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, &
+			                     Vin_locs(ll)%vs(in_slot)%vector, product(dim_in), Vout_loc, product(dim_out), &
+			                     ctemp1, ctemp2, stats, use_fft_circulant=option%use_fft_circulant)
 			               else
-			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, product(dim_out), ctemp1, ctemp2, stats)
+			                  call Full_block_MD_MVP_dat(blocks, chara, product(blocks%M_loc), Nrnd, &
+			                     Vin_locs(ll)%vs(bb)%vector, product(dim_in), Vout_locs(ll)%vs(bb)%vector, &
+			                     product(dim_out), ctemp1, ctemp2, stats, &
+			                     use_fft_circulant=option%use_fft_circulant)
 			               endif
 			            else
 			               if (use_unique_vecs) then
@@ -1427,7 +1533,7 @@ contains
                if (rep%style == 1) then
                   call Full_block_MD_MVP_dat(rep, 'N', product(rep%M_loc), Nrnd*batch_count, &
                      Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2, stats, &
-                     zfp_mvp_mode)
+                     zfp_mvp_mode=zfp_mvp_mode, use_fft_circulant=option%use_fft_circulant)
                else
                   if (rep%level_butterfly == 0 .and. product(rep%nc_m) == 1 .and. &
                       product(rep%nr_m) == 1 .and. ptree%pgrp(rep%pgno)%nproc == 1 .and. &
@@ -1639,7 +1745,8 @@ contains
 
                   if (rep%style == 1) then
                      call Full_block_MD_MVP_dat(rep, chara, product(rep%M_loc), Nrnd*batch_count, &
-                        Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2, stats)
+                        Vin_stack, product(dim_in), Vout_stack, product(dim_out), ctemp1, ctemp2, stats, &
+                        use_fft_circulant=option%use_fft_circulant)
                   else
                      call BF_MD_block_mvp(chara, Vin_stack, dim_in, Vout_stack, dim_out, &
                         Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option)
@@ -3284,6 +3391,11 @@ contains
 
       else if (blocks%style == 1) then
          if(associated(blocks%fullmat))memory_dense = memory_dense + SIZEOF(blocks%fullmat)/1024.0d3
+#if HAVE_FFTW
+         if(associated(blocks%FullmatFFT))then
+            if(allocated(blocks%FullmatFFT%kernel_hat))memory_dense = memory_dense + SIZEOF(blocks%FullmatFFT%kernel_hat)/1024.0d3
+         endif
+#endif
 #if HAVE_ZFP
          if(allocated(blocks%FullmatZFP%buffer_r))memory_dense = memory_dense + SIZEOF(blocks%FullmatZFP%buffer_r)/1024.0d3
          if(allocated(blocks%FullmatZFP%buffer_i))memory_dense = memory_dense + SIZEOF(blocks%FullmatZFP%buffer_i)/1024.0d3
@@ -3439,6 +3551,17 @@ contains
             deallocate (blocks%fullmat)
          else
             nullify(blocks%fullmat)
+         endif
+      endif
+      if (associated(blocks%FullmatFFT)) then
+         if (owns_data) then
+            if (allocated(blocks%FullmatFFT%dims_in)) deallocate(blocks%FullmatFFT%dims_in)
+            if (allocated(blocks%FullmatFFT%dims_out)) deallocate(blocks%FullmatFFT%dims_out)
+            if (allocated(blocks%FullmatFFT%dims_pad)) deallocate(blocks%FullmatFFT%dims_pad)
+            if (allocated(blocks%FullmatFFT%kernel_hat)) deallocate(blocks%FullmatFFT%kernel_hat)
+            deallocate(blocks%FullmatFFT)
+         else
+            nullify(blocks%FullmatFFT)
          endif
       endif
 #if HAVE_ZFP
@@ -21412,8 +21535,654 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine Full_block_MVP_dat
 
 
+#if HAVE_FFTW
+   subroutine Full_block_MD_FFT_MVP_dat(blocks, num_vectors, random1, ldi, random2tmp, ldo)
+
+      implicit none
+
+      type(matrixblock_MD), target::blocks
+      integer num_vectors, ldi, ldo
+      DT::random1(ldi, *), random2tmp(ldo, *)
+      logical built_fft
+      type(matrixblock_MD), pointer::cache_block
+
+      built_fft = .false.
+
+      if (.not. allocated(blocks%M_loc)) then
+         write(*,*) 'Full_block_MD_FFT_MVP_dat requires M_loc'
+         stop
+      endif
+      if (.not. allocated(blocks%N_loc)) then
+         write(*,*) 'Full_block_MD_FFT_MVP_dat requires N_loc'
+         stop
+      endif
+      if (blocks%Ndim <= 0) then
+         write(*,*) 'Full_block_MD_FFT_MVP_dat requires positive Ndim'
+         stop
+      endif
+
+      if (blocks%trans_invariant_dup == 1 .and. associated(blocks%trans_rep)) then
+         cache_block => blocks%trans_rep
+      else
+         cache_block => blocks
+      endif
+
+      call BP_MD_fft_circulant_ensure(cache_block, blocks, built_fft)
+      if (.not. built_fft) then
+         write(*,*) 'Full_block_MD_FFT_MVP_dat could not build FFT circulant tensor'
+         stop
+      endif
+
+#if DAT==0 || DAT==2
+      call BP_MD_fft_circulant_apply_complex(cache_block%FullmatFFT, num_vectors, random1, &
+         ldi, random2tmp, ldo)
+#else
+      call BP_MD_fft_circulant_apply_real(cache_block%FullmatFFT, num_vectors, random1, &
+         ldi, random2tmp, ldo)
+#endif
+
+   end subroutine Full_block_MD_FFT_MVP_dat
+
+
+   subroutine BP_MD_fft_circulant_ensure(cache_block, source_block, built_fft)
+
+      implicit none
+
+      type(matrixblock_MD), target::cache_block
+      type(matrixblock_MD)::source_block
+      logical built_fft
+      integer Ndim
+
+      built_fft = .false.
+      Ndim = source_block%Ndim
+      if (Ndim <= 0) return
+      if (.not. allocated(source_block%M_loc)) return
+      if (.not. allocated(source_block%N_loc)) return
+
+      if (.not. associated(cache_block%FullmatFFT)) allocate(cache_block%FullmatFFT)
+
+      if (cache_block%FullmatFFT%ready == 1) then
+         if (cache_block%FullmatFFT%Ndim == Ndim) then
+            if (allocated(cache_block%FullmatFFT%dims_in) .and. &
+                allocated(cache_block%FullmatFFT%dims_out)) then
+               if (all(cache_block%FullmatFFT%dims_in == source_block%N_loc) .and. &
+                   all(cache_block%FullmatFFT%dims_out == source_block%M_loc)) then
+                  built_fft = .true.
+                  return
+               endif
+            endif
+         endif
+      endif
+
+      if (.not. associated(source_block%fullmat)) return
+      if (product(source_block%M_loc) /= size(source_block%fullmat, 1)) return
+      if (product(source_block%N_loc) /= size(source_block%fullmat, 2)) return
+
+      if (allocated(cache_block%FullmatFFT%dims_in)) deallocate(cache_block%FullmatFFT%dims_in)
+      if (allocated(cache_block%FullmatFFT%dims_out)) deallocate(cache_block%FullmatFFT%dims_out)
+      if (allocated(cache_block%FullmatFFT%dims_pad)) deallocate(cache_block%FullmatFFT%dims_pad)
+      if (allocated(cache_block%FullmatFFT%kernel_hat)) deallocate(cache_block%FullmatFFT%kernel_hat)
+      cache_block%FullmatFFT%ready = 0
+      cache_block%FullmatFFT%Ndim = Ndim
+      allocate(cache_block%FullmatFFT%dims_in(Ndim))
+      allocate(cache_block%FullmatFFT%dims_out(Ndim))
+      allocate(cache_block%FullmatFFT%dims_pad(Ndim))
+      cache_block%FullmatFFT%dims_in = source_block%N_loc
+      cache_block%FullmatFFT%dims_out = source_block%M_loc
+      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
+
+#if DAT==0 || DAT==2
+      cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%npad
+      call BP_MD_fft_circulant_build_complex(source_block, cache_block%FullmatFFT, built_fft)
+#else
+      cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%dims_pad(1)/2 + 1
+      if (Ndim > 1) cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%nfreq* &
+         product(cache_block%FullmatFFT%dims_pad(2:Ndim))
+      call BP_MD_fft_circulant_build_real(source_block, cache_block%FullmatFFT, built_fft)
+#endif
+
+   end subroutine BP_MD_fft_circulant_ensure
+
+
+   subroutine BP_MD_fft_circulant_fill_kernel_entries(Ndim, blocks, msh, ker, stats, option, ptree, &
+      kernel_values, kernel_len, passflag)
+
+      implicit none
+
+      integer Ndim, kernel_len, passflag
+      type(matrixblock_MD)::blocks
+      type(mesh)::msh(Ndim)
+      type(kernelquant)::ker
+      type(Hstat)::stats
+      type(Hoption)::option
+      type(proctree)::ptree
+      DT::kernel_values(kernel_len)
+      integer kk, dim_i, offset_i
+      integer, allocatable::dims_pad(:), idx_pad(:), rows(:,:), cols(:,:)
+
+      allocate(dims_pad(Ndim), idx_pad(Ndim))
+      dims_pad = blocks%M_loc + blocks%N_loc - 1
+      call assert(kernel_len == product(dims_pad), 'FFT circulant kernel length mismatch')
+      allocate(rows(Ndim, kernel_len))
+      allocate(cols(Ndim, kernel_len))
+
+      do kk = 1, kernel_len
+         call SingleIndexToMultiIndex(Ndim, dims_pad, kk, idx_pad)
+         do dim_i = 1, Ndim
+            offset_i = idx_pad(dim_i) - blocks%N_loc(dim_i)
+            if(offset_i >= 0)then
+               rows(dim_i, kk) = blocks%headm(dim_i) + offset_i
+               cols(dim_i, kk) = blocks%headn(dim_i)
+            else
+               rows(dim_i, kk) = blocks%headm(dim_i)
+               cols(dim_i, kk) = blocks%headn(dim_i) - offset_i
+            endif
+         enddo
+      enddo
+
+      call element_Zmn_pairlist_user(Ndim, kernel_len, rows, cols, kernel_values, msh, &
+         option, ker, passflag, ptree, stats)
+
+      deallocate(rows, cols, dims_pad, idx_pad)
+
+   end subroutine BP_MD_fft_circulant_fill_kernel_entries
+
+
+   subroutine element_Zmn_pairlist_user(Ndim, Npair, rows, cols, vals, msh, option, ker, passflag, ptree, stats)
+
+      implicit none
+
+      integer Ndim, Npair, passflag
+      integer rows(Ndim, Npair), cols(Ndim, Npair)
+      DT vals(Npair)
+      type(mesh)::msh(Ndim)
+      type(Hoption)::option
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(Hstat)::stats
+      procedure(F_Zelem_MD_block), POINTER :: proc
+      procedure(C_Zelem_MD_block), POINTER :: proc_c
+      procedure(F_Zelem_MD), POINTER :: proc1
+      procedure(C_Zelem_MD), POINTER :: proc1_c
+      integer kk, dim_i, pp, Ninter, Nrow_max, Ncol_max
+      integer idx_r(Ndim), idx_c(Ndim)
+      integer, allocatable::allrows(:,:), allcols(:,:), rowidx(:,:), colidx(:,:), pgidx(:), pmaps(:, :)
+      integer*8 idx_dat
+      DT, pointer::alldat_loc(:)
+      DT value_e
+      real(kind=8)::t1, t2
+
+      t1 = MPI_Wtime()
+
+      if(option%elem_extract == 0)then
+         if(option%cpp == 1)then
+            call c_f_procpointer(ker%C_FuncZmn_MD, proc1_c)
+         else
+            proc1 => ker%FuncZmn_MD
+         endif
+
+#ifdef HAVE_OPENMP
+!$omp parallel do default(shared) private(kk,dim_i,idx_r,idx_c,value_e)
+#endif
+         do kk = 1, Npair
+            do dim_i = 1, Ndim
+               idx_r(dim_i) = msh(dim_i)%new2old(rows(dim_i, kk))
+               idx_c(dim_i) = msh(dim_i)%new2old(cols(dim_i, kk))
+            enddo
+            value_e = 0
+            if(option%cpp == 1)then
+               call proc1_c(Ndim, idx_r, idx_c, value_e, ker%C_QuantApp)
+            else
+               call proc1(Ndim, idx_r, idx_c, value_e, ker%QuantApp)
+            endif
+            vals(kk) = value_e*option%scale_factor
+         enddo
+#ifdef HAVE_OPENMP
+!$omp end parallel do
+#endif
+      else if(option%elem_extract == 2)then
+         Ninter = Npair
+         Nrow_max = 1
+         Ncol_max = 1
+         idx_dat = Npair
+         allocate(rowidx(Ndim, Ninter))
+         allocate(colidx(Ndim, Ninter))
+         allocate(allrows(Npair, Ndim))
+         allocate(allcols(Npair, Ndim))
+         allocate(pgidx(Ninter))
+         allocate(pmaps(1, 3))
+         allocate(alldat_loc(Npair))
+         rowidx = 1
+         colidx = 1
+         pgidx = 1
+         alldat_loc = 0
+         do dim_i = 1, Ndim
+            do kk = 1, Npair
+               allrows(kk, dim_i) = abs(msh(dim_i)%new2old(rows(dim_i, kk)))
+               allcols(kk, dim_i) = abs(msh(dim_i)%new2old(cols(dim_i, kk)))
+            enddo
+         enddo
+         do pp = 1, 1
+            pmaps(pp, 1) = 1
+            pmaps(pp, 2) = 1
+            pmaps(pp, 3) = ptree%MyID
+         enddo
+
+         if(option%cpp == 1)then
+            call c_f_procpointer(ker%C_FuncZmnBlock_MD, proc_c)
+            pgidx = pgidx - 1
+            call proc_c(Ndim, Ninter, Nrow_max, Ncol_max, idx_dat, allrows, allcols, &
+               alldat_loc, rowidx, colidx, pgidx, 1, pmaps, ker%C_QuantApp)
+         else
+            proc => ker%FuncZmnBlock_MD
+            call proc(Ndim, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, &
+               1, pmaps, ker%QuantApp)
+         endif
+         vals = alldat_loc*option%scale_factor
+
+         deallocate(alldat_loc, allrows, allcols, rowidx, colidx, pgidx, pmaps)
+      else
+         write(*,*) 'elem_extract == 1 not implemented in element_Zmn_pairlist_user'
+         stop
+      endif
+
+      passflag = 2
+      t2 = MPI_Wtime()
+      stats%Time_Entry = stats%Time_Entry + t2 - t1
+
+   end subroutine element_Zmn_pairlist_user
+
+
+   subroutine BP_MD_fft_circulant_ensure_from_kernel(cache_block, source_block, kernel_values, kernel_len, built_fft)
+
+      implicit none
+
+      type(matrixblock_MD), target::cache_block
+      type(matrixblock_MD)::source_block
+      integer kernel_len
+      DT::kernel_values(kernel_len)
+      logical built_fft
+      integer Ndim
+
+      built_fft = .false.
+      Ndim = source_block%Ndim
+      if (Ndim <= 0) return
+      if (.not. allocated(source_block%M_loc)) return
+      if (.not. allocated(source_block%N_loc)) return
+
+      if (.not. associated(cache_block%FullmatFFT)) allocate(cache_block%FullmatFFT)
+
+      if (cache_block%FullmatFFT%ready == 1) then
+         if (cache_block%FullmatFFT%Ndim == Ndim) then
+            if (allocated(cache_block%FullmatFFT%dims_in) .and. &
+                allocated(cache_block%FullmatFFT%dims_out)) then
+               if (all(cache_block%FullmatFFT%dims_in == source_block%N_loc) .and. &
+                   all(cache_block%FullmatFFT%dims_out == source_block%M_loc)) then
+                  built_fft = .true.
+                  return
+               endif
+            endif
+         endif
+      endif
+
+      if (kernel_len /= product(source_block%M_loc + source_block%N_loc - 1)) return
+
+      if (allocated(cache_block%FullmatFFT%dims_in)) deallocate(cache_block%FullmatFFT%dims_in)
+      if (allocated(cache_block%FullmatFFT%dims_out)) deallocate(cache_block%FullmatFFT%dims_out)
+      if (allocated(cache_block%FullmatFFT%dims_pad)) deallocate(cache_block%FullmatFFT%dims_pad)
+      if (allocated(cache_block%FullmatFFT%kernel_hat)) deallocate(cache_block%FullmatFFT%kernel_hat)
+      cache_block%FullmatFFT%ready = 0
+      cache_block%FullmatFFT%Ndim = Ndim
+      allocate(cache_block%FullmatFFT%dims_in(Ndim))
+      allocate(cache_block%FullmatFFT%dims_out(Ndim))
+      allocate(cache_block%FullmatFFT%dims_pad(Ndim))
+      cache_block%FullmatFFT%dims_in = source_block%N_loc
+      cache_block%FullmatFFT%dims_out = source_block%M_loc
+      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
+
+#if DAT==0 || DAT==2
+      cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%npad
+      call BP_MD_fft_circulant_build_complex_kernel(kernel_values, kernel_len, &
+         cache_block%FullmatFFT, built_fft)
+#else
+      cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%dims_pad(1)/2 + 1
+      if (Ndim > 1) cache_block%FullmatFFT%nfreq = cache_block%FullmatFFT%nfreq* &
+         product(cache_block%FullmatFFT%dims_pad(2:Ndim))
+      call BP_MD_fft_circulant_build_real_kernel(kernel_values, kernel_len, &
+         cache_block%FullmatFFT, built_fft)
+#endif
+
+   end subroutine BP_MD_fft_circulant_ensure_from_kernel
+
+#if DAT==0 || DAT==2
+   subroutine BP_MD_fft_circulant_build_complex_kernel(kernel_values, kernel_len, fftq, built_fft)
+
+      implicit none
+
+      integer kernel_len
+      DT::kernel_values(kernel_len)
+      type(fft_circulant_MD)::fftq
+      logical built_fft
+      integer dim_i
+      integer(c_int), allocatable::nrev(:)
+      DTC, allocatable::kernel(:)
+      type(c_ptr)::plan
+
+      built_fft = .false.
+      if(kernel_len /= fftq%npad)return
+      allocate(nrev(fftq%Ndim))
+      do dim_i = 1, fftq%Ndim
+         nrev(dim_i) = int(fftq%dims_pad(fftq%Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(kernel(fftq%npad))
+      allocate(fftq%kernel_hat(fftq%nfreq))
+      kernel = kernel_values(1:fftq%npad)
+      fftq%kernel_hat = 0
+
+      plan = BP_fftw_plan_dft(int(fftq%Ndim, c_int), nrev, kernel, fftq%kernel_hat, &
+         BP_FFTW_FORWARD, BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan)) then
+         deallocate(kernel, nrev)
+         return
+      endif
+      call BP_fftw_execute_dft(plan, kernel, fftq%kernel_hat)
+      call BP_fftw_destroy_plan(plan)
+      fftq%ready = 1
+      built_fft = .true.
+
+      deallocate(kernel, nrev)
+
+   end subroutine BP_MD_fft_circulant_build_complex_kernel
+
+
+   subroutine BP_MD_fft_circulant_build_complex(source_block, fftq, built_fft)
+
+      implicit none
+
+      type(matrixblock_MD)::source_block
+      type(fft_circulant_MD)::fftq
+      logical built_fft
+      integer Ndim, M1, N1, ii, jj, dim_i, idx_k
+      integer, allocatable::idx_out(:), idx_in(:), idx_pad(:)
+      integer(c_int), allocatable::nrev(:)
+      DTC, allocatable::kernel(:)
+      type(c_ptr)::plan
+
+      built_fft = .false.
+      Ndim = fftq%Ndim
+      M1 = product(fftq%dims_out)
+      N1 = product(fftq%dims_in)
+      allocate(idx_out(Ndim), idx_in(Ndim), idx_pad(Ndim))
+      allocate(nrev(Ndim))
+      do dim_i = 1, Ndim
+         nrev(dim_i) = int(fftq%dims_pad(Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(kernel(fftq%npad))
+      allocate(fftq%kernel_hat(fftq%nfreq))
+      kernel = 0
+      fftq%kernel_hat = 0
+
+      do jj = 1, N1
+         call SingleIndexToMultiIndex(Ndim, fftq%dims_in, jj, idx_in)
+         do ii = 1, M1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_out, ii, idx_out)
+            idx_pad = idx_out - idx_in + fftq%dims_in
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+            kernel(idx_k) = source_block%fullmat(ii, jj)
+         enddo
+      enddo
+
+      plan = BP_fftw_plan_dft(int(Ndim, c_int), nrev, kernel, fftq%kernel_hat, &
+         BP_FFTW_FORWARD, BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan)) return
+      call BP_fftw_execute_dft(plan, kernel, fftq%kernel_hat)
+      call BP_fftw_destroy_plan(plan)
+      fftq%ready = 1
+      built_fft = .true.
+
+      deallocate(kernel, nrev, idx_out, idx_in, idx_pad)
+
+   end subroutine BP_MD_fft_circulant_build_complex
+
+
+   subroutine BP_MD_fft_circulant_apply_complex(fftq, num_vectors, random1, ldi, &
+      random2tmp, ldo)
+
+      implicit none
+
+      type(fft_circulant_MD)::fftq
+      integer num_vectors, ldi, ldo
+      DT::random1(ldi, *), random2tmp(ldo, *)
+      integer vec, ii, jj, kk, dim_i, idx_k, Ndim, M1, N1
+      integer, allocatable::idx_out(:), idx_in(:), idx_pad(:)
+      integer(c_int), allocatable::nrev(:)
+      real(kind=8)::scale_fft
+      DTC, allocatable::work_in(:), work_hat(:), work_out(:)
+      type(c_ptr)::plan_f, plan_b
+
+      if (fftq%ready /= 1) then
+         write(*,*) 'BP_MD_fft_circulant_apply_complex requires a ready FFT circulant tensor'
+         stop
+      endif
+      Ndim = fftq%Ndim
+      M1 = product(fftq%dims_out)
+      N1 = product(fftq%dims_in)
+      scale_fft = 1d0/dble(fftq%npad)
+      allocate(idx_out(Ndim), idx_in(Ndim), idx_pad(Ndim))
+      allocate(nrev(Ndim))
+      do dim_i = 1, Ndim
+         nrev(dim_i) = int(fftq%dims_pad(Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(work_in(fftq%npad), work_hat(fftq%nfreq), work_out(fftq%npad))
+
+      plan_f = BP_fftw_plan_dft(int(Ndim, c_int), nrev, work_in, work_hat, &
+         BP_FFTW_FORWARD, BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan_f)) then
+         write(*,*) 'BP_MD_fft_circulant_apply_complex failed to create forward FFTW plan'
+         stop
+      endif
+      plan_b = BP_fftw_plan_dft(int(Ndim, c_int), nrev, work_hat, work_out, &
+         BP_FFTW_BACKWARD, BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan_b)) then
+         call BP_fftw_destroy_plan(plan_f)
+         write(*,*) 'BP_MD_fft_circulant_apply_complex failed to create backward FFTW plan'
+         stop
+      endif
+
+      do vec = 1, num_vectors
+         work_in = 0
+         do jj = 1, N1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_in, jj, idx_in)
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_in)
+            work_in(idx_k) = random1(jj, vec)
+         enddo
+         call BP_fftw_execute_dft(plan_f, work_in, work_hat)
+         do kk = 1, fftq%nfreq
+            work_hat(kk) = work_hat(kk)*fftq%kernel_hat(kk)
+         enddo
+         call BP_fftw_execute_dft(plan_b, work_hat, work_out)
+         do ii = 1, M1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_out, ii, idx_out)
+            idx_pad = idx_out + fftq%dims_in - 1
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+            random2tmp(ii, vec) = work_out(idx_k)*scale_fft
+         enddo
+      enddo
+
+      call BP_fftw_destroy_plan(plan_f)
+      call BP_fftw_destroy_plan(plan_b)
+      deallocate(work_in, work_hat, work_out, nrev, idx_out, idx_in, idx_pad)
+
+   end subroutine BP_MD_fft_circulant_apply_complex
+#else
+   subroutine BP_MD_fft_circulant_build_real_kernel(kernel_values, kernel_len, fftq, built_fft)
+
+      implicit none
+
+      integer kernel_len
+      DT::kernel_values(kernel_len)
+      type(fft_circulant_MD)::fftq
+      logical built_fft
+      integer dim_i
+      integer(c_int), allocatable::nrev(:)
+      DTR, allocatable::kernel(:)
+      type(c_ptr)::plan
+
+      built_fft = .false.
+      if(kernel_len /= fftq%npad)return
+      allocate(nrev(fftq%Ndim))
+      do dim_i = 1, fftq%Ndim
+         nrev(dim_i) = int(fftq%dims_pad(fftq%Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(kernel(fftq%npad))
+      allocate(fftq%kernel_hat(fftq%nfreq))
+      kernel = kernel_values(1:fftq%npad)
+      fftq%kernel_hat = 0
+
+      plan = BP_fftw_plan_dft_r2c(int(fftq%Ndim, c_int), nrev, kernel, fftq%kernel_hat, &
+         BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan)) then
+         deallocate(kernel, nrev)
+         return
+      endif
+      call BP_fftw_execute_dft_r2c(plan, kernel, fftq%kernel_hat)
+      call BP_fftw_destroy_plan(plan)
+      fftq%ready = 1
+      built_fft = .true.
+
+      deallocate(kernel, nrev)
+
+   end subroutine BP_MD_fft_circulant_build_real_kernel
+
+
+   subroutine BP_MD_fft_circulant_build_real(source_block, fftq, built_fft)
+
+      implicit none
+
+      type(matrixblock_MD)::source_block
+      type(fft_circulant_MD)::fftq
+      logical built_fft
+      integer Ndim, M1, N1, ii, jj, dim_i, idx_k
+      integer, allocatable::idx_out(:), idx_in(:), idx_pad(:)
+      integer(c_int), allocatable::nrev(:)
+      DTR, allocatable::kernel(:)
+      type(c_ptr)::plan
+
+      built_fft = .false.
+      Ndim = fftq%Ndim
+      M1 = product(fftq%dims_out)
+      N1 = product(fftq%dims_in)
+      allocate(idx_out(Ndim), idx_in(Ndim), idx_pad(Ndim))
+      allocate(nrev(Ndim))
+      do dim_i = 1, Ndim
+         nrev(dim_i) = int(fftq%dims_pad(Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(kernel(fftq%npad))
+      allocate(fftq%kernel_hat(fftq%nfreq))
+      kernel = 0
+      fftq%kernel_hat = 0
+
+      do jj = 1, N1
+         call SingleIndexToMultiIndex(Ndim, fftq%dims_in, jj, idx_in)
+         do ii = 1, M1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_out, ii, idx_out)
+            idx_pad = idx_out - idx_in + fftq%dims_in
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+            kernel(idx_k) = source_block%fullmat(ii, jj)
+         enddo
+      enddo
+
+      plan = BP_fftw_plan_dft_r2c(int(Ndim, c_int), nrev, kernel, fftq%kernel_hat, &
+         BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan)) return
+      call BP_fftw_execute_dft_r2c(plan, kernel, fftq%kernel_hat)
+      call BP_fftw_destroy_plan(plan)
+      fftq%ready = 1
+      built_fft = .true.
+
+      deallocate(kernel, nrev, idx_out, idx_in, idx_pad)
+
+   end subroutine BP_MD_fft_circulant_build_real
+
+
+   subroutine BP_MD_fft_circulant_apply_real(fftq, num_vectors, random1, ldi, &
+      random2tmp, ldo)
+
+      implicit none
+
+      type(fft_circulant_MD)::fftq
+      integer num_vectors, ldi, ldo
+      DT::random1(ldi, *), random2tmp(ldo, *)
+      integer vec, ii, jj, kk, dim_i, idx_k, Ndim, M1, N1
+      integer, allocatable::idx_out(:), idx_in(:), idx_pad(:)
+      integer(c_int), allocatable::nrev(:)
+      real(kind=8)::scale_fft
+      DTR, allocatable::work_in(:), work_out(:)
+      DTC, allocatable::work_hat(:)
+      type(c_ptr)::plan_f, plan_b
+
+      if (fftq%ready /= 1) then
+         write(*,*) 'BP_MD_fft_circulant_apply_real requires a ready FFT circulant tensor'
+         stop
+      endif
+      Ndim = fftq%Ndim
+      M1 = product(fftq%dims_out)
+      N1 = product(fftq%dims_in)
+      scale_fft = 1d0/dble(fftq%npad)
+      allocate(idx_out(Ndim), idx_in(Ndim), idx_pad(Ndim))
+      allocate(nrev(Ndim))
+      do dim_i = 1, Ndim
+         nrev(dim_i) = int(fftq%dims_pad(Ndim - dim_i + 1), c_int)
+      enddo
+      allocate(work_in(fftq%npad), work_hat(fftq%nfreq), work_out(fftq%npad))
+
+      plan_f = BP_fftw_plan_dft_r2c(int(Ndim, c_int), nrev, work_in, work_hat, &
+         BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan_f)) then
+         write(*,*) 'BP_MD_fft_circulant_apply_real failed to create forward FFTW plan'
+         stop
+      endif
+      plan_b = BP_fftw_plan_dft_c2r(int(Ndim, c_int), nrev, work_hat, work_out, &
+         BP_FFTW_ESTIMATE)
+      if (.not. c_associated(plan_b)) then
+         call BP_fftw_destroy_plan(plan_f)
+         write(*,*) 'BP_MD_fft_circulant_apply_real failed to create backward FFTW plan'
+         stop
+      endif
+
+      do vec = 1, num_vectors
+         work_in = 0
+         do jj = 1, N1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_in, jj, idx_in)
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_in)
+            work_in(idx_k) = random1(jj, vec)
+         enddo
+         call BP_fftw_execute_dft_r2c(plan_f, work_in, work_hat)
+         do kk = 1, fftq%nfreq
+            work_hat(kk) = work_hat(kk)*fftq%kernel_hat(kk)
+         enddo
+         call BP_fftw_execute_dft_c2r(plan_b, work_hat, work_out)
+         do ii = 1, M1
+            call SingleIndexToMultiIndex(Ndim, fftq%dims_out, ii, idx_out)
+            idx_pad = idx_out + fftq%dims_in - 1
+            call MultiIndexToSingleIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+            random2tmp(ii, vec) = work_out(idx_k)*scale_fft
+         enddo
+      enddo
+
+      call BP_fftw_destroy_plan(plan_f)
+      call BP_fftw_destroy_plan(plan_b)
+      deallocate(work_in, work_hat, work_out, nrev, idx_out, idx_in, idx_pad)
+
+   end subroutine BP_MD_fft_circulant_apply_real
+#endif
+#endif
+
+
    !>**** Multiply with dense blocks (as tensor). This is the same as Full_block_MVP_dat, except that blocks needs to be type(matrixblock_MD)
-   subroutine Full_block_MD_MVP_dat(blocks, chara, M, num_vectors, random1, ldi, random2, ldo, a, b, stats, zfp_mvp_mode)
+   subroutine Full_block_MD_MVP_dat(blocks, chara, M, num_vectors, random1, ldi, random2, ldo, a, b, stats, zfp_mvp_mode, use_fft_circulant)
 
 
 
@@ -21428,8 +22197,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       character chara
       type(matrixblock_MD)::blocks
       integer M, M1, N1, zfpflag,qttflag
-      integer, optional::zfp_mvp_mode
-      integer zfp_mvp_mode_loc
+      integer, optional::zfp_mvp_mode, use_fft_circulant
+      integer zfp_mvp_mode_loc, use_fft_circulant_loc
       integer ldi,ldo
       real(kind=8)::tol_used
       DT :: random1(ldi, *), random2(ldo, *)
@@ -21437,29 +22206,58 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT, allocatable :: random2tmp(:, :),random1tmp(:, :),random2tmp_1D(:),random2tmp_1D1(:),random1tmp_1D(:), mat_1D(:)
       real(kind=8)::t1, t2
       type(Hstat)::stats
+#if HAVE_FFTW
+      logical fft_path
+#endif
 
       t1 = MPI_Wtime()
 
       zfp_mvp_mode_loc = 0
       if (present(zfp_mvp_mode)) zfp_mvp_mode_loc = zfp_mvp_mode
+      use_fft_circulant_loc = 0
+      if (present(use_fft_circulant)) use_fft_circulant_loc = use_fft_circulant
       tol_used = 0d0
+#if HAVE_FFTW
+      fft_path = .false.
+#endif
 
       qttflag=0
       if(allocated(blocks%FullmatQTT%core) .or. allocated(blocks%FullmatQTT%coreZFP%buffer_r))qttflag=1
+#if HAVE_FFTW
+      fft_path = (use_fft_circulant_loc == 1 .and. qttflag == 0 .and. chara == 'N')
+#endif
 
       zfpflag=0
 #if HAVE_ZFP
       if(allocated(blocks%FullmatZFP%buffer_r))zfpflag=1
       if(zfpflag==1 .and. qttflag==0)then
+#if HAVE_FFTW
+         if (.not. fft_path .or. .not. associated(blocks%FullmatFFT) .or. blocks%FullmatFFT%ready /= 1) then
+#endif
          if (zfp_mvp_mode_loc == 0 .or. zfp_mvp_mode_loc == 1) then
             call ZFP_Decompress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
          else
             call assert(associated(blocks%fullmat), 'Full_block_MD_MVP_dat expects reusable ZFP full matrix')
          endif
+#if HAVE_FFTW
+         endif
+#endif
       endif
 #endif
-      M1=size(blocks%fullmat, 1)
-      N1=size(blocks%fullmat, 2)
+#if HAVE_FFTW
+      if (fft_path .and. associated(blocks%FullmatFFT) .and. blocks%FullmatFFT%ready == 1) then
+         M1 = product(blocks%FullmatFFT%dims_out)
+         N1 = product(blocks%FullmatFFT%dims_in)
+      else if (fft_path .and. allocated(blocks%M_loc) .and. allocated(blocks%N_loc)) then
+         M1 = product(blocks%M_loc)
+         N1 = product(blocks%N_loc)
+      else
+#endif
+      M1 = size(blocks%fullmat, 1)
+      N1 = size(blocks%fullmat, 2)
+#if HAVE_FFTW
+      endif
+#endif
 
 
       al = 1d0
@@ -21505,7 +22303,17 @@ end subroutine BF_block_extraction_multiply_oneblock_last
             deallocate(random2tmp_1D)
 
          else
-            call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M1, 'N', 'N', M1, num_vectors, N1, BPACK_cone, BPACK_czero)
+#if HAVE_FFTW
+            if (use_fft_circulant_loc == 1) then
+               call Full_block_MD_FFT_MVP_dat(blocks, num_vectors, random1, ldi, &
+                  random2tmp, M1)
+#else
+            if (.False.) then
+#endif
+            else
+               call gemmf90(blocks%fullmat, M, random1, ldi, random2tmp, M1, &
+                  'N', 'N', M1, num_vectors, N1, BPACK_cone, BPACK_czero)
+            endif
          endif
          random2(1:M1, 1:num_vectors) = a*random2tmp + b*random2(1:M1, 1:num_vectors)
 
@@ -21520,7 +22328,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
          random2(1:N1, 1:num_vectors) = a*random2tmp + b*random2(1:N1, 1:num_vectors)
       end if
-      if(zfpflag==1 .and. qttflag==0 .and. (zfp_mvp_mode_loc == 0 .or. zfp_mvp_mode_loc == 3))then
+      if(zfpflag==1 .and. qttflag==0 .and. associated(blocks%fullmat) .and. (zfp_mvp_mode_loc == 0 .or. zfp_mvp_mode_loc == 3))then
 #if HAVE_ZFP
       call ZFP_Compress(blocks%fullmat,blocks%FullmatZFP,product(blocks%M),product(blocks%N),tol_used,1)
 #endif
@@ -21528,6 +22336,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       t2 = MPI_Wtime()
       stats%Time_C_Mult_Block = stats%Time_C_Mult_Block + t2 - t1
+      stats%Time_C_Mult_FullBlock = stats%Time_C_Mult_FullBlock + t2 - t1
 
       deallocate (random2tmp)
    end subroutine Full_block_MD_MVP_dat

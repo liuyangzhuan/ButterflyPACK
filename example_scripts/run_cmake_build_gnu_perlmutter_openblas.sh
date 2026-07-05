@@ -2,6 +2,7 @@ module load PrgEnv-gnu
 module load cmake
 module load python/3.11
 module unload cray-libsci
+module load cray-libsci
 
 cd ..
 sed -i 's/\r$//' PrecisionPreprocessing.sh
@@ -11,6 +12,7 @@ export CRAYPE_LINK_TYPE=dynamic
 export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
 export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
 export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
+CMAKE_PREFIX_PATH="$FFTW_ROOT;$CMAKE_PREFIX_PATH"
 export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
 export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
 
@@ -27,6 +29,7 @@ cmake .. \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_python=ON \
 	-Denable_parsec=ON \
+	-Denable_fftw=ON \
 	-Denable_toplevel_openmp=OFF \
 	-DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \
 	-DCMAKE_Fortran_COMPILER=ftn \

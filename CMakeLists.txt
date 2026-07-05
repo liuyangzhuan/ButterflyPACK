@@ -22,6 +22,7 @@ option(enable_openmp    "Build with OpenMP support" ON)
 option(enable_toplevel_openmp    "Use OpenMP at top levels of the solver" OFF)
 option(enable_mpi    "Build with MPI support" ON)
 option(enable_python "Enable Python" OFF)
+option(enable_fftw "Build FFTW" OFF)
 
 ######################################################################
 #
@@ -341,6 +342,24 @@ if(ZFP_FOUND)
   set(CMAKE_C_FLAGS "-DHAVE_ZFP ${CMAKE_C_FLAGS} -I${TPL_ZFP_INCLUDE}")
 endif()
 
+if(enable_fftw)
+  if(TPL_FFTW_LIBRARIES)
+    message("-- Using TPL_FFTW_LIBRARIES='${TPL_FFTW_LIBRARIES}'")
+    set(FFTW_LIB ${TPL_FFTW_LIBRARIES})
+  else()
+    find_package(FFTW REQUIRED)
+    if(FFTW_FOUND)
+      set(TPL_FFTW_LIBRARIES "${FFTW_LIBRARIES}" CACHE FILEPATH
+      "Set from FindFFTW.cmake FFTW_LIBRARIES." FORCE)
+      set(FFTW_LIB ${TPL_FFTW_LIBRARIES})
+    endif()
+  endif()
+  string(REPLACE ";" " " FFTW_LIB_STR "${FFTW_LIB}")
+  set(FFTW_LIB_EXPORT ${FFTW_LIB_STR})
+  set(CMAKE_Fortran_FLAGS "-DHAVE_FFTW ${CMAKE_Fortran_FLAGS}")
+  set(CMAKE_C_FLAGS "-DHAVE_FFTW ${CMAKE_C_FLAGS}")
+endif()
+
 
 #--------------------- MPI ---------------------
 if(enable_mpi)
@@ -518,11 +537,11 @@ add_library(butterflypack
 if (enable_mpi)
   target_link_libraries(butterflypack PUBLIC
     ${MPI_CXX_LIBRARIES} ${MPI_Fortran_LIBRARIES}
-    ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${SCALAPACK_LIB}
+    ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${FFTW_LIB} ${SCALAPACK_LIB}
     ${ARPACK_LIB} ${MAGMA_LIB} m)
 else()
   target_link_libraries(butterflypack PUBLIC
-    mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB}
+    mpi_dummy ${BLAS_LIB} ${LAPACK_LIB} ${ZFP_LIB} ${FFTW_LIB}
     ${ARPACK_LIB} ${MAGMA_LIB} m)
 endif()
 

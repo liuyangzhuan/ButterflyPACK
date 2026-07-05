@@ -710,6 +710,10 @@ contains
          val_d = option%use_zfp
          valid_opt = 1
       endif
+      if (trim(str) == 'use_fft_circulant') then
+         val_d = option%use_fft_circulant
+         valid_opt = 1
+      endif
       if (trim(str) == 'use_parsec') then
          val_d = option%use_parsec
          valid_opt = 1
@@ -1004,6 +1008,11 @@ contains
       if (trim(str) == 'use_zfp') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_zfp = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'use_fft_circulant') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%use_fft_circulant = val_i
          valid_opt = 1
       endif
 
@@ -3917,6 +3926,7 @@ contains
       stats%Time_C_Mult = 0
       stats%Time_C_Mult_Wrapper = 0
       stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_FullBlock = 0
       stats%Time_C_Mult_Init = 0
       stats%Time_C_Mult_Right = 0
       stats%Time_C_Mult_All2All = 0

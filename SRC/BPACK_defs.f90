@@ -524,6 +524,17 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type matrixblock
 
 
+    type fft_circulant_MD
+        integer:: ready = 0
+        integer:: Ndim = 0
+        integer, allocatable:: dims_in(:)
+        integer, allocatable:: dims_out(:)
+        integer, allocatable:: dims_pad(:)
+        integer:: npad = 0
+        integer:: nfreq = 0
+        DTC, allocatable:: kernel_hat(:)
+    end type fft_circulant_MD
+
     !>**** butterfly or LR structure in tensor format
     type matrixblock_MD
         integer Ndim !< dimensionality
@@ -548,6 +559,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         DT, pointer :: fullmat(:, :) => null() !< full matrix entries
         type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
         type(TTtype):: FullmatQTT !< QTT quantity for compressing fullmat
+        type(fft_circulant_MD), pointer :: FullmatFFT => null() !< FFT circulant data for translational-invariant dense tensor blocks
         type(zfpquant), allocatable :: MiddleZFP(:) ! ZFP quantity array for compressing ButterflyMiddle
         type(TTtype), allocatable :: MiddleQTT(:) ! QTT quantity array for compressing ButterflyMiddle
         integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
@@ -788,6 +800,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
+        integer:: use_fft_circulant !< 1: use FFT circulant MVP for dense translational-invariant tensor leaf blocks when built with FFTW
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
@@ -824,7 +837,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** statistics
     type Hstat
         real(kind=8) Time_random(5)  !< Intialization, MVP, Reconstruction, Reconstruction of one subblock
-        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
+        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Mult_FullBlock, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
         real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
         real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack

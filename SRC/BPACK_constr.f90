@@ -3208,7 +3208,12 @@ contains
             endif
          endif
          if (bplus%LL(ll)%matrices_block(bb)%style == 1) then
+#if HAVE_FFTW
+            if (.not. associated(bplus%LL(ll)%matrices_block(rr)%fullmat) .and. &
+                .not. associated(bplus%LL(ll)%matrices_block(rr)%FullmatFFT)) cycle
+#else
             if (.not. associated(bplus%LL(ll)%matrices_block(rr)%fullmat)) cycle
+#endif
          elseif (bplus%LL(ll)%matrices_block(bb)%style == 2) then
             if (bplus%LL(ll)%matrices_block(rr)%level_half /= bplus%LL(ll)%matrices_block(bb)%level_half) cycle
             if (.not. allocated(bplus%LL(ll)%matrices_block(rr)%nr_m)) cycle
@@ -3285,6 +3290,7 @@ contains
       ! Trans-invariant MVP groups apply rep's numerical factors directly.
       if (blk%style == 1) then
          blk%fullmat => rep%fullmat
+         if (associated(rep%FullmatFFT)) blk%FullmatFFT => rep%FullmatFFT
       endif
 
    end subroutine BP_MD_alias_trans_data
