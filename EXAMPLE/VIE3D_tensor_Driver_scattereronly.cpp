@@ -1750,6 +1750,9 @@ if(myrank==master_rank){
       {"bdiag_sample_para",        required_argument, 0, 41},
       {"bdiag_sample_para_outer",        required_argument, 0, 42},
       {"bdiag_elem_extract",        required_argument, 0, 43},
+      {"use_fft_circulant",        required_argument, 0, 100},
+      {"fftw_plan_mode",        required_argument, 0, 101},
+      {"fft_plan_mode",        required_argument, 0, 102},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1931,6 +1934,13 @@ if(myrank==master_rank){
     case 43: {
       std::istringstream iss(optarg);
       iss >> bdiag_elem_extract;
+    } break;
+    case 100: {
+      // BPACK consumes this option from the original argv below.
+    } break;
+    case 101:
+    case 102: {
+      // BPACK consumes this option from the original argv below.
     } break;
     default: break;
     }

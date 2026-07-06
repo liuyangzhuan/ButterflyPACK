@@ -532,6 +532,11 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, allocatable:: dims_pad(:)
         integer:: npad = 0
         integer:: nfreq = 0
+        integer:: plan_mode = 2
+        integer, allocatable:: input_pad_idx(:)
+        integer, allocatable:: output_pad_idx(:)
+        type(c_ptr):: plan_f = c_null_ptr
+        type(c_ptr):: plan_b = c_null_ptr
         DTC, allocatable:: kernel_hat(:)
     end type fft_circulant_MD
 
@@ -800,7 +805,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
-        integer:: use_fft_circulant !< 1: use FFT circulant MVP for dense translational-invariant tensor leaf blocks when built with FFTW
+        integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
+        integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
@@ -845,6 +851,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
+        real(kind=8) Time_C_Mult_FFT_Total, Time_C_Mult_FFT_Check, Time_C_Mult_FFT_Apply, Time_C_Mult_FFT_Alloc
+        real(kind=8) Time_C_Mult_FFT_Input, Time_C_Mult_FFT_Forward, Time_C_Mult_FFT_Multiply, Time_C_Mult_FFT_Backward, Time_C_Mult_FFT_Output
         real(kind=8) Time_BF_MVP_Gemm, Time_BF_MVP_Gemm_Leaf, Time_BF_MVP_Gemm_Kernel, Time_BF_MVP_Exchange, Time_BF_MVP_All2All, Time_BF_MVP_Other
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor

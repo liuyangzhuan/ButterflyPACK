@@ -10426,7 +10426,7 @@ time_tmp = time_tmp + n2 - n1
 #endif
       use_fft_circulant = 0
 #if HAVE_FFTW
-      if(option%use_fft_circulant == 1)use_fft_circulant = 1
+      if(option%use_fft_circulant == 1 .or. option%use_fft_circulant == 2)use_fft_circulant = option%use_fft_circulant
 #endif
 
          do dim_i=1,Ndim
@@ -10458,7 +10458,8 @@ time_tmp = time_tmp + n2 - n1
          call BP_MD_fft_circulant_fill_kernel_entries(Ndim, blocks, msh, ker, stats, option, ptree, &
             kernel_fft, fft_npad, passflag)
          built_fft = .false.
-         call BP_MD_fft_circulant_ensure_from_kernel(blocks, blocks, kernel_fft, fft_npad, built_fft)
+         call BP_MD_fft_circulant_ensure_from_kernel(blocks, blocks, kernel_fft, fft_npad, &
+            built_fft, option%fftw_plan_mode)
          if(.not. built_fft)then
             write(*,*) 'Full_construction_MD failed to build FFT circulant tensor'
             stop
@@ -10466,6 +10467,24 @@ time_tmp = time_tmp + n2 - n1
          if(allocated(blocks%FullmatFFT%kernel_hat))call LogMemory(stats, SIZEOF(blocks%FullmatFFT%kernel_hat)/1024.0d3)
          call LogMemory(stats, -SIZEOF(kernel_fft)/1024.0d3)
          deallocate(kernel_fft)
+      elseif(use_fft_circulant==2)then
+         allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
+         call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+         blocks%fullmat => subtensors(1)%dat
+         subtensors(1)%dat=>null()
+         built_fft = .false.
+         call BP_MD_fft_circulant_ensure(blocks, blocks, built_fft, option%fftw_plan_mode)
+         if(.not. built_fft)then
+            write(*,*) 'Full_construction_MD failed to build FFT circulant tensor from fullmat'
+            stop
+         endif
+         if(allocated(blocks%FullmatFFT%kernel_hat))call LogMemory(stats, SIZEOF(blocks%FullmatFFT%kernel_hat)/1024.0d3)
+         if(associated(blocks%fullmat))then
+            call LogMemory(stats, -SIZEOF(blocks%fullmat)/1024.0d3)
+            deallocate(blocks%fullmat)
+            nullify(blocks%fullmat)
+         endif
       else
 #endif
          if(use_zfp==1 .and. option%use_qtt==0)then

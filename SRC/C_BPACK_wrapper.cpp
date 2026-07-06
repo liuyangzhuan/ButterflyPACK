@@ -71,6 +71,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"trans_invariant", "1: reuse HTENSOR blocks for translational-invariant tensor kernels on uniform Cartesian grids"},
 		{"htensor_mvp_level_batch", "number of HTENSOR levels grouped per MVP call; 1 keeps level-by-level memory"},
 		{"use_fft_circulant","whether to use FFT-based circulant representative blocks"},
+		{"fftw_plan_mode",  "FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive"},
 		{"use_zfp",         "whether to use zfp compression"},
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
@@ -132,6 +133,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"trans_invariant",         required_argument, 0, 40},
 			{"htensor_mvp_level_batch", required_argument, 0, 41},
 		{"use_fft_circulant",         required_argument, 0, 42},
+		{"fftw_plan_mode",         required_argument, 0, 43},
+		{"fft_plan_mode",         required_argument, 0, 44},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -339,6 +342,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "use_fft_circulant", opt_i);
+		} break;
+		case 43:
+		case 44: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "fftw_plan_mode", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);

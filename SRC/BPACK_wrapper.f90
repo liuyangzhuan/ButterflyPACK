@@ -714,6 +714,10 @@ contains
          val_d = option%use_fft_circulant
          valid_opt = 1
       endif
+      if (trim(str) == 'fftw_plan_mode' .or. trim(str) == 'fft_plan_mode') then
+         val_d = option%fftw_plan_mode
+         valid_opt = 1
+      endif
       if (trim(str) == 'use_parsec') then
          val_d = option%use_parsec
          valid_opt = 1
@@ -1013,6 +1017,11 @@ contains
       if (trim(str) == 'use_fft_circulant') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_fft_circulant = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'fftw_plan_mode' .or. trim(str) == 'fft_plan_mode') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%fftw_plan_mode = val_i
          valid_opt = 1
       endif
 
@@ -3551,6 +3560,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
       xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
@@ -3833,6 +3851,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3957,6 +3984,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -4072,6 +4108,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
