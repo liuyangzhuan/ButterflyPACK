@@ -1312,30 +1312,30 @@ if(myrank==master_rank){
     }
 
 
-  	// C_QuantApp_BF *quant_ptr_bf_s2s;
-    // z_c_bpack_set_I_option(&option_bf, "format", 7); // change this one! Xiaomian
+  	C_QuantApp_BF *quant_ptr_bf_s2s;
+    z_c_bpack_set_I_option(&option_bf, "format", 7); // change this one! Xiaomian
 
 
-    // F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
-    // F2Cptr stats_bf_s2s;      //statistics structure returned by Fortran code
-    // F2Cptr msh_bf_s2s;		   //d_mesh structure returned by Fortran code
-    // F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
-    // int myseg_s2s;
+    F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
+    F2Cptr stats_bf_s2s;      //statistics structure returned by Fortran code
+    F2Cptr msh_bf_s2s;		   //d_mesh structure returned by Fortran code
+    F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
+    int myseg_s2s;
 
-    // // create hodlr data structures
-    // z_c_bpack_createstats(&stats_bf_s2s);
-    // quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    // create hodlr data structures
+    z_c_bpack_createstats(&stats_bf_s2s);
+    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
 
-    // if(myrank==0){
-    //   cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
-    // }
-    // // construct hodlr with geometrical points
-    // z_c_bpack_construct_init(&Npo, &Ndim, data_geo.data(), nns_ptr_s2s,&nlevel, tree_bf, perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
-    // quant_ptr_bf_s2s->_Hperm.resize(Npo);
-    // std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
+    if(myrank==0){
+      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
+    }
+    // construct hodlr with geometrical points
+    z_c_bpack_construct_init(&Npo, &Ndim, data_geo.data(), nns_ptr_s2s,&nlevel, tree_bf, perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
+    quant_ptr_bf_s2s->_Hperm.resize(Npo);
+    std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
 
-	  // z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	// z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
+	  z_c_bpack_printoption(&option_bf,&ptree_bf);
+  	z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
 
 
     // if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;

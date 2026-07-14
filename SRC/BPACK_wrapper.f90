@@ -1546,13 +1546,13 @@ contains
       type(c_ptr) :: msh_Cptr
       type(mesh), pointer::msh
 
-      call c_f_pointer(msh_Cptr, msh)
-
+      allocate(msh)
       msh%Nunk = N
       allocate (msh%new2old(N))
       msh%new2old = new2old
       msh%idxs = idxs
       msh%idxe = idxe
+      msh_Cptr = c_loc(msh)
    end subroutine C_BPACK_Set_Mesh_H2
 
 

@@ -472,7 +472,8 @@ private:
     MatrixProperty property;        ///< Matrix symmetry property
     FactorizationMethod factorization_method;  ///< Method for matrix factorization
     int dimension;                 ///< Spatial dimension (2 or 3)
-    void (*kernel)(int*, int*, DataType*, void*); /// Kernel evaluation function
+    H2Kernel<CoordType, DataType>* kernel; /// Kernel evaluation function
+    
     // Proxy point configuration
     int num_proxy_points;          ///< Number of proxy points per box
     std::vector<CoordType> unit_proxy_points;  ///< Unit circle/sphere proxy points (dim × num_proxy)
@@ -500,7 +501,7 @@ public:
     HierarchicalFactorization(
         int64_t N,
         MatrixProperty prop,
-        void (*kernel_func)(int*, int*, DataType*, void*),
+        H2Kernel<CoordType, DataType>* kernel_func,
         int dim,
         FactorizationMethod factorization_type = FactorizationMethod::CHOLESKY,
         int num_proxy = -1,
@@ -1677,6 +1678,23 @@ std::vector<CoordType> gather_deferred_xnn_coords(
 }
 
 template<typename CoordType, typename DataType>
+std::vector<int64_t> gather_deferred_xnn_indices(
+    const BoxData<CoordType, DataType>* box,
+    bool eliminated,
+    int dimension) {
+    if (!eliminated) {
+        return box->point_indices;
+    }
+
+    std::vector<int64_t> indices(box->skeleton_indices.size());
+    for (size_t i = 0; i < box->skeleton_indices.size(); ++i) {
+        int64_t src_idx = box->skeleton_indices[i];
+        indices[i] = box->point_indices[src_idx];
+    }
+    return indices;
+}
+
+template<typename CoordType, typename DataType>
 bool deferred_xnn_target_exists(
     const DeferredXnnTargetKey& target,
     BoxData<CoordType, DataType>* target_box) {
@@ -1708,19 +1726,19 @@ std::vector<DataType> compute_deferred_xnn_base_matrix(
     }
 
     const bool target_eliminated = deferred_xnn_box_is_eliminated(level, task.target.box_morton);
-    std::vector<CoordType> target_coords =
-        gather_deferred_xnn_coords(target_box, target_eliminated, dimension);
+    std::vector<int64_t> target_indices =
+        gather_deferred_xnn_indices(target_box, target_eliminated, dimension);
 
-    if (static_cast<int64_t>(target_coords.size()) != task.cols * dimension) {
-        throw std::runtime_error("compute_deferred_xnn_base_matrix: target coordinate size mismatch");
+    if (static_cast<int64_t>(target_indices.size()) != task.cols) {
+        throw std::runtime_error("compute_deferred_xnn_base_matrix: target index size mismatch");
     }
 
     std::vector<DataType> base(static_cast<size_t>(task.rows * task.cols));
 
     if (task.target.kind == DeferredXnnTargetKind::SCHUR) {
-        kernel->evaluate_block(
-            target_coords.data(), task.rows,
-            target_coords.data(), task.cols,
+        kernel->evaluate_block_by_index(
+            target_indices.data(), task.rows,
+            target_indices.data(), task.cols,
             base.data(), task.rows);
         return base;
     }
@@ -1731,20 +1749,20 @@ std::vector<DataType> compute_deferred_xnn_base_matrix(
         throw std::runtime_error("compute_deferred_xnn_base_matrix: neighbor missing");
     }
 
-    std::vector<CoordType> neighbor_coords;
-    const CoordType* neighbor_coords_ptr =
-        coords_ptr_maybe_sliced(
+    std::vector<int64_t> neighbor_indices;
+    const int64_t* neighbor_indices_ptr =
+        indices_ptr_maybe_sliced(
             level,
             task.target.neighbor_morton,
             task.rows,
             dimension,
             /*box_or_null=*/neighbor.is_assisting ? nullptr : neighbor.box,
             /*assist_or_null=*/neighbor.is_assisting ? neighbor.assisting : nullptr,
-            neighbor_coords);
+            neighbor_indices);
 
-    kernel->evaluate_block(
-        neighbor_coords_ptr, task.rows,
-        target_coords.data(), task.cols,
+    kernel->evaluate_block_by_index(
+        neighbor_indices_ptr, task.rows,
+        target_indices.data(), task.cols,
         base.data(), task.rows);
     return base;
 }
@@ -3747,20 +3765,22 @@ void gather_id_workspace(
     
     int dimension = level.dimension;
     workspace_cols = box->num_points;
+
+    assert(num_proxy == 0);
     
     // Transform proxy points
-    std::vector<CoordType> transformed_proxy;
-    if (num_proxy > 0) {
-        CoordType proxy_radius = proxy_radius_factor * box->size;
-        transformed_proxy.resize(dimension * num_proxy);
+    // std::vector<CoordType> transformed_proxy;
+    // if (num_proxy > 0) {
+    //     CoordType proxy_radius = proxy_radius_factor * box->size;
+    //     transformed_proxy.resize(dimension * num_proxy);
 
-        for (int64_t i = 0; i < num_proxy; ++i) {
-            for (int d = 0; d < dimension; ++d) {
-                transformed_proxy[i * dimension + d] =
-                    box->center[d] + proxy_radius * unit_proxy_points[i * dimension + d];
-            }
-        }
-    }
+    //     for (int64_t i = 0; i < num_proxy; ++i) {
+    //         for (int d = 0; d < dimension; ++d) {
+    //             transformed_proxy[i * dimension + d] =
+    //                 box->center[d] + proxy_radius * unit_proxy_points[i * dimension + d];
+    //         }
+    //     }
+    // }
     // printf("box center, x: %f, y: %f, z: %f\n", box->center[0], box->center[1], box->center[2]);
 
     
@@ -3892,7 +3912,7 @@ void gather_id_workspace(
         } else {
             
             // Not in modified blocks - evaluate kernel
-            const CoordType* neighbor_coords = nullptr;
+            const int64_t* neighbor_indices = nullptr;
             int64_t actual_n_neighbor = n_neighbor;
             
             BoxData<CoordType, DataType>* neighbor_box = level.find_local_box(neighbor_morton);
@@ -3920,19 +3940,21 @@ void gather_id_workspace(
                     // Use skeleton points only
                     actual_n_neighbor = neighbor_box->skeleton_indices.size();
                     assert(actual_n_neighbor == n_neighbor);
-                    std::vector<CoordType> skeleton_coords(actual_n_neighbor * dimension);
+                    std::vector<int64_t> skeleton_indices(actual_n_neighbor);
+                    //std::vector<CoordType> skeleton_coords(actual_n_neighbor * dimension);
                     for (int64_t i = 0; i < actual_n_neighbor; ++i) {
                         int64_t src_idx = neighbor_box->skeleton_indices[i];
-                        for (int d = 0; d < dimension; ++d) {
-                            skeleton_coords[i * dimension + d] = 
-                                neighbor_box->point_coords[src_idx * dimension + d];
-                        }
+                        skeleton_indices[i] = neighbor_box->point_indices[src_idx];
+                        // for (int d = 0; d < dimension; ++d) {
+                        //     skeleton_coords[i * dimension + d] = 
+                        //         neighbor_box->point_coords[src_idx * dimension + d];
+                        // }
                     }
                     
                     std::vector<DataType> A_NB(actual_n_neighbor * workspace_cols);
-                    kernel->evaluate_block(
-                        skeleton_coords.data(), actual_n_neighbor,
-                        box->point_coords.data(), workspace_cols,
+                    kernel->evaluate_block_by_index(
+                        skeleton_indices.data(), actual_n_neighbor,
+                        box->point_indices.data(), workspace_cols,
                         A_NB.data(), actual_n_neighbor
                     );
                     
@@ -3945,13 +3967,13 @@ void gather_id_workspace(
                     
                 } else {
                     // Use all points (either not eliminated OR both on boundary)
-                    neighbor_coords = neighbor_box->point_coords.data();
-                    assert(neighbor_box->point_coords.size() == (size_t)n_neighbor * (size_t)dimension);
+                    neighbor_indices = neighbor_box->point_indices.data();
+                    assert(neighbor_box->point_indices.size() == (size_t)n_neighbor);
                     
                     std::vector<DataType> A_NB(n_neighbor * workspace_cols);
-                    kernel->evaluate_block(
-                        neighbor_coords, n_neighbor,
-                        box->point_coords.data(), workspace_cols,
+                    kernel->evaluate_block_by_index(
+                        neighbor_indices, n_neighbor,
+                        box->point_indices.data(), workspace_cols,
                         A_NB.data(), n_neighbor
                     );
                     
@@ -3988,8 +4010,8 @@ void gather_id_workspace(
                 const bool neighbor_eliminated =
                     (level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end());
 
-                const CoordType* neighbor_coords_ptr = nullptr;
-                std::vector<CoordType> neighbor_skel_coords; // storage if we need to gather skeleton coords
+                const int64_t* neighbor_indices_ptr = nullptr;
+                std::vector<int64_t> neighbor_skel_indices; // storage if we need to gather skeleton coords
                 // ggggggggggggggggggggg
                 // if (false) {
                 if (neighbor_eliminated) {
@@ -4003,39 +4025,41 @@ void gather_id_workspace(
                                                 std::to_string(n_neighbor) + ", have " +
                                                 std::to_string(req.skel_indices.size()) + ")");
                     }
-                    if ((int64_t)req.coords.size() < dimension) {
-                        throw std::runtime_error("gather_id_workspace: assisting coords empty for neighbor " +
+                    if ((int64_t)req.indices.size() < 1) {
+                        throw std::runtime_error("gather_id_workspace: assisting indices empty for neighbor " +
                                                 std::to_string(neighbor_morton));
                     }
 
-                    neighbor_skel_coords.resize((size_t)n_neighbor * (size_t)dimension);
+                    neighbor_skel_indices.resize((size_t)n_neighbor);
                     for (int64_t i = 0; i < n_neighbor; ++i) {
                         const int64_t src = req.skel_indices[(size_t)i];
-                        if (src < 0 || (size_t)(src * dimension + (dimension - 1)) >= req.coords.size()) {
+                        if (src < 0 || (size_t)src >= req.indices.size()) {
                             throw std::runtime_error("gather_id_workspace: bad skel index " + std::to_string(src) +
                                                     " for neighbor " + std::to_string(neighbor_morton));
                         }
-                        for (int d = 0; d < dimension; ++d) {
-                            neighbor_skel_coords[(size_t)i * dimension + (size_t)d] =
-                                req.coords[(size_t)src * dimension + (size_t)d];
-                        }
+
+                        neighbor_skel_indices[(size_t)i] = req.indices[(size_t)src];
+                        // for (int d = 0; d < dimension; ++d) {
+                        //     neighbor_skel_coords[(size_t)i * dimension + (size_t)d] =
+                        //         req.coords[(size_t)src * dimension + (size_t)d];
+                        // }
                     }
-                    neighbor_coords_ptr = neighbor_skel_coords.data();
-                    assert(neighbor_skel_coords.size() == (size_t)n_neighbor * (size_t)dimension);
+                    neighbor_indices_ptr = neighbor_skel_indices.data();
+                    assert(neighbor_skel_indices.size() == (size_t)n_neighbor);
 
                 } else {
 
                     // full (uneliminated) neighbor coordinates
                     // (Optional sanity check: req.coords.size() == n_neighbor*dim)
-                    neighbor_coords_ptr = req.coords.data();
-                    assert(req.coords.size() == (size_t)n_neighbor * (size_t)dimension);
+                    neighbor_indices_ptr = req.indices.data();
+                    assert(req.indices.size() == (size_t)n_neighbor);
                 }
 
                 // Evaluate block A(neighbor, box_points)
                 std::vector<DataType> A_NB((size_t)n_neighbor * (size_t)workspace_cols);
-                kernel->evaluate_block(
-                    neighbor_coords_ptr, n_neighbor,
-                    box->point_coords.data(), workspace_cols,
+                kernel->evaluate_block_by_index(
+                    neighbor_indices_ptr, n_neighbor,
+                    box->point_indices.data(), workspace_cols,
                     A_NB.data(), n_neighbor
                 );
 
@@ -4055,41 +4079,41 @@ void gather_id_workspace(
     
     
     // Step 4: Add proxy blocks at the end (no changes needed - not 2-hop neighbor interaction)
-    if (num_proxy > 0) {
-        std::vector<DataType> A_proxy_B(num_proxy * workspace_cols);
-        kernel->evaluate_block(
-            transformed_proxy.data(), num_proxy,
-            box->point_coords.data(), workspace_cols,
-            A_proxy_B.data(), num_proxy
-        );
+    // if (num_proxy > 0) {
+    //     std::vector<DataType> A_proxy_B(num_proxy * workspace_cols);
+    //     kernel->evaluate_block_by_index(
+    //         transformed_proxy.data(), num_proxy,
+    //         box->point_indices.data(), workspace_cols,
+    //         A_proxy_B.data(), num_proxy
+    //     );
 
-        for (int64_t col = 0; col < workspace_cols; ++col) {
-            for (int64_t row = 0; row < num_proxy; ++row) {
-                workspace[(current_row_offset + row) + col * workspace_rows] =
-                    A_proxy_B[row + col * num_proxy];
-            }
-        }
+    //     for (int64_t col = 0; col < workspace_cols; ++col) {
+    //         for (int64_t row = 0; row < num_proxy; ++row) {
+    //             workspace[(current_row_offset + row) + col * workspace_rows] =
+    //                 A_proxy_B[row + col * num_proxy];
+    //         }
+    //     }
 
-        current_row_offset += num_proxy;
+    //     current_row_offset += num_proxy;
 
-        if (!is_symmetric) {
-            std::vector<DataType> A_B_proxy(workspace_cols * num_proxy);
-            kernel->evaluate_block(
-                box->point_coords.data(), workspace_cols,
-                transformed_proxy.data(), num_proxy,
-                A_B_proxy.data(), workspace_cols
-            );
+    //     if (!is_symmetric) {
+    //         std::vector<DataType> A_B_proxy(workspace_cols * num_proxy);
+    //         kernel->evaluate_block(
+    //             box->point_coords.data(), workspace_cols,
+    //             transformed_proxy.data(), num_proxy,
+    //             A_B_proxy.data(), workspace_cols
+    //         );
 
-            for (int64_t col = 0; col < workspace_cols; ++col) {
-                for (int64_t row = 0; row < num_proxy; ++row) {
-                    workspace[(current_row_offset + row) + col * workspace_rows] =
-                        A_B_proxy[col + row * workspace_cols];
-                }
-            }
+    //         for (int64_t col = 0; col < workspace_cols; ++col) {
+    //             for (int64_t row = 0; row < num_proxy; ++row) {
+    //                 workspace[(current_row_offset + row) + col * workspace_rows] =
+    //                     A_B_proxy[col + row * workspace_cols];
+    //             }
+    //         }
 
-            current_row_offset += num_proxy;
-        }
-    }
+    //         current_row_offset += num_proxy;
+    //     }
+    // }
     
     if (current_row_offset != workspace_rows) {
         throw std::runtime_error(
@@ -4186,6 +4210,72 @@ static const CoordType* coords_ptr_maybe_sliced(
             tmp[(size_t)i * (size_t)dim + (size_t)d] =
                 (*coords)[(size_t)base + (size_t)d];
         }
+    }
+    return tmp.data();
+}
+
+// Returns pointer to coordinates for `morton` with `n_use` points (n_use must match caller's n_*).
+// If the box is eliminated, returns sliced skeleton indices (stored in `tmp`).
+template <typename CoordType, typename DataType>
+static const int64_t* indices_ptr_maybe_sliced(
+    TreeLevel<CoordType, DataType>& level,
+    int64_t morton,
+    int64_t n_use,
+    int dim,
+    const BoxData<CoordType, DataType>* box_or_null,                 // non-null if not assisting
+    const PointDataRequest<CoordType>* assist_or_null,               // non-null if assisting
+    std::vector<int64_t>& tmp)                                     // storage for sliced coords
+{
+    const bool eliminated = (level.eliminated_boxes.find(morton) != level.eliminated_boxes.end());
+
+    if (!eliminated) {
+        if (assist_or_null) {
+            if (assist_or_null->indices.empty())
+                throw std::runtime_error("indices_ptr_maybe_sliced: assisting coords empty for morton=" +
+                                         std::to_string(morton));
+            return assist_or_null->indices.data(); // full coords
+        } else {
+            if (!box_or_null) throw std::runtime_error("indices_ptr_maybe_sliced: box ptr null for morton=" +
+                                                       std::to_string(morton));
+            if (box_or_null->point_indices.empty())
+                throw std::runtime_error("indices_ptr_maybe_sliced: local point_indices empty for morton=" +
+                                         std::to_string(morton));
+            return box_or_null->point_indices.data(); // full indices
+        }
+    }
+
+    // eliminated => use skeleton coords
+    const std::vector<int64_t>* skel_idx = nullptr;
+    const std::vector<int64_t>* indices = nullptr;
+
+    if (assist_or_null) {
+        skel_idx = &assist_or_null->skel_indices;
+        indices   = &assist_or_null->indices;
+    } else {
+        if (!box_or_null) throw std::runtime_error("indices_ptr_maybe_sliced: box ptr null for morton=" +
+                                                   std::to_string(morton));
+        skel_idx = &box_or_null->skeleton_indices;
+        indices  = &box_or_null->point_indices;
+    }
+
+    if ((int64_t)skel_idx->size() < n_use) {
+        throw std::runtime_error("indices_ptr_maybe_sliced: need " + std::to_string(n_use) +
+                                 " skeleton indices but have " + std::to_string(skel_idx->size()) +
+                                 " for morton=" + std::to_string(morton));
+    }
+    if ((int64_t)indices->size() < 1) {
+        throw std::runtime_error("indices_ptr_maybe_sliced: indices empty for morton=" +
+                                 std::to_string(morton));
+    }
+ 
+    tmp.resize((size_t)n_use);
+    for (int64_t i = 0; i < n_use; ++i) {
+        const int64_t src = (*skel_idx)[(size_t)i];
+        if (src < 0 || (size_t)(src) >= indices->size()) {
+            throw std::runtime_error("indices_ptr_maybe_sliced: bad skeleton index " +
+                                     std::to_string(src) + " for morton=" + std::to_string(morton));
+        }
+        tmp[(size_t)i] = (*indices)[(size_t)src];
     }
     return tmp.data();
 }
@@ -5216,28 +5306,25 @@ void compute_step_two_internal(
                         if (is_diagonal) {
                             // Update schur_complement - LG_box must be valid here
                             if (!LG_box->schur_complement.is_allocated()) {
-                                // Get LG coordinates
-                                std::vector<CoordType> LG_coords;
+                                // Get LG indices
+                                std::vector<int64_t> LG_indices;
                                 bool LG_eliminated = (level.eliminated_boxes.find(LG_morton) != level.eliminated_boxes.end());
                                 
                                 if (LG_eliminated) {
-                                    LG_coords.resize(n_LG * dimension);
+                                    LG_indices.resize(n_LG);
                                     for (int64_t i = 0; i < n_LG; ++i) {
                                         int64_t src_idx = LG_box->skeleton_indices[i];
-                                        for (int d = 0; d < dimension; ++d) {
-                                            LG_coords[i * dimension + d] = 
-                                                LG_box->point_coords[src_idx * dimension + d];
-                                        }
+                                        LG_indices[i] = LG_box->point_indices[src_idx];
                                     }
                                 } else {
-                                    LG_coords = LG_box->point_coords;
+                                    LG_indices = LG_box->point_indices;
                                 }
                                 
                                 // Evaluate A(LG, LG)
                                 std::vector<DataType> A_LG_LG(n_LG * n_LG);
-                                kernel->evaluate_block(
-                                    LG_coords.data(), n_LG,
-                                    LG_coords.data(), n_LG,
+                                kernel->evaluate_block_by_index(
+                                    LG_indices.data(), n_LG,
+                                    LG_indices.data(), n_LG,
                                     A_LG_LG.data(), n_LG
                                 );
                                 
@@ -5382,40 +5469,37 @@ void compute_step_two_internal(
                                 // Block doesn't exist - evaluate A_NN and add update
                                 
                                 
-                                // Get LG coordinates
-                                std::vector<CoordType> LG_coords;
+                                // Get LG indices
+                                std::vector<int64_t> LG_indices;
                                 bool LG_eliminated = (level.eliminated_boxes.find(LG_morton) != level.eliminated_boxes.end());
                                 
                                 if (LG_eliminated) {
-                                    LG_coords.resize(n_LG * dimension);
+                                    LG_indices.resize(n_LG);
                                     for (int64_t i = 0; i < n_LG; ++i) {
                                         int64_t src_idx = LG_box->skeleton_indices[i];
-                                        for (int d = 0; d < dimension; ++d) {
-                                            LG_coords[i * dimension + d] = 
-                                                LG_box->point_coords[src_idx * dimension + d];
-                                        }
+                                        LG_indices[i] = LG_box->point_indices[src_idx];
                                     }
                                 } else {
-                                    LG_coords = LG_box->point_coords;
+                                    LG_indices = LG_box->point_indices;
                                 }
-                                
-                                // Get RG coordinates
-                                std::vector<CoordType> RG_coords_temp;
-                                const CoordType* RG_coords_ptr =
-                                    coords_ptr_maybe_sliced(level,
+                                 
+                                // Get RG indices
+                                std::vector<int64_t> RG_indices_temp;
+                                const int64_t* RG_indices_ptr =
+                                    indices_ptr_maybe_sliced(level,
                                                             RG_morton,
                                                             n_RG,
                                                             dimension,
                                                             /*box_or_null=*/ RG_is_assisting ? nullptr : RG_box,
                                                             /*assist_or_null=*/ RG_is_assisting ? RG_assisting : nullptr,
-                                                            RG_coords_temp);
+                                                            RG_indices_temp);
                                 
                                 // Kernel evaluate
                                 
                                 std::vector<DataType> A_LG_RG(n_LG * n_RG);
-                                kernel->evaluate_block(
-                                    LG_coords.data(), n_LG,
-                                    RG_coords_ptr, n_RG,
+                                kernel->evaluate_block_by_index(
+                                    LG_indices.data(), n_LG,
+                                    RG_indices_ptr, n_RG,
                                     A_LG_RG.data(), n_LG
                                 );
                                 
@@ -5558,38 +5642,36 @@ void compute_step_two_internal(
                                 // Block doesn't exist
                                 
                                 // Get RG coordinates
-                                std::vector<CoordType> RG_coords;
+                                std::vector<int64_t> RG_indices;
                                 bool RG_eliminated = (level.eliminated_boxes.find(RG_morton) != level.eliminated_boxes.end());
                                 
                                 if (RG_eliminated) {
-                                    RG_coords.resize(n_RG * dimension);
+                                    RG_indices.resize(n_RG);
                                     for (int64_t i = 0; i < n_RG; ++i) {
                                         int64_t src_idx = RG_box->skeleton_indices[i];
-                                        for (int d = 0; d < dimension; ++d) {
-                                            RG_coords[i * dimension + d] = 
-                                                RG_box->point_coords[src_idx * dimension + d];
-                                        }
+                                        RG_indices[i] = RG_box->point_indices[src_idx];
+                                        
                                     }
                                 } else {
-                                    RG_coords = RG_box->point_coords;
+                                    RG_indices = RG_box->point_indices;
                                 }
                                 
                                 // Get LG coordinates
-                                std::vector<CoordType> LG_coords_temp;
-                                const CoordType* LG_coords_ptr =
-                                    coords_ptr_maybe_sliced(level,
+                                std::vector<int64_t> LG_indices_temp;
+                                const int64_t* LG_indices_ptr =
+                                    indices_ptr_maybe_sliced(level,
                                                             LG_morton,
                                                             n_LG,
                                                             dimension,
                                                             /*box_or_null=*/ LG_is_assisting ? nullptr : LG_box,
                                                             /*assist_or_null=*/ LG_is_assisting ? LG_assisting : nullptr,
-                                                            LG_coords_temp);
+                                                            LG_indices_temp);
                                 
                                 // Kernel evaluate
                                 std::vector<DataType> A_LG_RG(n_LG * n_RG);
-                                kernel->evaluate_block(
-                                    LG_coords_ptr, n_LG,
-                                    RG_coords.data(), n_RG,
+                                kernel->evaluate_block_by_index(
+                                    LG_indices_ptr, n_LG,
+                                    RG_indices.data(), n_RG,
                                     A_LG_RG.data(), n_LG
                                 );
                                 
@@ -5691,51 +5773,46 @@ void compute_step_two_internal(
                                 // Block doesn't exist
                                 
                                 // Get RG coordinates
-                                std::vector<CoordType> RG_coords;
+                                std::vector<int64_t> RG_indices;
                                 bool RG_eliminated = (level.eliminated_boxes.find(RG_morton) != level.eliminated_boxes.end());
                                 
                                 if (RG_eliminated) {
-                                    RG_coords.resize(n_RG * dimension);
+                                    RG_indices.resize(n_RG);
                                     for (int64_t i = 0; i < n_RG; ++i) {
                                         int64_t src_idx = RG_box->skeleton_indices[i];
-                                        for (int d = 0; d < dimension; ++d) {
-                                            RG_coords[i * dimension + d] = 
-                                                RG_box->point_coords[src_idx * dimension + d];
-                                        }
+                                        RG_indices[i] = RG_box->point_indices[src_idx];
                                     }
                                 } else {
-                                    RG_coords = RG_box->point_coords;
+                                    RG_indices = RG_box->point_indices;
                                 }
                                 
                                 // Get LG coordinates
-                                const CoordType* LG_coords_ptr;
-                                std::vector<CoordType> LG_coords_temp;
+                                const int64_t* LG_indices_ptr;
+                                std::vector<int64_t> LG_indices_temp;
                                 
                                 if (LG_is_assisting) {
-                                    LG_coords_ptr = LG_assisting->coords.data();
+                                    LG_indices_ptr = LG_assisting->indices.data();
                                 } else {
                                     bool LG_eliminated = (level.eliminated_boxes.find(LG_morton) != level.eliminated_boxes.end());
                                     
-                                    if (LG_eliminated) {
-                                        LG_coords_temp.resize(n_LG * dimension);
+                                    if (LG_eliminated) { 
+                                        LG_indices_temp.resize(n_LG); 
                                         for (int64_t i = 0; i < n_LG; ++i) {
                                             int64_t src_idx = LG_box->skeleton_indices[i];
-                                            for (int d = 0; d < dimension; ++d) {
-                                                LG_coords_temp[i * dimension + d] = 
-                                                    LG_box->point_coords[src_idx * dimension + d];
-                                            }
+                                            LG_indices_temp[i] = LG_box->point_indices[src_idx];
+                                            
                                         }
-                                        LG_coords_ptr = LG_coords_temp.data();
+                                        LG_indices_ptr = LG_indices_temp.data();
                                     } else {
-                                        LG_coords_ptr = LG_box->point_coords.data();
+                                        LG_indices_ptr = LG_box->point_indices.data();
                                     }
                                 }
                                 
                                 // Kernel evaluate
                                 std::vector<DataType> A_LG_RG(n_LG * n_RG);
-                                kernel->evaluate_block(
-                                    LG_coords_ptr, n_LG,
-                                    RG_coords.data(), n_RG,
+                                kernel->evaluate_block_by_index(
+                                    LG_indices_ptr, n_LG,
+                                    RG_indices.data(), n_RG, 
                                     A_LG_RG.data(), n_LG
                                 );
                                 
@@ -6166,9 +6243,9 @@ void compute_and_modify(
         // std::cout << "Evaluating fresh kernel for X_BB" << std::endl;
         
         scratch.x_bb.resize(static_cast<size_t>(box->num_points * box->num_points));
-        kernel->evaluate_block(
-            box->point_coords.data(), box->num_points,
-            box->point_coords.data(), box->num_points,
+        kernel->evaluate_block_indices(
+            box->point_indices.data(), box->num_points,
+            box->point_indices.data(), box->num_points,
             scratch.x_bb.data(), box->num_points
         );
         X_BB_ptr = &scratch.x_bb;
@@ -6638,25 +6715,23 @@ void compute_and_modify(
                     const bool neighbor_elim =
                         (level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end());
 
-                    const int64_t n_full = static_cast<int64_t>(assisting_neighbor->coords.size() / dimension);
+                    const int64_t n_full = static_cast<int64_t>(assisting_neighbor->indices.size());
 
-                    const CoordType* nb_coords = assisting_neighbor->coords.data();
-                        auto& skel_coords = scratch.coord_buffer;
-                        skel_coords.clear();
+                    const int64_t* nb_indices = assisting_neighbor->indices.data();
+                        auto& skel_indices = scratch.index_buffer;
+                        skel_indices.clear();
                         int64_t n_use = n_full;
 
                     if (neighbor_elim) {
                         n_use = static_cast<int64_t>(assisting_neighbor->skel_indices.size());
                         if (n_use <= 0) throw std::runtime_error("assisting neighbor eliminated but skel_indices empty");
 
-                            skel_coords.resize(static_cast<size_t>(n_use * dimension));
+                            skel_indices.resize(static_cast<size_t>(n_use));
                         for (int64_t i = 0; i < n_use; ++i) {
                             const int64_t src = assisting_neighbor->skel_indices[static_cast<size_t>(i)];
-                            for (int d = 0; d < dimension; ++d)
-                                skel_coords[static_cast<size_t>(i * dimension + d)] =
-                                    assisting_neighbor->coords[static_cast<size_t>(src * dimension + d)];
+                            skel_indices[static_cast<size_t>(i)] = assisting_neighbor->indices[static_cast<size_t>(src)];
                         }
-                        nb_coords = skel_coords.data();
+                        nb_indices = skel_indices.data();
                     }
 
                     if (n_neighbor != n_use) {
@@ -6668,9 +6743,9 @@ void compute_and_modify(
 
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block(
-                        nb_coords, n_neighbor,
-                        box->point_coords.data(), workspace_cols,
+                    kernel->evaluate_block_by_index(
+                        nb_indices, n_neighbor,
+                        box->point_indices.data(), workspace_cols,
                         A_NB.data(), n_neighbor
                     );
 
@@ -6691,22 +6766,19 @@ void compute_and_modify(
                     // Local or ghost box that has been eliminated: use skeleton
                     assert(n_neighbor == neighbor_box->skeleton_indices.size());
                     n_neighbor = neighbor_box->skeleton_indices.size();  // UPDATE n_neighbor!
-                    auto& skeleton_coords = scratch.coord_buffer;
-                    skeleton_coords.resize(static_cast<size_t>(n_neighbor * dimension));
+                    auto& skeleton_indices = scratch.index_buffer;
+                    skeleton_indices.resize(static_cast<size_t>(n_neighbor));
                     
                     for (int64_t i = 0; i < n_neighbor; ++i) {
                         int64_t src_idx = neighbor_box->skeleton_indices[i];
-                        for (int d = 0; d < dimension; ++d) {
-                            skeleton_coords[i * dimension + d] = 
-                                neighbor_box->point_coords[src_idx * dimension + d];
-                        }
+                        skeleton_indices[static_cast<size_t>(i)] = neighbor_box->point_indices[static_cast<size_t>(src_idx)];
                     }
                     
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block(
-                        skeleton_coords.data(), n_neighbor,
-                        box->point_coords.data(), workspace_cols,
+                    kernel->evaluate_block_by_index(
+                        skeleton_indices.data(), n_neighbor,
+                        box->point_indices.data(), workspace_cols,
                         A_NB.data(), n_neighbor
                     );
                     
@@ -6730,9 +6802,9 @@ void compute_and_modify(
                     // Local or ghost box that has NOT been eliminated: use full coords
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block(
-                        neighbor_box->point_coords.data(), n_neighbor,
-                        box->point_coords.data(), workspace_cols,
+                    kernel->evaluate_block_by_index(
+                        neighbor_box->point_indices.data(), n_neighbor,
+                        box->point_indices.data(), workspace_cols,
                         A_NB.data(), n_neighbor
                     );
                     
@@ -6887,13 +6959,13 @@ void compute_and_modify(
 
                     if (is_assisting) {
                         // Assisting box: use full coords (no slicing, ignore eliminated status)
-                        n_neighbor = assisting_neighbor->coords.size() / dimension;
+                        n_neighbor = assisting_neighbor->indices.size();
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block(
-                            box->point_coords.data(), workspace_cols,
-                            assisting_neighbor->coords.data(), n_neighbor,
+                        kernel->evaluate_block_by_index(
+                            box->point_indices.data(), workspace_cols,
+                            assisting_neighbor->indices.data(), n_neighbor,
                             A_BN.data(), workspace_cols
                         );
                         
@@ -6916,22 +6988,19 @@ void compute_and_modify(
                     } else if (level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end()) {
                         // Local or ghost box that has been eliminated: use skeleton
                         n_neighbor = neighbor_box->skeleton_indices.size();  // UPDATE n_neighbor!
-                        auto& skeleton_coords = scratch.coord_buffer;
-                        skeleton_coords.resize(static_cast<size_t>(n_neighbor * dimension));
+                        auto& skeleton_indices = scratch.index_buffer;
+                        skeleton_indices.resize(static_cast<size_t>(n_neighbor));
                         
                         for (int64_t i = 0; i < n_neighbor; ++i) {
                             int64_t src_idx = neighbor_box->skeleton_indices[i];
-                            for (int d = 0; d < dimension; ++d) {
-                                skeleton_coords[i * dimension + d] = 
-                                    neighbor_box->point_coords[src_idx * dimension + d];
-                            }
+                            skeleton_indices[static_cast<size_t>(i)] = neighbor_box->point_indices[static_cast<size_t>(src_idx)];
                         }
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block(
-                            box->point_coords.data(), workspace_cols,
-                            skeleton_coords.data(), n_neighbor,
+                        kernel->evaluate_block_by_index(
+                            box->point_indices.data(), workspace_cols,
+                            skeleton_indices.data(), n_neighbor,
                             A_BN.data(), workspace_cols
                         );
                         
@@ -6955,9 +7024,9 @@ void compute_and_modify(
                         // Local or ghost box that has NOT been eliminated: use full coords
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block(
-                            box->point_coords.data(), workspace_cols,
-                            neighbor_box->point_coords.data(), n_neighbor,
+                        kernel->evaluate_block_by_index(
+                            box->point_indices.data(), workspace_cols,
+                            neighbor_box->point_indices.data(), n_neighbor,
                             A_BN.data(), workspace_cols
                         );
                         
@@ -7568,19 +7637,18 @@ std::vector<DataType> extract_child_interaction(
             
             // Extract skeleton coordinates and evaluate kernel directly
             std::vector<DataType> C_block(n_i * n_i);
+            std::vector<int64_t> indices_i(n_i);
             std::vector<CoordType> coords_i(n_i * dimension);
             
             for (int64_t idx = 0; idx < n_i; ++idx) {
                 int64_t skel_idx = child_i->skeleton_indices[idx];
-                for (int d = 0; d < dimension; ++d) {
-                    coords_i[idx * dimension + d] = child_i->point_coords[skel_idx * dimension + d];
-                }
+                indices_i[idx] = child_i->point_indices[skel_idx];
             }
             
             // Evaluate kernel: self-interaction
-            kernel->evaluate_block(
-                coords_i.data(), n_i,
-                coords_i.data(), n_i,
+            kernel->evaluate_block_by_index(
+                indices_i.data(), n_i,
+                indices_i.data(), n_i,
                 C_block.data(), n_i);
             
             return C_block;
@@ -7661,27 +7729,23 @@ std::vector<DataType> extract_child_interaction(
     std::vector<DataType> C_block(n_i * n_j);
     
     // Extract skeleton coordinates from children
-    std::vector<CoordType> coords_i(n_i * dimension);
-    std::vector<CoordType> coords_j(n_j * dimension);
+    std::vector<int64_t> indices_i(n_i);
+    std::vector<int64_t> indices_j(n_j);
     
     for (int64_t idx = 0; idx < n_i; ++idx) {
         int64_t skel_idx = child_i->skeleton_indices[idx];
-        for (int d = 0; d < dimension; ++d) {
-            coords_i[idx * dimension + d] = child_i->point_coords[skel_idx * dimension + d];
-        }
+        indices_i[idx] = child_i->point_indices[skel_idx];
     }
     
     for (int64_t idx = 0; idx < n_j; ++idx) {
         int64_t skel_idx = child_j->skeleton_indices[idx];
-        for (int d = 0; d < dimension; ++d) {
-            coords_j[idx * dimension + d] = child_j->point_coords[skel_idx * dimension + d];
-        }
+        indices_j[idx] = child_j->point_indices[skel_idx];
     }
     
     // Evaluate kernel: returns (n_i × n_j)
-    kernel->evaluate_block(
-        coords_i.data(), n_i,
-        coords_j.data(), n_j,
+    kernel->evaluate_block_by_index(
+        indices_i.data(), n_i,
+        indices_j.data(), n_j,
         C_block.data(), n_i);
     
     return C_block;
@@ -7982,6 +8046,32 @@ std::vector<CoordType> extract_skeleton_coords(
     return skeleton_coords;
 }
 
+/**
+ * @brief Extract skeleton indices from PointDataRequest
+ * @param request The PointDataRequest containing coords and skel_indices
+ * @param dimension Spatial dimension (2 or 3)
+ * @return Vector of skeleton indices
+ */ 
+//template<typename CoordType>
+std::vector<int64_t> extract_skeleton_indices(
+    const PointDataRequest<CoordType>& request,
+    int dimension
+) {
+    if (request.skel_indices.empty()) {
+        // No skeleton indices - return full coords
+        return request.indices;
+    }
+    
+    int64_t n_skel = request.skel_indices.size();
+    std::vector<int64_t> skeleton_indices(n_skel);
+    
+    for (int64_t i = 0; i < n_skel; ++i) {
+        int64_t src_idx = request.skel_indices[i];
+        skeleton_indices[i] = request.indices[src_idx];
+    }
+    
+    return skeleton_indices;
+}
 
 
 
@@ -8010,7 +8100,7 @@ template<typename CoordType, typename DataType, typename KernelType>
 std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
     BoxData<CoordType, DataType>* source_child,
     int64_t target_morton,
-    const std::vector<CoordType>& target_coords,
+    const std::vector<int64_t>& target_indices,
     int64_t n_source,
     int64_t n_target,
     TreeLevel<CoordType, DataType>& child_level,
@@ -8085,19 +8175,16 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
     // Not found - fallback to kernel evaluation
     std::vector<DataType> C_block(n_source * n_target);
     
-    // Extract skeleton coords from source_child
-    std::vector<CoordType> source_coords(n_source * dimension);
+    // Extract skeleton indices from source_child
+    std::vector<int64_t> source_indices(n_source);
     for (int64_t idx = 0; idx < n_source; ++idx) {
         int64_t skel_idx = source_child->skeleton_indices[idx];
-        for (int d = 0; d < dimension; ++d) {
-            source_coords[idx * dimension + d] = 
-                source_child->point_coords[skel_idx * dimension + d];
-        }
+        source_indices[idx] = source_child->point_indices[skel_idx];
     }
     
-    kernel->evaluate_block(
-        source_coords.data(), n_source,
-        target_coords.data(), n_target,
+    kernel->evaluate_block_by_index(
+        source_indices.data(), n_source,
+        target_indices.data(), n_target,
         C_block.data(), n_source);
     
     return C_block;
@@ -8207,12 +8294,9 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
         for (int c = 0; c < num_children; ++c) {
             auto& child = child_level.local_boxes[first_child_idx + c];
             
-            parent_box.point_indices.insert(
-                parent_box.point_indices.end(),
-                child.skeleton_indices.begin(),
-                child.skeleton_indices.end());
             
             for (int64_t skel_idx : child.skeleton_indices) {
+                parent_box.point_indices.push_back(child.point_indices[skel_idx]);
                 for (int d = 0; d < dimension; ++d) {
                     parent_box.point_coords.push_back(
                         child.point_coords[skel_idx * dimension + d]);
@@ -8237,7 +8321,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
     // Helper struct to store child info (either from ghost or assisting boxes)
     struct ChildInfo {
         BoxData<CoordType, DataType>* box_ptr;  // nullptr if assisting box
-        std::vector<CoordType> coords_ptr;
+        std::vector<int64_t> indices_ptr;
         int64_t num_points;
         bool is_ghost;  // true if from ghost_boxes, false if from assisting_boxes
     };
@@ -8391,7 +8475,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             auto& ghost_box = child_level.ghost_boxes[ghost_it->second];
                             ChildInfo info;
                             info.box_ptr = &ghost_box;
-                            info.coords_ptr = ghost_box.point_coords;
+                            info.indices_ptr = ghost_box.point_indices;
                             info.num_points = ghost_box.skeleton_indices.size();
                             info.is_ghost = true;
                             b2_children.push_back(info);
@@ -8405,11 +8489,11 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             
                             auto& assist_box = child_level.assisting_boxes[assist_it->second];
                             ChildInfo info;
-                            info.box_ptr = nullptr;
-                            info.coords_ptr = extract_skeleton_coords(assist_box, dimension);
+                            info.box_ptr = nullptr; 
+                            info.indices_ptr = extract_skeleton_indices(assist_box, dimension);
                             info.num_points = assist_box.skel_indices.size();
                             info.is_ghost = false;
-                            b2_children.push_back(info);
+                            b2_children.push_back(info); 
                             continue;
                         }
 
@@ -8474,7 +8558,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                 C_block = extract_or_evaluate_child_interaction_for_assisting(
                                     &child_i,           // Looking in child_i's storage
                                     child_j_morton,     // For neighbor child_j
-                                    child_j_info.coords_ptr,
+                                    child_j_info.indices_ptr,
                                     n_i, 
                                     n_j,
                                     child_level,
@@ -8598,7 +8682,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             auto& ghost_box = child_level.ghost_boxes[ghost_it->second];
                             ChildInfo info;
                             info.box_ptr = &ghost_box;
-                            info.coords_ptr = ghost_box.point_coords;
+                            info.indices_ptr = ghost_box.point_indices;
                             info.num_points = ghost_box.skeleton_indices.size();
                             info.is_ghost = true;
                             b2_children.push_back(info);
@@ -8611,7 +8695,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             auto& assist_box = child_level.assisting_boxes[assist_it->second];
                             ChildInfo info;
                             info.box_ptr = nullptr;
-                            info.coords_ptr = extract_skeleton_coords(assist_box, dimension);
+                            info.indices_ptr = extract_skeleton_indices(assist_box, dimension);
                             info.num_points = assist_box.skel_indices.size();
                             info.is_ghost = false;
                             b2_children.push_back(info);
@@ -8673,7 +8757,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                 C_block = extract_or_evaluate_child_interaction_for_assisting(
                                     &child_i,           // Looking in child_i's storage
                                     child_j_morton,     // For neighbor child_j
-                                    child_j_info.coords_ptr,
+                                    child_j_info.indices_ptr,
                                     n_i, 
                                     n_j,
                                     child_level,
@@ -8739,7 +8823,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                 C_block = extract_or_evaluate_child_interaction_for_assisting(
                                     &child_j,           // Looking in child_j's storage
                                     child_i_morton,     // For neighbor child_i
-                                    child_i_info.coords_ptr,
+                                    child_i_info.indices_ptr,
                                     n_j,                // n_source = child_j skeleton size
                                     n_i,                // n_target = child_i skeleton size  
                                     child_level,

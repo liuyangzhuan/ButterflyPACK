@@ -119,6 +119,7 @@ struct FactorizationThreadScratch {
     std::vector<DataType> update_buffer;
     std::vector<DataType> eval_buffer;
     std::vector<CoordType> coord_buffer;
+    std::vector<int64_t> index_buffer;
 };
 
 
@@ -304,6 +305,7 @@ struct PointDataRequest {
     int64_t morton_index;     ///< Box Morton index
     int source_rank;          ///< MPI rank to request from
     std::vector<CoordType> coords;  ///< Point coordinates (dim × num_points, column-major)
+    std::vector<int64_t> indices; ///< Global point indices
     std::vector<int64_t> skel_indices; ///< Skeleton indices
     bool on_boundary; ///< if this box is on the boundary
     

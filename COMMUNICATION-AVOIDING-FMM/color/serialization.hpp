@@ -914,6 +914,8 @@ size_t get_serialized_size(const PointDataRequest<CoordType>& request) {
     size += sizeof(int);      // source_rank
     size += sizeof(size_t);   // coords.size()
     size += request.coords.size() * sizeof(CoordType);
+    size += sizeof(size_t);   // indices.size()
+    size += request.indices.size() * sizeof(int64_t);
     size += sizeof(size_t);   // skel_indices.size()
     size += request.skel_indices.size() * sizeof(int64_t);
     size += sizeof(bool);     // on_boundary
@@ -939,6 +941,16 @@ char* serialize(const PointDataRequest<CoordType>& request, char* buffer) {
     if (coords_size > 0) {
         std::memcpy(buffer, request.coords.data(), coords_size * sizeof(CoordType));
         buffer += coords_size * sizeof(CoordType);
+    }
+
+    // adding PointDataRequest indices
+    size_t indices_size = request.indices.size();
+    std::memcpy(buffer, &indices_size, sizeof(size_t));
+    buffer += sizeof(size_t);
+
+    if (indices_size > 0) {
+        std::memcpy(buffer, request.indices.data(), indices_size * sizeof(int64_t));
+        buffer += indices_size * sizeof(int64_t);
     }
 
     size_t skel_size = request.skel_indices.size();
@@ -978,6 +990,18 @@ const char* deserialize(PointDataRequest<CoordType>& request, const char* buffer
         buffer += coords_size * sizeof(CoordType);
     } else {
         request.coords.clear();
+    }
+
+    // adding global indices
+    size_t indices_size;
+    std::memcpy(&indices_size, buffer, sizeof(size_t));
+    buffer += sizeof(size_t);
+    if (indices_size > 0) {
+        request.indices.resize(indices_size);
+        std::memcpy(request.indices.data(), buffer, indices_size * sizeof(int64_t));
+        buffer += indices_size * sizeof(int64_t);
+    } else {
+        request.indices.clear();
     }
 
     size_t skel_size;
@@ -1549,6 +1573,36 @@ static std::vector<CoordType> coords_for_count_from_box(
                              ", skel_size=" + std::to_string(b.skeleton_indices.size()) + ")");
 }
 
+// Extract exactly n points worth of indices (point-major: [i0 i1 i2 ...])
+template <typename CoordType, typename DataType>
+static std::vector<int64_t> indices_for_count_from_box(
+    const BoxData<CoordType, DataType>& b, int64_t n_needed, int dim)
+{
+    if (n_needed < 0) throw std::runtime_error("indices_for_count_from_box: n_needed < 0");
+
+    // Use skeleton indices if they match
+    if (!b.skeleton_indices.empty() && static_cast<int64_t>(b.skeleton_indices.size()) == n_needed) {
+        std::vector<int64_t> out(static_cast<size_t>(n_needed));
+        for (int64_t i = 0; i < n_needed; ++i) {
+            const int64_t src = b.skeleton_indices[static_cast<size_t>(i)];
+            out[static_cast<size_t>(i)] = b.point_indices[static_cast<size_t>(src)];
+        }
+        return out;
+    }
+
+    // Otherwise, require full coords to match
+    if (b.num_points == n_needed) {
+        return b.point_indices;
+    }
+
+    throw std::runtime_error("indices_for_count_from_box: cannot produce requested count=" +
+                             std::to_string(n_needed) + " from box morton=" +
+                             std::to_string(b.morton_index) +
+                             " (num_points=" + std::to_string(b.num_points) +
+                             ", skel_size=" + std::to_string(b.skeleton_indices.size()) + ")");
+}
+
+
 template <typename CoordType>
 static std::vector<CoordType> coords_for_count_from_assist(
     const PointDataRequest<CoordType>& a, int64_t n_needed, int dim)
@@ -1571,6 +1625,32 @@ static std::vector<CoordType> coords_for_count_from_assist(
     if (n_full == n_needed) return a.coords;
 
     throw std::runtime_error("coords_for_count_from_assist: cannot produce requested count=" +
+                             std::to_string(n_needed) + " from assist morton=" +
+                             std::to_string(a.morton_index) +
+                             " (full_n=" + std::to_string(n_full) +
+                             ", skel_size=" + std::to_string(a.skel_indices.size()) + ")");
+}
+
+template <typename CoordType>
+static std::vector<int64_t> indices_for_count_from_assist(
+    const PointDataRequest<CoordType>& a, int64_t n_needed, int dim)
+{
+    // prefer skeleton indices if present and matching
+    if (!a.skel_indices.empty() && static_cast<int64_t>(a.skel_indices.size()) == n_needed) {
+        // a.coords is full coords in point-major; extract skeleton coords
+        std::vector<int64_t> out(static_cast<size_t>(n_needed));
+        for (int64_t i = 0; i < n_needed; ++i) {
+            const int64_t src = a.skel_indices[static_cast<size_t>(i)];
+            out[static_cast<size_t>(i)] = a.indices[static_cast<size_t>(src)];
+        }
+        return out;
+    }
+
+    // else, require full coords length to match
+    const int64_t n_full = static_cast<int64_t>(a.indices.size());
+    if (n_full == n_needed) return a.indices;
+
+    throw std::runtime_error("indices_for_count_from_assist: cannot produce requested count=" +
                              std::to_string(n_needed) + " from assist morton=" +
                              std::to_string(a.morton_index) +
                              " (full_n=" + std::to_string(n_full) +
@@ -1828,6 +1908,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             p.morton_index = morton_idx;
             p.source_rank  = rank;
             p.coords       = b->point_coords;
+            p.indices      = b->point_indices;
             p.skel_indices = b->skeleton_indices;
             p.on_boundary  = b->on_boundary;
 
@@ -1843,6 +1924,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             p.morton_index = morton_idx;
             p.source_rank  = rank;
             p.coords       = b->point_coords;
+            p.indices      = b->point_indices;
             p.skel_indices = b->skeleton_indices;
             p.on_boundary  = b->on_boundary;
 
@@ -2252,11 +2334,11 @@ static void apply_updates_with_kernel_symmetric(
                                 std::to_string(task.target_morton));
                         }
 
-                        auto coords = coords_for_count_from_box(target_box, payload->rows, dim);
+                        auto indices = indices_for_count_from_box(target_box, payload->rows, dim);
                         std::vector<DataType> A(static_cast<size_t>(payload->rows * payload->rows));
-                        kernel->evaluate_block(
-                            coords.data(), payload->rows,
-                            coords.data(), payload->rows,
+                        kernel->evaluate_block_by_index(
+                            indices.data(), payload->rows,
+                            indices.data(), payload->rows,
                             A.data(), payload->rows);
 
                         target_box.schur_complement.allocate(
@@ -2415,27 +2497,27 @@ static void apply_updates_with_kernel_symmetric(
                     auto& newb =
                         upsert_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
 
-                    auto coords_self = coords_for_count_from_box(target_box, n_self, dim);
+                    auto indices_self = indices_for_count_from_box(target_box, n_self, dim);
 
-                    std::vector<CoordType> coords_nei;
+                    std::vector<int64_t> indices_nei;
                     const int64_t neighbor_local_idx = local_box_index(task.neighbor_morton);
                     if (neighbor_local_idx >= 0) {
-                        coords_nei = coords_for_count_from_box(
+                        indices_nei = indices_for_count_from_box(
                             lvl.local_boxes[static_cast<size_t>(neighbor_local_idx)], n_nei, dim);
                     } else {
                         const auto* assist = get_assist(task.neighbor_morton);
                         if (!assist) {
                             throw std::runtime_error(
-                                "apply task: missing assisting coords for morton " +
+                                "apply task: missing assisting indices for morton " +
                                 std::to_string(task.neighbor_morton));
                         }
-                        coords_nei = coords_for_count_from_assist(*assist, n_nei, dim);
+                        indices_nei = indices_for_count_from_assist(*assist, n_nei, dim);
                     }
 
                     std::vector<DataType> A_self_nei(static_cast<size_t>(n_self * n_nei));
-                    kernel->evaluate_block(
-                        coords_self.data(), n_self,
-                        coords_nei.data(), n_nei,
+                    kernel->evaluate_block_by_index(
+                        indices_self.data(), n_self,
+                        indices_nei.data(), n_nei,
                         A_self_nei.data(), n_self);
 
                     const auto stored = transpose_colmajor(

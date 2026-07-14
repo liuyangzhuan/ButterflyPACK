@@ -689,8 +689,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	// use datatype C_DT
     // construct H2 solver
     // To Do: need to add CoordType and DataType
-	//auto H2_solver = std::make_unique<H2<double, C_DT>>();
-    butterfly::H2<double, C_DT>*  H2_solver = new butterfly::H2<double, C_DT>();
+	// auto H2_solver = std::make_unique<H2<double, C_DT>>();
+    butterfly::H2<double, C_DT>* H2_solver = new butterfly::H2<double, C_DT>();
 
     int fcomm;
     c_bpack_get_comm(ptree, &fcomm);
@@ -788,7 +788,8 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
 	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
-	H2_solver->kernel = C_FuncZmn;
+	H2_solver->kernel.kernel = C_FuncZmn;
+	H2_solver->kernel.quant = C_QuantApp;
 
 	// save C_FuncZmnBlock in bmat, low priority right now
   }else{
@@ -821,9 +822,12 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
 	int rank = 0;
 	MPI_Comm_rank(H2_solver->comm, &rank);
+	
     try {
       
-      const int leaf_level = H2_solver->options.num_levels - 1;
+      //const int leaf_level = H2_solver->options.num_levels - 1;
+
+	  // not very necessary only for proxy points
       const auto factorization_method =
         (butterfly::is_complex_v<C_DT>)
           ? fmm::FactorizationMethod::COMPLEX_SYM
@@ -831,7 +835,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
       fmm::HierarchicalFactorization<double, C_DT> factorizer(
         H2_solver->options.N,
         fmm::MatrixProperty::SYMMETRIC,
-        H2_solver->kernel,
+        &H2_solver->kernel,
         H2_solver->options.dimension,
         factorization_method,
         H2_solver->options.num_proxy);
@@ -844,29 +848,29 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
       auto total_start = std::chrono::high_resolution_clock::now();
 
-	//   //To do: provide factorization method, and KERNEL!!!!
-    //   butterfly::hierarchical_factorization_parallel(
-    //     H2_solver->tree.get(),
-    //     H2_solver->kernel,
-    //     H2_solver->options.tolerance,
-    //     is_symmetric,
-    //     is_hermitian,
-    //     factorization_method,
-    //     unit_proxy,
-    //     num_proxy,
-    //     2.5,
-    //     true);
+	  //To do: provide factorization method, and KERNEL!!!!
+      butterfly::hierarchical_factorization_parallel(
+        H2_solver->tree.get(),
+        &H2_solver->kernel,
+        H2_solver->options.tolerance,
+        is_symmetric,
+        is_hermitian,
+        factorization_method,
+        unit_proxy,
+        num_proxy,
+        0, // proxy_radius = 0
+        true);
 
-    //   auto total_end = std::chrono::high_resolution_clock::now();
-    //   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-    //     total_end - total_start);
+      auto total_end = std::chrono::high_resolution_clock::now();
+      auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        total_end - total_start);
 
 	  
-    //   if (rank == 0) {
-    //     std::cout << "\n========================================" << std::endl;
-    //     std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-    //     std::cout << "========================================\n" << std::endl;
-    //   }
+      if (rank == 0) {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
+        std::cout << "========================================\n" << std::endl;
+      }
 
       
 
