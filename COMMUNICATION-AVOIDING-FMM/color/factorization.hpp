@@ -8052,7 +8052,7 @@ std::vector<CoordType> extract_skeleton_coords(
  * @param dimension Spatial dimension (2 or 3)
  * @return Vector of skeleton indices
  */ 
-//template<typename CoordType>
+template<typename CoordType>
 std::vector<int64_t> extract_skeleton_indices(
     const PointDataRequest<CoordType>& request,
     int dimension

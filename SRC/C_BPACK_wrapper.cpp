@@ -858,7 +858,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
         factorization_method,
         unit_proxy,
         num_proxy,
-        0, // proxy_radius = 0
+        0.0, // proxy_radius = 0
         true);
 
       auto total_end = std::chrono::high_resolution_clock::now();

@@ -20,8 +20,9 @@
 #include <chrono>
 #include <cstdio>
 
-// FMM 
+// FMM
 #include "factorization.hpp"
+#include "runtime_thread_support.hpp"
 #include "solver.hpp"
 #include "apply_mul.hpp"
 #include "tree_impl.hpp"
