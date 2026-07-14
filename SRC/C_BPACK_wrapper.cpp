@@ -832,7 +832,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
         (butterfly::is_complex_v<C_DT>)
           ? fmm::FactorizationMethod::COMPLEX_SYM
           : fmm::FactorizationMethod::LU;
-      fmm::HierarchicalFactorization<double, C_DT> factorizer(
+      fmm::HierarchicalFactorization<double, C_DT, butterfly::H2Kernel<double, C_DT>> factorizer(
         H2_solver->options.N,
         fmm::MatrixProperty::SYMMETRIC,
         &H2_solver->kernel,

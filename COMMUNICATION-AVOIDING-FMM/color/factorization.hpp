@@ -465,14 +465,14 @@ void apply_left_inverse_in_place(
  * @tparam CoordType Coordinate type (float or double)
  * @tparam DataType Matrix data type (can be complex)
  */
-template<typename CoordType, typename DataType>
+template<typename CoordType, typename DataType, typename KernelType>
 class HierarchicalFactorization {
 private:
     int64_t N_points;              ///< Total number of points
     MatrixProperty property;        ///< Matrix symmetry property
     FactorizationMethod factorization_method;  ///< Method for matrix factorization
     int dimension;                 ///< Spatial dimension (2 or 3)
-    H2Kernel<CoordType, DataType>* kernel; /// Kernel evaluation function
+    KernelType* kernel; /// Kernel evaluation function
     
     // Proxy point configuration
     int num_proxy_points;          ///< Number of proxy points per box
@@ -501,7 +501,7 @@ public:
     HierarchicalFactorization(
         int64_t N,
         MatrixProperty prop,
-        H2Kernel<CoordType, DataType>* kernel_func,
+        KernelType* kernel_func,
         int dim,
         FactorizationMethod factorization_type = FactorizationMethod::CHOLESKY,
         int num_proxy = -1,

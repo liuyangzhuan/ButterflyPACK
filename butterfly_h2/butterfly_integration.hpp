@@ -48,6 +48,7 @@
 
 
 namespace butterfly {
+using namespace fmm;
 
 template <typename T> struct is_complex : std::false_type {};                 // (1) primary
 template <typename T> struct is_complex<std::complex<T>> : std::true_type {}; // (2) specialization
@@ -593,10 +594,10 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
  * @param proxy_radius Proxy sphere radius multiplier
  * @param verbose Print progress messages
  */
-template<typename CoordType, typename DataType>
+template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_parallel(
     fmm::ParallelTree<CoordType, DataType>* tree,
-    H2Kernel<CoordType, DataType>* kernel,
+    KernelType* kernel,
     double tolerance,
     bool is_symmetric,
     bool is_hermitian,
