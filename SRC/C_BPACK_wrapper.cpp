@@ -852,7 +852,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
       auto total_start = std::chrono::high_resolution_clock::now();
 
 	  //To do: provide factorization method, and KERNEL!!!!
-      butterfly::hierarchical_factorization_parallel(
+      butterfly::hierarchical_factorization_parallel_if_supported(
         H2_solver->tree.get(),
         &H2_solver->kernel,
         H2_solver->options.tolerance,

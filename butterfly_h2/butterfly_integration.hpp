@@ -1574,6 +1574,37 @@ void hierarchical_factorization_parallel(
     
 }
 
+template<typename CoordType, typename DataType, typename KernelType>
+void hierarchical_factorization_parallel_if_supported(
+    fmm::ParallelTree<CoordType, DataType>* tree,
+    KernelType* kernel,
+    double tolerance,
+    bool is_symmetric,
+    bool is_hermitian,
+    FactorizationMethod factorization_method,
+    const std::vector<CoordType>& unit_proxy_points,
+    int num_proxy,
+    CoordType proxy_radius,
+    bool verbose = true) {
+    if constexpr (std::is_same_v<DataType, double> ||
+                  std::is_same_v<DataType, std::complex<double>>) {
+        hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
+            tree, 
+            kernel, 
+            tolerance, 
+            is_symmetric, 
+            is_hermitian, 
+            factorization_method, 
+            unit_proxy_points, 
+            num_proxy, 
+            proxy_radius, 
+            verbose);   // instantiated ONLY for double types
+    } else {
+        throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
+    }
+}
+
+
 
 // //provide booleans for whether to do certain checks
 // inline int h2_verification(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, bool verify_solution, bool verify_factorization, bool condition_number) {
