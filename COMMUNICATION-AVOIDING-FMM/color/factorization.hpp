@@ -6243,7 +6243,7 @@ void compute_and_modify(
         // std::cout << "Evaluating fresh kernel for X_BB" << std::endl;
         
         scratch.x_bb.resize(static_cast<size_t>(box->num_points * box->num_points));
-        kernel->evaluate_block_indices(
+        kernel->evaluate_block_index(
             box->point_indices.data(), box->num_points,
             box->point_indices.data(), box->num_points,
             scratch.x_bb.data(), box->num_points

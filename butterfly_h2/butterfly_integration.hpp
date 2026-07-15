@@ -51,6 +51,16 @@
 namespace butterfly {
 using namespace fmm;
 
+// C_DT (C built-in complex) → the std:: library type the FMM is written for
+template<class T> struct fmm_data           { using type = T; };
+template<>        struct fmm_data<_Complex double> { using type = std::complex<double>; };
+template<>        struct fmm_data<_Complex float>  { using type = std::complex<float>;  };
+
+// inverse: DataType → the C boundary type C_FuncZmn actually uses
+template<class T> struct kernel_value_type                        { using type = T; };
+template<>        struct kernel_value_type<std::complex<double>>  { using type = _Complex double; };
+template<>        struct kernel_value_type<std::complex<float>>   { using type = _Complex float;  };
+
 template <typename T> struct is_complex : std::false_type {};                 // (1) primary
 template <typename T> struct is_complex<std::complex<T>> : std::true_type {}; // (2) specialization
 template <typename T> inline constexpr bool is_complex_v = is_complex<T>::value; // (3) alias
@@ -125,12 +135,13 @@ struct ProgramOptions {
 
 template<typename CoordType, typename DataType>
 struct H2Kernel {
-    void (*kernel)(int*, int*, DataType*, void*) = nullptr;
+    using kerData = typename kernel_value_type<DataType>::type;
+    void (*kernel)(int*, int*, kerData*, void*) = nullptr;
     void* quant = nullptr;
 
     H2Kernel() = default;
 
-    H2Kernel(void (*kernel_)(int*, int*, DataType*, void*), void* quant_)
+    H2Kernel(void (*kernel_)(int*, int*, kerData*, void*), void* quant_)
         : kernel(kernel_), quant(quant_) {}
 
     // Fill the x_size-by-y_size block A (column-major, leading dimension lda):
@@ -145,7 +156,7 @@ struct H2Kernel {
             int n = static_cast<int>(y_indices[j]) + 1;   // 1-based column
             for (int64_t i = 0; i < x_size; ++i) {
                 int m = static_cast<int>(x_indices[i]) + 1;   // 1-based row
-                kernel(&m, &n, &A[i + j * lda], quant);
+                kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
             }
         }
     }

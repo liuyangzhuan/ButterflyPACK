@@ -688,9 +688,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   if(format==7){
 	// use datatype C_DT
     // construct H2 solver
-    // To Do: need to add CoordType and DataType
 	// auto H2_solver = std::make_unique<H2<double, C_DT>>();
-    butterfly::H2<double, C_DT>* H2_solver = new butterfly::H2<double, C_DT>();
+	using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    butterfly::H2<double, H2Data>* H2_solver = new butterfly::H2<double, H2Data>();
 
     int fcomm;
     c_bpack_get_comm(ptree, &fcomm);
@@ -750,7 +750,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       std::vector<int> new2old; 
 	  int idxs = 0; 
 	  int idxe = -1;
-      butterfly::h2_initiate<double, C_DT>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
+	  
+      butterfly::h2_initiate<double, H2Data>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
 	  // convert to perms and Npo_loc 
 	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, msh);
 	  *Npo_loc=idxe-idxs+1;
@@ -784,10 +785,11 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	using H2Data = typename butterfly::fmm_data<C_DT>::type;
 	static_assert(std::is_same_v<C2Fptr, void*>, "H2::kernel assumes C2Fptr == void*; update butterfly_integration.hpp if this changes");
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
-	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
+	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
 	H2_solver->kernel.kernel = C_FuncZmn;
 	H2_solver->kernel.quant = C_QuantApp;
 
@@ -816,9 +818,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	using H2Data = typename butterfly::fmm_data<C_DT>::type;
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
-	butterfly::H2<double, C_DT>* H2_solver = static_cast<butterfly::H2<double, C_DT>*>(H2_raw);
+	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
 
 	int rank = 0;
 	MPI_Comm_rank(H2_solver->comm, &rank);
@@ -829,10 +832,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
 	  // not very necessary only for proxy points
       const auto factorization_method =
-        (butterfly::is_complex_v<C_DT>)
+        (butterfly::is_complex_v<H2Data>)
           ? fmm::FactorizationMethod::COMPLEX_SYM
           : fmm::FactorizationMethod::LU;
-      fmm::HierarchicalFactorization<double, C_DT, butterfly::H2Kernel<double, C_DT>> factorizer(
+      fmm::HierarchicalFactorization<double, H2Data, butterfly::H2Kernel<double, H2Data>> factorizer(
         H2_solver->options.N,
         fmm::MatrixProperty::SYMMETRIC,
         &H2_solver->kernel,
@@ -990,7 +993,8 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 }
 
 extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
-    delete static_cast<butterfly::H2<double,C_DT>*>(h2_ptr);
+	using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    delete static_cast<butterfly::H2<double,H2Data>*>(h2_ptr);
 }
 
 
