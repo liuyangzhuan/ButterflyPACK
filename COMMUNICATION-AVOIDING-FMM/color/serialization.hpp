@@ -128,6 +128,88 @@ const char* deserialize(BoxData<CoordType, DataType>& box, const char* buffer);
 
 
 /**
+ * @brief Serialize a vector of BoxData into a buffer for MPI communication.
+ *
+ * Wraps the per-box BoxData serialization triplet (get_serialized_size /
+ * serialize) with a leading int64_t box count. Extracted from
+ * distributed_routine_*.cpp so headers that host a copy of
+ * hierarchical_factorization_parallel (butterfly_h2/butterfly_integration.hpp)
+ * can see it.
+ */
+template<typename CoordType, typename DataType>
+std::vector<char> serialize_boxes(const std::vector<BoxData<CoordType, DataType>>& boxes) {
+    // First pass: calculate total size needed using get_serialized_size
+    int64_t num_boxes = boxes.size();
+    size_t total_size = sizeof(int64_t);  // Space for num_boxes
+
+    std::vector<size_t> box_sizes(num_boxes);
+
+    for (int64_t i = 0; i < num_boxes; ++i) {
+        box_sizes[i] = get_serialized_size(boxes[i]);
+        total_size += box_sizes[i];
+    }
+
+    // Allocate exact buffer size
+    std::vector<char> buffer(total_size);
+    char* ptr = buffer.data();
+
+    // Write number of boxes
+    std::memcpy(ptr, &num_boxes, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+
+    // Serialize each box
+    for (int64_t i = 0; i < num_boxes; ++i) {
+        char* ptr_before = ptr;
+        ptr = serialize(boxes[i], ptr);
+
+        // Verify we wrote the expected size
+        size_t bytes_written = ptr - ptr_before;
+        if (bytes_written != box_sizes[i]) {
+            throw std::runtime_error("Box " + std::to_string(i) +
+                                   " size mismatch: expected " +
+                                   std::to_string(box_sizes[i]) +
+                                   " but wrote " + std::to_string(bytes_written));
+        }
+    }
+
+    // Verify total size
+    size_t actual_size = ptr - buffer.data();
+    if (actual_size != total_size) {
+        throw std::runtime_error("Total size mismatch: expected " +
+                               std::to_string(total_size) +
+                               " but wrote " + std::to_string(actual_size));
+    }
+
+    return buffer;
+}
+
+/**
+ * @brief Deserialize a vector of BoxData from a buffer produced by serialize_boxes.
+ */
+template<typename CoordType, typename DataType>
+std::vector<BoxData<CoordType, DataType>> deserialize_boxes(const std::vector<char>& buffer) {
+    const char* ptr = buffer.data();
+
+    // Read number of boxes
+    int64_t num_boxes = 0;
+    std::memcpy(&num_boxes, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+
+    // Deserialize each box
+    std::vector<BoxData<CoordType, DataType>> boxes;
+    boxes.reserve(num_boxes);
+
+    for (int64_t i = 0; i < num_boxes; ++i) {
+        BoxData<CoordType, DataType> box;
+        ptr = deserialize(box, ptr);
+        boxes.push_back(std::move(box));
+    }
+
+    return boxes;
+}
+
+
+/**
  * @brief Get serialized size of SolveDataRequest
  */
 template<typename CoordType, typename DataType>
