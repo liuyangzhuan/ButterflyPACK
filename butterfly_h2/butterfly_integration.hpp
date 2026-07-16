@@ -231,94 +231,67 @@ inline std::string reduction_threshold_pattern(int dimension) {
     return "8^k (1, 8, 64, 512, 4096, ...)";
 }
 
-// initiate MPI, first step. requires mpi library
-// void MPI_init(int argc, char* argv[]){
-//     MPI_Init(&argc, &argv);
+/**
+ * @brief Derive global domain bounds from the point coordinates.
+ *
+ * Locations is point-major (interleaved), stride = dimension:
+ *   [x0,y0,z0, x1,y1,z1, ...]     (matches tree_impl.hpp:801-803)
+ *
+ * Fills bounds as [xmin,xmax, ymin,ymax, zmin,zmax]; z entries are 0 in 2D
+ * (compute_box_geometry only reads them when dimension == 3).
+ *
+ * A small relative pad is applied so points on the upper face fall strictly
+ * inside the last box: point_to_morton computes (p - min)/box_size, which at
+ * p == max would land exactly on boxes_per_dim and be silently clamped.
+ *
+ * No MPI reduction: every rank holds the full global point array.
+ */
+template<typename CoordType>
+inline void compute_global_bounds(const CoordType* Locations,
+                                  int64_t num_points,
+                                  int dimension,
+                                  CoordType bounds[6]) {
+    if (Locations == nullptr || num_points <= 0) {
+        throw std::invalid_argument("compute_global_bounds: no points provided");
+    }
+    if (dimension != 2 && dimension != 3) {
+        throw std::invalid_argument("compute_global_bounds: dimension must be 2 or 3");
+    }
 
-//     int rank = 0; // ID of calling process
-//     int size = 1; // total number of processes
-//     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-//     MPI_Comm_size(MPI_COMM_WORLD, &size);
-    
-//     if (rank == 0) {
-//         std::cout << "Thread runtime: fmm_threads=" << fmm::configured_fmm_thread_count()
-//                   << ", omp_max_threads=" << omp_get_max_threads()
-//                   << ", openblas_threads=" << openblas_get_num_threads()
-//                   << ", visible_cpus=" << fmm::visible_process_cpu_count();
-//         if (const int dynamic_cpu_cap =
-//                 fmm::parse_positive_thread_count(std::getenv("FMM_MAX_CPUS_PER_NODE"));
-//             dynamic_cpu_cap > 0) {
-//             std::cout << ", dynamic_cpu_cap_per_node=" << dynamic_cpu_cap;
-//         }
-//         std::cout << std::endl;
-//     }
+    CoordType lo[3] = { std::numeric_limits<CoordType>::max(),
+                        std::numeric_limits<CoordType>::max(),
+                        std::numeric_limits<CoordType>::max() };
+    CoordType hi[3] = { std::numeric_limits<CoordType>::lowest(),
+                        std::numeric_limits<CoordType>::lowest(),
+                        std::numeric_limits<CoordType>::lowest() };
 
-//     {
-//         const auto& base_cpus = fmm::base_process_cpu_list();
-//         const int cap = fmm::parse_positive_thread_count(std::getenv("FMM_MAX_CPUS_PER_NODE"));
-//         MPI_Comm shared_comm;
-//         MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
-//                             MPI_INFO_NULL, &shared_comm);
-//         int shared_rank = 0, shared_size = 1;
-//         MPI_Comm_rank(shared_comm, &shared_rank);
-//         MPI_Comm_size(shared_comm, &shared_size);
-//         MPI_Comm_free(&shared_comm);
+    for (int64_t i = 0; i < num_points; ++i) {
+        for (int d = 0; d < dimension; ++d) {
+            const CoordType v = Locations[i * dimension + d];
+            if (!std::isfinite(v)) {
+                throw std::runtime_error("compute_global_bounds: non-finite coordinate");
+            }
+            lo[d] = std::min(lo[d], v);
+            hi[d] = std::max(hi[d], v);
+        }
+    }
 
-//         int slice_first = -1, slice_last = -1, slice_count = 0;
-//         if (!base_cpus.empty()) {
-//             const int usable = std::min<int>(cap > 0 ? cap : (int)base_cpus.size(),
-//                                               (int)base_cpus.size());
-//             const int threads = std::max(1, usable / std::max(1, shared_size));
-//             int slice_begin_idx = shared_rank * threads;
-//             if (slice_begin_idx >= usable) slice_begin_idx = std::max(0, usable - 1);
-//             const int slice_end_idx = std::min(slice_begin_idx + threads, usable);
-//             if (slice_end_idx > slice_begin_idx) {
-//                 slice_first = base_cpus[slice_begin_idx];
-//                 slice_last = base_cpus[slice_end_idx - 1];
-//                 slice_count = slice_end_idx - slice_begin_idx;
-//             }
-//         }
+    // Pad; the (span == 0) case covers a degenerate/planar dimension.
+    for (int d = 0; d < dimension; ++d) {
+        const CoordType span = hi[d] - lo[d];
+        const CoordType pad  = (span > CoordType(0) ? span : CoordType(1)) * CoordType(1e-6);
+        lo[d] -= pad;
+        hi[d] += pad;
+    }
 
-//         constexpr int kSocketCores = 64;
-//         constexpr int kCcdCores = 8;
-//         const bool socket_ok = (slice_first >= 0) &&
-//             ((slice_count >= kSocketCores && slice_first % kSocketCores == 0 && slice_count % kSocketCores == 0) ||
-//              (slice_count < kSocketCores && (slice_first / kSocketCores == slice_last / kSocketCores)));
-//         const bool ccd_ok = (slice_first >= 0) &&
-//             ((slice_count >= kCcdCores && slice_first % kCcdCores == 0 && slice_count % kCcdCores == 0) ||
-//              (slice_count < kCcdCores && (slice_first / kCcdCores == slice_last / kCcdCores)));
+    bounds[0] = lo[0]; bounds[1] = hi[0];
+    bounds[2] = lo[1]; bounds[3] = hi[1];
+    if (dimension == 3) { bounds[4] = lo[2]; bounds[5] = hi[2]; }
+    else                { bounds[4] = CoordType(0);   bounds[5] = CoordType(0);   }
+}
 
-//         struct AffinityInfo { int rank; int shared_rank; int first; int last; int count; int socket_ok; int ccd_ok; };
-//         AffinityInfo local{rank, shared_rank, slice_first, slice_last, slice_count,
-//                             socket_ok ? 1 : 0, ccd_ok ? 1 : 0};
-//         std::vector<AffinityInfo> all(size);
-//         MPI_Gather(&local, sizeof(AffinityInfo), MPI_BYTE,
-//                    all.data(), sizeof(AffinityInfo), MPI_BYTE,
-//                    0, MPI_COMM_WORLD);
-//         if (rank == 0) {
-//             std::cout << "Projected per-rank CPU slice (Perlmutter: 64 cores/socket, 8 cores/CCD):" << std::endl;
-//             bool any_socket_bad = false, any_ccd_bad = false;
-//             for (const auto& a : all) {
-//                 std::cout << "  rank " << a.rank
-//                           << " (node-local " << a.shared_rank << ")"
-//                           << ": cpus=[" << a.first << "," << a.last << "]"
-//                           << " count=" << a.count
-//                           << (a.socket_ok ? " socket-ok" : " SOCKET-CROSSES")
-//                           << (a.ccd_ok ? " ccd-ok" : " ccd-crosses")
-//                           << std::endl;
-//                 if (!a.socket_ok) any_socket_bad = true;
-//                 if (!a.ccd_ok) any_ccd_bad = true;
-//             }
-//             if (any_socket_bad) {
-//                 std::cout << "  WARNING: at least one rank's slice crosses a socket boundary"
-//                           << " — NUMA traffic expected." << std::endl;
-//             } else if (any_ccd_bad) {
-//                 std::cout << "  NOTE: slices cross CCD boundaries (cross-L3 within socket is OK but not optimal)."
-//                           << std::endl;
-//             }
-//         }
-//     }
-// }
+
+
 
 // ProgramOptions
   // int num_levels = nlevel;
@@ -537,7 +510,15 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
               << number_kind_to_string(options.number_kind) << ") ===" << std::endl;
   }
 
-  double bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, (options.dimension == 2) ? 0.0 : 1.0};
+  CoordType bounds[6];
+
+  compute_global_bounds(
+      Locations,
+      static_cast<int64_t>(options.N),
+      options.dimension,
+      bounds
+  );
+
   std::vector<int> idx_map;
   // Provide Locations to nullptr, check compatibility
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
@@ -553,8 +534,6 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
 
   H2_solver->tree = std::move(tree); 
 
-
-  
   idxs = 0;
   idxe = -1;
   allgather_idx_map_to_new2old(

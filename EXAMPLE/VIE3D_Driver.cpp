@@ -888,6 +888,7 @@ if(myrank==master_rank){
 
   double radius_max=0.3;
   double center[3]; //geometrical center of the scatterer
+  // centering scatterer for now -- Xiaomian
   // center[0]=(x0min+x0max)/2.0;
   // center[1]=(y0min+y0max)/2.0;
   // center[2]=(z0min+z0max)/2.0;
@@ -1338,28 +1339,28 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
 
 
-    // if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
-    // // factor hodlr
+    if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
+    // factor H2
 
 
-    // z_c_bpack_getoption(&option_bf, "precon", &opt_d);
-    // int precon=round(opt_d);
-    // if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
+    z_c_bpack_getoption(&option_bf, "precon", &opt_d);
+    int precon=round(opt_d);
+    if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
 
 
-    // if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
-    // vector<_Complex double> b_s(myseg_s2s*nvec,{0.0,0.0});
-    // for (int i=0; i<myseg_s2s; i++){
-    //   int i_new_loc = i+1;
-    //   int i_old;
-    //   z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
-    //   for (int nth=0; nth<nvec; nth++){
-    //     b_s[i+nth*myseg_s2s]=u_inc_glo[v_sub2glo[i_old-1]+nth*N];
-    //   }
-    // }
-    // int ErrSol=0;
-    // z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
-    // vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
+    if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;
+    vector<_Complex double> b_s(myseg_s2s*nvec,{0.0,0.0});
+    for (int i=0; i<myseg_s2s; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+      for (int nth=0; nth<nvec; nth++){
+        b_s[i+nth*myseg_s2s]=u_inc_glo[v_sub2glo[i_old-1]+nth*N];
+      }
+    }
+    int ErrSol=0;
+    z_c_bpack_set_I_option(&option_bf, "ErrSol", ErrSol);
+    vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
 
 
     // if(scaleGreen==1){
