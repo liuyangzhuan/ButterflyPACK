@@ -1450,70 +1450,70 @@ if(myrank==master_rank){
     }
 
 
-//     vector<_Complex double> x_v(myseg*nvec,{0.0,0.0}),b_v(myseg*nvec,{0.0,0.0});
-//     for (int i=0; i<myseg; i++){
-//       int i_new_loc = i+1;
-//       int i_old;
-//       z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-//       for (int nth=0; nth<nvec; nth++){
-//         x_v[i+nth*myseg] = x_v_glo[i_old-1+nth*N];
-//       }
-//     }
-//     z_c_bpack_set_I_option(&option_bf, "format", 1); // don't change this matrix! Xiaomian
-//     z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
-//     vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
-//     for (int i=0; i<myseg; i++){
-//       int i_new_loc = i+1;
-//       int i_old;
-//       z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
-//       for (int nth=0; nth<nvec; nth++){
-//         u_sca_glo.data()[i_old-1+nth*N] = b_v.data()[i+nth*myseg];
-//       }
-//     }
-//     MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    vector<_Complex double> x_v(myseg*nvec,{0.0,0.0}),b_v(myseg*nvec,{0.0,0.0});
+    for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+      for (int nth=0; nth<nvec; nth++){
+        x_v[i+nth*myseg] = x_v_glo[i_old-1+nth*N];
+      }
+    }
+    z_c_bpack_set_I_option(&option_bf, "format", 1); // don't change this matrix! Xiaomian
+    z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
+    vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
+    for (int i=0; i<myseg; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf,&i_new_loc,&i_old);
+      for (int nth=0; nth<nvec; nth++){
+        u_sca_glo.data()[i_old-1+nth*N] = b_v.data()[i+nth*myseg];
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
     
-//     if(myrank==master_rank){
-//       for(int nth=0; nth<nvec; nth++){
-//         string filename, str;
-//         filename = "./VIE_F_sca_f_";
-//         str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-//         filename +=str+"_vs_"+to_string((int)0)+"_ivelo_"+to_string(ivelo);
-//         if(shape>0)
-//           filename +="_shape_"+to_string(shape);
-//         std::ostringstream streamObj;
-//         streamObj << h;
-//         str=streamObj.str();
-//         // str=to_string(h); // this only has 6-digit precision
-//         str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-//         filename += "_h_"+str;
-//         double opt_d;
-//         z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
+    if(myrank==master_rank){
+      for(int nth=0; nth<nvec; nth++){
+        string filename, str;
+        filename = "./VIE_F_sca_f_";
+        str=to_string(w/2/pi);str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename +=str+"_vs_"+to_string((int)0)+"_ivelo_"+to_string(ivelo);
+        if(shape>0)
+          filename +="_shape_"+to_string(shape);
+        std::ostringstream streamObj;
+        streamObj << h;
+        str=streamObj.str();
+        // str=to_string(h); // this only has 6-digit precision
+        str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename += "_h_"+str;
+        double opt_d;
+        z_c_bpack_getoption(&option_bf, "tol_comp", &opt_d);
 
-//         str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
-//         filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
-// #ifdef IVELO9_CONST
-//         filename +="_ivelo9_const";
-// #endif
-//         fout1=fopen(filename.c_str(),"wb");
+        str=my::to_string(opt_d);//str.erase ( str.find_last_not_of('0') + 1, std::string::npos ); str.erase ( str.find_last_not_of('.') + 1, std::string::npos );
+        filename += "_tol_"+str+"_nth_"+to_string(nth)+"_matrix.bin";
+#ifdef IVELO9_CONST
+        filename +="_ivelo9_const";
+#endif
+        fout1=fopen(filename.c_str(),"wb");
 
-//         int nx = round((x0max-x0min)/h);
-//         int ny = round((y0max-y0min)/h);
-//         int nz = round((z0max-z0min)/h);
-//         fwrite(&nx,sizeof(int),1,fout1);
-//         fwrite(&ny,sizeof(int),1,fout1);
-//         fwrite(&nz,sizeof(int),1,fout1);
-//         fwrite(&h,sizeof(double),1,fout1);
-//         fwrite(&u_sca_glo.data()[nth*N],sizeof(_Complex double),N,fout1);
-//         fclose(fout1);
-//       }
-//     }
+        int nx = round((x0max-x0min)/h);
+        int ny = round((y0max-y0min)/h);
+        int nz = round((z0max-z0min)/h);
+        fwrite(&nx,sizeof(int),1,fout1);
+        fwrite(&ny,sizeof(int),1,fout1);
+        fwrite(&nz,sizeof(int),1,fout1);
+        fwrite(&h,sizeof(double),1,fout1);
+        fwrite(&u_sca_glo.data()[nth*N],sizeof(_Complex double),N,fout1);
+        fclose(fout1);
+      }
+    }
 
-//     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the volume-volume operator: "<<std::endl;
-//     z_c_bpack_printstats(&stats_bf,&ptree_bf);
+    if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the volume-volume operator: "<<std::endl;
+    z_c_bpack_printstats(&stats_bf,&ptree_bf);
 
-//     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
-//     z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
+    if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scatterer-scatterer operator: "<<std::endl;
+    z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
 
 
 

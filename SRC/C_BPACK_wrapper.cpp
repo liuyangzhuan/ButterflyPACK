@@ -818,65 +818,16 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-	using H2Data = typename butterfly::fmm_data<C_DT>::type;
-	void* H2_raw = nullptr;
-	c_bpack_get_h2(*bmat, &H2_raw);
-	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
 
-	int rank = 0;
-	MPI_Comm_rank(H2_solver->comm, &rank);
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
 	
     try {
-      
-      //const int leaf_level = H2_solver->options.num_levels - 1;
-
-	  // not very necessary only for proxy points
-      const auto factorization_method =
-        (butterfly::is_complex_v<H2Data>)
-          ? fmm::FactorizationMethod::COMPLEX_SYM
-          : fmm::FactorizationMethod::LU;
-      fmm::HierarchicalFactorization<double, H2Data, butterfly::H2Kernel<double, H2Data>> factorizer(
-        H2_solver->options.N,
-        fmm::MatrixProperty::SYMMETRIC,
-        &H2_solver->kernel,
-        H2_solver->options.dimension,
-        factorization_method,
-        H2_solver->options.num_proxy);
-
-      const auto& unit_proxy = factorizer.get_unit_proxy_points();
-      const int num_proxy = factorizer.get_num_proxy_points();
-
-      const bool is_symmetric = true;
-      const bool is_hermitian = false;
-
-      auto total_start = std::chrono::high_resolution_clock::now();
-
-	  //To do: provide factorization method, and KERNEL!!!!
-      butterfly::hierarchical_factorization_parallel_if_supported(
-        H2_solver->tree.get(),
-        &H2_solver->kernel,
-        H2_solver->options.tolerance,
-        is_symmetric,
-        is_hermitian,
-        factorization_method,
-        unit_proxy,
-        num_proxy,
-        0.0, // proxy_radius = 0
-        true);
-
-      auto total_end = std::chrono::high_resolution_clock::now();
-      auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        total_end - total_start);
-
-	  
-      if (rank == 0) {
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-        std::cout << "========================================\n" << std::endl;
-      }
-
-      
-
+      butterfly::butterfly_factorization_parallel(H2_solver);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         throw;
@@ -972,12 +923,55 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    // butterfly::H2<double, C_DT>* h2 = reinterpret_cast<butterfly::H2<double, C_DT>*>(*bmat); 
-    // bool verbose = true;
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
+
+    // guard against matrix matrix multiplication for now
+    if (*Ncol != 1) {
+      throw std::runtime_error(
+        "c_bpack_mult (format 7): H2/FMM multiplication supports only a single "
+        "left-hand side (Ncol == 1); got Ncol = " + std::to_string(*Ncol));
+    }
+
+    // Only F·x is implemented for format 7 (transpose/conj-transpose not yet supported).
+    const char op = (trans && trans[0]) ? trans[0] : 'N';
+    if (op != 'N' && op != 'n') {
+      throw std::runtime_error(
+          "c_bpack_mult (format 7): only trans == 'N' is currently supported; got '" +
+          std::string(1, op) + "'");
+    }
+
+    try {
+      if (!H2_solver->factorized) {
+        // need to to factorize first
+        butterfly::butterfly_factorization_parallel(H2_solver);
+      }
+
+      bool verbose = true;
+      std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data(
+        H2_solver->options.num_levels);
+      const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
+      std::vector<H2Data> lhs(xin_h2, xin_h2 + (*Ninloc) * (*Ncol));
+      butterfly::hierarchical_mul_parallel(H2_solver->tree.get(), lhs, mul_data, verbose); // can only handle matrix vector multiplication right now
+
+      // extract solution to xout
+      butterfly::gather_local_solution(H2_solver->tree.get(), mul_data, reinterpret_cast<H2Data*>(xout), Noutloc);
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+
+
     // // need to pass in rhs from bmat
     // // need to pass in h2 tree from bmat
 
-    // fmm::hierarchical_mul_parallel(tree, rhs, solve_data, verbose); // can only handle matrix vector multiplication right now
 	
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
