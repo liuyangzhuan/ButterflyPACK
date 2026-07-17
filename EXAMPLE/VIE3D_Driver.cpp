@@ -1411,23 +1411,43 @@ if(myrank==master_rank){
 
 
 
-//     vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
-//     for (int i=0; i<myseg_s2s; i++){
-//       int i_new_loc = i+1;
-//       int i_old;
-//       z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
-//       for (int nth=0; nth<nvec; nth++){
-//         double xs = data_geo[(i_old-1) * Ndim];
-//         double ys = data_geo[(i_old-1) * Ndim+1];
-//         double zs = data_geo[(i_old-1) * Ndim+2];
-//         double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
-//         double s0=2;
-//         double k0 = s0*w;
-//         double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
-//         x_v_glo[v_sub2glo[i_old-1]+nth*N]=x_s[i+nth*myseg_s2s]*coef;
-//       }
-//     }
-//     MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+    vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
+    for (int i=0; i<myseg_s2s; i++){
+      int i_new_loc = i+1;
+      int i_old;
+      z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+      for (int nth=0; nth<nvec; nth++){
+        double xs = data_geo[(i_old-1) * Ndim];
+        double ys = data_geo[(i_old-1) * Ndim+1];
+        double zs = data_geo[(i_old-1) * Ndim+2];
+        double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
+        double s0=2;
+        double k0 = s0*w;
+        double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
+        x_v_glo[v_sub2glo[i_old-1]+nth*N]=x_s[i+nth*myseg_s2s]*coef;
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
+
+    // checking correctness of the solution
+    if (myrank == master_rank) {
+        double nrm2 = 0.0;
+        for (int j = 0; j < N; j++) {
+            double re = __real__ x_v_glo[j];
+            double im = __imag__ x_v_glo[j];
+            nrm2 += re*re + im*im;
+        }
+        std::cout << "x_v_glo L2 norm = " << std::sqrt(nrm2) << std::endl;
+
+        // a handful of entries spread across the domain
+        int probe[5] = {0, N/4, N/2, (3*N)/4, N-1};
+        for (int k = 0; k < 5; k++) {
+            int j = probe[k];
+            std::cout << "x_v_glo[" << j << "] = ("
+                      << (double)__real__ x_v_glo[j] << ", "
+                      << (double)__imag__ x_v_glo[j] << "i)" << std::endl;
+        }
+    }
 
 
 //     vector<_Complex double> x_v(myseg*nvec,{0.0,0.0}),b_v(myseg*nvec,{0.0,0.0});
@@ -1452,7 +1472,7 @@ if(myrank==master_rank){
 //     }
 //     MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-
+    
 //     if(myrank==master_rank){
 //       for(int nth=0; nth<nvec; nth++){
 //         string filename, str;
