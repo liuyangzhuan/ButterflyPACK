@@ -916,37 +916,41 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    // try {
-    //   //To Do: pass in b to and redistribute to rhs, either do this here or in construct_init
-    //   // pass in tree and rhs to solve_parallel
-    //   std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>> solve_data(
-    //         options.num_levels);
-    //     fmm::hierarchical_solve_parallel(tree.get(), rhs, solve_data, true);
+    // hierarchical_solve_parallel currently supports only a single RHS vector,
+    // not a multi-column matrix. Reject Nrhs != 1 up front.
+    if (*Nrhs != 1) {
+      throw std::runtime_error(
+        "c_bpack_solve (format 7): H2/FMM solve supports only a single "
+        "right-hand side (Nrhs == 1); got Nrhs = " + std::to_string(*Nrhs));
+    }
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
 
-    //     std::vector<DataType> solution;
-    //     std::vector<DataType> aggregated_rhs;
-    //     const auto gather_verify_start = std::chrono::high_resolution_clock::now();
-    //     fmm::gather_solution_to_root(tree.get(), solve_data, solution, aggregated_rhs);
-    //     const auto gather_verify_end = std::chrono::high_resolution_clock::now();
-    //     const double gather_verify_ms =
-    //         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
-    //             gather_verify_end - gather_verify_start).count();
-    //     double gather_verify_max_ms = 0.0;
-    //     MPI_Reduce(&gather_verify_ms, &gather_verify_max_ms, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    //     if (rank == 0) {
-    //         std::cout << "Gather communication time for solve verification: "
-    //                   << gather_verify_max_ms << " ms" << std::endl;
-    //     }
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
 
-    //   // can conduct h2_verification, only if uniform points
+    try {
+      // pass in tree and rhs as b to solve_parallel, need to fix b type
+      std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
+            H2_solver->options.num_levels);
+      const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
+      std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs)); // assuming b is a contiguous array of size Nloc * Nrhs
+      butterfly::hierarchical_solve_parallel(
+        H2_solver->tree.get(), rhs, solve_data, true);
+        
+      // put result in x
+      butterfly::gather_local_solution(H2_solver->tree.get(), 
+        solve_data, 
+        reinterpret_cast<H2Data*>(x), 
+        Nloc);
 
-    //   // must call at the end of the program. Idk if solve ends it all or if another function.
-    //   // maybe create another construct_cleanup() function
-    //   // MPI_Finalize();
-    // } catch (const std::exception& e) {
-    //     std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-    //     MPI_Abort(MPI_COMM_WORLD, 1);
-    // }
+      // can conduct h2_verification, only if uniform points
+    } catch (const std::exception& e) {
+        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
   }else{
 	c_bpack_solve_fortran(x, b, Nloc, Nrhs, bmat, option, stats, ptree);

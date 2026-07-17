@@ -1363,48 +1363,48 @@ if(myrank==master_rank){
     vector<_Complex double> x_s(myseg_s2s*nvec,{0.0,0.0});
 
 
-    // if(scaleGreen==1){
-    //   quant_ptr_bf_s2s->bmat_bf = &bmat_bf_s2s;
-    //   quant_ptr_bf_s2s->option_bf = &option_bf;
-    //   quant_ptr_bf_s2s->stats_bf = &stats_bf_s2s;
-    //   quant_ptr_bf_s2s->ptree_bf = &ptree_bf;
-    //   quant_ptr_bf_s2s->msh_bf = &msh_bf_s2s;
-    //   F2Cptr kerquant_s2s;
-    //   z_c_bpack_iter_usermatvec_precon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_bf_s2s);
+    if(scaleGreen==1){
+      quant_ptr_bf_s2s->bmat_bf = &bmat_bf_s2s;
+      quant_ptr_bf_s2s->option_bf = &option_bf;
+      quant_ptr_bf_s2s->stats_bf = &stats_bf_s2s;
+      quant_ptr_bf_s2s->ptree_bf = &ptree_bf;
+      quant_ptr_bf_s2s->msh_bf = &msh_bf_s2s;
+      F2Cptr kerquant_s2s;
+      z_c_bpack_iter_usermatvec_precon(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec, &C_FuncIdentityPrecon, quant_ptr_bf_s2s);
 
-    //   // vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
-    //   // vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
-    //   // C_FuncHMatVec("N", &myseg_s2s, &myseg_s2s, &nvec, xx_s.data(),bb_s.data(), quant_ptr_bf_s2s);
+      // vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
+      // vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
+      // C_FuncHMatVec("N", &myseg_s2s, &myseg_s2s, &nvec, xx_s.data(),bb_s.data(), quant_ptr_bf_s2s);
 
-    //   // double tmp=0;
-    //   // for (int i=0; i<myseg_s2s; i++){
-    //   //   for (int nth=0; nth<nvec; nth++){
-    //   //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
-    //   //   }
-    //   // }
-    //   // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    //   // if(myrank==master_rank){
-    //   //   cout<<"norm"<<tmp<<endl;
-    //   // }
-    // }else{
-    //   z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
+      // double tmp=0;
+      // for (int i=0; i<myseg_s2s; i++){
+      //   for (int nth=0; nth<nvec; nth++){
+      //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
+      //   }
+      // }
+      // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      // if(myrank==master_rank){
+      //   cout<<"norm"<<tmp<<endl;
+      // }
+    }else{
+      z_c_bpack_solve(x_s.data(),b_s.data(),&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
 
-    //   vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
-    //   vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
+      vector<_Complex double> xx_s(myseg_s2s*nvec,{1.0,0.0});
+      vector<_Complex double> bb_s(myseg_s2s*nvec,{0.0,0.0});
 
-    //   // This line is not needed - Xiaomian
-    //   // z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
-    //   // double tmp=0;
-    //   // for (int i=0; i<myseg_s2s; i++){
-    //   //   for (int nth=0; nth<nvec; nth++){
-    //   //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
-    //   //   }
-    //   // }
-    //   // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    //   // if(myrank==master_rank){
-    //   //   cout<<"norm"<<tmp<<endl;
-    //   // }
-    // }
+      // This line is not needed - Xiaomian
+      // z_c_bpack_mult("N",xx_s.data(),bb_s.data(),&myseg_s2s,&myseg_s2s,&nvec,&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf);
+      // double tmp=0;
+      // for (int i=0; i<myseg_s2s; i++){
+      //   for (int nth=0; nth<nvec; nth++){
+      //   tmp += __real__ (bb_s[i+nth*myseg_s2s]);
+      //   }
+      // }
+      // MPI_Allreduce(MPI_IN_PLACE,&tmp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      // if(myrank==master_rank){
+      //   cout<<"norm"<<tmp<<endl;
+      // }
+    }
 
 
 
