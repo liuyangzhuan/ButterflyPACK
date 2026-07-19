@@ -1807,7 +1807,7 @@ subroutine mpi_scatterv ( sendbuf, sendcounts, displs, sendtype, recvbuf, &
 !  Discussion:
 !
 !    In a single-process (dummy MPI) context, this reduces to a simple
-!    copy of recvcount elements from sendbuf at offset displs(0) into recvbuf.
+!    copy of sendcounts(0) elements from sendbuf at offset displs(0) into recvbuf.
 !
 !  Parameters:
 !
