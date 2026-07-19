@@ -1776,19 +1776,19 @@ subroutine mpi_gatherv ( sendbuf, sendcount, sendtype, recvbuf, recvcounts, &
 
   if ( sendtype == mpi_double_precision ) then
     call mpi_copy_double_precision ( &
-      sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
   else if ( sendtype == mpi_integer ) then
     call mpi_copy_integer ( &
-      sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
   else if ( sendtype == mpi_real ) then
     call mpi_copy_real ( &
-      sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
   else if ( sendtype == mpi_complex ) then
     call mpi_copy_complex ( &
-      sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
   else if ( sendtype == mpi_double_complex ) then
     call mpi_copy_double_complex ( &
-      sendbuf, recvbuf(displs(0)), recvcounts(0), ierror )
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
   else
     ierror = MPI_FAILURE
   end if
@@ -1852,19 +1852,19 @@ subroutine mpi_scatterv ( sendbuf, sendcounts, displs, sendtype, recvbuf, &
 
   if ( sendtype == mpi_double_precision ) then
     call mpi_copy_double_precision ( &
-      sendbuf(displs(0)), recvbuf, recvcount, ierror )
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
   else if ( sendtype == mpi_integer ) then
     call mpi_copy_integer ( &
-      sendbuf(displs(0)), recvbuf, recvcount, ierror )
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
   else if ( sendtype == mpi_real ) then
     call mpi_copy_real ( &
-      sendbuf(displs(0)), recvbuf, recvcount, ierror )
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
   else if ( sendtype == mpi_complex ) then
     call mpi_copy_complex ( &
-      sendbuf(displs(0)), recvbuf, recvcount, ierror )
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
   else if ( sendtype == mpi_double_complex ) then
     call mpi_copy_double_complex ( &
-      sendbuf(displs(0)), recvbuf, recvcount, ierror )
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
   else
     ierror = MPI_FAILURE
   end if
