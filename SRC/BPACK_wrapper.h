@@ -87,6 +87,7 @@ void c_bpack_localindices(F2Cptr* msh, int* idxs, int* nlocal, int* nglobal);
 void c_bpack_printstats(F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_printstructure(F2Cptr* bmat, int* inverse, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree);
 void c_bpack_getstats(F2Cptr*stats, char const*nam, double*val_d);
+void c_bpack_setstats(F2Cptr*stats, char const*nam, double*val_d);
 void c_bpack_createoption(F2Cptr*option);
 void c_bpack_setoption(F2Cptr*option, char const*nam, C2Fptr val);
 void c_bpack_getoption(F2Cptr*option, char const*nam, double*val_d);

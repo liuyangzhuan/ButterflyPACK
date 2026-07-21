@@ -138,6 +138,8 @@ struct H2Kernel {
     using kerData = typename kernel_value_type<DataType>::type;
     void (*kernel)(int*, int*, kerData*, void*) = nullptr;
     void* quant = nullptr;
+    mutable std::vector<double> entryeval_time_per_thread;
+
 
     H2Kernel() = default;
 
@@ -152,12 +154,20 @@ struct H2Kernel {
     void evaluate_block_by_index(const int64_t* x_indices, int64_t x_size,
                                  const int64_t* y_indices, int64_t y_size,
                                  DataType* A, int64_t lda) const {
+        
+        
+        double t0 = MPI_Wtime();
         for (int64_t j = 0; j < y_size; ++j) {
             int n = static_cast<int>(y_indices[j]) + 1;   // 1-based column
             for (int64_t i = 0; i < x_size; ++i) {
                 int m = static_cast<int>(x_indices[i]) + 1;   // 1-based row
                 kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
             }
+        }
+        double tf = MPI_Wtime() - t0;
+        int tid = omp_get_thread_num();
+        if (tid < static_cast<int>(entryeval_time_per_thread.size())) {
+            entryeval_time_per_thread[tid] += tf;
         }
     }
 };
@@ -178,6 +188,7 @@ struct H2 {
 
     //temporary comment
     //RedistributionPlan redistribution;
+    int64_t last_factor_rankmax = 0;
     bool factorized = false;
 };
 
@@ -596,6 +607,7 @@ void hierarchical_factorization_parallel(
     const std::vector<CoordType>& unit_proxy_points,
     int num_proxy,
     CoordType proxy_radius,
+    int64_t* out_rankmax,
     bool verbose = true) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
@@ -636,6 +648,7 @@ void hierarchical_factorization_parallel(
     auto segment_start = clock::now();
     clock::duration total_data_exchange_time{};
     clock::duration total_reduction_time{};
+    int64_t local_max_skel = 0;
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
@@ -1142,6 +1155,7 @@ void hierarchical_factorization_parallel(
             for (const auto& box : level.local_boxes) {
                 total_skeleton += box.skeleton_indices.size();
                 total_redundant += box.redundant_indices.size();
+                local_max_skel = std::max<int64_t>(local_max_skel, box.skeleton_indices.size());
             }
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
@@ -1368,6 +1382,11 @@ void hierarchical_factorization_parallel(
         }
         
     }
+
+    int64_t global_max_skel = 0;
+    MPI_Allreduce(&local_max_skel, &global_max_skel, 1, MPI_INT64_T, MPI_MAX, tree->comm);
+    if (out_rankmax) *out_rankmax = global_max_skel;
+
     
     // ===== Special handling for level 0 (root) =====
     
@@ -1564,6 +1583,7 @@ void hierarchical_factorization_parallel_if_supported(
     const std::vector<CoordType>& unit_proxy_points,
     int num_proxy,
     CoordType proxy_radius,
+    int64_t* out_rankmax = nullptr,
     bool verbose = true) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
@@ -1577,6 +1597,7 @@ void hierarchical_factorization_parallel_if_supported(
             unit_proxy_points, 
             num_proxy, 
             proxy_radius, 
+            out_rankmax,
             verbose);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
@@ -1609,7 +1630,7 @@ void gather_local_solution(ParallelTree<CoordType, DataType>* tree,
 }
 
 template<typename CoordType, typename DataType>
-void butterfly_factorization_parallel(H2<CoordType,DataType>* solver) {
+void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* factorization_time, double* entryeval_time) {
 
   if (solver->factorized) return;
 
@@ -1633,9 +1654,12 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver) {
 
   const bool is_symmetric = true;
   const bool is_hermitian = false;
+  
+  solver->kernel.entryeval_time_per_thread.assign(omp_get_max_threads(), 0.0);
+  auto& ev = solver->kernel.entryeval_time_per_thread;
 
-  auto total_start = std::chrono::high_resolution_clock::now();
-
+//   auto total_start = std::chrono::high_resolution_clock::now();
+  double t0 = MPI_Wtime();
   butterfly::hierarchical_factorization_parallel_if_supported(
     solver->tree.get(),
     &solver->kernel,
@@ -1646,20 +1670,30 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver) {
     unit_proxy,
     num_proxy,
     0.0, // proxy_radius = 0
+    &solver->last_factor_rankmax,
     true);
+  double tf = MPI_Wtime() - t0;
+  MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
+  *factorization_time = tf;
   
+  double t_entry = 0.0;
+  if (!ev.empty()) {
+    t_entry = *std::max_element(ev.begin(), ev.end());
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &t_entry, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
+  *entryeval_time = t_entry;
   solver->factorized = true;
 
-  auto total_end = std::chrono::high_resolution_clock::now();
-  auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-    total_end - total_start);
+//   auto total_end = std::chrono::high_resolution_clock::now();
+//   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+//     total_end - total_start);
 
 
-  if (rank == 0) {
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
-    std::cout << "========================================\n" << std::endl;
-  }
+//   if (rank == 0) {
+//     std::cout << "\n========================================" << std::endl;
+//     std::cout << "Total factorization time: " << total_duration.count() << " ms" << std::endl;
+//     std::cout << "========================================\n" << std::endl;
+//   }
 
 }
 

@@ -308,6 +308,10 @@ contains
          val_d = stats%Time_C_Mult
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_C_Mult_Wrapper') then
+         val_d = stats%Time_C_Mult_Wrapper
+         valid_opt = 1
+      endif
       if (trim(str) == 'Time_C_Extract') then
          val_d = stats%Time_C_Extract
          valid_opt = 1
@@ -421,6 +425,205 @@ contains
       deallocate (str)
 
    end subroutine C_BPACK_Getstats
+
+   subroutine C_BPACK_Setstats(stats_Cptr, nam, val_d) bind(c, name="c_bpack_setstats")
+      implicit none
+      real(kind=8)::val_d
+      character(kind=c_char, len=1) :: nam(*)
+      character(kind=c_char) :: tmpc
+      type(c_ptr) :: stats_Cptr
+      type(Hstat), pointer::stats
+      ! character::nam(:)
+      ! type(c_ptr),value :: val_Cptr
+      ! integer,pointer::val_i
+      ! real(kind=8),pointer::val_d
+      integer strlen
+      character(len=:), allocatable :: str
+      integer valid_opt
+
+      valid_opt = 0
+      strlen = 1
+      tmpc=nam(strlen)
+      do while (tmpc /= c_null_char)
+         strlen = strlen + 1
+         tmpc=nam(strlen)
+      enddo
+      strlen = strlen - 1
+      allocate (character(len=strlen) :: str)
+      str = transfer(nam(1:strlen), str)
+
+      call c_f_pointer(stats_Cptr, stats)
+
+      
+      if (trim(str) == 'Time_Fill') then
+         stats%Time_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry') then
+         stats%Time_Entry = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Factor') then
+         stats%Time_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Solve') then
+         stats%Time_Sol = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Sblock') then
+         stats%Time_Sblock = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Inv') then
+         stats%Time_Inv = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_SMW') then
+         stats%Time_SMW = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_PartialUpdate') then
+         stats%Time_PartialUpdate = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_RedistB') then
+         stats%Time_RedistB = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_RedistV') then
+         stats%Time_RedistV = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BLK_MVP') then
+         stats%Time_BLK_MVP = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Mult') then
+         stats%Time_C_Mult = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Mult_Wrapper') then
+         stats%Time_C_Mult_Wrapper = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Extract') then
+         stats%Time_C_Extract = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_Traverse') then
+         stats%Time_Entry_Traverse = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_BF') then
+         stats%Time_Entry_BF = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_Comm') then
+         stats%Time_Entry_Comm = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Direct_LU') then
+         stats%Time_Direct_LU = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Add_Multiply') then
+         stats%Time_Add_Multiply = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Multiply') then
+         stats%Time_Multiply = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_XLUM') then
+         stats%Time_XLUM = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Split') then
+         stats%Time_Split = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Comm') then
+         stats%Time_Comm = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Idle') then
+         stats%Time_Idle = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Flop_Fill') then
+         stats%Flop_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_Factor') then
+         stats%Flop_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_Solve') then
+         stats%Flop_Sol = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_C_Mult') then
+         stats%Flop_C_Mult = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_C_Extract') then
+         stats%Flop_C_Extract = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Mem_Factor') then
+         stats%Mem_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Fill') then
+         stats%Mem_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Sblock') then
+         stats%Mem_Sblock = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_SMW') then
+         stats%Mem_SMW = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Direct_inv') then
+         stats%Mem_Direct_inv = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Direct_for') then
+         stats%Mem_Direct_for = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_int_vec') then
+         stats%Mem_int_vec = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Comp_for') then
+         stats%Mem_Comp_for = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Peak') then
+         stats%Mem_Peak = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Rank_max') then
+         if (.not. allocated(stats%rankmax_of_level_global))        allocate(stats%rankmax_of_level_global(0:0))
+         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate(stats%rankmax_of_level_global_factor(0:0))
+         stats%rankmax_of_level_global        = 0
+         stats%rankmax_of_level_global_factor = nint(val_d)
+         valid_opt = 1
+      endif
+
+      if (valid_opt == 0) write (*, *) 'invalid BPACK stats: '//trim(str)
+
+      deallocate (str)
+
+   end subroutine C_BPACK_Setstats
+
 
 !>**** C interface of printing statistics
    !> @param stats_Cptr: the structure containing statistics

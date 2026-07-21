@@ -765,6 +765,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(H2_solver->comm, 1);
     }
+
+	H2_solver->kernel.entryeval_time_per_thread.assign(omp_get_max_threads(), 0.0);
+
+	double zero = 0.0;
+	c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &zero);   // stats bare (already F2Cptr*), &zero
 	c_bpack_wrap_h2(bmat, static_cast<C2Fptr>(H2_solver));   // *bmat now = c_loc(Fortran Bmatrix)
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
@@ -825,9 +830,17 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
-	
+
+	double factorization_time;
+	double entryeval_time;
     try {
-      butterfly::butterfly_factorization_parallel(H2_solver);
+      butterfly::butterfly_factorization_parallel(H2_solver, &factorization_time, &entryeval_time);
+	  c_bpack_setstats(stats, "Time_Factor", &factorization_time);
+	  c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
+
+	  double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
+	  c_bpack_setstats(stats, "Rank_max", &rank_max);
+	  
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         throw;
@@ -888,8 +901,16 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
             H2_solver->options.num_levels);
       const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
       std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs)); // assuming b is a contiguous array of size Nloc * Nrhs
-      butterfly::hierarchical_solve_parallel(
+      
+	  double t0 = MPI_Wtime();
+
+	  butterfly::hierarchical_solve_parallel(
         H2_solver->tree.get(), rhs, solve_data, true);
+
+	  double t_solve = MPI_Wtime() - t0;
+	  MPI_Allreduce(MPI_IN_PLACE, &t_solve, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+	  c_bpack_setstats(stats, "Time_Solve", &t_solve);
+
         
       // put result in x
       butterfly::gather_local_solution(H2_solver->tree.get(), 
@@ -949,7 +970,11 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     try {
       if (!H2_solver->factorized) {
         // need to to factorize first
-        butterfly::butterfly_factorization_parallel(H2_solver);
+		double factorization_time;
+		double entryeval_time;
+        butterfly::butterfly_factorization_parallel(H2_solver, &factorization_time, &entryeval_time);
+		c_bpack_setstats(stats, "Time_Factor", &factorization_time);
+		c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
       }
 
       bool verbose = true;
@@ -957,7 +982,17 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         H2_solver->options.num_levels);
       const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
       std::vector<H2Data> lhs(xin_h2, xin_h2 + (*Ninloc) * (*Ncol));
+
+	  double t0 = MPI_Wtime();
       butterfly::hierarchical_mul_parallel(H2_solver->tree.get(), lhs, mul_data, verbose); // can only handle matrix vector multiplication right now
+	  
+	  double t_mult = MPI_Wtime() - t0;
+	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+
+	  double prev = 0.0;
+	  c_bpack_getstats(stats, "Time_C_Mult_Wrapper", &prev);   // read-modify-write
+	  double total = prev + t_mult;
+	  c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &total);
 
       // extract solution to xout
       butterfly::gather_local_solution(H2_solver->tree.get(), mul_data, reinterpret_cast<H2Data*>(xout), Noutloc);
@@ -966,13 +1001,6 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
-
-
-
-    // // need to pass in rhs from bmat
-    // // need to pass in h2 tree from bmat
-
-	
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
   }
