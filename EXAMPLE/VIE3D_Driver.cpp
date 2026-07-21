@@ -693,6 +693,8 @@ if(myrank==master_rank){
   double smax_ivelo11=3.0;
   int nshape=200;
 
+  int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
+
   FILE *fout1;
 
   //getting the example configurations from command line
@@ -740,6 +742,7 @@ if(myrank==master_rank){
       {"smax_ivelo11",        required_argument, 0, 32},
       {"scaleGreen",        required_argument, 0, 33},
       {"tol_comp_s2s",      required_argument, 0, 34},
+      {"format_s2s",       required_argument, 0, 35},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -884,6 +887,10 @@ if(myrank==master_rank){
     case 34: {
       std::istringstream iss(optarg);
       iss >> tol_s2s;
+    } break;
+    case 35: {
+      std::istringstream iss(optarg);
+      iss >> format_s2s;
     } break;
     default: break;
     }
@@ -1324,7 +1331,7 @@ if(myrank==master_rank){
 
 
   	C_QuantApp_BF *quant_ptr_bf_s2s;
-    z_c_bpack_set_I_option(&option_bf, "format", 7); // change this one! Xiaomian
+    z_c_bpack_set_I_option(&option_bf, "format", format_s2s); // change this one! Xiaomian
     // Format-7 (s2s) reads tol_comp at construct_init below, so override it HERE (before line ~1341).
     // Capture the format-1 value first so it can be restored for step 3.
     double tol_comp_step1; z_c_bpack_getoption(&option_bf, "tol_comp", &tol_comp_step1);
