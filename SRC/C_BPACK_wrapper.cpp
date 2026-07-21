@@ -975,6 +975,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         butterfly::butterfly_factorization_parallel(H2_solver, &factorization_time, &entryeval_time);
 		c_bpack_setstats(stats, "Time_Factor", &factorization_time);
 		c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
+
+		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
+	    c_bpack_setstats(stats, "Rank_max", &rank_max);
       }
 
       bool verbose = true;

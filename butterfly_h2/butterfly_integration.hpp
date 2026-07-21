@@ -1383,9 +1383,8 @@ void hierarchical_factorization_parallel(
         
     }
 
-    int64_t global_max_skel = 0;
-    MPI_Allreduce(&local_max_skel, &global_max_skel, 1, MPI_INT64_T, MPI_MAX, tree->comm);
-    if (out_rankmax) *out_rankmax = global_max_skel;
+
+    if (out_rankmax) *out_rankmax = local_max_skel;
 
     
     // ===== Special handling for level 0 (root) =====
@@ -1683,6 +1682,8 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   MPI_Allreduce(MPI_IN_PLACE, &t_entry, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
   *entryeval_time = t_entry;
   solver->factorized = true;
+
+  MPI_Allreduce(MPI_IN_PLACE, &solver->last_factor_rankmax, 1, MPI_INT64_T, MPI_MAX, tree->comm);
 
 //   auto total_end = std::chrono::high_resolution_clock::now();
 //   auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(

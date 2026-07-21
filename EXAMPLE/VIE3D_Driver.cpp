@@ -28,7 +28,7 @@
 #include "G2D/bessel.h"
 #include "zBPACK_wrapper.h"
 
-// #define IVELO9_CONST 1
+#define IVELO9_CONST 1
 
 //------------------------------------------------------------------------------
 using namespace std;
