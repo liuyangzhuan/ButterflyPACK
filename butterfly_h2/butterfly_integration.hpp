@@ -2884,6 +2884,38 @@ void hierarchical_mul_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
+// template<typename CoordType, typename DataType>
+// void hierarchical_logdet_parallel(H2<CoordType,DataType>* solver,
+//                                   double* logabsdet, DataType* phase) {
+
+//     auto* tree = solver->tree.get();
+//     int rank = 0; 
+//     MPI_Comm_rank(solver->comm, &rank);
+
+//     int leaf_level = tree->num_levels - 1;
+//     /* tree->levels.size()-1, as the solve computes it */;
+
+//     double logabs_local = 0.0;   // Σ log|det|
+//     double arg_local    = 0.0;   // Σ arg(det)
+
+//     for (int level = leaf_level; level >= 2; level--) {
+
+//         auto& tree_level = tree->levels[level];
+//         if (!tree_level.is_process_active) continue;
+//     }
+
+
+
+//     // iterate through all the levels
+
+//     // iterate through all the boxes (in parallel)
+
+//     // compute log|det| and phase for each box
+//     // add to logabs_local and arg_local
+
+// }
+
+
 
 // //provide booleans for whether to do certain checks
 // inline int h2_verification(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, bool verify_solution, bool verify_factorization, bool condition_number) {

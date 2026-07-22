@@ -1450,24 +1450,27 @@ if(myrank==master_rank){
     }
     MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-    // checking correctness of the solution
+    // dump x_v_glo for offline cross-format comparison
     if (myrank == master_rank) {
-        double nrm2 = 0.0;
-        for (int j = 0; j < N; j++) {
-            double re = __real__ x_v_glo[j];
-            double im = __imag__ x_v_glo[j];
-            nrm2 += re*re + im*im;
-        }
-        std::cout << "x_v_glo L2 norm = " << std::sqrt(nrm2) << std::endl;
+      // s2s tol falls back to step-1 tol_comp when --tol_comp_s2s is unset
+      double tol_s2s_eff = (tol_s2s > 0) ? tol_s2s : tol_comp_step1;
+      string tag = (format_s2s == 7) ? "h2tols2s" : "tols2s";
+      string filename = "./xvglo_tol" + my::to_string(tol_comp_step1)
+                      + "_" + tag + my::to_string(tol_s2s_eff) + ".bin";
+      FILE* fx = fopen(filename.c_str(), "wb");
+      int n_total = N * nvec;
+      fwrite(&n_total, sizeof(int), 1, fx);
+      fwrite(x_v_glo.data(), sizeof(_Complex double), n_total, fx);
+      fclose(fx);
+      std::cout << "wrote " << filename << std::endl;
 
-        // a handful of entries spread across the domain
-        int probe[5] = {0, N/4, N/2, (3*N)/4, N-1};
-        for (int k = 0; k < 5; k++) {
-            int j = probe[k];
-            std::cout << "x_v_glo[" << j << "] = ("
-                      << (double)__real__ x_v_glo[j] << ", "
-                      << (double)__imag__ x_v_glo[j] << "i)" << std::endl;
-        }
+      double nrm2 = 0.0;
+      for (int j = 0; j < N; j++) {
+          double re = __real__ x_v_glo[j];
+          double im = __imag__ x_v_glo[j];
+          nrm2 += re*re + im*im;
+      }
+      std::cout << "x_v_glo L2 norm = " << std::sqrt(nrm2) << std::endl;
     }
 
 
