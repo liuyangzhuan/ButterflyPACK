@@ -1566,7 +1566,7 @@ void hierarchical_factorization_parallel(
             local_memory_usage += calculate_box_data_size(box);
         }
     }
-    printf("factorization memory usage on rank %d: %.2f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
+    printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
     fflush(stdout);
     
 }
@@ -2884,6 +2884,32 @@ void hierarchical_mul_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
+// // To Do: still working on
+// // To Do: need to find better place for this function
+// template<typename DataType>
+// inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_t lda,
+//                                             const std::vector<int>& pivots,
+//                                             double& logabs, double& arg) {
+//     int64_t k = 0;
+//     while (k < r) {
+//         if (pivots[static_cast<size_t>(k)] > 0) {          // 1×1 pivot
+//             DataType d = A[k + k * lda];
+//             logabs += std::log(std::abs(d));
+//             arg    += std::arg(d);
+//             k += 1;
+//         } else {                                            // 2×2 pivot (pivots[k]==pivots[k+1]<0)
+//             DataType a = A[k       + k       * lda];
+//             DataType c = A[(k + 1) + (k + 1) * lda];
+//             DataType b = A[(k + 1) + k       * lda];        // sub-diagonal
+//             DataType det2 = a * c - b * b;
+//             logabs += std::log(std::abs(det2));
+//             arg    += std::arg(det2);
+//             k += 2;
+//         }
+//     }
+// }
+
+
 // template<typename CoordType, typename DataType>
 // void hierarchical_logdet_parallel(H2<CoordType,DataType>* solver,
 //                                   double* logabsdet, DataType* phase) {
@@ -2910,6 +2936,8 @@ void hierarchical_mul_parallel(
 
 //         #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
 //         {
+//             double t_logabs = 0.0, t_arg = 0.0;   // thread-local
+
 //             #pragma omp for schedule(static)
 //             for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
 //                 if (diagonal_failed.load(std::memory_order_relaxed)) {
@@ -2918,28 +2946,32 @@ void hierarchical_mul_parallel(
 
 //                 try {
 //                     auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
-//                     auto& solve_box = solve_data[level][static_cast<size_t>(box_idx)];
 
 //                     if (box.redundant_indices.empty()) {
 //                         continue;
 //                     }
 
 //                     int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-//                     std::vector<DataType> b_R(static_cast<size_t>(r));
-//                     for (int64_t i = 0; i < r; ++i) {
-//                         b_R[static_cast<size_t>(i)] =
-//                             solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]];
-//                     }
+//                     int64_t lda = box.X_RR.rows;
+//                     const DataType* A = box.X_RR.data.data();
 
 //                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
 
 //                     } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
 
 //                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
-
+//                         if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
+//                             throw std::runtime_error("logdet: missing Bunch-Kaufman pivots");
+//                         }
+//                         accumulate_logdet_bunch_kaufman(A, r, lda, box.X_RR_pivots, t_logabs, t_arg);
 //                     } else {
 //                         throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
 //                     }
+
+//                     #pragma omp atomic
+//                     logabs_local += t_logabs;
+//                     #pragma omp atomic
+//                     arg_local    += t_arg;
 
 //                 } catch (...) {
 //                     if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
@@ -2949,9 +2981,17 @@ void hierarchical_mul_parallel(
 //                 }
 //             }
 //         }
+
+//         auto& root_level = tree->levels[0];
+//         if (root_level.is_process_active && !root_level.local_boxes.empty()) {
+//             auto& rb = root_level.local_boxes[0];
+//             if (rb.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN)
+//                 accumulate_logdet_bunch_kaufman(rb.X_RR.data.data(), rb.X_RR.rows, rb.X_RR.rows,
+//                                                 rb.X_RR_pivots, logabs_local, arg_local);
+//             // else branches for other formats later
+//         }
+
 //     }
-
-
 
 //     // iterate through all the levels
 

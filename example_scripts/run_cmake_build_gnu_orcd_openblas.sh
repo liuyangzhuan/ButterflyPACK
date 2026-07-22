@@ -6,17 +6,16 @@
 module purge
 module load gcc/12.2.0
 module load openmpi/4.1.4                 # or openmpi/5.0.8
-module load openblas/0.3.26               # provides BLAS + LAPACK
+# module load openblas/0.3.26             # too old (no cblas_?gemm_batch); using $HOME/OpenBLAS build instead
 module load netlib-scalapack/2.2.0        # ScaLAPACK (depends on MPI + BLAS/LAPACK)
 module load fftw/3.3.10                    # FFTW (serial, double) needed by kernel.hpp
 module load cmake/3.27.9
 
 # ---- library locations ----
-# Fill in the install prefixes below. Find each with (after loading the modules):
-#   module show openblas/0.3.26          -> look for the ".../openblas-0.3.26-<hash>" prefix
-#   module show netlib-scalapack/2.2.0   -> look for the ".../netlib-scalapack-2.2.0-<hash>" prefix
-# OpenBLAS ships LAPACK inside libopenblas.so, so BLAS and LAPACK use the same file.
-OPENBLAS_LIB="/orcd/software/core/001/spack/pkg/openblas/0.3.26/ro5tivv/lib/libopenblas.so"
+# OpenBLAS: built from source in $HOME/OpenBLAS (v0.3.29+, includes cblas_?gemm_batch,
+# which the module 0.3.26 lacked). OpenBLAS ships LAPACK inside libopenblas.so, so
+# BLAS and LAPACK point to the same file.
+OPENBLAS_LIB="$HOME/OpenBLAS/libopenblas.so"
 SCALAPACK_LIB="/orcd/software/core/001/spack/pkg/netlib-scalapack/2.2.0/ziv7g2h/lib/libscalapack.so"
 
 # FFTW: CMake has no FFTW logic, so we add its include (compile) and lib (link) by hand.
