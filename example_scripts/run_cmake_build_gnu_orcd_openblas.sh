@@ -23,6 +23,11 @@ SCALAPACK_LIB="/orcd/software/core/001/spack/pkg/netlib-scalapack/2.2.0/ziv7g2h/
 # Find the prefix after `module load fftw/3.3.10` via:  env | grep -i fftw
 FFTW_PREFIX="/orcd/software/core/001/spack/pkg/fftw/3.3.10/2qziucy"
 
+# ZFP: built from source into $HOME/zfp-install (git clone LLNL/zfp; cmake -DBUILD_ZFORP=ON;
+# make install). Providing TPL_ZFP_* makes CMake define HAVE_ZFP so the *_ZFP_Compress
+# imports in CPP_INTERFACE/m_BPACK_utilities.f90 resolve.
+ZFP_PREFIX="$HOME/zfp-install"
+
 cd ..
 sed -i 's/\r$//' PrecisionPreprocessing.sh
 mkdir -p build
@@ -40,6 +45,8 @@ cmake .. \
 	-DTPL_BLAS_LIBRARIES="${OPENBLAS_LIB}" \
 	-DTPL_LAPACK_LIBRARIES="${OPENBLAS_LIB}" \
 	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}" \
+	-DTPL_ZFP_LIBRARIES="${ZFP_PREFIX}/lib64/libzFORp.so;${ZFP_PREFIX}/lib64/libzfp.so" \
+	-DTPL_ZFP_INCLUDE="${ZFP_PREFIX}/include" \
 	-DCMAKE_Fortran_COMPILER=mpif90 \
 	-DCMAKE_CXX_COMPILER=mpicxx \
 	-DCMAKE_C_COMPILER=mpicc \
