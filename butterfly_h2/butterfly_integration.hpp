@@ -2884,83 +2884,83 @@ void hierarchical_mul_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
-template<typename CoordType, typename DataType>
-void hierarchical_logdet_parallel(H2<CoordType,DataType>* solver,
-                                  double* logabsdet, DataType* phase) {
+// template<typename CoordType, typename DataType>
+// void hierarchical_logdet_parallel(H2<CoordType,DataType>* solver,
+//                                   double* logabsdet, DataType* phase) {
 
-    auto* tree = solver->tree.get();
-    int rank = 0; 
-    MPI_Comm_rank(solver->comm, &rank);
+//     auto* tree = solver->tree.get();
+//     int rank = 0; 
+//     MPI_Comm_rank(solver->comm, &rank);
 
-    int leaf_level = tree->num_levels - 1;
-    /* tree->levels.size()-1, as the solve computes it */;
+//     int leaf_level = tree->num_levels - 1;
+//     /* tree->levels.size()-1, as the solve computes it */;
 
-    double logabs_local = 0.0;   // Σ log|det|
-    double arg_local    = 0.0;   // Σ arg(det)
+//     double logabs_local = 0.0;   // Σ log|det|
+//     double arg_local    = 0.0;   // Σ arg(det)
 
-    for (int level = leaf_level; level >= 2; level--) {
+//     for (int level = leaf_level; level >= 2; level--) {
 
-        auto& tree_level = tree->levels[level];
-        const int level_print_rank = smallest_active_rank(tree_level);
-        if (!tree_level.is_process_active) continue;
+//         auto& tree_level = tree->levels[level];
+//         const int level_print_rank = smallest_active_rank(tree_level);
+//         if (!tree_level.is_process_active) continue;
 
-        std::exception_ptr diagonal_exception;
-        std::mutex diagonal_exception_mutex;
-        std::atomic<bool> diagonal_failed{false};
+//         std::exception_ptr diagonal_exception;
+//         std::mutex diagonal_exception_mutex;
+//         std::atomic<bool> diagonal_failed{false};
 
-        #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-        {
-            #pragma omp for schedule(static)
-            for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
-                if (diagonal_failed.load(std::memory_order_relaxed)) {
-                    continue;
-                }
+//         #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
+//         {
+//             #pragma omp for schedule(static)
+//             for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
+//                 if (diagonal_failed.load(std::memory_order_relaxed)) {
+//                     continue;
+//                 }
 
-                try {
-                    auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
-                    auto& solve_box = solve_data[level][static_cast<size_t>(box_idx)];
+//                 try {
+//                     auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
+//                     auto& solve_box = solve_data[level][static_cast<size_t>(box_idx)];
 
-                    if (box.redundant_indices.empty()) {
-                        continue;
-                    }
+//                     if (box.redundant_indices.empty()) {
+//                         continue;
+//                     }
 
-                    int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-                    std::vector<DataType> b_R(static_cast<size_t>(r));
-                    for (int64_t i = 0; i < r; ++i) {
-                        b_R[static_cast<size_t>(i)] =
-                            solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]];
-                    }
+//                     int64_t r = static_cast<int64_t>(box.redundant_indices.size());
+//                     std::vector<DataType> b_R(static_cast<size_t>(r));
+//                     for (int64_t i = 0; i < r; ++i) {
+//                         b_R[static_cast<size_t>(i)] =
+//                             solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]];
+//                     }
 
-                    if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
+//                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
 
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+//                     } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
 
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
+//                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
 
-                    } else {
-                        throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
-                    }
+//                     } else {
+//                         throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
+//                     }
 
-                } catch (...) {
-                    if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
-                        diagonal_exception = std::current_exception();
-                    }
-                }
-            }
-        }
-    }
+//                 } catch (...) {
+//                     if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
+//                         std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
+//                         diagonal_exception = std::current_exception();
+//                     }
+//                 }
+//             }
+//         }
+//     }
 
 
 
-    // iterate through all the levels
+//     // iterate through all the levels
 
-    // iterate through all the boxes (in parallel)
+//     // iterate through all the boxes (in parallel)
 
-    // compute log|det| and phase for each box
-    // add to logabs_local and arg_local
+//     // compute log|det| and phase for each box
+//     // add to logabs_local and arg_local
 
-}
+// }
 
 
 

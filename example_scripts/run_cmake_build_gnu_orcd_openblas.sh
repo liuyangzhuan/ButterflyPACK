@@ -8,6 +8,7 @@ module load gcc/12.2.0
 module load openmpi/4.1.4                 # or openmpi/5.0.8
 module load openblas/0.3.26               # provides BLAS + LAPACK
 module load netlib-scalapack/2.2.0        # ScaLAPACK (depends on MPI + BLAS/LAPACK)
+module load fftw/3.3.10                    # FFTW (serial, double) needed by kernel.hpp
 module load cmake/3.27.9
 
 # ---- library locations ----
@@ -18,6 +19,10 @@ module load cmake/3.27.9
 OPENBLAS_LIB="/orcd/software/core/001/spack/pkg/openblas/0.3.26/ro5tivv/lib/libopenblas.so"
 SCALAPACK_LIB="/orcd/software/core/001/spack/pkg/netlib-scalapack/2.2.0/ziv7g2h/lib/libscalapack.so"
 
+# FFTW: CMake has no FFTW logic, so we add its include (compile) and lib (link) by hand.
+# Find the prefix after `module load fftw/3.3.10` via:  env | grep -i fftw
+FFTW_PREFIX="/orcd/software/core/001/spack/pkg/fftw/3.3.10/2qziucy"
+
 cd ..
 sed -i 's/\r$//' PrecisionPreprocessing.sh
 mkdir -p build
@@ -27,7 +32,8 @@ rm -rf SRC_DOUBLE SRC_DOUBLECOMPLEX SRC_SINGLE SRC_COMPLEX
 
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE -fallow-argument-mismatch" \
-	-DCMAKE_CXX_FLAGS="" \
+	-DCMAKE_CXX_FLAGS="-I${FFTW_PREFIX}/include" \
+	-DCMAKE_EXE_LINKER_FLAGS="-L${FFTW_PREFIX}/lib -lfftw3" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_python=OFF \
 	-Denable_doc=OFF \
