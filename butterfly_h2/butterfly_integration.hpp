@@ -146,6 +146,17 @@ struct H2Kernel {
     H2Kernel(void (*kernel_)(int*, int*, kerData*, void*), void* quant_)
         : kernel(kernel_), quant(quant_) {}
 
+    // Evaluate the single (i, j) entry into a column-major matrix A with leading dimension lda:
+    //   A[i + j*lda] = K(i, j),  i = row, j = column (0-based global DOF indices).
+    // Routes to the same C_FuncZmn callback as evaluate_block_by_index (1-based), so the entry
+    // matches exactly what the H2 solver compressed/factored -- including the self/diagonal term
+    // when i == j. This is what lets direct-verify test the true operator, not a built-in kernel.
+    void evaluate_by_index(const int64_t i, const int64_t j, DataType* A, int64_t lda) const {
+        int m = static_cast<int>(i) + 1;   // 1-based row
+        int n = static_cast<int>(j) + 1;   // 1-based column
+        kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
+    }
+
     // Fill the x_size-by-y_size block A (column-major, leading dimension lda):
     //   A[i + j*lda] = K( x_indices[i], y_indices[j] )
     // x_indices index the rows, y_indices the columns. Indices are 0-based
@@ -562,6 +573,160 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
 
   // To Do: maybe put this section and below to c_bpack_factor
   return 0;
+}
+
+// To Do: need to find better place for this function
+// thresh: block-determinant magnitudes at or below this are treated as singular
+// (throws instead of feeding 0 into std::log and producing -inf). Default 0.0
+// guards only the exactly-zero case; pass a small positive value to also catch
+// near-singular pivots.
+template<typename DataType>
+inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_t lda,
+                                            const std::vector<int>& pivots,
+                                            double& logabs, double& arg,
+                                            double thresh = 1e-14) {
+    int64_t k = 0;
+    while (k < r) {
+        if (pivots[static_cast<size_t>(k)] > 0) {          // 1×1 pivot
+            DataType d = A[k + k * lda];
+            double ad = std::abs(d);
+            if (ad <= thresh) {
+                throw std::runtime_error(
+                    "accumulate_logdet_bunch_kaufman: singular/near-singular 1x1 pivot (|d| = " +
+                    std::to_string(ad) + ")");
+            }
+            logabs += std::log(ad);
+            arg    += std::arg(d);
+            k += 1;
+        } else {                                            // 2×2 pivot (pivots[k]==pivots[k+1]<0)
+            if (k + 1 >= r) {
+                throw std::runtime_error(
+                    "accumulate_logdet_bunch_kaufman: 2x2 pivot at last index k=" +
+                    std::to_string(k) + " (r=" + std::to_string(r) + "), malformed pivots");
+            }
+            DataType a = A[k       + k       * lda];
+            DataType c = A[(k + 1) + (k + 1) * lda];
+            DataType b = A[(k + 1) + k       * lda];        // sub-diagonal
+            DataType det2 = a * c - b * b;
+            double ad2 = std::abs(det2);
+            if (ad2 <= thresh) {
+                throw std::runtime_error(
+                    "accumulate_logdet_bunch_kaufman: singular/near-singular 2x2 pivot (|det2| = " +
+                    std::to_string(ad2) + ")");
+            }
+            logabs += std::log(ad2);
+            arg    += std::arg(det2);
+            k += 2;
+        }
+    }
+}
+
+
+template<typename CoordType, typename DataType>
+void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
+                                  double* logabsdet, DataType* phase) {
+
+    int leaf_level = tree->num_levels - 1;
+
+    double logabs_local = 0.0;   // Σ log|det|
+    double arg_local    = 0.0;   // Σ arg(det)
+
+    // iterate through all the levels
+    for (int level = leaf_level; level >= 2; level--) {
+
+        auto& tree_level = tree->levels[level];
+        if (!tree_level.is_process_active) continue;
+
+        std::exception_ptr diagonal_exception;
+        std::mutex diagonal_exception_mutex;
+        std::atomic<bool> diagonal_failed{false};
+
+        #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
+        {
+            double t_logabs = 0.0, t_arg = 0.0;   // thread-local
+
+            // iterate through all the boxes (in parallel)
+            #pragma omp for schedule(static)
+            for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
+                if (diagonal_failed.load(std::memory_order_relaxed)) {
+                    continue;
+                }
+
+                try {
+                    auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
+
+                    if (box.redundant_indices.empty()) {
+                        continue;
+                    }
+
+                    int64_t r = static_cast<int64_t>(box.redundant_indices.size());
+                    int64_t lda = box.X_RR.rows;
+                    if (r != lda) {
+                        throw std::runtime_error(
+                            "logdet: redundant_indices.size() (" + std::to_string(r) +
+                            ") != X_RR.rows (" + std::to_string(lda) + ")");
+                    }
+                    const DataType* A = box.X_RR.data.data();
+
+                    // compute log|det| and phase for each box
+                    if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
+                        throw std::runtime_error(
+                            "logdet: CHOLESKY_L not implemented yet (only BUNCH_KAUFMAN is supported)");
+                    } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+                        throw std::runtime_error(
+                            "logdet: LU_FACTORED not implemented yet (only BUNCH_KAUFMAN is supported)");
+                    } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
+                        if (box.X_RR_pivots.size() != static_cast<size_t>(r)) {
+                            throw std::runtime_error(
+                                "logdet: pivots is incorrect (X_RR_pivots.size() = " +
+                                std::to_string(box.X_RR_pivots.size()) +
+                                ", expected " + std::to_string(r) + ")");
+                        }
+                        accumulate_logdet_bunch_kaufman(A, r, lda, box.X_RR_pivots, t_logabs, t_arg);
+                    } else {
+                        throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
+                    }
+
+                } catch (...) {
+                    if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
+                        std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
+                        diagonal_exception = std::current_exception();
+                    }
+                }
+            }
+
+            #pragma omp atomic
+            logabs_local += t_logabs;
+            #pragma omp atomic
+            arg_local    += t_arg;
+        }
+        if (diagonal_exception) {
+            std::rethrow_exception(diagonal_exception);
+        }
+    }
+
+    // handle root level
+    auto& root_level = tree->levels[0];
+    if (root_level.is_process_active && !root_level.local_boxes.empty()) {
+        auto& rb = root_level.local_boxes[0];
+        if (rb.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
+            accumulate_logdet_bunch_kaufman(rb.X_RR.data.data(), rb.X_RR.rows, rb.X_RR.rows,
+                                            rb.X_RR_pivots, logabs_local, arg_local);
+        } else {
+            throw std::runtime_error(
+                "logdet (root): only BUNCH_KAUFMAN is supported for now (got CHOLESKY_L/LU_FACTORED)");
+        }
+    }
+
+    // accumulate logabsdet and phase
+    double buf[2] = { logabs_local, arg_local };
+    MPI_Allreduce(MPI_IN_PLACE, buf, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+    *logabsdet = buf[0];
+    if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        *phase = DataType(std::cos(buf[1]), std::sin(buf[1]));   // e^{iθ}, any angle
+    } else {
+        *phase = std::cos(buf[1]);   // ±1: for real dets, θ is a multiple of π, so cos θ = ±1, sin θ ≈ 0
+    }
 }
 
 /**
@@ -1569,6 +1734,12 @@ void hierarchical_factorization_parallel(
     printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
     fflush(stdout);
     
+    double logabsdet;
+    DataType phase;
+    hierarchical_logdet_parallel(tree, &logabsdet, &phase);
+    if (rank == 0) {
+        std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
+    }
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -1709,7 +1880,7 @@ void hierarchical_solve_parallel(
     bool verbose = true) {
     
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
     using clock = std::chrono::high_resolution_clock;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -2418,7 +2589,7 @@ void hierarchical_mul_parallel(
     bool verbose = true) {
 
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
     using clock = std::chrono::high_resolution_clock;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -2884,128 +3055,495 @@ void hierarchical_mul_parallel(
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
-// // To Do: still working on
-// // To Do: need to find better place for this function
-// template<typename DataType>
-// inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_t lda,
-//                                             const std::vector<int>& pivots,
-//                                             double& logabs, double& arg) {
-//     int64_t k = 0;
-//     while (k < r) {
-//         if (pivots[static_cast<size_t>(k)] > 0) {          // 1×1 pivot
-//             DataType d = A[k + k * lda];
-//             logabs += std::log(std::abs(d));
-//             arg    += std::arg(d);
-//             k += 1;
-//         } else {                                            // 2×2 pivot (pivots[k]==pivots[k+1]<0)
-//             DataType a = A[k       + k       * lda];
-//             DataType c = A[(k + 1) + (k + 1) * lda];
-//             DataType b = A[(k + 1) + k       * lda];        // sub-diagonal
-//             DataType det2 = a * c - b * b;
-//             logabs += std::log(std::abs(det2));
-//             arg    += std::arg(det2);
-//             k += 2;
-//         }
-//     }
-// }
 
+/**
+ * @brief Verify solution using direct BLAS matrix-vector product
+ * 
+ * Builds full dense matrix A and computes A*x using BLAS.
+ * WARNING: O(N²) memory and O(N²) time - only for small problems!
+ * 
+ * @tparam CoordType Coordinate data type
+ * @tparam DataType Matrix data type
+ * @tparam KernelType Kernel evaluator type
+ * @param kernel Kernel evaluator
+ * @param rhs Original right-hand side vector
+ * @param solution Computed solution vector
+ * @param N Number of points
+ * @param verbose Print detailed output
+ * @return Relative residual norm
+ */
+template<typename DataType, typename KernelType>
+double verify_solution_direct(
+    MPI_Comm comm,
+    KernelType* kernel,
+    const std::vector<DataType>& rhs,
+    const std::vector<DataType>& solution,
+    int64_t N,
+    int dimension = 2,
+    bool verbose = true) {
+    
+    int rank;
+    MPI_Comm_rank(comm, &rank);
+    
+    if (rank != 0) {
+        return 0.0;  // Only verify on rank 0
+    }
+    
+    if (verbose) {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Solution Verification (Direct BLAS)" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Total DOFs: " << N << std::endl;
+        
+        double matrix_memory_mb = (static_cast<double>(N) * N * sizeof(DataType)) / (1024.0 * 1024.0);
+        std::cout << "Matrix memory: " << matrix_memory_mb << " MB" << std::endl;
+        
+        if (N > 10000) {
+            std::cout << "⚠ WARNING: N = " << N << " is large for direct method!" << std::endl;
+        }
+    }
+    
+    // ===== Step 1: Build full matrix A =====
+    
+    auto build_start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<DataType> A(N * N);
+    
+    // Build A from the SAME entry evaluation the H2 solver compressed/factored (Zmn via
+    // evaluate_by_index), stored column-major (A[i + j*N]) to match the BLAS matvec below.
+    // No /N scaling and no special diagonal case: evaluate_by_index returns the exact matrix
+    // entry for every (i, j), including the self term when i == j.
+    #pragma omp parallel for collapse(2) if(N > 1000)
+    for (int64_t i = 0; i < N; ++i) {
+        for (int64_t j = 0; j < N; ++j) {
+            kernel->evaluate_by_index(i, j, A.data(), N);   // writes A[i + j*N] = K(i, j)
+        }
+    }
+    
+    auto build_end = std::chrono::high_resolution_clock::now();
+    auto build_duration = std::chrono::duration_cast<std::chrono::milliseconds>(build_end - build_start);
+    
+    if (verbose) {
+        std::cout << "Matrix assembly time: " << build_duration.count() << " ms" << std::endl;
+    }
+    
+    // ===== Step 2: Compute A*x using BLAS =====
+    
+    auto matvec_start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<DataType> Ax(N, DataType{0.0});
+    
+    if constexpr (std::is_same_v<DataType, double>) {
+        // DGEMV: y = alpha*A*x + beta*y
+        char trans = 'N';
+        int m = static_cast<int>(N);
+        int n = static_cast<int>(N);
+        double alpha = 1.0;
+        double beta = 0.0;
+        int lda = static_cast<int>(N);
+        int incx = 1;
+        int incy = 1;
 
-// template<typename CoordType, typename DataType>
-// void hierarchical_logdet_parallel(H2<CoordType,DataType>* solver,
-//                                   double* logabsdet, DataType* phase) {
+        dgemv_(&trans, &m, &n, &alpha, A.data(), &lda,
+            solution.data(), &incx, &beta, Ax.data(), &incy);
 
-//     auto* tree = solver->tree.get();
-//     int rank = 0; 
-//     MPI_Comm_rank(solver->comm, &rank);
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        // SGEMV
+        char trans = 'N';
+        int m = static_cast<int>(N);
+        int n = static_cast<int>(N);
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        int lda = static_cast<int>(N);
+        int incx = 1;
+        int incy = 1;
 
-//     int leaf_level = tree->num_levels - 1;
-//     /* tree->levels.size()-1, as the solve computes it */;
+        sgemv_(&trans, &m, &n, &alpha, A.data(), &lda,
+            solution.data(), &incx, &beta, Ax.data(), &incy);
 
-//     double logabs_local = 0.0;   // Σ log|det|
-//     double arg_local    = 0.0;   // Σ arg(det)
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        // ZGEMV
+        char trans = 'N';
+        int m = static_cast<int>(N);
+        int n = static_cast<int>(N);
+        std::complex<double> alpha(1.0, 0.0);
+        std::complex<double> beta(0.0, 0.0);
+        int lda = static_cast<int>(N);
+        int incx = 1;
+        int incy = 1;
 
-//     for (int level = leaf_level; level >= 2; level--) {
+        zgemv_(&trans, &m, &n, &alpha, A.data(), &lda,
+            solution.data(), &incx, &beta, Ax.data(), &incy);
 
-//         auto& tree_level = tree->levels[level];
-//         const int level_print_rank = smallest_active_rank(tree_level);
-//         if (!tree_level.is_process_active) continue;
+    } else if constexpr (std::is_same_v<DataType, std::complex<float>>) {
+        // CGEMV
+        char trans = 'N';
+        int m = static_cast<int>(N);
+        int n = static_cast<int>(N);
+        std::complex<float> alpha(1.0f, 0.0f);
+        std::complex<float> beta(0.0f, 0.0f);
+        int lda = static_cast<int>(N);
+        int incx = 1;
+        int incy = 1;
 
-//         std::exception_ptr diagonal_exception;
-//         std::mutex diagonal_exception_mutex;
-//         std::atomic<bool> diagonal_failed{false};
+        cgemv_(&trans, &m, &n, &alpha, A.data(), &lda,
+            solution.data(), &incx, &beta, Ax.data(), &incy);
 
-//         #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-//         {
-//             double t_logabs = 0.0, t_arg = 0.0;   // thread-local
+    } else {
+        throw std::runtime_error("Unsupported DataType for BLAS");
+    }
+    
+    auto matvec_end = std::chrono::high_resolution_clock::now();
+    auto matvec_duration = std::chrono::duration_cast<std::chrono::milliseconds>(matvec_end - matvec_start);
+    
+    if (verbose) {
+        std::cout << "BLAS matvec time: " << matvec_duration.count() << " ms" << std::endl;
+    }
+    
+    // ===== Step 3: Compute residual =====
+    
+    // Deduce the underlying real type
+    using RealType = std::conditional_t<
+        std::is_same_v<DataType, std::complex<double>>, double,
+        std::conditional_t<
+            std::is_same_v<DataType, std::complex<float>>, float,
+            DataType
+        >
+    >;
 
-//             #pragma omp for schedule(static)
-//             for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
-//                 if (diagonal_failed.load(std::memory_order_relaxed)) {
-//                     continue;
-//                 }
+    std::vector<DataType> residual(N);
+    for (int64_t i = 0; i < N; ++i) {
+        residual[i] = Ax[i] - rhs[i];
+    }
 
-//                 try {
-//                     auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
+    // Compute norms using BLAS
+    RealType residual_norm = 0.0;
+    RealType rhs_norm = 0.0;
 
-//                     if (box.redundant_indices.empty()) {
-//                         continue;
-//                     }
+    if constexpr (std::is_same_v<DataType, double>) {
+        int n = static_cast<int>(N);
+        int inc = 1;
+        residual_norm = dnrm2_(&n, residual.data(), &inc);
+        rhs_norm = dnrm2_(&n, rhs.data(), &inc);
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        int n = static_cast<int>(N);
+        int inc = 1;
+        residual_norm = snrm2_(&n, residual.data(), &inc);
+        rhs_norm = snrm2_(&n, rhs.data(), &inc);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        int n = static_cast<int>(N);
+        int inc = 1;
+        residual_norm = dznrm2_(&n, residual.data(), &inc);
+        rhs_norm = dznrm2_(&n, rhs.data(), &inc);
+    } else if constexpr (std::is_same_v<DataType, std::complex<float>>) {
+        int n = static_cast<int>(N);
+        int inc = 1;
+        residual_norm = scnrm2_(&n, residual.data(), &inc);
+        rhs_norm = scnrm2_(&n, rhs.data(), &inc);
+    }
 
-//                     int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-//                     int64_t lda = box.X_RR.rows;
-//                     const DataType* A = box.X_RR.data.data();
+    RealType relative_error = residual_norm / rhs_norm;
 
-//                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
+    if (verbose) {
+        std::cout << "\nBackward Error Analysis:" << std::endl;
+        std::cout << "  ||Ax - b||₂ = " << std::scientific << std::setprecision(6)
+                  << residual_norm << std::endl;
+        std::cout << "  ||b||₂      = " << rhs_norm << std::endl;
+        std::cout << "  Relative residual = " << relative_error << std::endl;
 
-//                     } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+        // Additional statistics
+        RealType max_residual = 0.0;
+        int64_t max_idx = 0;
+        for (int64_t i = 0; i < N; ++i) {
+            RealType abs_res = std::abs(residual[i]);
+            if (abs_res > max_residual) {
+                max_residual = abs_res;
+                max_idx = i;
+            }
+        }
 
-//                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
-//                         if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
-//                             throw std::runtime_error("logdet: missing Bunch-Kaufman pivots");
-//                         }
-//                         accumulate_logdet_bunch_kaufman(A, r, lda, box.X_RR_pivots, t_logabs, t_arg);
-//                     } else {
-//                         throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
-//                     }
+        std::cout << "  Max residual    = " << max_residual
+                  << " (at index " << max_idx << ")" << std::endl;
 
-//                     #pragma omp atomic
-//                     logabs_local += t_logabs;
-//                     #pragma omp atomic
-//                     arg_local    += t_arg;
+        // Solution quality assessment
+        if (relative_error < static_cast<RealType>(1e-10)) {
+            std::cout << "\n  ✓ EXCELLENT: Relative error < 1e-10" << std::endl;
+        } else if (relative_error < static_cast<RealType>(1e-6)) {
+            std::cout << "\n  ✓ VERY GOOD: Relative error < 1e-6" << std::endl;
+        } else if (relative_error < static_cast<RealType>(1e-3)) {
+            std::cout << "\n  ✓ GOOD: Relative error < 1e-3" << std::endl;
+        } else if (relative_error < static_cast<RealType>(1e-1)) {
+            std::cout << "\n  ⚠ WARNING: Relative error > 1e-3" << std::endl;
+        } else {
+            std::cout << "\n  ✗ ERROR: Relative error > 1e-1 (solution likely incorrect)" << std::endl;
+        }
 
-//                 } catch (...) {
-//                     if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
-//                         std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
-//                         diagonal_exception = std::current_exception();
-//                     }
-//                 }
-//             }
-//         }
+        std::cout << "========================================\n" << std::endl;
+    }
+    
+    return relative_error;
+}
 
-//         auto& root_level = tree->levels[0];
-//         if (root_level.is_process_active && !root_level.local_boxes.empty()) {
-//             auto& rb = root_level.local_boxes[0];
-//             if (rb.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN)
-//                 accumulate_logdet_bunch_kaufman(rb.X_RR.data.data(), rb.X_RR.rows, rb.X_RR.rows,
-//                                                 rb.X_RR_pivots, logabs_local, arg_local);
-//             // else branches for other formats later
-//         }
+/**
+ * @brief Gather solution and RHS from all processes to process 0
+ * 
+ * @tparam CoordType Coordinate type (float or double)
+ * @tparam DataType Data type for matrix entries
+ * 
+ * @param tree Parallel tree structure
+ * @param solve_data Solve data at all levels (only leaf level used)
+ * @param solution Output solution vector (only populated on rank 0)
+ * @param aggregated_rhs Output RHS vector (only populated on rank 0)
+ * 
+ * Gathers point_indices, left_side, and right_side from all leaf boxes 
+ * across all processes and assembles into global vectors on rank 0.
+ */
+template<typename CoordType, typename DataType>
+void gather_solution_to_root(
+    ParallelTree<CoordType, DataType>* tree,
+    const std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data,
+    std::vector<DataType>& solution,
+    std::vector<DataType>& aggregated_rhs) {
+    
+    int rank, size;
+    MPI_Comm_rank(tree->comm, &rank);
+    MPI_Comm_size(tree->comm, &size);
+    
+    int leaf_level = tree->num_levels - 1;
+    auto& leaf_level_ref = tree->levels[leaf_level];
 
-//     }
+    const int64_t local_solve_levels = static_cast<int64_t>(solve_data.size());
+    if (leaf_level < 0 || leaf_level >= static_cast<int>(solve_data.size())) {
+        std::fprintf(stderr,
+                     "gather_solution_to_root: rank=%d invalid leaf level %d for solve_data size %lld\n",
+                     rank,
+                     leaf_level,
+                     static_cast<long long>(local_solve_levels));
+        std::fflush(stderr);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
-//     // iterate through all the levels
+    const int64_t expected_leaf_boxes = leaf_level_ref.num_boxes_local;
+    const int64_t actual_leaf_boxes = static_cast<int64_t>(solve_data[leaf_level].size());
+    if (actual_leaf_boxes != expected_leaf_boxes) {
+        std::fprintf(stderr,
+                     "gather_solution_to_root: rank=%d solve_data leaf mismatch: expected %lld boxes, got %lld entries\n",
+                     rank,
+                     static_cast<long long>(expected_leaf_boxes),
+                     static_cast<long long>(actual_leaf_boxes));
+        std::fflush(stderr);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    
+    // ===== Step 1: Collect local indices, solution values, and RHS values =====
+    
+    std::vector<int64_t> local_indices;
+    std::vector<DataType> local_solution;
+    std::vector<DataType> local_rhs;
+    
+    for (int64_t box_idx = 0; box_idx < leaf_level_ref.num_boxes_local; ++box_idx) {
+        auto& box = leaf_level_ref.local_boxes[box_idx];
+        auto& solve_box = solve_data[leaf_level][box_idx];
+        
+        for (int64_t i = 0; i < box.num_points; ++i) {
+            local_indices.push_back(box.point_indices[i]);
+            local_solution.push_back(solve_box.left_side[i]);
+            local_rhs.push_back(solve_box.right_side[i]);
+        }
+    }
+    
+    // ===== Step 2: Gather counts on root =====
 
-//     // iterate through all the boxes (in parallel)
+    const size_t local_count = local_indices.size();
+    if (local_count > static_cast<size_t>(INT_MAX)) {
+        throw std::runtime_error(
+            "gather_solution_to_root: local verification gather count exceeds INT_MAX on rank " +
+            std::to_string(rank) + ": " + std::to_string(local_count));
+    }
 
-//     // compute log|det| and phase for each box
-//     // add to logabs_local and arg_local
+    const int local_count_int = static_cast<int>(local_count);
+    std::vector<int> recv_counts(rank == 0 ? size : 0, 0);
+    int err = MPI_Gather(&local_count_int,
+                         1,
+                         MPI_INT,
+                         rank == 0 ? recv_counts.data() : nullptr,
+                         1,
+                         MPI_INT,
+                         0,
+                         MPI_COMM_WORLD);
+    if (err != MPI_SUCCESS) {
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(
+            "gather_solution_to_root: MPI_Gather(counts) failed with error " +
+            std::string(errbuf, errlen));
+    }
+    
+    // ===== Step 3: Calculate displacements on rank 0 =====
+    
+    int total_count = 0;
+    std::vector<int> recv_displs(rank == 0 ? size : 0, 0);
+    if (rank == 0) {
+        for (int i = 0; i < size; ++i) {
+            if (i > 0) {
+                recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
+            }
+            if (recv_counts[i] < 0 || total_count > INT_MAX - recv_counts[i]) {
+                throw std::runtime_error(
+                    "gather_solution_to_root: total verification gather count exceeds INT_MAX");
+            }
+            total_count += recv_counts[i];
+        }
+    }
+    
+    // ===== Step 4: Gather indices, solution, and RHS on root =====
+    
+    const MPI_Datatype mpi_datatype = mpi_datatype_for<DataType>();
 
-// }
+    std::vector<int64_t> all_indices(rank == 0 ? static_cast<size_t>(total_count) : 0);
+    std::vector<DataType> all_solution(rank == 0 ? static_cast<size_t>(total_count) : 0);
+    std::vector<DataType> all_rhs(rank == 0 ? static_cast<size_t>(total_count) : 0);
 
+    err = MPI_Gatherv(local_indices.empty() ? nullptr : local_indices.data(),
+                      local_count_int,
+                      MPI_INT64_T,
+                      rank == 0 ? all_indices.data() : nullptr,
+                      rank == 0 ? recv_counts.data() : nullptr,
+                      rank == 0 ? recv_displs.data() : nullptr,
+                      MPI_INT64_T,
+                      0,
+                      MPI_COMM_WORLD);
+    if (err != MPI_SUCCESS) {
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(
+            "gather_solution_to_root: MPI_Gatherv(indices) failed with error " +
+            std::string(errbuf, errlen));
+    }
+
+    err = MPI_Gatherv(local_solution.empty() ? nullptr : local_solution.data(),
+                      local_count_int,
+                      mpi_datatype,
+                      rank == 0 ? all_solution.data() : nullptr,
+                      rank == 0 ? recv_counts.data() : nullptr,
+                      rank == 0 ? recv_displs.data() : nullptr,
+                      mpi_datatype,
+                      0,
+                      MPI_COMM_WORLD);
+    if (err != MPI_SUCCESS) {
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(
+            "gather_solution_to_root: MPI_Gatherv(solution) failed with error " +
+            std::string(errbuf, errlen));
+    }
+
+    err = MPI_Gatherv(local_rhs.empty() ? nullptr : local_rhs.data(),
+                      local_count_int,
+                      mpi_datatype,
+                      rank == 0 ? all_rhs.data() : nullptr,
+                      rank == 0 ? recv_counts.data() : nullptr,
+                      rank == 0 ? recv_displs.data() : nullptr,
+                      mpi_datatype,
+                      0,
+                      MPI_COMM_WORLD);
+    if (err != MPI_SUCCESS) {
+        char errbuf[MPI_MAX_ERROR_STRING];
+        int errlen = 0;
+        MPI_Error_string(err, errbuf, &errlen);
+        throw std::runtime_error(
+            "gather_solution_to_root: MPI_Gatherv(rhs) failed with error " +
+            std::string(errbuf, errlen));
+    }
+    
+    // ===== Step 5: Assemble solution and RHS on rank 0 =====
+    
+    if (rank == 0) {
+        solution.resize(tree->num_points, DataType{0.0});
+        aggregated_rhs.resize(tree->num_points, DataType{0.0});
+        
+        for (int i = 0; i < total_count; ++i) {
+            int64_t global_idx = all_indices[i];
+            
+            if (global_idx < 0 || global_idx >= tree->num_points) {
+                throw std::runtime_error(
+                    "gather_solution_to_root: Invalid global index " + 
+                    std::to_string(global_idx));
+            }
+            
+            solution[global_idx] = all_solution[i];
+            aggregated_rhs[global_idx] = all_rhs[i];
+        }
+    }
+}
+
+//provide booleans for whether to do certain checks
+template<typename CoordType, typename DataType, typename KernelType>
+inline int h2_direct_verification(ParallelTree<CoordType, DataType>* tree, 
+    const std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data,
+    KernelType* kernel, 
+    const ProgramOptions& options) {
+
+    int rank; 
+    MPI_Comm_rank(tree->comm, &rank);
+
+    // Invariant: options.N (the Npo handed to construct_init) must equal the built tree's
+    // point count. Both are derived from the same Npo, so a mismatch means the options struct
+    // and the tree are inconsistent -- fail loudly rather than size the verification wrong.
+    // (Global, rank-consistent scalars, so every rank takes the same branch: abort is safe.)
+    if (options.N != tree->num_points) {
+      if (rank == 0) {
+        std::cerr << "h2_direct_verification: options.N (" << options.N
+                  << ") != tree->num_points (" << tree->num_points
+                  << "); inconsistent solver state." << std::endl;
+      }
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    const int64_t N = tree->num_points;
+
+    // verify solution x from Ax=b is reasonable, this is the ground truth comparison for smaller matrices
+    if (N <= 4096) {
+
+      // Verification is purely index-based (evaluate_by_index): it needs no coordinates and
+      // imposes no grid-shape requirement, so any N <= 4096 is verifiable.
+      std::vector<DataType> solution;
+      std::vector<DataType> aggregated_rhs;
+
+      butterfly::gather_solution_to_root(tree, solve_data, solution, aggregated_rhs);
+      
+      const double direct_error = butterfly::verify_solution_direct(
+        tree->comm,
+        kernel,
+        aggregated_rhs,
+        solution,
+        N,
+        options.dimension,
+        true);
+      if (rank == 0) {
+        std::cout << "verifying with direct matrix vector multiply since N <= 4096" << std::endl;
+        std::cout << "Direct error: " << direct_error << std::endl;
+      }
+    } else {
+        if (rank ==0) {
+            std::cout << "no direct verification. N > 4096." <<std::endl;
+        }
+        
+    }
+
+    return 0;
+}
 
 
 // //provide booleans for whether to do certain checks
-// inline int h2_verification(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, bool verify_solution, bool verify_factorization, bool condition_number) {
+// inline int h2_verification(H2<CoordType, DataType>* H2_solver, 
+//     const ProgramOptions& options, 
+//     bool verify_solution, 
+//     bool verify_factorization, 
+//     bool condition_number) {
 //   // pass in tree and h2 options
 
 //   // Step 1: verify solution x from Ax=b is reasonable

@@ -919,6 +919,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
         Nloc);
 
       // can conduct h2_verification, only if uniform points
+	  
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -1015,7 +1016,18 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
 
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
+
+
+	double logabs_d = 0.0;
+	hierarchical_logdet_parallel(H2_solver->tree.get(), &logabsdet, reinterpret_cast<H2Data*>(phase));
+	*logabsdet = static_cast<C_RDT>(logsabs_d);
   }else{
 	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
   }
