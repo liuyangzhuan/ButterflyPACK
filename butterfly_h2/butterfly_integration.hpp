@@ -570,6 +570,13 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   idxs++;// this is to convert from 0-based index to 1-based index for Fortran compatibility
   idxe++;
 
+  // new2old currently holds 0-based global DOF indices (copied from box.point_indices via
+  // idx_map). ButterflyPACK's mesh/perms convention is 1-based: c_bpack_new2old returns these
+  // values and the driver subtracts 1 to get a 0-based DOF. Convert the VALUES to 1-based here so
+  // that both msh%new2old (C_BPACK_Set_Mesh_H2) and perms match the HODLR path. NOTE: this is the
+  // ONLY place to add the +1 -- C_BPACK_Set_Mesh_H2 must keep copying new2old verbatim.
+  for (int& v : new2old) v += 1;
+
 
   // To Do: maybe put this section and below to c_bpack_factor
   return 0;
