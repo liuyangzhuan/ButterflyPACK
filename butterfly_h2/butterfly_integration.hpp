@@ -3506,7 +3506,7 @@ inline int h2_direct_verification(ParallelTree<CoordType, DataType>* tree,
     const int64_t N = tree->num_points;
 
     // verify solution x from Ax=b is reasonable, this is the ground truth comparison for smaller matrices
-    if (N <= 4096) {
+    if (N <= 8000) {
 
       // Verification is purely index-based (evaluate_by_index): it needs no coordinates and
       // imposes no grid-shape requirement, so any N <= 4096 is verifiable.
