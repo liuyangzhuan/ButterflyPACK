@@ -980,6 +980,10 @@ contains
          val_d = option%sample_para_outer
          valid_opt = 1
       endif
+      if (trim(str) == 'reduction_threshold') then 
+         val_d = option%reduction_threshold
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1228,6 +1232,11 @@ contains
          option%use_qtt = val_i
          valid_opt = 1
       endif
+
+      if (trim(str) == 'reduction_threshold') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%reduction_threshold = val_i
+         valid_opt = 1
 
       ! if (trim(str) == 'sample_heuristic') then
       !    call c_f_pointer(val_Cptr, val_i)

@@ -789,6 +789,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
+        integer:: reduction_threshold !< 7: H2 process-reduction threshold
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse

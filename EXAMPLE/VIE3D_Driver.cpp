@@ -693,6 +693,8 @@ if(myrank==master_rank){
   double smax_ivelo11=3.0;
   int nshape=200;
 
+  int reduction_threshold = 0;
+
   int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
 
   FILE *fout1;
@@ -743,6 +745,7 @@ if(myrank==master_rank){
       {"scaleGreen",        required_argument, 0, 33},
       {"tol_comp_s2s",      required_argument, 0, 34},
       {"format_s2s",       required_argument, 0, 35},
+      {"reduction_threshold", required_argument, 0, 36},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -892,6 +895,10 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> format_s2s;
     } break;
+    case 36: {
+      std::isstringstream iss(optarg);
+      iss >> reduction_threshold;
+    }
     default: break;
     }
   }
@@ -1062,6 +1069,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "ErrSol", 1);
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
   // z_c_bpack_set_I_option(&option_bf, "format", 7); // not this matrix! Xiaomian
+  z_c_bpack_set_I_option(&option_bf, "reduction_threshold", reduction_threshold);
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
 
@@ -1456,7 +1464,9 @@ if(myrank==master_rank){
       double tol_s2s_eff = (tol_s2s > 0) ? tol_s2s : tol_comp_step1;
       string tag = (format_s2s == 7) ? "h2tols2s" : "tols2s";
       string filename = "./xvglo_tol" + my::to_string(tol_comp_step1)
-                      + "_" + tag + my::to_string(tol_s2s_eff) + ".bin";
+                      + "_" + tag + my::to_string(tol_s2s_eff)
+                      + "_h" + my::to_string(h)
+                      + "_omega" + my::to_string(w) + ".bin";
       FILE* fx = fopen(filename.c_str(), "wb");
       int n_total = N * nvec;
       fwrite(&n_total, sizeof(int), 1, fx);

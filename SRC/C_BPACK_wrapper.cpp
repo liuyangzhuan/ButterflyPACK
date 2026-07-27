@@ -718,8 +718,10 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     butterfly::ProgramOptions H2_options;
     try {
 	  double tolerance;
+	  int64_t reduction_threshold;
 	  c_bpack_getoption(option, "tol_comp", &tolerance);
-      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance);
+	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold)
+      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold);
 	  H2_solver->options = H2_options;
     } catch (const std::exception& e) {
         if (rank == 0) {
@@ -840,7 +842,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 
 	  double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
 	  c_bpack_setstats(stats, "Rank_max", &rank_max);
-	  
+
+	  double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+	  c_bpack_setstats(stats, "Mem_Factor", &factorization_memory_MB);
+
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         throw;
@@ -980,6 +985,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
 		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
 	    c_bpack_setstats(stats, "Rank_max", &rank_max);
+
+		double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+		c_bpack_setstats(stats,"Mem_Factor", &factorization_memory_MB);
       }
 
       bool verbose = true;

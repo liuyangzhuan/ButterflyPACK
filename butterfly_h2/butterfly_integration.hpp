@@ -200,6 +200,7 @@ struct H2 {
     //temporary comment
     //RedistributionPlan redistribution;
     int64_t last_factor_rankmax = 0;
+    size_t factorization_memory = 0;
     bool factorized = false;
 };
 
@@ -331,7 +332,7 @@ inline void compute_global_bounds(const CoordType* Locations,
   // double kappa = 10.0;         // Yukawa screening parameter κ
   // int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
 inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locations, 
-  double tolerance) {
+  double tolerance, int64_t reduction_threshold) {
 
     ProgramOptions h2_options;
     
@@ -570,11 +571,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   idxs++;// this is to convert from 0-based index to 1-based index for Fortran compatibility
   idxe++;
 
-  // new2old currently holds 0-based global DOF indices (copied from box.point_indices via
-  // idx_map). ButterflyPACK's mesh/perms convention is 1-based: c_bpack_new2old returns these
-  // values and the driver subtracts 1 to get a 0-based DOF. Convert the VALUES to 1-based here so
-  // that both msh%new2old (C_BPACK_Set_Mesh_H2) and perms match the HODLR path. NOTE: this is the
-  // ONLY place to add the +1 -- C_BPACK_Set_Mesh_H2 must keep copying new2old verbatim.
+  // new2old changed to index-1 based for fortran side
   for (int& v : new2old) v += 1;
 
 
@@ -780,6 +777,7 @@ void hierarchical_factorization_parallel(
     int num_proxy,
     CoordType proxy_radius,
     int64_t* out_rankmax,
+    size_t* memory_per_rank,
     bool verbose = true) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
@@ -1740,6 +1738,8 @@ void hierarchical_factorization_parallel(
     }
     printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
     fflush(stdout);
+
+    *memory_per_rank = local_memory_usage;
     
     double logabsdet;
     DataType phase;
@@ -1761,6 +1761,7 @@ void hierarchical_factorization_parallel_if_supported(
     int num_proxy,
     CoordType proxy_radius,
     int64_t* out_rankmax = nullptr,
+    size_t* memory_per_rank = nullptr,
     bool verbose = true) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
@@ -1775,6 +1776,7 @@ void hierarchical_factorization_parallel_if_supported(
             num_proxy, 
             proxy_radius, 
             out_rankmax,
+            memory_per_rank
             verbose);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
@@ -1848,6 +1850,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     num_proxy,
     0.0, // proxy_radius = 0
     &solver->last_factor_rankmax,
+    &solver->factorization_memory,
     true);
   double tf = MPI_Wtime() - t0;
   MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
