@@ -693,7 +693,7 @@ if(myrank==master_rank){
   double smax_ivelo11=3.0;
   int nshape=200;
 
-  int reduction_threshold = 0;
+  int64_t reduction_threshold = 0;
 
   int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
 
@@ -896,9 +896,9 @@ if(myrank==master_rank){
       iss >> format_s2s;
     } break;
     case 36: {
-      std::isstringstream iss(optarg);
+      std::istringstream iss(optarg);
       iss >> reduction_threshold;
-    }
+    } break;
     default: break;
     }
   }
@@ -1069,7 +1069,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "ErrSol", 1);
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
   // z_c_bpack_set_I_option(&option_bf, "format", 7); // not this matrix! Xiaomian
-  z_c_bpack_set_I_option(&option_bf, "reduction_threshold", reduction_threshold);
+  z_c_bpack_set_I_option(&option_bf, "reduction_threshold", (int)reduction_threshold);
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
 

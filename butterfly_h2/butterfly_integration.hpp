@@ -218,7 +218,7 @@ inline int64_t default_reduction_threshold_for_dimension(int dimension) {
 }
 
 inline int64_t min_reduction_threshold_for_dimension(int dimension) {
-    return (dimension == 2) ? 64 : 512;
+    return (dimension == 2) ? 16 : 64;
 }
 
 inline int default_num_proxy_for_dimension(int dimension) {
@@ -390,7 +390,8 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
     if (!(h2_options.tolerance > 0.0)) {
         throw std::invalid_argument("tolerance must be positive.");
     }
-    if (h2_options.reduction_threshold == 0) {
+    h2_options.reduction_threshold = reduction_threshold;
+    if (h2_options.reduction_threshold <= 0) {
         h2_options.reduction_threshold =
             default_reduction_threshold_for_dimension(h2_options.dimension);
     }
@@ -1776,7 +1777,7 @@ void hierarchical_factorization_parallel_if_supported(
             num_proxy, 
             proxy_radius, 
             out_rankmax,
-            memory_per_rank
+            memory_per_rank,
             verbose);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");

@@ -718,9 +718,10 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     butterfly::ProgramOptions H2_options;
     try {
 	  double tolerance;
-	  int64_t reduction_threshold;
+	  double reduction_threshold_d;
 	  c_bpack_getoption(option, "tol_comp", &tolerance);
-	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold)
+	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
+	  int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold);
 	  H2_solver->options = H2_options;
     } catch (const std::exception& e) {

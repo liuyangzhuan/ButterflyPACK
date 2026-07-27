@@ -1237,6 +1237,7 @@ contains
          call c_f_pointer(val_Cptr, val_i)
          option%reduction_threshold = val_i
          valid_opt = 1
+      endif
 
       ! if (trim(str) == 'sample_heuristic') then
       !    call c_f_pointer(val_Cptr, val_i)
