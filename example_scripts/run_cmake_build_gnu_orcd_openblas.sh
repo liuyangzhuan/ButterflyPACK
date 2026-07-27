@@ -34,6 +34,11 @@ cd build
 rm -rf CMakeCache.txt DartConfiguration.tcl CTestTestfile.cmake cmake_install.cmake CMakeFiles
 rm -rf SRC_DOUBLE SRC_DOUBLECOMPLEX SRC_SINGLE SRC_COMPLEX
 
+# Build type: RelWithDebInfo compiles -O2 -g (keeps optimization, adds debug symbols
+# so gdb/UCX backtraces show file:line). Toggle by swapping which line is commented.
+#BUILD_TYPE=Release
+BUILD_TYPE=RelWithDebInfo
+
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE -fallow-argument-mismatch" \
 	-DCMAKE_CXX_FLAGS="-I${FFTW_PREFIX}/include" \
@@ -50,7 +55,7 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=mpicxx \
 	-DCMAKE_C_COMPILER=mpicc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DOpenMP_C_FLAGS="-fopenmp" \
 	-DOpenMP_C_LIB_NAMES="gomp" \
