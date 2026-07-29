@@ -1523,7 +1523,7 @@ if(myrank==master_rank){
     delete quant_ptr_bf_s2s;
     z_c_bpack_deletestats(&stats_bf_s2s);
     z_c_bpack_deletemesh(&msh_bf_s2s);
-    z_c_bpack_deletekernelquant(&kerquant_bf_s2s);
+    if(format_s2s!=7) z_c_bpack_deletekernelquant(&kerquant_bf_s2s);
     z_c_bpack_delete(&bmat_bf_s2s);
     delete[] nns_ptr_s2s;        // also allocated at 1298, currently leaked
 
