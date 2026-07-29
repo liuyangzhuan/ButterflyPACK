@@ -67,3 +67,4 @@ cmake .. \
 
 # cvie3d pulls in its dependencies automatically
 make cvie3d -j16
+make cvie3d cvie3d_h2 -j16
