@@ -756,7 +756,7 @@ void assign_points_to_boxes(
     }
     
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
     
     // Broadcast points to all processes
     std::vector<CoordType> all_points;
@@ -770,7 +770,7 @@ void assign_points_to_boxes(
     }
     
     MPI_Datatype mpi_type = std::is_same_v<CoordType, float> ? MPI_FLOAT : MPI_DOUBLE;
-    MPI_Bcast(all_points.data(), tree->dimension * num_points, mpi_type, 0, MPI_COMM_WORLD);
+    MPI_Bcast(all_points.data(), tree->dimension * num_points, mpi_type, 0, tree->comm);
     
     int32_t leaf_level = tree->num_levels - 1;
     auto& leaf_lvl = tree->levels[leaf_level];
@@ -1818,8 +1818,8 @@ void compute_ghost_boxes_and_colors(
     // ========== Print diagnostics ==========
     
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    
+    MPI_Comm_rank(tree->comm, &rank);
+
     if (rank == 0) {
         std::cout << "\n========== Ghost Box Diagnostics (Rank 0) ==========" << std::endl;
         std::cout << "After Step 1 (1-hop neighbors): " << after_step1 << " ghosts" << std::endl;

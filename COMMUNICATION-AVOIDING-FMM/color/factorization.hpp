@@ -642,7 +642,7 @@ public:
             factorize_level(tree, level);
             
             // Synchronize between levels
-            MPI_Barrier(MPI_COMM_WORLD);
+            MPI_Barrier(tree->comm);
         }
     }
     

@@ -719,10 +719,13 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     try {
 	  double tolerance;
 	  double reduction_threshold_d;
+	  double Nmin_leaf_d;
 	  c_bpack_getoption(option, "tol_comp", &tolerance);
 	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
+	  c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
 	  int64_t reduction_threshold = (int64_t)reduction_threshold_d;
-      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold);
+	  int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
+      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf);
 	  H2_solver->options = H2_options;
     } catch (const std::exception& e) {
         if (rank == 0) {
@@ -733,19 +736,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 
     try {
       if (rank == 0) {
-
-        std::cout << "Run configuration: kernel=" << butterfly::kernel_kind_to_string(H2_options.kernel_kind)
-                  << ", number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
+        std::cout << "ButterflyPACK H2, number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
                   << ", dimension=" << H2_options.dimension
-                  << ", reduction_threshold=" << H2_options.reduction_threshold
-                  << ", num_proxy=" << H2_options.num_proxy;
-        if (H2_options.kernel_kind == butterfly::KernelKind::MATERN52) {
-          std::cout << ", length_scale=" << H2_options.length_scale
-                    << ", nugget=" << H2_options.nugget;
-        }
-        if (H2_options.kernel_kind == butterfly::KernelKind::YUKAWA) {
-          std::cout << ", kappa=" << H2_options.kappa;
-        }
+                  << ", reduction_threshold=" << H2_options.reduction_threshold;
         std::cout << std::endl;
       }
 

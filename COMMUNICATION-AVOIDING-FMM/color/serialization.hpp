@@ -1864,7 +1864,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     clock::duration communication_time{};
 
     int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
 
     // Step 1: Group requested assisting mortons by owner rank.
     std::unordered_map<int, std::vector<int64_t>> req_to_send;
@@ -1929,12 +1929,12 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     auto comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
-        int err = MPI_Irecv(&recv_counts[i], 1, MPI_INT, neighbor_ranks[i], 600, MPI_COMM_WORLD, &req);
+        int err = MPI_Irecv(&recv_counts[i], 1, MPI_INT, neighbor_ranks[i], 600, tree->comm, &req);
         throw_mpi_error(err, "count Irecv", neighbor_ranks[i]);
         requests.push_back(req);
     }
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
-        int err = MPI_Send(&send_counts[i], 1, MPI_INT, neighbor_ranks[i], 600, MPI_COMM_WORLD);
+        int err = MPI_Send(&send_counts[i], 1, MPI_INT, neighbor_ranks[i], 600, tree->comm);
         throw_mpi_error(err, "count Send", neighbor_ranks[i]);
     }
     if (!requests.empty()) {
@@ -1952,7 +1952,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             req_received[i].resize(static_cast<size_t>(recv_counts[i]));
             MPI_Request req;
             int err = MPI_Irecv(req_received[i].data(), recv_counts[i], MPI_INT64_T,
-                                neighbor_ranks[i], 601, MPI_COMM_WORLD, &req);
+                                neighbor_ranks[i], 601, tree->comm, &req);
             throw_mpi_error(err, "request-list Irecv", neighbor_ranks[i]);
             requests.push_back(req);
         }
@@ -1960,7 +1960,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (send_counts[i] > 0) {
             int err = MPI_Send(req_to_send[neighbor_ranks[i]].data(),
-                               send_counts[i], MPI_INT64_T, neighbor_ranks[i], 601, MPI_COMM_WORLD);
+                               send_counts[i], MPI_INT64_T, neighbor_ranks[i], 601, tree->comm);
             throw_mpi_error(err, "request-list Send", neighbor_ranks[i]);
         }
     }
@@ -2021,12 +2021,12 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
-        int err = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 602, MPI_COMM_WORLD, &req);
+        int err = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 602, tree->comm, &req);
         throw_mpi_error(err, "size Irecv", neighbor_ranks[i]);
         requests.push_back(req);
     }
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
-        int err = MPI_Send(&send_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 602, MPI_COMM_WORLD);
+        int err = MPI_Send(&send_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 602, tree->comm);
         throw_mpi_error(err, "size Send", neighbor_ranks[i]);
     }
     if (!requests.empty()) {
@@ -2048,14 +2048,14 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] > 0) {
             int err = MPI_Irecv_large(recv_buffers[i].data(), (size_t)recv_sizes[i], MPI_CHAR,
-                                      neighbor_ranks[i], 603, MPI_COMM_WORLD, requests);
+                                      neighbor_ranks[i], 603, tree->comm, requests);
             throw_mpi_error(err, "payload Irecv_large", neighbor_ranks[i]);
         }
     }
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (send_sizes[i] > 0) {
             int err = MPI_Send_large(send_buffers[i].data(), send_buffers[i].size(), MPI_CHAR,
-                                     neighbor_ranks[i], 603, MPI_COMM_WORLD);
+                                     neighbor_ranks[i], 603, tree->comm);
             throw_mpi_error(err, "payload Send_large", neighbor_ranks[i]);
         }
     }
@@ -2090,7 +2090,7 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
                 // lvl.assisting_box_points_for_kernel_evaluation[req.morton_index] = idx;
             } else {
                 lvl.assisting_boxes[(size_t)it->second] = std::move(req);
-            }
+            } 
         }
         if (ptr != end) throw std::runtime_error("assist recv buffer parse mismatch");
     }
@@ -2862,7 +2862,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     if (!lvl.is_process_active) return communication_time;
 
     int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
     // Step 1: Compute the 1-hop process-neighbor list used by this exchange.
     const std::vector<int> neighbor_ranks = compute_one_hop_neighbor_ranks(tree, lvl, level);
     std::unordered_set<int> neigh_set(neighbor_ranks.begin(), neighbor_ranks.end());
@@ -2934,7 +2934,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     auto comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
-        int err = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, MPI_COMM_WORLD, &req);
+        int err = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, tree->comm, &req);
         if (err != MPI_SUCCESS) {
             char errbuf[MPI_MAX_ERROR_STRING];
             int errlen = 0;
@@ -2946,7 +2946,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         requests.push_back(req);
     }
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
-        int err = MPI_Send(&send_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, MPI_COMM_WORLD);
+        int err = MPI_Send(&send_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, tree->comm);
         if (err != MPI_SUCCESS) {
             char errbuf[MPI_MAX_ERROR_STRING];
             int errlen = 0;
@@ -2983,7 +2983,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] > 0) {
             int err = MPI_Irecv_large(recv_bufs[i].data(), (size_t)recv_sizes[i], MPI_CHAR,
-                                      neighbor_ranks[i], 701, MPI_COMM_WORLD, requests);
+                                      neighbor_ranks[i], 701, tree->comm, requests);
             if (err != MPI_SUCCESS) {
                 char errbuf[MPI_MAX_ERROR_STRING];
                 int errlen = 0;
@@ -3012,7 +3012,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             throw std::runtime_error("serialize pending: byte mismatch");
         }
         int err = MPI_Send_large(send_buffer.data(), send_buffer.size(), MPI_CHAR,
-                                 peer, 701, MPI_COMM_WORLD);
+                                 peer, 701, tree->comm);
         if (err != MPI_SUCCESS) {
             char errbuf[MPI_MAX_ERROR_STRING];
             int errlen = 0;
@@ -3089,8 +3089,8 @@ void gather_boxes_solve(
     }
 
     int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(tree->comm, &rank);
+    MPI_Comm_size(tree->comm, &size);
 
     uint32_t grid_size = 1 << level;
 
@@ -3243,7 +3243,7 @@ void gather_boxes_solve(
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
         int ierr = MPI_Irecv(&recv_counts[i], 1, MPI_INT,
-                             neighbor_ranks[i], 300, MPI_COMM_WORLD, &req);
+                             neighbor_ranks[i], 300, tree->comm, &req);
         abort_on_mpi_error(ierr, "MPI_Irecv(counts)", neighbor_ranks[i], sizeof(int));
         requests.push_back(req);
     }
@@ -3251,7 +3251,7 @@ void gather_boxes_solve(
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         send_counts.push_back(static_cast<int>(solve_requests_to_send[neighbor_ranks[i]].size()));
         int ierr = MPI_Send(&send_counts[i], 1, MPI_INT,
-                            neighbor_ranks[i], 300, MPI_COMM_WORLD);
+                            neighbor_ranks[i], 300, tree->comm);
         abort_on_mpi_error(ierr, "MPI_Send(counts)", neighbor_ranks[i], sizeof(int));
     }
 
@@ -3274,7 +3274,7 @@ void gather_boxes_solve(
                                  MPI_CHAR,
                                  neighbor_ranks[i],
                                  301,
-                                 MPI_COMM_WORLD,
+                                 tree->comm,
                                  &req);
             abort_on_mpi_error(ierr,
                                "MPI_Irecv(request-list)",
@@ -3291,7 +3291,7 @@ void gather_boxes_solve(
                                 MPI_CHAR,
                                 neighbor_ranks[i],
                                 301,
-                                MPI_COMM_WORLD);
+                                tree->comm);
             abort_on_mpi_error(ierr,
                                "MPI_Send(request-list)",
                                neighbor_ranks[i],
@@ -3327,14 +3327,14 @@ void gather_boxes_solve(
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
         int ierr = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T,
-                             neighbor_ranks[i], 302, MPI_COMM_WORLD, &req);
+                             neighbor_ranks[i], 302, tree->comm, &req);
         abort_on_mpi_error(ierr, "MPI_Irecv(sizes)", neighbor_ranks[i], sizeof(size_t));
         requests.push_back(req);
     }
 
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         int ierr = MPI_Send(&send_sizes[i], 1, MPI_UINT64_T,
-                            neighbor_ranks[i], 302, MPI_COMM_WORLD);
+                            neighbor_ranks[i], 302, tree->comm);
         abort_on_mpi_error(ierr, "MPI_Send(sizes)", neighbor_ranks[i], sizeof(size_t));
     }
 
@@ -3356,7 +3356,7 @@ void gather_boxes_solve(
                                        MPI_CHAR,
                                        neighbor_ranks[i],
                                        303,
-                                       MPI_COMM_WORLD,
+                                       tree->comm,
                                        requests);
             abort_on_mpi_error(ierr, "MPI_Irecv_large(payload)", neighbor_ranks[i], recv_sizes[i]);
         }
@@ -3396,7 +3396,7 @@ void gather_boxes_solve(
                                   MPI_CHAR,
                                   neighbor_ranks[i],
                                   303,
-                                  MPI_COMM_WORLD);
+                                  tree->comm);
         abort_on_mpi_error(ierr, "MPI_Send_large(payload)", neighbor_ranks[i], total_size);
     }
 
@@ -3557,7 +3557,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
     clock::duration communication_time{};
 
     int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(tree->comm, &rank);
 
     if (level_index < 0 || level_index >= (int)solve_data.size())
         throw std::runtime_error("transport_and_apply_solve_updates_onehop: level_index out of range");
@@ -3648,7 +3648,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
 
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request r;
-        MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, MPI_COMM_WORLD, &r);
+        MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, tree->comm, &r);
         reqs.push_back(r);
     }
 
@@ -3671,7 +3671,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
 
         // Always send a size to every neighbor in the derived list.
         auto comm_start = clock::now();
-        MPI_Send(&nbytes, 1, MPI_UINT64_T, peer, 700, MPI_COMM_WORLD);
+        MPI_Send(&nbytes, 1, MPI_UINT64_T, peer, 700, tree->comm);
         communication_time += (clock::now() - comm_start);
     }
 
@@ -3700,7 +3700,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
                                       MPI_CHAR,
                                       neighbor_ranks[i],
                                       701,
-                                      MPI_COMM_WORLD,
+                                      tree->comm,
                                       reqs);
             if (err != MPI_SUCCESS) {
                 char errbuf[MPI_MAX_ERROR_STRING];
@@ -3723,7 +3723,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
                                  MPI_CHAR,
                                  neighbor_ranks[i],
                                  701,
-                                 MPI_COMM_WORLD);
+                                 tree->comm);
         if (err != MPI_SUCCESS) {
             char errbuf[MPI_MAX_ERROR_STRING];
             int errlen = 0;

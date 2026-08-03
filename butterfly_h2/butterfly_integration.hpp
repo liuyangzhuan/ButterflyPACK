@@ -213,6 +213,16 @@ inline int default_num_levels(int64_t grid_size) {
   return k;
 }
 
+inline int calc_num_levels(int64_t grid_size, int64_t grid_dim_min_leaf) {
+    int k = 0;
+    while (grid_dim_min_leaf <= grid_size) {
+        grid_dim_min_leaf *= 2;
+        ++k;
+    }
+    return k;
+}
+
+
 inline int64_t default_reduction_threshold_for_dimension(int dimension) {
     return (dimension == 2) ? 256 : 4096;
 }
@@ -332,7 +342,7 @@ inline void compute_global_bounds(const CoordType* Locations,
   // double kappa = 10.0;         // Yukawa screening parameter κ
   // int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
 inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locations, 
-  double tolerance, int64_t reduction_threshold) {
+  double tolerance, int64_t reduction_threshold, int64_t Nmin_leaf) {
 
     ProgramOptions h2_options;
     
@@ -366,8 +376,17 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
       );
     }
 
-    // for h2 just calculate in the package
-    h2_options.num_levels = default_num_levels(grid_size);
+    // for h2: get nmin_leaf argument and validate that it's possible
+    int64_t grid_dim_min_leaf = std::llround(std::pow((double)Nmin_leaf, 1.0 / *Ndim));
+    if (grid_dim_min_leaf == 0) {
+        h2_options.num_levels = default_num_levels(grid_size);
+    } else if (grid_dim_min_leaf >= 2 && *Npo >= Nmin_leaf) {
+        h2_options.num_levels = calc_num_levels(grid_size, grid_dim_min_leaf);
+    } else {
+        throw std::invalid_argument(
+            "Nmin_leaf must be 0 (default), >= 2^dimension, or <= Npo for H2 solver."
+        );
+    }
 
     // need to check DataType: want to support double and double complex
     h2_options.tolerance = tolerance;
@@ -1753,6 +1772,7 @@ void hierarchical_factorization_parallel(
     DataType phase;
     hierarchical_logdet_parallel(tree, &logabsdet, &phase);
     if (rank == 0) {
+        std::cout.precision(17);
         std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
     }
 }
@@ -3388,7 +3408,7 @@ void gather_solution_to_root(
                          1,
                          MPI_INT,
                          0,
-                         MPI_COMM_WORLD);
+                         tree->comm);
     if (err != MPI_SUCCESS) {
         char errbuf[MPI_MAX_ERROR_STRING];
         int errlen = 0;
@@ -3431,7 +3451,7 @@ void gather_solution_to_root(
                       rank == 0 ? recv_displs.data() : nullptr,
                       MPI_INT64_T,
                       0,
-                      MPI_COMM_WORLD);
+                      tree->comm);
     if (err != MPI_SUCCESS) {
         char errbuf[MPI_MAX_ERROR_STRING];
         int errlen = 0;
@@ -3449,7 +3469,7 @@ void gather_solution_to_root(
                       rank == 0 ? recv_displs.data() : nullptr,
                       mpi_datatype,
                       0,
-                      MPI_COMM_WORLD);
+                      tree->comm);
     if (err != MPI_SUCCESS) {
         char errbuf[MPI_MAX_ERROR_STRING];
         int errlen = 0;
@@ -3467,7 +3487,7 @@ void gather_solution_to_root(
                       rank == 0 ? recv_displs.data() : nullptr,
                       mpi_datatype,
                       0,
-                      MPI_COMM_WORLD);
+                      tree->comm);
     if (err != MPI_SUCCESS) {
         char errbuf[MPI_MAX_ERROR_STRING];
         int errlen = 0;
