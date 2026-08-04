@@ -635,7 +635,7 @@ int main(int argc, char* argv[])
 	int* nns_ptr_m, *nns_ptr_n, *nns_ptr_k, *nns_ptr_l;
 	int nogeo=0;  // 1: no geometrical information passed to hodlr, dat_ptr and Ndim are dummy
 
-	int Nmin=4; //finest leafsize
+	int Nmin=0; //finest leafsize
 	double tol=1e-4; //compression tolerance
 	double sample_para=2.0; //oversampling factor in entry evaluation
 	double sample_para_outer=2.0; //oversampling factor in entry evaluation
@@ -746,6 +746,7 @@ if(myrank==master_rank){
       {"tol_comp_s2s",      required_argument, 0, 34},
       {"format_s2s",       required_argument, 0, 35},
       {"reduction_threshold", required_argument, 0, 36},
+      {"Nmin_leaf",         required_argument, 0, 37},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -899,6 +900,10 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> reduction_threshold;
     } break;
+    case 37: {
+      std::istringstream iss(optarg);
+      iss >> Nmin;
+    } break;
     default: break;
     }
   }
@@ -1023,7 +1028,7 @@ if(myrank==master_rank){
 	// double* dat_ptr;
 	int* nns_ptr;
 
-	Nmin=100; //finest leafsize
+	// Nmin=100; // H2: keep Nmin=0 so Nmin_leaf=0 → parse_program_options uses default_num_levels; --Nmin_leaf overrides
 	tol=1e-4; //compression tolerance
   double tol_rand=1e-2; //factorization tolerence
 	com_opt=5; //1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton

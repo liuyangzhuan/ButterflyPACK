@@ -1976,12 +1976,10 @@ void hierarchical_solve_parallel(
 
             
             
-            
+            // To Do: add righthand side with matrix
             // Set RHS from global vector (only at leaf level)
             if (level == leaf_level) {
                 for (int64_t i = 0; i < box.num_points; ++i) {
-                    // int64_t global_idx = box.point_indices[i];
-                    // solve_box.right_side[i] = rhs[global_idx];
                     solve_box.right_side[i] = rhs[global_idx];
                     global_idx++;
                 }

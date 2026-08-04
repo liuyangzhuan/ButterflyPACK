@@ -697,6 +697,8 @@ if(myrank==master_rank){
 
   int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
 
+  int Nmin_leaf_s2s = -1;   // -1 = unset: s2s uses the same Nmin_leaf as v2v. Override with --Nmin_leaf_s2s
+
   FILE *fout1;
 
   //getting the example configurations from command line
@@ -746,6 +748,7 @@ if(myrank==master_rank){
       {"tol_comp_s2s",      required_argument, 0, 34},
       {"format_s2s",       required_argument, 0, 35},
       {"reduction_threshold", required_argument, 0, 36},
+      {"Nmin_leaf_s2s",     required_argument, 0, 37},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -898,6 +901,10 @@ if(myrank==master_rank){
     case 36: {
       std::istringstream iss(optarg);
       iss >> reduction_threshold;
+    } break;
+    case 37: {
+      std::istringstream iss(optarg);
+      iss >> Nmin_leaf_s2s;
     } break;
     default: break;
     }
@@ -1344,6 +1351,8 @@ if(myrank==master_rank){
     // Capture the format-1 value first so it can be restored for step 3.
     double tol_comp_step1; z_c_bpack_getoption(&option_bf, "tol_comp", &tol_comp_step1);
     if(tol_s2s > 0) z_c_bpack_set_D_option(&option_bf, "tol_comp", tol_s2s);
+    double Nmin_leaf_step1; z_c_bpack_getoption(&option_bf, "Nmin_leaf", &Nmin_leaf_step1);
+    if(Nmin_leaf_s2s >= 0) z_c_bpack_set_I_option(&option_bf, "Nmin_leaf", Nmin_leaf_s2s);
 
 
     F2Cptr bmat_bf_s2s;  //hierarchical matrix returned by Fortran code
@@ -1495,6 +1504,8 @@ if(myrank==master_rank){
     }
     z_c_bpack_set_I_option(&option_bf, "format", 1); // don't change this matrix! Xiaomian
     if(tol_s2s > 0) z_c_bpack_set_D_option(&option_bf, "tol_comp", tol_comp_step1); // restore step-1 tol_comp
+    if(Nmin_leaf_s2s >= 0) z_c_bpack_set_I_option(&option_bf, "Nmin_leaf", (int)Nmin_leaf_step1); // restore step-1 Nmin_leaf
+    
     z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
     vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
     for (int i=0; i<myseg; i++){
