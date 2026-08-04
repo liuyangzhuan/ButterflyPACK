@@ -7281,7 +7281,7 @@ time_tmp = time_tmp + n2 - n1
       norm_row_R = 0
       norm_column_R = 0
 
-      select_row(1) = frow
+      select_row(1) = header_m + select_row(1) - 1
 
       mrange = select_row(1)
       do j = 1, rankmax_c
@@ -7810,7 +7810,7 @@ time_tmp = time_tmp + n2 - n1
       norm_row_R = 0
       norm_column_R = 0
 
-      select_row(1) = frow
+      select_row(1) = header_m + select_row(1) - 1
 
       mrange = select_row(1)
       do j = 1, blocks%N_loc
