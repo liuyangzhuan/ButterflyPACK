@@ -7281,9 +7281,9 @@ time_tmp = time_tmp + n2 - n1
       norm_row_R = 0
       norm_column_R = 0
 
-      select_row(1) = header_m + frow - 1
+      select_row(1) = frow
 
-      mrange = select_row(1)
+      mrange(1) = header_m + select_row(1) - 1
       do j = 1, rankmax_c
          nrange(j) = header_n + j - 1
       enddo
@@ -7329,7 +7329,7 @@ time_tmp = time_tmp + n2 - n1
             call random_number(a)
             select_row(1) = floor_safe(a*(rankmax_r - 1)) + 1
 
-            mrange = select_row(1)
+            mrange(1) = header_m + select_row(1) - 1
             do j = 1, rankmax_c
                nrange(j) = header_n + j - 1
             enddo
@@ -7810,9 +7810,9 @@ time_tmp = time_tmp + n2 - n1
       norm_row_R = 0
       norm_column_R = 0
 
-      select_row(1) = header_m + frow - 1
+      select_row(1) = frow
 
-      mrange = select_row(1)
+      mrange(1) = header_m + select_row(1) - 1
       do j = 1, blocks%N_loc
          nrange(j) = header_n + j - 1 + headn_loc - 1
       enddo
