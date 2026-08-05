@@ -28,6 +28,177 @@ module MISC_DenseLA
 contains
 
 
+   ! Pivoted LDL^T factorization for real or complex symmetric matrices.
+   subroutine sytrff90(Matrix, ipiv, uplo, info, flop)
+      implicit none
+      DT Matrix(:, :)
+      integer ipiv(:)
+      character uplo
+      integer info, n, lwork
+      DT work_query(1)
+      DT, allocatable::work(:)
+      real(kind=8), optional::flop
+
+      n = size(Matrix, 1)
+      if (size(Matrix, 2) < n .or. size(ipiv) < n) then
+         info = -1
+         return
+      endif
+      if (n == 0) then
+         info = 0
+         if (present(flop)) flop = 0
+         return
+      endif
+
+      lwork = -1
+#if DAT==0
+      call ZSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work_query, lwork, info)
+#elif DAT==1
+      call DSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work_query, lwork, info)
+#elif DAT==2
+      call CSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work_query, lwork, info)
+#elif DAT==3
+      call SSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work_query, lwork, info)
+#endif
+      if (info /= 0) return
+
+      lwork = max(1, nint(real(work_query(1), kind=8)))
+      allocate(work(lwork))
+#if DAT==0
+      call ZSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work, lwork, info)
+#elif DAT==1
+      call DSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work, lwork, info)
+#elif DAT==2
+      call CSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work, lwork, info)
+#elif DAT==3
+      call SSYTRF(uplo, n, Matrix, size(Matrix, 1), ipiv, work, lwork, info)
+#endif
+      deallocate(work)
+
+      if (present(flop)) then
+#if DAT==0 || DAT==2
+         flop = 8d0/3d0*dble(n)**3
+#else
+         flop = 1d0/3d0*dble(n)**3
+#endif
+      endif
+   end subroutine sytrff90
+
+
+   ! Solve A*X=B from the factors returned by sytrff90.
+   subroutine sytrsf90(Matrix, ipiv, B, uplo, info, flop)
+      implicit none
+      DT Matrix(:, :), B(:, :)
+      integer ipiv(:)
+      character uplo
+      integer info, n, nrhs
+      real(kind=8), optional::flop
+
+      n = size(Matrix, 1)
+      nrhs = size(B, 2)
+      if (size(Matrix, 2) < n .or. size(ipiv) < n .or. size(B, 1) < n) then
+         info = -1
+         return
+      endif
+      if (n == 0 .or. nrhs == 0) then
+         info = 0
+         if (present(flop)) flop = 0
+         return
+      endif
+
+#if DAT==0
+      call ZSYTRS(uplo, n, nrhs, Matrix, size(Matrix, 1), ipiv, B, size(B, 1), info)
+#elif DAT==1
+      call DSYTRS(uplo, n, nrhs, Matrix, size(Matrix, 1), ipiv, B, size(B, 1), info)
+#elif DAT==2
+      call CSYTRS(uplo, n, nrhs, Matrix, size(Matrix, 1), ipiv, B, size(B, 1), info)
+#elif DAT==3
+      call SSYTRS(uplo, n, nrhs, Matrix, size(Matrix, 1), ipiv, B, size(B, 1), info)
+#endif
+
+      if (present(flop)) then
+#if DAT==0 || DAT==2
+         flop = 8d0*dble(n)*dble(n)*dble(nrhs)
+#else
+         flop = 2d0*dble(n)*dble(n)*dble(nrhs)
+#endif
+      endif
+   end subroutine sytrsf90
+
+
+   ! Compute det(A)=phase*exp(logabsdet) from a SYTRF factorization.  A
+   ! complex-symmetric 2-by-2 D block uses d11*d22-d12*d12, without conjugation.
+   subroutine sytrf_slogdet(uplo, n, af, ldaf, ipiv, phase, logabsdet, info)
+      implicit none
+      character uplo
+      integer n, ldaf, ipiv(*), info
+      DT af(ldaf, *), phase, det_block
+      DTR logabsdet, abs_det
+      integer k
+
+      phase = BPACK_cone
+      logabsdet = 0
+      info = 0
+      if (uplo == 'L' .or. uplo == 'l') then
+         k = 1
+         do while (k <= n)
+            if (ipiv(k) > 0) then
+               det_block = af(k, k)
+               call accumulate_block(k)
+               if (info /= 0) return
+               k = k + 1
+            else
+               if (k == n .or. ipiv(k + 1) /= ipiv(k)) then
+                  info = -5
+                  return
+               endif
+               det_block = af(k, k)*af(k + 1, k + 1) - af(k + 1, k)*af(k + 1, k)
+               call accumulate_block(k)
+               if (info /= 0) return
+               k = k + 2
+            endif
+         enddo
+      else if (uplo == 'U' .or. uplo == 'u') then
+         k = n
+         do while (k >= 1)
+            if (ipiv(k) > 0) then
+               det_block = af(k, k)
+               call accumulate_block(k)
+               if (info /= 0) return
+               k = k - 1
+            else
+               if (k == 1 .or. ipiv(k - 1) /= ipiv(k)) then
+                  info = -5
+                  return
+               endif
+               det_block = af(k - 1, k - 1)*af(k, k) - af(k - 1, k)*af(k - 1, k)
+               call accumulate_block(k - 1)
+               if (info /= 0) return
+               k = k - 2
+            endif
+         enddo
+      else
+         info = -1
+      endif
+
+   contains
+
+      subroutine accumulate_block(block_index)
+         integer block_index
+
+         abs_det = abs(det_block)
+         if (abs_det == 0 .or. abs_det /= abs_det) then
+            phase = BPACK_czero
+            logabsdet = -huge(logabsdet)
+            info = block_index
+            return
+         endif
+         phase = phase*(det_block/abs_det)
+         logabsdet = logabsdet + log(abs_det)
+      end subroutine accumulate_block
+   end subroutine sytrf_slogdet
+
+
    subroutine blacs_gridinfo_wrp(ctxt, nprow, npcol, myrow, mycol)
       integer ctxt,nprow,npcol,myrow,mycol
 #ifdef HAVE_MPI

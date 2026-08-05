@@ -1968,6 +1968,7 @@ contains
       integer::passflag = 0
       integer::mrange_dummy(1), nrange_dummy(1)
       DT::mat_dummy(1, 1)
+      DT::sym_value
       type(intersect)::submats(1)
 
       ! Memory_direct_forward=0
@@ -2002,7 +2003,7 @@ contains
          endif
          n3 = MPI_Wtime()
          do ii = Bidxs, Bidxe
-            if (option%sym == 1 .and. level_c /= ho_bf1%Maxlevel + 1 .and. mod(ii, 2) == 1) cycle
+            if (option%sym > 0 .and. level_c /= ho_bf1%Maxlevel + 1 .and. mod(ii, 2) == 1) cycle
             ! do ii =Bidxs,Bidxs
             if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) then
                if (level_c /= ho_bf1%Maxlevel + 1) then
@@ -2053,6 +2054,18 @@ contains
                      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'constructing level', level
                   endif
                   call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), msh, ker, stats, option, ptree, memory)
+                  if (option%sym > 0) then
+                     associate (leaf => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+                        call assert(leaf%M == leaf%N, 'a symmetric HODLR dense leaf must be square')
+                        do jj = 1, leaf%N
+                           do iii = jj + 1, leaf%M
+                              sym_value = (leaf%fullmat(iii, jj) + leaf%fullmat(jj, iii))/2d0
+                              leaf%fullmat(iii, jj) = sym_value
+                              leaf%fullmat(jj, iii) = sym_value
+                           enddo
+                        enddo
+                     end associate
+                  endif
                   stats%Mem_Direct_for = stats%Mem_Direct_for + memory
                endif
                ! ! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
@@ -2063,7 +2076,7 @@ contains
             endif
          end do
 
-         if (option%sym == 1 .and. level_c /= ho_bf1%Maxlevel + 1) then
+         if (option%sym > 0 .and. level_c /= ho_bf1%Maxlevel + 1) then
             do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
                if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)) then
                   call HODLR_sym_link_pair(ho_bf1%levels(level_c)%BP(2*ii - 1), &
@@ -2089,7 +2102,11 @@ contains
          n5 = n4 - n3
          n5_tmp = n5
          call MPI_ALLREDUCE(n5_tmp, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level
+         call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel), &
+            stats%rankmax_of_level_global(0:ho_bf1%Maxlevel), &
+            ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) &
+            'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level_global
       end do
       n2 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n2 - n1

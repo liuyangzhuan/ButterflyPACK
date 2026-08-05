@@ -3172,13 +3172,10 @@ end function distance_geo
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
-      if (option%sym == 1) then
-         call assert(option%format == HODLR, 'option%sym=1 requires option%format=HODLR')
-         call assert(option%LRlevel == 0, 'option%sym=1 requires option%LRlevel=0')
-         call assert(option%use_zfp == 0, 'option%sym=1 does not support ZFP-compressed dense leaves')
-#if DAT==0 || DAT==2
-         call assert(.false., 'option%sym=1 currently supports real-valued HODLR matrices only')
-#endif
+      if (option%sym > 0) then
+         call assert(option%format == HODLR, 'option%sym>0 requires option%format=HODLR')
+         call assert(option%LRlevel == 0, 'option%sym>0 requires option%LRlevel=0')
+         call assert(option%use_zfp /= 1, 'option%sym>0 does not support ZFP-compressed dense leaves')
       endif
 
       ho_bf1%N = msh%Nunk

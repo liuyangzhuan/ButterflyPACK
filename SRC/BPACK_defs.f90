@@ -673,8 +673,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type schulz_operand
 
     !>**** Symmetric HODLR factor associated with one binary-tree node.
-    ! The tall bases remain in the HODLR block-row layout.  The coupling and
-    ! Schur factors are small replicated matrices on the node process group.
+    ! The tall bases remain in the HODLR block-row layout.  The dense Schur
+    ! factor and its pivots are stored only on the node process-group head.
     type hodlr_symfactor
         integer :: pgno = 0
         integer :: pgno0 = 0, pgno1 = 0
@@ -683,9 +683,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer :: nloc0 = 0, nloc1 = 0
         integer :: info = 0
         DTR :: jitter = 0
-        DTR :: min_pivot = 0
+        integer, allocatable :: ipiv(:)
         DT, allocatable :: Q0(:, :), Q1(:, :)
-        DT, allocatable :: K(:, :)
+        DT, allocatable :: Z0(:, :), Z1(:, :)
         DT, allocatable :: S(:, :)
     end type hodlr_symfactor
 

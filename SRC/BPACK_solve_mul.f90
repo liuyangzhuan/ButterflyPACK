@@ -3176,85 +3176,11 @@ contains
    end subroutine BPACK_MD_Mult
 
 
-   ! Unpivoted LDL^T is stable for an SPD matrix and exposes the square-root
-   ! factors required by the symmetric HODLR recursion.
-   subroutine HODLR_Sym_LDLT_Factor(A, info, min_pivot, logdet)
-      implicit none
-      DT::A(:, :)
-      integer info, n, i, j, k
-      DTR min_pivot, logdet, pivot
-      DT accum
-
-      n = size(A, 1)
-      info = 0
-      logdet = 0
-      min_pivot = BPACK_Bigvalue
-      do j = 1, n
-         accum = 0
-         do k = 1, j - 1
-            accum = accum + A(j, k)*A(j, k)*A(k, k)
-         enddo
-         pivot = dble(A(j, j) - accum)
-         if (pivot <= 0 .or. pivot /= pivot) then
-            info = j
-            min_pivot = min(min_pivot, pivot)
-            return
-         endif
-         A(j, j) = pivot
-         min_pivot = min(min_pivot, pivot)
-         logdet = logdet + log(pivot)
-         do i = j + 1, n
-            accum = 0
-            do k = 1, j - 1
-               accum = accum + A(i, k)*A(j, k)*A(k, k)
-            enddo
-            A(i, j) = (A(i, j) - accum)/pivot
-         enddo
-      enddo
-   end subroutine HODLR_Sym_LDLT_Factor
-
-   subroutine HODLR_Sym_LDLT_Sqrt_Mult(A, X, trans)
-      implicit none
-      DT::A(:, :), X(:, :)
-      character trans
-      integer n, nrhs, i, j, k
-      DTR di
-
-      n = size(A, 1)
-      nrhs = size(X, 2)
-      if (trans == 'N') then
-         do j = 1, nrhs
-            do i = 1, n
-               do k = 1, i - 1
-                  X(i, j) = X(i, j) - A(i, k)*X(k, j)
-               enddo
-            enddo
-            do i = 1, n
-               di = dble(A(i, i))
-               X(i, j) = X(i, j)/sqrt(di)
-            enddo
-         enddo
-      else
-         do j = 1, nrhs
-            do i = 1, n
-               di = dble(A(i, i))
-               X(i, j) = X(i, j)/sqrt(di)
-            enddo
-            do i = n, 1, -1
-               do k = i + 1, n
-                  X(i, j) = X(i, j) - A(k, i)*X(k, j)
-               enddo
-            enddo
-         enddo
-      endif
-   end subroutine HODLR_Sym_LDLT_Sqrt_Mult
-
-   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead, trans)
+   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead)
       implicit none
       type(matrixblock)::block
       DT::X(:, :)
-      integer xhead, lo, hi, xoff, nrow
-      character trans
+      integer xhead, lo, hi, xoff, nrow, info
 
       lo = max(xhead, block%headm)
       hi = min(xhead + size(X, 1) - 1, block%headm + block%M - 1)
@@ -3262,21 +3188,22 @@ contains
       nrow = hi - lo + 1
       call assert(nrow == block%M, 'a symmetric HODLR leaf was split across block-row owners')
       xoff = lo - xhead + 1
-      call HODLR_Sym_LDLT_Sqrt_Mult(block%fullmat, X(xoff:xoff + nrow - 1, :), trans)
+      call sytrsf90(block%fullmat, block%ipiv, X(xoff:xoff + nrow - 1, :), 'L', info)
+      call assert(info == 0, 'symmetric HODLR dense-leaf solve failed')
    end subroutine HODLR_Sym_Leaf_Apply
 
-   subroutine HODLR_Sym_Node_Forward(fac, X, xhead, ptree)
+   subroutine HODLR_Sym_Node_Apply(fac, X, xhead, ptree)
       implicit none
       type(hodlr_symfactor)::fac
       type(proctree)::ptree
       DT::X(:, :)
-      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr
+      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr, info
       DT, allocatable::c0(:, :), c1(:, :), y(:, :)
 
       rank = fac%rank
       if (rank == 0) return
       nrhs = size(X, 2)
-      allocate(c0(rank, nrhs), c1(rank, nrhs), y(rank, nrhs))
+      allocate(c0(rank, nrhs), c1(rank, nrhs), y(2*rank, nrhs))
       c0 = 0
       c1 = 0
 
@@ -3287,7 +3214,7 @@ contains
             qoff = lo - fac%head0 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            c0 = matmul(transpose(fac%Q0(qoff:qoff + nrow - 1, :)), &
+            c0 = matmul(transpose(fac%Z0(qoff:qoff + nrow - 1, :)), &
                X(xoff:xoff + nrow - 1, :))
          endif
       endif
@@ -3298,7 +3225,7 @@ contains
             qoff = lo - fac%head1 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            c1 = matmul(transpose(fac%Q1(qoff:qoff + nrow - 1, :)), &
+            c1 = matmul(transpose(fac%Z1(qoff:qoff + nrow - 1, :)), &
                X(xoff:xoff + nrow - 1, :))
          endif
       endif
@@ -3307,51 +3234,15 @@ contains
       call MPI_ALLREDUCE(MPI_IN_PLACE, c1, rank*nrhs, MPI_DT, MPI_SUM, &
          ptree%pgrp(fac%pgno)%Comm, ierr)
 
-      y = matmul(transpose(fac%K), c0) - c1
-      call HODLR_Sym_LDLT_Sqrt_Mult(fac%S, y, 'N')
-      if (allocated(fac%Q1)) then
-         lo = max(xhead, fac%head1)
-         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
-         if (hi >= lo) then
-            qoff = lo - fac%head1 + 1
-            xoff = lo - xhead + 1
-            nrow = hi - lo + 1
-            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
-               matmul(fac%Q1(qoff:qoff + nrow - 1, :), y + c1)
-         endif
+      y(1:rank, :) = c0
+      y(rank + 1:2*rank, :) = c1
+      info = 0
+      if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+         call sytrsf90(fac%S, fac%ipiv, y, 'L', info)
       endif
-      deallocate(c0, c1, y)
-   end subroutine HODLR_Sym_Node_Forward
-
-   subroutine HODLR_Sym_Node_Transpose(fac, X, xhead, ptree)
-      implicit none
-      type(hodlr_symfactor)::fac
-      type(proctree)::ptree
-      DT::X(:, :)
-      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr
-      DT, allocatable::c1(:, :), y(:, :)
-
-      rank = fac%rank
-      if (rank == 0) return
-      nrhs = size(X, 2)
-      allocate(c1(rank, nrhs), y(rank, nrhs))
-      c1 = 0
-      if (allocated(fac%Q1)) then
-         lo = max(xhead, fac%head1)
-         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
-         if (hi >= lo) then
-            qoff = lo - fac%head1 + 1
-            xoff = lo - xhead + 1
-            nrow = hi - lo + 1
-            c1 = matmul(transpose(fac%Q1(qoff:qoff + nrow - 1, :)), &
-               X(xoff:xoff + nrow - 1, :))
-         endif
-      endif
-      call MPI_ALLREDUCE(MPI_IN_PLACE, c1, rank*nrhs, MPI_DT, MPI_SUM, &
-         ptree%pgrp(fac%pgno)%Comm, ierr)
-      y = c1
-      call HODLR_Sym_LDLT_Sqrt_Mult(fac%S, y, 'T')
-
+      call MPI_BCAST(info, 1, MPI_INTEGER, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+      call assert(info == 0, 'symmetric HODLR Woodbury solve failed')
+      call MPI_BCAST(y, 2*rank*nrhs, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
       if (allocated(fac%Q0)) then
          lo = max(xhead, fac%head0)
          hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
@@ -3360,7 +3251,7 @@ contains
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
             X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
-               matmul(fac%Q0(qoff:qoff + nrow - 1, :), matmul(fac%K, y))
+               matmul(fac%Q0(qoff:qoff + nrow - 1, :), y(1:rank, :))
          endif
       endif
       if (allocated(fac%Q1)) then
@@ -3371,16 +3262,17 @@ contains
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
             X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
-               matmul(fac%Q1(qoff:qoff + nrow - 1, :), c1 - y)
+               matmul(fac%Q1(qoff:qoff + nrow - 1, :), y(rank + 1:2*rank, :))
          endif
       endif
-      deallocate(c1, y)
-   end subroutine HODLR_Sym_Node_Transpose
+      deallocate(c0, c1, y)
+   end subroutine HODLR_Sym_Node_Apply
 
-   subroutine HODLR_Sym_Inv_Mult(Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+   subroutine HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
       implicit none
       integer Ns, num_vectors, level, ii, pp, xhead
       DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      character trans
       type(hobf)::ho_bf1
       type(proctree)::ptree
       type(Hoption)::option
@@ -3390,33 +3282,32 @@ contains
       rootblock => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
       pp = ptree%MyID - ptree%pgrp(rootblock%pgno)%head + 1
       xhead = rootblock%headn + rootblock%N_p(pp, 1) - 1
+#if DAT==0 || DAT==2
+      if (trans == 'C') then
+         Vout = conjg(Vin)
+      else
+         Vout = Vin
+      endif
+#else
       Vout = Vin
+#endif
 
       level = ho_bf1%Maxlevel + 1
       do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
          leafblock => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead, 'N')
+         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead)
       enddo
       do level = ho_bf1%Maxlevel, 1, -1
          do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
             if (IOwnPgrp(ptree, ho_bf1%levels(level)%SymFactor(ii)%pgno)) then
-               call HODLR_Sym_Node_Forward(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
+               call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
             endif
          enddo
       enddo
 
-      do level = 1, ho_bf1%Maxlevel
-         do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
-            if (IOwnPgrp(ptree, ho_bf1%levels(level)%SymFactor(ii)%pgno)) then
-               call HODLR_Sym_Node_Transpose(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
-            endif
-         enddo
-      enddo
-      level = ho_bf1%Maxlevel + 1
-      do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
-         leafblock => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead, 'T')
-      enddo
+#if DAT==0 || DAT==2
+      if (trans == 'C') Vout = conjg(Vout)
+#endif
       Vout = Vout*option%scale_factor
    end subroutine HODLR_Sym_Inv_Mult
 
@@ -3448,8 +3339,8 @@ contains
       type(Hoption)::option
       integer istart, iend, iinc
 
-      if (option%sym == 1) then
-         call HODLR_Sym_Inv_Mult(Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+      if (option%sym > 0) then
+         call HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
          return
       endif
 
@@ -3596,7 +3487,7 @@ contains
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
 
       trans_tmp = trans
-      if (option%sym == 1) trans_tmp = 'N'
+      if (option%sym > 0) trans_tmp = 'N'
       if (trans == 'C') then
          trans_tmp = 'T'
          Vin = conjg(cmplx(Vin, kind=8))
