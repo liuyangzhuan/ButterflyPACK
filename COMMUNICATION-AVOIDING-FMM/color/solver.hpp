@@ -4,7 +4,7 @@
 #include <complex>
 #include <stdexcept>
 #include "tree.hpp"
-#include "kernel.hpp"
+//#include "kernel.hpp"
 #include "morton.hpp"
 #include "serialization.hpp"
 #include <mpi.h>

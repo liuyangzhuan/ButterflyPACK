@@ -1,7 +1,8 @@
 module load PrgEnv-gnu
 module load cmake
 module load python/3.11
-module load cray-fftw 
+module unload cray-libsci
+#module load cray-fftw 
 module load cray-libsci
 
 cd ..
@@ -32,7 +33,7 @@ cmake .. \
 	-DCMAKE_CXX_COMPILER=CC \
 	-DCMAKE_C_COMPILER=cc \
 	-DCMAKE_INSTALL_PREFIX=. \
-	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
 	-DOpenMP_C_FLAGS="-fopenmp" \
 	-DOpenMP_C_LIB_NAMES="gomp" \
@@ -41,20 +42,24 @@ cmake .. \
 	-DOpenMP_omp_LIBRARY=$(gcc --print-file-name=libgomp.so) \
 	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
-	-DTPL_BLAS_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
-	-DTPL_LAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so"
+	-DTPL_BLAS_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
+	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/scalapack-2.2.0/build/install/lib/libscalapack.so"
+	# -DTPL_BLAS_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
+	# -DTPL_LAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
+	# -DTPL_SCALAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so"
 
-make ie2d -j16
-make ie3d -j16
-make ie3d_sp -j16
-make ie3d_mp -j16
-make ie3dport -j16
-make frankben -j16   
-make frankben_t -j16
-make cifio2dsb -j16  
-make cvie2d -j16  
-make cvie2d_t -j16
-
+# make ie2d -j16
+# make ie3d -j16
+# make ie3d_sp -j16
+# make ie3d_mp -j16
+# make ie3dport -j16
+# make frankben -j16   
+# make frankben_t -j16
+# make cifio2dsb -j16  
+# make cvie2d -j16  
+# make cvie2d_t -j16
+make cvie3d -j16
+make cvie3d cvie3d_h2 -j16
 
 #       -DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \

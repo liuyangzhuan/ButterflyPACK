@@ -2,7 +2,7 @@
 #define FACTORIZATION_HPP
 
 #include "tree_impl.hpp"
-#include "kernel.hpp"
+//#include "kernel.hpp"
 #include "morton.hpp"
 #include "serialization.hpp"
 #include "id_decomposition.hpp"

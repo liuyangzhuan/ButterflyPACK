@@ -26,7 +26,7 @@
 #include "solver.hpp"
 #include "apply_mul.hpp"
 #include "tree_impl.hpp"
-#include "kernel.hpp"
+//#include "kernel.hpp"
 #include "id_decomposition.hpp"
 
 
