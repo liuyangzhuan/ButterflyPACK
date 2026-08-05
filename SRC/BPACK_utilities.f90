@@ -225,6 +225,10 @@ contains
          ! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g1'
          allocate (ho_bf_o%levels(level_c)%BP_inverse_update(ho_bf_o%levels(level_c)%N_block_forward))
          allocate (ho_bf_o%levels(level_c)%BP_inverse_schur(ho_bf_o%levels(level_c)%N_block_inverse))
+         allocate (ho_bf_o%levels(level_c)%SymFactor(ho_bf_o%levels(level_c)%N_block_inverse))
+         if (allocated(ho_bf_i%levels(level_c)%SymFactor)) then
+            ho_bf_o%levels(level_c)%SymFactor = ho_bf_i%levels(level_c)%SymFactor
+         endif
 
          do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
             call Bplus_copy(ho_bf_i%levels(level_c)%BP(ii), ho_bf_o%levels(level_c)%BP(ii))
@@ -403,6 +407,7 @@ contains
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_update)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_schur)
+         if (allocated(ho_bf_o%levels(level_c)%SymFactor)) deallocate (ho_bf_o%levels(level_c)%SymFactor)
       end do
       deallocate (ho_bf_o%levels)
       if(allocated(ho_bf_o%fullmat2D))then
@@ -1258,6 +1263,7 @@ contains
       option%schulzsplitlevel = 1
       option%schulzlevel = 3000
       option%LRlevel = 0
+      option%sym = 0
       option%ErrFillFull = 0
       option%BACA_Batch = 64
       option%RecLR_leaf = BACA
@@ -1354,6 +1360,8 @@ contains
                   read (strings1, *) option%schulzlevel
                else if (trim(strings) == '--lrlevel' .or. trim(strings) == '--LRlevel') then
                   read (strings1, *) option%LRlevel
+               else if (trim(strings) == '--sym') then
+                  read (strings1, *) option%sym
                else if (trim(strings) == '--errfillfull' .or. trim(strings) == '--ErrFillFull') then
                   read (strings1, *) option%ErrFillFull
                else if (trim(strings) == '--forwardn15flag' .or. trim(strings) == '--forwardN15flag') then
@@ -1477,6 +1485,7 @@ contains
       option1%schulzsplitlevel = option%schulzsplitlevel
       option1%schulzlevel = option%schulzlevel
       option1%LRlevel = option%LRlevel
+      option1%sym = option%sym
       option1%ErrFillFull = option%ErrFillFull
       option1%BACA_Batch = option%BACA_Batch
       option1%RecLR_leaf = option%RecLR_leaf
@@ -1530,6 +1539,7 @@ contains
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
+         write (*, '(A18,I8)') 'sym', option%sym
          if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'

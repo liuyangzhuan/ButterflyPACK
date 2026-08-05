@@ -2002,6 +2002,7 @@ contains
          endif
          n3 = MPI_Wtime()
          do ii = Bidxs, Bidxe
+            if (option%sym == 1 .and. level_c /= ho_bf1%Maxlevel + 1 .and. mod(ii, 2) == 1) cycle
             ! do ii =Bidxs,Bidxs
             if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) then
                if (level_c /= ho_bf1%Maxlevel + 1) then
@@ -2062,6 +2063,17 @@ contains
             endif
          end do
 
+         if (option%sym == 1 .and. level_c /= ho_bf1%Maxlevel + 1) then
+            do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+               if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)) then
+                  call HODLR_sym_mirror_pair(ho_bf1%levels(level_c)%BP(2*ii - 1), &
+                     ho_bf1%levels(level_c)%BP(2*ii), &
+                     ho_bf1%levels(level_c)%BP_inverse(ii)%pgno, ptree, rtemp)
+                  stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+               endif
+            enddo
+         endif
+
          ! call MPI_barrier(ptree%Comm, ierr)
          ! do while(option%elem_extract == 1 .and. level==2)
 
@@ -2116,6 +2128,85 @@ contains
       return
 
    end subroutine HODLR_construction
+
+   ! Mirror A21 = U1*V0^T into A12 = V0*U1^T.  ACA stores both
+   ! factors on the A21 row process group; these redistributions move the
+   ! transposed factors to the sibling row group without changing the HODLR
+   ! block-row ownership.
+   subroutine HODLR_sym_mirror_pair(b12, b21, parent_pgno, ptree, memory)
+      implicit none
+      type(blockplus)::b12, b21
+      type(proctree)::ptree
+      type(matrixblock), pointer::block12, block21
+      integer parent_pgno, rank, rank_loc, ierr
+      integer m12, n12, m21, n21
+      DT, allocatable::src_u(:, :), src_v(:, :), dst_u(:, :), dst_v(:, :)
+      real(kind=8)::memory
+
+      call assert(b12%Lplus == 1 .and. b21%Lplus == 1, &
+         'symmetric HODLR path requires option%LRlevel=0')
+      block12 => b12%LL(1)%matrices_block(1)
+      block21 => b21%LL(1)%matrices_block(1)
+
+      rank_loc = 0
+      if (IOwnPgrp(ptree, block21%pgno)) rank_loc = block21%rankmax
+      call MPI_ALLREDUCE(rank_loc, rank, 1, MPI_INTEGER, MPI_MAX, &
+         ptree%pgrp(parent_pgno)%Comm, ierr)
+
+      block12%rankmax = rank
+      block12%rankmin = rank
+      block21%rankmax = rank
+      block21%rankmin = rank
+      b12%LL(1)%rankmax = rank
+      block12%ButterflyU%num_blk = 1
+      block12%ButterflyV%num_blk = 1
+      block12%ButterflyU%idx = 1
+      block12%ButterflyV%idx = 1
+      block12%ButterflyU%inc = 1
+      block12%ButterflyV%inc = 1
+      block12%ButterflyU%nblk_loc = 0
+      block12%ButterflyV%nblk_loc = 0
+
+      m12 = max(1, block12%M_loc)
+      n12 = max(1, block12%N_loc)
+      m21 = max(1, block21%M_loc)
+      n21 = max(1, block21%N_loc)
+      allocate(src_u(m21, max(1, rank)), src_v(n21, max(1, rank)))
+      allocate(dst_u(m12, max(1, rank)), dst_v(n12, max(1, rank)))
+      src_u = 0
+      src_v = 0
+      dst_u = 0
+      dst_v = 0
+      if (rank > 0 .and. IOwnPgrp(ptree, block21%pgno)) then
+         src_u(1:block21%M_loc, 1:rank) = block21%ButterflyU%blocks(1)%matrix
+         src_v(1:block21%N_loc, 1:rank) = block21%ButterflyV%blocks(1)%matrix
+      endif
+
+      if (rank > 0) then
+         call Redistribute1Dto1D(src_v, n21, block21%N_p, block21%headn, block21%pgno, &
+            dst_u, m12, block12%M_p, block12%headm, block12%pgno, rank, ptree)
+         call Redistribute1Dto1D(src_u, m21, block21%M_p, block21%headm, block21%pgno, &
+            dst_v, n12, block12%N_p, block12%headn, block12%pgno, rank, ptree)
+      endif
+
+      memory = 0
+      if (IOwnPgrp(ptree, block12%pgno)) then
+         allocate(block12%ButterflyU%blocks(1))
+         allocate(block12%ButterflyV%blocks(1))
+         allocate(block12%ButterflyU%blocks(1)%matrix(block12%M_loc, rank))
+         allocate(block12%ButterflyV%blocks(1)%matrix(block12%N_loc, rank))
+         if (rank > 0) then
+            block12%ButterflyU%blocks(1)%matrix = dst_u(1:block12%M_loc, 1:rank)
+            block12%ButterflyV%blocks(1)%matrix = dst_v(1:block12%N_loc, 1:rank)
+         endif
+         block12%ButterflyU%nblk_loc = 1
+         block12%ButterflyV%nblk_loc = 1
+         memory = (SIZEOF(block12%ButterflyU%blocks(1)%matrix) + &
+            SIZEOF(block12%ButterflyV%blocks(1)%matrix))/1024.0d3
+      endif
+
+      deallocate(src_u, src_v, dst_u, dst_v)
+   end subroutine HODLR_sym_mirror_pair
 
    subroutine HSS_construction(hss_bf1, option, stats, msh, ker, ptree)
 

@@ -594,6 +594,10 @@ contains
          val_d = option%LRlevel
          valid_opt = 1
       endif
+      if (trim(str) == 'sym') then
+         val_d = option%sym
+         valid_opt = 1
+      endif
       if (trim(str) == 'ErrFillFull') then
          val_d = option%ErrFillFull
          valid_opt = 1
@@ -872,6 +876,11 @@ contains
       if (trim(str) == 'lrlevel' .or. trim(str) == 'LRlevel') then
          call c_f_pointer(val_Cptr, val_i)
          option%LRlevel = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sym') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%sym = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'errfillfull' .or. trim(str) == 'ErrFillFull') then

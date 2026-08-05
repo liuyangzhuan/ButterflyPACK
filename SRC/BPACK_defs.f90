@@ -671,6 +671,23 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer hardstart !< 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
     end type schulz_operand
 
+    !>**** Symmetric HODLR factor associated with one binary-tree node.
+    ! The tall bases remain in the HODLR block-row layout.  The coupling and
+    ! Schur factors are small replicated matrices on the node process group.
+    type hodlr_symfactor
+        integer :: pgno = 0
+        integer :: pgno0 = 0, pgno1 = 0
+        integer :: rank = 0
+        integer :: head0 = 0, head1 = 0
+        integer :: nloc0 = 0, nloc1 = 0
+        integer :: info = 0
+        DTR :: jitter = 0
+        DTR :: min_pivot = 0
+        DT, allocatable :: Q0(:, :), Q1(:, :)
+        DT, allocatable :: K(:, :)
+        DT, allocatable :: S(:, :)
+    end type hodlr_symfactor
+
     !>**** One level in BPACK
     type cascadingfactors
         integer level  !< level number
@@ -681,6 +698,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus), pointer:: BP_inverse(:) => null() !< inverse blocks
         type(blockplus), pointer:: BP_inverse_update(:) => null() !< updated blocks dimension-wise matching forward blocks
         type(blockplus), pointer:: BP_inverse_schur(:) => null() !< schur complement blocks
+        type(hodlr_symfactor), allocatable :: SymFactor(:) !< symmetric factors for inverse blocks
     end type cascadingfactors
 
     !>**** HODLR/HODBF structure
@@ -773,6 +791,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         ! options for Bplus, Butterfly or LR
         integer::LRlevel  !< The top LRlevel level blocks are butterfly or Bplus
+        integer::sym !< 1: symmetric real HODLR compression/factorization (format=HODLR, LRlevel=0)
         integer:: lnoBP !< the bottom lnoBP levels are either Butterfly or LR, but not Bplus
         integer:: bp_cnt_lr !< only print the rank in the top-layer butterfly of a Bplus
         integer:: TwoLayerOnly  !< restrict Bplus as Butterfly + LR

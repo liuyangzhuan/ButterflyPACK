@@ -43,6 +43,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and pass it to TFQMR without preconditioner), 3: as a preconditioned iterative solver (compress the matrix and invert the matrix and pass them to TFQMR, using approximate matrix inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
+		{"sym",             "symmetric real HODLR compression and factorization (requires format=1 and lrlevel=0)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -135,6 +136,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_fft_circulant",         required_argument, 0, 42},
 		{"fftw_plan_mode",         required_argument, 0, 43},
 		{"fft_plan_mode",         required_argument, 0, 44},
+		{"sym",         required_argument, 0, 45},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -348,6 +350,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "fftw_plan_mode", opt_i);
+		} break;
+		case 45: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "sym", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
