@@ -482,6 +482,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer col_group !< column group number
         integer row_group !< row group number
         integer style !< 1: full block 2: compressed block 4: hierarchical block
+        integer:: is_transpose_view = 0 !< 1 when U/V alias a transposed sibling block
         integer level_butterfly !< butterfly levels
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks

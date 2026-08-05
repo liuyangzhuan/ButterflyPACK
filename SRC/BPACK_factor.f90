@@ -449,10 +449,11 @@ endif
         type(Hstat)::stats
         type(proctree)::ptree
         type(mesh)::msh
-        type(matrixblock), pointer::b12, b21, child0, child1, leaf, leaf_forward
+        type(matrixblock), pointer::b21, child0, child1, leaf, leaf_forward
         integer level, ii, jj, pp, rank, ierr, info, attempt
         integer pgno, pgno0, pgno1
         DT, allocatable::R0(:, :), R1(:, :), Rtmp(:, :), A0(:, :)
+        DT, allocatable::V0_src(:, :), V0_dst(:, :)
         DTR min_pivot, logdet_node, local_logdet, normA, jitter, jitter_base
         real(kind=8)::t0, t1
 
@@ -465,16 +466,28 @@ endif
         endif
         stats%rankmax_of_level_global_factor = 0
 
-        ! Copy the block-row ACA bases into dedicated symmetric factors.
+        ! Copy U1 directly from the retained A21 block row.  Redistribute V0
+        ! once to the upper child row; no numerical storage is owned by A12.
         do level = 1, ho_bf1%Maxlevel
             do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
                 pgno = ho_bf1%levels(level)%BP_inverse(ii)%pgno
                 if (.not. IOwnPgrp(ptree, pgno)) cycle
-                b12 => ho_bf1%levels(level)%BP(2*ii - 1)%LL(1)%matrices_block(1)
                 b21 => ho_bf1%levels(level)%BP(2*ii)%LL(1)%matrices_block(1)
                 child0 => ho_bf1%levels(level + 1)%BP_inverse(2*ii - 1)%LL(1)%matrices_block(1)
                 child1 => ho_bf1%levels(level + 1)%BP_inverse(2*ii)%LL(1)%matrices_block(1)
-                rank = b12%rankmax
+                rank = b21%rankmax
+                allocate(V0_src(max(1, b21%N_loc), max(1, rank)))
+                allocate(V0_dst(max(1, child0%M_loc), max(1, rank)))
+                V0_src = 0
+                V0_dst = 0
+                if (rank > 0 .and. IOwnPgrp(ptree, b21%pgno)) then
+                    V0_src(1:b21%N_loc, 1:rank) = b21%ButterflyV%blocks(1)%matrix
+                endif
+                if (rank > 0) then
+                    call Redistribute1Dto1D(V0_src, max(1, b21%N_loc), b21%N_p, b21%headn, b21%pgno, &
+                        V0_dst, max(1, child0%M_loc), child0%M_p, child0%headm, child0%pgno, &
+                        rank, ptree)
+                endif
                 associate(fac => ho_bf1%levels(level)%SymFactor(ii))
                     fac%pgno = pgno
                     fac%pgno0 = child0%pgno
@@ -491,7 +504,7 @@ endif
                         fac%nloc0 = child0%M_loc
                         fac%head0 = child0%headm + child0%M_p(pp, 1) - 1
                         allocate(fac%Q0(fac%nloc0, rank))
-                        fac%Q0 = b12%ButterflyU%blocks(1)%matrix
+                        if (rank > 0) fac%Q0 = V0_dst(1:fac%nloc0, 1:rank)
                     endif
                     if (IOwnPgrp(ptree, child1%pgno)) then
                         pp = ptree%MyID - ptree%pgrp(child1%pgno)%head + 1
@@ -501,6 +514,7 @@ endif
                         fac%Q1 = b21%ButterflyU%blocks(1)%matrix
                     endif
                 end associate
+                deallocate(V0_src, V0_dst)
             enddo
         enddo
 

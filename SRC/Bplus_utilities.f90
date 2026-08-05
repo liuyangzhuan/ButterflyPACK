@@ -2526,7 +2526,13 @@ contains
       if (allocated(blocks%ButterflyU%blocks)) then
          ! !$omp parallel do default(shared) private(i)
          do i = 1, blocks%ButterflyU%nblk_loc
-            if (associated(blocks%ButterflyU%blocks(i)%matrix)) deallocate (blocks%ButterflyU%blocks(i)%matrix)
+            if (associated(blocks%ButterflyU%blocks(i)%matrix)) then
+               if (blocks%is_transpose_view == 1) then
+                  nullify(blocks%ButterflyU%blocks(i)%matrix)
+               else
+                  deallocate (blocks%ButterflyU%blocks(i)%matrix)
+               endif
+            endif
          enddo
          ! !$omp end parallel do
          deallocate (blocks%ButterflyU%blocks)
@@ -2535,7 +2541,13 @@ contains
       if (allocated(blocks%ButterflyV%blocks)) then
          ! !$omp parallel do default(shared) private(i)
          do i = 1, blocks%ButterflyV%nblk_loc
-            if (associated(blocks%ButterflyV%blocks(i)%matrix)) deallocate (blocks%ButterflyV%blocks(i)%matrix)
+            if (associated(blocks%ButterflyV%blocks(i)%matrix)) then
+               if (blocks%is_transpose_view == 1) then
+                  nullify(blocks%ButterflyV%blocks(i)%matrix)
+               else
+                  deallocate (blocks%ButterflyV%blocks(i)%matrix)
+               endif
+            endif
          enddo
          ! !$omp end parallel do
          deallocate (blocks%ButterflyV%blocks)
@@ -2575,6 +2587,7 @@ contains
       ! blocks%level_butterfly=0
       blocks%rankmax = -1000
       blocks%rankmin = 1000
+      blocks%is_transpose_view = 0
 
       if (associated(blocks%fullmat)) deallocate (blocks%fullmat)
 #if HAVE_ZFP
@@ -2630,6 +2643,8 @@ contains
       if (present(memory)) memory = 0
 
       if (trans == 'N') then
+
+         block_o%is_transpose_view = 0
 
          block_o%level = block_i%level
          block_o%col_group = block_i%col_group
@@ -3240,12 +3255,14 @@ contains
             do level = 0, level_butterfly + 1
                if (level == 0) then
                   do jj = 1, block_i%ButterflyV%nblk_loc
-                     memory = memory + SIZEOF(block_i%ButterflyV%blocks(jj)%matrix)/1024.0d3
+                     if (block_i%is_transpose_view == 0) &
+                        memory = memory + SIZEOF(block_i%ButterflyV%blocks(jj)%matrix)/1024.0d3
                   enddo
                   memory = memory + SIZEOF(block_i%ButterflyV%blocks)/1024.0d3
                elseif (level == level_butterfly + 1) then
                   do jj = 1, block_i%ButterflyU%nblk_loc
-                     memory = memory + SIZEOF(block_i%ButterflyU%blocks(jj)%matrix)/1024.0d3
+                     if (block_i%is_transpose_view == 0) &
+                        memory = memory + SIZEOF(block_i%ButterflyU%blocks(jj)%matrix)/1024.0d3
                   enddo
                   memory = memory + SIZEOF(block_i%ButterflyU%blocks)/1024.0d3
                else
