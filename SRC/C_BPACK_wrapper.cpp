@@ -39,6 +39,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"tol_Rdetect",     "relative tolerance for rank detection during matrix inversion"},
 		{"tol_itersol",     "convergence tolerance for TFQMR iterative solver if precon=2 or 3"},
 		{"n_iter",          "maximum iteration count for TFQMR"},
+		{"IR_HODLR", "maximum HODLR direct-solve refinement steps; 0 disables refinement"},
 		{"level_check",     "the level in the hierarchical partitioning where the randomized construction algorithm is tested, set to 10000 by default (no checking)"},
 		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and pass it to TFQMR without preconditioner), 3: as a preconditioned iterative solver (compress the matrix and invert the matrix and pass them to TFQMR, using approximate matrix inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
@@ -137,6 +138,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"fftw_plan_mode",         required_argument, 0, 43},
 		{"fft_plan_mode",         required_argument, 0, 44},
 		{"sym",         required_argument, 0, 45},
+		{"IR_HODLR", required_argument, 0, 46},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -355,6 +357,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "sym", opt_i);
+		} break;
+		case 46: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "IR_HODLR", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);

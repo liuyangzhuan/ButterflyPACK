@@ -673,7 +673,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type schulz_operand
 
     !>**** Symmetric HODLR factor associated with one binary-tree node.
-    ! The tall bases remain in the HODLR block-row layout.  The dense Schur
+    ! The tall bases remain in the HODLR block-row layout.  The dense correction
     ! factor and its pivots are stored only on the node process-group head.
     type hodlr_symfactor
         integer :: pgno = 0
@@ -686,6 +686,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, allocatable :: ipiv(:)
         DT, allocatable :: Q0(:, :), Q1(:, :)
         DT, allocatable :: Z0(:, :), Z1(:, :)
+        DT, allocatable :: G0(:, :), G1(:, :)
         DT, allocatable :: S(:, :)
     end type hodlr_symfactor
 
@@ -850,6 +851,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_itersol  !< tolerance for iterative solvers
         integer n_iter  !< maximum number of iterations for iterative solver
         integer precon  !< DIRECT: use factored BPACK as direct solver, BPACKPRECON: use factored BPACK as preconditioner, NOPRECON: use forward BPACK as fast matvec,
+        integer IR_HODLR !< maximum HODLR direct-solve refinement steps; 0 disables refinement
 
         ! options for error checking
         integer::level_check !< check compression quality by picking random entries at level_check (only work for nmpi=1 now)

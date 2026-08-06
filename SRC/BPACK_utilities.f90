@@ -1249,6 +1249,7 @@ contains
       option%tol_LS = 1d-12
       option%tol_itersol = 1d-6
       option%n_iter = 1000
+      option%IR_HODLR = 10
       option%tol_rand = option%tol_comp
       option%tol_Rdetect = option%tol_comp*1d-1
       option%level_check = 10000
@@ -1342,6 +1343,8 @@ contains
                   read (strings1, *) option%tol_LS
                else if (trim(strings) == '--n_iter') then
                   read (strings1, *) option%n_iter
+               else if (trim(strings) == '--IR_HODLR') then
+                  read (strings1, *) option%IR_HODLR
                else if (trim(strings) == '--level_check') then
                   read (strings1, *) option%level_check
                else if (trim(strings) == '--precon') then
@@ -1471,6 +1474,7 @@ contains
       option1%tol_LS = option%tol_LS
       option1%tol_itersol = option%tol_itersol
       option1%n_iter = option%n_iter
+      option1%IR_HODLR = option%IR_HODLR
       option1%tol_rand = option%tol_rand
       option1%level_check = option%level_check
       option1%precon = option%precon
@@ -1540,6 +1544,7 @@ contains
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
          write (*, '(A18,I8)') 'sym', option%sym
+         write (*, '(A24,I8)') 'IR_HODLR', option%IR_HODLR
          if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'

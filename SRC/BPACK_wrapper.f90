@@ -546,6 +546,10 @@ contains
          val_d = option%n_iter
          valid_opt = 1
       endif
+      if (trim(str) == 'IR_HODLR') then
+         val_d = option%IR_HODLR
+         valid_opt = 1
+      endif
       if (trim(str) == 'precon') then
          val_d = option%precon
          valid_opt = 1
@@ -821,6 +825,11 @@ contains
       if (trim(str) == 'n_iter') then
          call c_f_pointer(val_Cptr, val_i)
          option%n_iter = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'IR_HODLR') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%IR_HODLR = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'precon') then

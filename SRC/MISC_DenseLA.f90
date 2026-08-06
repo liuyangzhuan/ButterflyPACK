@@ -28,6 +28,115 @@ module MISC_DenseLA
 contains
 
 
+   ! Pivoted LU used by the rank-r correction in the symmetric HODLR LDLT.
+   subroutine getrff90_info(Matrix, ipiv, info, flop)
+      implicit none
+      DT Matrix(:, :)
+      integer ipiv(:), info, m, n
+      real(kind=8), optional::flop
+
+      m = size(Matrix, 1)
+      n = size(Matrix, 2)
+      if (size(ipiv) < min(m, n)) then
+         info = -1
+         return
+      endif
+      if (m == 0 .or. n == 0) then
+         info = 0
+         if (present(flop)) flop = 0
+         return
+      endif
+
+#if DAT==0
+      call ZGETRF(m, n, Matrix, m, ipiv, info)
+#elif DAT==1
+      call DGETRF(m, n, Matrix, m, ipiv, info)
+#elif DAT==2
+      call CGETRF(m, n, Matrix, m, ipiv, info)
+#elif DAT==3
+      call SGETRF(m, n, Matrix, m, ipiv, info)
+#endif
+
+      if (present(flop)) then
+#if DAT==0 || DAT==2
+         flop = 8d0/3d0*dble(min(m, n))**3
+#else
+         flop = 2d0/3d0*dble(min(m, n))**3
+#endif
+      endif
+   end subroutine getrff90_info
+
+
+   subroutine getrsf90_info(Matrix, ipiv, B, trans, info, flop)
+      implicit none
+      DT Matrix(:, :), B(:, :)
+      integer ipiv(:), info, n, nrhs
+      character trans, trans_lapack
+      real(kind=8), optional::flop
+
+      n = size(Matrix, 1)
+      nrhs = size(B, 2)
+      if (size(Matrix, 2) < n .or. size(ipiv) < n .or. size(B, 1) < n) then
+         info = -1
+         return
+      endif
+      if (n == 0 .or. nrhs == 0) then
+         info = 0
+         if (present(flop)) flop = 0
+         return
+      endif
+
+      trans_lapack = trans
+#if DAT==1 || DAT==3
+      if (trans_lapack == 'C') trans_lapack = 'T'
+#endif
+#if DAT==0
+      call ZGETRS(trans_lapack, n, nrhs, Matrix, n, ipiv, B, size(B, 1), info)
+#elif DAT==1
+      call DGETRS(trans_lapack, n, nrhs, Matrix, n, ipiv, B, size(B, 1), info)
+#elif DAT==2
+      call CGETRS(trans_lapack, n, nrhs, Matrix, n, ipiv, B, size(B, 1), info)
+#elif DAT==3
+      call SGETRS(trans_lapack, n, nrhs, Matrix, n, ipiv, B, size(B, 1), info)
+#endif
+
+      if (present(flop)) then
+#if DAT==0 || DAT==2
+         flop = 8d0*dble(n)*dble(n)*dble(nrhs)
+#else
+         flop = 2d0*dble(n)*dble(n)*dble(nrhs)
+#endif
+      endif
+   end subroutine getrsf90_info
+
+
+   subroutine getrf_slogdet(n, af, ldaf, ipiv, phase, logabsdet, info)
+      implicit none
+      integer n, ldaf, ipiv(*), info, i, nswap
+      DT af(ldaf, *), phase, uii
+      DTR logabsdet, absuii
+
+      phase = BPACK_cone
+      logabsdet = 0
+      info = 0
+      nswap = 0
+      do i = 1, n
+         if (ipiv(i) /= i) nswap = nswap + 1
+         uii = af(i, i)
+         absuii = abs(uii)
+         if (absuii == 0) then
+            phase = BPACK_czero
+            logabsdet = -huge(logabsdet)
+            info = i
+            return
+         endif
+         phase = phase*(uii/absuii)
+         logabsdet = logabsdet + log(absuii)
+      enddo
+      if (mod(nswap, 2) == 1) phase = -phase
+   end subroutine getrf_slogdet
+
+
    ! Pivoted LDL^T factorization for real or complex symmetric matrices.
    subroutine sytrff90(Matrix, ipiv, uplo, info, flop)
       implicit none

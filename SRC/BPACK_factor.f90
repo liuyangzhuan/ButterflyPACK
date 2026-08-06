@@ -374,7 +374,7 @@ endif
         type(proctree)::ptree
         type(mesh)::msh
         type(matrixblock), pointer::b21, child0, child1, leaf, leaf_forward
-        integer level, ii, jj, pp, rank, rank2, ierr, info, attempt
+        integer level, ii, jj, pp, rank, ierr, info, attempt
         integer pgno
         DT, allocatable::G0(:, :), G1(:, :), A0(:, :)
         DT, allocatable::V0_src(:, :), V0_dst(:, :)
@@ -423,11 +423,13 @@ endif
                     fac%pgno0 = child0%pgno
                     fac%pgno1 = child1%pgno
                     fac%rank = rank
-                    rank2 = 2*rank
                     if (allocated(fac%S)) deallocate(fac%S)
                     if (allocated(fac%ipiv)) deallocate(fac%ipiv)
+                    if (allocated(fac%G0)) deallocate(fac%G0)
+                    if (allocated(fac%G1)) deallocate(fac%G1)
                     if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
-                        allocate(fac%S(rank2, rank2), fac%ipiv(rank2))
+                        allocate(fac%S(rank, rank), fac%ipiv(rank))
+                        allocate(fac%G0(rank, rank), fac%G1(rank, rank))
                         fac%S = 0
                     endif
                     if (IOwnPgrp(ptree, child0%pgno)) then
@@ -500,14 +502,13 @@ endif
             deallocate(A0)
         enddo
 
-        ! For A=D+Z*C*Z^T, store Q=D^{-1}Z and factor the symmetric Woodbury
-        ! matrix C+Z^T*D^{-1}Z.  Q0 and Q1 stay on their child block rows.
+        ! Form the block-LDL Schur correction T=I-G0*G1.  Its rank-r LU
+        ! avoids the poorly scaled rank-2r symmetric saddle formulation.
         do level = ho_bf1%Maxlevel, 1, -1
             do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
                 associate(fac => ho_bf1%levels(level)%SymFactor(ii))
                     if (.not. IOwnPgrp(ptree, fac%pgno)) cycle
                     rank = fac%rank
-                    rank2 = 2*rank
                     allocate(G0(rank, rank), G1(rank, rank))
                     G0 = 0
                     G1 = 0
@@ -524,32 +525,32 @@ endif
                     logdet_node = 0
                     phase_node = 1
                     if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+                        if (rank > 0) then
+                            fac%G0 = (G0 + transpose(G0))/2
+                            fac%G1 = (G1 + transpose(G1))/2
+                        endif
                         jitter_base = max(option%jitter, epsilon(1d0))
-                        if (rank2 > 0) then
+                        if (rank > 0) then
                             do attempt = 0, 8
-                                fac%S = 0
+                                fac%S = -matmul(fac%G0, fac%G1)
                                 do jj = 1, rank
-                                    fac%S(jj, rank + jj) = BPACK_cone
-                                    fac%S(rank + jj, jj) = BPACK_cone
+                                    fac%S(jj, jj) = fac%S(jj, jj) + BPACK_cone
                                 enddo
-                                fac%S(1:rank, 1:rank) = G0
-                                fac%S(rank + 1:rank2, rank + 1:rank2) = G1
                                 if (attempt > 0) then
                                     jitter = jitter_base*10d0**(attempt - 1)
-                                    do jj = 1, rank2
+                                    do jj = 1, rank
                                         fac%S(jj, jj) = fac%S(jj, jj) + jitter
                                     enddo
                                 endif
-                                call sytrff90(fac%S, fac%ipiv, 'L', info, flop)
+                                call getrff90_info(fac%S, fac%ipiv, info, flop)
                                 stats%Flop_Factor = stats%Flop_Factor + flop
                                 if (info == 0) then
-                                    call sytrf_slogdet('L', rank2, fac%S, rank2, fac%ipiv, &
+                                    call getrf_slogdet(rank, fac%S, rank, fac%ipiv, &
                                         phase_node, logdet_node, info)
                                 endif
                                 if (info == 0) exit
                             enddo
                         endif
-                        if (mod(rank, 2) == 1) phase_node = -phase_node
                     endif
                     call MPI_BCAST(info, 1, MPI_INTEGER, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
                     call MPI_BCAST(jitter, 1, MPI_DTR, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
@@ -557,7 +558,7 @@ endif
                     call MPI_BCAST(phase_node, 1, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
                     fac%info = info
                     fac%jitter = jitter
-                    call assert(info == 0, 'symmetric HODLR LDLT failed for a Woodbury correction')
+                    call assert(info == 0, 'symmetric HODLR LDLT failed for a rank-r Schur correction')
                     if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
                         local_phase = local_phase*phase_node
                         local_logdet = local_logdet + logdet_node
@@ -592,6 +593,8 @@ endif
                     if (allocated(fac%Q1)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Q1)/1024.0d3
                     if (allocated(fac%Z0)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Z0)/1024.0d3
                     if (allocated(fac%Z1)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Z1)/1024.0d3
+                    if (allocated(fac%G0)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%G0)/1024.0d3
+                    if (allocated(fac%G1)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%G1)/1024.0d3
                     if (allocated(fac%S)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%S)/1024.0d3
                     if (allocated(fac%ipiv)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%ipiv)/1024.0d3
                 end associate
