@@ -625,7 +625,7 @@ double h2_verification_smvp(
     const RealType nrm_h2  = std::sqrt(globalv[0]);
     const RealType nrm_ref = std::sqrt(globalv[1]);
     const RealType acc     = (globalv[0] > RealType(0))
-                             ? std::sqrt(globalv[2] / globalv[0]) : RealType(0);
+                             ? std::sqrt(globalv[2] / globalv[1]) : RealType(0);
 
     if (rank == 0 && verbose) {
         std::cout << "H2_CheckError(mvp): fnorm: "
