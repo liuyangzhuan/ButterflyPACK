@@ -150,7 +150,7 @@ while True:
         if rank == 0:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs = pickle.load(f)
-            xb = np.ascontiguousarray(xb, dtype=np_dt)
+            xb = np.asfortranarray(xb, dtype=np_dt)
         nrhs = bcast(nrhs, root=0)
         sp.py_bpack_solve(
             ctypes.byref(pyobjs[fid]),            # void **pyobj
@@ -169,7 +169,7 @@ while True:
         if rank == 0:
             with open(f"{DATA_FILE}.{fid}", "rb") as f:
                 xb,nrhs,trans = pickle.load(f)
-            xb = np.ascontiguousarray(xb, dtype=np_dt)
+            xb = np.asfortranarray(xb, dtype=np_dt)
         nrhs = bcast(nrhs, root=0)
         trans = bcast(trans, root=0)
         sp.py_bpack_mult(

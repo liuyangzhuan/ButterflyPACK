@@ -756,6 +756,10 @@ contains
          val_d = option%n_iter
          valid_opt = 1
       endif
+      if (trim(str) == 'IR_HODLR') then
+         val_d = option%IR_HODLR
+         valid_opt = 1
+      endif
       if (trim(str) == 'precon') then
          val_d = option%precon
          valid_opt = 1
@@ -802,6 +806,10 @@ contains
       endif
       if (trim(str) == 'LRlevel') then
          val_d = option%LRlevel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sym') then
+         val_d = option%sym
          valid_opt = 1
       endif
       if (trim(str) == 'ErrFillFull') then
@@ -920,6 +928,14 @@ contains
          val_d = option%use_zfp
          valid_opt = 1
       endif
+      if (trim(str) == 'use_fft_circulant') then
+         val_d = option%use_fft_circulant
+         valid_opt = 1
+      endif
+      if (trim(str) == 'fftw_plan_mode' .or. trim(str) == 'fft_plan_mode') then
+         val_d = option%fftw_plan_mode
+         valid_opt = 1
+      endif
       if (trim(str) == 'use_parsec') then
          val_d = option%use_parsec
          valid_opt = 1
@@ -1025,6 +1041,11 @@ contains
          option%n_iter = val_i
          valid_opt = 1
       endif
+      if (trim(str) == 'IR_HODLR') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%IR_HODLR = val_i
+         valid_opt = 1
+      endif
       if (trim(str) == 'precon') then
          call c_f_pointer(val_Cptr, val_i)
          option%precon = val_i
@@ -1078,6 +1099,11 @@ contains
       if (trim(str) == 'lrlevel' .or. trim(str) == 'LRlevel') then
          call c_f_pointer(val_Cptr, val_i)
          option%LRlevel = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sym') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%sym = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'errfillfull' .or. trim(str) == 'ErrFillFull') then
@@ -1218,6 +1244,16 @@ contains
       if (trim(str) == 'use_zfp') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_zfp = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'use_fft_circulant') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%use_fft_circulant = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'fftw_plan_mode' .or. trim(str) == 'fft_plan_mode') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%fftw_plan_mode = val_i
          valid_opt = 1
       endif
 
@@ -3038,6 +3074,354 @@ contains
 
 
 !>**** C interface for getting matrix diagonal blocks at an arbitrary tree level
+   !> Lightweight diagonal-block discovery for small block-diagonal preconditioners.
+   !> This mirrors C_BPACK_Get_Anylevel_Blocks for process ownership, but avoids
+   !> constructing a global BPACK matrix tree over all scatterers.
+   subroutine C_BPACK_Construct_Init_Diaglevel_Simple(N, Ndim, Locations, ScatterTensor, level, nlocal_active, local_tensor_old, &
+      nblock, block_info, diag_perm_size, diag_tensor_perm, mesh_range, route_capacity, local_diag_root, local_diag_gid, &
+      local_diag_pos, option_Cptr, ptree_Cptr) bind(c, name="c_bpack_construct_init_diaglevel_simple")
+      implicit none
+      integer N, Ndim, level, nlocal_active, nblock, diag_perm_size, route_capacity
+      real(kind=8) Locations(*)
+      integer ScatterTensor(*), local_tensor_old(*), block_info(*), diag_tensor_perm(*), mesh_range(2)
+      integer local_diag_root(*), local_diag_gid(*), local_diag_pos(*)
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+
+      type(Hoption), pointer :: option
+      type(proctree), pointer :: ptree
+      integer :: maxlevel_range, maxgroup, ngroup, info_stride, nblock_capacity, diag_perm_capacity
+      integer :: group_n(1), bb, cnt, perm_needed, pgno, pos, head_g, tail_g, lhead_g, ltail_g
+      integer :: ierr, rr, ii, total_active, route_counts_dummy
+      integer, allocatable :: group_head(:), group_tail(:), perm(:), old2new(:)
+      integer, allocatable :: recv_counts(:), recv_displs(:), active_tensor_all(:)
+      integer, allocatable :: route_root_all(:), route_gid_all(:), route_pos_all(:)
+      integer, allocatable :: perm_counts(:), perm_displs(:), perm_tensor_send(:)
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(ptree_Cptr, ptree)
+
+      call assert(level >= 0, 'negative level is not supported in C_BPACK_Construct_Init_Diaglevel_Simple')
+      call assert(N >= 2**level, 'too many diagonal blocks requested in C_BPACK_Construct_Init_Diaglevel_Simple')
+      call assert(option%nogeo == 0, 'C_BPACK_Construct_Init_Diaglevel_Simple assumes nogeo=0')
+      call assert(option%knn == 0, 'C_BPACK_Construct_Init_Diaglevel_Simple assumes knn=0')
+      call assert(option%xyzsort == NATURAL .or. option%xyzsort == CKD, &
+         'C_BPACK_Construct_Init_Diaglevel_Simple supports NATURAL or CKD ordering')
+
+      maxlevel_range = max(level, ptree%nlevel)
+      maxgroup = 2**(maxlevel_range + 1) - 1
+      allocate(group_head(maxgroup))
+      allocate(group_tail(maxgroup))
+      call build_balanced_ranges(N, maxlevel_range, group_head, group_tail)
+
+      call compute_simple_mesh_range(N, maxlevel_range, group_head, group_tail, mesh_range)
+
+      nblock_capacity = nblock
+      diag_perm_capacity = diag_perm_size
+      info_stride = 8
+      cnt = 0
+      perm_needed = 0
+      ngroup = 2**level
+      do bb = 1, ngroup
+         group_n(1) = ngroup + bb - 1
+         pgno = GetMshGroup_Pgno(ptree, 1, group_n)
+         if (IOwnPgrp(ptree, pgno)) then
+            cnt = cnt + 1
+            perm_needed = perm_needed + group_tail(group_n(1)) - group_head(group_n(1)) + 1
+            if (cnt <= nblock_capacity) then
+               pos = (cnt - 1)*info_stride
+               head_g = group_head(group_n(1))
+               tail_g = group_tail(group_n(1)) + 1
+               lhead_g = max(head_g, mesh_range(1))
+               ltail_g = min(tail_g, mesh_range(2))
+               block_info(pos + 1) = head_g
+               block_info(pos + 2) = tail_g
+               block_info(pos + 3) = lhead_g
+               block_info(pos + 4) = ltail_g
+               block_info(pos + 5) = ptree%pgrp(pgno)%head
+               block_info(pos + 6) = ptree%pgrp(pgno)%nproc
+               block_info(pos + 7) = pgno
+               block_info(pos + 8) = bb
+            endif
+         endif
+      enddo
+
+      nblock = cnt
+      diag_perm_size = perm_needed
+      if (nblock_capacity < cnt .or. diag_perm_capacity < perm_needed .or. route_capacity < nlocal_active) then
+         deallocate(group_head)
+         deallocate(group_tail)
+         return
+      endif
+
+      if (ptree%MyID == Main_ID) then
+         allocate(perm(N))
+         call build_root_permutation(N, Ndim, Locations, level, group_head, group_tail, perm)
+         allocate(old2new(N))
+         do ii = 1, N
+            old2new(perm(ii)) = ii
+         enddo
+      endif
+
+      call scatter_diag_permutation()
+      call route_local_scatterers()
+
+      if (ptree%MyID == Main_ID) then
+         deallocate(perm)
+         deallocate(old2new)
+      endif
+      deallocate(group_head)
+      deallocate(group_tail)
+
+   contains
+
+      subroutine build_balanced_ranges(Nunk, maxlevel, heads, tails)
+         implicit none
+         integer, intent(in) :: Nunk, maxlevel
+         integer, intent(out) :: heads(:), tails(:)
+         integer :: ll, gg, mid
+
+         heads = 1
+         tails = 0
+         heads(1) = 1
+         tails(1) = Nunk
+         do ll = 0, maxlevel - 1
+            do gg = 2**ll, 2**(ll + 1) - 1
+               call assert(tails(gg) > heads(gg), 'detected zero-sized group in simple diagonal split')
+               mid = (heads(gg) + tails(gg))/2
+               heads(2*gg) = heads(gg)
+               tails(2*gg) = mid
+               heads(2*gg + 1) = mid + 1
+               tails(2*gg + 1) = tails(gg)
+            enddo
+         enddo
+      end subroutine build_balanced_ranges
+
+      subroutine compute_simple_mesh_range(Nunk, maxlevel, heads, tails, range_out)
+         implicit none
+         integer, intent(in) :: Nunk, maxlevel
+         integer, intent(in) :: heads(:), tails(:)
+         integer, intent(out) :: range_out(2)
+         integer :: level_p, leaf, pg_leaf, proc
+
+         range_out(1) = Nunk + 1
+         range_out(2) = 1
+         level_p = min(ptree%nlevel, maxlevel)
+         do leaf = 1, 2**level_p
+            pg_leaf = 2**level_p + leaf - 1
+            proc = ptree%pgrp(pg_leaf)%head
+            if (proc == ptree%MyID) then
+               range_out(1) = min(range_out(1), heads(pg_leaf))
+               range_out(2) = max(range_out(2), tails(pg_leaf) + 1)
+            endif
+         enddo
+         if (range_out(1) > Nunk) then
+            range_out(1) = 1
+            range_out(2) = 1
+         endif
+      end subroutine compute_simple_mesh_range
+
+      subroutine build_root_permutation(Nunk, Dimn, Locs, split_level, heads, tails, new2old)
+         implicit none
+         integer, intent(in) :: Nunk, Dimn, split_level
+         real(kind=8), intent(in) :: Locs(*)
+         integer, intent(in) :: heads(:), tails(:)
+         integer, intent(out) :: new2old(:)
+         integer :: ll, gg, mm, idx, dim_i, sortdirec
+         real(kind=8), allocatable :: distance(:), xyzmin(:), xyzmax(:), xyzrange(:)
+         integer, allocatable :: order(:), map_temp(:)
+
+         do idx = 1, Nunk
+            new2old(idx) = idx
+         enddo
+         if (split_level == 0) return
+
+         allocate(xyzmin(Dimn))
+         allocate(xyzmax(Dimn))
+         allocate(xyzrange(Dimn))
+         do ll = 0, split_level - 1
+            do gg = 2**ll, 2**(ll + 1) - 1
+               mm = tails(gg) - heads(gg) + 1
+               allocate(distance(mm))
+               if (option%xyzsort == NATURAL) then
+                  do idx = heads(gg), tails(gg)
+                     distance(idx - heads(gg) + 1) = dble(idx)
+                  enddo
+               else
+                  xyzmin = 1d300
+                  xyzmax = -1d300
+                  do idx = heads(gg), tails(gg)
+                     do dim_i = 1, Dimn
+                        xyzmax(dim_i) = max(xyzmax(dim_i), Locs((new2old(idx) - 1)*Dimn + dim_i))
+                        xyzmin(dim_i) = min(xyzmin(dim_i), Locs((new2old(idx) - 1)*Dimn + dim_i))
+                     enddo
+                  enddo
+                  xyzrange = xyzmax - xyzmin
+                  sortdirec = maxloc(xyzrange, 1)
+                  do idx = heads(gg), tails(gg)
+                     distance(idx - heads(gg) + 1) = Locs((new2old(idx) - 1)*Dimn + sortdirec)
+                  enddo
+               endif
+
+               allocate(order(mm))
+               allocate(map_temp(mm))
+               call quick_sort(distance, order, mm)
+               do idx = 1, mm
+                  map_temp(idx) = new2old(order(idx) + heads(gg) - 1)
+               enddo
+               do idx = 1, mm
+                  new2old(idx + heads(gg) - 1) = map_temp(idx)
+               enddo
+               deallocate(map_temp)
+               deallocate(order)
+               deallocate(distance)
+            enddo
+         enddo
+         deallocate(xyzrange)
+         deallocate(xyzmax)
+         deallocate(xyzmin)
+      end subroutine build_root_permutation
+
+      subroutine scatter_diag_permutation()
+         implicit none
+         integer :: rank_i, bb_i, group_idx, pgno_i, count_i, displ_i, total_perm
+
+         allocate(perm_counts(ptree%nproc))
+         allocate(perm_displs(ptree%nproc))
+         perm_counts = 0
+         do rank_i = 0, ptree%nproc - 1
+            do bb_i = 1, ngroup
+               group_idx = ngroup + bb_i - 1
+               group_n(1) = group_idx
+               pgno_i = GetMshGroup_Pgno(ptree, 1, group_n)
+               if (rank_i >= ptree%pgrp(pgno_i)%head .and. rank_i <= ptree%pgrp(pgno_i)%tail) then
+                  perm_counts(rank_i + 1) = perm_counts(rank_i + 1) + group_tail(group_idx) - group_head(group_idx) + 1
+               endif
+            enddo
+         enddo
+         total_perm = 0
+         do rank_i = 1, ptree%nproc
+            perm_displs(rank_i) = total_perm
+            total_perm = total_perm + perm_counts(rank_i)
+         enddo
+
+         if (ptree%MyID == Main_ID) then
+            allocate(perm_tensor_send(max(1,total_perm)))
+            do rank_i = 0, ptree%nproc - 1
+               displ_i = perm_displs(rank_i + 1)
+               count_i = 0
+               do bb_i = 1, ngroup
+                  group_idx = ngroup + bb_i - 1
+                  group_n(1) = group_idx
+                  pgno_i = GetMshGroup_Pgno(ptree, 1, group_n)
+                  if (rank_i >= ptree%pgrp(pgno_i)%head .and. rank_i <= ptree%pgrp(pgno_i)%tail) then
+                     do ii = group_head(group_idx), group_tail(group_idx)
+                        perm_tensor_send(displ_i + count_i + 1) = ScatterTensor(perm(ii))
+                        count_i = count_i + 1
+                     enddo
+                  endif
+               enddo
+            enddo
+         else
+            allocate(perm_tensor_send(1))
+         endif
+
+         call MPI_Scatterv(perm_tensor_send, perm_counts, perm_displs, MPI_INTEGER, diag_tensor_perm, diag_perm_size, &
+            MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+         deallocate(perm_tensor_send)
+         deallocate(perm_displs)
+         deallocate(perm_counts)
+      end subroutine scatter_diag_permutation
+
+      subroutine route_local_scatterers()
+         implicit none
+         integer :: item, old_idx, tensor_idx, new_idx, route_bb, lo, hi, mid, group_idx
+
+         allocate(recv_counts(ptree%nproc))
+         allocate(recv_displs(ptree%nproc))
+         call MPI_Gather(nlocal_active, 1, MPI_INTEGER, recv_counts, 1, MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+         total_active = 0
+         if (ptree%MyID == Main_ID) then
+            do rr = 1, ptree%nproc
+               recv_displs(rr) = total_active
+               total_active = total_active + recv_counts(rr)
+            enddo
+            allocate(active_tensor_all(max(1,total_active)))
+            allocate(route_root_all(max(1,total_active)))
+            allocate(route_gid_all(max(1,total_active)))
+            allocate(route_pos_all(max(1,total_active)))
+         else
+            recv_displs = 0
+            allocate(active_tensor_all(1))
+            allocate(route_root_all(1))
+            allocate(route_gid_all(1))
+            allocate(route_pos_all(1))
+         endif
+
+         call MPI_Gatherv(local_tensor_old, nlocal_active, MPI_INTEGER, active_tensor_all, recv_counts, recv_displs, &
+            MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+
+         if (ptree%MyID == Main_ID) then
+            do item = 1, total_active
+               tensor_idx = active_tensor_all(item)
+               lo = 1
+               hi = N + 1
+               do while (lo < hi)
+                  mid = (lo + hi)/2
+                  if (ScatterTensor(mid) < tensor_idx) then
+                     lo = mid + 1
+                  else
+                     hi = mid
+                  endif
+               enddo
+               old_idx = lo
+               call assert(old_idx >= 1 .and. old_idx <= N, 'invalid tensor id in simple diagonal routing')
+               if (old_idx >= 1 .and. old_idx <= N) then
+                  call assert(ScatterTensor(old_idx) == tensor_idx, 'failed to map tensor id to scatterer id in simple diagonal routing')
+               endif
+               new_idx = old2new(old_idx)
+               lo = 1
+               hi = ngroup
+               do while (lo < hi)
+                  mid = (lo + hi)/2
+                  group_idx = ngroup + mid - 1
+                  if (group_tail(group_idx) < new_idx) then
+                     lo = mid + 1
+                  else
+                     hi = mid
+                  endif
+               enddo
+               route_bb = lo
+               group_idx = ngroup + route_bb - 1
+               call assert(new_idx >= group_head(group_idx) .and. new_idx <= group_tail(group_idx), &
+                  'failed to route scatterer in simple diagonal constructor')
+               group_n(1) = group_idx
+               pgno = GetMshGroup_Pgno(ptree, 1, group_n)
+               route_root_all(item) = ptree%pgrp(pgno)%head
+               route_gid_all(item) = route_bb
+               route_pos_all(item) = new_idx - group_head(group_idx)
+            enddo
+         endif
+
+         call MPI_Scatterv(route_root_all, recv_counts, recv_displs, MPI_INTEGER, local_diag_root, nlocal_active, &
+            MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+         call MPI_Scatterv(route_gid_all, recv_counts, recv_displs, MPI_INTEGER, local_diag_gid, nlocal_active, &
+            MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+         call MPI_Scatterv(route_pos_all, recv_counts, recv_displs, MPI_INTEGER, local_diag_pos, nlocal_active, &
+            MPI_INTEGER, Main_ID, ptree%Comm, ierr)
+
+         deallocate(route_pos_all)
+         deallocate(route_gid_all)
+         deallocate(route_root_all)
+         deallocate(active_tensor_all)
+         deallocate(recv_displs)
+         deallocate(recv_counts)
+      end subroutine route_local_scatterers
+
+   end subroutine C_BPACK_Construct_Init_Diaglevel_Simple
+
+
+!>**** C interface for getting matrix diagonal blocks at an arbitrary tree level
    !> @param level: requested basis-group tree level. If level<0, use a format-dependent default split
    !> @param nblock: input capacity of block_info; output number of local/shared blocks touching this rank
    !> @param block_info: per-block data with stride 8:
@@ -3432,6 +3816,15 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3443,6 +3836,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
       xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
@@ -3705,6 +4107,15 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3716,6 +4127,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3809,6 +4229,7 @@ contains
       stats%Time_C_Mult = 0
       stats%Time_C_Mult_Wrapper = 0
       stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_FullBlock = 0
       stats%Time_C_Mult_Init = 0
       stats%Time_C_Mult_Right = 0
       stats%Time_C_Mult_All2All = 0
@@ -3819,6 +4240,15 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3830,6 +4260,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 
@@ -3925,6 +4364,15 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -3936,6 +4384,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
 
       ! if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "Multiply ......"
 

@@ -7283,7 +7283,7 @@ time_tmp = time_tmp + n2 - n1
 
       select_row(1) = frow
 
-      mrange = select_row(1)
+      mrange(1) = header_m + select_row(1) - 1
       do j = 1, rankmax_c
          nrange(j) = header_n + j - 1
       enddo
@@ -7329,7 +7329,7 @@ time_tmp = time_tmp + n2 - n1
             call random_number(a)
             select_row(1) = floor_safe(a*(rankmax_r - 1)) + 1
 
-            mrange = select_row(1)
+            mrange(1) = header_m + select_row(1) - 1
             do j = 1, rankmax_c
                nrange(j) = header_n + j - 1
             enddo
@@ -7812,7 +7812,7 @@ time_tmp = time_tmp + n2 - n1
 
       select_row(1) = frow
 
-      mrange = select_row(1)
+      mrange(1) = header_m + select_row(1) - 1
       do j = 1, blocks%N_loc
          nrange(j) = header_n + j - 1 + headn_loc - 1
       enddo
@@ -10393,7 +10393,7 @@ time_tmp = time_tmp + n2 - n1
       integer Ndim
       integer group_m(Ndim), group_n(Ndim), i, j
       integer mm, nn, dim_i, ii
-      integer use_zfp
+      integer use_zfp, use_fft_circulant
       DT value_Z
       type(matrixblock_MD)::blocks
       type(mesh)::msh(Ndim)
@@ -10407,6 +10407,11 @@ time_tmp = time_tmp + n2 - n1
       real(kind=8)::memory,tmpmem
       type(intersect_MD) :: subtensors(1)
       type(intersect_MD) :: subtensors_dummy(1)
+#if HAVE_FFTW
+      logical built_fft
+      integer fft_npad
+      DT, allocatable::kernel_fft(:)
+#endif
 
       group_m = blocks%row_group
       group_n = blocks%col_group
@@ -10415,26 +10420,74 @@ time_tmp = time_tmp + n2 - n1
       allocate(subtensors(1)%nc(Ndim))
       allocate(subtensors(1)%rows(Ndim))
       allocate(subtensors(1)%cols(Ndim))
-      do dim_i=1,Ndim
-         subtensors(1)%nr(dim_i)=blocks%M(dim_i)
-         allocate (subtensors(1)%rows(dim_i)%dat(subtensors(1)%nr(dim_i)))
-         do ii=1,subtensors(1)%nr(dim_i)
-         subtensors(1)%rows(dim_i)%dat(ii) = blocks%headm(dim_i) + ii - 1
-         enddo
-      enddo
-
-      do dim_i=1,Ndim
-         subtensors(1)%nc(dim_i)=blocks%N(dim_i)
-         allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
-         do ii=1,subtensors(1)%nc(dim_i)
-         subtensors(1)%cols(dim_i)%dat(ii) = blocks%headn(dim_i) + ii - 1
-         enddo
-      enddo
       use_zfp=0
 #if HAVE_ZFP
       if(option%use_zfp>=1)use_zfp=1
 #endif
-      if(use_zfp==1 .and. option%use_qtt==0)then
+      use_fft_circulant = 0
+#if HAVE_FFTW
+      if(option%use_fft_circulant == 1 .or. option%use_fft_circulant == 2)use_fft_circulant = option%use_fft_circulant
+#endif
+
+         do dim_i=1,Ndim
+            subtensors(1)%nr(dim_i)=blocks%M(dim_i)
+            allocate (subtensors(1)%rows(dim_i)%dat(subtensors(1)%nr(dim_i)))
+            do ii=1,subtensors(1)%nr(dim_i)
+               subtensors(1)%rows(dim_i)%dat(ii) = blocks%headm(dim_i) + ii - 1
+            enddo
+         enddo
+
+         do dim_i=1,Ndim
+            subtensors(1)%nc(dim_i)=blocks%N(dim_i)
+            allocate (subtensors(1)%cols(dim_i)%dat(subtensors(1)%nc(dim_i)))
+            do ii=1,subtensors(1)%nc(dim_i)
+               subtensors(1)%cols(dim_i)%dat(ii) = blocks%headn(dim_i) + ii - 1
+            enddo
+         enddo
+
+#if HAVE_FFTW
+      if(use_fft_circulant==1)then
+         if(.not. allocated(blocks%M_loc) .or. .not. allocated(blocks%N_loc))then
+            write(*,*) 'Full_construction_MD FFT path requires M_loc/N_loc'
+            stop
+         endif
+         fft_npad = product(blocks%M_loc + blocks%N_loc - 1)
+         allocate(kernel_fft(fft_npad))
+         call LogMemory(stats, SIZEOF(kernel_fft)/1024.0d3)
+         passflag = 0
+         call BP_MD_fft_circulant_fill_kernel_entries(Ndim, blocks, msh, ker, stats, option, ptree, &
+            kernel_fft, fft_npad, passflag)
+         built_fft = .false.
+         call BP_MD_fft_circulant_ensure_from_kernel(blocks, blocks, kernel_fft, fft_npad, &
+            built_fft, option%fftw_plan_mode)
+         if(.not. built_fft)then
+            write(*,*) 'Full_construction_MD failed to build FFT circulant tensor'
+            stop
+         endif
+         if(allocated(blocks%FullmatFFT%kernel_hat))call LogMemory(stats, SIZEOF(blocks%FullmatFFT%kernel_hat)/1024.0d3)
+         call LogMemory(stats, -SIZEOF(kernel_fft)/1024.0d3)
+         deallocate(kernel_fft)
+      elseif(use_fft_circulant==2)then
+         allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
+         call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
+         call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+         blocks%fullmat => subtensors(1)%dat
+         subtensors(1)%dat=>null()
+         built_fft = .false.
+         call BP_MD_fft_circulant_ensure(blocks, blocks, built_fft, option%fftw_plan_mode)
+         if(.not. built_fft)then
+            write(*,*) 'Full_construction_MD failed to build FFT circulant tensor from fullmat'
+            stop
+         endif
+         if(allocated(blocks%FullmatFFT%kernel_hat))call LogMemory(stats, SIZEOF(blocks%FullmatFFT%kernel_hat)/1024.0d3)
+         if(associated(blocks%fullmat))then
+            call LogMemory(stats, -SIZEOF(blocks%fullmat)/1024.0d3)
+            deallocate(blocks%fullmat)
+            nullify(blocks%fullmat)
+         endif
+      else
+#endif
+         if(use_zfp==1 .and. option%use_qtt==0)then
 #if HAVE_ZFP
          allocate(blocks%MiddleZFP(1)) ! use MiddleZFP instead of FullmatZFP as element_Zmn_tensorlist_user needs array input
          call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats,zfpquants=blocks%MiddleZFP)
@@ -10458,11 +10511,13 @@ time_tmp = time_tmp + n2 - n1
          allocate(subtensors(1)%dat(product(subtensors(1)%nr),product(subtensors(1)%nc)))
          call LogMemory(stats, SIZEOF(subtensors(1)%dat)/1024.0d3)
          call element_Zmn_tensorlist_user(Ndim, subtensors, 1, msh, option, ker, 0, passflag, ptree, stats)
+         endif
+
+         blocks%fullmat => subtensors(1)%dat
+         subtensors(1)%dat=>null()
+#if HAVE_FFTW
       endif
-
-      blocks%fullmat => subtensors(1)%dat
-
-      subtensors(1)%dat=>null()
+#endif
 
       dim_subtensor=1
       call BF_MD_delete_subtensors(Ndim, dim_subtensor, subtensors, stats)

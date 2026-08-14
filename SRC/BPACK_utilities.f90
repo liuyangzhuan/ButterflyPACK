@@ -225,6 +225,10 @@ contains
          ! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g1'
          allocate (ho_bf_o%levels(level_c)%BP_inverse_update(ho_bf_o%levels(level_c)%N_block_forward))
          allocate (ho_bf_o%levels(level_c)%BP_inverse_schur(ho_bf_o%levels(level_c)%N_block_inverse))
+         allocate (ho_bf_o%levels(level_c)%SymFactor(ho_bf_o%levels(level_c)%N_block_inverse))
+         if (allocated(ho_bf_i%levels(level_c)%SymFactor)) then
+            ho_bf_o%levels(level_c)%SymFactor = ho_bf_i%levels(level_c)%SymFactor
+         endif
 
          do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
             call Bplus_copy(ho_bf_i%levels(level_c)%BP(ii), ho_bf_o%levels(level_c)%BP(ii))
@@ -403,6 +407,7 @@ contains
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_update)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_schur)
+         if (allocated(ho_bf_o%levels(level_c)%SymFactor)) deallocate (ho_bf_o%levels(level_c)%SymFactor)
       end do
       deallocate (ho_bf_o%levels)
       if(allocated(ho_bf_o%fullmat2D))then
@@ -444,17 +449,6 @@ contains
                deallocate (hss_bf1_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(hss_bf1_md%BP%LL(ll)%boundary_map)) deallocate (hss_bf1_md%BP%LL(ll)%boundary_map)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rep_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rep_list)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_offset)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_offset)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_member_list)) deallocate (hss_bf1_md%BP%LL(ll)%trans_member_list)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_n_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_n_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_to_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_map_m_from_rep)
-	               if (allocated(hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (hss_bf1_md%BP%LL(ll)%trans_rev_m_from_rep)
             end if
          end do
          deallocate (hss_bf1_md%BP%LL)
@@ -502,17 +496,6 @@ contains
                deallocate (h_mat_md%BP%LL(ll)%matrices_block)
                endif
                if (allocated(h_mat_md%BP%LL(ll)%boundary_map)) deallocate (h_mat_md%BP%LL(ll)%boundary_map)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rep_list)) deallocate (h_mat_md%BP%LL(ll)%trans_rep_list)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_offset)) deallocate (h_mat_md%BP%LL(ll)%trans_member_offset)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_member_list)) deallocate (h_mat_md%BP%LL(ll)%trans_member_list)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_n_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_n_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_to_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_map_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_map_m_from_rep)
-	               if (allocated(h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_rev_m_from_rep)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_row_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_row_group)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_col_group)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_col_group)
 	               if (allocated(h_mat_md%BP%LL(ll)%trans_dup_rep)) deallocate (h_mat_md%BP%LL(ll)%trans_dup_rep)
@@ -776,6 +759,7 @@ contains
       stats_o%Time_C_Mult = stats_i%Time_C_Mult
       stats_o%Time_C_Mult_Wrapper = stats_i%Time_C_Mult_Wrapper
       stats_o%Time_C_Mult_Block = stats_i%Time_C_Mult_Block
+      stats_o%Time_C_Mult_FullBlock = stats_i%Time_C_Mult_FullBlock
       stats_o%Time_C_Mult_Init = stats_i%Time_C_Mult_Init
       stats_o%Time_C_Mult_Right = stats_i%Time_C_Mult_Right
       stats_o%Time_C_Mult_All2All = stats_i%Time_C_Mult_All2All
@@ -786,6 +770,15 @@ contains
       stats_o%Time_C_Mult_RedistOut = stats_i%Time_C_Mult_RedistOut
       stats_o%Time_C_Mult_Level = stats_i%Time_C_Mult_Level
       stats_o%Time_C_Mult_TransPlan = stats_i%Time_C_Mult_TransPlan
+      stats_o%Time_C_Mult_RedistSelf = stats_i%Time_C_Mult_RedistSelf
+      stats_o%Time_C_Mult_RedistPack = stats_i%Time_C_Mult_RedistPack
+      stats_o%Time_C_Mult_RedistMPI = stats_i%Time_C_Mult_RedistMPI
+      stats_o%Time_C_Mult_RedistUnpack = stats_i%Time_C_Mult_RedistUnpack
+      stats_o%Time_C_Mult_RedistSetup = stats_i%Time_C_Mult_RedistSetup
+      stats_o%Time_C_Mult_RedistSetupLocal = stats_i%Time_C_Mult_RedistSetupLocal
+      stats_o%Time_C_Mult_RedistAlloc = stats_i%Time_C_Mult_RedistAlloc
+      stats_o%Time_C_Mult_RedistFree = stats_i%Time_C_Mult_RedistFree
+      stats_o%Time_C_Mult_RedistTotal = stats_i%Time_C_Mult_RedistTotal
       stats_o%Time_C_Mult_Pack = stats_i%Time_C_Mult_Pack
       stats_o%Time_C_Mult_Full = stats_i%Time_C_Mult_Full
       stats_o%Time_C_Mult_Unpack = stats_i%Time_C_Mult_Unpack
@@ -797,6 +790,15 @@ contains
       stats_o%Time_C_Mult_Reshape_Middle = stats_i%Time_C_Mult_Reshape_Middle
       stats_o%Time_C_Mult_Reshape_Left = stats_i%Time_C_Mult_Reshape_Left
       stats_o%Time_C_Mult_Reshape_Final = stats_i%Time_C_Mult_Reshape_Final
+      stats_o%Time_C_Mult_FFT_Total = stats_i%Time_C_Mult_FFT_Total
+      stats_o%Time_C_Mult_FFT_Check = stats_i%Time_C_Mult_FFT_Check
+      stats_o%Time_C_Mult_FFT_Apply = stats_i%Time_C_Mult_FFT_Apply
+      stats_o%Time_C_Mult_FFT_Alloc = stats_i%Time_C_Mult_FFT_Alloc
+      stats_o%Time_C_Mult_FFT_Input = stats_i%Time_C_Mult_FFT_Input
+      stats_o%Time_C_Mult_FFT_Forward = stats_i%Time_C_Mult_FFT_Forward
+      stats_o%Time_C_Mult_FFT_Multiply = stats_i%Time_C_Mult_FFT_Multiply
+      stats_o%Time_C_Mult_FFT_Backward = stats_i%Time_C_Mult_FFT_Backward
+      stats_o%Time_C_Mult_FFT_Output = stats_i%Time_C_Mult_FFT_Output
       stats_o%Time_BF_MVP_Gemm = stats_i%Time_BF_MVP_Gemm
       stats_o%Time_BF_MVP_Gemm_Leaf = stats_i%Time_BF_MVP_Gemm_Leaf
       stats_o%Time_BF_MVP_Gemm_Kernel = stats_i%Time_BF_MVP_Gemm_Kernel
@@ -897,6 +899,7 @@ contains
       stats%Time_C_Mult = 0
       stats%Time_C_Mult_Wrapper = 0
       stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_FullBlock = 0
       stats%Time_C_Mult_Init = 0
       stats%Time_C_Mult_Right = 0
       stats%Time_C_Mult_All2All = 0
@@ -907,6 +910,15 @@ contains
       stats%Time_C_Mult_RedistOut = 0
       stats%Time_C_Mult_Level = 0
       stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
       stats%Time_C_Mult_Pack = 0
       stats%Time_C_Mult_Full = 0
       stats%Time_C_Mult_Unpack = 0
@@ -918,6 +930,15 @@ contains
       stats%Time_C_Mult_Reshape_Middle = 0
       stats%Time_C_Mult_Reshape_Left = 0
       stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
       stats%Time_BF_MVP_Gemm = 0
       stats%Time_BF_MVP_Gemm_Leaf = 0
       stats%Time_BF_MVP_Gemm_Kernel = 0
@@ -1071,6 +1092,36 @@ contains
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_Block, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult block time:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult block time:', stats%Time_C_Mult_Block, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FullBlock, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult full block:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult full block:', stats%Time_C_Mult_FullBlock, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Total, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft total:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft total:', stats%Time_C_Mult_FFT_Total, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Check, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft check:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft check:', stats%Time_C_Mult_FFT_Check, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Apply, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft apply:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft apply:', stats%Time_C_Mult_FFT_Apply, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Alloc, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft alloc:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft alloc:', stats%Time_C_Mult_FFT_Alloc, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Input, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft input:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft input:', stats%Time_C_Mult_FFT_Input, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Forward, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft fwd:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft fwd:', stats%Time_C_Mult_FFT_Forward, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Multiply, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft mult:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft mult:', stats%Time_C_Mult_FFT_Multiply, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Backward, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft bwd:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft bwd:', stats%Time_C_Mult_FFT_Backward, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_FFT_Output, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult fft output:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult fft output:', stats%Time_C_Mult_FFT_Output, 'Seconds'
 
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistIn, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist in:', rtemp, 'Seconds'
@@ -1084,6 +1135,33 @@ contains
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_TransPlan, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult trans plan:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult trans plan:', stats%Time_C_Mult_TransPlan, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSelf, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist self:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist self:', stats%Time_C_Mult_RedistSelf, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistPack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist pack:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist pack:', stats%Time_C_Mult_RedistPack, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistMPI, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist MPI:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist MPI:', stats%Time_C_Mult_RedistMPI, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistUnpack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist unpack:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist unpack:', stats%Time_C_Mult_RedistUnpack, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSetup, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist setup:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist setup:', stats%Time_C_Mult_RedistSetup, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistSetupLocal, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult rsetup local:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult rsetup local:', stats%Time_C_Mult_RedistSetupLocal, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistAlloc, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist alloc:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist alloc:', stats%Time_C_Mult_RedistAlloc, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistFree, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist free:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist free:', stats%Time_C_Mult_RedistFree, 'Seconds'
+	      call MPI_ALLREDUCE(stats%Time_C_Mult_RedistTotal, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult redist total:', rtemp, 'Seconds'
+	      write (200, '(A21,Es14.2,A8)') 'C_mult redist total:', stats%Time_C_Mult_RedistTotal, 'Seconds'
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_Pack, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult pack time:', rtemp, 'Seconds'
 	      write (200, '(A21,Es14.2,A8)') 'C_mult pack time:', stats%Time_C_Mult_Pack, 'Seconds'
@@ -1117,7 +1195,6 @@ contains
       call MPI_ALLREDUCE(stats%Time_C_Mult_Gemm, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult gemm:', rtemp, 'Seconds'
       write (200, '(A21,Es14.2,A8)') 'C_mult gemm:', stats%Time_C_Mult_Gemm, 'Seconds'
-
 	      call MPI_ALLREDUCE(stats%Time_C_Mult_Init, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 	      if (ptree%MyID == Main_ID) write (*, '(A21,Es14.2,A8)') 'C_mult init time:', rtemp, 'Seconds'
       write (200, '(A21,Es14.2,A8)') 'C_mult init time:', stats%Time_C_Mult_Init, 'Seconds'
@@ -1172,6 +1249,7 @@ contains
       option%tol_LS = 1d-12
       option%tol_itersol = 1d-6
       option%n_iter = 1000
+      option%IR_HODLR = 10
       option%tol_rand = option%tol_comp
       option%tol_Rdetect = option%tol_comp*1d-1
       option%level_check = 10000
@@ -1186,6 +1264,7 @@ contains
       option%schulzsplitlevel = 1
       option%schulzlevel = 3000
       option%LRlevel = 0
+      option%sym = 0
       option%ErrFillFull = 0
       option%BACA_Batch = 64
       option%RecLR_leaf = BACA
@@ -1212,6 +1291,8 @@ contains
       option%fastsample_tensor = 0
       option%trans_invariant = 0
       option%htensor_mvp_level_batch = 1
+      option%use_fft_circulant = 0
+      option%fftw_plan_mode = 0
       option%sample_para = 2.0d0
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
@@ -1263,6 +1344,8 @@ contains
                   read (strings1, *) option%tol_LS
                else if (trim(strings) == '--n_iter') then
                   read (strings1, *) option%n_iter
+               else if (trim(strings) == '--IR_HODLR') then
+                  read (strings1, *) option%IR_HODLR
                else if (trim(strings) == '--level_check') then
                   read (strings1, *) option%level_check
                else if (trim(strings) == '--precon') then
@@ -1281,6 +1364,8 @@ contains
                   read (strings1, *) option%schulzlevel
                else if (trim(strings) == '--lrlevel' .or. trim(strings) == '--LRlevel') then
                   read (strings1, *) option%LRlevel
+               else if (trim(strings) == '--sym') then
+                  read (strings1, *) option%sym
                else if (trim(strings) == '--errfillfull' .or. trim(strings) == '--ErrFillFull') then
                   read (strings1, *) option%ErrFillFull
                else if (trim(strings) == '--forwardn15flag' .or. trim(strings) == '--forwardN15flag') then
@@ -1341,6 +1426,10 @@ contains
                   read (strings1, *) option%sample_para_outer
                else if (trim(strings) == '--use_zfp') then
                   read (strings1, *) option%use_zfp
+               else if (trim(strings) == '--use_fft_circulant') then
+                  read (strings1, *) option%use_fft_circulant
+               else if (trim(strings) == '--fftw_plan_mode' .or. trim(strings) == '--fft_plan_mode') then
+                  read (strings1, *) option%fftw_plan_mode
                else if (trim(strings) == '--use_parsec') then
                   read (strings1, *) option%use_parsec
                else if (trim(strings) == '--use_qtt') then
@@ -1386,6 +1475,7 @@ contains
       option1%tol_LS = option%tol_LS
       option1%tol_itersol = option%tol_itersol
       option1%n_iter = option%n_iter
+      option1%IR_HODLR = option%IR_HODLR
       option1%tol_rand = option%tol_rand
       option1%level_check = option%level_check
       option1%precon = option%precon
@@ -1400,6 +1490,7 @@ contains
       option1%schulzsplitlevel = option%schulzsplitlevel
       option1%schulzlevel = option%schulzlevel
       option1%LRlevel = option%LRlevel
+      option1%sym = option%sym
       option1%ErrFillFull = option%ErrFillFull
       option1%BACA_Batch = option%BACA_Batch
       option1%RecLR_leaf = option%RecLR_leaf
@@ -1426,6 +1517,8 @@ contains
       option1%fastsample_tensor = option%fastsample_tensor
       option1%trans_invariant = option%trans_invariant
       option1%htensor_mvp_level_batch = option%htensor_mvp_level_batch
+      option1%use_fft_circulant = option%use_fft_circulant
+      option1%fftw_plan_mode = option%fftw_plan_mode
       option1%sample_para = option%sample_para
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
@@ -1451,6 +1544,8 @@ contains
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
+         write (*, '(A18,I8)') 'sym', option%sym
+         write (*, '(A24,I8)') 'IR_HODLR', option%IR_HODLR
          if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'
@@ -1481,6 +1576,8 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1527,6 +1624,8 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1571,6 +1670,8 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1618,6 +1719,8 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1667,6 +1770,8 @@ contains
                write (*, '(A18,I8)') 'errfillfull', option%ErrFillFull
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1712,6 +1817,8 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1771,6 +1878,8 @@ contains
                write (*, '(A18,I8)') 'errsol', option%ErrSol
                write (*, '(A18,I8)') 'less_adapt', option%less_adapt
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
@@ -1819,6 +1928,8 @@ contains
                write (*, '(A18,I8)') 'cpp', option%cpp
                write (*, '(A18,I8)') 'knn', option%knn
                write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
                write (*, '(A18,I8)') 'use_qtt', option%use_qtt
@@ -1832,10 +1943,10 @@ contains
                write (*, *) ' '
             endif
          else if(option%format==HTENSOR)then
-            if(option%LRlevel==0)then
-               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-LR'
+            if(option%LRlevel>0)then
+               write (*, '(A18,A11)') 'algorithm', 'HTENSOR-BF'
             else
-               write (*, '(A18,A10)') 'algorithm', 'HTENSOR-BF'
+               write (*, '(A18,A11)') 'algorithm', 'HTENSOR-LR'
             endif
             write (*, '(A18,Es14.7)') 'near_para', option%near_para
             write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
@@ -1851,6 +1962,8 @@ contains
                write (*, '(A18,Es14.7)') 'period2', option%periods(2)
                write (*, '(A18,Es14.7)') 'period3', option%periods(3)
             endif
+
+            write (*, '(A18,I8)') 'itermax', option%itermax
             write (*, '(A18,I8)') 'verbosity', option%verbosity
             write (*, '(A18,I8)') 'fastsample_tensor', option%fastsample_tensor
             write (*, '(A18,I8)') 'trans_invariant', option%trans_invariant
@@ -1858,11 +1971,14 @@ contains
             write (*, '(A18,I8)') 'elem_extract', option%elem_extract
             write (*, '(A18,I8)') 'cpp', option%cpp
             write (*, '(A18,I8)') 'knn', option%knn
-            write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_zfp', option%use_zfp
+               write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
+               write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
             write (*, '(A18,I8)') 'use_parsec', option%use_parsec
             write (*, '(A18,I8)') 'iter_solver', option%iter_solver
             write (*, '(A18,I8)') 'use_qtt', option%use_qtt
 
+            write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
             write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
             write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
             write (*, '(A18,Es14.7)') 'knn_near_para', option%knn_near_para

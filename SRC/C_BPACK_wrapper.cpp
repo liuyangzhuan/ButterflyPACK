@@ -41,10 +41,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"tol_Rdetect",     "relative tolerance for rank detection during matrix inversion"},
 		{"tol_itersol",     "convergence tolerance for TFQMR iterative solver if precon=2 or 3"},
 		{"n_iter",          "maximum iteration count for TFQMR"},
+		{"IR_HODLR", "maximum HODLR direct-solve refinement steps; 0 disables refinement"},
 		{"level_check",     "the level in the hierarchical partitioning where the randomized construction algorithm is tested, set to 10000 by default (no checking)"},
 		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and pass it to TFQMR without preconditioner), 3: as a preconditioned iterative solver (compress the matrix and invert the matrix and pass them to TFQMR, using approximate matrix inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
+		{"sym",             "symmetric real HODLR compression and factorization (requires format=1 and lrlevel=0)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -72,6 +74,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"fastsample_tensor","0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance"},
 		{"trans_invariant", "1: reuse HTENSOR blocks for translational-invariant tensor kernels on uniform Cartesian grids"},
 		{"htensor_mvp_level_batch", "number of HTENSOR levels grouped per MVP call; 1 keeps level-by-level memory"},
+		{"use_fft_circulant","whether to use FFT-based circulant representative blocks"},
+		{"fftw_plan_mode",  "FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive"},
 		{"use_zfp",         "whether to use zfp compression"},
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
@@ -132,6 +136,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"iter_solver",         required_argument, 0, 39},
 		{"trans_invariant",         required_argument, 0, 40},
 			{"htensor_mvp_level_batch", required_argument, 0, 41},
+		{"use_fft_circulant",         required_argument, 0, 42},
+		{"fftw_plan_mode",         required_argument, 0, 43},
+		{"fft_plan_mode",         required_argument, 0, 44},
+		{"sym",         required_argument, 0, 45},
+		{"IR_HODLR", required_argument, 0, 46},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -335,6 +344,27 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 			iss >> opt_i;
 			c_bpack_set_I_option(&option0, "htensor_mvp_level_batch", opt_i);
 			} break;
+		case 42: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "use_fft_circulant", opt_i);
+		} break;
+		case 43:
+		case 44: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "fftw_plan_mode", opt_i);
+		} break;
+		case 45: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "sym", opt_i);
+		} break;
+		case 46: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "IR_HODLR", opt_i);
+		} break;
 		case 36: {
 		std::istringstream iss(optarg);
 		iss >> opt_i;
@@ -615,9 +645,9 @@ free(m);
 
 }
 
-void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms, 
-	int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, 
-	void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), 
+void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, int* nlevel, int* tree, int* perms,
+	int* Npo_loc, F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,
+	void (*C_FuncDistmn)(int*, int*, double*,C2Fptr),
 	void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp){
 	// To Do: need to compute msh (idxs, idxe, new2old), Npo_locs, perms
     // C_FuncDistmn: defines distance
@@ -633,7 +663,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   //   comm: some form of MPI info, gets mpi_rank, mpi_size
   //   reduction_threshold: only uniform reduction pattern is supported, so really there is only one option which is uniform
   //   pattern: only uniform reduction pattern is supported, so really there is only one option which is uniform
-  //   returns: tree structure 
+  //   returns: tree structure
 
   //   can also create HierarchicalFactorization object
   //   * @param N Total number of points in the problem
@@ -660,28 +690,28 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   // double nugget = 1e-6;        // Matérn diagonal nugget σ_n²
   // double kappa = 10.0;         // Yukawa screening parameter κ
   // int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
-  
+
   // Butterflypack end: need some definition of proxy points
 
   //   Npo: pass into num_points
   //   Ndim: pass into dimension
   //   Locations: pass into point_coords
-  //   nns: 
+  //   nns:
   //   nlevel: pass into num_levels
   //   tree: type difference with tree returned by create_uniform_tree
   //   perms: permutation vector?
-  //   Npo_loc: 
-  //   bmat: this stores the h2 solver struct, h2 tree, kernel, etc. 
-  //   option: 
-  //   stats: 
-  //   msh 
+  //   Npo_loc:
+  //   bmat: this stores the h2 solver struct, h2 tree, kernel, etc.
+  //   option:
+  //   stats:
+  //   msh
   //   ker: kernel types from FMM?
   //   ptree: mpi communicator needed, otherwise not relevant
   //   C_FuncDistmn
   //   C_FuncNearFar
   //   C_QuantApp
 
-	
+
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
@@ -697,7 +727,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
     H2_solver->comm = mpi_comm;
     //*bmat = static_cast<F2Cptr>(H2_solver.release());
-    
+
 	int rank = 0;
     int size = 1;
 	MPI_Comm_rank(H2_solver->comm, &rank);
@@ -714,7 +744,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
     //     return 0;
     //   }
     // }
-    
+
     butterfly::ProgramOptions H2_options;
     try {
 	  double tolerance;
@@ -743,12 +773,12 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       }
 
 	  // Setting up mesh and permutation variables
-      std::vector<int> new2old; 
-	  int idxs = 0; 
+      std::vector<int> new2old;
+	  int idxs = 0;
 	  int idxe = -1;
-	  
+
       butterfly::h2_initiate<double, H2Data>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
-	  // convert to perms and Npo_loc 
+	  // convert to perms and Npo_loc
 	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
@@ -775,8 +805,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 
 void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,
 	F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),
-	void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), 
-	C2Fptr C_QuantApp){  
+	void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr),
+	C2Fptr C_QuantApp){
   // these functions are important to define
   // C_FuncZmn: returns value at (i,j)th element of matrix -- need to update this to work for kernel
   // C_FuncZmnBlock: returns a block, low priority
@@ -802,17 +832,17 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 
 
 void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cptr*msh){
-  
+
   // Correspond to hierarchical_factorization_parallel, arguments
-  // tree: 
+  // tree:
   // kernel: kernel from factorizer
-  // tolerance: 
+  // tolerance:
   // is_symmetric: bool -- works for general helmholtz and V3D
-  // is_hermitian: bool, not supported right now 
+  // is_hermitian: bool, not supported right now
   // factorization_method: provided by factorizer, factorization_type
-  // unit_proxy_points: 
-  // num_proxy: 
-  // proxy_radius: 
+  // unit_proxy_points:
+  // num_proxy:
+  // proxy_radius:
 
   // bmat: can contain tree, and kernel function
   double tmp;
@@ -844,7 +874,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         throw;
     }
-	
+
   }else{
 	c_bpack_factor_fortran(bmat, option, stats, ptree, msh);
   }
@@ -861,18 +891,18 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   //   tree
   //   solve_data: pass in from hierarchical_solve_parallel
   //   solution: pass into x
-  //   aggregated_rhs: 
+  //   aggregated_rhs:
 
   // Ax = b
   // x: final solution
   // b: provided rhs
-  // Hloc: 
+  // Hloc:
   // Nrhs: number of rhs columns
   // bmat: factored matrix, do we need this? because it's in tree
-  // option 
+  // option
   // stat
   // ptree
-	
+
   // note to self: figure out aggregated_rhs, solution, solve_data; and mpi stuff (mpi stuff probably ask Tianyu)
   // need to redistribute x into H2, and then call mul_parallel, then extract mul_data, the nredistribute to Butterfly
   double tmp;
@@ -900,7 +930,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
             H2_solver->options.num_levels);
       const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
       std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs)); // assuming b is a contiguous array of size Nloc * Nrhs
-      
+
 	  double t0 = MPI_Wtime();
 
 	  butterfly::hierarchical_solve_parallel(
@@ -910,11 +940,11 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 	  MPI_Allreduce(MPI_IN_PLACE, &t_solve, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
 	  c_bpack_setstats(stats, "Time_Solve", &t_solve);
 
-        
+
       // put result in x
-      butterfly::gather_local_solution(H2_solver->tree.get(), 
-        solve_data, 
-        reinterpret_cast<H2Data*>(x), 
+      butterfly::gather_local_solution(H2_solver->tree.get(),
+        solve_data,
+        reinterpret_cast<H2Data*>(x),
         Nloc);
 
       // can conduct h2_verification, only if uniform points
@@ -930,17 +960,17 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   }
 }
 
-void c_bpack_mult(char const * trans, C_DT const * xin, 
-	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, 
+void c_bpack_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
 	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
-  
+
   // F * xin = xout, where F is the approximated matrix from hierarchical decomposition
-  // 
+  //
 
   // can call fft_matvec for uniform grid
 
 
-	
+
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
@@ -992,7 +1022,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
 	  double t0 = MPI_Wtime();
       butterfly::hierarchical_mul_parallel(H2_solver->tree.get(), lhs, mul_data, verbose); // can only handle matrix vector multiplication right now
-	  
+
 	  double t_mult = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
 
@@ -1051,7 +1081,7 @@ extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
 // 	delete H2_solver;
 // 	H2_solver = nullptr;
 // 	*bmat = nullptr;
-//   }else{ 
+//   }else{
 // 	c_bpack_delete_fortran(bmat);
 //   }
 // }

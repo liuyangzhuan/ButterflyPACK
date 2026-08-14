@@ -33,6 +33,21 @@
 #include <complex>
 #include <iomanip>
 
+#include <unistd.h>
+#include <limits.h>
+
+#if defined(__APPLE__)
+#include <sys/param.h>
+#endif
+
+#ifndef HOST_NAME_MAX
+#ifdef MAXHOSTNAMELEN
+#define HOST_NAME_MAX (MAXHOSTNAMELEN - 1)
+#else
+#define HOST_NAME_MAX 1024
+#endif
+#endif
+
 
 #define OMPI_SKIP_MPICXX 1
 #ifdef HAVE_MPI
@@ -1169,6 +1184,7 @@ namespace butterflypack {
           {"elem_extract",    "0: evaluating entries one by one 1: evaluating entries block by block (may requires communication inside the callback function) 2: evaluating entries block by block (no communication allowed inside the callback function)"},
           {"fastsample_tensor","0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance"},
           {"use_zfp",         "whether to use zfp compression"},
+          {"use_fft_circulant","whether to use FFT-based circulant representative blocks"},
           {"use_parsec",      "whether to use PaRSEC PTG factorization"},
           {"use_qtt",         "whether to use qtt compression"},
           {"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
@@ -1227,6 +1243,7 @@ namespace butterflypack {
           {"use_qtt",         required_argument, 0, 37},    
           {"hextralevel",         required_argument, 0, 38},    
           {"use_parsec",         required_argument, 0, 39},
+          {"use_fft_circulant",         required_argument, 0, 40},
           {NULL, 0, NULL, 0}
           };
         int c, option_index = 0;
@@ -1439,6 +1456,11 @@ namespace butterflypack {
             std::istringstream iss(optarg);
             iss >> opt_i;
             d_c_bpack_set_I_option(&option0, "use_parsec", opt_i);
+          } break;
+          case 40: {
+            std::istringstream iss(optarg);
+            iss >> opt_i;
+            d_c_bpack_set_I_option(&option0, "use_fft_circulant", opt_i);
           } break;
           default: break;
           }

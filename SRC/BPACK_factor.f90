@@ -88,6 +88,11 @@ contains
         DT::phase
         DTR::logabsdet
 
+        if (option%sym > 0) then
+            call HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
+            return
+        endif
+
         ho_bf1%phase=1
         ho_bf1%logabsdet=0
         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate (stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
@@ -311,6 +316,303 @@ endif
         return
 
     end subroutine HODLR_factorization
+
+    subroutine HODLR_Sym_Propagate_Leaf(ho_bf1, leafidx, leafblock, ptree)
+        implicit none
+        type(hobf)::ho_bf1
+        type(matrixblock)::leafblock
+        type(proctree)::ptree
+        integer leafidx, level, ancestor, side, divisor
+
+        do level = 1, ho_bf1%Maxlevel
+            divisor = 2**(ho_bf1%Maxlevel - level + 1)
+            ancestor = (leafidx - 1)/divisor + 1
+            side = mod((leafidx - 1)/2**(ho_bf1%Maxlevel - level), 2)
+            if (side == 0) then
+                if (allocated(ho_bf1%levels(level)%SymFactor(ancestor)%Q0)) then
+                    call HODLR_Sym_Leaf_Apply(leafblock, &
+                        ho_bf1%levels(level)%SymFactor(ancestor)%Q0, &
+                        ho_bf1%levels(level)%SymFactor(ancestor)%head0)
+                endif
+            else
+                if (allocated(ho_bf1%levels(level)%SymFactor(ancestor)%Q1)) then
+                    call HODLR_Sym_Leaf_Apply(leafblock, &
+                        ho_bf1%levels(level)%SymFactor(ancestor)%Q1, &
+                        ho_bf1%levels(level)%SymFactor(ancestor)%head1)
+                endif
+            endif
+        enddo
+    end subroutine HODLR_Sym_Propagate_Leaf
+
+    subroutine HODLR_Sym_Propagate_Node(ho_bf1, level, node, ptree)
+        implicit none
+        type(hobf)::ho_bf1
+        type(proctree)::ptree
+        integer level, node, ancestor_level, ancestor, side, divisor
+
+        do ancestor_level = 1, level - 1
+            divisor = 2**(level - ancestor_level)
+            ancestor = (node - 1)/divisor + 1
+            side = mod((node - 1)/2**(level - ancestor_level - 1), 2)
+            if (side == 0) then
+                call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), &
+                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q0, &
+                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head0, ptree)
+            else
+                call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), &
+                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q1, &
+                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head1, ptree)
+            endif
+        enddo
+    end subroutine HODLR_Sym_Propagate_Node
+
+    subroutine HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
+        implicit none
+        type(hobf)::ho_bf1
+        type(Hoption)::option
+        type(Hstat)::stats
+        type(proctree)::ptree
+        type(mesh)::msh
+        type(matrixblock), pointer::b21, child0, child1, leaf, leaf_forward
+        integer level, ii, jj, pp, rank, ierr, info, attempt
+        integer pgno
+        DT, allocatable::G0(:, :), G1(:, :), A0(:, :)
+        DT, allocatable::V0_src(:, :), V0_dst(:, :)
+        DT phase_node, local_phase
+        DTR logdet_node, local_logdet, normA, jitter, jitter_base
+        real(kind=8)::t0, t1, flop
+
+        t0 = MPI_Wtime()
+        ho_bf1%phase = 1
+        ho_bf1%logabsdet = 0
+        local_phase = 1
+        local_logdet = 0
+        stats%Mem_Direct_inv = 0
+        stats%Mem_Sblock = 0
+        stats%Mem_SMW = 0
+        stats%Mem_Factor = 0
+        if (.not. allocated(stats%rankmax_of_level_global_factor)) then
+            allocate(stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel))
+        endif
+        stats%rankmax_of_level_global_factor = 0
+
+        ! Copy U1 directly from the retained A21 block row.  Redistribute V0
+        ! once to the upper child row; no numerical storage is owned by A12.
+        do level = 1, ho_bf1%Maxlevel
+            do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+                pgno = ho_bf1%levels(level)%BP_inverse(ii)%pgno
+                if (.not. IOwnPgrp(ptree, pgno)) cycle
+                b21 => ho_bf1%levels(level)%BP(2*ii)%LL(1)%matrices_block(1)
+                child0 => ho_bf1%levels(level + 1)%BP_inverse(2*ii - 1)%LL(1)%matrices_block(1)
+                child1 => ho_bf1%levels(level + 1)%BP_inverse(2*ii)%LL(1)%matrices_block(1)
+                rank = b21%rankmax
+                allocate(V0_src(max(1, b21%N_loc), max(1, rank)))
+                allocate(V0_dst(max(1, child0%M_loc), max(1, rank)))
+                V0_src = 0
+                V0_dst = 0
+                if (rank > 0 .and. IOwnPgrp(ptree, b21%pgno)) then
+                    V0_src(1:b21%N_loc, 1:rank) = b21%ButterflyV%blocks(1)%matrix
+                endif
+                if (rank > 0) then
+                    call Redistribute1Dto1D(V0_src, max(1, b21%N_loc), b21%N_p, b21%headn, b21%pgno, &
+                        V0_dst, max(1, child0%M_loc), child0%M_p, child0%headm, child0%pgno, &
+                        rank, ptree)
+                endif
+                associate(fac => ho_bf1%levels(level)%SymFactor(ii))
+                    fac%pgno = pgno
+                    fac%pgno0 = child0%pgno
+                    fac%pgno1 = child1%pgno
+                    fac%rank = rank
+                    if (allocated(fac%S)) deallocate(fac%S)
+                    if (allocated(fac%ipiv)) deallocate(fac%ipiv)
+                    if (allocated(fac%G0)) deallocate(fac%G0)
+                    if (allocated(fac%G1)) deallocate(fac%G1)
+                    if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+                        allocate(fac%S(rank, rank), fac%ipiv(rank))
+                        allocate(fac%G0(rank, rank), fac%G1(rank, rank))
+                        fac%S = 0
+                    endif
+                    if (IOwnPgrp(ptree, child0%pgno)) then
+                        pp = ptree%MyID - ptree%pgrp(child0%pgno)%head + 1
+                        fac%nloc0 = child0%M_loc
+                        fac%head0 = child0%headm + child0%M_p(pp, 1) - 1
+                        allocate(fac%Q0(fac%nloc0, rank), fac%Z0(fac%nloc0, rank))
+                        if (rank > 0) then
+                            fac%Z0 = V0_dst(1:fac%nloc0, 1:rank)
+                            fac%Q0 = fac%Z0
+                        endif
+                    endif
+                    if (IOwnPgrp(ptree, child1%pgno)) then
+                        pp = ptree%MyID - ptree%pgrp(child1%pgno)%head + 1
+                        fac%nloc1 = child1%M_loc
+                        fac%head1 = child1%headm + child1%M_p(pp, 1) - 1
+                        allocate(fac%Q1(fac%nloc1, rank), fac%Z1(fac%nloc1, rank))
+                        if (rank > 0) then
+                            fac%Z1 = b21%ButterflyU%blocks(1)%matrix
+                            fac%Q1 = fac%Z1
+                        endif
+                    endif
+                end associate
+                deallocate(V0_src, V0_dst)
+            enddo
+        enddo
+
+        ! Factor dense leaves with pivoted LDL^T, then apply each W_leaf^{-1} to
+        ! every ancestor basis that overlaps that leaf.
+        level = ho_bf1%Maxlevel + 1
+        do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+            leaf_forward => ho_bf1%levels(level)%BP(ii)%LL(1)%matrices_block(1)
+            leaf => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+            allocate(A0(leaf_forward%M, leaf_forward%N))
+            A0 = leaf_forward%fullmat
+            normA = fnorm(A0, size(A0, 1), size(A0, 2), 'F')
+            jitter_base = max(option%jitter*max(normA, 1d0), &
+                epsilon(1d0)*max(normA, 1d0))
+            info = 1
+            jitter = 0
+            if (allocated(leaf%ipiv)) deallocate(leaf%ipiv)
+            allocate(leaf%ipiv(size(A0, 1)))
+            do attempt = 0, 8
+                if (associated(leaf%fullmat)) deallocate(leaf%fullmat)
+                allocate(leaf%fullmat(size(A0, 1), size(A0, 2)))
+                leaf%fullmat = A0
+                if (attempt > 0) then
+                    jitter = jitter_base*10d0**(attempt - 1)
+                    do jj = 1, size(A0, 1)
+                        leaf%fullmat(jj, jj) = leaf%fullmat(jj, jj) + jitter
+                    enddo
+                endif
+                call sytrff90(leaf%fullmat, leaf%ipiv, 'L', info, flop)
+                stats%Flop_Factor = stats%Flop_Factor + flop
+                if (info == 0) then
+                    call sytrf_slogdet('L', size(A0, 1), leaf%fullmat, size(A0, 1), &
+                        leaf%ipiv, phase_node, logdet_node, info)
+                endif
+                if (info == 0) exit
+            enddo
+            call assert(info == 0, 'symmetric HODLR LDLT failed on a dense leaf')
+            leaf%phase = phase_node
+            leaf%logabsdet = logdet_node
+            local_phase = local_phase*phase_node
+            local_logdet = local_logdet + logdet_node
+            if (jitter > 0 .and. option%verbosity >= 0) then
+                write(*,*) 'symmetric HODLR leaf jitter:', ii, jitter
+            endif
+            call HODLR_Sym_Propagate_Leaf(ho_bf1, ii, leaf, ptree)
+            deallocate(A0)
+        enddo
+
+        ! Form the block-LDL Schur correction T=I-G0*G1.  Its rank-r LU
+        ! avoids the poorly scaled rank-2r symmetric saddle formulation.
+        do level = ho_bf1%Maxlevel, 1, -1
+            do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+                associate(fac => ho_bf1%levels(level)%SymFactor(ii))
+                    if (.not. IOwnPgrp(ptree, fac%pgno)) cycle
+                    rank = fac%rank
+                    allocate(G0(rank, rank), G1(rank, rank))
+                    G0 = 0
+                    G1 = 0
+                    if (allocated(fac%Z0) .and. rank > 0) G0 = matmul(transpose(fac%Z0), fac%Q0)
+                    if (allocated(fac%Z1) .and. rank > 0) G1 = matmul(transpose(fac%Z1), fac%Q1)
+                    if (rank > 0) then
+                        call MPI_ALLREDUCE(MPI_IN_PLACE, G0, rank*rank, MPI_DT, MPI_SUM, &
+                            ptree%pgrp(fac%pgno)%Comm, ierr)
+                        call MPI_ALLREDUCE(MPI_IN_PLACE, G1, rank*rank, MPI_DT, MPI_SUM, &
+                            ptree%pgrp(fac%pgno)%Comm, ierr)
+                    endif
+                    info = 0
+                    jitter = 0
+                    logdet_node = 0
+                    phase_node = 1
+                    if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+                        if (rank > 0) then
+                            fac%G0 = (G0 + transpose(G0))/2
+                            fac%G1 = (G1 + transpose(G1))/2
+                        endif
+                        jitter_base = max(option%jitter, epsilon(1d0))
+                        if (rank > 0) then
+                            do attempt = 0, 8
+                                fac%S = -matmul(fac%G0, fac%G1)
+                                do jj = 1, rank
+                                    fac%S(jj, jj) = fac%S(jj, jj) + BPACK_cone
+                                enddo
+                                if (attempt > 0) then
+                                    jitter = jitter_base*10d0**(attempt - 1)
+                                    do jj = 1, rank
+                                        fac%S(jj, jj) = fac%S(jj, jj) + jitter
+                                    enddo
+                                endif
+                                call getrff90_info(fac%S, fac%ipiv, info, flop)
+                                stats%Flop_Factor = stats%Flop_Factor + flop
+                                if (info == 0) then
+                                    call getrf_slogdet(rank, fac%S, rank, fac%ipiv, &
+                                        phase_node, logdet_node, info)
+                                endif
+                                if (info == 0) exit
+                            enddo
+                        endif
+                    endif
+                    call MPI_BCAST(info, 1, MPI_INTEGER, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+                    call MPI_BCAST(jitter, 1, MPI_DTR, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+                    call MPI_BCAST(logdet_node, 1, MPI_DTR, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+                    call MPI_BCAST(phase_node, 1, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+                    fac%info = info
+                    fac%jitter = jitter
+                    call assert(info == 0, 'symmetric HODLR LDLT failed for a rank-r Schur correction')
+                    if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+                        local_phase = local_phase*phase_node
+                        local_logdet = local_logdet + logdet_node
+                        if (jitter > 0 .and. option%verbosity >= 0) then
+                            write(*,*) 'symmetric HODLR node jitter:', level, ii, jitter
+                        endif
+                    endif
+                    stats%rankmax_of_level_global_factor(level) = max( &
+                        stats%rankmax_of_level_global_factor(level), rank)
+                    if (level > 1) call HODLR_Sym_Propagate_Node(ho_bf1, level, ii, ptree)
+                    deallocate(G0, G1)
+                end associate
+            enddo
+        enddo
+
+        ! Persistent factor storage.  Forward blocks remain construction
+        ! memory; only their copied/transformed bases are counted here.
+        level = ho_bf1%Maxlevel + 1
+        do ii = 1, ho_bf1%levels(level)%N_block_inverse
+            leaf => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+            if (associated(leaf%fullmat)) then
+                stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(leaf%fullmat)/1024.0d3
+            endif
+            if (allocated(leaf%ipiv)) then
+                stats%Mem_Direct_inv = stats%Mem_Direct_inv + SIZEOF(leaf%ipiv)/1024.0d3
+            endif
+        enddo
+        do level = 1, ho_bf1%Maxlevel
+            do ii = 1, ho_bf1%levels(level)%N_block_inverse
+                associate(fac => ho_bf1%levels(level)%SymFactor(ii))
+                    if (allocated(fac%Q0)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Q0)/1024.0d3
+                    if (allocated(fac%Q1)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Q1)/1024.0d3
+                    if (allocated(fac%Z0)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Z0)/1024.0d3
+                    if (allocated(fac%Z1)) stats%Mem_Sblock = stats%Mem_Sblock + SIZEOF(fac%Z1)/1024.0d3
+                    if (allocated(fac%G0)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%G0)/1024.0d3
+                    if (allocated(fac%G1)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%G1)/1024.0d3
+                    if (allocated(fac%S)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%S)/1024.0d3
+                    if (allocated(fac%ipiv)) stats%Mem_SMW = stats%Mem_SMW + SIZEOF(fac%ipiv)/1024.0d3
+                end associate
+            enddo
+        enddo
+        stats%Mem_Factor = stats%Mem_Direct_inv + stats%Mem_Sblock + stats%Mem_SMW
+        call LogMemory(stats, stats%Mem_Factor)
+
+        call MPI_ALLREDUCE(local_logdet, ho_bf1%logabsdet, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(local_phase, ho_bf1%phase, 1, MPI_DT, MPI_PROD, ptree%Comm, ierr)
+        call MPI_ALLREDUCE(MPI_IN_PLACE, stats%rankmax_of_level_global_factor(0:ho_bf1%Maxlevel), &
+            ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+        t1 = MPI_Wtime()
+        stats%Time_Factor = t1 - t0
+        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            write(*,*) 'symmetric HODLR logdet:', ho_bf1%phase, ho_bf1%logabsdet
+        endif
+    end subroutine HODLR_factorization_sym
 
     subroutine HSS_factorization(hss_bf1, option, stats, ptree, msh)
 

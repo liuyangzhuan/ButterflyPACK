@@ -204,6 +204,7 @@ module BPACK_DEFS
         integer:: level_e=-1
         integer:: Ndim=0
         integer:: nproc=0
+        integer:: compact_slots=0
         type(vec_redist_peer_MD), allocatable:: send(:)
         type(vec_redist_peer_MD), allocatable:: recv(:)
     end type vec_redist_plan_MD
@@ -242,6 +243,14 @@ module BPACK_DEFS
     type vectorsblock_oneL
         type(vectorsblock), allocatable :: vs(:)
     end type vectorsblock_oneL
+
+    !>**** local map from per-block MD vector slots to unique row/column-group slots
+    type vec_redist_groupmap_MD
+        integer:: nslot = 0
+        integer:: nuniq = 0
+        integer, allocatable:: slot_map(:)
+        integer, allocatable:: owner_slot(:)
+    end type vec_redist_groupmap_MD
 
     !>**** cached local MD MVP work vectors, used to avoid repeated allocation churn
     type vec_mvp_cache_MD
@@ -473,6 +482,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer col_group !< column group number
         integer row_group !< row group number
         integer style !< 1: full block 2: compressed block 4: hierarchical block
+        integer:: is_transpose_view = 0 !< 1 when U/V alias a transposed sibling block
         integer level_butterfly !< butterfly levels
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
@@ -515,6 +525,22 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type matrixblock
 
 
+    type fft_circulant_MD
+        integer:: ready = 0
+        integer:: Ndim = 0
+        integer, allocatable:: dims_in(:)
+        integer, allocatable:: dims_out(:)
+        integer, allocatable:: dims_pad(:)
+        integer:: npad = 0
+        integer:: nfreq = 0
+        integer:: plan_mode = 2
+        integer, allocatable:: input_pad_idx(:)
+        integer, allocatable:: output_pad_idx(:)
+        type(c_ptr):: plan_f = c_null_ptr
+        type(c_ptr):: plan_b = c_null_ptr
+        DTC, allocatable:: kernel_hat(:)
+    end type fft_circulant_MD
+
     !>**** butterfly or LR structure in tensor format
     type matrixblock_MD
         integer Ndim !< dimensionality
@@ -539,6 +565,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         DT, pointer :: fullmat(:, :) => null() !< full matrix entries
         type(zfpquant):: FullmatZFP !< ZFP quantity for compressing fullmat
         type(TTtype):: FullmatQTT !< QTT quantity for compressing fullmat
+        type(fft_circulant_MD), pointer :: FullmatFFT => null() !< FFT circulant data for translational-invariant dense tensor blocks
         type(zfpquant), allocatable :: MiddleZFP(:) ! ZFP quantity array for compressing ButterflyMiddle
         type(TTtype), allocatable :: MiddleQTT(:) ! QTT quantity array for compressing ButterflyMiddle
         integer, allocatable::nr_m(:),nc_m(:) !< local number of middle-level row and column groups per dimension. The global number will be nr_m(dim_i)=2^level_half and nc_m(dim_i)=2^(level_butterfly-level_half)
@@ -592,15 +619,6 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer rankmax !< maximum butterfly rank on this layer
         type(matrixblock_MD), pointer:: matrices_block(:) => null()
         integer, allocatable::boundary_map(:,:,:) !< inadmisible subgroups for each subgroup
-        integer:: trans_nrep = 0 !< # representative local blocks for translational-invariant MVP batching
-        integer, allocatable:: trans_rep_list(:) !< representative local block ids
-        integer, allocatable:: trans_member_offset(:) !< offsets into trans_member_list for each representative
-        integer, allocatable:: trans_member_list(:) !< local block ids grouped by representative
-        integer:: trans_plan_ready = 0 !< 1 when trans_invariant=2 axis maps have been cached
-        integer, allocatable:: trans_map_n_to_rep(:,:), trans_rev_n_to_rep(:,:)
-        integer, allocatable:: trans_map_n_from_rep(:,:), trans_rev_n_from_rep(:,:)
-        integer, allocatable:: trans_map_m_to_rep(:,:), trans_rev_m_to_rep(:,:)
-        integer, allocatable:: trans_map_m_from_rep(:,:), trans_rev_m_from_rep(:,:)
         integer:: trans_ndup = 0 !< # compact single-rank occurrences that reuse representative blocks
         integer, allocatable:: trans_dup_row_group(:,:), trans_dup_col_group(:,:)
         integer, allocatable:: trans_dup_rep(:)
@@ -654,6 +672,24 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer hardstart !< 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
     end type schulz_operand
 
+    !>**** Symmetric HODLR factor associated with one binary-tree node.
+    ! The tall bases remain in the HODLR block-row layout.  The dense correction
+    ! factor and its pivots are stored only on the node process-group head.
+    type hodlr_symfactor
+        integer :: pgno = 0
+        integer :: pgno0 = 0, pgno1 = 0
+        integer :: rank = 0
+        integer :: head0 = 0, head1 = 0
+        integer :: nloc0 = 0, nloc1 = 0
+        integer :: info = 0
+        DTR :: jitter = 0
+        integer, allocatable :: ipiv(:)
+        DT, allocatable :: Q0(:, :), Q1(:, :)
+        DT, allocatable :: Z0(:, :), Z1(:, :)
+        DT, allocatable :: G0(:, :), G1(:, :)
+        DT, allocatable :: S(:, :)
+    end type hodlr_symfactor
+
     !>**** One level in BPACK
     type cascadingfactors
         integer level  !< level number
@@ -664,6 +700,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus), pointer:: BP_inverse(:) => null() !< inverse blocks
         type(blockplus), pointer:: BP_inverse_update(:) => null() !< updated blocks dimension-wise matching forward blocks
         type(blockplus), pointer:: BP_inverse_schur(:) => null() !< schur complement blocks
+        type(hodlr_symfactor), allocatable :: SymFactor(:) !< symmetric factors for inverse blocks
     end type cascadingfactors
 
     !>**** HODLR/HODBF structure
@@ -757,6 +794,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         ! options for Bplus, Butterfly or LR
         integer::LRlevel  !< The top LRlevel level blocks are butterfly or Bplus
+        integer::sym !< 1: symmetric real HODLR compression/factorization (format=HODLR, LRlevel=0)
         integer:: lnoBP !< the bottom lnoBP levels are either Butterfly or LR, but not Bplus
         integer:: bp_cnt_lr !< only print the rank in the top-layer butterfly of a Bplus
         integer:: TwoLayerOnly  !< restrict Bplus as Butterfly + LR
@@ -790,6 +828,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
+        integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
+        integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 
         ! options for inversion
         real(kind=8) tol_LS       !< tolerance in pseudo inverse
@@ -813,6 +853,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_itersol  !< tolerance for iterative solvers
         integer n_iter  !< maximum number of iterations for iterative solver
         integer precon  !< DIRECT: use factored BPACK as direct solver, BPACKPRECON: use factored BPACK as preconditioner, NOPRECON: use forward BPACK as fast matvec,
+        integer IR_HODLR !< maximum HODLR direct-solve refinement steps; 0 disables refinement
 
         ! options for error checking
         integer::level_check !< check compression quality by picking random entries at level_check (only work for nmpi=1 now)
@@ -826,12 +867,16 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** statistics
     type Hstat
         real(kind=8) Time_random(5)  !< Intialization, MVP, Reconstruction, Reconstruction of one subblock
-        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
+        real(kind=8) Time_Sblock, Time_Inv, Time_SMW, Time_PartialUpdate, Time_Fill, Time_RedistB, Time_RedistV, Time_Sol, Time_BLK_MVP, Time_C_Mult, Time_C_Mult_Wrapper, Time_C_Mult_Block, Time_C_Mult_FullBlock, Time_C_Extract, Time_Entry, Time_Entry_Traverse, Time_Entry_BF, Time_Entry_Comm
         real(kind=8) Time_C_Mult_Init, Time_C_Mult_Right, Time_C_Mult_All2All, Time_C_Mult_Middle, Time_C_Mult_Left, Time_C_Mult_Cleanup
         real(kind=8) Time_C_Mult_RedistIn, Time_C_Mult_RedistOut, Time_C_Mult_Level, Time_C_Mult_TransPlan
+        real(kind=8) Time_C_Mult_RedistSelf, Time_C_Mult_RedistPack, Time_C_Mult_RedistMPI, Time_C_Mult_RedistUnpack
+        real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistSetupLocal, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
+        real(kind=8) Time_C_Mult_FFT_Total, Time_C_Mult_FFT_Check, Time_C_Mult_FFT_Apply, Time_C_Mult_FFT_Alloc
+        real(kind=8) Time_C_Mult_FFT_Input, Time_C_Mult_FFT_Forward, Time_C_Mult_FFT_Multiply, Time_C_Mult_FFT_Backward, Time_C_Mult_FFT_Output
         real(kind=8) Time_BF_MVP_Gemm, Time_BF_MVP_Gemm_Leaf, Time_BF_MVP_Gemm_Kernel, Time_BF_MVP_Exchange, Time_BF_MVP_All2All, Time_BF_MVP_Other
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor

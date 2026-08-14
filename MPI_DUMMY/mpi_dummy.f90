@@ -1580,6 +1580,299 @@ subroutine mpi_waitany ( icount, requests, index, status, ierror )
   return
 end
 
+subroutine mpi_reduce_scatter ( sendbuf, recvbuf, recvcounts, datatype, &
+  operation, comm, ierror )
+
+!*****************************************************************************80
+!
+!! MPI_REDUCE_SCATTER carries out a reduction and scatter operation.
+!
+!  Discussion:
+!
+!    In a single-process (dummy MPI) context, this reduces to a copy
+!    of recvcounts(1) elements from sendbuf into recvbuf.
+!
+!  Parameters:
+!
+!    Input, DATATYPE SENDBUF(*), the data to be processed.
+!
+!    Output, DATATYPE RECVBUF(*), the result of the reduction.
+!
+!    Input, integer RECVCOUNTS(*), the number of elements each process receives.
+!
+!    Input, integer DATATYPE, indicates the datatype of the buffers.
+!
+!    Input, integer OPERATION, the reduction operation (MPI_SUM, etc.).
+!
+!    Input, integer COMM, the MPI communicator.
+!
+!    Output, integer IERROR, is nonzero if an error occurred.
+!
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer sendbuf(*)
+  integer recvbuf(*)
+  integer recvcounts(*)
+  integer datatype
+  integer operation
+  integer comm
+  integer ierror
+  integer n
+
+  ierror = MPI_SUCCESS
+  n = recvcounts(1)
+
+  if ( datatype == mpi_double_precision ) then
+
+    call mpi_reduce_double_precision ( sendbuf, recvbuf, n, operation, ierror )
+
+  else if ( datatype == mpi_integer ) then
+
+    call mpi_reduce_integer ( sendbuf, recvbuf, n, operation, ierror )
+
+  else if ( datatype == mpi_real ) then
+
+    call mpi_reduce_real ( sendbuf, recvbuf, n, operation, ierror )
+
+  else if ( datatype == mpi_complex ) then
+
+    call mpi_reduce_complex ( sendbuf, recvbuf, n, operation, ierror )
+
+  else if ( datatype == mpi_double_complex ) then
+
+    call mpi_reduce_double_complex ( sendbuf, recvbuf, n, operation, ierror )
+
+  else
+
+    ierror = MPI_FAILURE
+
+  end if
+
+  return
+end subroutine mpi_reduce_scatter
+
+subroutine mpi_gather ( sendbuf, sendcount, sendtype, recvbuf, recvcount, &
+  recvtype, root, comm, ierror )
+
+!*****************************************************************************80
+!
+!! MPI_GATHER gathers data from all processes to one (the root) process.
+!
+!  Discussion:
+!
+!    In a single-process (dummy MPI) context, this reduces to a simple
+!    copy of sendcount elements from sendbuf into recvbuf.
+!
+!  Parameters:
+!
+!    Input, SENDTYPE SENDBUF(SENDCOUNT), the data to be sent.
+!
+!    Input, integer SENDCOUNT, the number of data items being sent.
+!
+!    Input, integer SENDTYPE, the datatype of the data being sent.
+!
+!    Output, RECVTYPE RECVBUF(RECVCOUNT), the buffer to receive the data.
+!
+!    Input, integer RECVCOUNT, the number of data items to be received
+!    from each process.
+!
+!    Input, integer RECVTYPE, the datatype of the data being received.
+!
+!    Input, integer ROOT, the rank of the receiving process.
+!
+!    Input, integer COMM, the MPI communicator.
+!
+!    Output, integer IERROR, is nonzero if an error occurred.
+!
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer sendcount
+  integer recvcount
+
+  integer comm
+  integer ierror
+  integer recvbuf(recvcount)
+  integer recvtype
+  integer root
+  integer sendbuf(sendcount)
+  integer sendtype
+
+  ierror = MPI_SUCCESS
+
+  if ( sendtype == mpi_double_precision ) then
+    call mpi_copy_double_precision ( sendbuf, recvbuf, sendcount, ierror )
+  else if ( sendtype == mpi_integer ) then
+    call mpi_copy_integer ( sendbuf, recvbuf, sendcount, ierror )
+  else if ( sendtype == mpi_real ) then
+    call mpi_copy_real ( sendbuf, recvbuf, sendcount, ierror )
+  else if ( sendtype == mpi_complex ) then
+    call mpi_copy_complex ( sendbuf, recvbuf, sendcount, ierror )
+  else if ( sendtype == mpi_double_complex ) then
+    call mpi_copy_double_complex ( sendbuf, recvbuf, sendcount, ierror )
+  else
+    ierror = MPI_FAILURE
+  end if
+
+  return
+end subroutine mpi_gather
+
+
+subroutine mpi_gatherv ( sendbuf, sendcount, sendtype, recvbuf, recvcounts, &
+  displs, recvtype, root, comm, ierror )
+
+!*****************************************************************************80
+!
+!! MPI_GATHERV gathers variable-length data from all processes to the root.
+!
+!  Discussion:
+!
+!    In a single-process (dummy MPI) context, this reduces to a simple
+!    copy of sendcount elements from sendbuf into recvbuf at offset displs(0).
+!
+!  Parameters:
+!
+!    Input, SENDTYPE SENDBUF(SENDCOUNT), the data to be sent.
+!
+!    Input, integer SENDCOUNT, the number of data items being sent.
+!
+!    Input, integer SENDTYPE, the datatype of the data being sent.
+!
+!    Output, RECVTYPE RECVBUF(*), the buffer to receive the data.
+!
+!    Input, integer RECVCOUNTS(0:*), the number of data items to be received
+!    from each process.
+!
+!    Input, integer DISPLS(0:*), the displacement in RECVBUF for each process.
+!
+!    Input, integer RECVTYPE, the datatype of the data being received.
+!
+!    Input, integer ROOT, the rank of the receiving process.
+!
+!    Input, integer COMM, the MPI communicator.
+!
+!    Output, integer IERROR, is nonzero if an error occurred.
+!
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer sendcount
+
+  integer comm
+  integer displs(0:*)
+  integer ierror
+  integer recvbuf(*)
+  integer recvcounts(0:*)
+  integer recvtype
+  integer root
+  integer sendbuf(sendcount)
+  integer sendtype
+
+  ierror = MPI_SUCCESS
+
+  if ( sendtype == mpi_double_precision ) then
+    call mpi_copy_double_precision ( &
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
+  else if ( sendtype == mpi_integer ) then
+    call mpi_copy_integer ( &
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
+  else if ( sendtype == mpi_real ) then
+    call mpi_copy_real ( &
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
+  else if ( sendtype == mpi_complex ) then
+    call mpi_copy_complex ( &
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
+  else if ( sendtype == mpi_double_complex ) then
+    call mpi_copy_double_complex ( &
+      sendbuf, recvbuf(displs(0)), sendcount, ierror )
+  else
+    ierror = MPI_FAILURE
+  end if
+
+  return
+end subroutine mpi_gatherv
+
+
+subroutine mpi_scatterv ( sendbuf, sendcounts, displs, sendtype, recvbuf, &
+  recvcount, recvtype, root, comm, ierror )
+
+!*****************************************************************************80
+!
+!! MPI_SCATTERV scatters variable-length data from the root to all processes.
+!
+!  Discussion:
+!
+!    In a single-process (dummy MPI) context, this reduces to a simple
+!    copy of sendcounts(0) elements from sendbuf at offset displs(0) into recvbuf.
+!
+!  Parameters:
+!
+!    Input, SENDTYPE SENDBUF(*), the data to be scattered.
+!
+!    Input, integer SENDCOUNTS(0:*), the number of data items to be sent
+!    to each process.
+!
+!    Input, integer DISPLS(0:*), the displacement in SENDBUF for each process.
+!
+!    Input, integer SENDTYPE, the datatype of the data being sent.
+!
+!    Output, RECVTYPE RECVBUF(RECVCOUNT), the buffer to receive the data.
+!
+!    Input, integer RECVCOUNT, the number of data items to be received.
+!
+!    Input, integer RECVTYPE, the datatype of the data being received.
+!
+!    Input, integer ROOT, the rank of the sending process.
+!
+!    Input, integer COMM, the MPI communicator.
+!
+!    Output, integer IERROR, is nonzero if an error occurred.
+!
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer recvcount
+
+  integer comm
+  integer displs(0:*)
+  integer ierror
+  integer recvbuf(recvcount)
+  integer recvtype
+  integer root
+  integer sendbuf(*)
+  integer sendcounts(0:*)
+  integer sendtype
+
+  ierror = MPI_SUCCESS
+
+  if ( sendtype == mpi_double_precision ) then
+    call mpi_copy_double_precision ( &
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
+  else if ( sendtype == mpi_integer ) then
+    call mpi_copy_integer ( &
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
+  else if ( sendtype == mpi_real ) then
+    call mpi_copy_real ( &
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
+  else if ( sendtype == mpi_complex ) then
+    call mpi_copy_complex ( &
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
+  else if ( sendtype == mpi_double_complex ) then
+    call mpi_copy_double_complex ( &
+      sendbuf(displs(0)), recvbuf, sendcounts(0), ierror )
+  else
+    ierror = MPI_FAILURE
+  end if
+
+  return
+end subroutine mpi_scatterv
+
+
 function mpi_wtime ( )
 
 !*****************************************************************************80

@@ -18,10 +18,10 @@ ulimit -s unlimited
 
 
 
-for nmpi in 64
+for nmpi in 16
 do
 
-NTH=8
+NTH=4
 CORES_PER_NODE=128
 THREADS_PER_RANK=`expr $NTH \* 2`								 
 
@@ -73,6 +73,7 @@ rankrate=1.2
 tol_itersol=1e-12
 errsol=1
 iter_solver=3
+sym=0
 
 
 
@@ -80,59 +81,58 @@ iter_solver=3
 
 
 
+# ########################################## HODBF
+# format=1
+# elem_extract=2
+# precon=3
+# pat_comp=3
+# blknum=1
+# tol=1d-4
+# tol_rand=1d-2
+# errcheck=0
+# lrcomp=5
+# bACAbatch=16
+# LRlevel=100
+# leafsize=200
+# para=0.01	  
+# Nbundle=4		  
+# bp_cnt_lr=1
+# less_adapt=1
 
-########################################## HODBF
-format=1
-elem_extract=2
-precon=3
-pat_comp=3
-blknum=1
-tol=1d-4
-tol_rand=1d-2
-errcheck=0
-lrcomp=5
-bACAbatch=16
-LRlevel=100
-leafsize=200
-para=0.01	  
-Nbundle=4		  
-bp_cnt_lr=1
-less_adapt=1
+# # samplepara=2
+# # sample_para_outer=2    # this is performance critical for nlogn algorithm
+# # knn=200
+# # forwardN15flag=0
+
+
+# # samplepara=2
+# # sample_para_outer=2   
+# # knn=0
+# # forwardN15flag=1
+
 
 # samplepara=2
 # sample_para_outer=2    # this is performance critical for nlogn algorithm
-# knn=200
-# forwardN15flag=0
-
-
-# samplepara=2
-# sample_para_outer=2   
-# knn=0
-# forwardN15flag=1
-
-
-samplepara=2
-sample_para_outer=2    # this is performance critical for nlogn algorithm
-knn=40
-forwardN15flag=3
-pat_comp=1
+# knn=40
+# forwardN15flag=3
+# pat_comp=1
 
 
 
-# ###################################### HODLR
-# format=1
-# precon=1
-# blknum=1
-# tol=1d-4
-# tol_rand=1d-4
-# lrcomp=5
-# bACAbatch=16
-# LRlevel=0
-# leafsize=1000
-# para=0.01	  	  
-# bp_cnt_lr=1
-# knn=10
-
+###################################### HODLR
+format=1
+precon=1
+blknum=1
+tol=1d-4
+tol_rand=1d-4
+lrcomp=5
+bACAbatch=16
+LRlevel=0
+leafsize=1000
+para=0.01	  	  
+bp_cnt_lr=1
+knn=10
+sym=1
 
 
 
@@ -216,14 +216,14 @@ export OMP_NUM_THREADS=$OMP_NUM_THREADS
 
 
 
-# wavelength=2.0
-# filename=sphere_2300
+wavelength=2.0
+filename=sphere_2300
 
 # wavelength=1.0
 # filename=sphere_9000
 
-wavelength=0.28
-filename=sphere_128000
+# wavelength=0.28
+# filename=sphere_128000
 
 # wavelength=0.14
 # filename=sphere_512000
@@ -244,9 +244,9 @@ filename=sphere_128000
 # wavelength=0.03125
 # filename=plate_2560000
 
-logfile=$filename.out_precon_${precon}_sort_${xyzsort}_mpi_${nmpi}_format_${format}_less_adapt_${less_adapt}_tol_rand_${tol_rand}_lrlevel_${LRlevel}_nbundle_${Nbundle}_forwardN15flag_${forwardN15flag}_hextralevel_${hextralevel}_omp${NTH}_parsec${use_parsec}
+logfile=$filename.out_precon_${precon}_sort_${xyzsort}_mpi_${nmpi}_format_${format}_less_adapt_${less_adapt}_tol_rand_${tol_rand}_lrlevel_${LRlevel}_nbundle_${Nbundle}_forwardN15flag_${forwardN15flag}_hextralevel_${hextralevel}_omp${NTH}_parsec${use_parsec}_sym${sym}
 
-srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores /usr/bin/time -f "Time=%E MaxRSS=%M KB" $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --errsol $errsol --iter_solver ${iter_solver} --rankrate ${rankrate} --tol_itersol ${tol_itersol} --hextralevel ${hextralevel} --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
+srun -n $nmpi -c $THREADS_PER_RANK --cpu_bind=cores /usr/bin/time -f "Time=%E MaxRSS=%M KB" $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --errsol $errsol --iter_solver ${iter_solver} --sym ${sym} --rankrate ${rankrate} --tol_itersol ${tol_itersol} --hextralevel ${hextralevel} --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
 # srun -n $nmpi -N 4 -c $THREADS_PER_RANK --cpu_bind=cores valgrind --leak-check=yes $EXEC -quant --data_dir ../EXAMPLE/EM3D_DATA/preprocessor_3dmesh/$filename --wavelength $wavelength -option --lr_blk_num $blknum --use_zfp ${use_zfp} --use_parsec ${use_parsec} --elem_extract ${elem_extract} --tol_comp $tol --tol_rand ${tol_rand} --less_adapt ${less_adapt} --errfillfull $errcheck --reclr_leaf $lrcomp --baca_batch $bACAbatch --lrlevel $LRlevel --bp_cnt_lr $bp_cnt_lr --precon $precon --xyzsort $xyzsort --forwardN15flag $forwardN15flag --nmin_leaf $leafsize --near_para $para --verbosity ${verbosity} --pat_comp $pat_comp --nbundle $Nbundle --format $format --knn $knn --sample_para $samplepara --sample_para_outer ${sample_para_outer} 2>&1 | tee $logfile
 
 

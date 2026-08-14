@@ -1,9 +1,9 @@
 module load PrgEnv-gnu
 module load cmake
-module load python/3.11
+module load python/3.12
 module unload cray-libsci
-#module load cray-fftw 
-module load cray-libsci
+module load cray-fftw 
+
 
 cd ..
 sed -i 's/^M$//' PrecisionPreprocessing.sh
@@ -12,10 +12,10 @@ cd build
 export CRAYPE_LINK_TYPE=dynamic
 # export ZFP_INSTALL_DIR=$HOME/zfp-install
 export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
-#export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
-#export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
-#export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
-#export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
+export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
+export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
+export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
+export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
 
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
@@ -27,8 +27,9 @@ cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE" \
     -DCMAKE_CXX_FLAGS="" \
 	-DBUILD_SHARED_LIBS=ON \
-	-Denable_python=OFF \
-	-Denable_parsec=OFF \
+	-Denable_python=ON \
+	-Denable_parsec=ON \
+	-Denable_fftw=ON \
 	-Denable_toplevel_openmp=OFF \
 	-DCMAKE_Fortran_COMPILER=ftn \
 	-DCMAKE_CXX_COMPILER=CC \

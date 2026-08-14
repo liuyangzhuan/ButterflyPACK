@@ -19,6 +19,7 @@
 #include <vector>
 #include <atomic>
 #include <limits>
+#include <cstdint>
 #include <mpi.h>
 // #include <complex.h>
 
@@ -169,13 +170,6 @@ size_t tensor_slice_size(int nx, int ny, int nz){
   return static_cast<size_t>(ny)*nz + static_cast<size_t>(nx)*nz + static_cast<size_t>(nx)*ny;
 }
 
-struct DiagRouteBlock {
-  int head;
-  int tail;
-  int root;
-  int gid;
-};
-
 void collect_tensor_slices_from_local(int Ndim, const int Ns_phys[], int myseg[],
                                       F2Cptr* msh, const vector<_Complex double>& field_loc,
                                       int nvec, double scale, int ix, int iy, int iz,
@@ -246,7 +240,7 @@ void write_tensor_slices_file(const string& filename, int nx, int ny, int nz, do
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, const double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
-  g1=-0.2; g2=-0.4; g3=-0.35;
+  g1=-0.1; g2=-0.2; g3=-0.17;
   s0=2.0;  // This is at the domain reference point (slow_x0,slow_y0)
 
   double A = -0.01;
@@ -272,6 +266,77 @@ double slowness(double x,double y, double z, double slow_x0, double slow_y0,doub
     exit(0);
   }
   return s0;
+}
+
+std::string trimmed_double_string(double val){
+  std::ostringstream streamObj;
+  streamObj << val;
+  std::string str = streamObj.str();
+  size_t last = str.find_last_not_of('0');
+  if(last != std::string::npos) str.erase(last + 1, std::string::npos);
+  last = str.find_last_not_of('.');
+  if(last != std::string::npos) str.erase(last + 1, std::string::npos);
+  if(str.empty()) str = "0";
+  return str;
+}
+
+std::string slowness_model_filename(int I, int J, int K, int Nx, int Ny, int Nz,
+                                    int idx_off_x, int idx_off_y, int idx_off_z,
+                                    double smin, double smax, int nshape){
+  return "slowness_map_shapeoutter" + to_string(I) + "x" + to_string(J) + "x" + to_string(K) +
+         "_shape" + to_string(Nx) + "x" + to_string(Ny) + "x" + to_string(Nz) +
+         "_off" + to_string(idx_off_x) + "x" + to_string(idx_off_y) + "x" + to_string(idx_off_z) +
+         "_range" + trimmed_double_string(smin) + "_" + trimmed_double_string(smax) +
+         "_nshape" + to_string(nshape) + ".bin";
+}
+
+int64_t slowness_file_offset(double x, double y, double z, double h, int I, int J, int K){
+  int64_t i = static_cast<int64_t>(llround(x/h));
+  int64_t j = static_cast<int64_t>(llround(y/h));
+  int64_t k = static_cast<int64_t>(llround(z/h));
+  if(i < 0 || i >= I || j < 0 || j >= J || k < 0 || k >= K){
+    cout<<"slowness file index out of range: "<<i<<" "<<j<<" "<<k
+        <<" dims "<<I<<" "<<J<<" "<<K<<" coord "<<x<<" "<<y<<" "<<z<<endl;
+    exit(1);
+  }
+  return k*static_cast<int64_t>(I)*J + j*static_cast<int64_t>(I) + i;
+}
+
+void read_slowness_values(const std::string& filename,
+                          std::vector<std::pair<int64_t,int> >& requests,
+                          std::vector<double>& values){
+  if(requests.empty()) return;
+  std::sort(requests.begin(), requests.end());
+  std::ifstream file(filename, std::ios::binary);
+  if(!file){
+    cout<<"Unable to open "<<filename<<endl;
+    exit(1);
+  }
+
+  size_t p = 0;
+  while(p < requests.size()){
+    int64_t run_start = requests[p].first;
+    int64_t run_end = run_start;
+    size_t q = p + 1;
+    while(q < requests.size() && requests[q].first <= run_end + 1){
+      run_end = std::max(run_end, requests[q].first);
+      q++;
+    }
+    size_t run_len = static_cast<size_t>(run_end - run_start + 1);
+    std::vector<double> buffer(run_len);
+    file.seekg(static_cast<std::streamoff>(run_start*sizeof(double)), std::ios::beg);
+    file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(run_len*sizeof(double)));
+    if(!file){
+      cout<<"Failed to read "<<run_len<<" slowness values from "<<filename
+          <<" at offset "<<run_start<<endl;
+      exit(1);
+    }
+    for(size_t r=p; r<q; r++){
+      int local = requests[r].second;
+      values[local] = buffer[static_cast<size_t>(requests[r].first - run_start)];
+    }
+    p = q;
+  }
 }
 
 //symmetric about x=0
@@ -513,33 +578,66 @@ public:
   std::vector<MPI_Comm> _diag_comms;
   std::vector<MPI_Group> _diag_groups;
   std::vector<int> _iHperm_m;
-  std::vector<int> _scatter_to_tensor;
   std::vector<int> _local_tensor_ids;
   std::vector<int> _local_scatter_ids;
   std::vector<int> _local_diag_root;
   std::vector<int> _local_diag_gid;
   std::vector<int> _local_diag_pos;
+  std::vector<double> _local_slowness;
+  std::vector<double> _local_inv_mass_coef;
+  std::vector<double> _point_slowness;
   const vector<double>* _slowness_array = nullptr;
 
   C_QuantApp_BF() = default;
-
-  inline bool IsScattererTensorScalar(int tensor_scalar) const {
-    return ScatterIndexFromTensorScalar(tensor_scalar) > 0;
-  }
-
-  inline int ScatterIndexFromTensorScalar(int tensor_scalar) const {
-    auto it = std::lower_bound(_scatter_to_tensor.begin(), _scatter_to_tensor.end(), tensor_scalar);
-    if(it != _scatter_to_tensor.end() && *it == tensor_scalar){
-      return static_cast<int>(it - _scatter_to_tensor.begin()) + 1;
-    }
-    return 0;
-  }
 
   inline int LocalScatterIndex(int local_idx) const {
     if(local_idx >= 0 && local_idx < static_cast<int>(_local_scatter_ids.size())){
       return _local_scatter_ids[local_idx];
     }
     return 0;
+  }
+
+  inline double CoordinateSlowness(double x, double y, double z) const {
+    if(_ivelo==11){
+      cout<<"ivelo=11 requires a local or point slowness cache at ("<<x<<", "<<y<<", "<<z<<")"<<endl;
+      exit(1);
+    }
+    return slowness(x,y,z,_slow_x0,_slow_y0,_slow_z0,_ivelo,_slowness_array->data(),_h,_slow_nx,_slow_ny,_slow_nz);
+  }
+
+  inline double LocalSlowness(int local_idx, double x, double y, double z) const {
+    if(_ivelo==11){
+      if(local_idx >= 0 && local_idx < static_cast<int>(_local_slowness.size())) return _local_slowness[local_idx];
+      cout<<"missing local slowness cache for local index "<<local_idx<<endl;
+      exit(1);
+    }
+    return CoordinateSlowness(x,y,z);
+  }
+
+  inline double PointSlowness(int point_idx_1based, double x, double y, double z) const {
+    if(_ivelo==11){
+      int idx = point_idx_1based - 1;
+      if(idx >= 0 && idx < static_cast<int>(_point_slowness.size())) return _point_slowness[idx];
+      cout<<"missing point slowness cache for point index "<<point_idx_1based<<endl;
+      exit(1);
+    }
+    return CoordinateSlowness(x,y,z);
+  }
+
+  inline double LocalInvMassCoef(int local_idx, double x, double y, double z) const {
+    if(local_idx >= 0 && local_idx < static_cast<int>(_local_inv_mass_coef.size()) &&
+       _local_inv_mass_coef[local_idx] != 0.0){
+      return _local_inv_mass_coef[local_idx];
+    }
+    double s1 = LocalSlowness(local_idx,x,y,z);
+    double s0 = 2.0;
+    double k0 = s0*_w;
+    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+    if(fabs(coef) < 1e-30){
+      cout<<"zero contrast in local VIE mass term at ("<<x<<", "<<y<<", "<<z<<") with slowness "<<s1<<endl;
+      exit(1);
+    }
+    return 1.0/(pow(_h,3.0)*coef);
   }
 
   // constructor for the tensor operator
@@ -630,7 +728,7 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
     }else{
-      double s0 = slowness(x1,y1,z1, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array->data(),Q->_h,Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
+      double s0 = Q->CoordinateSlowness(x1,y1,z1);
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
 
@@ -661,14 +759,14 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 // The off-diagonal Green part is always -G.  The scaleGreen option now only
 // controls whether the diagonal h^{-3}/Q is inserted here (scaleGreen==0) or
 // applied dynamically in C_FuncHMatVec_MD (scaleGreen==1).
-void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
+void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, int col_index_1based, _Complex double* output, C_QuantApp_BF* Q){
 
     double s0=2;
     int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
-        double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array->data(),Q->_h, Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
+        double s1 = Q->PointSlowness(col_index_1based,x2,y2,z2);
         double k0 = s0*Q->_w;
         double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1); // Q(x2), assumed nonzero
         if(fabs(coef) < 1e-30){
@@ -706,14 +804,15 @@ void assemble_fromD1D2Tau_block(int nth, int nr, int nc, double* x1,double* x2,d
 
 
 // Assemble a block of matrix entries from interpolated D1, D2, tau
-void assemble_fromD1D2Tau_block_s2s(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, _Complex double* alldat_loc, int64_t* idx_val_map, double *fr, C_QuantApp_BF* Q){
+void assemble_fromD1D2Tau_block_s2s(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, const int* col_indices_1based, _Complex double* alldat_loc, int64_t* idx_val_map, double *fr, C_QuantApp_BF* Q){
     #pragma omp parallel for
     for (int idxrc=0;idxrc<nr*nc;idxrc++){
       int idxr = idxrc%nr;
       int idxc = idxrc/nr;
 
       _Complex double valtmp;
-      assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],&valtmp, Q);
+      int col_index_1based = col_indices_1based ? col_indices_1based[idxc] : -1;
+      assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],col_index_1based,&valtmp, Q);
       alldat_loc[idx_val_map[nth]+idxr+idxc*nr]=valtmp;
     }
 }
@@ -782,7 +881,7 @@ inline void C_FuncZmn_BF_S2S_MD(int* Ndim, int *m, int *n, _Complex double *val,
   double x2 = Q->_data[(n[0]-1) * Q->_d];
   double y2 = Q->_data[(n[1]-1) * Q->_d+1];
   double z2 = Q->_data[(n[2]-1) * Q->_d+2];
-  assemble_fromD1D2Tau_s2s(x1,x2,y1,y2,z1,z2, val, Q);
+  assemble_fromD1D2Tau_s2s(x1,x2,y1,y2,z1,z2,-1, val, Q);
 }
 
 // The compressibility function (tensor) wrapper required by the Fortran HODLR code
@@ -919,7 +1018,7 @@ inline void C_FuncZmnBlock_BF_S2S_MD(int* Ndim, int* Ninter, int* Nrow_max, int*
 
       // lagrange_interp2D_vec_block(Q->_x_cheb.data(), Q->_y_cheb.data(), nr, nc, x1,y1,x2,y2,Q->_u1_square_int_cheb.data(),Q->_D1_int_cheb.data(),Q->_D2_int_cheb.data(), Q->_TNx,Q->_TNy, fr);
 
-      assemble_fromD1D2Tau_block_s2s(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, alldat_loc, idx_val_map.data(),fr, Q);
+      assemble_fromD1D2Tau_block_s2s(nn,nr_1*nr_2*nr_3, nc_1*nc_2*nc_3, x1,x2,y1,y2,z1,z2, nullptr, alldat_loc, idx_val_map.data(),fr, Q);
       free(x1);
       free(y1);
       free(z1);
@@ -1079,7 +1178,7 @@ inline void C_FuncZmn_BF_S2S(int *m, int *n, _Complex double *val, C2Fptr quant)
   double x2 = Q->_data[(*n-1) * Q->_d];
   double y2 = Q->_data[(*n-1) * Q->_d+1];
   double z2 = Q->_data[(*n-1) * Q->_d+2];
-  assemble_fromD1D2Tau_s2s(x1,x2,y1,y2,z1,z2, val, Q);
+  assemble_fromD1D2Tau_s2s(x1,x2,y1,y2,z1,z2,*n, val, Q);
 }
 
 
@@ -1167,7 +1266,7 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
         z2[idxc] = Q->_data[(n-1) * Q->_d+2];
       }
 
-      assemble_fromD1D2Tau_block_s2s(nn1,nr,nc,x1,x2,y1,y2,z1,z2,alldat_loc,idx_val_map.data(),fr,Q);
+      assemble_fromD1D2Tau_block_s2s(nn1,nr,nc,x1,x2,y1,y2,z1,z2,allcols+idx_col_map[nn1],alldat_loc,idx_val_map.data(),fr,Q);
       free(x1);
       free(y1);
       free(z1);
@@ -1468,12 +1567,9 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
 
 
     bool is_scatterer = Q->LocalScatterIndex(i) > 0;
-    double coef = 1.0;
+    double inv_mass_coef = 0.0;
     if(is_scatterer){
-      double s1 = slowness(x1,y1,z1,Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array->data(),Q->_h, Q->_slow_nx, Q->_slow_ny, Q->_slow_nz);
-      double s0=2;
-      double k0 = s0*Q->_w;
-      coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+      inv_mass_coef = Q->LocalInvMassCoef(i,x1,y1,z1);
     }
 
     for (int nth=0; nth<*nvec; nth++){
@@ -1481,7 +1577,7 @@ inline void C_FuncHMatVec_MD(int* Ndim, char const *trans, int *nin, int *nout, 
       // h^{-3} * Q^{-1} * v.  Keep the sign convention from the sampled
       // matrix: z_c_bpack_md_mult applies the stored -G operator.
       if(is_scatterer){
-        xbuf1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]/(pow(Q->_h,3.0)*coef);
+        xbuf1[i+nth*product(nout,*Ndim)]=xin[i+nth*product(nout,*Ndim)]*inv_mass_coef;
       }else{
         xbuf1[i+nth*product(nout,*Ndim)]=0.0;
       }
@@ -1654,6 +1750,9 @@ if(myrank==master_rank){
       {"bdiag_sample_para",        required_argument, 0, 41},
       {"bdiag_sample_para_outer",        required_argument, 0, 42},
       {"bdiag_elem_extract",        required_argument, 0, 43},
+      {"use_fft_circulant",        required_argument, 0, 100},
+      {"fftw_plan_mode",        required_argument, 0, 101},
+      {"fft_plan_mode",        required_argument, 0, 102},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1836,6 +1935,13 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> bdiag_elem_extract;
     } break;
+    case 100: {
+      // BPACK consumes this option from the original argv below.
+    } break;
+    case 101:
+    case 102: {
+      // BPACK consumes this option from the original argv below.
+    } break;
     default: break;
     }
   }
@@ -1887,32 +1993,19 @@ if(myrank==master_rank){
     exit(1);
   }
 
-    vector<double> slowness_array;
+    vector<double> slowness_array(1,2.0);
+    string slowness_filename;
     if(ivelo==11){
-      slowness_array.resize(Iint*Jint*Kint,2.0);
-      string filename_in, str1, str2;
-      std::ostringstream streamObj1,streamObj2;
-      // cout<<smin_ivelo11 <<" "<<smax_ivelo11<<endl;
-      streamObj1 << smin_ivelo11;
-      str1=streamObj1.str();
-      str1.erase ( str1.find_last_not_of('0') + 1, std::string::npos ); str1.erase ( str1.find_last_not_of('.') + 1, std::string::npos );
-      streamObj2 << smax_ivelo11;
-      str2=streamObj2.str();
-      str2.erase ( str2.find_last_not_of('0') + 1, std::string::npos ); str2.erase ( str2.find_last_not_of('.') + 1, std::string::npos );
-
-      filename_in ="slowness_map_shapeoutter"+to_string(Iint)+"x"+to_string(Jint)+"x"+to_string(Kint)+"_shape"+to_string(Nx)+"x"+to_string(Ny)+"x"+to_string(Nz)+"_off"+to_string(idx_off_x)+"x"+to_string(idx_off_y)+"x"+to_string(idx_off_z)+"_range"+str1+"_"+str2+"_nshape"+to_string(nshape)+".bin";
-      // cout<<filename_in<<endl;
-
-      // Open the binary file
-      std::ifstream file(filename_in, std::ios::binary);
-      if (!file) {
-          std::cout << "Unable to open " << filename_in << std::endl;
+      slowness_filename = slowness_model_filename(static_cast<int>(Iint), static_cast<int>(Jint), static_cast<int>(Kint),
+                                                  Nx, Ny, Nz, idx_off_x, idx_off_y, idx_off_z,
+                                                  smin_ivelo11, smax_ivelo11, nshape);
+      if(myrank==master_rank){
+        std::ifstream file(slowness_filename, std::ios::binary);
+        if(!file){
+          std::cout << "Unable to open " << slowness_filename << std::endl;
           exit(1);
+        }
       }
-      file.read(reinterpret_cast<char*>(slowness_array.data()), Iint*Jint*Kint * sizeof(double));
-      file.close();
-    }else{
-      slowness_array.resize(1,2.0);
     }
 
     // generate the chebyshev nodes
@@ -2056,17 +2149,8 @@ if(myrank==master_rank){
   }
 
 
-
-  double smax=2.0;
-  for(int i=0;i<Nx;i++){
-    for(int j=0;j<Ny;j++){
-      for(int k=0;k<Nz;k++){
-        smax = max(smax,slowness(i*h-L/2+center[0],j*h-H/2+center[1],k*h-W/2+center[2],slow_x0, slow_y0,slow_z0,ivelo,slowness_array.data(),h, Iint, Jint, Kint));
-      }
-    }
-  }
-  double vtmp=smax;
-  MPI_Allreduce(&vtmp,&smax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  double s0=2;
+  double smax=s0;
 
 
 
@@ -2092,9 +2176,6 @@ if(myrank==master_rank){
     for(int ii=0;ii<Nz;ii++){
       data_geo[(ii) * Ndim+2] = ii*h+z0min;
     }
-    if(myrank==0){
-      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx <<" x "<< Ny <<" x "<< Nz <<" To: "<< Nx <<" x "<< Ny <<" x "<< Nz <<endl;
-    }
   }else{
     cout<<"vs=0 is not implemented in 3D code"<<endl;
     exit(0);
@@ -2118,33 +2199,9 @@ if(myrank==master_rank){
     int64_t Ntot_s2s = static_cast<int64_t>(Nx_s)*Ny_s*Nz_s;
     double background_s0 = 2.0;
     double scatterer_tol = 1e-12;
-    vector<int> scatter_to_tensor;
+    vector<int> scatter_tensor_root;
     vector<double> data_geo_scatterer;
-    if(bdiag_precon==1){
-      for(int kk=0; kk<Nz_s; kk++){
-        for(int jj=0; jj<Ny_s; jj++){
-          for(int ii=0; ii<Nx_s; ii++){
-            double xs = ii*h-L/2+center[0];
-            double ys = jj*h-H/2+center[1];
-            double zs = kk*h-W/2+center[2];
-            int tensor_scalar = kk*Nx_s*Ny_s + jj*Nx_s + ii + 1;
-            bool in_physical = ii < Nx && jj < Ny && kk < Nz;
-            double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
-            if(in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0))){
-              scatter_to_tensor.push_back(tensor_scalar);
-              data_geo_scatterer.push_back(xs);
-              data_geo_scatterer.push_back(ys);
-              data_geo_scatterer.push_back(zs);
-            }
-          }
-        }
-      }
-    }
-    int Nscatter = static_cast<int>(scatter_to_tensor.size());
-
-      if(myrank==0){
-        cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
-      }
+    int Nscatter = 0;
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
 
@@ -2165,17 +2222,23 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s->_nscatter = Nscatter;
     quant_ptr_bf_s2s->_background_s0 = background_s0;
     quant_ptr_bf_s2s->_scatterer_tol = scatterer_tol;
-    quant_ptr_bf_s2s->_scatter_to_tensor = scatter_to_tensor;
 
 
     // construct hodlr with geometrical points
     z_c_bpack_md_construct_init(Ns_s,&Nmax_s, &Ndim, data_geo.data(), perms_bf_s2s, myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncNearFar_BF_MD, quant_ptr_bf_s2s);
     quant_ptr_bf_s2s->_Hperm.resize(Nmax_s*Ndim);
     std::copy(perms_bf_s2s, perms_bf_s2s + Nmax_s*Ndim, quant_ptr_bf_s2s->_Hperm.begin());
-    quant_ptr_bf_s2s->_local_tensor_ids.resize(product(myseg_s2s,Ndim));
-    quant_ptr_bf_s2s->_local_scatter_ids.resize(product(myseg_s2s,Ndim),0);
+    int nloc_s2s = product(myseg_s2s,Ndim);
+    quant_ptr_bf_s2s->_local_tensor_ids.resize(nloc_s2s);
+    quant_ptr_bf_s2s->_local_scatter_ids.resize(nloc_s2s,0);
+    quant_ptr_bf_s2s->_local_slowness.assign(nloc_s2s,background_s0);
+    quant_ptr_bf_s2s->_local_inv_mass_coef.assign(nloc_s2s,0.0);
+    vector<unsigned char> local_in_physical(nloc_s2s,0);
+    vector<pair<int64_t,int> > local_slowness_requests;
+    if(ivelo==11) local_slowness_requests.reserve(nloc_s2s);
     long long Nscatter_loc = 0;
-    for (int i=0; i<product(myseg_s2s,Ndim); i++){
+    double smax_loc = s0;
+    for (int i=0; i<nloc_s2s; i++){
       int i_new_loc_scalar = i+1;
       int i_new_loc_md[Ndim];
       int i_old_md[Ndim];
@@ -2184,27 +2247,93 @@ if(myrank==master_rank){
       z_c_bpack_md_new2old(&Ndim,&msh_bf_s2s,i_new_loc_md,i_old_md);
       z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&i_old_scalar,i_old_md);
       quant_ptr_bf_s2s->_local_tensor_ids[i] = i_old_scalar;
-      if(bdiag_precon==1){
-        quant_ptr_bf_s2s->_local_scatter_ids[i] = quant_ptr_bf_s2s->ScatterIndexFromTensorScalar(i_old_scalar);
-      }else{
-        bool in_physical = in_physical_tensor_domain(i_old_md,Nx,Ny,Nz);
-        double xs = data_geo[(i_old_md[0]-1) * Ndim];
-        double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
-        double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
-        double s1 = in_physical ? slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint) : background_s0;
-        bool is_scatterer = in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0));
-        quant_ptr_bf_s2s->_local_scatter_ids[i] = is_scatterer ? 1 : 0;
-        if(is_scatterer) Nscatter_loc++;
+      bool in_physical = in_physical_tensor_domain(i_old_md,Nx,Ny,Nz);
+      local_in_physical[i] = in_physical ? 1 : 0;
+      double xs = data_geo[(i_old_md[0]-1) * Ndim];
+      double ys = data_geo[(i_old_md[1]-1) * Ndim+1];
+      double zs = data_geo[(i_old_md[2]-1) * Ndim+2];
+      if(in_physical){
+        if(ivelo==11){
+          local_slowness_requests.push_back(make_pair(slowness_file_offset(xs,ys,zs,h,static_cast<int>(Iint),static_cast<int>(Jint),static_cast<int>(Kint)), i));
+        }else{
+          quant_ptr_bf_s2s->_local_slowness[i] = slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint);
+        }
       }
     }
-    if(bdiag_precon==0){
-      long long Nscatter_glo = 0;
-      MPI_Allreduce(&Nscatter_loc,&Nscatter_glo,1,MPI_LONG_LONG,MPI_SUM,MPI_COMM_WORLD);
-      if(myrank==0){
-        cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
+    if(ivelo==11){
+      read_slowness_values(slowness_filename,local_slowness_requests,quant_ptr_bf_s2s->_local_slowness);
+      vector<pair<int64_t,int> >().swap(local_slowness_requests);
+    }
+
+    vector<int> active_tensor_ids;
+    if(bdiag_precon==1) active_tensor_ids.reserve(nloc_s2s);
+    for (int i=0; i<nloc_s2s; i++){
+      double s1 = quant_ptr_bf_s2s->_local_slowness[i];
+      smax_loc = max(smax_loc,s1);
+      bool in_physical = local_in_physical[i] != 0;
+      bool is_scatterer = in_physical && fabs(s1-background_s0) > scatterer_tol*max(1.0,fabs(background_s0));
+      quant_ptr_bf_s2s->_local_scatter_ids[i] = is_scatterer ? 1 : 0;
+      if(is_scatterer){
+        Nscatter_loc++;
+        double k0 = background_s0*w;
+        double coef = pow(k0,2.0)*(pow(s1/background_s0,2.0)-1);
+        quant_ptr_bf_s2s->_local_inv_mass_coef[i] = 1.0/(pow(h,3.0)*coef);
+        if(bdiag_precon==1) active_tensor_ids.push_back(quant_ptr_bf_s2s->_local_tensor_ids[i]);
       }
-    }else if(myrank==0){
-      cout<<"Scatterer unknowns: "<<Nscatter<<" out of "<<Ntot_s2s<<endl;
+    }
+
+    long long Nscatter_glo = 0;
+    MPI_Allreduce(&Nscatter_loc,&Nscatter_glo,1,MPI_LONG_LONG,MPI_SUM,MPI_COMM_WORLD);
+    if(bdiag_precon==1 && Nscatter_glo > std::numeric_limits<int>::max()){
+      if(myrank==0){
+        cout<<"Scatterer unknown count "<<Nscatter_glo<<" exceeds the current diagonal-block int interface"<<endl;
+      }
+      exit(1);
+    }
+    Nscatter = static_cast<int>(min<long long>(Nscatter_glo,std::numeric_limits<int>::max()));
+    quant_ptr_bf_s2s->_nscatter = Nscatter;
+
+    double vtmp=smax_loc;
+    MPI_Allreduce(&vtmp,&smax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    if(myrank==0){
+      cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" PPW(s0): "<<2*pi/(w*s0)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
+      cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
+    }
+
+    if(bdiag_precon==1){
+      int active_count = static_cast<int>(active_tensor_ids.size());
+      vector<int> active_counts(size,0), active_displs(size,0);
+      MPI_Gather(&active_count, 1, MPI_INT, active_counts.data(), 1, MPI_INT, master_rank, MPI_COMM_WORLD);
+      vector<int> gathered_tensor_ids;
+      if(myrank==master_rank){
+        int total_active = 0;
+        for(int rr=0; rr<size; rr++){
+          active_displs[rr] = total_active;
+          total_active += active_counts[rr];
+        }
+        gathered_tensor_ids.resize(total_active);
+      }
+      MPI_Gatherv(active_tensor_ids.empty() ? nullptr : active_tensor_ids.data(), active_count, MPI_INT,
+                  myrank==master_rank ? gathered_tensor_ids.data() : nullptr,
+                  active_counts.data(), active_displs.data(), MPI_INT, master_rank, MPI_COMM_WORLD);
+      if(myrank==master_rank){
+        std::sort(gathered_tensor_ids.begin(), gathered_tensor_ids.end());
+        gathered_tensor_ids.erase(std::unique(gathered_tensor_ids.begin(), gathered_tensor_ids.end()), gathered_tensor_ids.end());
+        if(static_cast<int>(gathered_tensor_ids.size()) != Nscatter){
+          cout<<"Gathered "<<gathered_tensor_ids.size()<<" unique scatterer ids but expected "<<Nscatter<<endl;
+          exit(1);
+        }
+        scatter_tensor_root.swap(gathered_tensor_ids);
+        data_geo_scatterer.resize(static_cast<size_t>(Ndim)*scatter_tensor_root.size());
+        for(size_t ii=0; ii<scatter_tensor_root.size(); ii++){
+          int tensor_scalar = scatter_tensor_root[ii];
+          int tensor_md[Ndim];
+          z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&tensor_scalar,tensor_md);
+          data_geo_scatterer[ii*Ndim] = data_geo[(tensor_md[0]-1) * Ndim];
+          data_geo_scatterer[ii*Ndim+1] = data_geo[(tensor_md[1]-1) * Ndim+1];
+          data_geo_scatterer[ii*Ndim+2] = data_geo[(tensor_md[2]-1) * Ndim+2];
+        }
+      }
     }
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
@@ -2271,6 +2400,8 @@ if(myrank==master_rank){
       }
     }
 
+    z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
+
 #if 0
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
     // factor hodlr
@@ -2300,34 +2431,59 @@ if(myrank==master_rank){
     z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "Nmin_leaf", 64); // leaf size in the matrix solver
     z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1); // suppress printing while building the scatterer tree
 
-    F2Cptr bmat_scatterer_blocks;
-    F2Cptr stats_scatterer_blocks;
-    F2Cptr msh_scatterer_blocks;
-    F2Cptr kerquant_scatterer_blocks;
-    z_c_bpack_createstats(&stats_scatterer_blocks);
-    int myseg_scatterer = 0;
-    int* perms_scatterer = new int[Nscatter];
-    int nlevel_scatterer = 0;
-    int* tree_scatterer = new int[1];
-    tree_scatterer[0] = Nscatter;
-    z_c_bpack_construct_init(&Nscatter, &Ndim, data_geo_scatterer.data(), nns_ptr, &nlevel_scatterer, tree_scatterer, perms_scatterer, &myseg_scatterer, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &stats_scatterer_blocks, &msh_scatterer_blocks, &kerquant_scatterer_blocks, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
-    vector<double>().swap(data_geo_scatterer);
+	    quant_ptr_bf_s2s->_diag_block_stride = 8;
+	    int mesh_range[2];
+	    int nblock = 0;
+	    int diag_perm_size = 0;
+	    int route_capacity = 0;
+	    int dummy_block_info[1];
+	    int dummy_diag_perm[1];
+	    int dummy_route[1];
+	    int nloc_s2s = product(myseg_s2s,Ndim);
+	    vector<int> active_local_pos;
+	    vector<int> active_tensor_old;
+	    active_local_pos.reserve(nloc_s2s);
+	    active_tensor_old.reserve(nloc_s2s);
+	    for(int i=0; i<nloc_s2s; i++){
+	      if(quant_ptr_bf_s2s->_local_scatter_ids[i] > 0){
+	        active_local_pos.push_back(i);
+	        active_tensor_old.push_back(quant_ptr_bf_s2s->_local_tensor_ids[i]);
+	      }
+	    }
+	    int nlocal_active = static_cast<int>(active_tensor_old.size());
+	    double dummy_geo_scatterer = 0.0;
+	    int dummy_scatter_tensor_root = 0;
+	    double* data_geo_scatterer_ptr = (myrank==master_rank && !data_geo_scatterer.empty()) ? data_geo_scatterer.data() : &dummy_geo_scatterer;
+	    int* scatter_tensor_root_ptr = (myrank==master_rank && !scatter_tensor_root.empty()) ? scatter_tensor_root.data() : &dummy_scatter_tensor_root;
 
-    quant_ptr_bf_s2s->_diag_block_stride = 8;
-    int mesh_range[2];
-    int nblock = 0;
-    int dummy_block_info[1];
-    z_c_bpack_get_anylevel_blocks(&(quant_ptr_bf_s2s->_bdiag_level), &nblock, dummy_block_info, mesh_range, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &ptree_bf, &msh_scatterer_blocks);
-    quant_ptr_bf_s2s->_nblock_diag = nblock;
-    quant_ptr_bf_s2s->_diag_block_info.resize(nblock*quant_ptr_bf_s2s->_diag_block_stride);
-    int nblock_capacity = nblock;
-    z_c_bpack_get_anylevel_blocks(&(quant_ptr_bf_s2s->_bdiag_level), &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(), mesh_range, &bmat_scatterer_blocks, &(quant_ptr_bf_s2s->option_diag), &ptree_bf, &msh_scatterer_blocks);
-    if(nblock_capacity != nblock){
-      cout<<"nblock changed between C_BPACK_Get_Anylevel_Blocks calls"<<endl;
-      exit(1);
-    }
+	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
+	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
+	        &nblock, dummy_block_info, &diag_perm_size, dummy_diag_perm, mesh_range,
+	        &route_capacity, dummy_route, dummy_route, dummy_route,
+	        &(quant_ptr_bf_s2s->option_diag), &ptree_bf);
+	    quant_ptr_bf_s2s->_nblock_diag = nblock;
+	    quant_ptr_bf_s2s->_diag_block_info.resize(nblock*quant_ptr_bf_s2s->_diag_block_stride);
+	    vector<int> diag_tensor_perm(diag_perm_size);
+	    vector<int> active_diag_root(nlocal_active,-1);
+	    vector<int> active_diag_gid(nlocal_active,-1);
+	    vector<int> active_diag_pos(nlocal_active,-1);
+	    int nblock_capacity = nblock;
+	    int diag_perm_capacity = diag_perm_size;
+	    route_capacity = nlocal_active;
+	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
+	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
+	        &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(),
+	        &diag_perm_capacity, diag_tensor_perm.data(), mesh_range,
+	        &route_capacity, active_diag_root.data(), active_diag_gid.data(), active_diag_pos.data(),
+	        &(quant_ptr_bf_s2s->option_diag), &ptree_bf);
+	    if(nblock_capacity != nblock || diag_perm_capacity != diag_perm_size){
+	      cout<<"diagonal block metadata changed between simple constructor calls"<<endl;
+	      exit(1);
+	    }
+	    vector<double>().swap(data_geo_scatterer);
+	    vector<int>().swap(scatter_tensor_root);
 
-    // The global matrix tree above is used only to discover diagonal blocks.
+    // The lightweight scatterer tree above is used only to discover diagonal blocks.
     // Enable the high-frequency HODBF options only for the smaller blocks.
     if(bdiag_tol_Rdetect < 0.0) bdiag_tol_Rdetect = bdiag_tol_rand*3e-1;
     z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "LRlevel", bdiag_lrlevel);
@@ -2343,67 +2499,15 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s->_outer_idxs[0] = mesh_range[0];
     quant_ptr_bf_s2s->_outer_idxe_plus1[0] = mesh_range[1];
 
-    int local_info_count = nblock*quant_ptr_bf_s2s->_diag_block_stride;
-    vector<int> info_counts(size,0), info_displs(size,0);
-    MPI_Allgather(&local_info_count, 1, MPI_INT, info_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
-    int total_info_count = 0;
-    for(int rr=0; rr<size; rr++){
-      info_displs[rr] = total_info_count;
-      total_info_count += info_counts[rr];
-    }
-    vector<int> all_diag_info(total_info_count);
-    int* local_info_ptr = local_info_count > 0 ? quant_ptr_bf_s2s->_diag_block_info.data() : nullptr;
-    int* all_info_ptr = total_info_count > 0 ? all_diag_info.data() : nullptr;
-    MPI_Allgatherv(local_info_ptr, local_info_count, MPI_INT,
-                   all_info_ptr, info_counts.data(), info_displs.data(), MPI_INT, MPI_COMM_WORLD);
-
-    vector<DiagRouteBlock> diag_route_blocks;
-    diag_route_blocks.reserve(total_info_count/max(1,quant_ptr_bf_s2s->_diag_block_stride));
-    unordered_map<int,int> seen_diag_gid;
-    for(int off=0; off+quant_ptr_bf_s2s->_diag_block_stride<=total_info_count; off+=quant_ptr_bf_s2s->_diag_block_stride){
-      int gid = all_diag_info[off+7];
-      if(seen_diag_gid.find(gid) != seen_diag_gid.end()) continue;
-      seen_diag_gid[gid] = 1;
-      DiagRouteBlock route;
-      route.head = all_diag_info[off+0];
-      route.tail = all_diag_info[off+1];
-      route.root = all_diag_info[off+4];
-      route.gid = gid;
-      diag_route_blocks.push_back(route);
-    }
-    std::sort(diag_route_blocks.begin(), diag_route_blocks.end(),
-              [](const DiagRouteBlock& a, const DiagRouteBlock& b){return a.head < b.head;});
-
-    int nloc_s2s = product(myseg_s2s,Ndim);
-    quant_ptr_bf_s2s->_local_diag_root.assign(nloc_s2s,-1);
-    quant_ptr_bf_s2s->_local_diag_gid.assign(nloc_s2s,-1);
-    quant_ptr_bf_s2s->_local_diag_pos.assign(nloc_s2s,-1);
-    for(int i=0; i<nloc_s2s; i++){
-      int scatter_old = quant_ptr_bf_s2s->_local_scatter_ids[i];
-      if(scatter_old <= 0) continue;
-      int scatter_new = 0;
-      z_c_bpack_old2new(&msh_scatterer_blocks, &scatter_old, &scatter_new);
-
-      int lo = 0;
-      int hi = static_cast<int>(diag_route_blocks.size());
-      while(lo < hi){
-        int mid = lo + (hi-lo)/2;
-        if(diag_route_blocks[mid].head <= scatter_new){
-          lo = mid + 1;
-        }else{
-          hi = mid;
-        }
-      }
-      int route_idx = lo - 1;
-      if(route_idx < 0 || scatter_new >= diag_route_blocks[route_idx].tail){
-        cout<<"Rank "<<myrank<<" failed to route scatterer "<<scatter_old
-            <<" with new index "<<scatter_new<<" to a diagonal block"<<endl;
-        exit(1);
-      }
-      quant_ptr_bf_s2s->_local_diag_root[i] = diag_route_blocks[route_idx].root;
-      quant_ptr_bf_s2s->_local_diag_gid[i] = diag_route_blocks[route_idx].gid;
-      quant_ptr_bf_s2s->_local_diag_pos[i] = scatter_new - diag_route_blocks[route_idx].head;
-    }
+	    quant_ptr_bf_s2s->_local_diag_root.assign(nloc_s2s,-1);
+	    quant_ptr_bf_s2s->_local_diag_gid.assign(nloc_s2s,-1);
+	    quant_ptr_bf_s2s->_local_diag_pos.assign(nloc_s2s,-1);
+	    for(int ii=0; ii<nlocal_active; ii++){
+	      int i = active_local_pos[ii];
+	      quant_ptr_bf_s2s->_local_diag_root[i] = active_diag_root[ii];
+	      quant_ptr_bf_s2s->_local_diag_gid[i] = active_diag_gid[ii];
+	      quant_ptr_bf_s2s->_local_diag_pos[i] = active_diag_pos[ii];
+	    }
 
     quant_ptr_bf_s2s->_diag_block_offsets.assign(nblock+1,0);
     for (int bb=0; bb<nblock; bb++){
@@ -2435,6 +2539,9 @@ if(myrank==master_rank){
       int block_offset = quant_ptr_bf_s2s->_diag_block_offsets[bb];
       quant_ptr_bf_s2s->_diag_npo[bb] = Npo;
       data_geo_diag.resize(Ndim*Npo);
+      vector<double> point_slowness(Npo,background_s0);
+      vector<pair<int64_t,int> > diag_slowness_requests;
+      if(ivelo==11) diag_slowness_requests.reserve(Npo);
       int pgrp_head = block_info[4];
       int pgrp_nproc = block_info[5];
       int global_block_id = block_info[7];
@@ -2459,8 +2566,7 @@ if(myrank==master_rank){
       }
 
       for(int ii=0;ii<Npo;ii++){
-        int scatter_old = perms_scatterer[head_g + ii - 1];
-        int tensor_scalar = scatter_to_tensor[scatter_old - 1];
+        int tensor_scalar = diag_tensor_perm[block_offset + ii];
         quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
 
         int tensor_scalar_tmp = tensor_scalar;
@@ -2473,6 +2579,15 @@ if(myrank==master_rank){
         data_geo_diag[(ii) * Ndim] = xs;
         data_geo_diag[(ii) * Ndim+1] = ys;
         data_geo_diag[(ii) * Ndim+2] = zs;
+        if(ivelo==11){
+          diag_slowness_requests.push_back(make_pair(slowness_file_offset(xs,ys,zs,h,static_cast<int>(Iint),static_cast<int>(Jint),static_cast<int>(Kint)), ii));
+        }else{
+          point_slowness[ii] = slowness(xs,ys,zs,slow_x0,slow_y0,slow_z0,ivelo,slowness_array.data(),h,Iint,Jint,Kint);
+        }
+      }
+      if(ivelo==11){
+        read_slowness_values(slowness_filename,diag_slowness_requests,point_slowness);
+        vector<pair<int64_t,int> >().swap(diag_slowness_requests);
       }
 
 
@@ -2480,6 +2595,7 @@ if(myrank==master_rank){
     // create hodlr data structures
     quant_ptr_bf_s2s->quant_ptr_diags[bb]=new C_QuantApp_BF(data_geo_diag, Ndim, 0, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,&slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->_elem_extract_comm = quant_ptr_bf_s2s->_diag_comms[bb];
+    quant_ptr_bf_s2s->quant_ptr_diags[bb]->_point_slowness = move(point_slowness);
 
 
   	int myseg_diag=0;     // local number of unknowns
@@ -2510,13 +2626,7 @@ if(myrank==master_rank){
     delete[] tree_diag;
     delete[] perms_diag;
     }
-    z_c_bpack_deletekernelquant(&kerquant_scatterer_blocks);
-    z_c_bpack_deletemesh(&msh_scatterer_blocks);
-    z_c_bpack_deletestats(&stats_scatterer_blocks);
-    z_c_bpack_delete(&bmat_scatterer_blocks);
-    delete[] tree_scatterer;
-    delete[] perms_scatterer;
-  }
+	  }
 
 
 #endif

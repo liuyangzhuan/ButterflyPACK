@@ -3176,7 +3176,188 @@ contains
    end subroutine BPACK_MD_Mult
 
 
-   subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead)
+      implicit none
+      type(matrixblock)::block
+      DT::X(:, :)
+      integer xhead, lo, hi, xoff, nrow, info
+
+      lo = max(xhead, block%headm)
+      hi = min(xhead + size(X, 1) - 1, block%headm + block%M - 1)
+      if (hi < lo) return
+      nrow = hi - lo + 1
+      call assert(nrow == block%M, 'a symmetric HODLR leaf was split across block-row owners')
+      xoff = lo - xhead + 1
+      call sytrsf90(block%fullmat, block%ipiv, X(xoff:xoff + nrow - 1, :), 'L', info)
+      call assert(info == 0, 'symmetric HODLR dense-leaf solve failed')
+   end subroutine HODLR_Sym_Leaf_Apply
+
+   subroutine HODLR_Sym_Node_Apply(fac, X, xhead, ptree)
+      implicit none
+      type(hodlr_symfactor)::fac
+      type(proctree)::ptree
+      DT::X(:, :)
+      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr, info
+      DT, allocatable::c0(:, :), c1(:, :), delta(:, :), gamma(:, :), y(:, :)
+
+      rank = fac%rank
+      if (rank == 0) return
+      nrhs = size(X, 2)
+      allocate(c0(rank, nrhs), c1(rank, nrhs), delta(rank, nrhs), gamma(rank, nrhs))
+      allocate(y(2*rank, nrhs))
+      c0 = 0
+      c1 = 0
+
+      if (allocated(fac%Q0)) then
+         lo = max(xhead, fac%head0)
+         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head0 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            c0 = matmul(transpose(fac%Z0(qoff:qoff + nrow - 1, :)), &
+               X(xoff:xoff + nrow - 1, :))
+         endif
+      endif
+      if (allocated(fac%Q1)) then
+         lo = max(xhead, fac%head1)
+         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head1 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            c1 = matmul(transpose(fac%Z1(qoff:qoff + nrow - 1, :)), &
+               X(xoff:xoff + nrow - 1, :))
+         endif
+      endif
+      call MPI_ALLREDUCE(MPI_IN_PLACE, c0, rank*nrhs, MPI_DT, MPI_SUM, &
+         ptree%pgrp(fac%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, c1, rank*nrhs, MPI_DT, MPI_SUM, &
+         ptree%pgrp(fac%pgno)%Comm, ierr)
+
+      info = 0
+      if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+         delta = matmul(fac%G0, c1 - matmul(fac%G1, c0))
+         call getrsf90_info(fac%S, fac%ipiv, delta, 'N', info)
+         if (info == 0) then
+            delta = delta - c0
+            gamma = c1 + matmul(fac%G1, delta)
+            y(1:rank, :) = delta
+            y(rank + 1:2*rank, :) = gamma
+         endif
+      endif
+      call MPI_BCAST(info, 1, MPI_INTEGER, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+      call assert(info == 0, 'symmetric HODLR rank-r Schur solve failed')
+      call MPI_BCAST(y, 2*rank*nrhs, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+      if (allocated(fac%Q0)) then
+         lo = max(xhead, fac%head0)
+         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head0 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
+               matmul(fac%Q0(qoff:qoff + nrow - 1, :), y(rank + 1:2*rank, :))
+         endif
+      endif
+      if (allocated(fac%Q1)) then
+         lo = max(xhead, fac%head1)
+         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head1 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) + &
+               matmul(fac%Q1(qoff:qoff + nrow - 1, :), y(1:rank, :))
+         endif
+      endif
+      deallocate(c0, c1, delta, gamma, y)
+   end subroutine HODLR_Sym_Node_Apply
+
+   subroutine HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+      implicit none
+      integer Ns, num_vectors, level, ii, pp, xhead
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(matrixblock), pointer::rootblock, leafblock
+
+      rootblock => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
+      pp = ptree%MyID - ptree%pgrp(rootblock%pgno)%head + 1
+      xhead = rootblock%headn + rootblock%N_p(pp, 1) - 1
+#if DAT==0 || DAT==2
+      if (trans == 'C') then
+         Vout = conjg(Vin)
+      else
+         Vout = Vin
+      endif
+#else
+      Vout = Vin
+#endif
+
+      level = ho_bf1%Maxlevel + 1
+      do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+         leafblock => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead)
+      enddo
+      do level = ho_bf1%Maxlevel, 1, -1
+         do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+            if (IOwnPgrp(ptree, ho_bf1%levels(level)%SymFactor(ii)%pgno)) then
+               call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
+            endif
+         enddo
+      enddo
+
+#if DAT==0 || DAT==2
+      if (trans == 'C') Vout = conjg(Vout)
+#endif
+   end subroutine HODLR_Sym_Inv_Apply
+
+
+   subroutine HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+      implicit none
+      integer Ns, num_vectors, refine, ierr
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      DT, allocatable::rhs(:, :), product(:, :), correction(:, :)
+      DTR rhs_norm_local, rhs_norm_global, residual_norm_local, residual_norm_global
+      DTR residual_rel, previous_residual, refine_tol
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(Hstat)::stats
+
+      call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+      Vout = Vout*option%scale_factor
+      if (option%IR_HODLR <= 0) return
+
+      allocate(rhs(Ns, num_vectors), product(Ns, num_vectors), correction(Ns, num_vectors))
+
+      rhs_norm_local = fnorm(Vin, Ns, num_vectors)**2
+      call MPI_ALLREDUCE(rhs_norm_local, rhs_norm_global, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+      refine_tol = 50*epsilon(ho_bf1%logabsdet)
+      previous_residual = huge(previous_residual)
+      if (rhs_norm_global > tiny(rhs_norm_global)) then
+         do refine = 1, option%IR_HODLR
+            call HODLR_Mult(trans, Ns, num_vectors, 1, ho_bf1%Maxlevel + 1, &
+               Vout, product, ho_bf1, ptree, option, stats)
+            rhs = Vin - product
+            residual_norm_local = fnorm(rhs, Ns, num_vectors)**2
+            call MPI_ALLREDUCE(residual_norm_local, residual_norm_global, 1, MPI_DTR, &
+               MPI_SUM, ptree%Comm, ierr)
+            residual_rel = sqrt(residual_norm_global/rhs_norm_global)
+            if (residual_rel <= refine_tol) exit
+            if (residual_rel >= previous_residual) exit
+            previous_residual = residual_rel
+            call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree)
+            Vout = Vout + correction*option%scale_factor
+         enddo
+      endif
+      deallocate(rhs, product, correction)
+   end subroutine HODLR_Sym_Inv_Mult
+
+   subroutine HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
 
 
 
@@ -3201,7 +3382,6 @@ contains
       type(hobf)::ho_bf1
       type(proctree)::ptree
       type(Hstat)::stats
-      type(Hoption)::option
       integer istart, iend, iinc
 
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
@@ -3264,10 +3444,57 @@ contains
          Vout = conjg(cmplx(Vout, kind=8))
          Vin = conjg(cmplx(Vin, kind=8))
       endif
-      Vout = Vout*option%scale_factor
 
       return
 
+   end subroutine HODLR_Inv_Apply
+
+
+   subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+      implicit none
+      integer Ns, num_vectors, refine, ierr
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      DT, allocatable::rhs(:, :), product(:, :), correction(:, :)
+      DTR rhs_norm_local, rhs_norm_global, residual_norm_local, residual_norm_global
+      DTR residual_rel, previous_residual, refine_tol
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(Hstat)::stats
+
+      if (option%sym > 0) then
+         call HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+         return
+      endif
+
+      call HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
+      Vout = Vout*option%scale_factor
+      if (option%IR_HODLR <= 0) return
+
+      allocate(rhs(Ns, num_vectors), product(Ns, num_vectors), correction(Ns, num_vectors))
+
+      rhs_norm_local = fnorm(Vin, Ns, num_vectors)**2
+      call MPI_ALLREDUCE(rhs_norm_local, rhs_norm_global, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+      refine_tol = 50*epsilon(ho_bf1%logabsdet)
+      previous_residual = huge(previous_residual)
+      if (rhs_norm_global > tiny(rhs_norm_global)) then
+         do refine = 1, option%IR_HODLR
+            call HODLR_Mult(trans, Ns, num_vectors, 1, ho_bf1%Maxlevel + 1, &
+               Vout, product, ho_bf1, ptree, option, stats)
+            rhs = Vin - product
+            residual_norm_local = fnorm(rhs, Ns, num_vectors)**2
+            call MPI_ALLREDUCE(residual_norm_local, residual_norm_global, 1, MPI_DTR, &
+               MPI_SUM, ptree%Comm, ierr)
+            residual_rel = sqrt(residual_norm_global/rhs_norm_global)
+            if (residual_rel <= refine_tol) exit
+            if (residual_rel >= previous_residual) exit
+            previous_residual = residual_rel
+            call HODLR_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree, stats)
+            Vout = Vout + correction*option%scale_factor
+         enddo
+      endif
+      deallocate(rhs, product, correction)
    end subroutine HODLR_Inv_Mult
 
    subroutine HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
@@ -3347,6 +3574,7 @@ contains
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
 
       trans_tmp = trans
+      if (option%sym > 0) trans_tmp = 'N'
       if (trans == 'C') then
          trans_tmp = 'T'
          Vin = conjg(cmplx(Vin, kind=8))

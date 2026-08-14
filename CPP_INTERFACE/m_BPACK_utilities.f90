@@ -12,10 +12,15 @@ module m_BPACK_utilities
    use c_BPACK_utilities, only: c_BPACK_delete, c_delete_mesh
    use c_Bplus_utilities, only: c_Bplus_delete, c_node_score_block_ptr_row
    use c_BPACK_Solve_Mul, only: c_BPACK_Inv_Mult
-   use c_MISC_Utilities, only: c_ZFP_Compress
    use z_BPACK_Utilities, only: z_delete_kernelquant
    use z_BPACK_Solve_Mul, only: z_BPACK_Inv_Mult, z_BPACK_Mult, z_BPACK_Z_iter_usermatvec_precon
+#if HAVE_ZFP   
+   use c_MISC_Utilities, only: c_ZFP_Compress
    use z_MISC_Utilities, only: z_ZFP_Compress, z_ZFP_Decompress, z_copymatT
+#else 
+   use z_MISC_Utilities, only: z_copymatT
+#endif
+
    implicit none
 
    private
