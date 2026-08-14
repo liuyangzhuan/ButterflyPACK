@@ -10,7 +10,8 @@ sed -i 's/^M$//' PrecisionPreprocessing.sh
 mkdir -p build
 cd build
 export CRAYPE_LINK_TYPE=dynamic
-export ZFP_INSTALL_DIR=$HOME/zfp-install
+# export ZFP_INSTALL_DIR=$HOME/zfp-install
+export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
 #export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
 #export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
 #export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
