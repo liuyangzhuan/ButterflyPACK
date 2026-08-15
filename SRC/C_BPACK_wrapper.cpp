@@ -946,10 +946,10 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
         solve_data,
         reinterpret_cast<H2Data*>(x),
         Nloc);
-
+#if 0
       // can conduct h2_verification, only if uniform points
 	  butterfly::h2_direct_verification(H2_solver->tree.get(), solve_data, &H2_solver->kernel, H2_solver->options);
-
+#endif
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);

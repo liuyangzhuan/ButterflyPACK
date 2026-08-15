@@ -1177,7 +1177,7 @@ void hierarchical_factorization_parallel(
         std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
     }
 
-    double acc = butterfly::h2_verification_smvp(tree, kernel);
+    (void)butterfly::h2_quick_verification(tree, kernel);
 }
 
 template<typename CoordType, typename DataType, typename KernelType>

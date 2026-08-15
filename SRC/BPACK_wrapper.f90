@@ -454,7 +454,7 @@ contains
 
       call c_f_pointer(stats_Cptr, stats)
 
-      
+
       if (trim(str) == 'Time_Fill') then
          stats%Time_Fill = val_d
          valid_opt = 1
@@ -996,7 +996,7 @@ contains
          val_d = option%sample_para_outer
          valid_opt = 1
       endif
-      if (trim(str) == 'reduction_threshold') then 
+      if (trim(str) == 'reduction_threshold') then
          val_d = option%reduction_threshold
          valid_opt = 1
       endif
@@ -1768,8 +1768,8 @@ contains
    subroutine C_BPACK_Wrap_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_wrap_h2")
       use iso_c_binding
       implicit none
-      type(c_ptr)         :: bmat_Cptr   
-      type(c_ptr), value  :: h2_ptr  
+      type(c_ptr)         :: bmat_Cptr
+      type(c_ptr), value  :: h2_ptr
       type(Bmatrix), pointer :: bmat
       allocate(bmat)
       bmat%h2   = h2_ptr
@@ -1779,8 +1779,8 @@ contains
    subroutine C_BPACK_Get_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_get_h2")
       use iso_c_binding
       implicit none
-      type(c_ptr), value :: bmat_Cptr   
-      type(c_ptr)        :: h2_ptr      
+      type(c_ptr), value :: bmat_Cptr
+      type(c_ptr)        :: h2_ptr
       type(Bmatrix), pointer :: bmat
       call c_f_pointer(bmat_Cptr, bmat)
       h2_ptr = bmat%h2
@@ -4500,7 +4500,7 @@ contains
 
       call c_f_pointer(bmat_Cptr, bmat)
       if (c_associated(bmat%h2)) then
-         call c_bpack_h2_delete(bmat%h2)   
+         call c_bpack_h2_delete(bmat%h2)
          deallocate(bmat)
          bmat_Cptr = c_null_ptr
          return
