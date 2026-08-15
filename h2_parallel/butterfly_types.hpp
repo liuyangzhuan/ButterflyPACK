@@ -133,6 +133,13 @@ struct ProgramOptions {
     double nugget = 1e-6;        // Matérn diagonal nugget σ_n²
     double kappa = 10.0;         // Yukawa screening parameter κ
     int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
+    int precon = 1;              // 1/3: RS-S factorization, 2: compression-only H2
+};
+
+enum class H2BuildState {
+    UNBUILT,
+    H2_COMPRESSED,
+    RS_FACTORIZED
 };
 
 template<typename CoordType, typename DataType>
@@ -203,6 +210,7 @@ struct H2 {
     //RedistributionPlan redistribution;
     int64_t last_factor_rankmax = 0;
     size_t factorization_memory = 0;
+    H2BuildState build_state = H2BuildState::UNBUILT;
     bool factorized = false;
 };
 

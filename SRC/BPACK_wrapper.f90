@@ -414,6 +414,14 @@ contains
          val_d = stats%Mem_Peak
          valid_opt = 1
       endif
+      if (trim(str) == 'Rank_max_Constr') then
+         if (allocated(stats%rankmax_of_level_global)) then
+            val_d = dble(maxval(stats%rankmax_of_level_global))
+         else
+            val_d = 0d0
+         endif
+         valid_opt = 1
+      endif
       if (trim(str) == 'Rank_max') then
          val_d = dble(maxval(stats%rankmax_of_level_global))
          if(allocated(stats%rankmax_of_level_global_factor))val_d = NINT(max(dble(val_d),dble(maxval(stats%rankmax_of_level_global_factor))))
@@ -610,6 +618,11 @@ contains
          valid_opt = 1
       endif
 
+      if (trim(str) == 'Rank_max_Constr') then
+         if (.not. allocated(stats%rankmax_of_level_global)) allocate(stats%rankmax_of_level_global(0:0))
+         stats%rankmax_of_level_global = nint(val_d)
+         valid_opt = 1
+      endif
       if (trim(str) == 'Rank_max') then
          if (.not. allocated(stats%rankmax_of_level_global))        allocate(stats%rankmax_of_level_global(0:0))
          if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate(stats%rankmax_of_level_global_factor(0:0))

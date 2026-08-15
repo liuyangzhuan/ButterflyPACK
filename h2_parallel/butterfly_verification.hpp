@@ -529,6 +529,125 @@ SparseTestVector<DataType> make_sparse_test_vector(int64_t N, int64_t Npt_src, u
     return stv;
 }
 
+template<typename DataType>
+struct SparseMvpVerificationData {
+    std::vector<DataType> input;
+    std::vector<DataType> exact_output;
+};
+
+template<typename CoordType, typename DataType, typename KernelType>
+SparseMvpVerificationData<DataType> make_sparse_mvp_verification_data(
+    ParallelTree<CoordType, DataType>* tree,
+    KernelType* kernel,
+    int num_src,
+    unsigned seed) {
+
+    const int64_t N = tree->num_points;
+    const int64_t Npt_src = std::min<int64_t>(num_src, N);
+    const SparseTestVector<DataType> stv =
+        make_sparse_test_vector<DataType>(N, Npt_src, seed);
+
+    std::unordered_map<int64_t, DataType> sparse_values;
+    sparse_values.reserve(static_cast<size_t>(Npt_src) * 2);
+    for (int64_t k = 0; k < Npt_src; ++k) {
+        sparse_values.emplace(stv.idx[static_cast<size_t>(k)],
+                              stv.weight[static_cast<size_t>(k)]);
+    }
+
+    const int leaf_level = tree->num_levels - 1;
+    auto& leaf = tree->levels[leaf_level];
+    SparseMvpVerificationData<DataType> verification;
+    std::vector<int64_t> local_rows;
+    for (int64_t b = 0; b < leaf.num_boxes_local; ++b) {
+        const auto& box = leaf.local_boxes[b];
+        for (int64_t i = 0; i < box.num_points; ++i) {
+            const int64_t global_row = box.point_indices[i];
+            local_rows.push_back(global_row);
+            const auto value = sparse_values.find(global_row);
+            verification.input.push_back(
+                value == sparse_values.end() ? DataType{0.0} : value->second);
+        }
+    }
+
+    const int64_t Nloc = static_cast<int64_t>(local_rows.size());
+    std::vector<DataType> block(
+        static_cast<size_t>(Nloc) * static_cast<size_t>(Npt_src));
+    if (Nloc > 0 && Npt_src > 0) {
+        kernel->evaluate_block_by_index(local_rows.data(), Nloc,
+                                        stv.idx.data(), Npt_src,
+                                        block.data(), Nloc);
+    }
+
+    verification.exact_output.assign(static_cast<size_t>(Nloc), DataType{0.0});
+    for (int64_t row = 0; row < Nloc; ++row) {
+        for (int64_t k = 0; k < Npt_src; ++k) {
+            verification.exact_output[static_cast<size_t>(row)] +=
+                stv.weight[static_cast<size_t>(k)] *
+                block[static_cast<size_t>(row + k * Nloc)];
+        }
+    }
+    return verification;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+double h2_compression_quick_verification(
+    ParallelTree<CoordType, DataType>* tree,
+    KernelType* kernel,
+    int num_src = 20,
+    unsigned seed = 12345,
+    bool verbose = true) {
+
+    using RealType = std::conditional_t<
+        std::is_same_v<DataType, std::complex<double>>, double,
+        std::conditional_t<std::is_same_v<DataType, std::complex<float>>, float, DataType>>;
+
+    auto mag2 = [](const DataType& z) -> RealType {
+        const RealType magnitude = std::abs(z);
+        return magnitude * magnitude;
+    };
+
+    int rank = 0;
+    MPI_Comm_rank(tree->comm, &rank);
+    const auto verification = make_sparse_mvp_verification_data(
+        tree, kernel, num_src, seed);
+
+    std::vector<DataType> h2_output;
+    const double t0 = MPI_Wtime();
+    hierarchical_h2_mul_parallel(tree, verification.input, h2_output, false);
+    double t_mvp = MPI_Wtime() - t0;
+    if (h2_output.size() != verification.exact_output.size()) {
+        throw std::runtime_error(
+            "h2_compression_quick_verification: local output length mismatch");
+    }
+
+    RealType local_norms[3] = {0, 0, 0};
+    for (size_t i = 0; i < h2_output.size(); ++i) {
+        local_norms[0] += mag2(h2_output[i]);
+        local_norms[1] += mag2(verification.exact_output[i]);
+        local_norms[2] += mag2(h2_output[i] - verification.exact_output[i]);
+    }
+
+    RealType global_norms[3] = {0, 0, 0};
+    const MPI_Datatype real_mpi =
+        std::is_same_v<RealType, double> ? MPI_DOUBLE : MPI_FLOAT;
+    MPI_Allreduce(local_norms, global_norms, 3, real_mpi, MPI_SUM, tree->comm);
+    MPI_Allreduce(MPI_IN_PLACE, &t_mvp, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
+
+    const RealType norm_h2 = std::sqrt(global_norms[0]);
+    const RealType norm_exact = std::sqrt(global_norms[1]);
+    const RealType acc_mvp = global_norms[1] > RealType(0)
+        ? std::sqrt(global_norms[2] / global_norms[1])
+        : RealType(0);
+    if (rank == 0 && verbose) {
+        std::cout << "H2_CheckError(compression quick): fnorm: "
+                  << std::scientific << std::setprecision(7)
+                  << norm_h2 << "  " << norm_exact
+                  << "  acc_mvp: " << acc_mvp
+                  << "  time_mvp: " << t_mvp << std::endl;
+    }
+    return static_cast<double>(acc_mvp);
+}
+
 
 template<typename CoordType, typename DataType, typename KernelType>
 double h2_quick_verification(
@@ -542,7 +661,6 @@ double h2_quick_verification(
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
 
-    int64_t N = tree->num_points;
     const int leaf_level = tree->num_levels - 1;
     auto& leaf = tree->levels[leaf_level];
 
@@ -556,27 +674,11 @@ double h2_quick_verification(
         return a * a;
     };
 
-    // step 0: setting up sparse x_true and distribute into local segments
-
-    // generate sparse test vector
-    const int64_t Npt_src = std::min<int64_t>(num_src, N);
-    const SparseTestVector<DataType> stv = make_sparse_test_vector<DataType>(N, Npt_src, seed);
-
-    // define x_true, local segments for each MPI rank
-    std::unordered_set<int64_t> src_set(stv.idx.begin(), stv.idx.end());
-
-    std::vector<DataType> x_true;
-    std::vector<int64_t>  local_rows;
-    for (int64_t b = 0; b < leaf.num_boxes_local; ++b) {
-        const auto& box = leaf.local_boxes[b];
-        for (int64_t i = 0; i < box.num_points; ++i) {
-            const int64_t g = box.point_indices[i];
-            local_rows.push_back(g);
-            // nonzero only on the support; value is the SAME deterministic weight used above
-            x_true.push_back(src_set.count(g) ? make_verification_entry<DataType>(g, seed)
-                                              : DataType{0.0});
-        }
-    }
+    // step 0: set up sparse x_true and b = A_exact*x_true
+    const auto verification = make_sparse_mvp_verification_data(
+        tree, kernel, num_src, seed);
+    const auto& x_true = verification.input;
+    const auto& b_vec = verification.exact_output;
     const int64_t Nloc = static_cast<int64_t>(x_true.size());
 
     // step 1: calculate H2_approx*x_true
@@ -587,25 +689,13 @@ double h2_quick_verification(
     butterfly::hierarchical_mul_parallel(tree, x_true, mul_data, false);
     double t_mvp = MPI_Wtime() - t0;
 
-    // step 2: calculate b = A_exact*x_true using only the sparse support columns
-    std::vector<DataType> block(static_cast<size_t>(Nloc) * static_cast<size_t>(Npt_src));
-    if (Nloc > 0) {
-        kernel->evaluate_block_by_index(local_rows.data(), Nloc,
-                                        stv.idx.data(),    Npt_src,
-                                        block.data(),      Nloc);
-    }
-
-    std::vector<DataType> b_vec(static_cast<size_t>(Nloc), DataType{0.0});
+    // step 2: compare against the sparse exact product prepared above
     RealType approx_Ax = 0, exact_Ax = 0, diff_mvp = 0, x_true_norm = 0;
     int64_t pos = 0;
     for (int64_t b = 0; b < leaf.num_boxes_local; ++b) {
         const auto& solve_box = mul_data[leaf_level][b];
         for (size_t i = 0; i < solve_box.left_side.size(); ++i, ++pos) {
-            DataType y_ref{0.0};
-            for (int64_t k = 0; k < Npt_src; ++k)
-                y_ref += stv.weight[k] * block[pos + k * Nloc];   // exact weighted column sum
-
-            b_vec[static_cast<size_t>(pos)] = y_ref;
+            const DataType y_ref = b_vec[static_cast<size_t>(pos)];
             const DataType y_h2 = solve_box.left_side[i];     // compressed A x
             approx_Ax += mag2(y_h2);
             exact_Ax += mag2(y_ref);

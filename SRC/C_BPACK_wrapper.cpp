@@ -26,6 +26,53 @@ static inline int product(int arr[], int n) {
   return out;
 }
 
+static void require_symmetric_h2_option(
+    F2Cptr* option,
+    MPI_Comm comm,
+    const char* caller) {
+  double sym_d = 0.0;
+  c_bpack_getoption(option, "sym", &sym_d);
+  const int sym = static_cast<int>(std::llround(sym_d));
+  if (sym == 1) return;
+
+  const std::string message = std::string(caller) +
+    ": ButterflyPACK H2 (format=7) currently requires option%sym=1 "
+    "for a transpose-symmetric matrix; received option%sym=" +
+    std::to_string(sym);
+  int rank = 0;
+  MPI_Comm_rank(comm, &rank);
+  if (rank == 0) std::cerr << message << std::endl;
+  MPI_Abort(comm, 1);
+  throw std::runtime_error(message);
+}
+
+template<typename CoordType, typename DataType>
+void compress_h2_and_update_stats(
+    butterfly::H2<CoordType, DataType>* solver,
+    F2Cptr* stats) {
+  if (solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
+    return;
+  }
+
+  double compression_time = 0.0;
+  double entryeval_time = 0.0;
+  butterfly::butterfly_compression_parallel(
+    solver, &compression_time, &entryeval_time);
+
+  c_bpack_setstats(stats, "Time_Fill", &compression_time);
+  c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
+
+  double rank_max = static_cast<double>(solver->last_factor_rankmax);
+  c_bpack_setstats(stats, "Rank_max_Constr", &rank_max);
+
+  double compression_memory_mb =
+    solver->factorization_memory / (1024.0 * 1024.0);
+  c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
+
+  (void)butterfly::h2_compression_quick_verification(
+    solver->tree.get(), &solver->kernel);
+}
+
 // The command line parser for the example related parameters
 void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
 
@@ -39,14 +86,14 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"tol_comp",        "relative tolerance for matrix construction"},
 		{"tol_rand",        "relative tolerance for matrix inversion"},
 		{"tol_Rdetect",     "relative tolerance for rank detection during matrix inversion"},
-		{"tol_itersol",     "convergence tolerance for TFQMR iterative solver if precon=2 or 3"},
-		{"n_iter",          "maximum iteration count for TFQMR"},
+		{"tol_itersol",     "convergence tolerance for the iterative solver (format-7 precon=2 uses H2 BiCGSTAB)"},
+		{"n_iter",          "maximum iteration count for the iterative solver"},
 		{"IR_HODLR", "maximum HODLR direct-solve refinement steps; 0 disables refinement"},
 		{"level_check",     "the level in the hierarchical partitioning where the randomized construction algorithm is tested, set to 10000 by default (no checking)"},
-		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and pass it to TFQMR without preconditioner), 3: as a preconditioned iterative solver (compress the matrix and invert the matrix and pass them to TFQMR, using approximate matrix inverse as a preconditioner)"},
+		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and use it without a preconditioner), 3: as a preconditioned iterative solver (compress and invert the matrix, using the approximate inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
-		{"sym",             "symmetric real HODLR compression and factorization (requires format=1 and lrlevel=0)"},
+		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -716,15 +763,17 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+	int fcomm;
+	c_bpack_get_comm(ptree, &fcomm);
+	MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
+	require_symmetric_h2_option(option, mpi_comm, "c_bpack_construct_init");
+
 	// use datatype C_DT
     // construct H2 solver
 	// auto H2_solver = std::make_unique<H2<double, C_DT>>();
 	using H2Data = typename butterfly::fmm_data<C_DT>::type;
     butterfly::H2<double, H2Data>* H2_solver = new butterfly::H2<double, H2Data>();
 
-    int fcomm;
-    c_bpack_get_comm(ptree, &fcomm);
-    MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
     H2_solver->comm = mpi_comm;
     //*bmat = static_cast<F2Cptr>(H2_solver.release());
 
@@ -750,12 +799,15 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  double tolerance;
 	  double reduction_threshold_d;
 	  double Nmin_leaf_d;
+	  double precon_d;
 	  c_bpack_getoption(option, "tol_comp", &tolerance);
 	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
 	  c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
+	  c_bpack_getoption(option, "precon", &precon_d);
 	  int64_t reduction_threshold = (int64_t)reduction_threshold_d;
 	  int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf);
+	  H2_options.precon = static_cast<int>(std::llround(precon_d));
 	  H2_solver->options = H2_options;
     } catch (const std::exception& e) {
         if (rank == 0) {
@@ -821,6 +873,8 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
 	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	require_symmetric_h2_option(
+	  option, H2_solver->comm, "c_bpack_construct_element_compute");
 	H2_solver->kernel.kernel = C_FuncZmn;
 	H2_solver->kernel.quant = C_QuantApp;
 
@@ -853,22 +907,31 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_factor");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
 
-	double factorization_time;
-	double entryeval_time;
     try {
-      butterfly::butterfly_factorization_parallel(H2_solver, &factorization_time, &entryeval_time);
-	  c_bpack_setstats(stats, "Time_Factor", &factorization_time);
-	  c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
+	  double precon_d = 1.0;
+	  c_bpack_getoption(option, "precon", &precon_d);
+	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
+	  if (H2_solver->options.precon == 2) {
+		compress_h2_and_update_stats(H2_solver, stats);
+	  } else {
+		double factorization_time = 0.0;
+		double entryeval_time = 0.0;
+		butterfly::butterfly_factorization_parallel(
+		  H2_solver, &factorization_time, &entryeval_time);
+		c_bpack_setstats(stats, "Time_Factor", &factorization_time);
+		c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
 
-	  double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
-	  c_bpack_setstats(stats, "Rank_max", &rank_max);
+		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
+		c_bpack_setstats(stats, "Rank_max", &rank_max);
 
-	  double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
-	  c_bpack_setstats(stats, "Mem_Factor", &factorization_memory_MB);
+		double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+		c_bpack_setstats(stats, "Mem_Factor", &factorization_memory_MB);
+	  }
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
@@ -920,36 +983,59 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_solve");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
 
     try {
-      // pass in tree and rhs as b to solve_parallel, need to fix b type
-      std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
-            H2_solver->options.num_levels);
       const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
-      std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs)); // assuming b is a contiguous array of size Nloc * Nrhs
+      std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs));
+	  double precon_d = 1.0;
+	  c_bpack_getoption(option, "precon", &precon_d);
+	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 
 	  double t0 = MPI_Wtime();
+	  if (H2_solver->options.precon == 2) {
+		if (H2_solver->build_state == butterfly::H2BuildState::UNBUILT) {
+		  compress_h2_and_update_stats(H2_solver, stats);
+		}
+		if (H2_solver->build_state != butterfly::H2BuildState::H2_COMPRESSED) {
+		  throw std::runtime_error(
+			"c_bpack_solve (format 7): precon=2 requires a compression-only H2 representation");
+		}
 
-	  butterfly::hierarchical_solve_parallel(
-        H2_solver->tree.get(), rhs, solve_data, true);
+		double tolerance = 0.0;
+		double max_iterations_d = 0.0;
+		c_bpack_getoption(option, "tol_itersol", &tolerance);
+		c_bpack_getoption(option, "n_iter", &max_iterations_d);
+		std::vector<H2Data> iterative_solution;
+		int iterations = 0;
+		double residual = 0.0;
+		butterfly::hierarchical_h2_bicgstab_parallel(
+		  H2_solver->tree.get(), rhs, iterative_solution,
+		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
+		  &iterations, &residual, true);
+		std::copy(
+		  iterative_solution.begin(), iterative_solution.end(),
+		  reinterpret_cast<H2Data*>(x));
+	  } else {
+		if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+		  throw std::runtime_error(
+			"c_bpack_solve (format 7): direct solve requires c_bpack_factor first");
+		}
+		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
+		  H2_solver->options.num_levels);
+		butterfly::hierarchical_solve_parallel(
+		  H2_solver->tree.get(), rhs, solve_data, true);
+		butterfly::gather_local_solution(
+		  H2_solver->tree.get(), solve_data,
+		  reinterpret_cast<H2Data*>(x), Nloc);
+	  }
 
 	  double t_solve = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_solve, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
 	  c_bpack_setstats(stats, "Time_Solve", &t_solve);
-
-
-      // put result in x
-      butterfly::gather_local_solution(H2_solver->tree.get(),
-        solve_data,
-        reinterpret_cast<H2Data*>(x),
-        Nloc);
-#if 0
-      // can conduct h2_verification, only if uniform points
-	  butterfly::h2_direct_verification(H2_solver->tree.get(), solve_data, &H2_solver->kernel, H2_solver->options);
-#endif
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -979,6 +1065,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_mult");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -999,29 +1086,43 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     }
 
     try {
-      if (!H2_solver->factorized) {
-        // need to to factorize first
-		double factorization_time;
-		double entryeval_time;
-        butterfly::butterfly_factorization_parallel(H2_solver, &factorization_time, &entryeval_time);
-		c_bpack_setstats(stats, "Time_Factor", &factorization_time);
-		c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
+	  double precon_d = 1.0;
+	  c_bpack_getoption(option, "precon", &precon_d);
+	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 
-		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
-	    c_bpack_setstats(stats, "Rank_max", &rank_max);
+      if (H2_solver->build_state == butterfly::H2BuildState::UNBUILT) {
+		if (H2_solver->options.precon == 2) {
+		  compress_h2_and_update_stats(H2_solver, stats);
+		} else {
+		  double factorization_time = 0.0;
+		  double entryeval_time = 0.0;
+		  butterfly::butterfly_factorization_parallel(
+			H2_solver, &factorization_time, &entryeval_time);
+		  c_bpack_setstats(stats, "Time_Factor", &factorization_time);
+		  c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
 
-		double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
-		c_bpack_setstats(stats,"Mem_Factor", &factorization_memory_MB);
+		  double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
+	      c_bpack_setstats(stats, "Rank_max", &rank_max);
+
+		  double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+		  c_bpack_setstats(stats,"Mem_Factor", &factorization_memory_MB);
+		}
       }
 
-      bool verbose = true;
-      std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data(
-        H2_solver->options.num_levels);
       const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
       std::vector<H2Data> lhs(xin_h2, xin_h2 + (*Ninloc) * (*Ncol));
+	  std::vector<H2Data> compressed_output;
+	  std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data;
 
 	  double t0 = MPI_Wtime();
-      butterfly::hierarchical_mul_parallel(H2_solver->tree.get(), lhs, mul_data, verbose); // can only handle matrix vector multiplication right now
+	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
+		butterfly::hierarchical_h2_mul_parallel(
+		  H2_solver->tree.get(), lhs, compressed_output, true);
+	  } else {
+		mul_data.resize(H2_solver->options.num_levels);
+		butterfly::hierarchical_mul_parallel(
+		  H2_solver->tree.get(), lhs, mul_data, true);
+	  }
 
 	  double t_mult = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
@@ -1031,8 +1132,19 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  double total = prev + t_mult;
 	  c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &total);
 
-      // extract solution to xout
-      butterfly::gather_local_solution(H2_solver->tree.get(), mul_data, reinterpret_cast<H2Data*>(xout), Noutloc);
+	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
+		if (compressed_output.size() != static_cast<size_t>(*Noutloc)) {
+		  throw std::runtime_error(
+			"c_bpack_mult (format 7): compression-only output length mismatch");
+		}
+		std::copy(
+		  compressed_output.begin(), compressed_output.end(),
+		  reinterpret_cast<H2Data*>(xout));
+	  } else {
+		butterfly::gather_local_solution(
+		  H2_solver->tree.get(), mul_data,
+		  reinterpret_cast<H2Data*>(xout), Noutloc);
+	  }
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
@@ -1053,11 +1165,13 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-
-    int rank = 0;
-    MPI_Comm_rank(H2_solver->comm, &rank);
+	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_logdet");
 
 
+	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+	  throw std::runtime_error(
+		"c_bpack_logdet (format 7): log-determinant requires an RS-S factorization");
+	}
 	double logabs_d = 0.0;
 	butterfly::hierarchical_logdet_parallel(H2_solver->tree.get(), &logabs_d, reinterpret_cast<H2Data*>(phase));
 	*logabsdet = static_cast<C_RDT>(logabs_d);

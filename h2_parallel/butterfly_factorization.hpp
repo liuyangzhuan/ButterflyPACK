@@ -1217,7 +1217,15 @@ void hierarchical_factorization_parallel_if_supported(
 template<typename CoordType, typename DataType>
 void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* factorization_time, double* entryeval_time) {
 
-  if (solver->factorized) return;
+  if (solver->build_state == H2BuildState::RS_FACTORIZED) {
+    if (factorization_time) *factorization_time = 0.0;
+    if (entryeval_time) *entryeval_time = 0.0;
+    return;
+  }
+  if (solver->build_state == H2BuildState::H2_COMPRESSED) {
+    throw std::runtime_error(
+      "butterfly_factorization_parallel: solver already contains a compression-only H2 representation");
+  }
 
   int rank = 0;
   MPI_Comm_rank(solver->comm, &rank);
@@ -1269,6 +1277,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   MPI_Allreduce(MPI_IN_PLACE, &t_entry, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
   *entryeval_time = t_entry;
   solver->factorized = true;
+  solver->build_state = H2BuildState::RS_FACTORIZED;
 
   MPI_Allreduce(MPI_IN_PLACE, &solver->last_factor_rankmax, 1, MPI_INT64_T, MPI_MAX, solver->comm);
 

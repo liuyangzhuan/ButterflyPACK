@@ -515,6 +515,28 @@ struct ModifiedBlock {
 };
 
 /**
+ * @brief Target-owned block used by the compression-only H2 representation.
+ *
+ * The matrix has target-box rows and source-box columns. Coupling blocks use
+ * skeleton coordinates on both sides; leaf near-field blocks use all leaf
+ * points. Keeping these blocks separate from ModifiedBlock prevents the H2
+ * matvec representation from being confused with Schur-updated RS-S blocks.
+ */
+template<typename DataType>
+struct H2Block {
+    int64_t source_morton;
+    MatrixStorage<DataType> matrix;
+
+    H2Block() : source_morton(-1) {}
+    ~H2Block() = default;
+
+    H2Block(const H2Block&) = delete;
+    H2Block& operator=(const H2Block&) = delete;
+    H2Block(H2Block&&) = default;
+    H2Block& operator=(H2Block&&) = default;
+};
+
+/**
  * @brief Box data structure (FMM3D.pdf Section 4.1)
  * 
  * Contains all geometric, hierarchical, and matrix data for a single box.
@@ -652,6 +674,15 @@ struct BoxData {
      */
     std::vector<ModifiedBlock<DataType>> far_field_modified_interactions;
     int64_t num_far_field_interactions;
+
+    // ===== Compression-only H2 representation =====
+    // Directed, target-owned K(S_target, S_source) blocks for this level's
+    // first-admissible interaction list.
+    std::vector<H2Block<DataType>> h2_interaction_blocks;
+
+    // Directed exact K(B_target, B_source) blocks. Populated only at leaves
+    // for self and one-hop neighbors.
+    std::vector<H2Block<DataType>> h2_near_blocks;
     
     // ===== Constructors and Destructor =====
     
@@ -882,6 +913,20 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
     total += vec_heap(box.far_field_modified_interactions);
     for (const auto& mb : box.far_field_modified_interactions) {
         total += modified_block_heap(mb);
+    }
+
+    auto h2_block_heap = [&](const H2Block<DataType>& block) -> size_t {
+        return matrix_heap(block.matrix);
+    };
+
+    total += vec_heap(box.h2_interaction_blocks);
+    for (const auto& block : box.h2_interaction_blocks) {
+        total += h2_block_heap(block);
+    }
+
+    total += vec_heap(box.h2_near_blocks);
+    for (const auto& block : box.h2_near_blocks) {
+        total += h2_block_heap(block);
     }
 
     return total;

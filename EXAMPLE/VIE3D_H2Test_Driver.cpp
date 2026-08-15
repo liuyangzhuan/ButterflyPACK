@@ -1066,6 +1066,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "LR_BLK_NUM", bnum);
 	z_c_bpack_set_I_option(&option_bf, "cpp", cpp);
 	z_c_bpack_set_I_option(&option_bf, "LRlevel", lrlevel);
+	z_c_bpack_set_I_option(&option_bf, "sym", 1);
 	z_c_bpack_set_I_option(&option_bf, "knn", knn);
 	z_c_bpack_set_I_option(&option_bf, "verbosity", verbose);
 	z_c_bpack_set_I_option(&option_bf, "less_adapt", 1);
@@ -1262,7 +1263,7 @@ if(myrank==master_rank){
 
 
 
-    
+
     vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
     Npo=0;
     int Npo_o=0;
@@ -1480,7 +1481,7 @@ if(myrank==master_rank){
 //     }
 //     MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-    
+
 //     if(myrank==master_rank){
 //       for(int nth=0; nth<nvec; nth++){
 //         string filename, str;
