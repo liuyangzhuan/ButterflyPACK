@@ -407,10 +407,11 @@ void gather_skeleton_to_parent(
     TreeLevel<CoordType, DataType>& parent_level,
     std::vector<SolveDataRequest<CoordType, DataType>>& child_solve_data,
     std::vector<SolveDataRequest<CoordType, DataType>>& parent_solve_data,
-    int dimension) {
+    int dimension,
+    MPI_Comm comm) {
     
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(comm, &rank);
     const bool child_active = child_level.is_process_active;
     const bool parent_active = parent_level.is_process_active;
     
@@ -495,10 +496,10 @@ void gather_skeleton_to_parent(
 
             int64_t buffer_size = 0;
             MPI_Status status;
-            MPI_Recv(&buffer_size, 1, MPI_INT64_T, child_rank, 400, MPI_COMM_WORLD, &status);
+            MPI_Recv(&buffer_size, 1, MPI_INT64_T, child_rank, 400, comm, &status);
 
             std::vector<char> recv_buffer(static_cast<size_t>(buffer_size));
-            MPI_Recv(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 401, MPI_COMM_WORLD, &status);
+            MPI_Recv(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 401, comm, &status);
 
             const char* ptr = recv_buffer.data();
             const char* buffer_end = ptr + buffer_size;
@@ -559,8 +560,8 @@ void gather_skeleton_to_parent(
         }
         
         int64_t buffer_size = send_buffer.size();
-        MPI_Send(&buffer_size, 1, MPI_INT64_T, child_level.parent_level_owner, 400, MPI_COMM_WORLD);
-        MPI_Send(send_buffer.data(), buffer_size, MPI_CHAR, child_level.parent_level_owner, 401, MPI_COMM_WORLD);
+        MPI_Send(&buffer_size, 1, MPI_INT64_T, child_level.parent_level_owner, 400, comm);
+        MPI_Send(send_buffer.data(), buffer_size, MPI_CHAR, child_level.parent_level_owner, 401, comm);
         
         parent_solve_data.clear();
     } else {
@@ -666,10 +667,12 @@ void scatter_solution_to_children(
     TreeLevel<CoordType, DataType>& child_level,
     TreeLevel<CoordType, DataType>& parent_level,
     std::vector<SolveDataRequest<CoordType, DataType>>& child_solve_data,
-    std::vector<SolveDataRequest<CoordType, DataType>>& parent_solve_data, int dimension) {
+    std::vector<SolveDataRequest<CoordType, DataType>>& parent_solve_data,
+    int dimension,
+    MPI_Comm comm) {
     
     int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_rank(comm, &rank);
     const bool child_active = child_level.is_process_active;
     const bool parent_active = parent_level.is_process_active;
     
@@ -763,8 +766,8 @@ void scatter_solution_to_children(
                 }
                 
                 int64_t buffer_size = send_buffer.size();
-                MPI_Send(&buffer_size, 1, MPI_INT64_T, child_rank, 500, MPI_COMM_WORLD);
-                MPI_Send(send_buffer.data(), buffer_size, MPI_CHAR, child_rank, 501, MPI_COMM_WORLD);
+                MPI_Send(&buffer_size, 1, MPI_INT64_T, child_rank, 500, comm);
+                MPI_Send(send_buffer.data(), buffer_size, MPI_CHAR, child_rank, 501, comm);
             }
         }
         
@@ -773,10 +776,10 @@ void scatter_solution_to_children(
         
         int64_t buffer_size = 0;
         MPI_Status status;
-        MPI_Recv(&buffer_size, 1, MPI_INT64_T, child_level.parent_level_owner, 500, MPI_COMM_WORLD, &status);
+        MPI_Recv(&buffer_size, 1, MPI_INT64_T, child_level.parent_level_owner, 500, comm, &status);
         
         std::vector<char> recv_buffer(buffer_size);
-        MPI_Recv(recv_buffer.data(), buffer_size, MPI_CHAR, child_level.parent_level_owner, 501, MPI_COMM_WORLD, &status);
+        MPI_Recv(recv_buffer.data(), buffer_size, MPI_CHAR, child_level.parent_level_owner, 501, comm, &status);
         
         const char* ptr = recv_buffer.data();
         const char* buffer_end = ptr + buffer_size;

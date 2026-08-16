@@ -127,13 +127,6 @@ void hierarchical_solve_parallel(
     for (int level = leaf_level; level >= 1; level--) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
-        // Error check: level 2→1 should not trigger reduction
-        if (level == 2) {
-            auto& parent_level = tree->levels[1];
-            if (tree_level.num_active_processes != parent_level.num_active_processes) {
-                throw std::runtime_error("Reduction between level 2 and level 1 is not allowed");
-            }
-        }
         if (print_detail && rank == level_print_rank) {
             std::cout << "  Level " << level << ": " << tree_level.num_boxes_local << " boxes" << " on rank: " << rank << std::endl;
         }
@@ -320,7 +313,8 @@ void hierarchical_solve_parallel(
             parent_level,
             solve_data[level],
             solve_data[level - 1],
-            tree->dimension
+            tree->dimension,
+            tree->comm
         );
         communication_total_forward += (clock::now() - get_data_start);
 
@@ -523,7 +517,8 @@ void hierarchical_solve_parallel(
                 parent_level,
                 solve_data[level],
                 solve_data[level - 1],
-                tree->dimension
+                tree->dimension,
+                tree->comm
             );
         }
         communication_total_backward += (clock::now() - get_data_start);
@@ -818,12 +813,6 @@ void hierarchical_mul_parallel(
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
 
-        if (level == 2) {
-            auto& parent_level = tree->levels[1];
-            if (tree_level.num_active_processes != parent_level.num_active_processes) {
-                throw std::runtime_error("Reduction between level 2 and level 1 is not allowed");
-            }
-        }
         if (verbose && rank == level_print_rank) {
             std::cout << "  Level " << level << ": " << tree_level.num_boxes_local
                       << " boxes on rank: " << rank << std::endl;
@@ -906,7 +895,8 @@ void hierarchical_mul_parallel(
             parent_level,
             solve_data[level],
             solve_data[level - 1],
-            tree->dimension);
+            tree->dimension,
+            tree->comm);
         communication_total_forward += (clock::now() - get_data_start);
     }
 
@@ -1090,7 +1080,8 @@ void hierarchical_mul_parallel(
                 parent_level,
                 solve_data[level],
                 solve_data[level - 1],
-                tree->dimension);
+                tree->dimension,
+                tree->comm);
         }
         communication_total_backward += (clock::now() - get_data_start);
 

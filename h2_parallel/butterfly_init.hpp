@@ -29,7 +29,7 @@ inline int64_t default_reduction_threshold_for_dimension(int dimension) {
 }
 
 inline int64_t min_reduction_threshold_for_dimension(int dimension) {
-    return (dimension == 2) ? 16 : 64;
+    return (dimension == 2) ? 4 : 8;
 }
 
 inline int default_num_proxy_for_dimension(int dimension) {
@@ -60,9 +60,9 @@ inline bool is_valid_reduction_threshold(int64_t reduction_threshold, int dimens
 
 inline std::string reduction_threshold_pattern(int dimension) {
     if (dimension == 2) {
-        return "4^k (1, 4, 16, 64, 256, ...)";
+        return "4^k (4, 16, 64, 256, ...)";
     }
-    return "8^k (1, 8, 64, 512, 4096, ...)";
+    return "8^k (8, 64, 512, 4096, ...)";
 }
 
 /**

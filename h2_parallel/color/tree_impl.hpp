@@ -1554,15 +1554,16 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     // Step 1: Determine active processes at each level (Section 5.1.3)
     compute_active_processes(tree);
 
-    // check if there are too many MPI ranks and will be reduced improperly
+    // Root assembly requires all level-1 sibling boxes on one process. Process
+    // reduction from level 2 to level 1 is supported, but level 1 to level 0 is not.
     int reduction_factor = (tree->dimension == 2) ? 4 : 8;
-    if (tree->num_levels > 2 && tree->levels[2].num_active_processes != 1) {
+    if (tree->num_levels > 1 && tree->levels[1].num_active_processes != 1) {
         long long cap = 1; 
-        for (int i = 0; i < tree->num_levels - 3; ++i) cap *= reduction_factor;
+        for (int i = 0; i < tree->num_levels - 2; ++i) cap *= reduction_factor;
         throw std::invalid_argument(
-            "H2 tree: level 2 has " + std::to_string(tree->levels[2].num_active_processes) +
+            "H2 tree: level 1 has " + std::to_string(tree->levels[1].num_active_processes) +
             " active ranks (must be 1). Either reduce ranks to <= " + std::to_string(cap) +
-            " (= reduction_factor^(num_levels-3), num_levels=" + std::to_string(tree->num_levels) +
+            " (= reduction_factor^(num_levels-2), num_levels=" + std::to_string(tree->num_levels) +
             "), or raise reduction_threshold.");
     }
     

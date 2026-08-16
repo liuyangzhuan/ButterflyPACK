@@ -426,9 +426,9 @@ void hierarchical_factorization_parallel(
                 // ----------------------------------------------------------------
                 // Communication / transport step (single-threaded)
                 // ----------------------------------------------------------------
-                if(!is_interior){
+                if (!is_interior || counter == interior_start_loc) {
                     const auto comm_duration_raw = transport_and_apply_factor_updates_symmetric_onehop(
-                    tree, current_level, kernel, pending_updates, false);
+                        tree, current_level, kernel, pending_updates, false);
                     level_data_exchange += comm_duration_raw;
                     update_neighbor_slicing_for_level(level, is_symmetric);
                     auto comm_duration = std::chrono::duration_cast<std::chrono::milliseconds>(comm_duration_raw);
@@ -437,25 +437,6 @@ void hierarchical_factorization_parallel(
                         std::cout << "  Comm time: "
                                 << comm_duration.count()
                                 << " ms" << std::endl;
-                    }
-                }else if(counter == interior_start_loc){
-                    const std::vector<int> neighbor_ranks = compute_one_hop_neighbor_ranks(tree, level, current_level);
-                    std::vector<int64_t> need_assist;
-                    for (const auto& kv : level.assisting_box_points_for_kernel_evaluation) {
-                        if(level.eliminated_boxes.count(kv.first) != 0){
-                            need_assist.push_back(kv.first);
-                        }
-                    }
-                    if (!need_assist.empty()) {
-                        const auto comm_duration_raw = exchange_assisting_for_mortons_onehop(
-                            tree, level, current_level, neighbor_ranks, need_assist);
-                        level_data_exchange += comm_duration_raw;
-                        auto comm_duration = std::chrono::duration_cast<std::chrono::milliseconds>(comm_duration_raw);
-                        if (print_detail && rank == level_print_rank) {
-                            std::cout << "  Comm time: "
-                                    << comm_duration.count()
-                                    << " ms" << std::endl;
-                        }
                     }
                 }
                 
@@ -804,14 +785,14 @@ void hierarchical_factorization_parallel(
                     }
                 }
 
-                // Final transport after the very last wave
-                if (counter == static_cast<int>(color_bins.size()) - 1) {
-                    const auto final_comm_duration = transport_and_apply_factor_updates_symmetric_onehop(
-                        tree, current_level, kernel, pending_updates, false);
-                    level_data_exchange += final_comm_duration;
-                    update_neighbor_slicing_for_level(level, is_symmetric);
-                }
             }
+
+            // Keep the final flush outside the wave body so empty trailing bins
+            // cannot strand updates produced by the last nonempty wave.
+            const auto final_comm_duration = transport_and_apply_factor_updates_symmetric_onehop(
+                tree, current_level, kernel, pending_updates, false);
+            level_data_exchange += final_comm_duration;
+            update_neighbor_slicing_for_level(level, is_symmetric);
             
             auto elim_end = std::chrono::high_resolution_clock::now();
             elim_duration = std::chrono::duration_cast<std::chrono::milliseconds>(elim_end - elim_start);
@@ -920,15 +901,6 @@ void hierarchical_factorization_parallel(
         
         // ===== Step 5: Handle process reduction =====
         
-        // Error check: Level 2 → 1 should NOT trigger reduction
-        if (current_level == 2 && level.parent_level_owner != rank && level.is_process_active) {
-            throw std::runtime_error(
-                "hierarchical_factorization_parallel: Level 2 → 1 triggered process reduction! "
-                "This is not allowed. parent_level_owner = " + std::to_string(level.parent_level_owner) +
-                ", current rank = " + std::to_string(rank));
-        }
-
-
         const bool reduction_occurred =
             (parent_level.num_active_processes != level.num_active_processes);
         const bool keep_local_parent_boxes =

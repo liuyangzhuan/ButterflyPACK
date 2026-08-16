@@ -1038,7 +1038,7 @@ void hierarchical_h2_mul_parallel(
                 gather_skeleton_to_parent(
                     level, tree->levels[level_number - 1],
                     source_data[level_number], source_data[level_number - 1],
-                    tree->dimension);
+                    tree->dimension, tree->comm);
             }
         }
 
@@ -1079,7 +1079,7 @@ void hierarchical_h2_mul_parallel(
                 scatter_solution_to_children(
                     tree->levels[level_number + 1], level,
                     target_data[level_number + 1], target_data[level_number],
-                    tree->dimension);
+                    tree->dimension, tree->comm);
             }
         }
     }
