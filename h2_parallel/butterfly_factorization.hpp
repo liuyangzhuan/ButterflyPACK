@@ -7,6 +7,61 @@
 namespace butterfly {
 using namespace fmm;
 
+struct FactorizationCommunicatorSet {
+    std::vector<MPI_Comm> level;
+    std::vector<MPI_Comm> transition;
+};
+
+template<typename CoordType, typename DataType>
+FactorizationCommunicatorSet make_factorization_communicators(
+    fmm::ParallelTree<CoordType, DataType>* tree) {
+    FactorizationCommunicatorSet communicators;
+    communicators.level.assign(
+        static_cast<size_t>(tree->num_levels), MPI_COMM_NULL);
+    communicators.transition.assign(
+        static_cast<size_t>(tree->num_levels), MPI_COMM_NULL);
+
+    for (int level = 0; level < tree->num_levels; ++level) {
+        const int color = tree->levels[level].is_process_active
+            ? 0
+            : MPI_UNDEFINED;
+        MPI_Comm_split(
+            tree->comm,
+            color,
+            tree->mpi_rank,
+            &communicators.level[static_cast<size_t>(level)]);
+    }
+
+    for (int child_level = 1;
+         child_level < tree->num_levels;
+         ++child_level) {
+        const bool participates =
+            tree->levels[child_level].is_process_active ||
+            tree->levels[child_level - 1].is_process_active;
+        MPI_Comm_split(
+            tree->comm,
+            participates ? 0 : MPI_UNDEFINED,
+            tree->mpi_rank,
+            &communicators.transition[static_cast<size_t>(child_level)]);
+    }
+
+    return communicators;
+}
+
+inline void destroy_factorization_communicators(
+    FactorizationCommunicatorSet& communicators) {
+    for (MPI_Comm& comm : communicators.transition) {
+        if (comm != MPI_COMM_NULL) {
+            MPI_Comm_free(&comm);
+        }
+    }
+    for (MPI_Comm& comm : communicators.level) {
+        if (comm != MPI_COMM_NULL) {
+            MPI_Comm_free(&comm);
+        }
+    }
+}
+
 // To Do: need to find better place for this function
 // thresh: block-determinant magnitudes at or below this are treated as singular
 // (throws instead of feeding 0 into std::log and producing -inf). Default 0.0
@@ -191,7 +246,7 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
  * @param unit_proxy_points Unit sphere proxy points
  * @param num_proxy Number of proxy points
  * @param proxy_radius Proxy sphere radius multiplier
- * @param verbose Print progress messages
+ * @param verbosity -1: quiet, 0: summary, 1+: detailed progress
  */
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_parallel(
@@ -206,15 +261,19 @@ void hierarchical_factorization_parallel(
     CoordType proxy_radius,
     int64_t* out_rankmax,
     size_t* memory_per_rank,
-    bool verbose = true) {
+    int verbosity = 1) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
     
     int rank = tree->mpi_rank;
     int size = tree->mpi_size;
+    const bool print_summary = verbosity >= 0;
+    const bool print_detail = verbosity >= 1;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
+    FactorizationCommunicatorSet factorization_comms =
+        make_factorization_communicators(tree);
     
     int dimension = tree->dimension;
     int num_levels = tree->num_levels;
@@ -223,7 +282,7 @@ void hierarchical_factorization_parallel(
     const int factorization_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
     
-    if (verbose && rank == factorization_header_rank) {
+    if (print_summary && rank == factorization_header_rank) {
         const char* factorization_name =
             factorization_method == FactorizationMethod::CHOLESKY ? "Cholesky" :
             factorization_method == FactorizationMethod::LU ? "LU" : "None";
@@ -254,14 +313,22 @@ void hierarchical_factorization_parallel(
         clock::duration level_reduction{};
         
         auto& level = tree->levels[current_level];
+        auto& parent_level = tree->levels[current_level - 1];
+        const bool participates_in_transition =
+            level.is_process_active || parent_level.is_process_active;
+        if (!participates_in_transition) {
+            continue;
+        }
+
+        MPI_Comm level_comm =
+            factorization_comms.level[static_cast<size_t>(current_level)];
+        MPI_Comm transition_comm =
+            factorization_comms.transition[static_cast<size_t>(current_level)];
         const int level_print_rank = smallest_active_rank(level);
-        const LevelThreadPlan level_thread_plan =
-            configure_level_thread_plan(dynamic_threading, tree->comm, level);
-        
-        if (!level.is_process_active) {
-            if (verbose && rank == level_print_rank) {
-                std::cout << "\n===== Level " << current_level << " (Process " << rank << " inactive) =====" << std::endl;
-            }
+        LevelThreadPlan level_thread_plan;
+        if (level.is_process_active) {
+            level_thread_plan = configure_level_thread_plan(
+                dynamic_threading, level_comm, level);
         }
 
         // declare locks
@@ -286,20 +353,19 @@ void hierarchical_factorization_parallel(
             level.box_locks = std::move(box_locks);
         }
         
-        if (verbose && rank == level_print_rank) {
+        if (print_summary && rank == level_print_rank) {
             std::cout << "\n===== Level " << current_level << " =====" << std::endl;
             std::cout << "Active processes: " << level.num_active_processes << " from rank: " << rank << std::endl;
             std::cout << "Boxes per process: " << level.num_boxes_local << std::endl;
         }
         print_level_thread_plan(
             dynamic_threading,
-            tree->comm,
             current_level,
             "factorization",
             level_print_rank,
             rank,
             level_thread_plan,
-            verbose);
+            print_detail);
         
         // ===== Step 1: Gather ghost and assisting boxes =====
         
@@ -367,7 +433,7 @@ void hierarchical_factorization_parallel(
                     update_neighbor_slicing_for_level(level, is_symmetric);
                     auto comm_duration = std::chrono::duration_cast<std::chrono::milliseconds>(comm_duration_raw);
 
-                    if (verbose && rank == level_print_rank) {
+                    if (print_detail && rank == level_print_rank) {
                         std::cout << "  Comm time: "
                                 << comm_duration.count()
                                 << " ms" << std::endl;
@@ -385,7 +451,7 @@ void hierarchical_factorization_parallel(
                             tree, level, current_level, neighbor_ranks, need_assist);
                         level_data_exchange += comm_duration_raw;
                         auto comm_duration = std::chrono::duration_cast<std::chrono::milliseconds>(comm_duration_raw);
-                        if (verbose && rank == level_print_rank) {
+                        if (print_detail && rank == level_print_rank) {
                             std::cout << "  Comm time: "
                                     << comm_duration.count()
                                     << " ms" << std::endl;
@@ -398,7 +464,7 @@ void hierarchical_factorization_parallel(
 
                 const auto& color_list = color_bins[static_cast<size_t>(counter)];
 
-                if (verbose && rank == level_print_rank) {
+                if (print_detail && rank == level_print_rank) {
                     std::cout << "  Processing "
                             << (is_interior ? "interior sub-wave " : "boundary color ")
                             << color_id_mod
@@ -757,23 +823,23 @@ void hierarchical_factorization_parallel(
             }
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
-            if (verbose && rank == level_print_rank) {
+            if (print_detail && rank == level_print_rank) {
                 std::cout << "  Skipping elimination at level 1 (final coarsening step)" << std::endl;
             }
         }
 
-        if (current_level > 1) {
+        if (current_level > 1 && level.is_process_active) {
             double min_elim_ms = 0.0;
             double max_elim_ms = 0.0;
             reduce_active_duration_bounds_ms(
-                tree->comm,
-                level_print_rank,
-                level.is_process_active,
+                level_comm,
+                0,
+                true,
                 elim_duration,
                 min_elim_ms,
                 max_elim_ms);
             
-            if (verbose && rank == level_print_rank) {
+            if (print_detail && rank == level_print_rank) {
                 std::cout << "  Elimination time: shortest=" << std::llround(min_elim_ms)
                           << " ms, longest=" << std::llround(max_elim_ms) << " ms" << std::endl;
                 
@@ -797,7 +863,7 @@ void hierarchical_factorization_parallel(
         
         // Special handling for level 1: set all DOFs as skeleton (no elimination)
         if (current_level == 1 && level.is_process_active) {
-            if (verbose && rank == level_print_rank) {
+            if (print_detail && rank == level_print_rank) {
                 std::cout << "  Setting all DOFs as skeleton (no redundant DOFs at level 1)" << std::endl;
             }
             
@@ -847,14 +913,12 @@ void hierarchical_factorization_parallel(
         auto transition_end = std::chrono::high_resolution_clock::now();
         auto transition_duration = std::chrono::duration_cast<std::chrono::milliseconds>(transition_end - transition_start);
         
-        if (verbose && rank == level_print_rank) {
+        if (print_detail && rank == level_print_rank) {
             std::cout << "  Level transition time: " << transition_duration.count() << " ms" << std::endl;
             std::cout << "  Parent boxes created: " << parent_boxes.size() << std::endl;
         }
         
         // ===== Step 5: Handle process reduction =====
-        
-        auto& parent_level = tree->levels[current_level - 1];
         
         // Error check: Level 2 → 1 should NOT trigger reduction
         if (current_level == 2 && level.parent_level_owner != rank && level.is_process_active) {
@@ -885,7 +949,7 @@ void hierarchical_factorization_parallel(
             // Synchronize after parent-box construction/packing so the reduction
             // communication timer does not count time spent waiting for slower
             // ranks that are still preparing their payloads.
-            MPI_Barrier(tree->comm);
+            MPI_Barrier(transition_comm);
         }
 
         if (!reduction_occurred) {
@@ -940,7 +1004,7 @@ void hierarchical_factorization_parallel(
             // This process will become inactive at parent level
             parent_level.local_boxes.clear();
 
-            if (verbose) {
+            if (print_detail) {
                 std::cout << "  Process " << rank << " sending " << parent_boxes.size() 
                           << " parent boxes to process " << level.parent_level_owner << std::endl;
             }
@@ -965,17 +1029,28 @@ void hierarchical_factorization_parallel(
                 std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(level_reduction).count()
             };
             double max_deltas[2] = {0.0, 0.0};
-            MPI_Allreduce(local_deltas, max_deltas, 2, MPI_DOUBLE, MPI_MAX, tree->comm);
-            total_data_exchange_time += std::chrono::duration_cast<clock::duration>(
-                std::chrono::duration<double, std::milli>(max_deltas[0]));
-            total_reduction_time += std::chrono::duration_cast<clock::duration>(
-                std::chrono::duration<double, std::milli>(max_deltas[1]));
+            int transition_rank = -1;
+            MPI_Comm_rank(transition_comm, &transition_rank);
+            MPI_Reduce(
+                local_deltas,
+                max_deltas,
+                2,
+                MPI_DOUBLE,
+                MPI_MAX,
+                0,
+                transition_comm);
+            if (transition_rank == 0) {
+                total_data_exchange_time += std::chrono::duration_cast<clock::duration>(
+                    std::chrono::duration<double, std::milli>(max_deltas[0]));
+                total_reduction_time += std::chrono::duration_cast<clock::duration>(
+                    std::chrono::duration<double, std::milli>(max_deltas[1]));
+            }
         }
 
         auto level_end = std::chrono::high_resolution_clock::now();
         auto level_duration = std::chrono::duration_cast<std::chrono::milliseconds>(level_end - level_start);
         
-        if (verbose && rank == level_print_rank) {
+        if (print_detail && rank == level_print_rank) {
             std::cout << "  Total level time: " << level_duration.count() << " ms" << std::endl;
         }
         
@@ -988,14 +1063,14 @@ void hierarchical_factorization_parallel(
     // ===== Special handling for level 0 (root) =====
     
     const int root_print_rank = smallest_active_rank(tree->levels[0]);
-    if (verbose && rank == root_print_rank) {
+    if (print_detail && rank == root_print_rank) {
         std::cout << "\n===== Level 0 (Root) =====" << std::endl;
     }
     
     auto& root_level = tree->levels[0];
     
     if (!root_level.is_process_active || root_level.local_boxes.empty()) {
-        if (verbose) {
+        if (print_detail) {
             std::cout << "  Process " << rank << " has no boxes at root level" << std::endl;
         }
     } else {
@@ -1007,7 +1082,7 @@ void hierarchical_factorization_parallel(
         
         auto& root_box = root_level.local_boxes[0];
         
-        if (verbose && rank == root_print_rank) {
+        if (print_detail && rank == root_print_rank) {
             std::cout << "  Root box points: " << root_box.num_points << std::endl;
         }
         
@@ -1019,7 +1094,7 @@ void hierarchical_factorization_parallel(
         
         int64_t n = root_box.schur_complement.rows;
         
-        if (verbose && rank == root_print_rank) {
+        if (print_detail && rank == root_print_rank) {
             std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
         }
         
@@ -1050,7 +1125,7 @@ void hierarchical_factorization_parallel(
             
             root_box.X_RR.format = MatrixStorage<DataType>::CHOLESKY_L;
             
-            if (verbose && rank == root_print_rank) {
+            if (print_detail && rank == root_print_rank) {
                 std::cout << "  ✓ Root Cholesky factorization complete" << std::endl;
             }
             
@@ -1077,7 +1152,7 @@ void hierarchical_factorization_parallel(
 
             root_box.X_RR.format = MatrixStorage<DataType>::LU_FACTORED;
 
-            if (verbose && rank == root_print_rank) {
+            if (print_detail && rank == root_print_rank) {
                 std::cout << "  ✓ Root LU factorization complete" << std::endl;
             }
 
@@ -1106,7 +1181,7 @@ void hierarchical_factorization_parallel(
 
                 root_box.X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
 
-                if (verbose && rank == root_print_rank) {
+                if (print_detail && rank == root_print_rank) {
                     std::cout << "  ✓ Root Bunch-Kaufman factorization complete" << std::endl;
                 }
             } else {
@@ -1119,7 +1194,7 @@ void hierarchical_factorization_parallel(
             root_box.X_RR.format = MatrixStorage<DataType>::FULL;
             root_box.X_RR_pivots.clear();
             
-            if (verbose && rank == root_print_rank) {
+            if (print_detail && rank == root_print_rank) {
                 std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
             }
         }
@@ -1132,25 +1207,35 @@ void hierarchical_factorization_parallel(
         root_box.redundant_indices.clear();
     }
     
-    MPI_Barrier(tree->comm);
+    passive_mpi_barrier(tree->comm);
 
-    const double data_exchange_ms =
+    const double local_timing_ms[2] = {
         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
-            total_data_exchange_time).count();
-    const double reduction_ms =
+            total_data_exchange_time).count(),
         std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
-            total_reduction_time).count();
+            total_reduction_time).count()
+    };
+    double global_timing_ms[2] = {0.0, 0.0};
+    MPI_Reduce(
+        local_timing_ms,
+        global_timing_ms,
+        2,
+        MPI_DOUBLE,
+        MPI_SUM,
+        root_print_rank,
+        tree->comm);
 
-    if (verbose && rank == root_print_rank) {
+    if (print_summary && rank == root_print_rank) {
         auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - total_time);
         std::cout << "\n========================================" << std::endl;
         std::cout << "✓ Hierarchical Factorization Complete" << std::endl;
         std::cout << "  total time: " << total_duration.count() << " ms" << std::endl;
-        std::cout << "  data exchange communication time: " << std::llround(data_exchange_ms) << " ms" << std::endl;
-        std::cout << "  process reduction communication time: " << std::llround(reduction_ms) << " ms" << std::endl;
+        std::cout << "  data exchange communication time: " << std::llround(global_timing_ms[0]) << " ms" << std::endl;
+        std::cout << "  process reduction communication time: " << std::llround(global_timing_ms[1]) << " ms" << std::endl;
         std::cout << "========================================\n" << std::endl;
     }
 
+    destroy_factorization_communicators(factorization_comms);
     restore_base_process_affinity();
     clear_runtime_fmm_thread_count();
     destroy_dynamic_threading_context(dynamic_threading);
@@ -1164,20 +1249,24 @@ void hierarchical_factorization_parallel(
             local_memory_usage += calculate_box_data_size(box);
         }
     }
-    printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
-    fflush(stdout);
-
-    *memory_per_rank = local_memory_usage;
-    
-    double logabsdet;
-    DataType phase;
-    hierarchical_logdet_parallel(tree, &logabsdet, &phase);
-    if (rank == 0) {
-        std::cout.precision(17);
-        std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
+    if (print_detail) {
+        printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
+        fflush(stdout);
     }
 
-    (void)butterfly::h2_quick_verification(tree, kernel);
+    *memory_per_rank = local_memory_usage;
+
+    if (print_summary) {
+        double logabsdet;
+        DataType phase;
+        hierarchical_logdet_parallel(tree, &logabsdet, &phase);
+        if (rank == 0) {
+            std::cout.precision(17);
+            std::cout << "logdet: " << phase << " " << logabsdet << std::endl;
+        }
+
+        (void)butterfly::h2_quick_verification(tree, kernel);
+    }
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -1193,7 +1282,7 @@ void hierarchical_factorization_parallel_if_supported(
     CoordType proxy_radius,
     int64_t* out_rankmax = nullptr,
     size_t* memory_per_rank = nullptr,
-    bool verbose = true) {
+    int verbosity = 1) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
         hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
@@ -1208,7 +1297,7 @@ void hierarchical_factorization_parallel_if_supported(
             proxy_radius, 
             out_rankmax,
             memory_per_rank,
-            verbose);   // instantiated ONLY for double types
+            verbosity);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
     }
@@ -1265,7 +1354,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     0.0, // proxy_radius = 0
     &solver->last_factor_rankmax,
     &solver->factorization_memory,
-    true);
+    solver->options.verbosity);
   double tf = MPI_Wtime() - t0;
   MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
   *factorization_time = tf;

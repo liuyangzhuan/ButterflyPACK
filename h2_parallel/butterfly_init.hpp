@@ -347,7 +347,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   // from H2 struct, set typename CoordType, DataType
   // from H2 struct, get kernel
   // from H2 struct, get rank, size
-  if (rank == 0) {
+  if (rank == 0 && options.verbosity >= 1) {
     std::cout << "=== Hierarchical Factorization Test ("
               << options.dimension << "D "
               << number_kind_to_string(options.number_kind) << ") ===" << std::endl;

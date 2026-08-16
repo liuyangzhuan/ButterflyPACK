@@ -134,6 +134,7 @@ struct ProgramOptions {
     double kappa = 10.0;         // Yukawa screening parameter κ
     int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
     int precon = 1;              // 1/3: RS-S factorization, 2: compression-only H2
+    int verbosity = 0;           // -1: quiet, 0: summaries, 1+: detailed progress
 };
 
 enum class H2BuildState {

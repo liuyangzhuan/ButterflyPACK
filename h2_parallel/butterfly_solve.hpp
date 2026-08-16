@@ -35,10 +35,12 @@ void hierarchical_solve_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& rhs,
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
-    bool verbose = true) {
+    int verbosity = 1) {
     
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
+    const bool print_summary = verbosity >= 0;
+    const bool print_detail = verbosity >= 1;
     using clock = std::chrono::high_resolution_clock;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -55,11 +57,11 @@ void hierarchical_solve_parallel(
     const LevelThreadPlan solve_thread_plan =
         configure_static_process_thread_plan(dynamic_threading);
     
-    if (verbose && rank == solve_header_rank) {
+    if (print_summary && rank == solve_header_rank) {
         std::cout << "\n========================================" << std::endl;
         std::cout << "Hierarchical Solve (Parallel MPI)" << std::endl;
         std::cout << "========================================" << std::endl;
-        if (dynamic_threading.enabled) {
+        if (print_detail && dynamic_threading.enabled) {
             std::cout << "Solve thread plan: threads=" << solve_thread_plan.threads;
             if (solve_thread_plan.cpu_begin >= 0 && solve_thread_plan.cpu_end >= 0) {
                 std::cout << ", cpus=[" << solve_thread_plan.cpu_begin
@@ -109,13 +111,13 @@ void hierarchical_solve_parallel(
     }
 
     
-    if (verbose && rank == solve_header_rank) {
+    if (print_detail && rank == solve_header_rank) {
         std::cout << "Initialized solve data structures" << std::endl;
     }
     
     // ===== Phase 1: Forward Sweep (V^{-1}) with level transitions =====
     
-    if (verbose && rank == solve_header_rank) {
+    if (print_detail && rank == solve_header_rank) {
         std::cout << "\n===== Phase 1: Forward Sweep (V^{-1}) =====" << std::endl;
     }
     
@@ -132,7 +134,7 @@ void hierarchical_solve_parallel(
                 throw std::runtime_error("Reduction between level 2 and level 1 is not allowed");
             }
         }
-        if (verbose && rank == level_print_rank) {
+        if (print_detail && rank == level_print_rank) {
             std::cout << "  Level " << level << ": " << tree_level.num_boxes_local << " boxes" << " on rank: " << rank << std::endl;
         }
        
@@ -330,13 +332,13 @@ void hierarchical_solve_parallel(
     auto forward_end = std::chrono::high_resolution_clock::now();
     auto forward_duration = std::chrono::duration_cast<std::chrono::milliseconds>(forward_end - forward_start - communication_total_forward);
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_detail && rank == solve_root_rank) {
         std::cout << "  Forward sweep time: " << forward_duration.count() << " ms" << std::endl;
     }
     
     // ===== Phase 2: Diagonal Solve (D^{-1}) =====
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_detail && rank == solve_root_rank) {
         std::cout << "\n===== Phase 2: Diagonal Solve (D^{-1}) =====" << std::endl;
     }
     
@@ -480,7 +482,7 @@ void hierarchical_solve_parallel(
     auto diagonal_end = std::chrono::high_resolution_clock::now();
     auto diagonal_duration = std::chrono::duration_cast<std::chrono::milliseconds>(diagonal_end - diagonal_start);
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_detail && rank == solve_root_rank) {
         std::cout << "  Diagonal solves: " << num_diagonal_solves  << " from rank: " << rank << std::endl;
         std::cout << "  Diagonal solve time: " << diagonal_duration.count() << " ms" << std::endl;
     }
@@ -488,7 +490,7 @@ void hierarchical_solve_parallel(
     
     // ===== Phase 3: Backward Sweep (W^{-1}) with level transitions =====
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_detail && rank == solve_root_rank) {
         std::cout << "\n===== Phase 3: Backward Sweep (W^{-1}) =====" << std::endl;
     }
     
@@ -498,7 +500,7 @@ void hierarchical_solve_parallel(
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
         
-        if (verbose && rank == level_print_rank) {
+        if (print_detail && rank == level_print_rank) {
             std::cout << "  Level " << level << ": " << tree_level.num_boxes_local << " boxes" << " from rank: " << rank << std::endl;
         }
 
@@ -536,7 +538,7 @@ void hierarchical_solve_parallel(
         //     }
         // }
         
-        if (verbose && rank == level_print_rank) {
+        if (print_detail && rank == level_print_rank) {
             std::cout << "    ← Scattered from level " << (level - 1) << std::endl;
         }
         
@@ -696,12 +698,12 @@ void hierarchical_solve_parallel(
     auto backward_end = std::chrono::high_resolution_clock::now();
     auto backward_duration = std::chrono::duration_cast<std::chrono::milliseconds>(backward_end - backward_start - communication_total_backward);
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_detail && rank == solve_root_rank) {
         std::cout << "  Backward sweep time: " << backward_duration.count() << " ms" << std::endl;
     }
     
     
-    if (verbose && rank == solve_root_rank) {
+    if (print_summary && rank == solve_root_rank) {
         auto total_end = std::chrono::high_resolution_clock::now();
         auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - forward_start);
         auto communication_duration_forward = std::chrono::duration_cast<std::chrono::milliseconds>(communication_total_forward);

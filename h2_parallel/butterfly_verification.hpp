@@ -709,7 +709,7 @@ double h2_quick_verification(
         solve_data(tree->num_levels);
 
     const double t1 = MPI_Wtime();
-    butterfly::hierarchical_solve_parallel(tree, b_vec, solve_data, false);
+    butterfly::hierarchical_solve_parallel(tree, b_vec, solve_data, -1);
     double t_solve = MPI_Wtime() - t1;
 
     std::vector<DataType> x_h2(static_cast<size_t>(Nloc), DataType{0.0});

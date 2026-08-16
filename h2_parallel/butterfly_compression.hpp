@@ -1306,7 +1306,8 @@ void butterfly_compression_parallel(
         const double start = MPI_Wtime();
         hierarchical_compression_parallel(
             solver->tree.get(), &solver->kernel, solver->options.tolerance,
-            &solver->last_factor_rankmax, &solver->factorization_memory, true);
+            &solver->last_factor_rankmax, &solver->factorization_memory,
+            solver->options.verbosity >= 1);
         double elapsed = MPI_Wtime() - start;
         MPI_Allreduce(MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
         if (compression_time) *compression_time = elapsed;

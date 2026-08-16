@@ -175,6 +175,22 @@ inline void clear_runtime_fmm_thread_count() {
     runtime_thread_override_storage().store(0, std::memory_order_relaxed);
 }
 
+inline void passive_mpi_barrier(MPI_Comm comm) {
+    if (comm == MPI_COMM_NULL) {
+        return;
+    }
+
+    MPI_Request request = MPI_REQUEST_NULL;
+    MPI_Ibarrier(comm, &request);
+    int complete = 0;
+    while (!complete) {
+        MPI_Test(&request, &complete, MPI_STATUS_IGNORE);
+        if (!complete) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+}
+
 inline int configured_fmm_thread_count() {
     if (const int override_count =
             runtime_thread_override_storage().load(std::memory_order_relaxed);
@@ -196,6 +212,7 @@ struct DynamicThreadingContext {
     int shared_rank = 0;
     int shared_size = 1;
     int cpu_cap_per_node = 0;
+    int original_thread_count = 1;
 };
 
 struct LevelThreadPlan {
@@ -210,6 +227,7 @@ struct LevelThreadPlan {
 
 inline DynamicThreadingContext make_dynamic_threading_context(MPI_Comm comm) {
     DynamicThreadingContext context;
+    context.original_thread_count = std::max(1, omp_get_max_threads());
     const int requested_cpus_per_node =
         parse_positive_thread_count(std::getenv("FMM_MAX_CPUS_PER_NODE"));
     if (requested_cpus_per_node <= 0) {
@@ -232,6 +250,9 @@ inline DynamicThreadingContext make_dynamic_threading_context(MPI_Comm comm) {
 }
 
 inline void destroy_dynamic_threading_context(DynamicThreadingContext& context) {
+    if (context.enabled) {
+        omp_set_num_threads(std::max(1, context.original_thread_count));
+    }
     if (context.shared_comm != MPI_COMM_NULL) {
         MPI_Comm_free(&context.shared_comm);
         context.shared_comm = MPI_COMM_NULL;
@@ -285,121 +306,73 @@ inline LevelThreadPlan configure_static_process_thread_plan(
 template<typename CoordType, typename DataType>
 LevelThreadPlan configure_level_thread_plan(
     const DynamicThreadingContext& context,
-    MPI_Comm comm,
+    MPI_Comm level_comm,
     const TreeLevel<CoordType, DataType>& level) {
     LevelThreadPlan plan;
     plan.active = level.is_process_active;
 
-    if (!context.enabled) {
+    if (!context.enabled || !plan.active) {
         return plan;
     }
-
-    std::vector<int> node_active_flags(static_cast<size_t>(context.shared_size), 0);
-    const int local_active = plan.active ? 1 : 0;
-    MPI_Allgather(
-        &local_active,
-        1,
-        MPI_INT,
-        node_active_flags.data(),
-        1,
-        MPI_INT,
-        context.shared_comm);
-
-    for (int active_flag : node_active_flags) {
-        plan.active_on_node += active_flag;
+    if (level_comm == MPI_COMM_NULL) {
+        throw std::runtime_error(
+            "configure_level_thread_plan: active rank has no level communicator");
     }
-    const int inactive_on_node = context.shared_size - plan.active_on_node;
+
+    MPI_Comm active_shared_comm = MPI_COMM_NULL;
+    MPI_Comm_split_type(
+        level_comm,
+        MPI_COMM_TYPE_SHARED,
+        0,
+        MPI_INFO_NULL,
+        &active_shared_comm);
+    MPI_Comm_rank(active_shared_comm, &plan.active_slot);
+    MPI_Comm_size(active_shared_comm, &plan.active_on_node);
     MPI_Allreduce(
         &plan.active_on_node,
         &plan.max_active_on_any_node,
         1,
         MPI_INT,
         MPI_MAX,
-        comm);
+        level_comm);
     plan.max_active_on_any_node = std::max(1, plan.max_active_on_any_node);
-
-    int max_inactive_on_any_node = 0;
-    MPI_Allreduce(
-        &inactive_on_node,
-        &max_inactive_on_any_node,
-        1,
-        MPI_INT,
-        MPI_MAX,
-        comm);
-
-    const int reserved_idle_cpus =
-        std::max(0, std::min(context.cpu_cap_per_node - 1, max_inactive_on_any_node));
-    const int active_cpu_budget =
-        std::max(1, context.cpu_cap_per_node - reserved_idle_cpus);
-    const int active_threads =
-        std::max(1, active_cpu_budget / plan.max_active_on_any_node);
-    plan.threads = plan.active ? active_threads : 1;
 
     const auto& base_cpus = base_process_cpu_list();
     const int usable_cpu_count = std::min<int>(
         context.cpu_cap_per_node,
         static_cast<int>(base_cpus.size()));
-    const int reserved_cpu_count = std::min(
-        usable_cpu_count,
-        plan.max_active_on_any_node * active_threads);
+    plan.threads = std::max(
+        1, usable_cpu_count / std::max(1, plan.active_on_node));
 
-    if (plan.active) {
-        plan.active_slot = 0;
-        for (int local_rank = 0; local_rank < context.shared_rank; ++local_rank) {
-            if (node_active_flags[static_cast<size_t>(local_rank)] != 0) {
-                ++plan.active_slot;
-            }
+    if (usable_cpu_count > 0) {
+        int begin_offset = plan.active_slot * plan.threads;
+        if (begin_offset >= usable_cpu_count) {
+            begin_offset = usable_cpu_count - 1;
         }
-
-        if (usable_cpu_count > 0) {
-            int begin_offset = plan.active_slot * active_threads;
-            if (begin_offset >= usable_cpu_count) {
-                begin_offset = usable_cpu_count - 1;
-            }
-            const int end_offset = std::min(begin_offset + active_threads, usable_cpu_count);
-            std::vector<int> assigned_cpus(
-                base_cpus.begin() + begin_offset,
-                base_cpus.begin() + end_offset);
-            if (!assigned_cpus.empty()) {
-                plan.cpu_begin = assigned_cpus.front();
-                plan.cpu_end = assigned_cpus.back();
-                set_runtime_fmm_thread_count(plan.threads);
-                set_runtime_cpu_subset(assigned_cpus, plan.threads);
-            } else {
-                set_runtime_fmm_thread_count(plan.threads);
-            }
+        const int end_offset = std::min(
+            begin_offset + plan.threads, usable_cpu_count);
+        std::vector<int> assigned_cpus(
+            base_cpus.begin() + begin_offset,
+            base_cpus.begin() + end_offset);
+        if (!assigned_cpus.empty()) {
+            plan.cpu_begin = assigned_cpus.front();
+            plan.cpu_end = assigned_cpus.back();
+            set_runtime_fmm_thread_count(plan.threads);
+            set_runtime_cpu_subset(assigned_cpus, plan.threads);
         } else {
             set_runtime_fmm_thread_count(plan.threads);
         }
     } else {
-        if (usable_cpu_count > 0) {
-            int inactive_slot = 0;
-            for (int local_rank = 0; local_rank < context.shared_rank; ++local_rank) {
-                if (node_active_flags[static_cast<size_t>(local_rank)] == 0) {
-                    ++inactive_slot;
-                }
-            }
-
-            int chosen_offset = 0;
-            const int idle_span = std::max(1, usable_cpu_count - reserved_cpu_count);
-            chosen_offset =
-                reserved_cpu_count + std::min(inactive_slot, idle_span - 1);
-            std::vector<int> idle_cpu{base_cpus[static_cast<size_t>(chosen_offset)]};
-            plan.cpu_begin = idle_cpu.front();
-            plan.cpu_end = idle_cpu.front();
-            set_runtime_fmm_thread_count(1);
-            set_runtime_cpu_subset(idle_cpu, 1);
-        } else {
-            set_runtime_fmm_thread_count(1);
-        }
+        set_runtime_fmm_thread_count(plan.threads);
     }
+
+    MPI_Comm_free(&active_shared_comm);
 
     return plan;
 }
 
 inline void print_level_thread_plan(
     const DynamicThreadingContext& context,
-    MPI_Comm comm,
     int level_index,
     const char* phase_name,
     int level_print_rank,

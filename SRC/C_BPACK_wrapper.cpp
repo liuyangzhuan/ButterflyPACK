@@ -47,6 +47,16 @@ static void require_symmetric_h2_option(
 }
 
 template<typename CoordType, typename DataType>
+int sync_h2_verbosity(
+    F2Cptr* option,
+    butterfly::H2<CoordType, DataType>* solver) {
+  double verbosity_d = 0.0;
+  c_bpack_getoption(option, "verbosity", &verbosity_d);
+  solver->options.verbosity = static_cast<int>(std::llround(verbosity_d));
+  return solver->options.verbosity;
+}
+
+template<typename CoordType, typename DataType>
 void compress_h2_and_update_stats(
     butterfly::H2<CoordType, DataType>* solver,
     F2Cptr* stats) {
@@ -69,8 +79,10 @@ void compress_h2_and_update_stats(
     solver->factorization_memory / (1024.0 * 1024.0);
   c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
 
-  (void)butterfly::h2_compression_quick_verification(
-    solver->tree.get(), &solver->kernel);
+  if (solver->options.verbosity >= 1) {
+    (void)butterfly::h2_compression_quick_verification(
+      solver->tree.get(), &solver->kernel);
+  }
 }
 
 // The command line parser for the example related parameters
@@ -109,7 +121,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"nbundle",         "multiply nbundle sets of vectors together in randomized butterfly algorithm for better flop performance, default to 1"},
 		{"near_para",       "admissibility parameter when format=2/3/4/5, strong admissibility typically requires near_para>2.0"},
 		{"format",          "the hierarchical matrix format: 1: HODLR/HODBF 2: H matrix 3: HSSBF/SHNBF 4: HSSBF_MD/SHNBF_MD 5: block-LR/BF"},
-		{"verbosity",       "verbosity for the printing (-1, 0, 1, 2), -1 suppresses everything, 2 prints most details"},
+		{"verbosity",       "-1 suppresses output, 0 prints summaries, and 1 or greater prints details"},
 		{"rmax",            "preestimate of the maximum rank for allocating buffers, default to 1000"},
 		{"sample_para",     "oversampling factor in the nlogn entry-evaluation-based butterfly algorithm, default to 2"},
 		{"pat_comp",        "pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner"},
@@ -796,28 +808,31 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 
     butterfly::ProgramOptions H2_options;
     try {
-	  double tolerance;
-	  double reduction_threshold_d;
-	  double Nmin_leaf_d;
-	  double precon_d;
-	  c_bpack_getoption(option, "tol_comp", &tolerance);
-	  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
-	  c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
-	  c_bpack_getoption(option, "precon", &precon_d);
-	  int64_t reduction_threshold = (int64_t)reduction_threshold_d;
-	  int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
+      double tolerance;
+      double reduction_threshold_d;
+      double Nmin_leaf_d;
+      double precon_d;
+      double verbosity_d;
+      c_bpack_getoption(option, "tol_comp", &tolerance);
+      c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
+      c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
+      c_bpack_getoption(option, "precon", &precon_d);
+      c_bpack_getoption(option, "verbosity", &verbosity_d);
+      int64_t reduction_threshold = (int64_t)reduction_threshold_d;
+      int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf);
-	  H2_options.precon = static_cast<int>(std::llround(precon_d));
-	  H2_solver->options = H2_options;
+      H2_options.precon = static_cast<int>(std::llround(precon_d));
+      H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
+      H2_solver->options = H2_options;
     } catch (const std::exception& e) {
-        if (rank == 0) {
-            std::cerr << "Argument error: " << e.what() << std::endl;
-        }
-		throw;
+      if (rank == 0) {
+        std::cerr << "Argument error: " << e.what() << std::endl;
+      }
+      throw;
     }
 
     try {
-      if (rank == 0) {
+      if (rank == 0 && H2_options.verbosity >= 1) {
         std::cout << "ButterflyPACK H2, number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
                   << ", dimension=" << H2_options.dimension
                   << ", reduction_threshold=" << H2_options.reduction_threshold;
@@ -913,7 +928,8 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
     MPI_Comm_rank(H2_solver->comm, &rank);
 
     try {
-	  double precon_d = 1.0;
+      sync_h2_verbosity(option, H2_solver);
+      double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
 	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 	  if (H2_solver->options.precon == 2) {
@@ -989,6 +1005,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     MPI_Comm_rank(H2_solver->comm, &rank);
 
     try {
+      const int verbosity = sync_h2_verbosity(option, H2_solver);
       const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
       std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs));
 	  double precon_d = 1.0;
@@ -1015,7 +1032,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		butterfly::hierarchical_h2_bicgstab_parallel(
 		  H2_solver->tree.get(), rhs, iterative_solution,
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
-		  &iterations, &residual, true);
+		  &iterations, &residual, verbosity >= 1);
 		std::copy(
 		  iterative_solution.begin(), iterative_solution.end(),
 		  reinterpret_cast<H2Data*>(x));
@@ -1027,7 +1044,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
 		  H2_solver->options.num_levels);
 		butterfly::hierarchical_solve_parallel(
-		  H2_solver->tree.get(), rhs, solve_data, true);
+		  H2_solver->tree.get(), rhs, solve_data, verbosity);
 		butterfly::gather_local_solution(
 		  H2_solver->tree.get(), solve_data,
 		  reinterpret_cast<H2Data*>(x), Nloc);
@@ -1086,7 +1103,8 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     }
 
     try {
-	  double precon_d = 1.0;
+      const int verbosity = sync_h2_verbosity(option, H2_solver);
+      double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
 	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 
@@ -1117,11 +1135,11 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  double t0 = MPI_Wtime();
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		butterfly::hierarchical_h2_mul_parallel(
-		  H2_solver->tree.get(), lhs, compressed_output, true);
+		  H2_solver->tree.get(), lhs, compressed_output, verbosity >= 1);
 	  } else {
 		mul_data.resize(H2_solver->options.num_levels);
 		butterfly::hierarchical_mul_parallel(
-		  H2_solver->tree.get(), lhs, mul_data, true);
+		  H2_solver->tree.get(), lhs, mul_data, verbosity >= 1);
 	  }
 
 	  double t_mult = MPI_Wtime() - t0;
