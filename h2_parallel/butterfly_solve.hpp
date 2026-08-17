@@ -628,19 +628,15 @@ void hierarchical_solve_parallel(
                             throw std::runtime_error("Diagonal solve missing Bunch-Kaufman pivots for X_RR");
                         }
 
-                        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            char uplo = 'L';
-                            int n = static_cast<int>(r), nrhs = 1;
-                            int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-                            zsytrs_(&uplo, &n, &nrhs,
-                                    box.X_RR.data.data(), &lda,
-                                    box.X_RR_pivots.data(),
-                                    b_R.data(), &ldb, &info);
-                            if (info != 0) {
-                                throw std::runtime_error("Bunch-Kaufman diagonal solve failed for X_RR");
-                            }
-                        } else {
-                            throw std::runtime_error("BUNCH_KAUFMAN format only supported for complex<double>");
+                        char uplo = 'L';
+                        int n = static_cast<int>(r), nrhs = 1;
+                        int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
+                        sytrs_(&uplo, &n, &nrhs,
+                               box.X_RR.data.data(), &lda,
+                               box.X_RR_pivots.data(),
+                               b_R.data(), &ldb, &info);
+                        if (info != 0) {
+                            throw std::runtime_error("Bunch-Kaufman diagonal solve failed for X_RR");
                         }
                     } else {
                         throw std::runtime_error("Unsupported X_RR format in diagonal solve");
@@ -1263,12 +1259,9 @@ void hierarchical_mul_parallel(
                         if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
                             throw std::runtime_error("Diagonal multiply missing Bunch-Kaufman pivots");
                         }
-                        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            fmm::bunch_kaufman_multiply(n, box.X_RR.data.data(), n,
-                                                       box.X_RR_pivots.data(), x_R.data());
-                        } else {
-                            throw std::runtime_error("BUNCH_KAUFMAN format only supported for complex<double>");
-                        }
+                        fmm::bunch_kaufman_multiply(
+                            n, box.X_RR.data.data(), n,
+                            box.X_RR_pivots.data(), x_R.data());
                     } else {
                         throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
                     }

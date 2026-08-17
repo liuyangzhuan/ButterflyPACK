@@ -1,6 +1,11 @@
 #ifndef BLAS_DECLARE_HPP
 #define BLAS_DECLARE_HPP
 
+#include <algorithm>
+#include <complex>
+#include <stdexcept>
+#include <type_traits>
+
 // extern "C" {
 //     // =====================
 //     // Real double
@@ -215,8 +220,13 @@ extern "C" {
                  std::complex<double>* B, const int* LDB, int* INFO);
 
     // =====================
-    // Bunch-Kaufman factorization for complex symmetric matrices (A = P*L*D*L^T*P^T)
+    // Bunch-Kaufman factorization for symmetric matrices (A = P*L*D*L^T*P^T)
     // =====================
+    void dsytrf_(const char* UPLO, const int* N, double* A, const int* LDA,
+                 int* IPIV, double* WORK, const int* LWORK, int* INFO);
+    void dsytrs_(const char* UPLO, const int* N, const int* NRHS,
+                 const double* A, const int* LDA, const int* IPIV,
+                 double* B, const int* LDB, int* INFO);
     void zsytrf_(const char* UPLO, const int* N, std::complex<double>* A, const int* LDA,
                  int* IPIV, std::complex<double>* WORK, const int* LWORK, int* INFO);
     void zsytrs_(const char* UPLO, const int* N, const int* NRHS,
@@ -386,6 +396,34 @@ extern "C" {
                  const int* K1, const int* K2, const int* IPIV, const int* INCX);
     void zlaswp_(const int* N, std::complex<double>* A, const int* LDA,
                  const int* K1, const int* K2, const int* IPIV, const int* INCX);
+}
+
+
+template <typename DataType>
+void sytrf_(const char* uplo, const int* n, DataType* a, const int* lda,
+            int* ipiv, DataType* work, const int* lwork, int* info) {
+    if constexpr (std::is_same_v<DataType, double>) {
+        dsytrf_(uplo, n, a, lda, ipiv, work, lwork, info);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        zsytrf_(uplo, n, a, lda, ipiv, work, lwork, info);
+    } else {
+        throw std::runtime_error(
+            "Bunch-Kaufman requires double or complex<double>");
+    }
+}
+
+template <typename DataType>
+void sytrs_(const char* uplo, const int* n, const int* nrhs,
+            const DataType* a, const int* lda, const int* ipiv,
+            DataType* b, const int* ldb, int* info) {
+    if constexpr (std::is_same_v<DataType, double>) {
+        dsytrs_(uplo, n, nrhs, a, lda, ipiv, b, ldb, info);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        zsytrs_(uplo, n, nrhs, a, lda, ipiv, b, ldb, info);
+    } else {
+        throw std::runtime_error(
+            "Bunch-Kaufman requires double or complex<double>");
+    }
 }
 
 

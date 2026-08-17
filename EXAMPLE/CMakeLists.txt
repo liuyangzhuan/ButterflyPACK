@@ -266,6 +266,18 @@ target_link_libraries(cvie3d_h2 ${all_link_libs_z})
 add_dependencies(cvie3d_h2 cvie3d)
 endif()
 
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CLAPLACE3DH2 Laplace3D_H2Test_Driver.cpp)
+add_executable(claplace3d_h2 ${CLAPLACE3DH2})
+target_link_libraries(claplace3d_h2 ${all_link_libs_d})
+endif()
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CMATERN2DH2 Matern2D_H2Test_Driver.cpp)
+add_executable(cmatern2d_h2 ${CMATERN2DH2})
+target_link_libraries(cmatern2d_h2 ${all_link_libs_d})
+endif()
+
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CVIE3DT VIE3D_tensor_Driver.cpp G2D/bessel.cpp)

@@ -605,7 +605,7 @@ struct BoxData {
      * Usage: Solve X_RR^{-1} * b using the chosen factorization
      */
     MatrixStorage<DataType> X_RR;
-    std::vector<int> X_RR_pivots;   ///< Pivot vector for LU_FACTORED X_RR
+    std::vector<int> X_RR_pivots;   ///< LAPACK pivots for LU or Bunch-Kaufman X_RR
     
     /**
      * X_RS block (Section 2.3.3):

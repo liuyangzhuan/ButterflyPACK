@@ -375,24 +375,25 @@ void apply_mul_forward_W(
 // Bunch-Kaufman multiply: y = A*x where A = L*D*L^T (with interleaved pivots)
 // ============================================================================
 //
-// zsytrf with UPLO='L' produces A = L*D*L^T where:
+// xSYTRF with UPLO='L' produces A = L*D*L^T where:
 //   L = product of permutation and unit lower triangular elementary matrices
 //   D = block diagonal with 1x1 and 2x2 blocks
 //   IPIV encodes the pivot structure (positive=1x1, negative=2x2)
 //
-// To multiply y = A*x, we reverse the zsytrs solve steps:
+// To multiply y = A*x, we reverse the xSYTRS solve steps:
 //   Step 1: Apply L^T with forward permutations (k = 0..n-1)
 //   Step 2: Apply D (block diagonal multiply)
 //   Step 3: Apply L with backward permutations (k = n-1..0)
 
+template <typename DataType>
 inline void bunch_kaufman_multiply(
     int n,
-    const std::complex<double>* A, int lda,
+    const DataType* A, int lda,
     const int* ipiv,
-    std::complex<double>* x)
+    DataType* x)
 {
     // Step 1: L^T multiply with permutations (forward, k=0..n-1)
-    // This is the inverse of zsytrs backward pass
+    // This is the inverse of the SYTRS backward pass
     int k = 0;
     while (k < n) {
         if (ipiv[k] > 0) {
@@ -431,10 +432,10 @@ inline void bunch_kaufman_multiply(
             k += 1;
         } else {
             // 2x2 block: D = [A(k,k), A(k+1,k); A(k+1,k), A(k+1,k+1)]
-            std::complex<double> d11 = A[k + k * lda];
-            std::complex<double> d21 = A[(k + 1) + k * lda];
-            std::complex<double> d22 = A[(k + 1) + (k + 1) * lda];
-            std::complex<double> t0 = x[k], t1 = x[k + 1];
+            DataType d11 = A[k + k * lda];
+            DataType d21 = A[(k + 1) + k * lda];
+            DataType d22 = A[(k + 1) + (k + 1) * lda];
+            DataType t0 = x[k], t1 = x[k + 1];
             x[k]     = d11 * t0 + d21 * t1;
             x[k + 1] = d21 * t0 + d22 * t1;
             k += 2;
@@ -442,7 +443,7 @@ inline void bunch_kaufman_multiply(
     }
 
     // Step 3: L multiply with permutations (backward, k=n-1..0)
-    // This is the inverse of zsytrs forward pass
+    // This is the inverse of the SYTRS forward pass
     k = n - 1;
     while (k >= 0) {
         if (ipiv[k] > 0) {
@@ -480,7 +481,7 @@ inline void bunch_kaufman_multiply(
 // X_RR is stored in factored form, so we reconstruct the multiply:
 //   CHOLESKY_L:  X_RR = L * L^T  ->  y = L^T * x, then z = L * y  (dtrmv)
 //   LU_FACTORED: X_RR = P * L * U ->  y = U*x, z = L*y, w = P*z   (dtrmv + laswp)
-//   BUNCH_KAUFMAN: A = L*D*L^T with interleaved pivots (zsytrf)
+//   BUNCH_KAUFMAN: A = L*D*L^T with interleaved pivots (xSYTRF)
 
 template<typename CoordType, typename DataType>
 void apply_diagonal_multiply(
@@ -600,12 +601,8 @@ void apply_diagonal_multiply(
         if (X_RR_pivots == nullptr || X_RR_pivots->size() < static_cast<size_t>(k)) {
             throw std::runtime_error("apply_diagonal_multiply: missing Bunch-Kaufman pivots");
         }
-        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            bunch_kaufman_multiply(n, X_RR->data.data(), n,
-                                  X_RR_pivots->data(), x_S.data());
-        } else {
-            throw std::runtime_error("apply_diagonal_multiply: BUNCH_KAUFMAN only supported for complex<double>");
-        }
+        bunch_kaufman_multiply(n, X_RR->data.data(), n,
+                               X_RR_pivots->data(), x_S.data());
     } else {
         throw std::runtime_error(
             "apply_diagonal_multiply: unsupported X_RR format");

@@ -1435,6 +1435,177 @@ contains
    end subroutine BPACK_Ziterativerefinement_usermatvec_precon
 
 
+   !!!>**** preconditioned conjugate gradient with separate operator and preconditioner matvecs
+   subroutine BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+      blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal, nn_loc
+      integer::iter, itmax, it, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::r(:,:), z(:,:), p(:,:), q(:,:), Ax(:,:)
+      DT::x_sum, x_sum_global, norm_local, norm_sum
+      DT::rho_local, rho, rho_new_local, rho_new, pap_local, pap
+      DT::alpha, beta
+      real(kind=8)::err, tol, bmag, rerr, breakdown_tol
+      real(kind=8)::rho_real, rho_new_real, pap_real
+      logical::breakdown
+      character(len=128)::breakdown_reason
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write(*,*)' '
+
+      tol = err
+      itmax = iter
+      if (itmax == 0) itmax = ntotal
+      itmax = max(1, itmax)
+      it = 0
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
+
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(x_sum, x_sum_global, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if (myisnan(abs(x_sum_global))) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            write(*,*)'In BPACK_Zcg, the initial guess is invalid. Setting x=0.'
+         endif
+         x = 0d0
+      endif
+
+      allocate(r(nn_loc,1), z(nn_loc,1), p(nn_loc,1), q(nn_loc,1), Ax(nn_loc,1))
+
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      bmag = sqrt(abs(norm_sum))
+      if (bmag <= breakdown_tol .or. bmag /= bmag) then
+         x = 0d0
+         err = 0d0
+         iter = 0
+         deallocate(r, z, p, q, Ax)
+         return
+      endif
+
+      norm_local = dot_product(x(:,1), x(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if (abs(norm_sum) <= breakdown_tol) then
+         r = b
+      else
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         r = b - Ax
+      endif
+      norm_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      rerr = sqrt(abs(norm_sum))/bmag
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of CG,error:', 0, rerr
+      endif
+      if (rerr <= tol) then
+         err = rerr
+         iter = 0
+         deallocate(r, z, p, q, Ax)
+         return
+      endif
+
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, z, ker)
+      rho_local = dot_product(r(:,1), z(:,1))
+      call MPI_ALLREDUCE(rho_local, rho, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      rho_real = real(rho, kind=8)
+      if (rho_real <= breakdown_tol .or. myisnan(abs(rho))) then
+         breakdown = .true.
+         breakdown_reason = 'initial r^H M^{-1} r is not positive'
+      endif
+      p = z
+
+      if (.not. breakdown) then
+         do it = 1, itmax
+            call blackbox_MVP('N', nn_loc, nn_loc, 1, p, q, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+
+            pap_local = dot_product(p(:,1), q(:,1))
+            call MPI_ALLREDUCE(pap_local, pap, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            pap_real = real(pap, kind=8)
+            if (pap_real <= breakdown_tol .or. myisnan(abs(pap))) then
+               breakdown = .true.
+               breakdown_reason = 'non-positive curvature p^H A p'
+               exit
+            endif
+
+            alpha = rho/pap
+            if (myisnan(abs(alpha))) then
+               breakdown = .true.
+               breakdown_reason = 'invalid alpha'
+               exit
+            endif
+
+            x = x + alpha*p
+            r = r - alpha*q
+
+            norm_local = dot_product(r(:,1), r(:,1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            rerr = sqrt(abs(norm_sum))/bmag
+            if (rerr /= rerr) then
+               breakdown = .true.
+               breakdown_reason = 'invalid residual norm'
+               exit
+            endif
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of CG,error:', it, rerr
+            endif
+            if (rerr <= tol) then
+               err = rerr
+               iter = it
+               deallocate(r, z, p, q, Ax)
+               return
+            endif
+
+            call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, z, ker)
+            rho_new_local = dot_product(r(:,1), z(:,1))
+            call MPI_ALLREDUCE(rho_new_local, rho_new, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            rho_new_real = real(rho_new, kind=8)
+            if (rho_new_real <= breakdown_tol .or. myisnan(abs(rho_new))) then
+               breakdown = .true.
+               breakdown_reason = 'r^H M^{-1} r is not positive'
+               exit
+            endif
+
+            beta = rho_new/rho
+            if (myisnan(abs(beta))) then
+               breakdown = .true.
+               breakdown_reason = 'invalid beta'
+               exit
+            endif
+            p = z + beta*p
+            rho = rho_new
+         enddo
+      endif
+
+      err = rerr
+      if (breakdown) then
+         iter = max(0, it - 1)
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: CG breakdown: ', trim(breakdown_reason), ', residual:', err
+         endif
+      else
+         iter = itmax
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: CG terminated without reaching tolerance:', err
+         endif
+      endif
+
+      deallocate(r, z, p, q, Ax)
+
+      return
+   end subroutine BPACK_Zcg_usermatvec_precon
+
+
    !!!>**** dispatch usermatvec iterative solves according to option%iter_solver
    subroutine BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       implicit none
@@ -1455,6 +1626,9 @@ contains
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (IR)
          call BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (CG)
+         call BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (TFQMR)
          call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
@@ -2323,6 +2497,52 @@ contains
    end subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon
 
 
+   !!!>**** tensor callback adapter for the shared preconditioned CG implementation
+   subroutine BPACK_MD_Zcg_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, &
+      err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::Ndim, ntotal
+      integer::iter, nn_loc_MD(Ndim), nn_loc
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+      call BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+         blackbox_MVP_adapter, blackbox_precon_MVP_adapter, ptree, option, stats, ker)
+
+      return
+
+   contains
+
+      subroutine blackbox_MVP_adapter(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+
+         call blackbox_MVP(Ndim, trans, nn_loc_MD, nn_loc_MD, num_vect, Vin, Vout, ker)
+      end subroutine blackbox_MVP_adapter
+
+      subroutine blackbox_precon_MVP_adapter(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+
+         call blackbox_precon_MVP(Ndim, trans, nn_loc_MD, nn_loc_MD, num_vect, Vin, Vout, ker)
+      end subroutine blackbox_precon_MVP_adapter
+
+   end subroutine BPACK_MD_Zcg_usermatvec_precon
+
+
    !!!>**** dispatch tensor usermatvec iterative solves according to option%iter_solver
    subroutine BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       implicit none
@@ -2344,6 +2564,9 @@ contains
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (IR)
          call BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (CG)
+         call BPACK_MD_Zcg_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (TFQMR)
          call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &

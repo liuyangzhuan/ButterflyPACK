@@ -2332,19 +2332,15 @@ void apply_diagonal_solve(
             throw std::runtime_error("X_RR Bunch-Kaufman solve is missing pivot data");
         }
 
-        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            char uplo = 'L';
-            zsytrs_(&uplo, &n, &nrhs,
-                    X_RR->data.data(), &lda,
-                    const_cast<int*>(X_RR_pivots->data()),
-                    x_S.data(), &ldb, &info);
-        } else {
-            throw std::runtime_error("BUNCH_KAUFMAN format only supported for complex<double>");
-        }
+        char uplo = 'L';
+        sytrs_(&uplo, &n, &nrhs,
+               X_RR->data.data(), &lda, X_RR_pivots->data(),
+               x_S.data(), &ldb, &info);
 
         if (info != 0) {
             throw std::runtime_error(
-                "Diagonal solve (zsytrs) failed with info = " + std::to_string(info));
+                "Bunch-Kaufman diagonal solve failed with info = " +
+                std::to_string(info));
         }
     } else {
         throw std::runtime_error("Unsupported X_RR format for diagonal solve");

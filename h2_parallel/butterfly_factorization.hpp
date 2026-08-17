@@ -108,6 +108,41 @@ inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_
     }
 }
 
+template<typename DataType>
+inline void accumulate_logdet_lu(const DataType* A, int64_t r, int64_t lda,
+                                 const std::vector<int>& pivots,
+                                 double& logabs, double& arg,
+                                 double thresh = 1e-14) {
+    if (pivots.size() != static_cast<size_t>(r)) {
+        throw std::runtime_error(
+            "accumulate_logdet_lu: pivot count (" + std::to_string(pivots.size()) +
+            ") does not match matrix size (" + std::to_string(r) + ")");
+    }
+
+    for (int64_t k = 0; k < r; ++k) {
+        const DataType diagonal = A[k + k * lda];
+        const double magnitude = std::abs(diagonal);
+        if (magnitude <= thresh) {
+            throw std::runtime_error(
+                "accumulate_logdet_lu: singular/near-singular pivot (|u_kk| = " +
+                std::to_string(magnitude) + ")");
+        }
+
+        const int pivot = pivots[static_cast<size_t>(k)];
+        if (pivot < 1 || pivot > r) {
+            throw std::runtime_error(
+                "accumulate_logdet_lu: invalid LAPACK pivot " +
+                std::to_string(pivot) + " at index " + std::to_string(k));
+        }
+
+        logabs += std::log(magnitude);
+        arg += std::arg(diagonal);
+        if (pivot != k + 1) {
+            arg += std::acos(-1.0);
+        }
+    }
+}
+
 
 template<typename CoordType, typename DataType>
 void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
@@ -158,10 +193,10 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
                     // compute log|det| and phase for each box
                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
                         throw std::runtime_error(
-                            "logdet: CHOLESKY_L not implemented yet (only BUNCH_KAUFMAN is supported)");
+                            "logdet: CHOLESKY_L is not implemented yet");
                     } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
-                        throw std::runtime_error(
-                            "logdet: LU_FACTORED not implemented yet (only BUNCH_KAUFMAN is supported)");
+                        accumulate_logdet_lu(
+                            A, r, lda, box.X_RR_pivots, t_logabs, t_arg);
                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
                         if (box.X_RR_pivots.size() != static_cast<size_t>(r)) {
                             throw std::runtime_error(
@@ -199,9 +234,12 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
         if (rb.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
             accumulate_logdet_bunch_kaufman(rb.X_RR.data.data(), rb.X_RR.rows, rb.X_RR.rows,
                                             rb.X_RR_pivots, logabs_local, arg_local);
+        } else if (rb.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+            accumulate_logdet_lu(rb.X_RR.data.data(), rb.X_RR.rows, rb.X_RR.rows,
+                                 rb.X_RR_pivots, logabs_local, arg_local);
         } else {
             throw std::runtime_error(
-                "logdet (root): only BUNCH_KAUFMAN is supported for now (got CHOLESKY_L/LU_FACTORED)");
+                "logdet (root): unsupported X_RR factorization format");
         }
     }
 
@@ -608,7 +646,7 @@ void factorize_CA_level(
  * @param tolerance ID tolerance
  * @param is_symmetric Matrix symmetry flag
  * @param is_hermitian Matrix Hermitian flag
- * @param factorization_method Cholesky or None
+ * @param factorization_method Dense diagonal-block factorization method
  * @param unit_proxy_points Unit sphere proxy points
  * @param num_proxy Number of proxy points
  * @param proxy_radius Proxy sphere radius multiplier
@@ -649,9 +687,21 @@ void hierarchical_factorization_parallel(
         smallest_active_rank(tree->levels[leaf_level]);
     
     if (print_summary && rank == factorization_header_rank) {
-        const char* factorization_name =
-            factorization_method == FactorizationMethod::CHOLESKY ? "Cholesky" :
-            factorization_method == FactorizationMethod::LU ? "LU" : "None";
+        const char* factorization_name = "Unknown";
+        switch (factorization_method) {
+            case FactorizationMethod::CHOLESKY:
+                factorization_name = "Cholesky";
+                break;
+            case FactorizationMethod::LU:
+                factorization_name = "LU";
+                break;
+            case FactorizationMethod::BUNCH_KAUFMAN:
+                factorization_name = "Bunch-Kaufman";
+                break;
+            case FactorizationMethod::NONE:
+                factorization_name = "None";
+                break;
+        }
         std::cout << "\n========================================" << std::endl;
         std::cout << "Hierarchical Factorization (Parallel)" << std::endl;
         std::cout << "========================================" << std::endl;
@@ -1556,36 +1606,37 @@ void hierarchical_factorization_parallel(
                 std::cout << "  ✓ Root LU factorization complete" << std::endl;
             }
 
-        } else if (factorization_method == FactorizationMethod::COMPLEX_SYM) {
-            if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                root_box.X_RR.data = root_box.schur_complement.data;
-                root_box.X_RR_pivots.resize(static_cast<size_t>(n));
+        } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
+            root_box.X_RR.data = root_box.schur_complement.data;
+            root_box.X_RR_pivots.resize(static_cast<size_t>(n));
 
-                char uplo = 'L';
-                int nn = n;
-                int lwork = -1;
-                int info = 0;
-                std::vector<DataType> work(1);
-                zsytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
-                lwork = static_cast<int>(work[0].real());
-                work.resize(static_cast<size_t>(lwork));
-                zsytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
+            char uplo = 'L';
+            int nn = n;
+            int lwork = -1;
+            int info = 0;
+            std::vector<DataType> work(1);
+            sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
+                   root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
+            if (info != 0) {
+                throw std::runtime_error(
+                    "hierarchical_factorization_parallel: Bunch-Kaufman root workspace query failed with INFO = " +
+                    std::to_string(info));
+            }
+            lwork = std::max(1, static_cast<int>(std::real(work[0])));
+            work.resize(static_cast<size_t>(lwork));
+            sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
+                   root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
 
-                if (info != 0) {
-                    throw std::runtime_error(
-                        "hierarchical_factorization_parallel: Bunch-Kaufman factorization of root failed at pivot " +
-                        std::to_string(info));
-                }
+            if (info != 0) {
+                throw std::runtime_error(
+                    "hierarchical_factorization_parallel: Bunch-Kaufman factorization of root failed at pivot " +
+                    std::to_string(info));
+            }
 
-                root_box.X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
+            root_box.X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
 
-                if (print_detail && rank == root_print_rank) {
-                    std::cout << "  ✓ Root Bunch-Kaufman factorization complete" << std::endl;
-                }
-            } else {
-                throw std::runtime_error("COMPLEX_SYM factorization only supported for complex<double>");
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root Bunch-Kaufman factorization complete" << std::endl;
             }
 
         } else {
@@ -1729,9 +1780,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   MPI_Comm_rank(solver->comm, &rank);
 
   const auto factorization_method =
-    (butterfly::is_complex_v<DataType>)
-      ? fmm::FactorizationMethod::COMPLEX_SYM
-      : fmm::FactorizationMethod::LU;
+    fmm::FactorizationMethod::BUNCH_KAUFMAN;
   fmm::HierarchicalFactorization<CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
     solver->options.N,
     fmm::MatrixProperty::SYMMETRIC,

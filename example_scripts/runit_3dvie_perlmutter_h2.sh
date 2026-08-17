@@ -67,4 +67,4 @@ ELEM_EXTRACT=0
 nmpi=64
 h=0.00260416666
 omega=4.71238898038469
-srun --export=ALL -n ${nmpi} -N 64 --cpu-bind=none /usr/bin/time -f "MaxRSS=%M KB" ./EXAMPLE/cvie3d_h2  --ivelo 9 --scaleGreen 0 --omega $omega --h $h --x0max 1.0 --y0max 1.0 --z0max 1.0 --L 1.0 --H  1.0 --W 1.0  --vs 1 --shape 4 --tol_comp $tols2s --tol_comp_s2s $tols2s --format_s2s $format --sym 1 --reduction_threshold 8 --CA_level "$CA_LEVEL" --Nmin_leaf 216 --precon 1 --elem_extract "$ELEM_EXTRACT" --verbosity 1 --lrlevel 0 | tee vie3d_h2_384_3_calv_${CA_LEVEL}.log
+srun --export=ALL -n ${nmpi} -N 64 --cpu-bind=none /usr/bin/time -f "MaxRSS=%M KB" ./EXAMPLE/cvie3d_h2  --ivelo 9 --scaleGreen 0 --omega $omega --h $h --x0max 1.0 --y0max 1.0 --z0max 1.0 --L 1.0 --H  1.0 --W 1.0  --vs 1 --shape 4 --tol_comp $tols2s --tol_comp_s2s $tols2s --format_s2s $format --sym 1 --reduction_threshold 8 --CA_level "$CA_LEVEL" --Nmin_leaf 216 --precon 1 --elem_extract "$ELEM_EXTRACT" --verbosity 1 --lrlevel 0 |& tee vie3d_h2_384_3_calv_${CA_LEVEL}.log

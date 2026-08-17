@@ -222,7 +222,7 @@ enum class MatrixProperty {
 enum class FactorizationMethod {
     CHOLESKY,    ///< Cholesky factorization (for SPD matrices)
     LU,          ///< LU factorization with pivoting
-    COMPLEX_SYM, ///< Bunch-Kaufman for complex symmetric matrices (A = P*L*D*L^T*P^T)
+    BUNCH_KAUFMAN, ///< Bunch-Kaufman for symmetric matrices (A = P*L*D*L^T*P^T)
     NONE         ///< Explicit inverse (no factorization)
 };
 
@@ -343,25 +343,21 @@ void apply_right_inverse_in_place(
         solve_lu_factored_system_in_place(
             inverse_or_factor, pivots, trans, transposed.data(), n, nrhs, ldb, context);
         transpose_colmajor_back(transposed, matrix, rows, cols);
-    } else if (factorization_method == FactorizationMethod::COMPLEX_SYM) {
-        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            std::vector<DataType> transposed = transpose_colmajor_copy(matrix, rows, cols);
-            const int n = static_cast<int>(cols);
-            const int nrhs = static_cast<int>(rows);
-            const int ldb = n;
-            char uplo = 'L';
-            int info = 0;
-            zsytrs_(&uplo, &n, &nrhs,
-                    inverse_or_factor.data.data(), &n,
-                    const_cast<int*>(pivots.data()),
-                    transposed.data(), &ldb, &info);
-            if (info != 0)
-                throw std::runtime_error(std::string(context) +
-                    ": zsytrs right-inverse failed with INFO = " + std::to_string(info));
-            transpose_colmajor_back(transposed, matrix, rows, cols);
-        } else {
-            throw std::runtime_error("COMPLEX_SYM factorization only supported for complex<double>");
-        }
+    } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
+        std::vector<DataType> transposed = transpose_colmajor_copy(matrix, rows, cols);
+        const int n = static_cast<int>(cols);
+        const int nrhs = static_cast<int>(rows);
+        const int ldb = n;
+        char uplo = 'L';
+        int info = 0;
+        sytrs_(&uplo, &n, &nrhs,
+               inverse_or_factor.data.data(), &n,
+               pivots.data(), transposed.data(), &ldb, &info);
+        if (info != 0)
+            throw std::runtime_error(std::string(context) +
+                ": Bunch-Kaufman right-inverse failed with INFO = " +
+                std::to_string(info));
+        transpose_colmajor_back(transposed, matrix, rows, cols);
     } else if (factorization_method == FactorizationMethod::NONE) {
         std::vector<DataType> temp = matrix;
         int m = static_cast<int>(rows);
@@ -421,23 +417,19 @@ void apply_left_inverse_in_place(
         char trans = 'N';
         solve_lu_factored_system_in_place(
             inverse_or_factor, pivots, trans, matrix.data(), n, nrhs, ldb, context);
-    } else if (factorization_method == FactorizationMethod::COMPLEX_SYM) {
-        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            const int n = static_cast<int>(rows);
-            const int nrhs = static_cast<int>(cols);
-            const int ldb = n;
-            char uplo = 'L';
-            int info = 0;
-            zsytrs_(&uplo, &n, &nrhs,
-                    inverse_or_factor.data.data(), &n,
-                    const_cast<int*>(pivots.data()),
-                    matrix.data(), &ldb, &info);
-            if (info != 0)
-                throw std::runtime_error(std::string(context) +
-                    ": zsytrs left-inverse failed with INFO = " + std::to_string(info));
-        } else {
-            throw std::runtime_error("COMPLEX_SYM factorization only supported for complex<double>");
-        }
+    } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
+        const int n = static_cast<int>(rows);
+        const int nrhs = static_cast<int>(cols);
+        const int ldb = n;
+        char uplo = 'L';
+        int info = 0;
+        sytrs_(&uplo, &n, &nrhs,
+               inverse_or_factor.data.data(), &n,
+               pivots.data(), matrix.data(), &ldb, &info);
+        if (info != 0)
+            throw std::runtime_error(std::string(context) +
+                ": Bunch-Kaufman left-inverse failed with INFO = " +
+                std::to_string(info));
     } else if (factorization_method == FactorizationMethod::NONE) {
         std::vector<DataType> temp = matrix;
         int m = static_cast<int>(rows);
@@ -538,6 +530,10 @@ public:
                 throw std::invalid_argument(
                     "Cholesky factorization requires symmetric or Hermitian matrix property");
             }
+        } else if (factorization_type == FactorizationMethod::BUNCH_KAUFMAN &&
+                   prop != MatrixProperty::SYMMETRIC) {
+            throw std::invalid_argument(
+                "Bunch-Kaufman SYTRF requires a transpose-symmetric matrix property");
         }
         
         // Set default proxy points based on dimension if not specified
@@ -6591,27 +6587,28 @@ void compute_and_modify(
 
         box->X_RR.format = MatrixStorage<DataType>::LU_FACTORED;
 
-    } else if (factorization_method == FactorizationMethod::COMPLEX_SYM) {
-        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            char uplo = 'L';
-            int n = r;
-            int lwork = -1;
-            int info = 0;
-            box->X_RR_pivots.resize(static_cast<size_t>(r));
-            std::vector<DataType> work(1);
-            zsytrf_(&uplo, &n, box->X_RR.data.data(), &n,
-                    box->X_RR_pivots.data(), work.data(), &lwork, &info);
-            lwork = static_cast<int>(work[0].real());
-            work.resize(static_cast<size_t>(lwork));
-            zsytrf_(&uplo, &n, box->X_RR.data.data(), &n,
-                    box->X_RR_pivots.data(), work.data(), &lwork, &info);
-            if (info != 0)
-                throw std::runtime_error(
-                    "Bunch-Kaufman factorization failed with INFO = " + std::to_string(info));
-            box->X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
-        } else {
-            throw std::runtime_error("COMPLEX_SYM factorization only supported for complex<double>");
+    } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
+        char uplo = 'L';
+        int n = r;
+        int lwork = -1;
+        int info = 0;
+        box->X_RR_pivots.resize(static_cast<size_t>(r));
+        std::vector<DataType> work(1);
+        sytrf_(&uplo, &n, box->X_RR.data.data(), &n,
+               box->X_RR_pivots.data(), work.data(), &lwork, &info);
+        if (info != 0) {
+            throw std::runtime_error(
+                "Bunch-Kaufman workspace query failed with INFO = " +
+                std::to_string(info));
         }
+        lwork = std::max(1, static_cast<int>(std::real(work[0])));
+        work.resize(static_cast<size_t>(lwork));
+        sytrf_(&uplo, &n, box->X_RR.data.data(), &n,
+               box->X_RR_pivots.data(), work.data(), &lwork, &info);
+        if (info != 0)
+            throw std::runtime_error(
+                "Bunch-Kaufman factorization failed with INFO = " + std::to_string(info));
+        box->X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
 
     } else if (factorization_method == FactorizationMethod::NONE) {
         int n = r;

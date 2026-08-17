@@ -138,7 +138,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_zfp",         "whether to use zfp compression"},
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
-		{"iter_solver",         "The choice of iterative solvers. 1: TFQMR, 2: GMRES or 3: IterativeRefinement)"},
+		{"iter_solver",         "The choice of iterative solvers. 1: TFQMR, 2: GMRES, 3: IterativeRefinement, or 4: CG"},
 		{"help",            "print this help message"}
 	};
 

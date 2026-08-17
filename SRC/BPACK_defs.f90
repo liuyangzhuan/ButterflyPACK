@@ -117,6 +117,7 @@ module BPACK_DEFS
     integer, parameter:: TFQMR = 1 !< use tfqmr
     integer, parameter:: GMRES = 2 !< use gmres
     integer, parameter:: IR = 3 !< use iterative refinement
+    integer, parameter:: CG = 4 !< use preconditioned conjugate gradient
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -837,7 +838,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_Rdetect  !< tolerance to detect numerical ranks
         real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
-        integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR or IterativeRefinement)
+        integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR, IterativeRefinement or CG)
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
         integer::schulzorder !< order (>=2) of schultz iteration
