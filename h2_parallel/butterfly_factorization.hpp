@@ -685,6 +685,11 @@ void hierarchical_factorization_parallel(
     int num_children = (dimension == 2) ? 4 : 8;
     const int factorization_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
+
+    if (dynamic_threading.enabled &&
+        !tree->levels[leaf_level].is_process_active) {
+        park_inactive_rank_on_service_cpu(dynamic_threading);
+    }
     
     if (print_summary && rank == factorization_header_rank) {
         const char* factorization_name = "Unknown";
@@ -1502,6 +1507,11 @@ void hierarchical_factorization_parallel(
         
         if (print_detail && rank == level_print_rank) {
             std::cout << "  Total level time: " << level_duration.count() << " ms" << std::endl;
+        }
+
+        if (dynamic_threading.enabled &&
+            level.is_process_active && !parent_level.is_process_active) {
+            park_inactive_rank_on_service_cpu(dynamic_threading);
         }
         
     }

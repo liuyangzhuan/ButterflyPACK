@@ -223,6 +223,7 @@ struct LevelThreadPlan {
     int active_slot = -1;
     int cpu_begin = -1;
     int cpu_end = -1;
+    int service_cpu = -1;
 };
 
 inline DynamicThreadingContext make_dynamic_threading_context(MPI_Comm comm) {
@@ -303,6 +304,27 @@ inline LevelThreadPlan configure_static_process_thread_plan(
     return plan;
 }
 
+inline bool park_inactive_rank_on_service_cpu(
+    const DynamicThreadingContext& context) {
+    if (!context.enabled) {
+        return false;
+    }
+
+    set_runtime_fmm_thread_count(1);
+
+    const auto& base_cpus = base_process_cpu_list();
+    const int usable_cpu_count = std::min<int>(
+        context.cpu_cap_per_node,
+        static_cast<int>(base_cpus.size()));
+    if (usable_cpu_count <= 0) {
+        return false;
+    }
+
+    const std::vector<int> service_cpu{
+        base_cpus[static_cast<std::size_t>(usable_cpu_count - 1)]};
+    return set_runtime_cpu_subset(service_cpu, 1);
+}
+
 template<typename CoordType, typename DataType>
 LevelThreadPlan configure_level_thread_plan(
     const DynamicThreadingContext& context,
@@ -341,16 +363,24 @@ LevelThreadPlan configure_level_thread_plan(
     const int usable_cpu_count = std::min<int>(
         context.cpu_cap_per_node,
         static_cast<int>(base_cpus.size()));
+    const bool reserve_service_cpu =
+        usable_cpu_count > 1 && plan.active_on_node < context.shared_size;
+    const int active_cpu_count =
+        usable_cpu_count - (reserve_service_cpu ? 1 : 0);
+    if (reserve_service_cpu) {
+        plan.service_cpu =
+            base_cpus[static_cast<std::size_t>(usable_cpu_count - 1)];
+    }
     plan.threads = std::max(
-        1, usable_cpu_count / std::max(1, plan.active_on_node));
+        1, active_cpu_count / std::max(1, plan.active_on_node));
 
-    if (usable_cpu_count > 0) {
+    if (active_cpu_count > 0) {
         int begin_offset = plan.active_slot * plan.threads;
-        if (begin_offset >= usable_cpu_count) {
-            begin_offset = usable_cpu_count - 1;
+        if (begin_offset >= active_cpu_count) {
+            begin_offset = active_cpu_count - 1;
         }
         const int end_offset = std::min(
-            begin_offset + plan.threads, usable_cpu_count);
+            begin_offset + plan.threads, active_cpu_count);
         std::vector<int> assigned_cpus(
             base_cpus.begin() + begin_offset,
             base_cpus.begin() + end_offset);
@@ -387,8 +417,11 @@ inline void print_level_thread_plan(
               << ": cpu_cap_per_node=" << context.cpu_cap_per_node
               << ", max_active_ranks_on_any_node=" << local_plan.max_active_on_any_node
               << ", active_threads=" << std::max(1, local_plan.threads)
-              << ", node_active=" << local_plan.active_on_node
-              << std::endl;
+              << ", node_active=" << local_plan.active_on_node;
+    if (local_plan.service_cpu >= 0) {
+        std::cout << ", service_cpu=" << local_plan.service_cpu;
+    }
+    std::cout << std::endl;
     if (local_plan.cpu_begin >= 0 && local_plan.cpu_end >= 0) {
         std::cout << "    Rank " << rank
                   << ": active=" << (local_plan.active ? "yes" : "no")
