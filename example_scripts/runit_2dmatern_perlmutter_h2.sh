@@ -28,8 +28,8 @@ export VECLIB_MAXIMUM_THREADS=1
 
 NMPI=256
 NNODES=16
-GRID_SIZE=4096
-TOL=1e-10
+GRID_SIZE=16384
+TOL=1e-8
 NMIN_LEAF=64
 REDUCTION_THRESHOLD=4
 CA_LEVEL=0                 # 0: full CA where eligible; 10000: full color
@@ -37,7 +37,7 @@ ELEM_EXTRACT=2
 VERBOSITY=1
 LENGTH_SCALE=0.1
 NUGGET=1e-3
-CG_TOL=1e-12
+CG_TOL=1e-13
 CG_MAX_ITERATIONS=100
 
 srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
@@ -56,7 +56,7 @@ srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
   --iter_solver 4 \
   --elem_extract "${ELEM_EXTRACT}" \
   --verbosity "${VERBOSITY}" \
-  2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}.log
+  2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}_tol${TOL}.log
 
 CA_LEVEL=10000
 
@@ -76,4 +76,4 @@ srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
   --iter_solver 4 \
   --elem_extract "${ELEM_EXTRACT}" \
   --verbosity "${VERBOSITY}" \
-  2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}.log
+  2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}_tol${TOL}.log

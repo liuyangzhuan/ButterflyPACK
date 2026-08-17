@@ -738,7 +738,7 @@ int main(int argc, char** argv) {
 
     const int64_t point_count_64 =
         checked_square(driver_options.grid_size, "grid_size");
-    const double operator_tolerance = driver_options.tolerance * 0.01;
+    const double operator_tolerance = 1e-13; //driver_options.tolerance * 0.01;
     if (!(operator_tolerance > 0.0) ||
         !std::isfinite(operator_tolerance)) {
       throw std::invalid_argument("0.01*tol_comp is outside the double range");
