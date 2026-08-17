@@ -1306,6 +1306,7 @@ contains
       option%bp_cnt_lr = 1
       option%less_adapt = 0
       option%reduction_threshold=0
+      option%CA_level=10000
 
    end subroutine SetDefaultOptions
 
@@ -1350,6 +1351,8 @@ contains
                   read (strings1, *) option%level_check
                else if (trim(strings) == '--precon') then
                   read (strings1, *) option%precon
+               else if (trim(strings) == '--ca_level' .or. trim(strings) == '--CA_level') then
+                  read (strings1, *) option%CA_level
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
                else if (trim(strings) == '--xyzsort') then
@@ -1470,6 +1473,7 @@ contains
       type(Hoption)::option, option1
 
       option1%Nmin_leaf = option%Nmin_leaf
+      option1%CA_level = option%CA_level
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS

@@ -44,9 +44,9 @@ cmake .. \
 	-DOpenMP_omp_LIBRARY=$(gcc --print-file-name=libgomp.so) \
 	-DTPL_ZFP_LIBRARIES="$ZFP_INSTALL_DIR/lib64/libzFORp.so;$ZFP_INSTALL_DIR/lib64/libzfp.so" \
 	-DTPL_ZFP_INCLUDE="$ZFP_INSTALL_DIR/include" \
-	-DTPL_BLAS_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
-	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS/build/install/lib//libopenblas.so" \
-	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/scalapack-2.2.0/build/install/lib/libscalapack.so"
+	-DTPL_BLAS_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS_sequential/build/install/lib//libopenblas.so" \
+	-DTPL_LAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/OpenBLAS_sequential/build/install/lib//libopenblas.so" \
+	-DTPL_SCALAPACK_LIBRARIES="$CFS/m2957/lib/lib/PrgEnv-gnu/scalapack-2.2.0_sequential/build/install/lib/libscalapack.so"
 	# -DTPL_BLAS_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
 	# -DTPL_LAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so" \
 	# -DTPL_SCALAPACK_LIBRARIES="$CRAY_LIBSCI_PREFIX_DIR/lib/libsci_gnu_mp.so"

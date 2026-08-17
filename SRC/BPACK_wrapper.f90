@@ -1013,6 +1013,10 @@ contains
          val_d = option%reduction_threshold
          valid_opt = 1
       endif
+      if (trim(str) == 'CA_level' .or. trim(str) == 'ca_level') then
+         val_d = option%CA_level
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1285,6 +1289,11 @@ contains
       if (trim(str) == 'reduction_threshold') then
          call c_f_pointer(val_Cptr, val_i)
          option%reduction_threshold = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'CA_level' .or. trim(str) == 'ca_level') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%CA_level = val_i
          valid_opt = 1
       endif
 

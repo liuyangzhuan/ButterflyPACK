@@ -127,6 +127,7 @@ struct ProgramOptions {
     NumberKind number_kind = NumberKind::REAL;
     int dimension = 3;
     int64_t reduction_threshold = 0;
+    int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
     int num_proxy = -1;
     double wave_divisor = 32.0;
     double length_scale = 0.1;   // Matérn length scale ℓ
@@ -146,8 +147,14 @@ enum class H2BuildState {
 template<typename CoordType, typename DataType>
 struct H2Kernel {
     using kerData = typename kernel_value_type<DataType>::type;
+    using BlockKernel = void (*)(
+        int*, int*, int*, int64_t*, int*, int*, kerData*,
+        int*, int*, int*, int*, int*, void*);
+
     void (*kernel)(int*, int*, kerData*, void*) = nullptr;
+    BlockKernel block_kernel = nullptr;
     void* quant = nullptr;
+    int block_callback_pid = 0;
     mutable std::vector<double> entryeval_time_per_thread;
 
 
@@ -175,16 +182,73 @@ struct H2Kernel {
     void evaluate_block_by_index(const int64_t* x_indices, int64_t x_size,
                                  const int64_t* y_indices, int64_t y_size,
                                  DataType* A, int64_t lda) const {
-        
-        
+        if (x_size < 0 || y_size < 0 || lda < x_size) {
+            throw std::invalid_argument(
+                "H2Kernel::evaluate_block_by_index: invalid block dimensions");
+        }
+        if (x_size == 0 || y_size == 0) return;
+
         double t0 = MPI_Wtime();
-        for (int64_t j = 0; j < y_size; ++j) {
-            int n = static_cast<int>(y_indices[j]) + 1;   // 1-based column
+
+        if (block_kernel != nullptr) {
+            if (x_size > std::numeric_limits<int>::max() ||
+                y_size > std::numeric_limits<int>::max()) {
+                throw std::overflow_error(
+                    "H2Kernel::evaluate_block_by_index: callback block is too large");
+            }
+
+            std::vector<int> allrows(static_cast<size_t>(x_size));
+            std::vector<int> allcols(static_cast<size_t>(y_size));
             for (int64_t i = 0; i < x_size; ++i) {
-                int m = static_cast<int>(x_indices[i]) + 1;   // 1-based row
-                kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
+                allrows[static_cast<size_t>(i)] =
+                    static_cast<int>(x_indices[i]) + 1;
+            }
+            for (int64_t j = 0; j < y_size; ++j) {
+                allcols[static_cast<size_t>(j)] =
+                    static_cast<int>(y_indices[j]) + 1;
+            }
+
+            int ninter = 1;
+            int nallrows = static_cast<int>(x_size);
+            int nallcols = static_cast<int>(y_size);
+            int64_t nalldat_loc = x_size * y_size;
+            int rowidx = nallrows;
+            int colidx = nallcols;
+            int pgidx = 0;
+            int npmap = 1;
+            int pmaps[3] = {1, 1, block_callback_pid};
+
+            std::vector<DataType> packed;
+            DataType* output = A;
+            if (lda != x_size) {
+                packed.resize(static_cast<size_t>(nalldat_loc));
+                output = packed.data();
+            }
+
+            block_kernel(
+                &ninter, &nallrows, &nallcols, &nalldat_loc,
+                allrows.data(), allcols.data(),
+                reinterpret_cast<kerData*>(output),
+                &rowidx, &colidx, &pgidx, &npmap, pmaps, quant);
+
+            if (!packed.empty()) {
+                for (int64_t j = 0; j < y_size; ++j) {
+                    std::copy_n(
+                        packed.data() + j * x_size,
+                        x_size,
+                        A + j * lda);
+                }
+            }
+        } else {
+            for (int64_t j = 0; j < y_size; ++j) {
+                int n = static_cast<int>(y_indices[j]) + 1;   // 1-based column
+                for (int64_t i = 0; i < x_size; ++i) {
+                    int m = static_cast<int>(x_indices[i]) + 1;   // 1-based row
+                    kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
+                }
             }
         }
+
         double tf = MPI_Wtime() - t0;
         int tid = omp_get_thread_num();
         if (tid < static_cast<int>(entryeval_time_per_thread.size())) {

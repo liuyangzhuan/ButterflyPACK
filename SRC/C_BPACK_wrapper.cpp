@@ -813,16 +813,23 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double Nmin_leaf_d;
       double precon_d;
       double verbosity_d;
+      double CA_level_d;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
       c_bpack_getoption(option, "precon", &precon_d);
       c_bpack_getoption(option, "verbosity", &verbosity_d);
+      c_bpack_getoption(option, "CA_level", &CA_level_d);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
-      H2_options = butterfly::parse_program_options(Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf);
+      const int CA_level = static_cast<int>(std::llround(CA_level_d));
+      H2_options = butterfly::parse_program_options(
+          Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf, CA_level);
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
+      if (H2_options.precon == 2) {
+        H2_options.CA_level = H2_options.num_levels;
+      }
       H2_solver->options = H2_options;
     } catch (const std::exception& e) {
       if (rank == 0) {
@@ -835,7 +842,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (rank == 0 && H2_options.verbosity >= 1) {
         std::cout << "ButterflyPACK H2, number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
                   << ", dimension=" << H2_options.dimension
-                  << ", reduction_threshold=" << H2_options.reduction_threshold;
+                  << ", reduction_threshold=" << H2_options.reduction_threshold
+                  << ", CA_level=" << H2_options.CA_level;
         std::cout << std::endl;
       }
 
@@ -891,9 +899,13 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	require_symmetric_h2_option(
 	  option, H2_solver->comm, "c_bpack_construct_element_compute");
 	H2_solver->kernel.kernel = C_FuncZmn;
+	double elem_extract_d = 0.0;
+	c_bpack_getoption(option, "elem_extract", &elem_extract_d);
+	const int elem_extract = static_cast<int>(std::llround(elem_extract_d));
+	H2_solver->kernel.block_kernel =
+	  (elem_extract == 2) ? C_FuncZmnBlock : nullptr;
+	MPI_Comm_rank(MPI_COMM_WORLD, &H2_solver->kernel.block_callback_pid);
 	H2_solver->kernel.quant = C_QuantApp;
-
-	// save C_FuncZmnBlock in bmat, low priority right now
   }else{
 	c_bpack_construct_element_compute_fortran(bmat, option, stats, msh, ker, ptree, C_FuncZmn, C_FuncZmnBlock, C_QuantApp);
   }

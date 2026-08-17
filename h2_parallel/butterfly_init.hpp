@@ -36,35 +36,6 @@ inline int default_num_proxy_for_dimension(int dimension) {
     return (dimension == 2) ? 32 : 256;
 }
 
-inline int64_t is_power_of_base(int64_t value, int64_t base) {
-    if (value < 1 || base < 2) {
-        return -1;
-    }
-    double power = 0;
-    while (value % base == 0) {
-        value /= base;
-        power += 1;
-    }
-    if (value == 1) {
-      return power;
-    }
-    else {
-      return -1;
-    }
-}
-
-inline bool is_valid_reduction_threshold(int64_t reduction_threshold, int dimension) {
-    const int64_t base = (dimension == 2) ? 4 : 8;
-    return is_power_of_base(reduction_threshold, base) >= 0;
-}
-
-inline std::string reduction_threshold_pattern(int dimension) {
-    if (dimension == 2) {
-        return "4^k (4, 16, 64, 256, ...)";
-    }
-    return "8^k (8, 64, 512, 4096, ...)";
-}
-
 /**
  * @brief Derive global domain bounds from the point coordinates.
  *
@@ -143,7 +114,8 @@ inline void compute_global_bounds(const CoordType* Locations,
   // double kappa = 10.0;         // Yukawa screening parameter κ
   // int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
 inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locations, 
-  double tolerance, int64_t reduction_threshold, int64_t Nmin_leaf) {
+  double tolerance, int64_t reduction_threshold, int64_t Nmin_leaf,
+  int CA_level = 10000) {
 
     ProgramOptions h2_options;
     
@@ -207,6 +179,8 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
     if (h2_options.num_levels <= 0) {
         throw std::invalid_argument("num_levels must be positive.");
     }
+    h2_options.CA_level =
+        (CA_level < 0) ? h2_options.num_levels : CA_level;
     if (!(h2_options.tolerance > 0.0)) {
         throw std::invalid_argument("tolerance must be positive.");
     }
@@ -226,12 +200,6 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
         throw std::invalid_argument(
             "reduction_threshold must be at least " +
             std::to_string(min_reduction_threshold_for_dimension(h2_options.dimension)) +
-            " for dimension " + std::to_string(h2_options.dimension) + ".");
-    }
-    if (!is_valid_reduction_threshold(h2_options.reduction_threshold, h2_options.dimension)) {
-        throw std::invalid_argument(
-            "reduction_threshold must be " +
-            reduction_threshold_pattern(h2_options.dimension) +
             " for dimension " + std::to_string(h2_options.dimension) + ".");
     }
     if (h2_options.num_proxy < -1) {
@@ -380,7 +348,8 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
           bounds,
           options.dimension,
           H2_solver->comm,
-          options.reduction_threshold, 
+          options.reduction_threshold,
+          options.CA_level,
           idx_map));
 
   H2_solver->tree = std::move(tree); 

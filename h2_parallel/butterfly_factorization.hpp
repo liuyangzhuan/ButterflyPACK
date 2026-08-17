@@ -216,6 +216,372 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
     }
 }
 
+template<typename CoordType, typename DataType, typename KernelType>
+void factorize_CA_level(
+    fmm::ParallelTree<CoordType, DataType>* tree,
+    int current_level,
+    KernelType* kernel,
+    double tolerance,
+    bool is_symmetric,
+    bool is_hermitian,
+    FactorizationMethod factorization_method,
+    const std::vector<CoordType>& unit_proxy_points,
+    int num_proxy,
+    CoordType proxy_radius,
+    int64_t& total_skeleton,
+    int64_t& total_redundant,
+    int64_t& local_max_skel,
+    bool print_detail,
+    int level_print_rank) {
+    auto& level = tree->levels[current_level];
+    const int dimension = tree->dimension;
+    const int num_waves = 1 << dimension;
+
+    std::vector<std::string> group_names;
+    std::vector<const std::vector<int64_t>*> group_lists;
+    std::vector<int64_t> boundary;
+    std::vector<int64_t> interior;
+    std::vector<int64_t> blue_orange;
+
+    interior.reserve(level.interior_id.size());
+    for (int64_t local_idx : level.interior_id) {
+        interior.push_back(local_idx + level.local_morton_start);
+    }
+
+    if (level.num_active_processes == 1) {
+        boundary.reserve(level.boundary_id.size());
+        for (int64_t local_idx : level.boundary_id) {
+            boundary.push_back(local_idx + level.local_morton_start);
+        }
+        group_names = {"boundary", "interior"};
+        group_lists = {&boundary, &interior};
+    } else {
+        blue_orange = level.blue;
+        blue_orange.insert(
+            blue_orange.end(), level.orange.begin(), level.orange.end());
+        group_names.push_back("blue/orange");
+        group_lists.push_back(&blue_orange);
+        if (dimension == 3) {
+            group_names.push_back("purple");
+            group_lists.push_back(&level.purple);
+        }
+        group_names.push_back("green");
+        group_lists.push_back(&level.green);
+        group_names.push_back("interior");
+        group_lists.push_back(&interior);
+    }
+
+    for (size_t group_idx = 0; group_idx < group_names.size(); ++group_idx) {
+        const std::string& group_name = group_names[group_idx];
+        const auto& group = *group_lists[group_idx];
+        if (print_detail && tree->mpi_rank == level_print_rank) {
+            std::cout << "  Processing CA " << group_name << " group ("
+                      << group.size() << " boxes)..." << std::endl;
+        }
+
+        std::vector<std::vector<int64_t>> waves(
+            static_cast<size_t>(num_waves));
+        for (int64_t morton : group) {
+            waves[static_cast<size_t>(morton & (num_waves - 1))].push_back(morton);
+        }
+
+        if (group_name == "interior") {
+            clear_ghosts(level);
+        }
+
+        for (const auto& wave : waves) {
+            if (wave.empty()) continue;
+            std::unordered_set<int64_t> wave_boxes(wave.begin(), wave.end());
+            for (int64_t morton : wave) {
+                auto* box = level.find_local_box(morton);
+                if (box == nullptr) box = level.find_ghost_box(morton);
+                if (box == nullptr) continue;
+                for (int64_t neighbor : box->one_hop) {
+                    if (neighbor != morton && wave_boxes.count(neighbor) != 0) {
+                        throw std::runtime_error(
+                            "CA wave contains one-hop neighbors at level " +
+                            std::to_string(current_level));
+                    }
+                }
+            }
+
+            const bool use_owner_deferred_xnn =
+                is_symmetric && !is_hermitian;
+            const int max_wave_threads = std::max(1, omp_get_max_threads());
+            std::vector<std::vector<int64_t>> thread_xnn_candidate_boxes;
+            std::vector<size_t> candidate_box_offsets;
+            std::vector<int64_t> wave_xnn_candidate_boxes;
+            std::vector<std::vector<DeferredXnnTargetKey>>
+                wave_xnn_mirror_targets;
+            if (use_owner_deferred_xnn) {
+                thread_xnn_candidate_boxes.resize(
+                    static_cast<size_t>(max_wave_threads));
+                candidate_box_offsets.resize(
+                    thread_xnn_candidate_boxes.size() + 1, 0);
+            }
+
+            std::exception_ptr wave_exception;
+            std::mutex wave_exception_mutex;
+            std::atomic<bool> wave_failed{false};
+
+            #pragma omp parallel default(shared) if (wave.size() > 1)
+            {
+                FactorizationThreadScratch<CoordType, DataType> scratch;
+                #pragma omp for schedule(static)
+                for (int64_t idx = 0; idx < static_cast<int64_t>(wave.size()); ++idx) {
+                    if (wave_failed.load(std::memory_order_relaxed)) continue;
+                    try {
+                        const int64_t morton = wave[static_cast<size_t>(idx)];
+                        auto* box = level.find_local_box(morton);
+                        if (box == nullptr) box = level.find_ghost_box(morton);
+                        if (box == nullptr) {
+                            throw std::runtime_error(
+                                "CA factorization cannot resolve Morton box " +
+                                std::to_string(morton));
+                        }
+
+                        gather_id_workspace(
+                            box, level, kernel,
+                            unit_proxy_points.data(), num_proxy,
+                            proxy_radius, is_symmetric,
+                            scratch.workspace, scratch.workspace_rows,
+                            scratch.workspace_cols, 0, box->on_boundary,
+                            /*use_CA_boundary_semantics=*/true);
+                        compute_and_modify(
+                            dimension, box, level, kernel, scratch,
+                            tolerance, is_symmetric, is_hermitian,
+                            static_cast<PendingFactorUpdates<DataType>*>(nullptr),
+                            factorization_method, use_owner_deferred_xnn);
+                    } catch (...) {
+                        if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
+                            std::lock_guard<std::mutex> lock(wave_exception_mutex);
+                            wave_exception = std::current_exception();
+                        }
+                    }
+                }
+            }
+
+            if (wave_exception) std::rethrow_exception(wave_exception);
+
+            for (int64_t morton : wave) {
+                level.eliminated_boxes.insert(morton);
+            }
+            slice_far_field_blocks(level, is_symmetric, is_hermitian);
+
+            if (use_owner_deferred_xnn) {
+                std::exception_ptr candidate_exception;
+                std::mutex candidate_exception_mutex;
+                std::atomic<bool> candidate_failed{false};
+
+                #pragma omp parallel default(shared) if (wave.size() > 1)
+                {
+                    const int tid = omp_get_thread_num();
+                    auto& local_candidates =
+                        thread_xnn_candidate_boxes[static_cast<size_t>(tid)];
+
+                    #pragma omp for schedule(static)
+                    for (int64_t idx = 0;
+                         idx < static_cast<int64_t>(wave.size());
+                         ++idx) {
+                        if (candidate_failed.load(std::memory_order_relaxed)) {
+                            continue;
+                        }
+                        try {
+                            const int64_t morton =
+                                wave[static_cast<size_t>(idx)];
+                            auto* source_box = level.find_local_box(morton);
+                            if (source_box == nullptr) {
+                                source_box = level.find_ghost_box(morton);
+                            }
+                            if (source_box == nullptr) continue;
+
+                            collect_owner_deferred_xnn_candidates_for_source_box(
+                                source_box, level, wave_boxes,
+                                local_candidates,
+                                /*include_ghosts=*/true);
+                        } catch (...) {
+                            if (!candidate_failed.exchange(
+                                    true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(
+                                    candidate_exception_mutex);
+                                candidate_exception = std::current_exception();
+                            }
+                        }
+                    }
+                }
+
+                if (candidate_exception) {
+                    std::rethrow_exception(candidate_exception);
+                }
+
+                for (size_t tid = 0;
+                     tid < thread_xnn_candidate_boxes.size();
+                     ++tid) {
+                    candidate_box_offsets[tid + 1] =
+                        candidate_box_offsets[tid] +
+                        thread_xnn_candidate_boxes[tid].size();
+                }
+                wave_xnn_candidate_boxes.resize(
+                    candidate_box_offsets.back());
+                for (size_t tid = 0;
+                     tid < thread_xnn_candidate_boxes.size();
+                     ++tid) {
+                    size_t out_idx = candidate_box_offsets[tid];
+                    for (int64_t candidate :
+                         thread_xnn_candidate_boxes[tid]) {
+                        wave_xnn_candidate_boxes[out_idx++] = candidate;
+                    }
+                }
+                std::sort(
+                    wave_xnn_candidate_boxes.begin(),
+                    wave_xnn_candidate_boxes.end());
+                wave_xnn_candidate_boxes.erase(
+                    std::unique(
+                        wave_xnn_candidate_boxes.begin(),
+                        wave_xnn_candidate_boxes.end()),
+                    wave_xnn_candidate_boxes.end());
+                wave_xnn_mirror_targets.resize(
+                    wave_xnn_candidate_boxes.size());
+
+                std::exception_ptr owner_exception;
+                std::mutex owner_exception_mutex;
+                std::atomic<bool> owner_failed{false};
+
+                #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
+                {
+                    DeferredXnnOwnerScratch<DataType> owner_scratch;
+
+                    #pragma omp for schedule(static)
+                    for (int64_t idx = 0;
+                         idx < static_cast<int64_t>(
+                                   wave_xnn_candidate_boxes.size());
+                         ++idx) {
+                        if (owner_failed.load(std::memory_order_relaxed)) {
+                            continue;
+                        }
+                        try {
+                            const int64_t candidate =
+                                wave_xnn_candidate_boxes[
+                                    static_cast<size_t>(idx)];
+                            apply_owner_deferred_xnn_updates_for_candidate_box(
+                                candidate, level, kernel, wave_boxes,
+                                owner_scratch,
+                                wave_xnn_mirror_targets[
+                                    static_cast<size_t>(idx)],
+                                static_cast<PendingFactorUpdates<DataType>*>(
+                                    nullptr),
+                                /*include_ghosts=*/true);
+                        } catch (...) {
+                            if (!owner_failed.exchange(
+                                    true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(
+                                    owner_exception_mutex);
+                                owner_exception = std::current_exception();
+                            }
+                        }
+                    }
+                }
+
+                if (owner_exception) {
+                    std::rethrow_exception(owner_exception);
+                }
+
+                std::exception_ptr mirror_exception;
+                std::mutex mirror_exception_mutex;
+                std::atomic<bool> mirror_failed{false};
+
+                #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
+                {
+                    #pragma omp for schedule(static)
+                    for (int64_t idx = 0;
+                         idx < static_cast<int64_t>(
+                                   wave_xnn_candidate_boxes.size());
+                         ++idx) {
+                        if (mirror_failed.load(std::memory_order_relaxed)) {
+                            continue;
+                        }
+                        try {
+                            const int64_t candidate =
+                                wave_xnn_candidate_boxes[
+                                    static_cast<size_t>(idx)];
+                            auto* candidate_box =
+                                level.find_local_box(candidate);
+                            if (candidate_box == nullptr) {
+                                candidate_box =
+                                    level.find_ghost_box(candidate);
+                            }
+                            if (candidate_box == nullptr) continue;
+
+                            apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
+                                candidate_box,
+                                wave_xnn_mirror_targets[
+                                    static_cast<size_t>(idx)],
+                                level,
+                                /*include_ghosts=*/true);
+                        } catch (...) {
+                            if (!mirror_failed.exchange(
+                                    true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(
+                                    mirror_exception_mutex);
+                                mirror_exception = std::current_exception();
+                            }
+                        }
+                    }
+                }
+
+                if (mirror_exception) {
+                    std::rethrow_exception(mirror_exception);
+                }
+
+                std::exception_ptr finalize_exception;
+                std::mutex finalize_exception_mutex;
+                std::atomic<bool> finalize_failed{false};
+
+                #pragma omp parallel default(shared) if (wave.size() > 1)
+                {
+                    #pragma omp for schedule(static)
+                    for (int64_t idx = 0;
+                         idx < static_cast<int64_t>(wave.size());
+                         ++idx) {
+                        if (finalize_failed.load(std::memory_order_relaxed)) {
+                            continue;
+                        }
+                        try {
+                            const int64_t morton =
+                                wave[static_cast<size_t>(idx)];
+                            auto* source_box = level.find_local_box(morton);
+                            if (source_box == nullptr) {
+                                source_box = level.find_ghost_box(morton);
+                            }
+                            if (source_box == nullptr) continue;
+                            finalize_deferred_xnn_source_box(source_box);
+                        } catch (...) {
+                            if (!finalize_failed.exchange(
+                                    true, std::memory_order_relaxed)) {
+                                std::lock_guard<std::mutex> lock(
+                                    finalize_exception_mutex);
+                                finalize_exception =
+                                    std::current_exception();
+                            }
+                        }
+                    }
+                }
+
+                if (finalize_exception) {
+                    std::rethrow_exception(finalize_exception);
+                }
+            }
+        }
+    }
+
+    for (const auto& box : level.local_boxes) {
+        total_skeleton += static_cast<int64_t>(box.skeleton_indices.size());
+        total_redundant += static_cast<int64_t>(box.redundant_indices.size());
+        local_max_skel = std::max<int64_t>(
+            local_max_skel, box.skeleton_indices.size());
+    }
+}
+
 /**
  * @brief Hierarchical factorization routine (parallel)
  * 
@@ -330,6 +696,23 @@ void hierarchical_factorization_parallel(
             level_thread_plan = configure_level_thread_plan(
                 dynamic_threading, level_comm, level);
         }
+        const bool CA_requested = tree->level_requests_CA(current_level);
+        const bool use_CA_level = tree->level_uses_CA(current_level);
+
+        if (level.is_process_active && use_CA_level) {
+            segment_start = clock::now();
+            gather_CA_factorization_data(
+                tree, current_level, level_comm,
+                is_symmetric && !is_hermitian);
+            const auto gather_duration = clock::now() - segment_start;
+            level_data_exchange += gather_duration;
+            if (print_detail && rank == level_print_rank) {
+                std::cout << "  CA ghost/assisting gather time: "
+                          << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 gather_duration).count()
+                          << " ms" << std::endl;
+            }
+        }
 
         // declare locks
         std::unordered_map<int64_t, omp_lock_t*> box_locks;
@@ -340,6 +723,13 @@ void hierarchical_factorization_parallel(
                 auto* lock = new omp_lock_t;
                 omp_init_lock(lock);
                 box_locks[box.morton_index] = lock;
+            }
+            if (use_CA_level) {
+                for (auto& box : level.ghost_boxes) {
+                    auto* lock = new omp_lock_t;
+                    omp_init_lock(lock);
+                    box_locks[box.morton_index] = lock;
+                }
             }
             
             {
@@ -366,6 +756,17 @@ void hierarchical_factorization_parallel(
             rank,
             level_thread_plan,
             print_detail);
+        if (print_detail && rank == level_print_rank && current_level > 1) {
+            std::cout << "  Level algorithm: "
+                      << (use_CA_level ? "CA" : "color");
+            if (CA_requested && !use_CA_level) {
+                std::cout << " (automatic CA fallback: "
+                          << tree->boxes_per_active_process(current_level)
+                          << " boxes per active process; distributed CA requires at least "
+                          << tree->minimum_CA_boxes_per_active_process() << ")";
+            }
+            std::cout << std::endl;
+        }
         
         // ===== Step 1: Gather ghost and assisting boxes =====
         
@@ -381,7 +782,15 @@ void hierarchical_factorization_parallel(
 
             auto elim_start = std::chrono::high_resolution_clock::now();
 
-            const int num_colors = 1 << dimension;
+            if (use_CA_level) {
+                factorize_CA_level(
+                    tree, current_level, kernel, tolerance,
+                    is_symmetric, is_hermitian, factorization_method,
+                    unit_proxy_points, num_proxy, proxy_radius,
+                    total_skeleton, total_redundant, local_max_skel,
+                    print_detail, level_print_rank);
+            } else {
+                const int num_colors = 1 << dimension;
 
             // ----------------------------------------------------------------
             // Build boundary color bins [0, num_colors-1]
@@ -794,14 +1203,16 @@ void hierarchical_factorization_parallel(
             level_data_exchange += final_comm_duration;
             update_neighbor_slicing_for_level(level, is_symmetric);
             
-            auto elim_end = std::chrono::high_resolution_clock::now();
-            elim_duration = std::chrono::duration_cast<std::chrono::milliseconds>(elim_end - elim_start);
-
             for (const auto& box : level.local_boxes) {
                 total_skeleton += box.skeleton_indices.size();
                 total_redundant += box.redundant_indices.size();
                 local_max_skel = std::max<int64_t>(local_max_skel, box.skeleton_indices.size());
             }
+            }
+
+            const auto elim_end = std::chrono::high_resolution_clock::now();
+            elim_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                elim_end - elim_start);
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
             if (print_detail && rank == level_print_rank) {
@@ -835,7 +1246,24 @@ void hierarchical_factorization_parallel(
         }
         
         // ===== Step 3: Gather assisting boxes post-elimination =====
-        clear_ghosts(level);
+        if (current_level > 1 && level.is_process_active && use_CA_level) {
+            segment_start = clock::now();
+            gather_CA_assisting_boxes_factorization(
+                tree, current_level, level_comm, 412);
+            const auto gather_duration = clock::now() - segment_start;
+            level_data_exchange += gather_duration;
+            update_neighbor_slicing_for_level(
+                level, is_symmetric,
+                /*use_received_assisting_skeletons=*/true);
+            if (print_detail && rank == level_print_rank) {
+                std::cout << "  CA post-elimination assisting gather time: "
+                          << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 gather_duration).count()
+                          << " ms" << std::endl;
+            }
+        } else {
+            clear_ghosts(level);
+        }
         
         
 
@@ -984,7 +1412,7 @@ void hierarchical_factorization_parallel(
         
         // Clear modified interaction matrices to free memory
         if (level.is_process_active) {
-            clear_modified_interaction_matrices(level);
+            clear_modified_interaction_matrices(level, use_CA_level);
         }
 
         // Teardown
@@ -1214,19 +1642,28 @@ void hierarchical_factorization_parallel(
 
 
     size_t local_memory_usage = 0;
+    size_t CA_halo_memory_usage = 0;
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
     
         auto& level = tree->levels[current_level];
         for (auto& box : level.local_boxes) {
             local_memory_usage += calculate_box_data_size(box);
         }
+        if (tree->level_uses_CA(current_level)) {
+            for (const auto& box : level.ghost_boxes) {
+                CA_halo_memory_usage += calculate_box_data_size(box);
+            }
+        }
     }
     if (print_detail) {
-        printf("factorization memory usage on rank %d: %.10f GB\n", rank, local_memory_usage / (1024.0 * 1024.0 * 1024.0));
+        printf("factorization memory usage on rank %d: %.10f GB local + %.10f GB CA halo\n",
+               rank,
+               local_memory_usage / (1024.0 * 1024.0 * 1024.0),
+               CA_halo_memory_usage / (1024.0 * 1024.0 * 1024.0));
         fflush(stdout);
     }
 
-    *memory_per_rank = local_memory_usage;
+    *memory_per_rank = local_memory_usage + CA_halo_memory_usage;
 
     if (print_summary) {
         double logabsdet;

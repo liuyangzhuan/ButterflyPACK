@@ -18,6 +18,7 @@
 #include <vector>
 #include <atomic>
 #include <mpi.h>
+#include <omp.h>
 // #include <complex.h>
 
 #include <sstream>
@@ -122,7 +123,7 @@ double slowness(double x,double y, double z, double slow_x0, double slow_y0,doub
   double A = -0.01;
   if(ivelo==9){
   #ifdef IVELO9_CONST
-      s0 = 1.0;
+      s0 = 3.0;
   #else
       s0 =1/((1.0/s0+g1*(x-slow_x0)+g2*(y-slow_y0)+g3*(z-slow_z0)));
   #endif
@@ -442,31 +443,89 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 }
 
 
-// Assemble a block of matrix entries from interpolated D1, D2, tau
-void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
+inline void assemble_fromD1D2Tau_s2s_with_coef(
+    double x1, double x2, double y1, double y2, double z1, double z2,
+    double coef, _Complex double* output, C_QuantApp_BF* Q) {
+    const double dx = x1 - x2;
+    const double dy = y1 - y2;
+    const double dz = z1 - z2;
+    const double r_squared = dx * dx + dy * dy + dz * dz;
 
-    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
-    double s0=2;
-    double k0 = s0*Q->_w;
-    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
-    int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
-    if(self==1){
+    if (r_squared < 1e-40) {
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
         *output = -*output*coef + 1.0/pow(Q->_h,3.0);
       }else{
         *output = -*output;
       }
-    }else{
-      double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
-      double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
-      double tau = sqrt(pow(s0,2)* (pow(x1-x2,2) + pow(y1-y2,2) + pow(z1-z2,2)));
+    } else {
+      // For d=3, D1=s0/(2*pi), D2=0, and tau=s0*r with s0=2,
+      // the Babich expression reduces exactly to exp(i*2*w*r)/(4*pi*r).
+      const double r = sqrt(r_squared);
+      const double phase = 2.0 * Q->_w * r;
+      const double amplitude = 1.0 / (4.0 * pi * r);
+      const _Complex double green =
+          amplitude * (cos(phase) + Im * sin(phase));
       if(Q->_scaleGreen==0){
-        *output =-coef*Babich(Q->_d, Q->_w, D1, D2, tau);
+        *output = -coef * green;
       }else{
-        *output = -Babich(Q->_d, Q->_w, D1, D2, tau);
+        *output = -green;
       }
     }
+}
+
+
+// Assemble a matrix entry from interpolated D1, D2, tau.
+void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, _Complex double* output, C_QuantApp_BF* Q){
+
+    double s1 = slowness(x2,y2,z2, Q->_slow_x0, Q->_slow_y0,Q->_slow_z0,Q->_ivelo,Q->_slowness_array.data(),Q->_h, round(Q->_x0max/Q->_h), round(Q->_y0max/Q->_h), round(Q->_z0max/Q->_h));
+    double s0=2;
+    double k0 = s0*Q->_w;
+    double coef = pow(k0,2.0)*(pow(s1/s0,2.0)-1);
+    assemble_fromD1D2Tau_s2s_with_coef(
+        x1, x2, y1, y2, z1, z2, coef, output, Q);
+}
+
+
+// Fill one dense S2S block in column-major order using the same entry formula
+// as C_FuncZmn_BF_S2S.
+void assemble_fromD1D2Tau_block_s2s(
+    int nr, int nc, const int* rows, const int* cols,
+  _Complex double* output, C_QuantApp_BF* Q) {
+  const double s0 = 2.0;
+  const double k0 = s0 * Q->_w;
+  const double k0_squared = pow(k0, 2.0);
+  const int nx = round(Q->_x0max / Q->_h);
+  const int ny = round(Q->_y0max / Q->_h);
+  const int nz = round(Q->_z0max / Q->_h);
+  const int64_t num_entries = static_cast<int64_t>(nr) * nc;
+  // These callbacks are usually small. Two threads help past this crossover;
+  // larger teams lose to fork/join overhead, and nested H2 regions stay serial.
+  const int callback_threads =
+      !omp_in_parallel() && omp_get_max_threads() > 1 && num_entries >= 512
+          ? 2
+          : 1;
+
+  #pragma omp parallel for schedule(static) num_threads(callback_threads) if(callback_threads > 1)
+  for (int idxc = 0; idxc < nc; ++idxc) {
+    const int n = cols[idxc] - 1;
+    const double x2 = Q->_data[n * Q->_d];
+    const double y2 = Q->_data[n * Q->_d + 1];
+    const double z2 = Q->_data[n * Q->_d + 2];
+    const double s1 = slowness(
+        x2, y2, z2, Q->_slow_x0, Q->_slow_y0, Q->_slow_z0, Q->_ivelo,
+        Q->_slowness_array.data(), Q->_h, nx, ny, nz);
+    const double coef = k0_squared * (pow(s1 / s0, 2.0) - 1);
+
+    for (int idxr = 0; idxr < nr; ++idxr) {
+      const int m = rows[idxr] - 1;
+      assemble_fromD1D2Tau_s2s_with_coef(
+          Q->_data[m * Q->_d], x2,
+          Q->_data[m * Q->_d + 1], y2,
+          Q->_data[m * Q->_d + 2], z2, coef,
+          &output[idxr + static_cast<int64_t>(idxc) * nr], Q);
+    }
+  }
 }
 
 
@@ -559,6 +618,45 @@ inline void C_FuncZmnBlock_BF_V2V(int* Ninter, int* Nallrows, int* Nallcols, int
 // The extraction sampling function wrapper required by the Fortran HODLR code
 inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows, int* allcols, _Complex double* alldat_loc, int* rowidx,int* colidx, int* pgidx, int* Npmap, int* pmaps, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+
+  int myrank = pmaps[2];
+  if (*Npmap != 1) {
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+  }
+
+  int64_t row_offset = 0;
+  int64_t col_offset = 0;
+  int64_t value_offset = 0;
+  for (int nn = 0; nn < *Ninter; ++nn) {
+    const int process_group = pgidx[nn];
+    const int nprow = pmaps[process_group];
+    const int npcol = pmaps[*Npmap + process_group];
+    const int pid = pmaps[2 * (*Npmap) + process_group];
+    const int nr = rowidx[nn];
+    const int nc = colidx[nn];
+
+    if (nprow * npcol != 1) {
+      if (myrank == 0) {
+        cerr << "C_FuncZmnBlock_BF_S2S only supports single-process blocks"
+             << endl;
+      }
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    if (*Npmap == 1 || myrank == pid) {
+      assemble_fromD1D2Tau_block_s2s(
+          nr, nc, allrows + row_offset, allcols + col_offset,
+          alldat_loc + value_offset, Q);
+      value_offset += static_cast<int64_t>(nr) * nc;
+    }
+
+    row_offset += nr;
+    col_offset += nc;
+  }
+
+  (void)Nallrows;
+  (void)Nallcols;
+  (void)Nalldat_loc;
 }
 
 
@@ -694,6 +792,7 @@ if(myrank==master_rank){
   int nshape=200;
 
   int64_t reduction_threshold = 0;
+  int CA_level = 10000;
 
   int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
 
@@ -747,6 +846,7 @@ if(myrank==master_rank){
       {"format_s2s",       required_argument, 0, 35},
       {"reduction_threshold", required_argument, 0, 36},
       {"Nmin_leaf",         required_argument, 0, 37},
+      {"CA_level",          required_argument, 0, 38},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -904,6 +1004,10 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> Nmin;
     } break;
+    case 38: {
+      std::istringstream iss(optarg);
+      iss >> CA_level;
+    } break;
     default: break;
     }
   }
@@ -913,13 +1017,9 @@ if(myrank==master_rank){
 
   double radius_max=0.3;
   double center[3]; //geometrical center of the scatterer
-  // centering scatterer for now -- Xiaomian
-  // center[0]=(x0min+x0max)/2.0;
-  // center[1]=(y0min+y0max)/2.0;
-  // center[2]=(z0min+z0max)/2.0;
-  center[0]=0.4;
-  center[1]=0.4;
-  center[2]=0.4;
+  center[0] = (x0min + x0max) / 2.0;
+  center[1] = (y0min + y0max) / 2.0;
+  center[2] = (z0min + z0max) / 2.0;
 
   slow_x0 = center[0];
   slow_y0 = center[1];
@@ -1076,6 +1176,7 @@ if(myrank==master_rank){
 	z_c_bpack_set_I_option(&option_bf, "elem_extract", elem_extract);
   // z_c_bpack_set_I_option(&option_bf, "format", 7); // not this matrix! Xiaomian
   z_c_bpack_set_I_option(&option_bf, "reduction_threshold", (int)reduction_threshold);
+  z_c_bpack_set_I_option(&option_bf, "CA_level", CA_level);
   z_c_bpack_set_option_from_command_line(argc, argv, option_bf);
 
 

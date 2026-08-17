@@ -5,6 +5,33 @@
 namespace butterfly {
 using namespace fmm;
 
+struct SolveCommunicatorSet {
+    std::vector<MPI_Comm> level;
+};
+
+template<typename CoordType, typename DataType>
+SolveCommunicatorSet make_solve_communicators(
+    ParallelTree<CoordType, DataType>* tree) {
+    SolveCommunicatorSet communicators;
+    communicators.level.assign(
+        static_cast<size_t>(tree->num_levels), MPI_COMM_NULL);
+    for (int level = 0; level < tree->num_levels; ++level) {
+        MPI_Comm_split(
+            tree->comm,
+            tree->levels[level].is_process_active ? 0 : MPI_UNDEFINED,
+            tree->mpi_rank,
+            &communicators.level[static_cast<size_t>(level)]);
+    }
+    return communicators;
+}
+
+inline void destroy_solve_communicators(
+    SolveCommunicatorSet& communicators) {
+    for (MPI_Comm& comm : communicators.level) {
+        if (comm != MPI_COMM_NULL) MPI_Comm_free(&comm);
+    }
+}
+
 // Gather local solution for both solve and mult
 // solution is stored on the left_side regardless of whether it is a solve or mult operation 
 template<typename CoordType, typename DataType> 
@@ -31,6 +58,155 @@ void gather_local_solution(ParallelTree<CoordType, DataType>* tree,
 }
 
 template<typename CoordType, typename DataType>
+std::vector<std::vector<int64_t>> make_CA_box_groups(
+    const TreeLevel<CoordType, DataType>& level,
+    int dimension,
+    bool reverse_order) {
+    std::vector<std::vector<int64_t>> groups;
+    std::vector<int64_t> interior;
+    interior.reserve(level.interior_id.size());
+    for (int64_t local_idx : level.interior_id) {
+        interior.push_back(local_idx + level.local_morton_start);
+    }
+
+    if (level.num_active_processes == 1) {
+        std::vector<int64_t> boundary;
+        boundary.reserve(level.boundary_id.size());
+        for (int64_t local_idx : level.boundary_id) {
+            boundary.push_back(local_idx + level.local_morton_start);
+        }
+        groups.push_back(std::move(boundary));
+        groups.push_back(std::move(interior));
+    } else {
+        std::vector<int64_t> blue_orange = level.blue;
+        blue_orange.insert(
+            blue_orange.end(), level.orange.begin(), level.orange.end());
+        groups.push_back(std::move(blue_orange));
+        if (dimension == 3) {
+            groups.push_back(level.purple);
+        }
+        groups.push_back(level.green);
+        groups.push_back(std::move(interior));
+    }
+
+    if (reverse_order) {
+        std::reverse(groups.begin(), groups.end());
+    }
+    return groups;
+}
+
+template<typename CoordType, typename DataType>
+SolveDataRequest<CoordType, DataType>* resolve_CA_solve_box(
+    TreeLevel<CoordType, DataType>& level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_solve_data,
+    int64_t morton,
+    bool& is_ghost) {
+    if (level.is_box_on_process(morton)) {
+        is_ghost = false;
+        return &level_solve_data[static_cast<size_t>(
+            morton - level.local_morton_start)];
+    }
+
+    auto it = level.ghost_and_assisting_box_points_for_solve_map.find(morton);
+    if (it == level.ghost_and_assisting_box_points_for_solve_map.end() ||
+        !level.is_ghost_solve[it->second]) {
+        return nullptr;
+    }
+    is_ghost = true;
+    return &level.ghost_and_assisting_boxes_for_solve[it->second];
+}
+
+template<typename CoordType, typename DataType, typename BoxOperation,
+         typename GroupComplete>
+void apply_CA_level_schedule(
+    TreeLevel<CoordType, DataType>& level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_solve_data,
+    int dimension,
+    bool reverse_order,
+    bool writes_neighbors,
+    BoxOperation&& operation,
+    GroupComplete&& group_complete) {
+    if (!level.is_process_active) return;
+
+    auto groups = make_CA_box_groups(level, dimension, reverse_order);
+    const int num_waves = 1 << dimension;
+    const int max_threads = std::max(1, omp_get_max_threads());
+
+    for (size_t group_idx = 0; group_idx < groups.size(); ++group_idx) {
+        std::vector<std::vector<int64_t>> waves(
+            static_cast<size_t>(num_waves));
+        for (int64_t morton : groups[group_idx]) {
+            waves[static_cast<size_t>(morton & (num_waves - 1))].push_back(morton);
+        }
+
+        for (int wave_step = 0; wave_step < num_waves; ++wave_step) {
+            const int wave_idx = reverse_order
+                ? num_waves - 1 - wave_step
+                : wave_step;
+            auto& wave = waves[static_cast<size_t>(wave_idx)];
+            if (wave.empty()) continue;
+
+            std::vector<PendingSolveUpdates<DataType>> thread_pending(
+                static_cast<size_t>(max_threads));
+            std::exception_ptr wave_exception;
+            std::mutex wave_exception_mutex;
+            std::atomic<bool> wave_failed{false};
+
+            #pragma omp parallel default(shared) if (wave.size() > 1)
+            {
+                const int tid = omp_get_thread_num();
+                auto& pending = thread_pending[static_cast<size_t>(tid)];
+
+                #pragma omp for schedule(static)
+                for (int64_t idx = 0;
+                     idx < static_cast<int64_t>(wave.size());
+                     ++idx) {
+                    if (wave_failed.load(std::memory_order_relaxed)) continue;
+                    try {
+                        const size_t ordered_idx = reverse_order
+                            ? wave.size() - 1 - static_cast<size_t>(idx)
+                            : static_cast<size_t>(idx);
+                        const int64_t morton = wave[ordered_idx];
+                        bool is_ghost = false;
+                        auto* solve_box = resolve_CA_solve_box(
+                            level, level_solve_data, morton, is_ghost);
+                        if (solve_box == nullptr) {
+                            throw std::runtime_error(
+                                "CA solve schedule cannot resolve Morton box " +
+                                std::to_string(morton));
+                        }
+                        operation(*solve_box, is_ghost, pending);
+                    } catch (...) {
+                        if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
+                            std::lock_guard<std::mutex> lock(
+                                wave_exception_mutex);
+                            wave_exception = std::current_exception();
+                        }
+                    }
+                }
+            }
+
+            if (wave_exception) std::rethrow_exception(wave_exception);
+
+            if (writes_neighbors) {
+                PendingSolveUpdates<DataType> merged;
+                for (int tid = 0; tid < max_threads; ++tid) {
+                    merge_pending_solve(
+                        merged, thread_pending[static_cast<size_t>(tid)]);
+                    clear_pending_solve_updates_memory(
+                        thread_pending[static_cast<size_t>(tid)]);
+                }
+                apply_pending_solve_updates_local_or_ghost(
+                    level, level_solve_data, merged);
+                clear_pending_solve_updates_memory(merged);
+            }
+        }
+
+        group_complete(group_idx, groups.size());
+    }
+}
+
+template<typename CoordType, typename DataType>
 void hierarchical_solve_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& rhs,
@@ -50,6 +226,7 @@ void hierarchical_solve_parallel(
     
     int num_levels = tree->num_levels;
     int leaf_level = num_levels - 1;
+    SolveCommunicatorSet solve_comms = make_solve_communicators(tree);
     const int solve_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
     const int solve_root_rank =
@@ -210,7 +387,33 @@ void hierarchical_solve_parallel(
            
         // }
 
-        if (level >= 2 && tree_level.is_process_active) {
+        if (level >= 2 && tree_level.is_process_active &&
+            tree->level_uses_CA(level)) {
+            get_data_start = clock::now();
+            gather_CA_boxes_solve(
+                tree, level, solve_data[level],
+                solve_comms.level[static_cast<size_t>(level)]);
+            communication_total_forward += (clock::now() - get_data_start);
+
+            apply_CA_level_schedule(
+                tree_level,
+                solve_data[level],
+                tree->dimension,
+                /*reverse_order=*/false,
+                /*writes_neighbors=*/true,
+                [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                    apply_forward_elimination(
+                        tree_level,
+                        solve_box,
+                        solve_data[level],
+                        fmm::MatrixProperty::SYMMETRIC,
+                        local_pending,
+                        is_ghost,
+                        /*defer_local_updates=*/true,
+                        /*local_or_ghost_targets_only=*/true);
+                },
+                [](size_t, size_t) {});
+        } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
             const int max_forward_threads = std::max(1, omp_get_max_threads());
 
@@ -537,7 +740,35 @@ void hierarchical_solve_parallel(
             std::cout << "    ← Scattered from level " << (level - 1) << std::endl;
         }
         
-        if (level >= 2 && tree_level.is_process_active) {
+        if (level >= 2 && tree_level.is_process_active &&
+            tree->level_uses_CA(level)) {
+            apply_CA_level_schedule(
+                tree_level,
+                solve_data[level],
+                tree->dimension,
+                /*reverse_order=*/true,
+                /*writes_neighbors=*/false,
+                [&](auto& solve_box, bool is_ghost, auto&) {
+                    apply_backward_substitution(
+                        tree_level,
+                        solve_box,
+                        solve_data[level],
+                        fmm::MatrixProperty::SYMMETRIC,
+                        is_ghost);
+                },
+                [&](size_t group_idx, size_t group_count) {
+                    if (tree_level.num_active_processes > 1 &&
+                        group_idx + 1 < group_count) {
+                        get_data_start = clock::now();
+                        gather_CA_boxes_solve(
+                            tree, level, solve_data[level],
+                            solve_comms.level[static_cast<size_t>(level)],
+                            /*assist_only=*/group_idx > 0);
+                        communication_total_backward +=
+                            (clock::now() - get_data_start);
+                    }
+                });
+        } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
             // ----------------------------------------------------------------
@@ -716,6 +947,7 @@ void hierarchical_solve_parallel(
 
     restore_base_process_affinity();
     clear_runtime_fmm_thread_count();
+    destroy_solve_communicators(solve_comms);
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
@@ -752,6 +984,7 @@ void hierarchical_mul_parallel(
 
     int num_levels = tree->num_levels;
     int leaf_level = num_levels - 1;
+    SolveCommunicatorSet solve_comms = make_solve_communicators(tree);
     const int mul_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
     const int mul_root_rank =
@@ -818,7 +1051,30 @@ void hierarchical_mul_parallel(
                       << " boxes on rank: " << rank << std::endl;
         }
 
-        if (level >= 2 && tree_level.is_process_active) {
+        if (level >= 2 && tree_level.is_process_active &&
+            tree->level_uses_CA(level)) {
+            get_data_start = clock::now();
+            gather_CA_boxes_solve(
+                tree, level, solve_data[level],
+                solve_comms.level[static_cast<size_t>(level)]);
+            communication_total_forward += (clock::now() - get_data_start);
+
+            apply_CA_level_schedule(
+                tree_level,
+                solve_data[level],
+                tree->dimension,
+                /*reverse_order=*/false,
+                /*writes_neighbors=*/false,
+                [&](auto& solve_box, bool is_ghost, auto&) {
+                    fmm::apply_mul_forward_W(
+                        tree_level,
+                        solve_box,
+                        solve_data[level],
+                        fmm::MatrixProperty::SYMMETRIC,
+                        is_ghost);
+                },
+                [](size_t, size_t) {});
+        } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
             // Build boundary-then-interior sub-wave bins (same as solve forward).
@@ -1089,7 +1345,42 @@ void hierarchical_mul_parallel(
             std::cout << "    <- Scattered from level " << (level - 1) << std::endl;
         }
 
-        if (level >= 2 && tree_level.is_process_active) {
+        if (level >= 2 && tree_level.is_process_active &&
+            tree->level_uses_CA(level)) {
+            get_data_start = clock::now();
+            gather_CA_boxes_solve(
+                tree, level, solve_data[level],
+                solve_comms.level[static_cast<size_t>(level)]);
+            communication_total_backward += (clock::now() - get_data_start);
+
+            apply_CA_level_schedule(
+                tree_level,
+                solve_data[level],
+                tree->dimension,
+                /*reverse_order=*/true,
+                /*writes_neighbors=*/true,
+                [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                    fmm::apply_mul_backward_V_with_pending(
+                        tree_level,
+                        solve_box,
+                        solve_data[level],
+                        fmm::MatrixProperty::SYMMETRIC,
+                        local_pending,
+                        is_ghost,
+                        /*local_or_ghost_targets_only=*/true);
+                },
+                [&](size_t group_idx, size_t group_count) {
+                    if (tree_level.num_active_processes > 1 &&
+                        group_idx + 1 < group_count) {
+                        get_data_start = clock::now();
+                        gather_CA_boxes_solve(
+                            tree, level, solve_data[level],
+                            solve_comms.level[static_cast<size_t>(level)]);
+                        communication_total_backward +=
+                            (clock::now() - get_data_start);
+                    }
+                });
+        } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
             std::vector<std::vector<int64_t>> color_bins(static_cast<size_t>(num_colors));
@@ -1201,6 +1492,7 @@ void hierarchical_mul_parallel(
 
     restore_base_process_affinity();
     clear_runtime_fmm_thread_count();
+    destroy_solve_communicators(solve_comms);
     destroy_dynamic_threading_context(dynamic_threading);
 }
 
