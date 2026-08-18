@@ -296,6 +296,21 @@ struct MatrixStorage {
     }
 };
 
+/**
+ * @brief One dense allocation shared by the two directed views of a symmetric edge.
+ *
+ * The physical orientation may follow either endpoint.  Replacing a block through
+ * one view can therefore move the caller's contiguous buffer directly into this
+ * object; the reciprocal view observes the transpose through its orientation bit.
+ */
+template<typename DataType>
+struct SymmetricEdgeMatrixStorage {
+    MatrixStorage<DataType> matrix;
+    bool physical_orientation;
+
+    SymmetricEdgeMatrixStorage() : physical_orientation(false) {}
+};
+
 
 /**
  * @brief Helper struct for MPI point data exchange
@@ -501,11 +516,14 @@ struct ModifiedBlock {
     int64_t neighbor_morton;           ///< Morton index of neighbor box
     bool reconstruct_A_NS_from_symmetric_pair;  ///< Halo-only transpose reconstruction flag
     MatrixStorage<DataType> A_SN;      ///< Skeleton-to-neighbor (k × n_neighbor), null if symmetric
-    MatrixStorage<DataType> A_NS;      ///< Neighbor-to-skeleton (n_neighbor × k), default storage
+    MatrixStorage<DataType> A_NS;      ///< Directed neighbor-to-skeleton storage (nonsymmetric path)
+    std::shared_ptr<SymmetricEdgeMatrixStorage<DataType>> symmetric_A_NS;
+    bool symmetric_A_NS_orientation;
     
     ModifiedBlock()
         : neighbor_morton(-1),
-          reconstruct_A_NS_from_symmetric_pair(false) {}
+          reconstruct_A_NS_from_symmetric_pair(false),
+          symmetric_A_NS_orientation(false) {}
     ~ModifiedBlock() = default;
     
     // Delete copy constructor and assignment
@@ -515,7 +533,204 @@ struct ModifiedBlock {
     // Add move constructor and move assignment
     ModifiedBlock(ModifiedBlock&&) = default;
     ModifiedBlock& operator=(ModifiedBlock&&) = default;
+
+    bool a_ns_uses_symmetric_storage() const {
+        return static_cast<bool>(symmetric_A_NS);
+    }
+
+    bool a_ns_view_is_transposed() const {
+        return symmetric_A_NS &&
+               symmetric_A_NS_orientation !=
+                   symmetric_A_NS->physical_orientation;
+    }
+
+    const MatrixStorage<DataType>& a_ns_physical_storage() const {
+        return symmetric_A_NS ? symmetric_A_NS->matrix : A_NS;
+    }
+
+    MatrixStorage<DataType>& a_ns_physical_storage() {
+        return symmetric_A_NS ? symmetric_A_NS->matrix : A_NS;
+    }
+
+    bool a_ns_is_allocated() const {
+        return a_ns_physical_storage().is_allocated();
+    }
+
+    bool a_ns_data_empty() const {
+        return a_ns_physical_storage().data.empty();
+    }
+
+    int64_t a_ns_rows() const {
+        const auto& storage = a_ns_physical_storage();
+        return a_ns_view_is_transposed() ? storage.cols : storage.rows;
+    }
+
+    int64_t a_ns_cols() const {
+        const auto& storage = a_ns_physical_storage();
+        return a_ns_view_is_transposed() ? storage.rows : storage.cols;
+    }
+
+    typename MatrixStorage<DataType>::Format a_ns_format() const {
+        return a_ns_physical_storage().format;
+    }
+
+    size_t a_ns_data_size() const {
+        return a_ns_physical_storage().data.size();
+    }
+
+    size_t a_ns_heap_bytes() const {
+        const size_t bytes =
+            a_ns_physical_storage().data.capacity() * sizeof(DataType);
+        if (!symmetric_A_NS) return bytes;
+
+        const size_t references = symmetric_A_NS.use_count();
+        return references > 0 ? bytes / references : bytes;
+    }
+
+    DataType& a_ns(int64_t row, int64_t col) {
+        auto& storage = a_ns_physical_storage();
+        return a_ns_view_is_transposed()
+            ? storage(col, row)
+            : storage(row, col);
+    }
+
+    const DataType& a_ns(int64_t row, int64_t col) const {
+        const auto& storage = a_ns_physical_storage();
+        return a_ns_view_is_transposed()
+            ? storage(col, row)
+            : storage(row, col);
+    }
+
+    std::vector<DataType> copy_a_ns_data() const {
+        const int64_t rows = a_ns_rows();
+        const int64_t cols = a_ns_cols();
+        std::vector<DataType> result(static_cast<size_t>(rows * cols));
+        for (int64_t col = 0; col < cols; ++col) {
+            for (int64_t row = 0; row < rows; ++row) {
+                result[static_cast<size_t>(row + col * rows)] =
+                    a_ns(row, col);
+            }
+        }
+        return result;
+    }
+
+    void set_a_ns_owned(
+        int64_t rows,
+        int64_t cols,
+        std::vector<DataType>&& data,
+        typename MatrixStorage<DataType>::Format format =
+            MatrixStorage<DataType>::FULL) {
+        if (!symmetric_A_NS) {
+            A_NS.set_owned(rows, cols, std::move(data), format);
+            return;
+        }
+
+        symmetric_A_NS->matrix.set_owned(
+            rows, cols, std::move(data), format);
+        symmetric_A_NS->physical_orientation = symmetric_A_NS_orientation;
+    }
+
+    void allocate_a_ns(
+        int64_t rows,
+        int64_t cols,
+        typename MatrixStorage<DataType>::Format format =
+            MatrixStorage<DataType>::FULL) {
+        if (!symmetric_A_NS) {
+            A_NS.allocate(rows, cols, format);
+            return;
+        }
+
+        symmetric_A_NS->matrix.allocate(rows, cols, format);
+        symmetric_A_NS->physical_orientation = symmetric_A_NS_orientation;
+    }
+
+    void promote_a_ns_to_symmetric_storage() {
+        if (symmetric_A_NS) return;
+
+        symmetric_A_NS =
+            std::make_shared<SymmetricEdgeMatrixStorage<DataType>>();
+        symmetric_A_NS->matrix = std::move(A_NS);
+        symmetric_A_NS->physical_orientation = false;
+        symmetric_A_NS_orientation = false;
+        A_NS = MatrixStorage<DataType>();
+    }
+
+    void share_transposed_a_ns_from(ModifiedBlock<DataType>& source) {
+        if (&source == this) {
+            throw std::runtime_error(
+                "ModifiedBlock cannot share symmetric A_NS with itself");
+        }
+
+        const int64_t current_rows = a_ns_rows();
+        const int64_t current_cols = a_ns_cols();
+        source.promote_a_ns_to_symmetric_storage();
+        if (symmetric_A_NS && symmetric_A_NS != source.symmetric_A_NS) {
+            if (a_ns_is_allocated()) {
+                throw std::runtime_error(
+                    "ModifiedBlock symmetric A_NS already belongs to another edge");
+            }
+            symmetric_A_NS.reset();
+            symmetric_A_NS_orientation = false;
+        }
+
+        const int64_t expected_rows = source.a_ns_cols();
+        const int64_t expected_cols = source.a_ns_rows();
+        if ((current_rows != 0 || current_cols != 0) &&
+            (current_rows != expected_rows || current_cols != expected_cols)) {
+            throw std::runtime_error(
+                "ModifiedBlock symmetric A_NS dimension mismatch");
+        }
+
+        symmetric_A_NS = source.symmetric_A_NS;
+        symmetric_A_NS_orientation = !source.symmetric_A_NS_orientation;
+        A_NS = MatrixStorage<DataType>();
+    }
 };
+
+template<typename DataType>
+bool share_symmetric_a_ns_pair(
+    ModifiedBlock<DataType>& first,
+    ModifiedBlock<DataType>& second) {
+    if (first.A_SN.is_allocated() || second.A_SN.is_allocated()) {
+        return false;
+    }
+
+    if (first.symmetric_A_NS && second.symmetric_A_NS) {
+        if (first.symmetric_A_NS == second.symmetric_A_NS) {
+            if (first.symmetric_A_NS_orientation ==
+                second.symmetric_A_NS_orientation) {
+                throw std::runtime_error(
+                    "Reciprocal symmetric blocks have the same orientation");
+            }
+            return true;
+        }
+
+        const bool first_allocated = first.a_ns_is_allocated();
+        const bool second_allocated = second.a_ns_is_allocated();
+        if (first_allocated && second_allocated) {
+            throw std::runtime_error(
+                "Reciprocal symmetric blocks use different edge allocations");
+        }
+        if (first_allocated) {
+            second.share_transposed_a_ns_from(first);
+            return true;
+        }
+        if (second_allocated) {
+            first.share_transposed_a_ns_from(second);
+            return true;
+        }
+    }
+
+    if (first.a_ns_is_allocated()) {
+        second.share_transposed_a_ns_from(first);
+        return true;
+    }
+    if (second.a_ns_is_allocated()) {
+        first.share_transposed_a_ns_from(second);
+        return true;
+    }
+    return false;
+}
 
 /**
  * @brief Target-owned block used by the compression-only H2 representation.
@@ -827,6 +1042,63 @@ struct TreeLevel {
 };
 
 /**
+ * @brief Coalesce reciprocal A_NS blocks into one allocation on this rank.
+ *
+ * Blocks without a resident reciprocal (for example, a purely remote edge)
+ * remain directed.  A_SN is used as the guard that keeps the future
+ * nonsymmetric representation out of this path.
+ */
+template<typename CoordType, typename DataType>
+void share_symmetric_level_edges(TreeLevel<CoordType, DataType>& level) {
+    auto find_box = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        if (auto* box = level.find_local_box(morton)) return box;
+        return level.find_ghost_box(morton);
+    };
+
+    auto share_blocks = [&](BoxData<CoordType, DataType>& box,
+                            std::vector<ModifiedBlock<DataType>>& blocks,
+                            bool near) {
+        for (auto& block : blocks) {
+            if (block.neighbor_morton < box.morton_index) continue;
+            if (block.neighbor_morton == box.morton_index) continue;
+            if (block.A_SN.is_allocated()) continue;
+
+            auto* neighbor = find_box(block.neighbor_morton);
+            if (neighbor == nullptr) continue;
+
+            auto& reciprocal_map = near
+                ? neighbor->near_field_interaction_map
+                : neighbor->far_field_interaction_map;
+            auto& reciprocal_blocks = near
+                ? neighbor->near_field_modified_interactions
+                : neighbor->far_field_modified_interactions;
+            const auto reciprocal_it = reciprocal_map.find(box.morton_index);
+            if (reciprocal_it == reciprocal_map.end()) continue;
+
+            auto& reciprocal = reciprocal_blocks[static_cast<size_t>(
+                reciprocal_it->second)];
+            if (!block.a_ns_is_allocated() &&
+                !reciprocal.a_ns_is_allocated()) {
+                continue;
+            }
+
+            if (share_symmetric_a_ns_pair(block, reciprocal)) {
+                block.reconstruct_A_NS_from_symmetric_pair = false;
+                reciprocal.reconstruct_A_NS_from_symmetric_pair = false;
+            }
+        }
+    };
+
+    auto share_box = [&](BoxData<CoordType, DataType>& box) {
+        share_blocks(box, box.near_field_modified_interactions, true);
+        share_blocks(box, box.far_field_modified_interactions, false);
+    };
+
+    for (auto& box : level.local_boxes) share_box(box);
+    for (auto& box : level.ghost_boxes) share_box(box);
+}
+
+/**
  * @brief Calculate the total memory usage of a BoxData instance in bytes.
  *
  * Accounts for all dynamically allocated storage (vectors, matrix data,
@@ -859,7 +1131,7 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
     auto modified_block_heap = [&matrix_heap](const ModifiedBlock<DataType>& mb) -> size_t {
         // sizeof(ModifiedBlock) is already counted when we account for the
         // vector<ModifiedBlock> capacity, so only count heap inside each block.
-        return matrix_heap(mb.A_SN) + matrix_heap(mb.A_NS);
+        return matrix_heap(mb.A_SN) + mb.a_ns_heap_bytes();
     };
 
     // Heap memory of a std::vector<T> (element storage only; header is inline)

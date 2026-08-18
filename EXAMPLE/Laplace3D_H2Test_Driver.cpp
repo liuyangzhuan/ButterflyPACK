@@ -522,6 +522,18 @@ int main(int argc, char** argv) {
     d_c_bpack_factor(
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree, &resources.mesh);
+
+    if (rank == 0) {
+      std::cout << "\nSolving the 3D Laplace system:" << std::endl;
+    }
+    int number_of_rhs = 1;
+    std::vector<double> rhs(static_cast<size_t>(local_points), 1.0);
+    std::vector<double> solution(static_cast<size_t>(local_points), 0.0);
+    d_c_bpack_solve(
+        solution.data(), rhs.data(), &local_points, &number_of_rhs,
+        &resources.matrix, &resources.option, &resources.stats,
+        &resources.process_tree);
+
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);
   } catch (const std::exception& error) {
     std::cerr << "Laplace3D_H2Test_Driver error on rank " << rank << ": "

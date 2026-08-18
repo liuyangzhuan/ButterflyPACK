@@ -1549,8 +1549,21 @@ contains
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
          write (*, '(A18,I8)') 'sym', option%sym
-         write (*, '(A24,I8)') 'IR_HODLR', option%IR_HODLR
-         if(option%format==HMAT)then
+         if(option%format==H2)then
+            write (*, '(A18,A10)') 'algorithm', 'H2'
+            write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+            write (*, '(A20,I8)') 'reduction_threshold', option%reduction_threshold
+            write (*, '(A18,I8)') 'CA_level', option%CA_level
+            write (*, '(A18,I8)') 'n_iter', option%n_iter
+            write (*, '(A18,I8)') 'precon', option%precon
+            write (*, '(A18,I8)') 'verbosity', option%verbosity
+            write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+            write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+            write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+            write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+            write (*, *) '***************************'
+            write (*, *) ' '
+         else if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'
                write (*, '(A18,Es14.7)') 'near_para', option%near_para
@@ -1658,6 +1671,7 @@ contains
                write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'IR_HODLR', option%IR_HODLR
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)

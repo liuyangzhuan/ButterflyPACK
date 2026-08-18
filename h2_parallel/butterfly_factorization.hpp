@@ -3,6 +3,7 @@
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "butterfly_verification.hpp"
+#include "memory_diagnostics.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -270,7 +271,8 @@ void factorize_CA_level(
     int64_t& total_redundant,
     int64_t& local_max_skel,
     bool print_detail,
-    int level_print_rank) {
+    int level_print_rank,
+    H2FactorizationMemoryDiagnostics* memory_diagnostics) {
     auto& level = tree->levels[current_level];
     const int dimension = tree->dimension;
     const int num_waves = 1 << dimension;
@@ -327,7 +329,8 @@ void factorize_CA_level(
             clear_ghosts(level);
         }
 
-        for (const auto& wave : waves) {
+        for (size_t wave_idx = 0; wave_idx < waves.size(); ++wave_idx) {
+            const auto& wave = waves[wave_idx];
             if (wave.empty()) continue;
             std::unordered_set<int64_t> wave_boxes(wave.begin(), wave.end());
             for (int64_t morton : wave) {
@@ -361,6 +364,7 @@ void factorize_CA_level(
             std::exception_ptr wave_exception;
             std::mutex wave_exception_mutex;
             std::atomic<bool> wave_failed{false};
+            size_t wave_scratch_bytes = 0;
 
             #pragma omp parallel default(shared) if (wave.size() > 1)
             {
@@ -395,6 +399,22 @@ void factorize_CA_level(
                             std::lock_guard<std::mutex> lock(wave_exception_mutex);
                             wave_exception = std::current_exception();
                         }
+                    }
+                }
+
+                if (memory_diagnostics != nullptr && memory_diagnostics->enabled()) {
+                    const size_t thread_scratch_bytes =
+                        h2_diag_factorization_scratch_bytes(scratch);
+                    #pragma omp atomic update
+                    wave_scratch_bytes += thread_scratch_bytes;
+                    #pragma omp barrier
+                    #pragma omp single
+                    {
+                        memory_diagnostics->record(
+                            tree, current_level, "CA",
+                            "group" + std::to_string(group_idx) + "_wave" +
+                                std::to_string(wave_idx) + "_compute",
+                            0, wave_scratch_bytes);
                     }
                 }
             }
@@ -484,6 +504,7 @@ void factorize_CA_level(
                 std::exception_ptr owner_exception;
                 std::mutex owner_exception_mutex;
                 std::atomic<bool> owner_failed{false};
+                size_t owner_scratch_bytes = 0;
 
                 #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
                 {
@@ -516,6 +537,22 @@ void factorize_CA_level(
                                     owner_exception_mutex);
                                 owner_exception = std::current_exception();
                             }
+                        }
+                    }
+
+                    if (memory_diagnostics != nullptr && memory_diagnostics->enabled()) {
+                        const size_t thread_scratch_bytes =
+                            h2_diag_deferred_owner_scratch_bytes(owner_scratch);
+                        #pragma omp atomic update
+                        owner_scratch_bytes += thread_scratch_bytes;
+                        #pragma omp barrier
+                        #pragma omp single
+                        {
+                            memory_diagnostics->record(
+                                tree, current_level, "CA",
+                                "group" + std::to_string(group_idx) + "_wave" +
+                                    std::to_string(wave_idx) + "_owner",
+                                0, owner_scratch_bytes);
                         }
                     }
                 }
@@ -571,6 +608,8 @@ void factorize_CA_level(
                     std::rethrow_exception(mirror_exception);
                 }
 
+                share_symmetric_level_edges(level);
+
                 std::exception_ptr finalize_exception;
                 std::mutex finalize_exception_mutex;
                 std::atomic<bool> finalize_failed{false};
@@ -608,6 +647,13 @@ void factorize_CA_level(
                 if (finalize_exception) {
                     std::rethrow_exception(finalize_exception);
                 }
+            }
+
+            if (memory_diagnostics != nullptr && memory_diagnostics->enabled()) {
+                memory_diagnostics->record(
+                    tree, current_level, "CA",
+                    "group" + std::to_string(group_idx) + "_wave" +
+                        std::to_string(wave_idx) + "_complete");
             }
         }
     }
@@ -674,6 +720,7 @@ void hierarchical_factorization_parallel(
     int size = tree->mpi_size;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
+    H2FactorizationMemoryDiagnostics memory_diagnostics;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
     FactorizationCommunicatorSet factorization_comms =
@@ -728,6 +775,8 @@ void hierarchical_factorization_parallel(
     clock::duration total_reduction_time{};
     int64_t local_max_skel = 0;
 
+    memory_diagnostics.record(tree, leaf_level, "setup", "factor_start");
+
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
         clock::duration level_data_exchange{};
@@ -756,9 +805,20 @@ void hierarchical_factorization_parallel(
 
         if (level.is_process_active && use_CA_level) {
             segment_start = clock::now();
+            FactorizationMemoryDiagnosticCallback gather_memory_diagnostic;
+            if (memory_diagnostics.enabled()) {
+                gather_memory_diagnostic =
+                    [&](const char* phase, size_t pending, size_t communication) {
+                        memory_diagnostics.record(
+                            tree, current_level, "CA",
+                            std::string("initial_gather_") + phase,
+                            pending, 0, 0, communication);
+                    };
+            }
             gather_CA_factorization_data(
                 tree, current_level, level_comm,
-                is_symmetric && !is_hermitian);
+                is_symmetric && !is_hermitian,
+                gather_memory_diagnostic);
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
             if (print_detail && rank == level_print_rank) {
@@ -768,6 +828,11 @@ void hierarchical_factorization_parallel(
                           << " ms" << std::endl;
             }
         }
+
+        memory_diagnostics.record(
+            tree, current_level, use_CA_level ? "CA" : "color",
+            level.is_process_active && use_CA_level ? "post_CA_gather" :
+                                                       "level_start");
 
         // declare locks
         std::unordered_map<int64_t, omp_lock_t*> box_locks;
@@ -843,7 +908,7 @@ void hierarchical_factorization_parallel(
                     is_symmetric, is_hermitian, factorization_method,
                     unit_proxy_points, num_proxy, proxy_radius,
                     total_skeleton, total_redundant, local_max_skel,
-                    print_detail, level_print_rank);
+                    print_detail, level_print_rank, &memory_diagnostics);
             } else {
                 const int num_colors = 1 << dimension;
 
@@ -891,10 +956,38 @@ void hierarchical_factorization_parallel(
                 // Communication / transport step (single-threaded)
                 // ----------------------------------------------------------------
                 if (!is_interior || counter == interior_start_loc) {
-                    const auto comm_duration_raw = transport_and_apply_factor_updates_symmetric_onehop(
-                        tree, current_level, kernel, pending_updates, false);
+                    if (memory_diagnostics.enabled()) {
+                        memory_diagnostics.record(
+                            tree, current_level, "color",
+                            "wave" + std::to_string(counter) + "_pre_transport",
+                            h2_diag_pending_bytes(pending_updates));
+                    }
+                    FactorizationMemoryDiagnosticCallback transport_memory_diagnostic;
+                    if (memory_diagnostics.enabled()) {
+                        transport_memory_diagnostic =
+                            [&](const char* phase, size_t additional_pending,
+                                size_t communication) {
+                                memory_diagnostics.record(
+                                    tree, current_level, "color",
+                                    "wave" + std::to_string(counter) +
+                                        "_transport_" + phase,
+                                    h2_diag_pending_bytes(pending_updates) +
+                                        additional_pending,
+                                    0, 0, communication);
+                            };
+                    }
+                    const auto comm_duration_raw =
+                        transport_and_apply_factor_updates_symmetric_onehop(
+                            tree, current_level, kernel, pending_updates, false,
+                            transport_memory_diagnostic);
                     level_data_exchange += comm_duration_raw;
                     update_neighbor_slicing_for_level(level, is_symmetric);
+                    if (memory_diagnostics.enabled()) {
+                        memory_diagnostics.record(
+                            tree, current_level, "color",
+                            "wave" + std::to_string(counter) + "_post_transport",
+                            h2_diag_pending_bytes(pending_updates));
+                    }
                     auto comm_duration = std::chrono::duration_cast<std::chrono::milliseconds>(comm_duration_raw);
 
                     if (print_detail && rank == level_print_rank) {
@@ -967,6 +1060,7 @@ void hierarchical_factorization_parallel(
                 std::exception_ptr wave_exception;
                 std::mutex wave_exception_mutex;
                 std::atomic<bool> wave_failed{false};
+                size_t wave_scratch_bytes = 0;
 
                 #pragma omp parallel default(shared) if (color_list.size() > 1)
                 {
@@ -1015,6 +1109,27 @@ void hierarchical_factorization_parallel(
                                 std::lock_guard<std::mutex> lock(wave_exception_mutex);
                                 wave_exception = std::current_exception();
                             }
+                        }
+                    }
+
+                    if (memory_diagnostics.enabled()) {
+                        const size_t thread_scratch_bytes =
+                            h2_diag_factorization_scratch_bytes(scratch);
+                        #pragma omp atomic update
+                        wave_scratch_bytes += thread_scratch_bytes;
+                        #pragma omp barrier
+                        #pragma omp single
+                        {
+                            size_t all_pending_bytes =
+                                h2_diag_pending_bytes(pending_updates);
+                            for (const auto& thread_updates : thread_pending) {
+                                all_pending_bytes +=
+                                    h2_diag_pending_bytes(thread_updates);
+                            }
+                            memory_diagnostics.record(
+                                tree, current_level, "color",
+                                "wave" + std::to_string(counter) + "_compute",
+                                all_pending_bytes, wave_scratch_bytes);
                         }
                     }
                 }
@@ -1101,6 +1216,7 @@ void hierarchical_factorization_parallel(
                     std::exception_ptr owner_exception;
                     std::mutex owner_exception_mutex;
                     std::atomic<bool> owner_failed{false};
+                    size_t owner_scratch_bytes = 0;
 
                     #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
                     {
@@ -1134,6 +1250,27 @@ void hierarchical_factorization_parallel(
                                     std::lock_guard<std::mutex> lock(owner_exception_mutex);
                                     owner_exception = std::current_exception();
                                 }
+                            }
+                        }
+
+                        if (memory_diagnostics.enabled()) {
+                            const size_t thread_scratch_bytes =
+                                h2_diag_deferred_owner_scratch_bytes(scratch);
+                            #pragma omp atomic update
+                            owner_scratch_bytes += thread_scratch_bytes;
+                            #pragma omp barrier
+                            #pragma omp single
+                            {
+                                size_t all_pending_bytes =
+                                    h2_diag_pending_bytes(pending_updates);
+                                for (const auto& thread_updates : thread_pending) {
+                                    all_pending_bytes +=
+                                        h2_diag_pending_bytes(thread_updates);
+                                }
+                                memory_diagnostics.record(
+                                    tree, current_level, "color",
+                                    "wave" + std::to_string(counter) + "_owner",
+                                    all_pending_bytes, owner_scratch_bytes);
                             }
                         }
                     }
@@ -1182,6 +1319,8 @@ void hierarchical_factorization_parallel(
                     if (mirror_exception) {
                         std::rethrow_exception(mirror_exception);
                     }
+
+                    share_symmetric_level_edges(level);
 
                     std::exception_ptr finalize_exception;
                     std::mutex finalize_exception_mutex;
@@ -1249,14 +1388,46 @@ void hierarchical_factorization_parallel(
                     }
                 }
 
+                if (memory_diagnostics.enabled()) {
+                    memory_diagnostics.record(
+                        tree, current_level, "color",
+                        "wave" + std::to_string(counter) + "_complete",
+                        h2_diag_pending_bytes(pending_updates));
+                }
+
             }
 
             // Keep the final flush outside the wave body so empty trailing bins
             // cannot strand updates produced by the last nonempty wave.
-            const auto final_comm_duration = transport_and_apply_factor_updates_symmetric_onehop(
-                tree, current_level, kernel, pending_updates, false);
+            if (memory_diagnostics.enabled()) {
+                memory_diagnostics.record(
+                    tree, current_level, "color", "final_pre_transport",
+                    h2_diag_pending_bytes(pending_updates));
+            }
+            FactorizationMemoryDiagnosticCallback final_transport_memory_diagnostic;
+            if (memory_diagnostics.enabled()) {
+                final_transport_memory_diagnostic =
+                    [&](const char* phase, size_t additional_pending,
+                        size_t communication) {
+                        memory_diagnostics.record(
+                            tree, current_level, "color",
+                            std::string("final_transport_") + phase,
+                            h2_diag_pending_bytes(pending_updates) +
+                                additional_pending,
+                            0, 0, communication);
+                    };
+            }
+            const auto final_comm_duration =
+                transport_and_apply_factor_updates_symmetric_onehop(
+                    tree, current_level, kernel, pending_updates, false,
+                    final_transport_memory_diagnostic);
             level_data_exchange += final_comm_duration;
             update_neighbor_slicing_for_level(level, is_symmetric);
+            if (memory_diagnostics.enabled()) {
+                memory_diagnostics.record(
+                    tree, current_level, "color", "final_post_transport",
+                    h2_diag_pending_bytes(pending_updates));
+            }
             
             for (const auto& box : level.local_boxes) {
                 total_skeleton += box.skeleton_indices.size();
@@ -1274,6 +1445,10 @@ void hierarchical_factorization_parallel(
                 std::cout << "  Skipping elimination at level 1 (final coarsening step)" << std::endl;
             }
         }
+
+        memory_diagnostics.record(
+            tree, current_level, use_CA_level ? "CA" : "color",
+            "post_elimination");
 
         if (current_level > 1 && level.is_process_active) {
             double min_elim_ms = 0.0;
@@ -1303,8 +1478,19 @@ void hierarchical_factorization_parallel(
         // ===== Step 3: Gather assisting boxes post-elimination =====
         if (current_level > 1 && level.is_process_active && use_CA_level) {
             segment_start = clock::now();
+            FactorizationMemoryDiagnosticCallback assisting_memory_diagnostic;
+            if (memory_diagnostics.enabled()) {
+                assisting_memory_diagnostic =
+                    [&](const char* phase, size_t pending, size_t communication) {
+                        memory_diagnostics.record(
+                            tree, current_level, "CA",
+                            std::string("post_elimination_assisting_") + phase,
+                            pending, 0, 0, communication);
+                    };
+            }
             gather_CA_assisting_boxes_factorization(
-                tree, current_level, level_comm, 412);
+                tree, current_level, level_comm, 412,
+                assisting_memory_diagnostic);
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
             update_neighbor_slicing_for_level(
@@ -1319,6 +1505,10 @@ void hierarchical_factorization_parallel(
         } else {
             clear_ghosts(level);
         }
+
+        memory_diagnostics.record(
+            tree, current_level, use_CA_level ? "CA" : "color",
+            "post_assisting_gather");
         
         
 
@@ -1370,6 +1560,13 @@ void hierarchical_factorization_parallel(
                 tree->global_bounds
             );
         }
+
+        if (memory_diagnostics.enabled()) {
+            memory_diagnostics.record(
+                tree, current_level, use_CA_level ? "CA" : "color",
+                "post_parent_build", 0, 0,
+                h2_diag_box_vector_bytes(parent_boxes));
+        }
         
         
         
@@ -1398,6 +1595,14 @@ void hierarchical_factorization_parallel(
             // communication timer excludes sender-side serialization work.
             send_buffer = serialize_boxes(parent_boxes);
             send_buffer_size = static_cast<int64_t>(send_buffer.size());
+        }
+
+        if (memory_diagnostics.enabled()) {
+            memory_diagnostics.record(
+                tree, current_level, use_CA_level ? "CA" : "color",
+                "post_parent_pack", 0, 0,
+                h2_diag_box_vector_bytes(parent_boxes),
+                h2_diag_vector_bytes(send_buffer));
         }
 
         if (reduction_occurred) {
@@ -1433,9 +1638,28 @@ void hierarchical_factorization_parallel(
                 recv_buffer.resize(buffer_size);
                 MPI_Recv_large(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 1, tree->comm, &status);
                 level_reduction += (clock::now() - segment_start);
+
+                if (memory_diagnostics.enabled()) {
+                    memory_diagnostics.record(
+                        tree, current_level, use_CA_level ? "CA" : "color",
+                        "parent_receive_buffer", 0, 0,
+                        h2_diag_box_vector_bytes(parent_boxes) +
+                            h2_diag_box_vector_bytes(all_parent_boxes),
+                        h2_diag_vector_bytes(recv_buffer));
+                }
                 
                 std::vector<BoxData<CoordType, DataType>> child_parent_boxes =
                     deserialize_boxes<CoordType, DataType>(recv_buffer);
+
+                if (memory_diagnostics.enabled()) {
+                    memory_diagnostics.record(
+                        tree, current_level, use_CA_level ? "CA" : "color",
+                        "parent_deserialized", 0, 0,
+                        h2_diag_box_vector_bytes(parent_boxes) +
+                            h2_diag_box_vector_bytes(all_parent_boxes) +
+                            h2_diag_box_vector_bytes(child_parent_boxes),
+                        h2_diag_vector_bytes(recv_buffer));
+                }
                 
                 all_parent_boxes.insert(
                     all_parent_boxes.end(),
@@ -1445,6 +1669,11 @@ void hierarchical_factorization_parallel(
             }
 
             parent_level.local_boxes = std::move(all_parent_boxes);
+        }
+
+        if (parent_level.is_process_active &&
+            is_symmetric && !is_hermitian) {
+            share_symmetric_level_edges(parent_level);
         }
 
         if (sends_parent_boxes) {
@@ -1464,11 +1693,23 @@ void hierarchical_factorization_parallel(
                           << " parent boxes to process " << level.parent_level_owner << std::endl;
             }
         }
+
+        if (memory_diagnostics.enabled()) {
+            memory_diagnostics.record(
+                tree, current_level, use_CA_level ? "CA" : "color",
+                "post_parent_redistribution", 0, 0,
+                h2_diag_box_vector_bytes(parent_boxes),
+                h2_diag_vector_bytes(send_buffer));
+        }
         
         // Clear modified interaction matrices to free memory
         if (level.is_process_active) {
             clear_modified_interaction_matrices(level, use_CA_level);
         }
+
+        memory_diagnostics.record(
+            tree, current_level, use_CA_level ? "CA" : "color",
+            "post_level_clear");
 
         // Teardown
         if (level.is_process_active) {
@@ -1667,6 +1908,8 @@ void hierarchical_factorization_parallel(
         }
         root_box.redundant_indices.clear();
     }
+
+    memory_diagnostics.record(tree, 0, "root", "post_root_factorization");
     
     passive_mpi_barrier(tree->comm);
 
@@ -1726,6 +1969,8 @@ void hierarchical_factorization_parallel(
 
     *memory_per_rank = local_memory_usage + CA_halo_memory_usage;
 
+    memory_diagnostics.record(tree, 0, "retained", "factorization_complete");
+
     if (print_summary) {
         double logabsdet;
         DataType phase;
@@ -1737,6 +1982,9 @@ void hierarchical_factorization_parallel(
 
         (void)butterfly::h2_quick_verification(tree, kernel);
     }
+
+    memory_diagnostics.record(tree, 0, "verification", "post_quick_verification");
+    memory_diagnostics.print(tree->comm, rank, size);
 }
 
 template<typename CoordType, typename DataType, typename KernelType>

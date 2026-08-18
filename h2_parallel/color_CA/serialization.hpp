@@ -8,6 +8,7 @@
 #include <climits>
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <complex>
 
@@ -62,6 +63,9 @@ inline const char* read_vector(const char* ptr, std::vector<T>& v) {
 }
 
 namespace fmm {
+
+using FactorizationMemoryDiagnosticCallback =
+    std::function<void(const char*, size_t, size_t)>;
 
 /**
  * @brief Get serialized size of MatrixStorage
@@ -472,6 +476,22 @@ size_t bytes_pending(const PendingFactorUpdates<DataType>& p) {
 }
 
 template <typename DataType>
+size_t resident_bytes_pending(const PendingFactorUpdates<DataType>& p) {
+    size_t bytes = p.replace_blocks.bucket_count() * sizeof(void*);
+    for (const auto& entry : p.replace_blocks) {
+        bytes += sizeof(entry) + sizeof(void*) + sizeof(size_t);
+        bytes += entry.second.data.capacity() * sizeof(DataType);
+    }
+
+    bytes += p.accumulated_deltas.bucket_count() * sizeof(void*);
+    for (const auto& entry : p.accumulated_deltas) {
+        bytes += sizeof(entry) + sizeof(void*) + sizeof(size_t);
+        bytes += entry.second.data.capacity() * sizeof(DataType);
+    }
+    return bytes;
+}
+
+template <typename DataType>
 char* serialize(const PendingFactorUpdates<DataType>& p, char* ptr) {
     static_assert(std::is_trivially_copyable_v<DataType>, "PendingFactorUpdates: DataType must be trivially copyable");
 
@@ -643,6 +663,78 @@ const char* deserialize(MatrixStorage<DataType>& mat, const char* buffer) {
 }
 
 template<typename DataType>
+size_t get_serialized_a_ns_size(
+    const ModifiedBlock<DataType>& block,
+    bool omit_payload) {
+    if (!block.a_ns_uses_symmetric_storage()) {
+        return omit_payload
+            ? get_serialized_size_without_payload(block.A_NS)
+            : get_serialized_size(block.A_NS);
+    }
+
+    size_t size = sizeof(int64_t) * 3;
+    size += sizeof(typename MatrixStorage<DataType>::Format);
+    size += sizeof(size_t);
+    if (!omit_payload && block.a_ns_is_allocated()) {
+        size += static_cast<size_t>(block.a_ns_rows() * block.a_ns_cols()) *
+                sizeof(DataType);
+    }
+    return size;
+}
+
+template<typename DataType>
+char* serialize_a_ns(
+    const ModifiedBlock<DataType>& block,
+    char* buffer,
+    bool omit_payload) {
+    if (!block.a_ns_uses_symmetric_storage()) {
+        return omit_payload
+            ? serialize_without_payload(block.A_NS, buffer)
+            : serialize(block.A_NS, buffer);
+    }
+
+    const int64_t rows = block.a_ns_rows();
+    const int64_t cols = block.a_ns_cols();
+    const int64_t lda = rows;
+    const auto format = block.a_ns_format();
+    const size_t data_size =
+        (omit_payload || !block.a_ns_is_allocated())
+            ? 0
+            : static_cast<size_t>(rows * cols);
+
+    std::memcpy(buffer, &rows, sizeof(int64_t));
+    buffer += sizeof(int64_t);
+    std::memcpy(buffer, &cols, sizeof(int64_t));
+    buffer += sizeof(int64_t);
+    std::memcpy(buffer, &lda, sizeof(int64_t));
+    buffer += sizeof(int64_t);
+    std::memcpy(
+        buffer, &format, sizeof(typename MatrixStorage<DataType>::Format));
+    buffer += sizeof(typename MatrixStorage<DataType>::Format);
+    std::memcpy(buffer, &data_size, sizeof(size_t));
+    buffer += sizeof(size_t);
+
+    if (data_size > 0) {
+        const auto& physical = block.a_ns_physical_storage();
+        if (!block.a_ns_view_is_transposed() && physical.lda == rows &&
+            physical.data.size() == data_size) {
+            std::memcpy(
+                buffer, physical.data.data(), data_size * sizeof(DataType));
+            buffer += data_size * sizeof(DataType);
+        } else {
+            for (int64_t col = 0; col < cols; ++col) {
+                for (int64_t row = 0; row < rows; ++row) {
+                    const DataType value = block.a_ns(row, col);
+                    std::memcpy(buffer, &value, sizeof(DataType));
+                    buffer += sizeof(DataType);
+                }
+            }
+        }
+    }
+    return buffer;
+}
+
+template<typename DataType>
 size_t get_serialized_size(const ModifiedBlock<DataType>& block) {
     return get_serialized_size(block, false);
 }
@@ -655,9 +747,7 @@ size_t get_serialized_size(
     size += sizeof(int64_t);  // neighbor_morton
     size += sizeof(bool);     // reconstruct_A_NS_from_symmetric_pair
     size += get_serialized_size(block.A_SN);
-    size += omit_A_NS_payload
-        ? get_serialized_size_without_payload(block.A_NS)
-        : get_serialized_size(block.A_NS);
+    size += get_serialized_a_ns_size(block, omit_A_NS_payload);
     return size;
 }
 
@@ -682,9 +772,7 @@ char* serialize(
     buffer += sizeof(bool);
 
     buffer = serialize(block.A_SN, buffer);
-    buffer = omit_A_NS_payload
-        ? serialize_without_payload(block.A_NS, buffer)
-        : serialize(block.A_NS, buffer);
+    buffer = serialize_a_ns(block, buffer, omit_A_NS_payload);
     
     return buffer;
 }
@@ -699,6 +787,8 @@ const char* deserialize(ModifiedBlock<DataType>& block, const char* buffer) {
     buffer += sizeof(bool);
 
     buffer = deserialize(block.A_SN, buffer);
+    block.symmetric_A_NS.reset();
+    block.symmetric_A_NS_orientation = false;
     buffer = deserialize(block.A_NS, buffer);
     
     return buffer;
@@ -1088,7 +1178,7 @@ bool should_omit_symmetric_halo_A_NS_payload(
 
     // A Hermitian or nonsymmetric block cannot be rebuilt by plain transpose.
     if ((block.A_SN.is_allocated() && !block.A_SN.data.empty()) ||
-        !block.A_NS.is_allocated() || block.A_NS.data.empty()) {
+        !block.a_ns_is_allocated() || block.a_ns_data_empty()) {
         return false;
     }
 
@@ -1116,7 +1206,7 @@ size_t get_serialized_size_for_CA_ghost_halo_box(
                     box, block, receiver_full_requested_ghosts,
                     receiver_rank, owner_rank_for_morton,
                     enable_symmetric_pair_pruning)) {
-                size -= block.A_NS.data.size() * sizeof(DataType);
+                size -= block.a_ns_data_size() * sizeof(DataType);
             }
         }
     };
@@ -1649,6 +1739,19 @@ struct CARequestPlan {
     std::vector<int> global_rank_by_comm;
 };
 
+inline size_t resident_bytes_CA_request_plan(const CARequestPlan& plan) {
+    size_t bytes = plan.outgoing.capacity() * sizeof(std::vector<int64_t>);
+    bytes += plan.incoming.capacity() * sizeof(std::vector<int64_t>);
+    for (const auto& requests : plan.outgoing) {
+        bytes += requests.capacity() * sizeof(int64_t);
+    }
+    for (const auto& requests : plan.incoming) {
+        bytes += requests.capacity() * sizeof(int64_t);
+    }
+    bytes += plan.global_rank_by_comm.capacity() * sizeof(int);
+    return bytes;
+}
+
 template<typename CoordType, typename DataType>
 CARequestPlan make_CA_request_plan(
     ParallelTree<CoordType, DataType>* tree,
@@ -1770,7 +1873,8 @@ void exchange_CA_requested_payloads(
     int payload_tag,
     SizeFunction payload_size,
     SerializeFunction serialize_payload,
-    ConsumeFunction consume_payload) {
+    ConsumeFunction consume_payload,
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {}) {
     int comm_size = 0;
     MPI_Comm_size(level_comm, &comm_size);
 
@@ -1801,6 +1905,19 @@ void exchange_CA_requested_payloads(
         }
     }
 
+    auto buffer_bytes = [](const std::vector<std::vector<char>>& buffers) {
+        size_t bytes = buffers.capacity() * sizeof(std::vector<char>);
+        for (const auto& buffer : buffers) {
+            bytes += buffer.capacity();
+        }
+        return bytes;
+    };
+    size_t send_buffer_bytes = 0;
+    if (memory_diagnostic) {
+        send_buffer_bytes = buffer_bytes(send_buffers);
+        memory_diagnostic("send_buffers_ready", 0, send_buffer_bytes);
+    }
+
     MPI_Alltoall(
         send_sizes.data(), 1, MPI_UINT64_T,
         recv_sizes.data(), 1, MPI_UINT64_T,
@@ -1818,6 +1935,13 @@ void exchange_CA_requested_payloads(
             throw std::runtime_error("CA payload receive failed");
         }
     }
+    size_t recv_buffer_bytes = 0;
+    if (memory_diagnostic) {
+        recv_buffer_bytes = buffer_bytes(recv_buffers);
+        memory_diagnostic(
+            "receive_buffers_ready", 0,
+            send_buffer_bytes + recv_buffer_bytes);
+    }
     for (int peer = 0; peer < comm_size; ++peer) {
         const size_t bytes = static_cast<size_t>(send_sizes[static_cast<size_t>(peer)]);
         if (bytes == 0) continue;
@@ -1831,6 +1955,11 @@ void exchange_CA_requested_payloads(
     if (!requests.empty()) {
         MPI_Waitall(
             static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
+    }
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "payload_exchange_complete", 0,
+            send_buffer_bytes + recv_buffer_bytes);
     }
 
     for (int peer = 0; peer < comm_size; ++peer) {
@@ -1863,6 +1992,11 @@ void exchange_CA_requested_payloads(
         if (ptr != end) {
             throw std::runtime_error("CA payload has trailing bytes");
         }
+    }
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "payloads_consumed", 0,
+            send_buffer_bytes + recv_buffer_bytes);
     }
 }
 
@@ -1946,7 +2080,8 @@ void gather_CA_assisting_boxes_factorization(
     ParallelTree<CoordType, DataType>* tree,
     int level,
     MPI_Comm level_comm,
-    int payload_tag) {
+    int payload_tag,
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {}) {
     auto& lvl = tree->levels[level];
     std::vector<int64_t> assisting_mortons;
     assisting_mortons.reserve(
@@ -1958,6 +2093,12 @@ void gather_CA_assisting_boxes_factorization(
 
     const CARequestPlan plan = make_CA_request_plan(
         tree, level, assisting_mortons, level_comm);
+    const size_t plan_bytes = memory_diagnostic
+        ? resident_bytes_CA_request_plan(plan)
+        : 0;
+    if (memory_diagnostic) {
+        memory_diagnostic("request_plan_ready", 0, plan_bytes);
+    }
     lvl.assisting_boxes.resize(
         lvl.assisting_box_points_for_kernel_evaluation.size());
 
@@ -1977,6 +2118,14 @@ void gather_CA_assisting_boxes_factorization(
         return request;
     };
 
+    FactorizationMemoryDiagnosticCallback payload_diagnostic;
+    if (memory_diagnostic) {
+        payload_diagnostic =
+            [&](const char* phase, size_t pending, size_t communication) {
+                memory_diagnostic(phase, pending, plan_bytes + communication);
+            };
+    }
+
     exchange_CA_requested_payloads(
         plan, level_comm, payload_tag,
         [&](int, int64_t morton) {
@@ -1995,7 +2144,12 @@ void gather_CA_assisting_boxes_factorization(
                 lvl.assisting_box_points_for_kernel_evaluation.at(morton));
             lvl.assisting_boxes[index] = std::move(request);
             return end;
-        });
+        },
+        payload_diagnostic);
+
+    if (memory_diagnostic) {
+        memory_diagnostic("payload_buffers_released", 0, plan_bytes);
+    }
 }
 
 template<typename CoordType, typename DataType>
@@ -2029,46 +2183,39 @@ void reconstruct_CA_symmetric_ghost_halo(
                     "reconstruct_CA_symmetric_ghost_halo: reciprocal block missing");
             }
 
-            const auto& source_block =
+            auto& source_block =
                 source_blocks[static_cast<size_t>(source_it->second)];
-            if (!source_block.A_NS.is_allocated()) {
+            if (!source_block.a_ns_is_allocated()) {
                 throw std::runtime_error(
                     "reconstruct_CA_symmetric_ghost_halo: reciprocal payload missing");
             }
 
-            const int64_t expected_rows = source_block.A_NS.cols;
-            const int64_t expected_cols = source_block.A_NS.rows;
-            if ((target_block.A_NS.rows != 0 || target_block.A_NS.cols != 0) &&
-                (target_block.A_NS.rows != expected_rows ||
-                 target_block.A_NS.cols != expected_cols)) {
+            const int64_t expected_rows = source_block.a_ns_cols();
+            const int64_t expected_cols = source_block.a_ns_rows();
+            if ((target_block.a_ns_rows() != 0 ||
+                 target_block.a_ns_cols() != 0) &&
+                (target_block.a_ns_rows() != expected_rows ||
+                 target_block.a_ns_cols() != expected_cols)) {
                 throw std::runtime_error(
                     "reconstruct_CA_symmetric_ghost_halo: dimension mismatch");
             }
 
-            target_block.A_NS.allocate(
-                expected_rows, expected_cols, source_block.A_NS.format);
-            for (int64_t col = 0; col < source_block.A_NS.cols; ++col) {
-                for (int64_t row = 0; row < source_block.A_NS.rows; ++row) {
-                    target_block.A_NS.data[static_cast<size_t>(
-                        col + row * source_block.A_NS.cols)] =
-                        source_block.A_NS.data[static_cast<size_t>(
-                            row + col * source_block.A_NS.rows)];
-                }
+            if (!share_symmetric_a_ns_pair(source_block, target_block)) {
+                throw std::runtime_error(
+                    "reconstruct_CA_symmetric_ghost_halo: cannot share reciprocal block");
             }
             target_block.reconstruct_A_NS_from_symmetric_pair = false;
         }
     };
 
-    #pragma omp parallel for schedule(static) if (level.ghost_boxes.size() > 1)
-    for (int64_t idx = 0;
-         idx < static_cast<int64_t>(level.ghost_boxes.size());
-         ++idx) {
-        auto& ghost_box = level.ghost_boxes[static_cast<size_t>(idx)];
+    for (auto& ghost_box : level.ghost_boxes) {
         reconstruct_blocks(
             ghost_box, ghost_box.near_field_modified_interactions, true);
         reconstruct_blocks(
             ghost_box, ghost_box.far_field_modified_interactions, false);
     }
+
+    share_symmetric_level_edges(level);
 }
 
 template<typename CoordType, typename DataType>
@@ -2076,10 +2223,17 @@ void gather_CA_factorization_data(
     ParallelTree<CoordType, DataType>* tree,
     int level,
     MPI_Comm level_comm,
-    bool enable_symmetric_pair_pruning) {
+    bool enable_symmetric_pair_pruning,
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {}) {
     auto& lvl = tree->levels[level];
     const CARequestPlan ghost_plan = make_CA_request_plan(
         tree, level, lvl.ghost_id, level_comm);
+    const size_t ghost_plan_bytes = memory_diagnostic
+        ? resident_bytes_CA_request_plan(ghost_plan)
+        : 0;
+    if (memory_diagnostic) {
+        memory_diagnostic("request_plan_ready", 0, ghost_plan_bytes);
+    }
     int comm_size = 0;
     MPI_Comm_size(level_comm, &comm_size);
     std::vector<std::unordered_set<int64_t>> peer_full_request_sets(
@@ -2087,6 +2241,18 @@ void gather_CA_factorization_data(
     if (enable_symmetric_pair_pruning) {
         peer_full_request_sets = exchange_CA_full_requested_ghost_sets(
             ghost_plan, lvl.ghost_id, level_comm);
+    }
+    size_t request_set_bytes = 0;
+    if (memory_diagnostic) {
+        for (const auto& requests : peer_full_request_sets) {
+            request_set_bytes += requests.bucket_count() * sizeof(void*);
+            request_set_bytes += requests.size() *
+                (sizeof(int64_t) + sizeof(void*) + sizeof(size_t));
+        }
+    }
+    const size_t ghost_request_bytes = ghost_plan_bytes + request_set_bytes;
+    if (memory_diagnostic) {
+        memory_diagnostic("request_sets_ready", 0, ghost_request_bytes);
     }
 
     auto owner_rank_for_morton = [&](int64_t morton) {
@@ -2107,6 +2273,17 @@ void gather_CA_factorization_data(
 
     lvl.ghost_boxes.clear();
     lvl.ghost_boxes.resize(lvl.ghost_id.size());
+
+    FactorizationMemoryDiagnosticCallback ghost_payload_diagnostic;
+    if (memory_diagnostic) {
+        ghost_payload_diagnostic =
+            [&](const char* phase, size_t pending, size_t communication) {
+                const std::string named_phase = std::string("ghost_") + phase;
+                memory_diagnostic(
+                    named_phase.c_str(), pending,
+                    ghost_request_bytes + communication);
+            };
+    }
 
     exchange_CA_requested_payloads(
         ghost_plan, level_comm, 410,
@@ -2139,14 +2316,37 @@ void gather_CA_factorization_data(
             const size_t index = static_cast<size_t>(lvl.ghost_id_to_index.at(morton));
             lvl.ghost_boxes[index] = std::move(box);
             return end;
-        });
+        },
+        ghost_payload_diagnostic);
+
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "ghost_payload_buffers_released", 0, ghost_request_bytes);
+    }
 
     if (enable_symmetric_pair_pruning) {
         reconstruct_CA_symmetric_ghost_halo(lvl);
+        if (memory_diagnostic) {
+            memory_diagnostic(
+                "symmetric_halo_reconstructed", 0, ghost_request_bytes);
+        }
     }
 
+    FactorizationMemoryDiagnosticCallback assisting_diagnostic;
+    if (memory_diagnostic) {
+        assisting_diagnostic =
+            [&](const char* phase, size_t pending, size_t communication) {
+                const std::string named_phase = std::string("assisting_") + phase;
+                memory_diagnostic(
+                    named_phase.c_str(), pending,
+                    ghost_request_bytes + communication);
+            };
+    }
     gather_CA_assisting_boxes_factorization(
-        tree, level, level_comm, 411);
+        tree, level, level_comm, 411, assisting_diagnostic);
+    if (memory_diagnostic) {
+        memory_diagnostic("gather_complete", 0, ghost_request_bytes);
+    }
 }
 
 /**
@@ -2612,7 +2812,8 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     TreeLevel<CoordType, DataType>& lvl,
     int level,
     const std::vector<int>& neighbor_ranks,
-    const std::vector<int64_t>& needed_remote_mortons)
+    const std::vector<int64_t>& needed_remote_mortons,
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {})
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -2725,6 +2926,21 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     }
     communication_time += (clock::now() - comm_start);
 
+    auto nested_vector_bytes = [](const auto& buffers) {
+        using buffers_type = std::decay_t<decltype(buffers)>;
+        using inner_type = typename buffers_type::value_type;
+        size_t bytes = buffers.capacity() * sizeof(inner_type);
+        for (const auto& buffer : buffers) {
+            bytes += buffer.capacity() * sizeof(typename inner_type::value_type);
+        }
+        return bytes;
+    };
+    size_t request_list_bytes = 0;
+    if (memory_diagnostic) {
+        request_list_bytes = nested_vector_bytes(req_received);
+        memory_diagnostic("request_lists_ready", 0, request_list_bytes);
+    }
+
     // Step 4: Build packed responses and exchange payload sizes.
     std::vector<uint64_t> recv_sizes(neighbor_ranks.size(), 0);
     std::vector<uint64_t> send_sizes(neighbor_ranks.size(), 0);
@@ -2771,6 +2987,13 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
         }
         send_sizes[i] = static_cast<uint64_t>(total);
     }
+    size_t send_buffer_bytes = 0;
+    if (memory_diagnostic) {
+        send_buffer_bytes = nested_vector_bytes(send_buffers);
+        memory_diagnostic(
+            "send_buffers_ready", 0,
+            request_list_bytes + send_buffer_bytes);
+    }
 
     comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
@@ -2797,6 +3020,13 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             recv_buffers[i].resize((size_t)recv_sizes[i]);
         }
     }
+    size_t recv_buffer_bytes = 0;
+    if (memory_diagnostic) {
+        recv_buffer_bytes = nested_vector_bytes(recv_buffers);
+        memory_diagnostic(
+            "receive_buffers_ready", 0,
+            request_list_bytes + send_buffer_bytes + recv_buffer_bytes);
+    }
 
     comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
@@ -2819,6 +3049,11 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
         requests.clear();
     }
     communication_time += (clock::now() - comm_start);
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "payload_exchange_complete", 0,
+            request_list_bytes + send_buffer_bytes + recv_buffer_bytes);
+    }
 
     // Step 6: Deserialize received assisting boxes into the level caches.
     
@@ -2847,6 +3082,12 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             } 
         }
         if (ptr != end) throw std::runtime_error("assist recv buffer parse mismatch");
+    }
+
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "payloads_consumed", 0,
+            request_list_bytes + send_buffer_bytes + recv_buffer_bytes);
     }
 
     return communication_time;
@@ -2974,6 +3215,10 @@ static void apply_updates_with_kernel_symmetric(
 {
     const int dim = tree->dimension;
 
+    if (!is_hermitian) {
+        share_symmetric_level_edges(lvl);
+    }
+
     auto get_assist = [&](int64_t morton) -> const PointDataRequest<CoordType>* {
         auto it = lvl.assisting_box_points_for_kernel_evaluation.find(morton);
         if (it == lvl.assisting_box_points_for_kernel_evaluation.end()) return nullptr;
@@ -3032,7 +3277,13 @@ static void apply_updates_with_kernel_symmetric(
 
     for (const auto& [rk, block] : incoming.replace_blocks) {
         (void)block;
-        const int64_t local_idx = local_box_index(rk.target_box);
+        int64_t task_target = rk.target_box;
+        if (!is_hermitian &&
+            local_box_index(rk.target_box) >= 0 &&
+            local_box_index(rk.neighbor_box) >= 0) {
+            task_target = std::min(rk.target_box, rk.neighbor_box);
+        }
+        const int64_t local_idx = local_box_index(task_target);
         if (local_idx >= 0) {
             ++task_counts[static_cast<size_t>(local_idx)];
         }
@@ -3053,7 +3304,7 @@ static void apply_updates_with_kernel_symmetric(
         if (local_lo >= 0) {
             ++task_counts[static_cast<size_t>(local_lo)];
         }
-        if (local_hi >= 0) {
+        if (local_hi >= 0 && (is_hermitian || local_lo < 0)) {
             ++task_counts[static_cast<size_t>(local_hi)];
         }
     }
@@ -3064,17 +3315,29 @@ static void apply_updates_with_kernel_symmetric(
     }
 
     for (const auto& [rk, block] : incoming.replace_blocks) {
-        const int64_t local_idx = local_box_index(rk.target_box);
+        int64_t task_target = rk.target_box;
+        int64_t task_neighbor = rk.neighbor_box;
+        bool transpose_replace = false;
+        if (!is_hermitian &&
+            local_box_index(rk.target_box) >= 0 &&
+            local_box_index(rk.neighbor_box) >= 0 &&
+            rk.neighbor_box < rk.target_box) {
+            task_target = rk.neighbor_box;
+            task_neighbor = rk.target_box;
+            transpose_replace = true;
+        }
+        const int64_t local_idx = local_box_index(task_target);
         if (local_idx < 0) {
             continue;
         }
 
         IncomingApplyTask<DataType> task;
         task.kind = IncomingApplyTaskKind::Replace;
-        task.target_morton = rk.target_box;
-        task.neighbor_morton = rk.neighbor_box;
+        task.target_morton = task_target;
+        task.neighbor_morton = task_neighbor;
         task.edge_kind = EdgeKind::Near;
         task.block = &block;
+        task.transpose_delta = transpose_replace;
         tasks_per_box[static_cast<size_t>(local_idx)].push_back(task);
     }
 
@@ -3108,7 +3371,7 @@ static void apply_updates_with_kernel_symmetric(
         }
 
         const int64_t local_hi = local_box_index(ek.hi);
-        if (local_hi >= 0) {
+        if (local_hi >= 0 && (is_hermitian || local_lo < 0)) {
             IncomingApplyTask<DataType> task;
             task.kind = IncomingApplyTaskKind::Offdiag;
             task.target_morton = ek.hi;
@@ -3154,8 +3417,21 @@ static void apply_updates_with_kernel_symmetric(
 
                 if (task.kind == IncomingApplyTaskKind::Replace) {
                     auto& mb = upsert_block_symmetric(target_box, task.neighbor_morton, EdgeKind::Near);
-                    mb.A_NS.allocate(payload->rows, payload->cols, MatrixStorage<DataType>::FULL);
-                    copy_contiguous_into(mb.A_NS, payload->data, payload->rows, payload->cols);
+                    if (task.transpose_delta) {
+                        auto replacement = transpose_colmajor(
+                            payload->data, payload->rows, payload->cols,
+                            /*do_conj=*/is_hermitian);
+                        mb.set_a_ns_owned(
+                            payload->cols, payload->rows,
+                            std::move(replacement),
+                            MatrixStorage<DataType>::FULL);
+                    } else {
+                        std::vector<DataType> replacement = payload->data;
+                        mb.set_a_ns_owned(
+                            payload->rows, payload->cols,
+                            std::move(replacement),
+                            MatrixStorage<DataType>::FULL);
+                    }
                     continue;
                 }
 
@@ -3329,7 +3605,7 @@ static void apply_updates_with_kernel_symmetric(
                 ModifiedBlock<DataType>* mb =
                     find_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
 
-                if (!mb || !mb->A_NS.is_allocated()) {
+                if (!mb || !mb->a_ns_is_allocated()) {
                     auto& newb =
                         upsert_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
 
@@ -3356,34 +3632,39 @@ static void apply_updates_with_kernel_symmetric(
                         indices_nei.data(), n_nei,
                         A_self_nei.data(), n_self);
 
-                    const auto stored = transpose_colmajor(
+                    auto stored = transpose_colmajor(
                         A_self_nei,
                         n_self,
                         n_nei,
                         /*do_conj=*/is_hermitian);
 
-                    newb.A_NS.allocate(n_nei, n_self, MatrixStorage<DataType>::FULL);
-                    copy_contiguous_into(newb.A_NS, stored, n_nei, n_self);
+                    newb.set_a_ns_owned(
+                        n_nei, n_self, std::move(stored),
+                        MatrixStorage<DataType>::FULL);
                     mb = &newb;
                 }
 
-                if (mb->A_NS.is_allocated() &&
-                    (mb->A_NS.rows != n_nei || mb->A_NS.cols != n_self)) {
-                    if (mb->A_NS.rows < n_nei || mb->A_NS.cols < n_self) {
+                if (mb->a_ns_is_allocated() &&
+                    (mb->a_ns_rows() != n_nei ||
+                     mb->a_ns_cols() != n_self)) {
+                    if (mb->a_ns_rows() < n_nei ||
+                        mb->a_ns_cols() < n_self) {
                         std::ostringstream oss;
                         oss << "apply offdiag task: existing block smaller than current view"
                             << " target=" << task.target_morton
                             << " neighbor=" << task.neighbor_morton
-                            << " existing_rows=" << mb->A_NS.rows
-                            << " existing_cols=" << mb->A_NS.cols
+                            << " existing_rows=" << mb->a_ns_rows()
+                            << " existing_cols=" << mb->a_ns_cols()
                             << " expected_rows=" << n_nei
                             << " expected_cols=" << n_self
                             << " transpose_delta=" << task.transpose_delta;
                         throw std::runtime_error(oss.str());
                     }
 
-                    const bool need_row_slice_existing = (mb->A_NS.rows != n_nei);
-                    const bool need_col_slice_existing = (mb->A_NS.cols != n_self);
+                    const bool need_row_slice_existing =
+                        (mb->a_ns_rows() != n_nei);
+                    const bool need_col_slice_existing =
+                        (mb->a_ns_cols() != n_self);
                     const auto* neighbor_skeleton =
                         need_row_slice_existing ? endpoint_skeleton(task.neighbor_morton) : nullptr;
 
@@ -3407,7 +3688,7 @@ static void apply_updates_with_kernel_symmetric(
                         const int64_t src_col = need_col_slice_existing
                             ? target_box.skeleton_indices[static_cast<size_t>(j)]
                             : j;
-                        if (src_col < 0 || src_col >= mb->A_NS.cols) {
+                        if (src_col < 0 || src_col >= mb->a_ns_cols()) {
                             throw std::runtime_error(
                                 "apply offdiag task: existing-block target index out of bounds");
                         }
@@ -3415,27 +3696,29 @@ static void apply_updates_with_kernel_symmetric(
                             const int64_t src_row = need_row_slice_existing
                                 ? (*neighbor_skeleton)[static_cast<size_t>(i)]
                                 : i;
-                            if (src_row < 0 || src_row >= mb->A_NS.rows) {
+                            if (src_row < 0 || src_row >= mb->a_ns_rows()) {
                                 throw std::runtime_error(
                                     "apply offdiag task: existing-block neighbor index out of bounds");
                             }
                             sliced_existing[static_cast<size_t>(i + j * n_nei)] =
-                                mb->A_NS(src_row, src_col);
+                                mb->a_ns(src_row, src_col);
                         }
                     }
 
-                    mb->A_NS.allocate(n_nei, n_self, MatrixStorage<DataType>::FULL);
-                    mb->A_NS.data = std::move(sliced_existing);
+                    mb->set_a_ns_owned(
+                        n_nei, n_self, std::move(sliced_existing),
+                        MatrixStorage<DataType>::FULL);
                 }
 
-                if (!mb->A_NS.is_allocated() ||
-                    mb->A_NS.rows != n_nei || mb->A_NS.cols != n_self) {
+                if (!mb->a_ns_is_allocated() ||
+                    mb->a_ns_rows() != n_nei ||
+                    mb->a_ns_cols() != n_self) {
                     std::ostringstream oss;
                     oss << "apply offdiag task: dim mismatch"
                         << " target=" << task.target_morton
                         << " neighbor=" << task.neighbor_morton
-                        << " existing_rows=" << mb->A_NS.rows
-                        << " existing_cols=" << mb->A_NS.cols
+                        << " existing_rows=" << mb->a_ns_rows()
+                        << " existing_cols=" << mb->a_ns_cols()
                         << " expected_rows=" << n_nei
                         << " expected_cols=" << n_self
                         << " transpose_delta=" << task.transpose_delta;
@@ -3443,14 +3726,22 @@ static void apply_updates_with_kernel_symmetric(
                 }
 
                 if (task.transpose_delta) {
-                    add_transposed_contiguous_into(
-                        mb->A_NS,
-                        *payload_data,
-                        payload_rows,
-                        payload_cols,
-                        is_hermitian);
+                    for (int64_t col = 0; col < payload_rows; ++col) {
+                        for (int64_t row = 0; row < payload_cols; ++row) {
+                            mb->a_ns(row, col) += maybe_conj(
+                                (*payload_data)[static_cast<size_t>(
+                                    col + row * payload_rows)],
+                                is_hermitian);
+                        }
+                    }
                 } else {
-                    add_contiguous_into(mb->A_NS, *payload_data, n_nei, n_self);
+                    for (int64_t col = 0; col < n_self; ++col) {
+                        for (int64_t row = 0; row < n_nei; ++row) {
+                            mb->a_ns(row, col) +=
+                                (*payload_data)[static_cast<size_t>(
+                                    row + col * n_nei)];
+                        }
+                    }
                 }
             }
         } catch (...) {
@@ -3463,6 +3754,10 @@ static void apply_updates_with_kernel_symmetric(
 
     if (apply_exception) {
         std::rethrow_exception(apply_exception);
+    }
+
+    if (!is_hermitian) {
+        share_symmetric_level_edges(lvl);
     }
 }
 
@@ -3607,7 +3902,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     int level,
     KernelType* kernel,
     PendingFactorUpdates<DataType>& pending,
-    bool is_hermitian=false)
+    bool is_hermitian=false,
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {})
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -3675,6 +3971,19 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         else { add_to(owner_lo); add_to(owner_hi); }
     }
 
+    auto routed_pending_bytes = [&]() {
+        size_t bytes = resident_bytes_pending(local_apply);
+        for (const auto& entry : out) {
+            bytes += resident_bytes_pending(entry.second);
+        }
+        return bytes;
+    };
+    size_t routed_bytes = 0;
+    if (memory_diagnostic) {
+        routed_bytes = routed_pending_bytes();
+        memory_diagnostic("updates_routed", routed_bytes, 0);
+    }
+
     // Step 2: Exchange per-neighbor payload sizes by posting receives, then sending local sizes.
     std::vector<uint64_t> recv_sizes(neighbor_ranks.size(), 0);
     std::vector<uint64_t> send_sizes(neighbor_ranks.size(), 0);
@@ -3730,6 +4039,20 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         if (recv_sizes[i] > 0) {
             recv_bufs[i].resize((size_t)recv_sizes[i]);
         }
+    }
+
+    auto nested_char_vector_bytes = [](const std::vector<std::vector<char>>& buffers) {
+        size_t bytes = buffers.capacity() * sizeof(std::vector<char>);
+        for (const auto& buffer : buffers) {
+            bytes += buffer.capacity();
+        }
+        return bytes;
+    };
+    size_t recv_buffer_bytes = 0;
+    if (memory_diagnostic) {
+        recv_buffer_bytes = nested_char_vector_bytes(recv_bufs);
+        memory_diagnostic(
+            "receive_buffers_ready", routed_bytes, recv_buffer_bytes);
     }
 
     std::vector<char> send_buffer; // reusable
@@ -3789,15 +4112,47 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         requests.clear();
     }
     communication_time += (clock::now() - comm_start);
+    const size_t payload_buffer_bytes = memory_diagnostic
+        ? recv_buffer_bytes + send_buffer.capacity()
+        : 0;
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "payload_exchange_complete", routed_bytes,
+            payload_buffer_bytes);
+    }
 
     // Step 4: Merge incoming updates from all neighbors.
     PendingFactorUpdates<DataType> incoming_total;
     merge_pending(incoming_total, local_apply);
+    size_t remaining_payloads = 0;
+    if (memory_diagnostic) {
+        for (uint64_t bytes : recv_sizes) {
+            if (bytes != 0) ++remaining_payloads;
+        }
+    }
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         if (recv_sizes[i] == 0) continue;
         PendingFactorUpdates<DataType> in;
         deserialize(in, recv_bufs[i].data());
         merge_pending(incoming_total, in);
+        if (memory_diagnostic) {
+            --remaining_payloads;
+            if (remaining_payloads == 0) {
+                memory_diagnostic(
+                    "last_payload_merged",
+                    routed_bytes + resident_bytes_pending(incoming_total) +
+                        resident_bytes_pending(in),
+                    payload_buffer_bytes);
+            }
+        }
+    }
+    const size_t merged_pending_bytes = memory_diagnostic
+        ? routed_bytes + resident_bytes_pending(incoming_total)
+        : 0;
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "incoming_updates_ready", merged_pending_bytes,
+            payload_buffer_bytes);
     }
     
     // Step 5: Refresh assisting-box data needed by the apply path.
@@ -3806,19 +4161,47 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         need_assist.push_back(kv.first);
     }
     if (!need_assist.empty()) {
+        FactorizationMemoryDiagnosticCallback assisting_diagnostic;
+        if (memory_diagnostic) {
+            assisting_diagnostic =
+                [&](const char* phase, size_t pending_bytes,
+                    size_t communication_bytes) {
+                    const std::string named_phase =
+                        std::string("assisting_") + phase;
+                    memory_diagnostic(
+                        named_phase.c_str(),
+                        merged_pending_bytes + pending_bytes,
+                        payload_buffer_bytes + communication_bytes);
+                };
+        }
         communication_time += exchange_assisting_for_mortons_onehop(
-            tree, lvl, level, neighbor_ranks, need_assist);
+            tree, lvl, level, neighbor_ranks, need_assist,
+            assisting_diagnostic);
+    }
+
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "pre_apply", merged_pending_bytes, payload_buffer_bytes);
     }
     
 
     // Step 6: Apply the merged updates to local boxes.
     apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "post_apply", merged_pending_bytes, payload_buffer_bytes);
+    }
     
     // if(rank == 0)
     //     print_pending_factor_updates(incoming_total, std::cout, ("rank " + std::to_string(rank) + ": ").c_str());
 
     // clear the updates after each color
     clear_pending_factor_updates_memory(pending);
+    if (memory_diagnostic) {
+        memory_diagnostic(
+            "source_pending_cleared", merged_pending_bytes,
+            payload_buffer_bytes);
+    }
 
     return communication_time;
 }

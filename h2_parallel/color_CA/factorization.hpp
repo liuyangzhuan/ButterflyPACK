@@ -849,19 +849,33 @@ void get_sliced_neighbor_block_into(
     int64_t box_size,
     std::vector<DataType>& out)
 {
-    const auto& M = is_A_NS ? stored_block.A_NS : stored_block.A_SN;
+    const bool matrix_allocated = is_A_NS
+        ? stored_block.a_ns_is_allocated()
+        : stored_block.A_SN.is_allocated();
+    const int64_t matrix_rows = is_A_NS
+        ? stored_block.a_ns_rows()
+        : stored_block.A_SN.rows;
+    const int64_t matrix_cols = is_A_NS
+        ? stored_block.a_ns_cols()
+        : stored_block.A_SN.cols;
+    auto matrix_value = [&](int64_t row, int64_t col) -> const DataType& {
+        return is_A_NS
+            ? stored_block.a_ns(row, col)
+            : stored_block.A_SN(row, col);
+    };
 
-    if (!M.is_allocated()) {
+    if (!matrix_allocated) {
         throw std::runtime_error(
             "get_sliced_neighbor_block: Matrix not allocated for neighbor " +
             std::to_string(neighbor_morton));
     }
 
-    auto pack_no_padding_into = [&](const MatrixStorage<DataType>& A) {
-        out.resize(static_cast<size_t>(A.rows * A.cols));
-        for (int64_t j = 0; j < A.cols; ++j)
-            for (int64_t i = 0; i < A.rows; ++i)
-                out[static_cast<size_t>(i + j * A.rows)] = A(i, j);
+    auto pack_no_padding_into = [&]() {
+        out.resize(static_cast<size_t>(matrix_rows * matrix_cols));
+        for (int64_t j = 0; j < matrix_cols; ++j)
+            for (int64_t i = 0; i < matrix_rows; ++i)
+                out[static_cast<size_t>(i + j * matrix_rows)] =
+                    matrix_value(i, j);
     };
 
     const bool neighbor_eliminated =
@@ -869,23 +883,23 @@ void get_sliced_neighbor_block_into(
 
     // Validate the "box_size" side dimension
     if (is_A_NS) {
-        if (M.cols != box_size) {
+        if (matrix_cols != box_size) {
             throw std::runtime_error(
                 "get_sliced_neighbor_block(A_NS): Column mismatch - stored=" +
-                std::to_string(M.cols) + " expected=" + std::to_string(box_size) +
+                std::to_string(matrix_cols) + " expected=" + std::to_string(box_size) +
                 " neighbor=" + std::to_string(neighbor_morton));
         }
     } else {
-        if (M.rows != box_size) {
+        if (matrix_rows != box_size) {
             throw std::runtime_error(
                 "get_sliced_neighbor_block(A_SN): Row mismatch - stored=" +
-                std::to_string(M.rows) + " expected=" + std::to_string(box_size) +
+                std::to_string(matrix_rows) + " expected=" + std::to_string(box_size) +
                 " neighbor=" + std::to_string(neighbor_morton));
         }
     }
 
     if (!neighbor_eliminated) {
-        pack_no_padding_into(M);
+        pack_no_padding_into();
         return;
     }
 
@@ -925,12 +939,12 @@ void get_sliced_neighbor_block_into(
     // The dimension corresponding to the neighbor DOFs in the stored block:
     // - A_NS: rows correspond to neighbor
     // - A_SN: cols correspond to neighbor
-    const int64_t neighbor_dim = is_A_NS ? M.rows : M.cols;
+    const int64_t neighbor_dim = is_A_NS ? matrix_rows : matrix_cols;
 
     // If the stored block is already at skeleton resolution, do NOT interpret skel_indices
     // as indices into this matrix. Just return it.
     if (neighbor_dim == skeleton_size) {
-        pack_no_padding_into(M);
+        pack_no_padding_into();
         return;
     }
 
@@ -954,7 +968,8 @@ void get_sliced_neighbor_block_into(
                 std::to_string(neighbor_morton) + " min_skel=" + std::to_string(min_idx) +
                 " max_skel=" + std::to_string(max_idx) +
                 " stored_neighbor_dim=" + std::to_string(neighbor_dim) +
-                " M.rows=" + std::to_string(M.rows) + " M.cols=" + std::to_string(M.cols));
+                " M.rows=" + std::to_string(matrix_rows) +
+                " M.cols=" + std::to_string(matrix_cols));
         }
     }
 
@@ -965,7 +980,7 @@ void get_sliced_neighbor_block_into(
         for (int64_t j = 0; j < box_size; ++j) {
             for (int64_t i = 0; i < skeleton_size; ++i) {
                 out[static_cast<size_t>(i + j * skeleton_size)] =
-                    M((*skel)[static_cast<size_t>(i)], j);
+                    matrix_value((*skel)[static_cast<size_t>(i)], j);
             }
         }
         return;
@@ -975,7 +990,8 @@ void get_sliced_neighbor_block_into(
         for (int64_t j = 0; j < skeleton_size; ++j) {
             const int64_t src_col = (*skel)[static_cast<size_t>(j)];
             for (int64_t i = 0; i < box_size; ++i) {
-                out[static_cast<size_t>(i + j * box_size)] = M(i, src_col);
+                out[static_cast<size_t>(i + j * box_size)] =
+                    matrix_value(i, src_col);
             }
         }
         return;
@@ -1038,10 +1054,23 @@ std::vector<DataType> slice_modified_block_both_directions(
     bool is_A_NS,
     int64_t expected_neighbor_size)
 {
-    const auto& source = is_A_NS ? stored_block.A_NS : stored_block.A_SN;
     const int64_t k = static_cast<int64_t>(current_box_skeleton.size());
+    const bool source_allocated = is_A_NS
+        ? stored_block.a_ns_is_allocated()
+        : stored_block.A_SN.is_allocated();
+    const int64_t source_rows = is_A_NS
+        ? stored_block.a_ns_rows()
+        : stored_block.A_SN.rows;
+    const int64_t source_cols = is_A_NS
+        ? stored_block.a_ns_cols()
+        : stored_block.A_SN.cols;
+    auto source_value = [&](int64_t row, int64_t col) -> const DataType& {
+        return is_A_NS
+            ? stored_block.a_ns(row, col)
+            : stored_block.A_SN(row, col);
+    };
 
-    if (!source.is_allocated()) {
+    if (!source_allocated) {
         throw std::runtime_error("slice_modified_block_both_directions: Source not allocated");
     }
     if (k <= 0) {
@@ -1051,11 +1080,13 @@ std::vector<DataType> slice_modified_block_both_directions(
         throw std::runtime_error("slice_modified_block_both_directions: expected_neighbor_size <= 0");
     }
 
-    auto pack_no_padding = [&](const MatrixStorage<DataType>& A) -> std::vector<DataType> {
-        std::vector<DataType> out(static_cast<size_t>(A.rows * A.cols));
-        for (int64_t j = 0; j < A.cols; ++j) {
-            for (int64_t i = 0; i < A.rows; ++i) {
-                out[static_cast<size_t>(i + j * A.rows)] = A(i, j);
+    auto pack_no_padding = [&]() -> std::vector<DataType> {
+        std::vector<DataType> out(
+            static_cast<size_t>(source_rows * source_cols));
+        for (int64_t j = 0; j < source_cols; ++j) {
+            for (int64_t i = 0; i < source_rows; ++i) {
+                out[static_cast<size_t>(i + j * source_rows)] =
+                    source_value(i, j);
             }
         }
         return out;
@@ -1085,13 +1116,13 @@ std::vector<DataType> slice_modified_block_both_directions(
 
     if (is_A_NS) {
         // A_NS: (n_neighbor × num_points_box), want: (n_neighbor_skel × k)
-        const int64_t stored_rows = source.rows;
-        const int64_t stored_cols = source.cols;
+        const int64_t stored_rows = source_rows;
+        const int64_t stored_cols = source_cols;
         const bool current_side_resolved = (stored_cols == k);
         const bool neighbor_side_resolved = (stored_rows == expected_neighbor_size);
 
         if (current_side_resolved && neighbor_side_resolved) {
-            return pack_no_padding(source);
+            return pack_no_padding();
         }
         if (stored_rows < expected_neighbor_size) {
             throw std::runtime_error(
@@ -1150,20 +1181,21 @@ std::vector<DataType> slice_modified_block_both_directions(
             }
             for (int64_t i = 0; i < expected_neighbor_size; ++i) {
                 const int64_t src_row = neighbor_side_resolved ? i : (*neighbor_skeleton)[static_cast<size_t>(i)];
-                result[static_cast<size_t>(i + j * expected_neighbor_size)] = source(src_row, src_col);
+                result[static_cast<size_t>(i + j * expected_neighbor_size)] =
+                    source_value(src_row, src_col);
             }
         }
         return result;
     }
 
     // A_SN: (num_points_box × n_neighbor), want: (k × n_neighbor_skel)
-    const int64_t stored_rows = source.rows;
-    const int64_t stored_cols = source.cols;
+    const int64_t stored_rows = source_rows;
+    const int64_t stored_cols = source_cols;
     const bool current_side_resolved = (stored_rows == k);
     const bool neighbor_side_resolved = (stored_cols == expected_neighbor_size);
 
     if (current_side_resolved && neighbor_side_resolved) {
-        return pack_no_padding(source);
+        return pack_no_padding();
     }
     if (stored_cols < expected_neighbor_size) {
         throw std::runtime_error(
@@ -1222,7 +1254,8 @@ std::vector<DataType> slice_modified_block_both_directions(
                     "slice_modified_block_both_directions(A_SN): current skeleton row out of bounds. "
                     "src_row=" + std::to_string(src_row) + " stored_rows=" + std::to_string(stored_rows));
             }
-            result[static_cast<size_t>(i + j * k)] = source(src_row, src_col);
+            result[static_cast<size_t>(i + j * k)] =
+                source_value(src_row, src_col);
         }
     }
     return result;
@@ -1882,12 +1915,12 @@ std::vector<DataType> materialize_deferred_xnn_target_matrix_for_accumulation(
     }
 
     auto& block = modified_interactions[it->second];
-    if (!block.A_NS.is_allocated()) {
+    if (!block.a_ns_is_allocated()) {
         throw std::runtime_error(
             "materialize_deferred_xnn_target_matrix_for_accumulation: A_NS missing");
     }
 
-    if (block.A_NS.rows != rows || block.A_NS.cols != cols) {
+    if (block.a_ns_rows() != rows || block.a_ns_cols() != cols) {
         std::ostringstream oss;
         oss << "materialize_deferred_xnn_target_matrix_for_accumulation: existing block dimension mismatch"
             << " target_box=" << target.box_morton
@@ -1895,15 +1928,15 @@ std::vector<DataType> materialize_deferred_xnn_target_matrix_for_accumulation(
             << " target_kind="
             << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
                     "NEAR_A_NS" : "FAR_A_NS")
-            << " stored_rows=" << block.A_NS.rows
-            << " stored_cols=" << block.A_NS.cols
+            << " stored_rows=" << block.a_ns_rows()
+            << " stored_cols=" << block.a_ns_cols()
             << " expected_rows=" << rows
             << " expected_cols=" << cols;
         throw std::runtime_error(oss.str());
     }
 
     const size_t expected_size = static_cast<size_t>(rows * cols);
-    if (block.A_NS.data.size() != expected_size) {
+    if (block.a_ns_data_size() != expected_size) {
         std::ostringstream oss;
         oss << "materialize_deferred_xnn_target_matrix_for_accumulation: existing block data size mismatch"
             << " target_box=" << target.box_morton
@@ -1911,12 +1944,12 @@ std::vector<DataType> materialize_deferred_xnn_target_matrix_for_accumulation(
             << " target_kind="
             << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
                     "NEAR_A_NS" : "FAR_A_NS")
-            << " data_size=" << block.A_NS.data.size()
+            << " data_size=" << block.a_ns_data_size()
             << " expected_size=" << expected_size;
         throw std::runtime_error(oss.str());
     }
 
-    return block.A_NS.data;
+    return block.copy_a_ns_data();
 }
 
 // Write one fully accumulated destination block back to box storage. At this
@@ -1956,7 +1989,7 @@ void flush_deferred_xnn_target_matrix_from_accumulation(
     if (it == interaction_map.end()) {
         ModifiedBlock<DataType> new_block;
         new_block.neighbor_morton = target_state.target.neighbor_morton;
-        new_block.A_NS.set_owned(
+        new_block.set_a_ns_owned(
             target_state.rows, target_state.cols, std::move(target_state.data),
             MatrixStorage<DataType>::FULL);
 
@@ -1967,14 +2000,13 @@ void flush_deferred_xnn_target_matrix_from_accumulation(
     }
 
     auto& block = modified_interactions[it->second];
-    block.A_NS.set_owned(
+    block.set_a_ns_owned(
         target_state.rows, target_state.cols, std::move(target_state.data),
         MatrixStorage<DataType>::FULL);
 }
 
-// Ensure that the non-owner half of a symmetric pair already has concrete
-// storage before the mirror-copy phase starts. This keeps the later parallel
-// mirror pass free of map insertions and vector growth.
+// Ensure that the non-owner half of a symmetric pair has a metadata entry
+// before the sharing phase starts. The dense payload remains owner-only.
 template<typename CoordType, typename DataType>
 void ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
     const DeferredXnnTargetKey& target,
@@ -2006,8 +2038,6 @@ void ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
     if (it == interaction_map.end()) {
         ModifiedBlock<DataType> new_block;
         new_block.neighbor_morton = target.neighbor_morton;
-        new_block.A_NS.allocate(rows, cols, MatrixStorage<DataType>::FULL);
-
         int64_t new_idx = static_cast<int64_t>(modified_interactions.size());
         modified_interactions.push_back(std::move(new_block));
         interaction_map[target.neighbor_morton] = new_idx;
@@ -2015,39 +2045,18 @@ void ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
     }
 
     auto& block = modified_interactions[it->second];
-    if (!block.A_NS.is_allocated()) {
-        block.A_NS.allocate(rows, cols, MatrixStorage<DataType>::FULL);
+    if (block.a_ns_uses_symmetric_storage()) {
+        // The owner candidate may be replacing this shared allocation in a
+        // concurrent iteration.  Validate the settled logical dimensions in
+        // the post-owner mirror pass, after that parallel region completes.
         return;
     }
 
-    if (block.A_NS.rows != rows || block.A_NS.cols != cols) {
-        std::ostringstream oss;
-        oss << "ensure_symmetric_owner_deferred_xnn_target_matrix_storage: preallocated mirror block dimension mismatch"
-            << " target_box=" << target.box_morton
-            << " neighbor_box=" << target.neighbor_morton
-            << " target_kind="
-            << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
-                    "NEAR_A_NS" : "FAR_A_NS")
-            << " existing_rows=" << block.A_NS.rows
-            << " existing_cols=" << block.A_NS.cols
-            << " requested_rows=" << rows
-            << " requested_cols=" << cols;
-        throw std::runtime_error(oss.str());
-    }
-
-    const size_t expected_size = static_cast<size_t>(rows * cols);
-    if (block.A_NS.data.size() != expected_size) {
-        std::ostringstream oss;
-        oss << "ensure_symmetric_owner_deferred_xnn_target_matrix_storage: preallocated mirror block data size mismatch"
-            << " target_box=" << target.box_morton
-            << " neighbor_box=" << target.neighbor_morton
-            << " target_kind="
-            << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
-                    "NEAR_A_NS" : "FAR_A_NS")
-            << " existing_data_size=" << block.A_NS.data.size()
-            << " expected_size=" << expected_size;
-        throw std::runtime_error(oss.str());
-    }
+    (void)rows;
+    (void)cols;
+    // A directed payload here is a stale reciprocal copy.  The mirror pass
+    // will attach this metadata entry to the canonical owner's allocation.
+    block.A_NS = MatrixStorage<DataType>();
 }
 
 template<typename CoordType, typename DataType>
@@ -2104,10 +2113,11 @@ void apply_deferred_xnn_update(
 
         ModifiedBlock<DataType> new_block;
         new_block.neighbor_morton = update.target.neighbor_morton;
-        new_block.A_NS.set_owned(
+        accumulate_deferred_xnn_matrix_in_place(
+            base_it->second.data, update.delta);
+        new_block.set_a_ns_owned(
             update.rows, update.cols, std::move(base_it->second.data),
             MatrixStorage<DataType>::FULL);
-        accumulate_deferred_xnn_matrix_in_place(new_block.A_NS.data, update.delta);
 
         int64_t new_idx = static_cast<int64_t>(modified_interactions.size());
         modified_interactions.push_back(std::move(new_block));
@@ -2141,8 +2151,8 @@ void apply_deferred_xnn_update(
             << " target_eliminated=" << target_eliminated
             << " target_num_points=" << target_box->num_points
             << " target_skeleton_size=" << target_box->skeleton_indices.size()
-            << " stored_A_NS_rows=" << block.A_NS.rows
-            << " stored_A_NS_cols=" << block.A_NS.cols
+            << " stored_A_NS_rows=" << block.a_ns_rows()
+            << " stored_A_NS_cols=" << block.a_ns_cols()
             << " cause={" << e.what() << "}";
         throw std::runtime_error(oss.str());
     }
@@ -2152,7 +2162,7 @@ void apply_deferred_xnn_update(
     }
 
     accumulate_deferred_xnn_matrix_in_place(current, update.delta);
-    block.A_NS.set_owned(
+    block.set_a_ns_owned(
         update.rows, update.cols, std::move(current), MatrixStorage<DataType>::FULL);
 }
 
@@ -2493,19 +2503,20 @@ void deferred_xnn_cache_remote_source_pair_replace_from_source_box(
     }
 
     const auto& block = source_box->near_field_modified_interactions[it->second];
-    if (!block.A_NS.is_allocated()) {
+    if (!block.a_ns_is_allocated()) {
         throw std::runtime_error(
             "deferred_xnn_cache_remote_source_pair_replace_from_source_box: source A_NS missing");
     }
 
     const int64_t k_source = static_cast<int64_t>(source_box->skeleton_indices.size());
-    if (block.A_NS.rows != n_candidate || block.A_NS.cols != k_source) {
+    if (block.a_ns_rows() != n_candidate ||
+        block.a_ns_cols() != k_source) {
         std::ostringstream oss;
         oss << "deferred_xnn_cache_remote_source_pair_replace_from_source_box: unexpected source block dimensions"
             << " source_box=" << source_box->morton_index
             << " candidate_box=" << candidate_morton
-            << " stored_rows=" << block.A_NS.rows
-            << " stored_cols=" << block.A_NS.cols
+            << " stored_rows=" << block.a_ns_rows()
+            << " stored_cols=" << block.a_ns_cols()
             << " expected_rows=" << n_candidate
             << " expected_cols=" << k_source;
         throw std::runtime_error(oss.str());
@@ -2515,7 +2526,7 @@ void deferred_xnn_cache_remote_source_pair_replace_from_source_box(
     for (int64_t col = 0; col < k_source; ++col) {
         for (int64_t row = 0; row < n_candidate; ++row) {
             transpose[static_cast<size_t>(col + row * k_source)] =
-                block.A_NS.data[static_cast<size_t>(row + col * n_candidate)];
+                block.a_ns(row, col);
         }
     }
 
@@ -2588,8 +2599,6 @@ void ensure_symmetric_owner_deferred_source_pair_target_matrix_storage(
     if (it == interaction_map.end()) {
         ModifiedBlock<DataType> new_block;
         new_block.neighbor_morton = target.neighbor_morton;
-        new_block.A_NS.allocate(rows, cols, MatrixStorage<DataType>::FULL);
-
         int64_t new_idx = static_cast<int64_t>(modified_interactions.size());
         modified_interactions.push_back(std::move(new_block));
         interaction_map[target.neighbor_morton] = new_idx;
@@ -2597,7 +2606,30 @@ void ensure_symmetric_owner_deferred_source_pair_target_matrix_storage(
     }
 
     auto& block = modified_interactions[it->second];
-    block.A_NS.allocate(rows, cols, MatrixStorage<DataType>::FULL);
+    if (!block.a_ns_uses_symmetric_storage()) {
+        // This directed payload is the stale reciprocal view that the old
+        // mirror path zero-resized here.  Drop it now; the post-owner pass
+        // attaches this block to the updated owner's shared allocation.
+        block.A_NS = MatrixStorage<DataType>();
+        return;
+    }
+
+    if (block.a_ns_is_allocated() &&
+        (block.a_ns_rows() != rows || block.a_ns_cols() != cols)) {
+        std::ostringstream oss;
+        oss << "ensure_symmetric_owner_deferred_source_pair_target_matrix_storage: dimension mismatch"
+            << " target_box=" << target.box_morton
+            << " neighbor_box=" << target.neighbor_morton
+            << " stored_rows=" << block.a_ns_rows()
+            << " stored_cols=" << block.a_ns_cols()
+            << " expected_rows=" << rows
+            << " expected_cols=" << cols
+            << " shared=" << block.a_ns_uses_symmetric_storage()
+            << " transposed=" << block.a_ns_view_is_transposed()
+            << " physical_rows=" << block.a_ns_physical_storage().rows
+            << " physical_cols=" << block.a_ns_physical_storage().cols;
+        throw std::runtime_error(oss.str());
+    }
 }
 
 // For one candidate box, replay each previous-wave source in deterministic order.
@@ -3000,9 +3032,9 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
     }
 }
 
-// Copy the owner half-pair directly into a preallocated non-owner block. By the
-// time this runs, the owner-side accumulation pass is finished, and every
-// mirrored destination block has already been created with the correct shape.
+// Link the owner half-pair to its metadata-only reciprocal block. By the time
+// this runs, the owner-side accumulation pass is finished and the dense edge is
+// immutable until the next wave.
 template<typename CoordType, typename DataType>
 void apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
     BoxData<CoordType, DataType>* candidate_box,
@@ -3060,8 +3092,8 @@ void apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
             throw std::runtime_error(oss.str());
         }
 
-        const auto& owner_block = owner_interactions[owner_it->second];
-        if (!owner_block.A_NS.is_allocated()) {
+        auto& owner_block = owner_interactions[owner_it->second];
+        if (!owner_block.a_ns_is_allocated()) {
             std::ostringstream oss;
             oss << "apply_symmetric_owner_deferred_xnn_updates_for_candidate_box: owner block storage missing"
                 << " candidate_box=" << candidate_box->morton_index
@@ -3094,21 +3126,11 @@ void apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
         }
 
         auto& target_block = target_interactions[target_it->second];
-        if (!target_block.A_NS.is_allocated()) {
-            std::ostringstream oss;
-            oss << "apply_symmetric_owner_deferred_xnn_updates_for_candidate_box: preallocated mirror storage missing"
-                << " candidate_box=" << candidate_box->morton_index
-                << " owner_box=" << target.neighbor_morton
-                << " target_kind="
-                << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
-                        "NEAR_A_NS" : "FAR_A_NS");
-            throw std::runtime_error(oss.str());
-        }
-
-        const int64_t expected_rows = owner_block.A_NS.cols;
-        const int64_t expected_cols = owner_block.A_NS.rows;
-        if (target_block.A_NS.rows != expected_rows ||
-            target_block.A_NS.cols != expected_cols) {
+        const int64_t expected_rows = owner_block.a_ns_cols();
+        const int64_t expected_cols = owner_block.a_ns_rows();
+        if (target_block.a_ns_is_allocated() &&
+            (target_block.a_ns_rows() != expected_rows ||
+             target_block.a_ns_cols() != expected_cols)) {
             std::ostringstream oss;
             oss << "apply_symmetric_owner_deferred_xnn_updates_for_candidate_box: preallocated mirror block dimension mismatch"
                 << " candidate_box=" << candidate_box->morton_index
@@ -3116,16 +3138,16 @@ void apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
                 << " target_kind="
                 << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
                         "NEAR_A_NS" : "FAR_A_NS")
-                << " existing_rows=" << target_block.A_NS.rows
-                << " existing_cols=" << target_block.A_NS.cols
+                << " existing_rows=" << target_block.a_ns_rows()
+                << " existing_cols=" << target_block.a_ns_cols()
                 << " expected_rows=" << expected_rows
                 << " expected_cols=" << expected_cols;
             throw std::runtime_error(oss.str());
         }
 
-        const size_t expected_size = static_cast<size_t>(expected_rows * expected_cols);
-        if (target_block.A_NS.data.size() != expected_size ||
-            owner_block.A_NS.data.size() != expected_size) {
+        const size_t expected_size =
+            static_cast<size_t>(expected_rows * expected_cols);
+        if (owner_block.a_ns_data_size() != expected_size) {
             std::ostringstream oss;
             oss << "apply_symmetric_owner_deferred_xnn_updates_for_candidate_box: mirror data size mismatch"
                 << " candidate_box=" << candidate_box->morton_index
@@ -3133,19 +3155,15 @@ void apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
                 << " target_kind="
                 << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
                         "NEAR_A_NS" : "FAR_A_NS")
-                << " target_data_size=" << target_block.A_NS.data.size()
-                << " owner_data_size=" << owner_block.A_NS.data.size()
+                << " target_data_size=" << target_block.a_ns_data_size()
+                << " owner_data_size=" << owner_block.a_ns_data_size()
                 << " expected_size=" << expected_size;
             throw std::runtime_error(oss.str());
         }
 
-        // Copy the transpose directly into the already allocated destination
-        // buffer. No map insertions or vector growth happen in this phase.
-        for (int64_t col = 0; col < owner_block.A_NS.cols; ++col) {
-            for (int64_t row = 0; row < owner_block.A_NS.rows; ++row) {
-                target_block.A_NS.data[static_cast<size_t>(col + row * owner_block.A_NS.cols)] =
-                    owner_block.A_NS.data[static_cast<size_t>(row + col * owner_block.A_NS.rows)];
-            }
+        if (!share_symmetric_a_ns_pair(owner_block, target_block)) {
+            throw std::runtime_error(
+                "apply_symmetric_owner_deferred_xnn_updates_for_candidate_box: cannot share reciprocal edge");
         }
     }
 }
@@ -4417,20 +4435,27 @@ void slice_far_field_blocks(
         // ====================================================================
         for (auto& block : box.far_field_modified_interactions) {
 
-            if (block.A_NS.is_allocated() && block.A_NS.cols != k) {
-                int64_t stored_rows = block.A_NS.rows;
-                std::vector<int64_t> all_rows(stored_rows);
-                std::iota(all_rows.begin(), all_rows.end(), 0);
+            if (block.a_ns_is_allocated() && block.a_ns_cols() != k) {
+                const int64_t stored_rows = block.a_ns_rows();
+                const int64_t stored_cols = block.a_ns_cols();
+                std::vector<DataType> sliced(
+                    static_cast<size_t>(stored_rows * k));
+                for (int64_t col = 0; col < k; ++col) {
+                    const int64_t source_col =
+                        box.skeleton_indices[static_cast<size_t>(col)];
+                    if (source_col < 0 || source_col >= stored_cols) {
+                        throw std::runtime_error(
+                            "slice_far_field_blocks: skeleton column out of bounds");
+                    }
+                    for (int64_t row = 0; row < stored_rows; ++row) {
+                        sliced[static_cast<size_t>(row + col * stored_rows)] =
+                            block.a_ns(row, source_col);
+                    }
+                }
 
-                std::vector<DataType> sliced(stored_rows * k);
-                extract_submatrix(
-                    block.A_NS.data.data(), stored_rows,
-                    all_rows, box.skeleton_indices,
-                    sliced.data(), stored_rows
-                );
-
-                block.A_NS.data = std::move(sliced);
-                block.A_NS.cols = k;
+                block.set_a_ns_owned(
+                    stored_rows, k, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
             }
         }
 
@@ -4462,21 +4487,28 @@ void slice_far_field_blocks(
             auto& neighbor_block = neighbor_box->far_field_modified_interactions[it->second];
 
             // Slice A_NS rows: (n_B × k_G) → (k_B × k_G)
-            if (neighbor_block.A_NS.is_allocated() && neighbor_block.A_NS.rows != k) {
-                int64_t stored_cols = neighbor_block.A_NS.cols;
-                std::vector<int64_t> all_cols(stored_cols);
-                std::iota(all_cols.begin(), all_cols.end(), 0);
+            if (neighbor_block.a_ns_is_allocated() &&
+                neighbor_block.a_ns_rows() != k) {
+                const int64_t stored_rows = neighbor_block.a_ns_rows();
+                const int64_t stored_cols = neighbor_block.a_ns_cols();
+                std::vector<DataType> sliced(
+                    static_cast<size_t>(k * stored_cols));
+                for (int64_t col = 0; col < stored_cols; ++col) {
+                    for (int64_t row = 0; row < k; ++row) {
+                        const int64_t source_row =
+                            box.skeleton_indices[static_cast<size_t>(row)];
+                        if (source_row < 0 || source_row >= stored_rows) {
+                            throw std::runtime_error(
+                                "slice_far_field_blocks: skeleton row out of bounds");
+                        }
+                        sliced[static_cast<size_t>(row + col * k)] =
+                            neighbor_block.a_ns(source_row, col);
+                    }
+                }
 
-                std::vector<DataType> sliced(k * stored_cols);
-                extract_submatrix(
-                    neighbor_block.A_NS.data.data(), neighbor_block.A_NS.rows,
-                    box.skeleton_indices, all_cols,
-                    sliced.data(), k
-                );
-
-                neighbor_block.A_NS.data = std::move(sliced);
-                neighbor_block.A_NS.rows = k;
-                neighbor_block.A_NS.lda  = k;
+                neighbor_block.set_a_ns_owned(
+                    k, stored_cols, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
             }
         }
     };
@@ -4643,7 +4675,9 @@ void compute_step_two_internal(
                 // DEBUG: Print dimensions
                 if (DEBUG){
                     std::cout << "DEBUG Step 5: Slicing A_NS for neighbor " << neighbor_morton << std::endl;
-                    std::cout << "  Stored A_NS dims: " << modified_block.A_NS.rows << " × " << modified_block.A_NS.cols << std::endl;
+                    std::cout << "  Stored A_NS dims: "
+                              << modified_block.a_ns_rows() << " × "
+                              << modified_block.a_ns_cols() << std::endl;
                     std::cout << "  Current box skeleton size: " << box->skeleton_indices.size() << std::endl;
                     std::cout << "  Expected neighbor size (n_neighbor): " << n_neighbor << std::endl;
                     std::cout << "  Neighbor is eliminated: " << (level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end() ? "yes" : "no") << std::endl;
@@ -4668,7 +4702,7 @@ void compute_step_two_internal(
                 }
                 
                 // Store back (now properly sized: n_neighbor × k)
-                modified_block.A_NS.set_owned(
+                modified_block.set_a_ns_owned(
                     n_neighbor, k, std::move(sliced), MatrixStorage<DataType>::FULL);
                 
             } else {
@@ -4723,7 +4757,7 @@ void compute_step_two_internal(
                 // Store combined result
                 ModifiedBlock<DataType> new_block;
                 new_block.neighbor_morton = neighbor_morton;
-                new_block.A_NS.set_owned(
+                new_block.set_a_ns_owned(
                     n_neighbor, k, std::move(A_NS_original), MatrixStorage<DataType>::FULL);
                 
                 int64_t new_idx = box->near_field_modified_interactions.size();
@@ -4919,7 +4953,7 @@ void compute_step_two_internal(
                     throw std::runtime_error("Step 7: neighbor missing from near_field_interaction_map");
                 }
                 const auto& modified_block = box->near_field_modified_interactions[it->second];
-                if (!modified_block.A_NS.is_allocated()) {
+                if (!modified_block.a_ns_is_allocated()) {
                     throw std::runtime_error("Step 7: A_NS should be allocated after step 5");
                 }
 
@@ -4929,7 +4963,8 @@ void compute_step_two_internal(
                     std::vector<DataType> X_GS_transpose(k * n_neighbor);
                     for (int64_t i = 0; i < k; ++i) {
                         for (int64_t j = 0; j < n_neighbor; ++j) {
-                            X_GS_transpose[i + j * k] = modified_block.A_NS.data[j + i * n_neighbor];
+                            X_GS_transpose[i + j * k] =
+                                modified_block.a_ns(j, i);
                         }
                     }
 
@@ -4937,7 +4972,8 @@ void compute_step_two_internal(
                         DenseBlock<DataType>{k, n_neighbor, std::move(X_GS_transpose)};
                 } else {
                     // Nonsymmetric: cache REPLACE into neighbor's A_SN
-                    std::vector<DataType> X_GS = modified_block.A_NS.data; // (n_neighbor x k)
+                    std::vector<DataType> X_GS =
+                        modified_block.copy_a_ns_data(); // (n_neighbor x k)
 
                     pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index}] =
                         DenseBlock<DataType>{n_neighbor, k, std::move(X_GS)};
@@ -4958,11 +4994,11 @@ void compute_step_two_internal(
                     "compute_step_two_internal: Neighbor should be in near_field_interaction_map");
             }
             
-            const auto& modified_block = box->near_field_modified_interactions[it->second];
+            auto& modified_block = box->near_field_modified_interactions[it->second];
             
 
 
-            if (!modified_block.A_NS.is_allocated()) {
+            if (!modified_block.a_ns_is_allocated()) {
                 throw std::runtime_error(
                     "compute_step_two_internal: A_NS should be allocated after step 5");
             }
@@ -4978,7 +5014,7 @@ void compute_step_two_internal(
                 std::vector<DataType> X_GS_transpose(k * n_neighbor);
                 for (int64_t i = 0; i < k; ++i) {
                     for (int64_t j = 0; j < n_neighbor; ++j) {
-                        X_GS_transpose[i + j * k] = modified_block.A_NS.data[j + i * n_neighbor];
+                        X_GS_transpose[i + j * k] = modified_block.a_ns(j, i);
                     }
                 }
                 // Write to neighbor INSIDE lock
@@ -4996,16 +5032,18 @@ void compute_step_two_internal(
                     if (DEBUG) {
                         std::cout << "DEBUG Step 7: UPDATING existing block in Box " << neighbor_morton 
                                 << "'s view for Box " << box->morton_index << std::endl;
-                        std::cout << "  Old A_NS dims: " << block_G.A_NS.rows << " × " << block_G.A_NS.cols << std::endl;
+                        std::cout << "  Old A_NS dims: "
+                                  << block_G.a_ns_rows() << " × "
+                                  << block_G.a_ns_cols() << std::endl;
                         std::cout << "  New A_NS dims: " << k << " × " << n_neighbor << std::endl;
                     }
-                    block_G.A_NS.set_owned(
+                    block_G.set_a_ns_owned(
                         k, n_neighbor, std::move(X_GS_transpose), MatrixStorage<DataType>::FULL);
 
                     // DEBUG: Verify allocation
                     if (DEBUG) {
                         bool stored_has_nan = false;
-                        for (auto val : block_G.A_NS.data) {
+                        for (auto val : block_G.copy_a_ns_data()) {
                             if (is_nan(val)) {
                                 stored_has_nan = true;
                                 break;
@@ -5013,8 +5051,10 @@ void compute_step_two_internal(
                         }
                         std::cout << "  AFTER STORAGE in Box " << neighbor_morton << "'s block[" << block_idx_G << "]:" << std::endl;
                         std::cout << "    A_NS contains NaN: " << (stored_has_nan ? "YES ⚠️" : "NO") << std::endl;
-                        std::cout << "    A_NS dims: " << block_G.A_NS.rows << " × " << block_G.A_NS.cols << std::endl;
-                        std::cout << "    A_NS data.size: " << block_G.A_NS.data.size() << std::endl;
+                        std::cout << "    A_NS dims: " << block_G.a_ns_rows()
+                                  << " × " << block_G.a_ns_cols() << std::endl;
+                        std::cout << "    A_NS data.size: "
+                                  << block_G.a_ns_data_size() << std::endl;
                         
                         if (stored_has_nan) {
                             std::cout << "  ⚠️ NaN DETECTED! Box " << box->morton_index 
@@ -5039,7 +5079,7 @@ void compute_step_two_internal(
                     }
                     ModifiedBlock<DataType> new_block_G;
                     new_block_G.neighbor_morton = box->morton_index;
-                    new_block_G.A_NS.set_owned(
+                    new_block_G.set_a_ns_owned(
                         k, n_neighbor, std::move(X_GS_transpose), MatrixStorage<DataType>::FULL);  // FIX: k × n_neighbor
 
                     
@@ -5050,7 +5090,7 @@ void compute_step_two_internal(
                     if (DEBUG) {
                         const auto& stored_block = neighbor_box->near_field_modified_interactions[new_idx];
                         bool stored_has_nan = false;
-                        for (auto val : stored_block.A_NS.data) {
+                        for (auto val : stored_block.copy_a_ns_data()) {
                             if (is_nan(val)) {
                                 stored_has_nan = true;
                                 break;
@@ -5070,7 +5110,7 @@ void compute_step_two_internal(
                 // ===== Nonsymmetric: Store X_GS in G's A_SN =====
                 // From B: X_GS is (n_neighbor × k) in A_NS
                 // From G: X_GS is (n_neighbor × k) in A_SN
-                std::vector<DataType> X_GS = modified_block.A_NS.data;
+                std::vector<DataType> X_GS = modified_block.copy_a_ns_data();
                 
                 auto it_G = neighbor_box->near_field_interaction_map_nonsymmetry.find(box->morton_index);
                 
@@ -6172,8 +6212,8 @@ void compute_and_modify(
         for (const auto& [morton, idx] : box->near_field_interaction_map) {
             const auto& block = box->near_field_modified_interactions[idx];
             std::cout << "  Neighbor " << morton << ": A_NS = ";
-            if (block.A_NS.is_allocated()) {
-                std::cout << block.A_NS.rows << " × " << block.A_NS.cols;
+            if (block.a_ns_is_allocated()) {
+                std::cout << block.a_ns_rows() << " × " << block.a_ns_cols();
             } else {
                 std::cout << "not allocated";
             }
@@ -6189,7 +6229,10 @@ void compute_and_modify(
             std::cout << "  morton " << morton << " -> idx " << idx;
             if (idx < box->near_field_modified_interactions.size()) {
                 const auto& block = box->near_field_modified_interactions[idx];
-                std::cout << " (block " << (block.A_NS.is_allocated() ? "allocated" : "NOT allocated") << ")";
+                std::cout << " (block "
+                          << (block.a_ns_is_allocated()
+                                  ? "allocated" : "NOT allocated")
+                          << ")";
             } else {
                 std::cout << " (INDEX OUT OF BOUNDS!)";
             }
@@ -6750,8 +6793,8 @@ void compute_and_modify(
 
                 if (DEBUG) {
                     bool stored_has_nan = false;
-                    const auto& check_matrix = modified_block.A_NS;
-                    for (auto val : check_matrix.data) {
+                    const auto check_matrix = modified_block.copy_a_ns_data();
+                    for (auto val : check_matrix) {
                         if (is_nan(val)) {
                             stored_has_nan = true;
                             break;
@@ -6759,7 +6802,9 @@ void compute_and_modify(
                     }
                     
                     std::cout << "DEBUG Box " << box->morton_index << " neighbor " << neighbor_morton << std::endl;
-                    std::cout << "  Stored block A_NS dims: " << check_matrix.rows << " × " << check_matrix.cols << std::endl;
+                    std::cout << "  Stored block A_NS dims: "
+                              << modified_block.a_ns_rows() << " × "
+                              << modified_block.a_ns_cols() << std::endl;
                     std::cout << "  Stored block ALREADY has NaN: " << (stored_has_nan ? "YES" : "NO") << std::endl;
                     // if(neighbor_morton == 192)
                     // {
@@ -7300,18 +7345,31 @@ void update_neighbor_slicing_for_level(
     
     // Helper lambda to slice a single matrix in the neighbor dimension
     auto slice_neighbor_dimension = [&](
-        MatrixStorage<DataType>& matrix,
+        ModifiedBlock<DataType>& block,
         int64_t neighbor_morton,
         int64_t current_box_skeleton_size,
         int64_t current_box_morton,
         bool is_A_NS) {
+        (void)current_box_skeleton_size;
         
-        if (!matrix.is_allocated()) {
+        const bool matrix_allocated = is_A_NS
+            ? block.a_ns_is_allocated()
+            : block.A_SN.is_allocated();
+        if (!matrix_allocated) {
             return;  // Nothing to slice
         }
         
-        int64_t stored_rows = matrix.rows;
-        int64_t stored_cols = matrix.cols;
+        int64_t stored_rows = is_A_NS
+            ? block.a_ns_rows()
+            : block.A_SN.rows;
+        int64_t stored_cols = is_A_NS
+            ? block.a_ns_cols()
+            : block.A_SN.cols;
+        auto matrix_value = [&](int64_t row, int64_t col) -> const DataType& {
+            return is_A_NS
+                ? block.a_ns(row, col)
+                : block.A_SN(row, col);
+        };
         
         
         
@@ -7413,21 +7471,17 @@ void update_neighbor_slicing_for_level(
                 // Need to slice rows to skeleton
                 std::vector<DataType> sliced(skeleton_size * stored_cols);
                 
-                // Extract skeleton rows, all columns
-                std::vector<int64_t> all_cols(stored_cols);
-                std::iota(all_cols.begin(), all_cols.end(), 0);
-                
-                extract_submatrix(
-                    matrix.data.data(), stored_rows,
-                    skeleton_indices,
-                    all_cols,
-                    sliced.data(), skeleton_size
-                );
-                
-                // Update matrix in-place
-                matrix.data = std::move(sliced);
-                matrix.rows = skeleton_size;
-                matrix.lda = skeleton_size;
+                for (int64_t col = 0; col < stored_cols; ++col) {
+                    for (int64_t row = 0; row < skeleton_size; ++row) {
+                        sliced[static_cast<size_t>(row + col * skeleton_size)] =
+                            matrix_value(
+                                skeleton_indices[static_cast<size_t>(row)], col);
+                    }
+                }
+
+                block.set_a_ns_owned(
+                    skeleton_size, stored_cols, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
                 
             } else {
                 // stored_rows < skeleton_size
@@ -7449,20 +7503,18 @@ void update_neighbor_slicing_for_level(
                 // Need to slice columns to skeleton
                 std::vector<DataType> sliced(stored_rows * skeleton_size);
                 
-                // Extract all rows, skeleton columns
-                std::vector<int64_t> all_rows(stored_rows);
-                std::iota(all_rows.begin(), all_rows.end(), 0);
-                
-                extract_submatrix(
-                    matrix.data.data(), stored_rows,
-                    all_rows,
-                    skeleton_indices,
-                    sliced.data(), stored_rows
-                );
-                
-                // Update matrix in-place
-                matrix.data = std::move(sliced);
-                matrix.cols = skeleton_size;
+                for (int64_t col = 0; col < skeleton_size; ++col) {
+                    for (int64_t row = 0; row < stored_rows; ++row) {
+                        sliced[static_cast<size_t>(row + col * stored_rows)] =
+                            matrix_value(
+                                row,
+                                skeleton_indices[static_cast<size_t>(col)]);
+                    }
+                }
+
+                block.A_SN.set_owned(
+                    stored_rows, skeleton_size, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
                 
             } else {
                 // stored_cols < skeleton_size
@@ -7486,16 +7538,16 @@ void update_neighbor_slicing_for_level(
             int64_t neighbor_morton = modified_block.neighbor_morton;
             
             // Symmetric: only A_NS needs checking
-            if (modified_block.A_NS.is_allocated()) {
+            if (modified_block.a_ns_is_allocated()) {
                 slice_neighbor_dimension(
-                    modified_block.A_NS, neighbor_morton, 
+                    modified_block, neighbor_morton,
                     k_box, box.morton_index, true);
             }
             
             // Nonsymmetric: also check A_SN
             if (!is_symmetric && modified_block.A_SN.is_allocated()) {
                 slice_neighbor_dimension(
-                    modified_block.A_SN, neighbor_morton, 
+                    modified_block, neighbor_morton,
                     k_box, box.morton_index, false);
             }
         }
@@ -7505,16 +7557,16 @@ void update_neighbor_slicing_for_level(
             int64_t neighbor_morton = modified_block.neighbor_morton;
             
             // Symmetric: only A_NS needs checking
-            if (modified_block.A_NS.is_allocated()) {
+            if (modified_block.a_ns_is_allocated()) {
                 slice_neighbor_dimension(
-                    modified_block.A_NS, neighbor_morton, 
+                    modified_block, neighbor_morton,
                     k_box, box.morton_index, true);
             }
             
             // Nonsymmetric: also check A_SN
             if (!is_symmetric && modified_block.A_SN.is_allocated()) {
                 slice_neighbor_dimension(
-                    modified_block.A_SN, neighbor_morton, 
+                    modified_block, neighbor_morton,
                     k_box, box.morton_index, false);
             }
         }
@@ -7578,14 +7630,13 @@ bool verify_modified_interaction_symmetry(
             for (auto& block_BG : interactions) {
                 int64_t morton_G = block_BG.neighbor_morton;
                 
-                if (!block_BG.A_NS.is_allocated()) {
+                if (!block_BG.a_ns_is_allocated()) {
                     continue;  // Nothing to verify
                 }
                 
                 // A_NS[B,G] stored in box B's modified_interactions
-                auto& A_NS_BG = block_BG.A_NS;
-                int64_t rows_BG = A_NS_BG.rows;  // k_G (neighbor's skeleton size)
-                int64_t cols_BG = A_NS_BG.cols;  // k_B (box's skeleton size)
+                int64_t rows_BG = block_BG.a_ns_rows();  // k_G
+                int64_t cols_BG = block_BG.a_ns_cols();  // k_B
                 
                 if (cols_BG != k_B) {
                     if (verbose) {
@@ -7642,7 +7693,8 @@ bool verify_modified_interaction_symmetry(
                 
                 // Check both near and far field lists
                 for (auto& candidate : box_G->near_field_modified_interactions) {
-                    if (candidate.neighbor_morton == morton_B && candidate.A_NS.is_allocated()) {
+                    if (candidate.neighbor_morton == morton_B &&
+                        candidate.a_ns_is_allocated()) {
                         block_GB = &candidate;
                         break;
                     }
@@ -7650,7 +7702,8 @@ bool verify_modified_interaction_symmetry(
                 
                 if (block_GB == nullptr) {
                     for (auto& candidate : box_G->far_field_modified_interactions) {
-                        if (candidate.neighbor_morton == morton_B && candidate.A_NS.is_allocated()) {
+                        if (candidate.neighbor_morton == morton_B &&
+                            candidate.a_ns_is_allocated()) {
                             block_GB = &candidate;
                             break;
                         }
@@ -7666,14 +7719,14 @@ bool verify_modified_interaction_symmetry(
                     continue;
                 }
                 
-                auto& A_NS_GB = block_GB->A_NS;
-                int64_t rows_GB = A_NS_GB.rows;  // Should be k_B
-                int64_t cols_GB = A_NS_GB.cols;  // Should be k_G
+                int64_t rows_GB = block_GB->a_ns_rows();  // Should be k_B
+                int64_t cols_GB = block_GB->a_ns_cols();  // Should be k_G
                 if(block_GB->neighbor_morton == 67)
                 {
                     int rank;
                     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-                    printf("rank: %d, my id: %d, 67 index row: %d, col: %d\n", rank, box_G->morton_index, A_NS_GB.rows, A_NS_GB.cols);
+                    printf("rank: %d, my id: %d, 67 index row: %d, col: %d\n",
+                           rank, box_G->morton_index, rows_GB, cols_GB);
                 }
                 
                 // Dimension check: A_NS[B,G]^T should have same dimensions as A_NS[G,B]
@@ -7700,10 +7753,10 @@ bool verify_modified_interaction_symmetry(
                 for (int64_t i = 0; i < k_B; ++i) {
                     for (int64_t j = 0; j < k_G; ++j) {
                         // A_NS[B,G][j,i] (j-th row, i-th col) - column-major indexing
-                        DataType val_BG_transpose = A_NS_BG.data[i * rows_BG + j];
+                        DataType val_BG_transpose = block_BG.a_ns(j, i);
                         
                         // A_NS[G,B][i,j] (i-th row, j-th col) - column-major indexing
-                        DataType val_GB = A_NS_GB.data[j * rows_GB + i];
+                        DataType val_GB = block_GB->a_ns(i, j);
                         
                         DataType error = std::abs(val_BG_transpose - val_GB);
                         
@@ -7861,13 +7914,14 @@ std::vector<DataType> extract_child_interaction(
         } else {
             // *** KEY FIX: A_NS is stored as (neighbor × self) = (child_j × child_i)
             // *** We need to transpose to get C(child_i, child_j) = (child_i × child_j)
-            const auto& A_NS = modified_interactions[it->second].A_NS;
+            const auto& block = modified_interactions[it->second];
 
-            if (A_NS.rows != n_j || A_NS.cols != n_i) {
+            if (block.a_ns_rows() != n_j || block.a_ns_cols() != n_i) {
                 if (DEBUG){
                     std::cerr << "WARNING: extract_child_interaction: A_NS dimension mismatch. "
                           << "Expected " << n_j << "×" << n_i
-                          << " got " << A_NS.rows << "×" << A_NS.cols
+                          << " got " << block.a_ns_rows() << "×"
+                          << block.a_ns_cols()
                           << ". Falling back to kernel evaluation." << std::endl;
                 }
             } else {
@@ -7875,7 +7929,7 @@ std::vector<DataType> extract_child_interaction(
                 std::vector<DataType> C_block(n_i * n_j);
                 for (int64_t i = 0; i < n_i; ++i) {
                     for (int64_t j = 0; j < n_j; ++j) {
-                        C_block[i + j * n_i] = A_NS.data[j + i * n_j];
+                        C_block[i + j * n_i] = block.a_ns(j, i);
                     }
                 }
                 
@@ -8290,20 +8344,20 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
     if (near_it != source_child->near_field_interaction_map.end()) {
         auto& block = source_child->near_field_modified_interactions[near_it->second];
         
-        if (block.A_NS.is_allocated()) {
+        if (block.a_ns_is_allocated()) {
             // Found A_NS
             if (transpose_if_found) {
                 // A_NS is (n_target × n_source), need (n_source × n_target)
                 std::vector<DataType> transposed(n_source * n_target);
                 for (int64_t i = 0; i < n_target; ++i) {
                     for (int64_t j = 0; j < n_source; ++j) {
-                        transposed[j + i * n_source] = block.A_NS.data[i + j * n_target];
+                        transposed[j + i * n_source] = block.a_ns(i, j);
                     }
                 }
                 return transposed;
             } else {
                 // Already correct orientation
-                return block.A_NS.data;
+                return block.copy_a_ns_data();
             }
         }
     }
@@ -8313,20 +8367,20 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
     if (far_it != source_child->far_field_interaction_map.end()) {
         auto& block = source_child->far_field_modified_interactions[far_it->second];
         
-        if (block.A_NS.is_allocated()) {
+        if (block.a_ns_is_allocated()) {
             // Found A_NS
             if (transpose_if_found) {
                 // A_NS is (n_target × n_source), need (n_source × n_target)
                 std::vector<DataType> transposed(n_source * n_target);
                 for (int64_t i = 0; i < n_target; ++i) {
                     for (int64_t j = 0; j < n_source; ++j) {
-                        transposed[j + i * n_source] = block.A_NS.data[i + j * n_target];
+                        transposed[j + i * n_source] = block.a_ns(i, j);
                     }
                 }
                 return transposed;
             } else {
                 // Already correct orientation
-                return block.A_NS.data;
+                return block.copy_a_ns_data();
             }
         }
     }
@@ -8591,33 +8645,59 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                         row_offset += n_i;
                     }
                     
-                    // Transpose for B1's A_NS view (B2 × B1)
-                    std::vector<DataType> I_transposed(total_rows * total_cols);
-                    for (int64_t i = 0; i < total_rows; ++i) {
-                        for (int64_t j = 0; j < total_cols; ++j) {
-                            I_transposed[j + i * total_cols] = I_B1_B2[i + j * total_rows];
-                        }
-                    }
-                    
-                    // Store B1's view (A_NS)
                     ModifiedBlock<DataType> block_b1;
                     block_b1.neighbor_morton = B2.morton_index;
-                    block_b1.A_NS.set_owned(
-                        total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
-                    
-                    int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
-                    B1.near_field_modified_interactions.push_back(std::move(block_b1));
-                    B1.near_field_interaction_map[B2.morton_index] = block_idx_b1;
-                    
-                    // Store B2's view (A_NS)
                     ModifiedBlock<DataType> block_b2;
                     block_b2.neighbor_morton = B1.morton_index;
-                    block_b2.A_NS.set_owned(
-                        total_rows, total_cols, std::move(I_B1_B2), MatrixStorage<DataType>::FULL);
-                    
-                    int64_t block_idx_b2 = B2.near_field_modified_interactions.size();
-                    B2.near_field_modified_interactions.push_back(std::move(block_b2));
-                    B2.near_field_interaction_map[B1.morton_index] = block_idx_b2;
+
+                    if (is_symmetric && !is_hermitian) {
+                        // B2 owns the already assembled payload; B1 is its
+                        // transpose view of the same allocation.
+                        block_b2.set_a_ns_owned(
+                            total_rows, total_cols, std::move(I_B1_B2),
+                            MatrixStorage<DataType>::FULL);
+                    } else {
+                        // Preserve the directed Hermitian path until conjugate
+                        // views are represented explicitly.
+                        std::vector<DataType> I_transposed(
+                            static_cast<size_t>(total_rows * total_cols));
+                        for (int64_t i = 0; i < total_rows; ++i) {
+                            for (int64_t j = 0; j < total_cols; ++j) {
+                                I_transposed[static_cast<size_t>(
+                                    j + i * total_cols)] =
+                                    I_B1_B2[static_cast<size_t>(
+                                        i + j * total_rows)];
+                            }
+                        }
+                        block_b1.set_a_ns_owned(
+                            total_cols, total_rows, std::move(I_transposed),
+                            MatrixStorage<DataType>::FULL);
+                        block_b2.set_a_ns_owned(
+                            total_rows, total_cols, std::move(I_B1_B2),
+                            MatrixStorage<DataType>::FULL);
+                    }
+
+                    int64_t block_idx_b1 =
+                        B1.near_field_modified_interactions.size();
+                    B1.near_field_modified_interactions.push_back(
+                        std::move(block_b1));
+                    B1.near_field_interaction_map[B2.morton_index] =
+                        block_idx_b1;
+
+                    int64_t block_idx_b2 =
+                        B2.near_field_modified_interactions.size();
+                    B2.near_field_modified_interactions.push_back(
+                        std::move(block_b2));
+                    B2.near_field_interaction_map[B1.morton_index] =
+                        block_idx_b2;
+
+                    if (is_symmetric && !is_hermitian) {
+                        share_symmetric_a_ns_pair(
+                            B2.near_field_modified_interactions[
+                                static_cast<size_t>(block_idx_b2)],
+                            B1.near_field_modified_interactions[
+                                static_cast<size_t>(block_idx_b1)]);
+                    }
                     
                 } else {
                     
@@ -8749,7 +8829,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                     // Store only B1's view
                     ModifiedBlock<DataType> block_b1;
                     block_b1.neighbor_morton = neighbor_morton;
-                    block_b1.A_NS.set_owned(
+                    block_b1.set_a_ns_owned(
                         total_cols, total_rows, std::move(I_transposed), MatrixStorage<DataType>::FULL);
                     
                     int64_t block_idx_b1 = B1.near_field_modified_interactions.size();
