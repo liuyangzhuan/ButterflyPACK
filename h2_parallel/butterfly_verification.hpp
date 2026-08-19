@@ -613,7 +613,7 @@ double h2_compression_quick_verification(
 
     std::vector<DataType> h2_output;
     const double t0 = MPI_Wtime();
-    hierarchical_h2_mul_parallel(tree, verification.input, h2_output, false);
+    hierarchical_h2_mul_parallel(tree, verification.input, h2_output, 1, false);
     double t_mvp = MPI_Wtime() - t0;
     if (h2_output.size() != verification.exact_output.size()) {
         throw std::runtime_error(
@@ -686,7 +686,7 @@ double h2_quick_verification(
         mul_data(tree->num_levels);
 
     const double t0 = MPI_Wtime();
-    butterfly::hierarchical_mul_parallel(tree, x_true, mul_data, false);
+    butterfly::hierarchical_mul_parallel(tree, x_true, mul_data, 1, false);
     double t_mvp = MPI_Wtime() - t0;
 
     // step 2: compare against the sparse exact product prepared above
@@ -709,7 +709,7 @@ double h2_quick_verification(
         solve_data(tree->num_levels);
 
     const double t1 = MPI_Wtime();
-    butterfly::hierarchical_solve_parallel(tree, b_vec, solve_data, -1);
+    butterfly::hierarchical_solve_parallel(tree, b_vec, solve_data, 1, -1);
     double t_solve = MPI_Wtime() - t1;
 
     std::vector<DataType> x_h2(static_cast<size_t>(Nloc), DataType{0.0});
@@ -729,7 +729,8 @@ double h2_quick_verification(
         backward_mul_data(tree->num_levels);
 
     const double t2 = MPI_Wtime();
-    butterfly::hierarchical_mul_parallel(tree, x_h2, backward_mul_data, false);
+    butterfly::hierarchical_mul_parallel(
+        tree, x_h2, backward_mul_data, 1, false);
     double t_backward_mvp = MPI_Wtime() - t2;
 
     RealType diff_backward = 0;

@@ -1452,6 +1452,8 @@ size_t get_serialized_size(const SolveDataRequest<CoordType, DataType>& request)
     // POD fields
     size += sizeof(int64_t);  // morton_index
     size += sizeof(int);      // source_rank
+    size += sizeof(int64_t);  // num_points
+    size += sizeof(int64_t);  // nrhs
     
     // Vector fields with DataType elements
     size += sizeof(size_t) + request.right_side.size() * sizeof(DataType);
@@ -1490,6 +1492,12 @@ char* serialize(const SolveDataRequest<CoordType, DataType>& request, char* buff
     
     std::memcpy(ptr, &request.source_rank, sizeof(int));
     ptr += sizeof(int);
+
+    std::memcpy(ptr, &request.num_points, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+
+    std::memcpy(ptr, &request.nrhs, sizeof(int64_t));
+    ptr += sizeof(int64_t);
     
     // Helper lambda for vector serialization
     auto serialize_vector = [&ptr](const auto& vec) {
@@ -1539,6 +1547,12 @@ const char* deserialize(SolveDataRequest<CoordType, DataType>& request, const ch
     
     std::memcpy(&request.source_rank, ptr, sizeof(int));
     ptr += sizeof(int);
+
+    std::memcpy(&request.num_points, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+
+    std::memcpy(&request.nrhs, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
     
     // Helper lambda for vector deserialization
     auto deserialize_vector = [&ptr](auto& vec) {
@@ -4275,6 +4289,8 @@ void gather_CA_boxes_solve(
             auto& cached = lvl.ghost_and_assisting_boxes_for_solve[index];
             cached.morton_index = request.morton_index;
             cached.source_rank = request.source_rank;
+            cached.num_points = request.num_points;
+            cached.nrhs = request.nrhs;
             cached.right_side = std::move(request.right_side);
             cached.left_side = std::move(request.left_side);
             cached.redundant_indices = std::move(request.redundant_indices);
@@ -4373,6 +4389,8 @@ void gather_boxes_solve(
             size_t size = 0;
             size += sizeof(int64_t);  // morton_index
             size += sizeof(int);      // source_rank
+            size += sizeof(int64_t);  // num_points
+            size += sizeof(int64_t);  // nrhs
             size += vector_serialized_size(rhs_info.right_side);
             size += vector_serialized_size(rhs_info.left_side);
             size += vector_serialized_size(box.redundant_indices);
@@ -4667,6 +4685,8 @@ void gather_boxes_solve(
                 ptr = deserialize(temp, ptr);
                 lvl.ghost_and_assisting_boxes_for_solve[idx].morton_index = temp.morton_index;
                 lvl.ghost_and_assisting_boxes_for_solve[idx].source_rank = temp.source_rank;
+                lvl.ghost_and_assisting_boxes_for_solve[idx].num_points = temp.num_points;
+                lvl.ghost_and_assisting_boxes_for_solve[idx].nrhs = temp.nrhs;
                 lvl.ghost_and_assisting_boxes_for_solve[idx].right_side = std::move(temp.right_side);
                 lvl.ghost_and_assisting_boxes_for_solve[idx].left_side = std::move(temp.left_side);
                 lvl.ghost_and_assisting_boxes_for_solve[idx].redundant_indices = std::move(temp.redundant_indices);
@@ -4728,7 +4748,9 @@ static inline void apply_full_update_local(
 {
     auto& dst = get_local_solve_entry_checked(lvl, level_solve_data, morton);
 
-    if ((int64_t)dst.left_side.size() != (int64_t)upd.size()) {
+    const int64_t expected = dst.num_points * dst.nrhs;
+    if (expected != static_cast<int64_t>(dst.left_side.size()) ||
+        expected != static_cast<int64_t>(upd.size())) {
         throw std::runtime_error("apply_full_update_local: size mismatch morton=" + std::to_string(morton) +
                                  " left_side=" + std::to_string(dst.left_side.size()) +
                                  " upd=" + std::to_string(upd.size()));
@@ -4746,14 +4768,23 @@ static inline void apply_skel_update_local(
 {
     auto& dst = get_local_solve_entry_checked(lvl, level_solve_data, morton);
 
-    if ((int64_t)dst.skeleton_indices.size() != (int64_t)upd.size()) {
+    const int64_t skeleton_count =
+        static_cast<int64_t>(dst.skeleton_indices.size());
+    const int64_t expected = skeleton_count * dst.nrhs;
+    const int64_t full_size = dst.num_points * dst.nrhs;
+    if (full_size != static_cast<int64_t>(dst.left_side.size()) ||
+        expected != static_cast<int64_t>(upd.size())) {
         throw std::runtime_error("apply_skel_update_local: size mismatch morton=" + std::to_string(morton) +
                                  " skel=" + std::to_string(dst.skeleton_indices.size()) +
                                  " upd=" + std::to_string(upd.size()));
     }
-    for (int64_t i = 0; i < (int64_t)upd.size(); ++i) {
-        const int64_t dof = dst.skeleton_indices[(size_t)i];
-        dst.left_side[(size_t)dof] += upd[(size_t)i];
+    for (int64_t column = 0; column < dst.nrhs; ++column) {
+        for (int64_t i = 0; i < skeleton_count; ++i) {
+            const int64_t dof = dst.skeleton_indices[static_cast<size_t>(i)];
+            dst.left_side[static_cast<size_t>(
+                dof + column * dst.num_points)] +=
+                upd[static_cast<size_t>(i + column * skeleton_count)];
+        }
     }
 }
 

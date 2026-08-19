@@ -346,6 +346,8 @@ struct SolveDataRequest {
     // ===== Identification =====
     int64_t morton_index;              ///< Box Morton index
     int source_rank;                   ///< MPI rank to request from
+    int64_t num_points;                ///< Leading dimension of each RHS column
+    int64_t nrhs;                      ///< Number of column-major RHS vectors
     
     // ===== Vector Data (always needed for solve) =====
     std::vector<DataType> right_side;  ///< RHS vector (modified during V^{-1})
@@ -380,7 +382,8 @@ struct SolveDataRequest {
     MatrixStorage<DataType> X_NR;
     
     // ===== Constructors =====
-    SolveDataRequest() : morton_index(-1), source_rank(-1) {}
+    SolveDataRequest()
+        : morton_index(-1), source_rank(-1), num_points(0), nrhs(0) {}
     
     /**
      * @brief Initialize with vector data only (minimal mode)
@@ -388,11 +391,23 @@ struct SolveDataRequest {
      * @param rank Source MPI rank
      * @param num_points Number of DOFs
      */
-    void initialize(int64_t box_morton, int rank, int64_t num_points) {
+    void initialize(
+        int64_t box_morton,
+        int rank,
+        int64_t point_count,
+        int64_t num_rhs = 1) {
+        if (point_count < 0 || num_rhs <= 0) {
+            throw std::invalid_argument(
+                "SolveDataRequest::initialize: invalid point or RHS count");
+        }
         morton_index = box_morton;
         source_rank = rank;
-        right_side.resize(num_points, DataType{0.0});
-        left_side.resize(num_points, DataType{0.0});
+        num_points = point_count;
+        nrhs = num_rhs;
+        const size_t value_count =
+            static_cast<size_t>(num_points) * static_cast<size_t>(nrhs);
+        right_side.assign(value_count, DataType{0.0});
+        left_side.assign(value_count, DataType{0.0});
     }
 
     /**
@@ -403,6 +418,8 @@ struct SolveDataRequest {
     */
     void copy_minimal_from_box(const BoxData<CoordType, DataType>& box, const SolveDataRequest<CoordType, DataType>& rhs_info) {
         // Copy index vectors
+        num_points = rhs_info.num_points;
+        nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
         skeleton_indices = box.skeleton_indices;
         right_side = rhs_info.right_side;
@@ -420,6 +437,8 @@ struct SolveDataRequest {
     */
     void copy_factorization_from_box(const BoxData<CoordType, DataType>& box, const SolveDataRequest<CoordType, DataType>& rhs_info) {
         // Copy index vectors
+        num_points = rhs_info.num_points;
+        nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
         skeleton_indices = box.skeleton_indices;
         one_hop = box.one_hop;
@@ -475,14 +494,17 @@ struct SolveDataRequest {
      * @brief Get number of DOFs
      */
     int64_t size() const {
-        return right_side.size();
+        return num_points;
     }
     
     /**
      * @brief Check if initialized (vector data allocated)
      */
     bool is_initialized() const {
-        return !right_side.empty();
+        const size_t expected =
+            static_cast<size_t>(num_points) * static_cast<size_t>(nrhs);
+        return nrhs > 0 && right_side.size() == expected &&
+            left_side.size() == expected;
     }
     
     /**

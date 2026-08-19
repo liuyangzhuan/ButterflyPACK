@@ -320,6 +320,24 @@ extern "C" {
             std::complex<float>* B, const int* LDB);
 
     // =====================
+    // TRMM (Triangular matrix-matrix multiply): B = alpha*op(A)*B
+    // =====================
+    void dtrmm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* DIAG,
+                const int* M, const int* N, const double* ALPHA,
+                const double* A, const int* LDA, double* B, const int* LDB);
+    void ztrmm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* DIAG,
+                const int* M, const int* N, const std::complex<double>* ALPHA,
+                const std::complex<double>* A, const int* LDA,
+                std::complex<double>* B, const int* LDB);
+    void strmm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* DIAG,
+                const int* M, const int* N, const float* ALPHA,
+                const float* A, const int* LDA, float* B, const int* LDB);
+    void ctrmm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* DIAG,
+                const int* M, const int* N, const std::complex<float>* ALPHA,
+                const std::complex<float>* A, const int* LDA,
+                std::complex<float>* B, const int* LDB);
+
+    // =====================
     // TRTRS (Triangular solve, LAPACK): A*X = B
     // =====================
     void dtrtrs_(char* UPLO, char* TRANS, char* DIAG,
@@ -442,6 +460,24 @@ void trsm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* D
         ctrsm_(SIDE, UPLO, TRANSA, DIAG, M, N, ALPHA, A, LDA, B, LDB);
     } else {
         static_assert(sizeof(DataType) == 0, "Unsupported DataType for trsm_");
+    }
+}
+
+template <typename DataType>
+void trmm_(const char* SIDE, const char* UPLO, const char* TRANSA, const char* DIAG,
+           const int* M, const int* N, const DataType* ALPHA,
+           const DataType* A, const int* LDA,
+           DataType* B, const int* LDB) {
+    if constexpr (std::is_same_v<DataType, double>) {
+        dtrmm_(SIDE, UPLO, TRANSA, DIAG, M, N, ALPHA, A, LDA, B, LDB);
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        strmm_(SIDE, UPLO, TRANSA, DIAG, M, N, ALPHA, A, LDA, B, LDB);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        ztrmm_(SIDE, UPLO, TRANSA, DIAG, M, N, ALPHA, A, LDA, B, LDB);
+    } else if constexpr (std::is_same_v<DataType, std::complex<float>>) {
+        ctrmm_(SIDE, UPLO, TRANSA, DIAG, M, N, ALPHA, A, LDA, B, LDB);
+    } else {
+        static_assert(sizeof(DataType) == 0, "Unsupported DataType for trmm_");
     }
 }
 

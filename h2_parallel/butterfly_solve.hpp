@@ -37,22 +37,30 @@ inline void destroy_solve_communicators(
 template<typename CoordType, typename DataType> 
 void gather_local_solution(ParallelTree<CoordType, DataType>* tree, 
   std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data, 
-  DataType* x, int* Nloc) {
+  DataType* x, int* Nloc, int nrhs = 1) {
   const int leaf_level = tree->num_levels - 1;
   auto& leaf = tree->levels[leaf_level];
 
-  int64_t g = 0;
+  int64_t local_row = 0;
   for (int64_t box_idx = 0; box_idx < leaf.num_boxes_local; ++box_idx) {
     const auto& solve_box = solve_data[leaf_level][box_idx];
-    for (size_t i = 0; i < solve_box.left_side.size(); ++i) {   // == box.num_points
-      x[g++] = solve_box.left_side[i];
+    if (solve_box.nrhs != nrhs) {
+      throw std::runtime_error(
+        "gather_local_solution: inconsistent RHS count in leaf box");
     }
+    for (int column = 0; column < nrhs; ++column) {
+      for (int64_t i = 0; i < solve_box.num_points; ++i) {
+        x[local_row + i + static_cast<int64_t>(column) * (*Nloc)] =
+          solve_box.left_side[static_cast<size_t>(
+            i + static_cast<int64_t>(column) * solve_box.num_points)];
+      }
+    }
+    local_row += solve_box.num_points;
   }
-  // sanity: g should equal *Nloc (== myseg on this rank)
-  if (g != *Nloc) {
+  if (local_row != *Nloc) {
     throw std::runtime_error(
       "c_bpack_solve (format 7): solution DOF count mismatch — wrote " +
-      std::to_string(g) + " values but Nloc = " + std::to_string(*Nloc) +
+      std::to_string(local_row) + " rows but Nloc = " + std::to_string(*Nloc) +
       " (leaf-box ordering inconsistent with construct_init's myseg)");
   }
 }
@@ -211,7 +219,14 @@ void hierarchical_solve_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& rhs,
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
-    int verbosity = 1) {
+    int nrhs,
+    int verbosity) {
+    if (nrhs <= 0 || rhs.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::invalid_argument(
+            "hierarchical_solve_parallel: invalid batched RHS dimensions");
+    }
+    const int64_t local_points =
+        static_cast<int64_t>(rhs.size() / static_cast<size_t>(nrhs));
     
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
@@ -268,7 +283,7 @@ void hierarchical_solve_parallel(
             // solve_box.source_rank = rank;
             // solve_box.right_side.resize(box.num_points, DataType{0.0});
             // solve_box.left_side.resize(box.num_points, DataType{0.0});
-            solve_box.initialize(box.morton_index, rank, box.num_points);
+            solve_box.initialize(box.morton_index, rank, box.num_points, nrhs);
             
             solve_box.skeleton_indices = box.skeleton_indices;
             solve_box.redundant_indices = box.redundant_indices;
@@ -278,12 +293,22 @@ void hierarchical_solve_parallel(
             // To Do: add righthand side with matrix
             // Set RHS from global vector (only at leaf level)
             if (level == leaf_level) {
-                for (int64_t i = 0; i < box.num_points; ++i) {
-                    solve_box.right_side[i] = rhs[global_idx];
-                    global_idx++;
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < box.num_points; ++i) {
+                        solve_box.right_side[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) * box.num_points)] =
+                            rhs[static_cast<size_t>(
+                                global_idx + i +
+                                static_cast<int64_t>(column) * local_points)];
+                    }
                 }
+                global_idx += box.num_points;
                 solve_box.left_side = solve_box.right_side;
             }
+        }
+        if (level == leaf_level && global_idx != local_points) {
+            throw std::runtime_error(
+                "hierarchical_solve_parallel: local RHS row count mismatch");
         }
     }
 
@@ -575,23 +600,30 @@ void hierarchical_solve_parallel(
                     }
 
                     int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-                    std::vector<DataType> b_R(static_cast<size_t>(r));
-                    for (int64_t i = 0; i < r; ++i) {
-                        b_R[static_cast<size_t>(i)] =
-                            solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]];
+                    std::vector<DataType> b_R(
+                        static_cast<size_t>(r * nrhs));
+                    for (int column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < r; ++i) {
+                            b_R[static_cast<size_t>(
+                                i + static_cast<int64_t>(column) * r)] =
+                                solve_box.left_side[static_cast<size_t>(
+                                    box.redundant_indices[static_cast<size_t>(i)] +
+                                    static_cast<int64_t>(column) *
+                                        solve_box.num_points)];
+                        }
                     }
 
                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
                         char uplo = 'L';
-                        int n = static_cast<int>(r), nrhs = 1;
+                        int n = static_cast<int>(r), rhs_columns = nrhs;
                         int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
 
                         if constexpr (std::is_same_v<DataType, double>) {
-                            dpotrs_(&uplo, &n, &nrhs,
+                            dpotrs_(&uplo, &n, &rhs_columns,
                                     box.X_RR.data.data(), &lda,
                                     b_R.data(), &ldb, &info);
                         } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zsychol_solve_(&uplo, &n, &nrhs,
+                            zsychol_solve_(&uplo, &n, &rhs_columns,
                                            box.X_RR.data.data(), &lda,
                                            b_R.data(), &ldb, &info);
                         }
@@ -605,16 +637,16 @@ void hierarchical_solve_parallel(
                         }
 
                         char trans = 'N';
-                        int n = static_cast<int>(r), nrhs = 1;
+                        int n = static_cast<int>(r), rhs_columns = nrhs;
                         int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
 
                         if constexpr (std::is_same_v<DataType, double>) {
-                            dgetrs_(&trans, &n, &nrhs,
+                            dgetrs_(&trans, &n, &rhs_columns,
                                     box.X_RR.data.data(), &lda,
                                     box.X_RR_pivots.data(),
                                     b_R.data(), &ldb, &info);
                         } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zgetrs_(&trans, &n, &nrhs,
+                            zgetrs_(&trans, &n, &rhs_columns,
                                     box.X_RR.data.data(), &lda,
                                     box.X_RR_pivots.data(),
                                     b_R.data(), &ldb, &info);
@@ -629,9 +661,9 @@ void hierarchical_solve_parallel(
                         }
 
                         char uplo = 'L';
-                        int n = static_cast<int>(r), nrhs = 1;
+                        int n = static_cast<int>(r), rhs_columns = nrhs;
                         int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-                        sytrs_(&uplo, &n, &nrhs,
+                        sytrs_(&uplo, &n, &rhs_columns,
                                box.X_RR.data.data(), &lda,
                                box.X_RR_pivots.data(),
                                b_R.data(), &ldb, &info);
@@ -642,9 +674,15 @@ void hierarchical_solve_parallel(
                         throw std::runtime_error("Unsupported X_RR format in diagonal solve");
                     }
 
-                    for (int64_t i = 0; i < r; ++i) {
-                        solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]] =
-                            b_R[static_cast<size_t>(i)];
+                    for (int column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < r; ++i) {
+                            solve_box.left_side[static_cast<size_t>(
+                                box.redundant_indices[static_cast<size_t>(i)] +
+                                static_cast<int64_t>(column) *
+                                    solve_box.num_points)] =
+                                b_R[static_cast<size_t>(
+                                    i + static_cast<int64_t>(column) * r)];
+                        }
                     }
 
                     local_diagonal_solves++;
@@ -967,7 +1005,14 @@ void hierarchical_mul_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& input_vec,
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
-    bool verbose = true) {
+    int nrhs,
+    bool verbose) {
+    if (nrhs <= 0 || input_vec.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::invalid_argument(
+            "hierarchical_mul_parallel: invalid batched input dimensions");
+    }
+    const int64_t local_points =
+        static_cast<int64_t>(input_vec.size() / static_cast<size_t>(nrhs));
 
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
@@ -1013,17 +1058,27 @@ void hierarchical_mul_parallel(
             auto& box = tree_level.local_boxes[box_idx];
             auto& solve_box = solve_data[level][box_idx];
 
-            solve_box.initialize(box.morton_index, rank, box.num_points);
+            solve_box.initialize(box.morton_index, rank, box.num_points, nrhs);
             solve_box.skeleton_indices = box.skeleton_indices;
             solve_box.redundant_indices = box.redundant_indices;
 
             if (level == leaf_level) {
-                for (int64_t i = 0; i < box.num_points; ++i) {
-                    solve_box.right_side[i] = input_vec[global_idx];
-                    global_idx++;
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < box.num_points; ++i) {
+                        solve_box.right_side[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) * box.num_points)] =
+                            input_vec[static_cast<size_t>(
+                                global_idx + i +
+                                static_cast<int64_t>(column) * local_points)];
+                    }
                 }
+                global_idx += box.num_points;
                 solve_box.left_side = solve_box.right_side;
             }
+        }
+        if (level == leaf_level && global_idx != local_points) {
+            throw std::runtime_error(
+                "hierarchical_mul_parallel: local input row count mismatch");
         }
     }
 
@@ -1191,68 +1246,61 @@ void hierarchical_mul_parallel(
                     if (box.redundant_indices.empty()) continue;
 
                     int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-                    std::vector<DataType> x_R(static_cast<size_t>(r));
-                    for (int64_t i = 0; i < r; ++i) {
-                        x_R[static_cast<size_t>(i)] =
-                            solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]];
+                    std::vector<DataType> x_R(
+                        static_cast<size_t>(r * nrhs));
+                    for (int column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < r; ++i) {
+                            x_R[static_cast<size_t>(
+                                i + static_cast<int64_t>(column) * r)] =
+                                solve_box.left_side[static_cast<size_t>(
+                                    box.redundant_indices[static_cast<size_t>(i)] +
+                                    static_cast<int64_t>(column) *
+                                        solve_box.num_points)];
+                        }
                     }
 
                     int n = static_cast<int>(r);
-                    int incx = 1;
+                    int rhs_columns = nrhs;
+                    int ldb = n;
+                    char side = 'L';
+                    DataType one = DataType{1};
 
                     if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
                         char uplo = 'L', diag_N = 'N';
                         int lda = static_cast<int>(r);
 
-                        if constexpr (std::is_same_v<DataType, double>) {
-                            char trans_T = 'T';
-                            dtrmv_(&uplo, &trans_T, &diag_N, &n,
+                        char trans_T = 'T';
+                        trmm_(&side, &uplo, &trans_T, &diag_N,
+                                   &n, &rhs_columns, &one,
                                    box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            char trans_N = 'N';
-                            dtrmv_(&uplo, &trans_N, &diag_N, &n,
+                                   x_R.data(), &ldb);
+                        char trans_N = 'N';
+                        trmm_(&side, &uplo, &trans_N, &diag_N,
+                                   &n, &rhs_columns, &one,
                                    box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            char trans_T = 'T';
-                            ztrmv_(&uplo, &trans_T, &diag_N, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            char trans_N = 'N';
-                            ztrmv_(&uplo, &trans_N, &diag_N, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                        }
+                                   x_R.data(), &ldb);
                     } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
                         if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
                             throw std::runtime_error("Diagonal multiply missing LU pivots");
                         }
                         int lda = static_cast<int>(r);
 
+                        char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
+                        trmm_(&side, &uplo_U, &trans_N, &diag_N,
+                                   &n, &rhs_columns, &one,
+                                   box.X_RR.data.data(), &lda,
+                                   x_R.data(), &ldb);
+                        char uplo_L = 'L', diag_U = 'U';
+                        trmm_(&side, &uplo_L, &trans_N, &diag_U,
+                                   &n, &rhs_columns, &one,
+                                   box.X_RR.data.data(), &lda,
+                                   x_R.data(), &ldb);
+                        int k1 = 1, k2 = n, inc_rev = -1;
                         if constexpr (std::is_same_v<DataType, double>) {
-                            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-                            dtrmv_(&uplo_U, &trans_N, &diag_N, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            char uplo_L = 'L', diag_U = 'U';
-                            dtrmv_(&uplo_L, &trans_N, &diag_U, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            // P * z (not P^T * z) — use INCX=-1.
-                            int nrhs = 1, k1 = 1, k2 = n, inc_rev = -1;
-                            dlaswp_(&nrhs, x_R.data(), &n,
+                            dlaswp_(&rhs_columns, x_R.data(), &n,
                                     &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
                         } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-                            ztrmv_(&uplo_U, &trans_N, &diag_N, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            char uplo_L = 'L', diag_U = 'U';
-                            ztrmv_(&uplo_L, &trans_N, &diag_U, &n,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &incx);
-                            int nrhs = 1, k1 = 1, k2 = n, inc_rev = -1;
-                            zlaswp_(&nrhs, x_R.data(), &n,
+                            zlaswp_(&rhs_columns, x_R.data(), &n,
                                     &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
                         }
                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
@@ -1261,14 +1309,20 @@ void hierarchical_mul_parallel(
                         }
                         fmm::bunch_kaufman_multiply(
                             n, box.X_RR.data.data(), n,
-                            box.X_RR_pivots.data(), x_R.data());
+                            box.X_RR_pivots.data(), x_R.data(), n, nrhs);
                     } else {
                         throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
                     }
 
-                    for (int64_t i = 0; i < r; ++i) {
-                        solve_box.left_side[box.redundant_indices[static_cast<size_t>(i)]] =
-                            x_R[static_cast<size_t>(i)];
+                    for (int column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < r; ++i) {
+                            solve_box.left_side[static_cast<size_t>(
+                                box.redundant_indices[static_cast<size_t>(i)] +
+                                static_cast<int64_t>(column) *
+                                    solve_box.num_points)] =
+                                x_R[static_cast<size_t>(
+                                    i + static_cast<int64_t>(column) * r)];
+                        }
                     }
 
                     local_diagonal_muls++;

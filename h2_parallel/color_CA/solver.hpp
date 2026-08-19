@@ -302,7 +302,7 @@ namespace fmm {
 template<typename CoordType, typename DataType>
 size_t get_parent_gather_transfer_size(
     const SolveDataRequest<CoordType, DataType>& solve_box) {
-    return sizeof(int64_t) +
+    return 3 * sizeof(int64_t) +
            sizeof(size_t) + solve_box.left_side.size() * sizeof(DataType) +
            sizeof(size_t) + solve_box.right_side.size() * sizeof(DataType);
 }
@@ -312,6 +312,10 @@ char* serialize_parent_gather_transfer(
     const SolveDataRequest<CoordType, DataType>& solve_box,
     char* ptr) {
     std::memcpy(ptr, &solve_box.morton_index, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(ptr, &solve_box.num_points, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(ptr, &solve_box.nrhs, sizeof(int64_t));
     ptr += sizeof(int64_t);
 
     auto serialize_vector = [&ptr](const auto& vec) {
@@ -336,6 +340,10 @@ const char* deserialize_parent_gather_transfer(
     const char* ptr) {
     std::memcpy(&solve_box.morton_index, ptr, sizeof(int64_t));
     ptr += sizeof(int64_t);
+    std::memcpy(&solve_box.num_points, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(&solve_box.nrhs, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
 
     auto deserialize_vector = [&ptr](auto& vec) {
         size_t vec_size;
@@ -359,7 +367,7 @@ const char* deserialize_parent_gather_transfer(
 template<typename CoordType, typename DataType>
 size_t get_parent_scatter_transfer_size(
     const SolveDataRequest<CoordType, DataType>& solve_box) {
-    return sizeof(int64_t) +
+    return 3 * sizeof(int64_t) +
            sizeof(size_t) + solve_box.left_side.size() * sizeof(DataType);
 }
 
@@ -368,6 +376,10 @@ char* serialize_parent_scatter_transfer(
     const SolveDataRequest<CoordType, DataType>& solve_box,
     char* ptr) {
     std::memcpy(ptr, &solve_box.morton_index, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(ptr, &solve_box.num_points, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(ptr, &solve_box.nrhs, sizeof(int64_t));
     ptr += sizeof(int64_t);
 
     size_t vec_size = solve_box.left_side.size();
@@ -385,6 +397,10 @@ const char* deserialize_parent_scatter_transfer(
     SolveDataRequest<CoordType, DataType>& solve_box,
     const char* ptr) {
     std::memcpy(&solve_box.morton_index, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(&solve_box.num_points, ptr, sizeof(int64_t));
+    ptr += sizeof(int64_t);
+    std::memcpy(&solve_box.nrhs, ptr, sizeof(int64_t));
     ptr += sizeof(int64_t);
 
     size_t vec_size;
@@ -431,8 +447,6 @@ void gather_skeleton_to_parent(
         int64_t parent_morton = first_child.parent_morton;
         
         auto& parent_solve = local_parent_solve[parent_i];
-        parent_solve.morton_index = parent_morton;
-        parent_solve.source_rank = child_level.parent_level_owner;
         assert(child_level.parent_level_owner != -1);
         
         // Calculate total skeleton size
@@ -442,8 +456,11 @@ void gather_skeleton_to_parent(
             total_skel_size += child_box.skeleton_indices.size();
         }
         
-        parent_solve.left_side.resize(total_skel_size, DataType{0.0});
-        parent_solve.right_side.resize(total_skel_size, DataType{0.0});
+        const int64_t parent_nrhs =
+            child_solve_data[static_cast<size_t>(child_start_idx)].nrhs;
+        parent_solve.initialize(
+            parent_morton, child_level.parent_level_owner,
+            total_skel_size, parent_nrhs);
         
         // Copy metadata from parent box if we own it
         BoxData<CoordType, DataType>* parent_box = parent_level.find_local_box(parent_morton);
@@ -461,11 +478,25 @@ void gather_skeleton_to_parent(
             int64_t child_idx = child_start_idx + child_i;
             auto& child_box = child_level.local_boxes[child_idx];
             auto& child_solve = child_solve_data[child_idx];
+            if (child_solve.nrhs != parent_nrhs ||
+                child_solve.num_points != child_box.num_points) {
+                throw std::runtime_error(
+                    "gather_skeleton_to_parent: incompatible child RHS layout");
+            }
             
             const auto& child_skel = child_box.skeleton_indices;
-            for (int64_t i = 0; i < child_skel.size(); ++i) {
-                parent_solve.left_side[parent_offset + i] = child_solve.left_side[child_skel[i]];
-                parent_solve.right_side[parent_offset + i] = child_solve.right_side[child_skel[i]];
+            for (int64_t column = 0; column < parent_nrhs; ++column) {
+                for (int64_t i = 0; i < static_cast<int64_t>(child_skel.size()); ++i) {
+                    const size_t parent_index = static_cast<size_t>(
+                        parent_offset + i + column * total_skel_size);
+                    const size_t child_index = static_cast<size_t>(
+                        child_skel[static_cast<size_t>(i)] +
+                        column * child_solve.num_points);
+                    parent_solve.left_side[parent_index] =
+                        child_solve.left_side[child_index];
+                    parent_solve.right_side[parent_index] =
+                        child_solve.right_side[child_index];
+                }
             }
             
             parent_offset += child_skel.size();
@@ -702,10 +733,21 @@ void scatter_solution_to_children(
                 
                 int64_t child_idx = child_morton - child_level.local_morton_start;
                 auto& child_solve = child_solve_data[child_idx];
+                if (child_solve.nrhs != parent_solve.nrhs) {
+                    throw std::runtime_error(
+                        "scatter_solution_to_children: RHS count mismatch");
+                }
                 
                 const auto& child_skel = child_box->skeleton_indices;
-                for (int64_t i = 0; i < child_skel.size(); ++i) {
-                    child_solve.left_side[child_skel[i]] = parent_solve.left_side[parent_offset + i];
+                for (int64_t column = 0; column < parent_solve.nrhs; ++column) {
+                    for (int64_t i = 0; i < static_cast<int64_t>(child_skel.size()); ++i) {
+                        child_solve.left_side[static_cast<size_t>(
+                            child_skel[static_cast<size_t>(i)] +
+                            column * child_solve.num_points)] =
+                            parent_solve.left_side[static_cast<size_t>(
+                                parent_offset + i +
+                                column * parent_solve.num_points)];
+                    }
                 }
                 
                 parent_offset += child_skel.size();
@@ -829,10 +871,21 @@ void scatter_solution_to_children(
             
             int64_t child_idx = child_morton - child_level.local_morton_start;
             auto& child_solve = child_solve_data[child_idx];
+            if (child_solve.nrhs != parent_solve.nrhs) {
+                throw std::runtime_error(
+                    "scatter_solution_to_children: RHS count mismatch");
+            }
             
             const auto& child_skel = child_box->skeleton_indices;
-            for (int64_t i = 0; i < child_skel.size(); ++i) {
-                child_solve.left_side[child_skel[i]] = parent_solve.left_side[parent_offset + i];
+            for (int64_t column = 0; column < parent_solve.nrhs; ++column) {
+                for (int64_t i = 0; i < static_cast<int64_t>(child_skel.size()); ++i) {
+                    child_solve.left_side[static_cast<size_t>(
+                        child_skel[static_cast<size_t>(i)] +
+                        column * child_solve.num_points)] =
+                        parent_solve.left_side[static_cast<size_t>(
+                            parent_offset + i +
+                            column * parent_solve.num_points)];
+                }
             }
             
             parent_offset += child_skel.size();
@@ -951,8 +1004,12 @@ static inline std::vector<int64_t> solve_neighbor_sizes_for_box(
                 "solve_neighbor_sizes_for_box: neighbor " +
                 std::to_string(one_hop[i]) + " is unavailable");
         }
+        if (neighbor->nrhs != solve_data.nrhs) {
+            throw std::runtime_error(
+                "solve_neighbor_sizes_for_box: neighbor RHS count mismatch");
+        }
         sizes.push_back(use_full_set[i] == 1
-            ? static_cast<int64_t>(neighbor->left_side.size())
+            ? neighbor->num_points
             : static_cast<int64_t>(neighbor->skeleton_indices.size()));
     }
     return sizes;
@@ -966,7 +1023,10 @@ static inline void apply_pending_solve_updates_local_or_ghost(
     for (const auto& [morton, update] : pending.full_updates) {
         auto* target = resolve_solve_data_for_morton(
             level, level_solve_data, morton, true);
-        if (target == nullptr || target->left_side.size() != update.size()) {
+        const size_t expected = target == nullptr ? 0 :
+            static_cast<size_t>(target->num_points * target->nrhs);
+        if (target == nullptr || target->left_side.size() != expected ||
+            expected != update.size()) {
             throw std::runtime_error(
                 "apply_pending_solve_updates_local_or_ghost: invalid full target " +
                 std::to_string(morton));
@@ -979,14 +1039,25 @@ static inline void apply_pending_solve_updates_local_or_ghost(
     for (const auto& [morton, update] : pending.skel_updates) {
         auto* target = resolve_solve_data_for_morton(
             level, level_solve_data, morton, true);
-        if (target == nullptr || target->skeleton_indices.size() != update.size()) {
+        const int64_t skeleton_count = target == nullptr ? 0 :
+            static_cast<int64_t>(target->skeleton_indices.size());
+        const size_t expected = target == nullptr ? 0 :
+            static_cast<size_t>(skeleton_count * target->nrhs);
+        const size_t full_size = target == nullptr ? 0 :
+            static_cast<size_t>(target->num_points * target->nrhs);
+        if (target == nullptr || target->left_side.size() != full_size ||
+            expected != update.size()) {
             throw std::runtime_error(
                 "apply_pending_solve_updates_local_or_ghost: invalid skeleton target " +
                 std::to_string(morton));
         }
-        for (size_t i = 0; i < update.size(); ++i) {
-            target->left_side[static_cast<size_t>(
-                target->skeleton_indices[i])] += update[i];
+        for (int64_t column = 0; column < target->nrhs; ++column) {
+            for (int64_t i = 0; i < skeleton_count; ++i) {
+                target->left_side[static_cast<size_t>(
+                    target->skeleton_indices[static_cast<size_t>(i)] +
+                    column * target->num_points)] +=
+                    update[static_cast<size_t>(i + column * skeleton_count)];
+            }
         }
     }
 }
@@ -1065,61 +1136,86 @@ void apply_forward_elimination(
 
     const int64_t k = static_cast<int64_t>(skeleton_indices->size());
     const int64_t r = static_cast<int64_t>(redundant_indices->size());
+    const int64_t nrhs = solve_data.nrhs;
+    if (solve_data.num_points * nrhs !=
+        static_cast<int64_t>(solve_data.left_side.size())) {
+        throw std::runtime_error(
+            "apply_forward_elimination: invalid batched vector layout");
+    }
 
-    // Extract x[S], x[R]
-    std::vector<DataType> x_S(static_cast<size_t>(k));
-    for (int64_t i = 0; i < k; ++i)
-        x_S[static_cast<size_t>(i)] = solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])];
-
-    std::vector<DataType> x_R(static_cast<size_t>(r));
-    for (int64_t i = 0; i < r; ++i)
-        x_R[static_cast<size_t>(i)] = solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])];
+    std::vector<DataType> x_S(static_cast<size_t>(k * nrhs));
+    std::vector<DataType> x_R(static_cast<size_t>(r * nrhs));
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            x_S[static_cast<size_t>(i + column * k)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
+        for (int64_t i = 0; i < r; ++i) {
+            x_R[static_cast<size_t>(i + column * r)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
+    }
 
     // ===== Step 1: x[R] -= T^T * x[S] =====
     if (T && T->is_allocated()) {
-        std::vector<DataType> tmp(static_cast<size_t>(r), DataType{0});
+        std::vector<DataType> tmp(static_cast<size_t>(r * nrhs), DataType{0});
 
-        char trans = 'T';
-        int m = static_cast<int>(k), n = static_cast<int>(r);
+        char trans_a = 'T', trans_b = 'N';
+        int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(k);
         DataType alpha = DataType{1}, beta = DataType{0};
-        int lda = static_cast<int>(T->lda), incx = 1, incy = 1;
+        int lda = static_cast<int>(T->lda), ldb = static_cast<int>(k);
+        int ldc = static_cast<int>(r);
+        gemm_(&trans_a, &trans_b, &m, &n, &inner, &alpha,
+              T->data.data(), &lda, x_S.data(), &ldb,
+              &beta, tmp.data(), &ldc);
 
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha, T->data.data(), &lda,
-                   x_S.data(), &incx, &beta, tmp.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha, T->data.data(), &lda,
-                   x_S.data(), &incx, &beta, tmp.data(), &incy);
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < r; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] -=
+                    tmp[static_cast<size_t>(i + column * r)];
+            }
         }
-
-        for (int64_t i = 0; i < r; ++i)
-            solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])] -= tmp[static_cast<size_t>(i)];
     }
 
     // Re-extract x[R]
-    for (int64_t i = 0; i < r; ++i)
-        x_R[static_cast<size_t>(i)] =
-            solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])];
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            x_R[static_cast<size_t>(i + column * r)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
+    }
 
     // ===== Step 2: x[S] += X_SR * x[R] =====
     if (X_SR && X_SR->is_allocated()) {
-        std::vector<DataType> tmp(static_cast<size_t>(k), DataType{0});
+        std::vector<DataType> tmp(static_cast<size_t>(k * nrhs), DataType{0});
 
         char trans = 'N';
-        int m = static_cast<int>(k), n = static_cast<int>(r);
+        int m = static_cast<int>(k), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(r);
         DataType alpha = DataType{1}, beta = DataType{0};
-        int lda = static_cast<int>(X_SR->lda), incx = 1, incy = 1;
+        int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(k);
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              X_SR->data.data(), &lda, x_R.data(), &ldb,
+              &beta, tmp.data(), &ldc);
 
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha, X_SR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, tmp.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha, X_SR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, tmp.data(), &incy);
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < k; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] +=
+                    tmp[static_cast<size_t>(i + column * k)];
+            }
         }
-
-        for (int64_t i = 0; i < k; ++i)
-            solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])] += tmp[static_cast<size_t>(i)];
     }
 
     // ===== Step 3: neighbor updates =====
@@ -1131,21 +1227,19 @@ void apply_forward_elimination(
         is_ghost);
 
     const int64_t total_neighbor_points = X_NR->rows;
-    std::vector<DataType> neighbor_updates(static_cast<size_t>(total_neighbor_points), DataType{0});
+    std::vector<DataType> neighbor_updates(
+        static_cast<size_t>(total_neighbor_points * nrhs), DataType{0});
 
     {
         char trans = 'N';
-        int m = static_cast<int>(total_neighbor_points), n = static_cast<int>(r);
+        int m = static_cast<int>(total_neighbor_points);
+        int n = static_cast<int>(nrhs), inner = static_cast<int>(r);
         DataType alpha = DataType{1}, beta = DataType{0};
-        int lda = static_cast<int>(X_NR->lda), incx = 1, incy = 1;
-
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha, X_NR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, neighbor_updates.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha, X_NR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, neighbor_updates.data(), &incy);
-        }
+        int lda = static_cast<int>(X_NR->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(total_neighbor_points);
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              X_NR->data.data(), &lda, x_R.data(), &ldb,
+              &beta, neighbor_updates.data(), &ldc);
     }
 
     auto is_local_morton = [&](int64_t morton) -> bool {
@@ -1166,14 +1260,24 @@ void apply_forward_elimination(
             throw std::runtime_error("apply_forward_elimination: X_NR row partition overflow");
         }
 
-        const DataType* seg = neighbor_updates.data() + row_offset;
+        std::vector<DataType> segment(static_cast<size_t>(n_neighbor * nrhs));
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < n_neighbor; ++i) {
+                segment[static_cast<size_t>(i + column * n_neighbor)] =
+                    neighbor_updates[static_cast<size_t>(
+                        row_offset + i + column * total_neighbor_points)];
+            }
+        }
+        const DataType* seg = segment.data();
+        const int64_t segment_size = n_neighbor * nrhs;
 
         if (is_local_morton(neighbor_morton)) {
             auto& neighbor_data =
                 level_solve_data[static_cast<size_t>(neighbor_morton - level.local_morton_start)];
 
             if (use_full) {
-                if (static_cast<int64_t>(neighbor_data.left_side.size()) != n_neighbor) {
+                if (neighbor_data.num_points != n_neighbor ||
+                    neighbor_data.nrhs != nrhs) {
                     throw std::runtime_error("apply_forward_elimination: local full size mismatch for neighbor=" +
                                              std::to_string(neighbor_morton));
                 }
@@ -1182,10 +1286,11 @@ void apply_forward_elimination(
                         pending_updates.full_updates,
                         neighbor_morton,
                         seg,
-                        n_neighbor);
+                        segment_size);
                 } else {
-                    for (int64_t i = 0; i < n_neighbor; ++i)
-                        neighbor_data.left_side[static_cast<size_t>(i)] += seg[static_cast<size_t>(i)];
+                    for (int64_t i = 0; i < segment_size; ++i)
+                        neighbor_data.left_side[static_cast<size_t>(i)] +=
+                            seg[static_cast<size_t>(i)];
                 }
             } else {
                 if (static_cast<int64_t>(neighbor_data.skeleton_indices.size()) != n_neighbor) {
@@ -1197,11 +1302,17 @@ void apply_forward_elimination(
                         pending_updates.skel_updates,
                         neighbor_morton,
                         seg,
-                        n_neighbor);
+                        segment_size);
                 } else {
                     const auto& skel = neighbor_data.skeleton_indices;
-                    for (int64_t i = 0; i < n_neighbor; ++i)
-                        neighbor_data.left_side[static_cast<size_t>(skel[static_cast<size_t>(i)])] += seg[static_cast<size_t>(i)];
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_data.left_side[static_cast<size_t>(
+                                skel[static_cast<size_t>(i)] +
+                                column * neighbor_data.num_points)] +=
+                                seg[static_cast<size_t>(i + column * n_neighbor)];
+                        }
+                    }
                 }
             }
         } else {
@@ -1214,11 +1325,11 @@ void apply_forward_elimination(
                 if (use_full) {
                     accumulate_replace_then_add(
                         pending_updates.full_updates,
-                        neighbor_morton, seg, n_neighbor);
+                        neighbor_morton, seg, segment_size);
                 } else {
                     accumulate_replace_then_add(
                         pending_updates.skel_updates,
-                        neighbor_morton, seg, n_neighbor);
+                        neighbor_morton, seg, segment_size);
                 }
             }
         }
@@ -1320,17 +1431,30 @@ void apply_backward_substitution(
     
     int64_t k = skeleton_indices->size();
     int64_t r = redundant_indices->size();
+    const int64_t nrhs = solve_data.nrhs;
+    if (solve_data.num_points * nrhs !=
+        static_cast<int64_t>(solve_data.left_side.size())) {
+        throw std::runtime_error(
+            "apply_backward_substitution: invalid batched vector layout");
+    }
     
     // ===== Step 1: Apply U: x[R] -= X_RR^{-1}X_RS * x[S] - X_RR^{-1}X_RN * x[N] =====
     
-    std::vector<DataType> x_R(r);
-    for (int64_t i = 0; i < r; ++i) {
-        x_R[i] = solve_data.left_side[(*redundant_indices)[i]];
-    }
-    
-    std::vector<DataType> x_S(k);
-    for (int64_t i = 0; i < k; ++i) {
-        x_S[i] = solve_data.left_side[(*skeleton_indices)[i]];
+    std::vector<DataType> x_R(static_cast<size_t>(r * nrhs));
+    std::vector<DataType> x_S(static_cast<size_t>(k * nrhs));
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            x_R[static_cast<size_t>(i + column * r)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
+        for (int64_t i = 0; i < k; ++i) {
+            x_S[static_cast<size_t>(i + column * k)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
     
     // U: x[R] -= X_RR^{-1}X_RS * x[S]
@@ -1338,44 +1462,30 @@ void apply_backward_substitution(
     assert(X_SR->is_allocated());
     if (matrix_property == MatrixProperty::SYMMETRIC) {
         if (X_SR->is_allocated()) {
-            char trans = 'T';
-            int m = k, n = r;
+            char trans_a = 'T', trans_b = 'N';
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(k);
             DataType alpha = 1.0;  // ADD (double negative cancels)
             DataType beta = 1.0;
-            int lda = k, incx = 1, incy = 1;
-            
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_SR->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_SR->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(k);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans_a, &trans_b, &m, &n, &inner, &alpha,
+                  X_SR->data.data(), &lda, x_S.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     } else {
         // NONSYMMETRIC: Use stored X_RS directly
         if (X_RS->is_allocated()) {
             char trans = 'N';
-            int m = r, n = k;
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(k);
             DataType alpha = 1.0;  // ADD
             DataType beta = 1.0;
-            int lda = r, incx = 1, incy = 1;
-            
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_RS->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_RS->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_RS->lda), ldb = static_cast<int>(k);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+                  X_RS->data.data(), &lda, x_S.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     }
     
@@ -1386,7 +1496,8 @@ void apply_backward_substitution(
         
         if (matrix_property == MatrixProperty::SYMMETRIC && X_NR->is_allocated()) {
             int64_t total_neighbor_points = X_NR->rows;
-            std::vector<DataType> neighbor_values(total_neighbor_points, DataType{0.0});
+            std::vector<DataType> neighbor_values(
+                static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
             
             // Collect neighbor values in one_hop order
             int64_t row_offset = 0;
@@ -1413,11 +1524,14 @@ void apply_backward_substitution(
                         neighbor_data = &level.ghost_and_assisting_boxes_for_solve[it->second];
                     }
                 }
-                
                 if (neighbor_data == nullptr) {
                     throw std::runtime_error(
                         "apply_backward_substitution: Neighbor " + 
                         std::to_string(neighbor_morton) + " not found in solve data");
+                }
+                if (neighbor_data->nrhs != nrhs) {
+                    throw std::runtime_error(
+                        "apply_backward_substitution: neighbor RHS count mismatch");
                 }
                 
                 int64_t n_neighbor;
@@ -1426,10 +1540,15 @@ void apply_backward_substitution(
                     // Neighbor was eliminated AFTER current box
                     // X_NR was computed against neighbor's full point set
                     // Read from entire left_side vector
-                    n_neighbor = neighbor_data->left_side.size();
-                    
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[row_offset + i] = neighbor_data->left_side[i];
+                    n_neighbor = neighbor_data->num_points;
+
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                row_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    i + column * neighbor_data->num_points)];
+                        }
                     }
                 } else {
                     // Neighbor was eliminated BEFORE current box
@@ -1438,8 +1557,14 @@ void apply_backward_substitution(
                     n_neighbor = neighbor_data->skeleton_indices.size();
                     const auto& neighbor_skel = neighbor_data->skeleton_indices;
                     
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[row_offset + i] = neighbor_data->left_side[neighbor_skel[i]];
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                row_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    neighbor_skel[static_cast<size_t>(i)] +
+                                    column * neighbor_data->num_points)];
+                        }
                     }
                 }
                 
@@ -1453,28 +1578,23 @@ void apply_backward_substitution(
             }
             
             // U: x[R] -= X_RR^{-1}X_RN*x[N] = x[R] += stored_X_NR^T*x[N]
-            char trans = 'T';
-            int m = total_neighbor_points, n = r;
+            char trans_a = 'T', trans_b = 'N';
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(total_neighbor_points);
             DataType alpha = 1.0;  // ADD
             DataType beta = 1.0;
-            int lda = total_neighbor_points, incx = 1, incy = 1;
-            
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_NR->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_NR->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_NR->lda);
+            int ldb = static_cast<int>(total_neighbor_points);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans_a, &trans_b, &m, &n, &inner, &alpha,
+                  X_NR->data.data(), &lda, neighbor_values.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
             
         } else if (matrix_property == MatrixProperty::NONSYMMETRIC && X_RN->is_allocated()) {
             // NONSYMMETRIC case
             int64_t total_neighbor_points = X_RN->cols;
-            std::vector<DataType> neighbor_values(total_neighbor_points, DataType{0.0});
+            std::vector<DataType> neighbor_values(
+                static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
             
             // Collect neighbor values in one_hop order
             int64_t col_offset = 0;
@@ -1501,11 +1621,14 @@ void apply_backward_substitution(
                         neighbor_data = &level.ghost_and_assisting_boxes_for_solve[it->second];
                     }
                 }
-                
                 if (neighbor_data == nullptr) {
                     throw std::runtime_error(
                         "apply_backward_substitution: Neighbor " + 
                         std::to_string(neighbor_morton) + " not found in solve data");
+                }
+                if (neighbor_data->nrhs != nrhs) {
+                    throw std::runtime_error(
+                        "apply_backward_substitution: neighbor RHS count mismatch");
                 }
                 
                 int64_t n_neighbor;
@@ -1514,10 +1637,15 @@ void apply_backward_substitution(
                     // Neighbor was eliminated AFTER current box
                     // X_RN was computed against neighbor's full point set
                     // Read from entire left_side vector
-                    n_neighbor = neighbor_data->left_side.size();
-                    
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[col_offset + i] = neighbor_data->left_side[i];
+                    n_neighbor = neighbor_data->num_points;
+
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                col_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    i + column * neighbor_data->num_points)];
+                        }
                     }
                 } else {
                     // Neighbor was eliminated BEFORE current box
@@ -1526,8 +1654,14 @@ void apply_backward_substitution(
                     n_neighbor = neighbor_data->skeleton_indices.size();
                     const auto& neighbor_skel = neighbor_data->skeleton_indices;
                     
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[col_offset + i] = neighbor_data->left_side[neighbor_skel[i]];
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                col_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    neighbor_skel[static_cast<size_t>(i)] +
+                                    column * neighbor_data->num_points)];
+                        }
                     }
                 }
                 
@@ -1543,60 +1677,54 @@ void apply_backward_substitution(
             
             // U: x[R] -= X_RR^{-1}X_RN*x[N] = x[R] += stored_X_RN*x[N]
             char trans = 'N';
-            int m = r, n = total_neighbor_points;
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(total_neighbor_points);
             DataType alpha = 1.0;  // ADD
             DataType beta = 1.0;
-            int lda = r, incx = 1, incy = 1;
-            
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_RN->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_RN->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_RN->lda);
+            int ldb = static_cast<int>(total_neighbor_points);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+                  X_RN->data.data(), &lda, neighbor_values.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     }
     
     // Store updated x[R]
-    for (int64_t i = 0; i < r; ++i) {
-        solve_data.left_side[(*redundant_indices)[i]] = x_R[i];
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            solve_data.left_side[static_cast<size_t>(
+                (*redundant_indices)[static_cast<size_t>(i)] +
+                column * solve_data.num_points)] =
+                x_R[static_cast<size_t>(i + column * r)];
+        }
     }
     
     // ===== Step 2: Apply L_T: x[S] -= T * x[R] =====
     assert(T->is_allocated());
     if (T->is_allocated()) {
         // Re-extract x[R] after Step 1 updates
-        for (int64_t i = 0; i < r; ++i) {
-            x_R[i] = solve_data.left_side[(*redundant_indices)[i]];
-        }
-        
-        std::vector<DataType> result(k, DataType{0.0});
+        std::vector<DataType> result(
+            static_cast<size_t>(k * nrhs), DataType{0.0});
         
         char trans = 'N';  // No transpose: T is (k×r)
-        int m = k, n = r;
+        int m = static_cast<int>(k), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(r);
         DataType alpha = 1.0, beta = 0.0;
-        int lda = k, incx = 1, incy = 1;
-        
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_R.data(), &incx,
-                   &beta, result.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_R.data(), &incx,
-                   &beta, result.data(), &incy);
-        }
+        int lda = static_cast<int>(T->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(k);
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              T->data.data(), &lda, x_R.data(), &ldb,
+              &beta, result.data(), &ldc);
         
         // L_T: x[S] -= T * x[R]
-        for (int64_t i = 0; i < k; ++i) {
-            solve_data.left_side[(*skeleton_indices)[i]] -= result[i];
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < k; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] -=
+                    result[static_cast<size_t>(i + column * k)];
+            }
         }
     }
 }
@@ -2277,14 +2405,20 @@ void apply_diagonal_solve(
     
     // Extract x[S] from left_side
     // (At level 0, "skeleton" indices represent all DOFs)
-    std::vector<DataType> x_S(k);
-    for (int64_t i = 0; i < k; ++i) {
-        x_S[i] = solve_data.left_side[(*skeleton_indices)[i]];
+    const int64_t rhs_count = solve_data.nrhs;
+    std::vector<DataType> x_S(static_cast<size_t>(k * rhs_count));
+    for (int64_t column = 0; column < rhs_count; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            x_S[static_cast<size_t>(i + column * k)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
     
     int n = static_cast<int>(k);
-    int nrhs = 1;
-    int lda = static_cast<int>(k);
+    int nrhs = static_cast<int>(rhs_count);
+    int lda = static_cast<int>(X_RR->lda);
     int ldb = static_cast<int>(k);
     int info = 0;
 
@@ -2347,8 +2481,13 @@ void apply_diagonal_solve(
     }
     
     // Store result back to left_side[S]
-    for (int64_t i = 0; i < k; ++i) {
-        solve_data.left_side[(*skeleton_indices)[i]] = x_S[i];
+    for (int64_t column = 0; column < rhs_count; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            solve_data.left_side[static_cast<size_t>(
+                (*skeleton_indices)[static_cast<size_t>(i)] +
+                column * solve_data.num_points)] =
+                x_S[static_cast<size_t>(i + column * k)];
+        }
     }
 }
 

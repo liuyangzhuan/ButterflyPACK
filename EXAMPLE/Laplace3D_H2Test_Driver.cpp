@@ -30,6 +30,7 @@ struct DriverOptions {
   int64_t reduction_threshold = 4096;
   int ca_level = 0;
   int precon = 1;
+  int nrhs = 1;
   int verbosity = 1;
   int elem_extract = 2;
   int lrlevel = 0;
@@ -166,6 +167,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.ca_level = parse_int(value, "CA_level");
     } else if (name == "precon") {
       options.precon = parse_int(value, "precon");
+    } else if (name == "nrhs") {
+      options.nrhs = parse_int(value, "nrhs");
     } else if (name == "verbosity") {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
@@ -217,6 +220,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.precon < 1 || options.precon > 3) {
     throw std::invalid_argument("precon must be 1, 2, or 3");
   }
+  if (options.nrhs <= 0) {
+    throw std::invalid_argument("nrhs must be positive");
+  }
 
   derive_nmin_leaf_from_levels(options);
   const int64_t points = checked_cube(options.grid_size, "grid_size");
@@ -256,6 +262,7 @@ void print_usage(const char* executable) {
       << "  --reduction_threshold <count>\n"
       << "  --CA_level <level>\n"
       << "  --precon <1|2|3>\n"
+      << "  --nrhs <count>\n"
       << "  --elem_extract <0|2>\n"
       << "  --verbosity <-1|0|1>\n";
 }
@@ -462,6 +469,7 @@ int main(int argc, char** argv) {
                 << "Reduction threshold: "
                 << driver_options.reduction_threshold << "\n"
                 << "CA_level: " << driver_options.ca_level << "\n"
+                << "Number of RHS: " << driver_options.nrhs << "\n"
                 << "Gaussian potential: disabled\n"
                 << "Proxy points: 0 (current ButterflyPACK H2 interface)\n"
                 << "Diagonal self-cell integral: " << std::setprecision(17)
@@ -523,14 +531,26 @@ int main(int argc, char** argv) {
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree, &resources.mesh);
 
+    int number_of_rhs = driver_options.nrhs;
+    const size_t value_count = static_cast<size_t>(local_points) *
+        static_cast<size_t>(number_of_rhs);
+    std::vector<double> rhs(value_count);
+    for (int column = 0; column < number_of_rhs; ++column) {
+      for (int row = 0; row < local_points; ++row) {
+        rhs[static_cast<size_t>(row) +
+            static_cast<size_t>(column) * local_points] =
+            1.0 + 0.125 * column +
+            0.001 * ((row + 17 * rank) % 97);
+      }
+    }
+
     if (rank == 0) {
       std::cout << "\nSolving the 3D Laplace system:" << std::endl;
     }
-    int number_of_rhs = 1;
-    std::vector<double> rhs(static_cast<size_t>(local_points), 1.0);
-    std::vector<double> solution(static_cast<size_t>(local_points), 0.0);
+    std::vector<double> solution(value_count, 0.0);
     d_c_bpack_solve(
-        solution.data(), rhs.data(), &local_points, &number_of_rhs,
+        solution.data(), rhs.data(), &local_points,
+        &number_of_rhs,
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree);
 

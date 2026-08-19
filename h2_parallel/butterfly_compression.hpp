@@ -581,10 +581,17 @@ std::vector<DataType> h2_local_vector_for_morton(
 
     if (!skeleton_only) return data.right_side;
 
-    std::vector<DataType> result;
-    result.reserve(box->skeleton_indices.size());
-    for (int64_t skeleton_index : box->skeleton_indices) {
-        result.push_back(data.left_side.at(static_cast<size_t>(skeleton_index)));
+    const int64_t skeleton_count =
+        static_cast<int64_t>(box->skeleton_indices.size());
+    std::vector<DataType> result(
+        static_cast<size_t>(skeleton_count * data.nrhs));
+    for (int64_t column = 0; column < data.nrhs; ++column) {
+        for (int64_t i = 0; i < skeleton_count; ++i) {
+            result[static_cast<size_t>(i + column * skeleton_count)] =
+                data.left_side.at(static_cast<size_t>(
+                    box->skeleton_indices[static_cast<size_t>(i)] +
+                    column * data.num_points));
+        }
     }
     return result;
 }
@@ -795,35 +802,30 @@ void h2_matrix_vector_product(
     const MatrixStorage<DataType>& matrix,
     const std::vector<DataType>& input,
     std::vector<DataType>& output,
+    int64_t nrhs,
     char transpose = 'N') {
 
     const bool transposed = transpose != 'N' && transpose != 'n';
     const int64_t input_size = transposed ? matrix.rows : matrix.cols;
     const int64_t output_size = transposed ? matrix.cols : matrix.rows;
-    if (static_cast<int64_t>(input.size()) != input_size) {
+    if (nrhs <= 0 || static_cast<int64_t>(input.size()) != input_size * nrhs) {
         throw std::runtime_error("h2_matrix_vector_product: input dimension mismatch");
     }
-    output.assign(static_cast<size_t>(output_size), DataType{0});
+    output.assign(static_cast<size_t>(output_size * nrhs), DataType{0});
     if (input_size == 0 || output_size == 0) return;
 
-    const int m = static_cast<int>(matrix.rows);
-    const int n = static_cast<int>(matrix.cols);
+    const int m = static_cast<int>(output_size);
+    const int n = static_cast<int>(nrhs);
+    const int k = static_cast<int>(input_size);
     const int lda = static_cast<int>(matrix.lda);
-    const int increment = 1;
+    const int ldb = static_cast<int>(input_size);
+    const int ldc = static_cast<int>(output_size);
     const DataType alpha = DataType{1};
     const DataType beta = DataType{0};
-    if constexpr (std::is_same_v<DataType, double>) {
-        dgemv_(
-            &transpose, &m, &n, &alpha, matrix.data.data(), &lda,
-            input.data(), &increment, &beta, output.data(), &increment);
-    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-        zgemv_(
-            &transpose, &m, &n, &alpha, matrix.data.data(), &lda,
-            input.data(), &increment, &beta, output.data(), &increment);
-    } else {
-        throw std::runtime_error(
-            "H2 compression-only multiply supports double precision only");
-    }
+    const char trans_b = 'N';
+    gemm_(&transpose, &trans_b, &m, &n, &k, &alpha,
+          matrix.data.data(), &lda, input.data(), &ldb,
+          &beta, output.data(), &ldc);
 }
 
 template<typename CoordType, typename DataType>
@@ -832,15 +834,30 @@ void apply_h2_upward_projection(
     SolveDataRequest<CoordType, DataType>& data) {
 
     if (box.redundant_indices.empty()) return;
-    std::vector<DataType> redundant(box.redundant_indices.size());
-    for (size_t i = 0; i < box.redundant_indices.size(); ++i) {
-        redundant[i] = data.left_side.at(
-            static_cast<size_t>(box.redundant_indices[i]));
+    const int64_t redundant_count =
+        static_cast<int64_t>(box.redundant_indices.size());
+    const int64_t skeleton_count =
+        static_cast<int64_t>(box.skeleton_indices.size());
+    std::vector<DataType> redundant(
+        static_cast<size_t>(redundant_count * data.nrhs));
+    for (int64_t column = 0; column < data.nrhs; ++column) {
+        for (int64_t i = 0; i < redundant_count; ++i) {
+            redundant[static_cast<size_t>(i + column * redundant_count)] =
+                data.left_side.at(static_cast<size_t>(
+                    box.redundant_indices[static_cast<size_t>(i)] +
+                    column * data.num_points));
+        }
     }
     std::vector<DataType> projected;
-    h2_matrix_vector_product(box.interpolation_matrix, redundant, projected, 'N');
-    for (size_t i = 0; i < box.skeleton_indices.size(); ++i) {
-        data.left_side.at(static_cast<size_t>(box.skeleton_indices[i])) += projected[i];
+    h2_matrix_vector_product(
+        box.interpolation_matrix, redundant, projected, data.nrhs, 'N');
+    for (int64_t column = 0; column < data.nrhs; ++column) {
+        for (int64_t i = 0; i < skeleton_count; ++i) {
+            data.left_side.at(static_cast<size_t>(
+                box.skeleton_indices[static_cast<size_t>(i)] +
+                column * data.num_points)) +=
+                projected[static_cast<size_t>(i + column * skeleton_count)];
+        }
     }
 }
 
@@ -850,15 +867,30 @@ void apply_h2_downward_interpolation(
     SolveDataRequest<CoordType, DataType>& data) {
 
     if (box.redundant_indices.empty()) return;
-    std::vector<DataType> skeleton(box.skeleton_indices.size());
-    for (size_t i = 0; i < box.skeleton_indices.size(); ++i) {
-        skeleton[i] = data.left_side.at(
-            static_cast<size_t>(box.skeleton_indices[i]));
+    const int64_t skeleton_count =
+        static_cast<int64_t>(box.skeleton_indices.size());
+    const int64_t redundant_count =
+        static_cast<int64_t>(box.redundant_indices.size());
+    std::vector<DataType> skeleton(
+        static_cast<size_t>(skeleton_count * data.nrhs));
+    for (int64_t column = 0; column < data.nrhs; ++column) {
+        for (int64_t i = 0; i < skeleton_count; ++i) {
+            skeleton[static_cast<size_t>(i + column * skeleton_count)] =
+                data.left_side.at(static_cast<size_t>(
+                    box.skeleton_indices[static_cast<size_t>(i)] +
+                    column * data.num_points));
+        }
     }
     std::vector<DataType> interpolated;
-    h2_matrix_vector_product(box.interpolation_matrix, skeleton, interpolated, 'T');
-    for (size_t i = 0; i < box.redundant_indices.size(); ++i) {
-        data.left_side.at(static_cast<size_t>(box.redundant_indices[i])) += interpolated[i];
+    h2_matrix_vector_product(
+        box.interpolation_matrix, skeleton, interpolated, data.nrhs, 'T');
+    for (int64_t column = 0; column < data.nrhs; ++column) {
+        for (int64_t i = 0; i < redundant_count; ++i) {
+            data.left_side.at(static_cast<size_t>(
+                box.redundant_indices[static_cast<size_t>(i)] +
+                column * data.num_points)) +=
+                interpolated[static_cast<size_t>(i + column * redundant_count)];
+        }
     }
 }
 
@@ -896,14 +928,26 @@ void apply_h2_interactions(
                 }
 
                 std::vector<DataType> contribution;
-                h2_matrix_vector_product(block.matrix, source, contribution, 'N');
-                if (contribution.size() != target.skeleton_indices.size()) {
+                const int64_t nrhs =
+                    target_data[static_cast<size_t>(box_index)].nrhs;
+                h2_matrix_vector_product(
+                    block.matrix, source, contribution, nrhs, 'N');
+                const int64_t skeleton_count =
+                    static_cast<int64_t>(target.skeleton_indices.size());
+                if (contribution.size() !=
+                    static_cast<size_t>(skeleton_count * nrhs)) {
                     throw std::runtime_error(
                         "apply_h2_interactions: target rank mismatch");
                 }
-                for (size_t i = 0; i < contribution.size(); ++i) {
-                    target_vector.at(
-                        static_cast<size_t>(target.skeleton_indices[i])) += contribution[i];
+                const int64_t target_rows =
+                    target_data[static_cast<size_t>(box_index)].num_points;
+                for (int64_t column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < skeleton_count; ++i) {
+                        target_vector.at(static_cast<size_t>(
+                            target.skeleton_indices[static_cast<size_t>(i)] +
+                            column * target_rows)) += contribution[static_cast<size_t>(
+                                i + column * skeleton_count)];
+                    }
                 }
             }
         } catch (...) {
@@ -949,7 +993,10 @@ void apply_h2_leaf_near(
                     source = it->second;
                 }
                 std::vector<DataType> contribution;
-                h2_matrix_vector_product(block.matrix, source, contribution, 'N');
+                const int64_t nrhs =
+                    target_data[static_cast<size_t>(box_index)].nrhs;
+                h2_matrix_vector_product(
+                    block.matrix, source, contribution, nrhs, 'N');
                 if (contribution.size() != output.size()) {
                     throw std::runtime_error(
                         "apply_h2_leaf_near: target size mismatch");
@@ -973,7 +1020,15 @@ void hierarchical_h2_mul_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& input,
     std::vector<DataType>& output,
-    bool verbose = true) {
+    int nrhs,
+    bool verbose) {
+
+    if (nrhs <= 0 || input.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::invalid_argument(
+            "hierarchical_h2_mul_parallel: invalid batched input dimensions");
+    }
+    const int64_t local_points =
+        static_cast<int64_t>(input.size() / static_cast<size_t>(nrhs));
 
     const int rank = tree->mpi_rank;
     const int leaf_level = tree->num_levels - 1;
@@ -995,27 +1050,29 @@ void hierarchical_h2_mul_parallel(
             const auto& box = level.local_boxes[box_index];
             auto& source = source_data[level_number][box_index];
             auto& target = target_data[level_number][box_index];
-            source.initialize(box.morton_index, rank, box.num_points);
-            target.initialize(box.morton_index, rank, box.num_points);
+            source.initialize(box.morton_index, rank, box.num_points, nrhs);
+            target.initialize(box.morton_index, rank, box.num_points, nrhs);
             source.skeleton_indices = box.skeleton_indices;
             source.redundant_indices = box.redundant_indices;
             target.skeleton_indices = box.skeleton_indices;
             target.redundant_indices = box.redundant_indices;
 
             if (level_number == leaf_level) {
-                for (int64_t i = 0; i < box.num_points; ++i) {
-                    if (input_offset >= static_cast<int64_t>(input.size())) {
-                        throw std::runtime_error(
-                            "hierarchical_h2_mul_parallel: local input is too short");
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < box.num_points; ++i) {
+                        source.left_side[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) * box.num_points)] =
+                            input[static_cast<size_t>(
+                                input_offset + i +
+                                static_cast<int64_t>(column) * local_points)];
                     }
-                    source.left_side[static_cast<size_t>(i)] =
-                        input[static_cast<size_t>(input_offset++)];
                 }
+                input_offset += box.num_points;
                 source.right_side = source.left_side;
             }
         }
     }
-    if (input_offset != static_cast<int64_t>(input.size())) {
+    if (input_offset != local_points) {
         throw std::runtime_error(
             "hierarchical_h2_mul_parallel: local input length does not match leaf DOFs");
     }
@@ -1104,12 +1161,25 @@ void hierarchical_h2_mul_parallel(
             remote_near_sources);
     }
 
-    output.clear();
-    output.reserve(input.size());
+    output.assign(input.size(), DataType{0});
     if (leaf.is_process_active) {
+        int64_t local_row = 0;
         for (const auto& box_data : target_data[leaf_level]) {
-            output.insert(
-                output.end(), box_data.left_side.begin(), box_data.left_side.end());
+            for (int column = 0; column < nrhs; ++column) {
+                for (int64_t i = 0; i < box_data.num_points; ++i) {
+                    output[static_cast<size_t>(
+                        local_row + i +
+                        static_cast<int64_t>(column) * local_points)] =
+                        box_data.left_side[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) *
+                                box_data.num_points)];
+                }
+            }
+            local_row += box_data.num_points;
+        }
+        if (local_row != local_points) {
+            throw std::runtime_error(
+                "hierarchical_h2_mul_parallel: local output row mismatch");
         }
     }
     if (output.size() != input.size()) {
@@ -1123,41 +1193,67 @@ void hierarchical_h2_mul_parallel(
 }
 
 template<typename DataType>
-DataType h2_global_dot(
+std::vector<DataType> h2_global_column_dots(
     const std::vector<DataType>& lhs,
     const std::vector<DataType>& rhs,
+    int nrhs,
     MPI_Comm comm) {
 
-    if (lhs.size() != rhs.size()) {
-        throw std::runtime_error("h2_global_dot: vector length mismatch");
+    if (nrhs <= 0 || lhs.size() != rhs.size() ||
+        lhs.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::runtime_error(
+            "h2_global_column_dots: invalid batched vector dimensions");
     }
-    DataType local = DataType{0};
-    for (size_t i = 0; i < lhs.size(); ++i) {
-        if constexpr (is_complex_v<DataType>) {
-            local += std::conj(lhs[i]) * rhs[i];
-        } else {
-            local += lhs[i] * rhs[i];
+    const size_t local_rows = lhs.size() / static_cast<size_t>(nrhs);
+    std::vector<DataType> local(static_cast<size_t>(nrhs), DataType{0});
+    for (int column = 0; column < nrhs; ++column) {
+        const size_t offset = static_cast<size_t>(column) * local_rows;
+        for (size_t row = 0; row < local_rows; ++row) {
+            if constexpr (is_complex_v<DataType>) {
+                local[static_cast<size_t>(column)] +=
+                    std::conj(lhs[offset + row]) * rhs[offset + row];
+            } else {
+                local[static_cast<size_t>(column)] +=
+                    lhs[offset + row] * rhs[offset + row];
+            }
         }
     }
-    DataType global = DataType{0};
+    std::vector<DataType> global(static_cast<size_t>(nrhs), DataType{0});
     MPI_Allreduce(
-        &local, &global, 1, mpi_datatype_for<DataType>(), MPI_SUM, comm);
+        local.data(), global.data(), nrhs, mpi_datatype_for<DataType>(),
+        MPI_SUM, comm);
     return global;
 }
 
 template<typename DataType>
-double h2_global_norm(const std::vector<DataType>& vector, MPI_Comm comm) {
-    double local = 0.0;
-    for (const auto& value : vector) {
-        if constexpr (is_complex_v<DataType>) {
-            local += std::norm(value);
-        } else {
-            local += static_cast<double>(value) * static_cast<double>(value);
+std::vector<double> h2_global_column_norms(
+    const std::vector<DataType>& values,
+    int nrhs,
+    MPI_Comm comm) {
+
+    if (nrhs <= 0 || values.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::runtime_error(
+            "h2_global_column_norms: invalid batched vector dimensions");
+    }
+    const size_t local_rows = values.size() / static_cast<size_t>(nrhs);
+    std::vector<double> local(static_cast<size_t>(nrhs), 0.0);
+    for (int column = 0; column < nrhs; ++column) {
+        const size_t offset = static_cast<size_t>(column) * local_rows;
+        for (size_t row = 0; row < local_rows; ++row) {
+            if constexpr (is_complex_v<DataType>) {
+                local[static_cast<size_t>(column)] +=
+                    std::norm(values[offset + row]);
+            } else {
+                const double value = static_cast<double>(values[offset + row]);
+                local[static_cast<size_t>(column)] += value * value;
+            }
         }
     }
-    double global = 0.0;
-    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, comm);
-    return std::sqrt(global);
+    std::vector<double> global(static_cast<size_t>(nrhs), 0.0);
+    MPI_Allreduce(
+        local.data(), global.data(), nrhs, MPI_DOUBLE, MPI_SUM, comm);
+    for (double& value : global) value = std::sqrt(value);
+    return global;
 }
 
 template<typename CoordType, typename DataType>
@@ -1165,6 +1261,7 @@ void hierarchical_h2_bicgstab_parallel(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& rhs,
     std::vector<DataType>& solution,
+    int nrhs,
     double tolerance,
     int max_iterations,
     int* completed_iterations = nullptr,
@@ -1179,104 +1276,210 @@ void hierarchical_h2_bicgstab_parallel(
         throw std::invalid_argument(
             "hierarchical_h2_bicgstab_parallel: max_iterations must be positive");
     }
-
-    const size_t n = rhs.size();
-    solution.assign(n, DataType{0});
-    std::vector<DataType> residual = rhs;
-    std::vector<DataType> shadow = residual;
-    std::vector<DataType> direction(n, DataType{0});
-    std::vector<DataType> image(n, DataType{0});
-    std::vector<DataType> intermediate(n, DataType{0});
-    std::vector<DataType> intermediate_image(n, DataType{0});
-
-    const double rhs_norm = h2_global_norm(rhs, tree->comm);
-    if (rhs_norm == 0.0) {
-        if (completed_iterations) *completed_iterations = 0;
-        if (final_relative_residual) *final_relative_residual = 0.0;
-        return;
+    if (nrhs <= 0 || rhs.size() % static_cast<size_t>(nrhs) != 0) {
+        throw std::invalid_argument(
+            "hierarchical_h2_bicgstab_parallel: invalid batched RHS dimensions");
     }
 
-    DataType rho_previous = DataType{1};
-    DataType alpha = DataType{1};
-    DataType omega = DataType{1};
-    double relative_residual = h2_global_norm(residual, tree->comm) / rhs_norm;
+    const size_t value_count = rhs.size();
+    const size_t local_rows = value_count / static_cast<size_t>(nrhs);
+    solution.assign(value_count, DataType{0});
+    std::vector<DataType> residual = rhs;
+    std::vector<DataType> shadow = residual;
+    std::vector<DataType> direction(value_count, DataType{0});
+    std::vector<DataType> image(value_count, DataType{0});
+    std::vector<DataType> intermediate(value_count, DataType{0});
+    std::vector<DataType> intermediate_image(value_count, DataType{0});
+
+    const std::vector<double> rhs_norm =
+        h2_global_column_norms(rhs, nrhs, tree->comm);
+    std::vector<double> relative_residual(static_cast<size_t>(nrhs), 0.0);
+    std::vector<bool> active(static_cast<size_t>(nrhs), false);
+    std::vector<int> column_iterations(static_cast<size_t>(nrhs), 0);
+    for (int column = 0; column < nrhs; ++column) {
+        if (rhs_norm[static_cast<size_t>(column)] > 0.0) {
+            active[static_cast<size_t>(column)] = true;
+            relative_residual[static_cast<size_t>(column)] = 1.0;
+        }
+    }
+
+    std::vector<DataType> rho_previous(
+        static_cast<size_t>(nrhs), DataType{1});
+    std::vector<DataType> alpha(static_cast<size_t>(nrhs), DataType{1});
+    std::vector<DataType> omega(static_cast<size_t>(nrhs), DataType{1});
     auto unusable_scalar = [](const DataType& value) {
         const double magnitude = std::abs(value);
         return magnitude == 0.0 || !std::isfinite(magnitude);
     };
-    int iteration = 0;
+    auto any_active = [&]() {
+        return std::any_of(active.begin(), active.end(), [](bool value) {
+            return value;
+        });
+    };
+    auto clear_column = [&](std::vector<DataType>& values, int column) {
+        const size_t offset = static_cast<size_t>(column) * local_rows;
+        std::fill(
+            values.begin() + static_cast<ptrdiff_t>(offset),
+            values.begin() + static_cast<ptrdiff_t>(offset + local_rows),
+            DataType{0});
+    };
 
-    for (iteration = 1; iteration <= max_iterations; ++iteration) {
-        const DataType rho = h2_global_dot(shadow, residual, tree->comm);
-        if (unusable_scalar(rho)) {
-            throw std::runtime_error("H2 BiCGSTAB breakdown: rho is zero");
-        }
-
-        if (iteration == 1) {
-            direction = residual;
-        } else {
-            if (unusable_scalar(omega)) {
-                throw std::runtime_error("H2 BiCGSTAB breakdown: omega is zero");
+    for (int iteration = 1;
+         iteration <= max_iterations && any_active();
+         ++iteration) {
+        const std::vector<DataType> rho =
+            h2_global_column_dots(shadow, residual, nrhs, tree->comm);
+        for (int column = 0; column < nrhs; ++column) {
+            if (!active[static_cast<size_t>(column)]) {
+                clear_column(direction, column);
+                continue;
             }
-            const DataType beta = (rho / rho_previous) * (alpha / omega);
-            for (size_t i = 0; i < n; ++i) {
-                direction[i] = residual[i] +
-                    beta * (direction[i] - omega * image[i]);
+            if (unusable_scalar(rho[static_cast<size_t>(column)])) {
+                throw std::runtime_error(
+                    "H2 BiCGSTAB breakdown: rho is zero for RHS " +
+                    std::to_string(column));
             }
-        }
-
-        hierarchical_h2_mul_parallel(tree, direction, image, false);
-        const DataType denominator = h2_global_dot(shadow, image, tree->comm);
-        if (unusable_scalar(denominator)) {
-            throw std::runtime_error("H2 BiCGSTAB breakdown: alpha denominator is zero");
-        }
-        alpha = rho / denominator;
-        for (size_t i = 0; i < n; ++i) {
-            intermediate[i] = residual[i] - alpha * image[i];
-        }
-
-        relative_residual = h2_global_norm(intermediate, tree->comm) / rhs_norm;
-        if (relative_residual <= tolerance) {
-            for (size_t i = 0; i < n; ++i) {
-                solution[i] += alpha * direction[i];
+            const size_t offset = static_cast<size_t>(column) * local_rows;
+            if (iteration == 1) {
+                std::copy_n(
+                    residual.begin() + static_cast<ptrdiff_t>(offset),
+                    local_rows,
+                    direction.begin() + static_cast<ptrdiff_t>(offset));
+            } else {
+                if (unusable_scalar(omega[static_cast<size_t>(column)])) {
+                    throw std::runtime_error(
+                        "H2 BiCGSTAB breakdown: omega is zero for RHS " +
+                        std::to_string(column));
+                }
+                const DataType beta =
+                    (rho[static_cast<size_t>(column)] /
+                     rho_previous[static_cast<size_t>(column)]) *
+                    (alpha[static_cast<size_t>(column)] /
+                     omega[static_cast<size_t>(column)]);
+                for (size_t row = 0; row < local_rows; ++row) {
+                    const size_t index = offset + row;
+                    direction[index] = residual[index] + beta *
+                        (direction[index] -
+                         omega[static_cast<size_t>(column)] * image[index]);
+                }
             }
-            break;
         }
 
         hierarchical_h2_mul_parallel(
-            tree, intermediate, intermediate_image, false);
-        const DataType omega_denominator =
-            h2_global_dot(intermediate_image, intermediate_image, tree->comm);
-        if (unusable_scalar(omega_denominator)) {
-            throw std::runtime_error(
-                "H2 BiCGSTAB breakdown: omega denominator is zero");
+            tree, direction, image, nrhs, false);
+        const std::vector<DataType> denominator =
+            h2_global_column_dots(shadow, image, nrhs, tree->comm);
+        for (int column = 0; column < nrhs; ++column) {
+            if (!active[static_cast<size_t>(column)]) {
+                clear_column(intermediate, column);
+                continue;
+            }
+            if (unusable_scalar(denominator[static_cast<size_t>(column)])) {
+                throw std::runtime_error(
+                    "H2 BiCGSTAB breakdown: alpha denominator is zero for RHS " +
+                    std::to_string(column));
+            }
+            alpha[static_cast<size_t>(column)] =
+                rho[static_cast<size_t>(column)] /
+                denominator[static_cast<size_t>(column)];
+            const size_t offset = static_cast<size_t>(column) * local_rows;
+            for (size_t row = 0; row < local_rows; ++row) {
+                const size_t index = offset + row;
+                intermediate[index] = residual[index] -
+                    alpha[static_cast<size_t>(column)] * image[index];
+            }
         }
-        omega = h2_global_dot(
-            intermediate_image, intermediate, tree->comm) / omega_denominator;
 
-        for (size_t i = 0; i < n; ++i) {
-            solution[i] += alpha * direction[i] + omega * intermediate[i];
-            residual[i] = intermediate[i] - omega * intermediate_image[i];
+        const std::vector<double> intermediate_norm =
+            h2_global_column_norms(intermediate, nrhs, tree->comm);
+        for (int column = 0; column < nrhs; ++column) {
+            if (!active[static_cast<size_t>(column)]) continue;
+            relative_residual[static_cast<size_t>(column)] =
+                intermediate_norm[static_cast<size_t>(column)] /
+                rhs_norm[static_cast<size_t>(column)];
+            if (relative_residual[static_cast<size_t>(column)] <= tolerance) {
+                const size_t offset = static_cast<size_t>(column) * local_rows;
+                for (size_t row = 0; row < local_rows; ++row) {
+                    const size_t index = offset + row;
+                    solution[index] += alpha[static_cast<size_t>(column)] *
+                        direction[index];
+                }
+                active[static_cast<size_t>(column)] = false;
+                column_iterations[static_cast<size_t>(column)] = iteration;
+                clear_column(intermediate, column);
+            }
         }
-        relative_residual = h2_global_norm(residual, tree->comm) / rhs_norm;
-        if (relative_residual <= tolerance) break;
-        rho_previous = rho;
+        if (!any_active()) break;
+
+        hierarchical_h2_mul_parallel(
+            tree, intermediate, intermediate_image, nrhs, false);
+        const std::vector<DataType> omega_numerator =
+            h2_global_column_dots(
+                intermediate_image, intermediate, nrhs, tree->comm);
+        const std::vector<DataType> omega_denominator =
+            h2_global_column_dots(
+                intermediate_image, intermediate_image, nrhs, tree->comm);
+        for (int column = 0; column < nrhs; ++column) {
+            if (!active[static_cast<size_t>(column)]) continue;
+            if (unusable_scalar(
+                    omega_denominator[static_cast<size_t>(column)])) {
+                throw std::runtime_error(
+                    "H2 BiCGSTAB breakdown: omega denominator is zero for RHS " +
+                    std::to_string(column));
+            }
+            omega[static_cast<size_t>(column)] =
+                omega_numerator[static_cast<size_t>(column)] /
+                omega_denominator[static_cast<size_t>(column)];
+            const size_t offset = static_cast<size_t>(column) * local_rows;
+            for (size_t row = 0; row < local_rows; ++row) {
+                const size_t index = offset + row;
+                solution[index] += alpha[static_cast<size_t>(column)] *
+                    direction[index] + omega[static_cast<size_t>(column)] *
+                    intermediate[index];
+                residual[index] = intermediate[index] -
+                    omega[static_cast<size_t>(column)] *
+                    intermediate_image[index];
+            }
+        }
+
+        const std::vector<double> residual_norm =
+            h2_global_column_norms(residual, nrhs, tree->comm);
+        for (int column = 0; column < nrhs; ++column) {
+            if (!active[static_cast<size_t>(column)]) continue;
+            relative_residual[static_cast<size_t>(column)] =
+                residual_norm[static_cast<size_t>(column)] /
+                rhs_norm[static_cast<size_t>(column)];
+            if (relative_residual[static_cast<size_t>(column)] <= tolerance) {
+                active[static_cast<size_t>(column)] = false;
+                column_iterations[static_cast<size_t>(column)] = iteration;
+            } else {
+                rho_previous[static_cast<size_t>(column)] =
+                    rho[static_cast<size_t>(column)];
+            }
+        }
     }
 
-    const int iterations_done = std::min(iteration, max_iterations);
+    const int iterations_done = *std::max_element(
+        column_iterations.begin(), column_iterations.end());
+    const double max_relative_residual = *std::max_element(
+        relative_residual.begin(), relative_residual.end());
     if (completed_iterations) *completed_iterations = iterations_done;
-    if (final_relative_residual) *final_relative_residual = relative_residual;
-    if (relative_residual > tolerance) {
+    if (final_relative_residual) {
+        *final_relative_residual = max_relative_residual;
+    }
+    if (any_active()) {
         throw std::runtime_error(
             "H2 BiCGSTAB did not converge in " +
-            std::to_string(max_iterations) + " iterations; relative residual=" +
-            std::to_string(relative_residual));
+            std::to_string(max_iterations) +
+            " iterations; maximum relative residual=" +
+            std::to_string(max_relative_residual));
     }
 
     if (verbose && tree->mpi_rank == smallest_active_rank(
             tree->levels[tree->num_levels - 1])) {
         std::cout << "H2 BiCGSTAB converged in " << iterations_done
-                  << " iterations, relative residual=" << relative_residual
+                  << " iterations, maximum relative residual="
+                  << max_relative_residual
                   << std::endl;
     }
 }

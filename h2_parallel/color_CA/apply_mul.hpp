@@ -128,48 +128,55 @@ void apply_mul_forward_W(
 
     int64_t k = static_cast<int64_t>(skeleton_indices->size());
     int64_t r = static_cast<int64_t>(redundant_indices->size());
+    const int64_t nrhs = solve_data.nrhs;
 
     // Extract x[R]
-    std::vector<DataType> x_R(static_cast<size_t>(r));
-    for (int64_t i = 0; i < r; ++i) {
-        x_R[static_cast<size_t>(i)] =
-            solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])];
+    std::vector<DataType> x_R(static_cast<size_t>(r * nrhs));
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            x_R[static_cast<size_t>(i + column * r)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
 
     // ===== Step 1: L_T^{-1}: x[S] += T * x[R] =====
     // (Compare solve backward: L_T: x[S] -= T * x[R])
     assert(T->is_allocated());
     if (T->is_allocated()) {
-        std::vector<DataType> result(static_cast<size_t>(k), DataType{0.0});
+        std::vector<DataType> result(
+            static_cast<size_t>(k * nrhs), DataType{0.0});
 
         char trans = 'N';
-        int m = static_cast<int>(k), n = static_cast<int>(r);
+        int m = static_cast<int>(k), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(r);
         DataType alpha = 1.0, beta = 0.0;
-        int lda = static_cast<int>(k), incx = 1, incy = 1;
+        int lda = static_cast<int>(T->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(k);
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              T->data.data(), &lda, x_R.data(), &ldb,
+              &beta, result.data(), &ldc);
 
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_R.data(), &incx,
-                   &beta, result.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_R.data(), &incx,
-                   &beta, result.data(), &incy);
-        }
-
-        for (int64_t i = 0; i < k; ++i) {
-            solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])] +=
-                result[static_cast<size_t>(i)];
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < k; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] +=
+                    result[static_cast<size_t>(i + column * k)];
+            }
         }
     }
 
     // Re-extract x[S] after update (needed for Step 2)
-    std::vector<DataType> x_S(static_cast<size_t>(k));
-    for (int64_t i = 0; i < k; ++i) {
-        x_S[static_cast<size_t>(i)] =
-            solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])];
+    std::vector<DataType> x_S(static_cast<size_t>(k * nrhs));
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            x_S[static_cast<size_t>(i + column * k)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
 
     // ===== Step 2: U^{-1}: x[R] -= stored_X_SR^T * x[S] =====
@@ -181,44 +188,31 @@ void apply_mul_forward_W(
         assert(X_SR->is_allocated());
         if (X_SR->is_allocated()) {
             char trans = 'T';
-            int m = static_cast<int>(k), n = static_cast<int>(r);
+            char trans_b = 'N';
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(k);
             DataType alpha = -1.0;
             DataType beta = 1.0;
-            int lda = static_cast<int>(k), incx = 1, incy = 1;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_SR->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_SR->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(k);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans, &trans_b, &m, &n, &inner, &alpha,
+                  X_SR->data.data(), &lda, x_S.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     } else {
         // NONSYMMETRIC: stored_X_RS = -X_RR^{-1}*X_RS
         // U^{-1} wants +X_RR^{-1}*X_RS = -stored_X_RS
         if (X_RS->is_allocated()) {
             char trans = 'N';
-            int m = static_cast<int>(r), n = static_cast<int>(k);
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(k);
             DataType alpha = -1.0;
             DataType beta = 1.0;
-            int lda = static_cast<int>(r), incx = 1, incy = 1;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_RS->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_RS->data.data(), &lda,
-                       x_S.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_RS->lda), ldb = static_cast<int>(k);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+                  X_RS->data.data(), &lda, x_S.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     }
 
@@ -228,7 +222,8 @@ void apply_mul_forward_W(
 
         if (matrix_property == MatrixProperty::SYMMETRIC && X_NR->is_allocated()) {
             int64_t total_neighbor_points = X_NR->rows;
-            std::vector<DataType> neighbor_values(static_cast<size_t>(total_neighbor_points), DataType{0.0});
+            std::vector<DataType> neighbor_values(
+                static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
 
             // Collect neighbor values in one_hop order
             int64_t row_offset = 0;
@@ -248,25 +243,39 @@ void apply_mul_forward_W(
                         neighbor_data = &level.ghost_and_assisting_boxes_for_solve[it->second];
                     }
                 }
-
                 if (neighbor_data == nullptr) {
                     throw std::runtime_error(
                         "apply_mul_forward_W: Neighbor " +
                         std::to_string(neighbor_morton) + " not found in solve data");
                 }
+                if (neighbor_data->nrhs != nrhs) {
+                    throw std::runtime_error(
+                        "apply_mul_forward_W: neighbor RHS count mismatch");
+                }
 
                 int64_t n_neighbor;
 
                 if (use_full) {
-                    n_neighbor = static_cast<int64_t>(neighbor_data->left_side.size());
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[static_cast<size_t>(row_offset + i)] = neighbor_data->left_side[static_cast<size_t>(i)];
+                    n_neighbor = neighbor_data->num_points;
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                row_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    i + column * neighbor_data->num_points)];
+                        }
                     }
                 } else {
                     n_neighbor = static_cast<int64_t>(neighbor_data->skeleton_indices.size());
                     const auto& neighbor_skel = neighbor_data->skeleton_indices;
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[static_cast<size_t>(row_offset + i)] = neighbor_data->left_side[static_cast<size_t>(neighbor_skel[static_cast<size_t>(i)])];
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                row_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    neighbor_skel[static_cast<size_t>(i)] +
+                                    column * neighbor_data->num_points)];
+                        }
                     }
                 }
 
@@ -279,27 +288,22 @@ void apply_mul_forward_W(
             }
 
             // x[R] -= stored_X_NR^T * x[N]  (sign flip from solve's +=)
-            char trans = 'T';
-            int m = static_cast<int>(total_neighbor_points), n = static_cast<int>(r);
+            char trans_a = 'T', trans_b = 'N';
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(total_neighbor_points);
             DataType alpha = -1.0;
             DataType beta = 1.0;
-            int lda = static_cast<int>(total_neighbor_points), incx = 1, incy = 1;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_NR->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_NR->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_NR->lda);
+            int ldb = static_cast<int>(total_neighbor_points);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans_a, &trans_b, &m, &n, &inner, &alpha,
+                  X_NR->data.data(), &lda, neighbor_values.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
 
         } else if (matrix_property == MatrixProperty::NONSYMMETRIC && X_RN->is_allocated()) {
             int64_t total_neighbor_points = X_RN->cols;
-            std::vector<DataType> neighbor_values(static_cast<size_t>(total_neighbor_points), DataType{0.0});
+            std::vector<DataType> neighbor_values(
+                static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
 
             int64_t col_offset = 0;
             for (size_t neighbor_idx = 0; neighbor_idx < one_hop->size(); ++neighbor_idx) {
@@ -321,18 +325,33 @@ void apply_mul_forward_W(
                         "apply_mul_forward_W: Neighbor " +
                         std::to_string(neighbor_morton) + " not found");
                 }
+                if (neighbor_data->nrhs != nrhs) {
+                    throw std::runtime_error(
+                        "apply_mul_forward_W: neighbor RHS count mismatch");
+                }
 
                 int64_t n_neighbor;
                 if (use_full) {
-                    n_neighbor = static_cast<int64_t>(neighbor_data->left_side.size());
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[static_cast<size_t>(col_offset + i)] = neighbor_data->left_side[static_cast<size_t>(i)];
+                    n_neighbor = neighbor_data->num_points;
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                col_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    i + column * neighbor_data->num_points)];
+                        }
                     }
                 } else {
                     n_neighbor = static_cast<int64_t>(neighbor_data->skeleton_indices.size());
                     const auto& neighbor_skel = neighbor_data->skeleton_indices;
-                    for (int64_t i = 0; i < n_neighbor; ++i) {
-                        neighbor_values[static_cast<size_t>(col_offset + i)] = neighbor_data->left_side[static_cast<size_t>(neighbor_skel[static_cast<size_t>(i)])];
+                    for (int64_t column = 0; column < nrhs; ++column) {
+                        for (int64_t i = 0; i < n_neighbor; ++i) {
+                            neighbor_values[static_cast<size_t>(
+                                col_offset + i + column * total_neighbor_points)] =
+                                neighbor_data->left_side[static_cast<size_t>(
+                                    neighbor_skel[static_cast<size_t>(i)] +
+                                    column * neighbor_data->num_points)];
+                        }
                     }
                 }
                 col_offset += n_neighbor;
@@ -344,29 +363,27 @@ void apply_mul_forward_W(
 
             // x[R] -= stored_X_RN * x[N]  (sign flip from solve's +=)
             char trans = 'N';
-            int m = static_cast<int>(r), n = static_cast<int>(total_neighbor_points);
+            int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+            int inner = static_cast<int>(total_neighbor_points);
             DataType alpha = -1.0;
             DataType beta = 1.0;
-            int lda = static_cast<int>(r), incx = 1, incy = 1;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgemv_(&trans, &m, &n, &alpha,
-                       X_RN->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgemv_(&trans, &m, &n, &alpha,
-                       X_RN->data.data(), &lda,
-                       neighbor_values.data(), &incx,
-                       &beta, x_R.data(), &incy);
-            }
+            int lda = static_cast<int>(X_RN->lda);
+            int ldb = static_cast<int>(total_neighbor_points);
+            int ldc = static_cast<int>(r);
+            gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+                  X_RN->data.data(), &lda, neighbor_values.data(), &ldb,
+                  &beta, x_R.data(), &ldc);
         }
     }
 
     // Store updated x[R]
-    for (int64_t i = 0; i < r; ++i) {
-        solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])] =
-            x_R[static_cast<size_t>(i)];
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            solve_data.left_side[static_cast<size_t>(
+                (*redundant_indices)[static_cast<size_t>(i)] +
+                column * solve_data.num_points)] =
+                x_R[static_cast<size_t>(i + column * r)];
+        }
     }
 }
 
@@ -390,8 +407,16 @@ inline void bunch_kaufman_multiply(
     int n,
     const DataType* A, int lda,
     const int* ipiv,
-    DataType* x)
+    DataType* x, int ldx, int nrhs)
 {
+    if (n == 0 || nrhs == 0) {
+        return;
+    }
+
+    const DataType one = DataType{1};
+    const char trans = 'T';
+    const char no_trans = 'N';
+
     // Step 1: L^T multiply with permutations (forward, k=0..n-1)
     // This is the inverse of the SYTRS backward pass
     int k = 0;
@@ -400,24 +425,35 @@ inline void bunch_kaufman_multiply(
             // 1x1 pivot
             int kp = ipiv[k] - 1;  // convert to 0-based
             if (kp != k) {
-                std::swap(x[k], x[kp]);
+                for (int column = 0; column < nrhs; ++column) {
+                    std::swap(x[k + column * ldx], x[kp + column * ldx]);
+                }
             }
-            // x[k] += L(k+1:n, k)^T * x[k+1:n]
-            for (int i = k + 1; i < n; i++) {
-                x[k] += A[i + k * lda] * x[i];  // A stored column-major, L column k
+            // X[k,:] += L(k+1:n,k)^T * X[k+1:n,:]
+            int tail = n - k - 1;
+            if (tail > 0) {
+                int one_row = 1;
+                gemm_(&trans, &no_trans, &one_row, &nrhs, &tail,
+                      &one, A + (k + 1) + k * lda, &lda,
+                      x + k + 1, &ldx, &one, x + k, &ldx);
             }
             k += 1;
         } else {
             // 2x2 pivot: ipiv[k] < 0 and ipiv[k+1] < 0
             int kp = -ipiv[k] - 1;  // convert to 0-based
             if (kp != k + 1) {
-                std::swap(x[k + 1], x[kp]);
+                for (int column = 0; column < nrhs; ++column) {
+                    std::swap(x[k + 1 + column * ldx],
+                              x[kp + column * ldx]);
+                }
             }
-            // x[k] += L(k+2:n, k)^T * x[k+2:n]
-            // x[k+1] += L(k+2:n, k+1)^T * x[k+2:n]
-            for (int i = k + 2; i < n; i++) {
-                x[k] += A[i + k * lda] * x[i];
-                x[k + 1] += A[i + (k + 1) * lda] * x[i];
+            // X[k:k+1,:] += L(k+2:n,k:k+1)^T * X[k+2:n,:]
+            int tail = n - k - 2;
+            if (tail > 0) {
+                int two_rows = 2;
+                gemm_(&trans, &no_trans, &two_rows, &nrhs, &tail,
+                      &one, A + (k + 2) + k * lda, &lda,
+                      x + k + 2, &ldx, &one, x + k, &ldx);
             }
             k += 2;
         }
@@ -428,16 +464,21 @@ inline void bunch_kaufman_multiply(
     while (k < n) {
         if (ipiv[k] > 0) {
             // 1x1 block: D(k,k) = A(k,k)
-            x[k] *= A[k + k * lda];
+            for (int column = 0; column < nrhs; ++column) {
+                x[k + column * ldx] *= A[k + k * lda];
+            }
             k += 1;
         } else {
             // 2x2 block: D = [A(k,k), A(k+1,k); A(k+1,k), A(k+1,k+1)]
             DataType d11 = A[k + k * lda];
             DataType d21 = A[(k + 1) + k * lda];
             DataType d22 = A[(k + 1) + (k + 1) * lda];
-            DataType t0 = x[k], t1 = x[k + 1];
-            x[k]     = d11 * t0 + d21 * t1;
-            x[k + 1] = d21 * t0 + d22 * t1;
+            for (int column = 0; column < nrhs; ++column) {
+                DataType* x_column = x + column * ldx;
+                DataType t0 = x_column[k], t1 = x_column[k + 1];
+                x_column[k] = d11 * t0 + d21 * t1;
+                x_column[k + 1] = d21 * t0 + d22 * t1;
+            }
             k += 2;
         }
     }
@@ -448,25 +489,37 @@ inline void bunch_kaufman_multiply(
     while (k >= 0) {
         if (ipiv[k] > 0) {
             // 1x1 pivot
-            // x[k+1:n] += L(k+1:n, k) * x[k]
-            for (int i = k + 1; i < n; i++) {
-                x[i] += A[i + k * lda] * x[k];
+            // X[k+1:n,:] += L(k+1:n,k) * X[k,:]
+            int tail = n - k - 1;
+            if (tail > 0) {
+                int one_column = 1;
+                gemm_(&no_trans, &no_trans, &tail, &nrhs, &one_column,
+                      &one, A + (k + 1) + k * lda, &lda,
+                      x + k, &ldx, &one, x + k + 1, &ldx);
             }
             int kp = ipiv[k] - 1;
             if (kp != k) {
-                std::swap(x[k], x[kp]);
+                for (int column = 0; column < nrhs; ++column) {
+                    std::swap(x[k + column * ldx], x[kp + column * ldx]);
+                }
             }
             k -= 1;
         } else {
             // 2x2 pivot: ipiv[k] < 0 and ipiv[k-1] < 0
             // x[k+1:n] += L(k+1:n, k-1) * x[k-1] + L(k+1:n, k) * x[k]
             // Note: the 2x2 block is at (k-1, k), so we process k-1 and k together
-            for (int i = k + 1; i < n; i++) {
-                x[i] += A[i + (k - 1) * lda] * x[k - 1] + A[i + k * lda] * x[k];
+            int tail = n - k - 1;
+            if (tail > 0) {
+                int two_columns = 2;
+                gemm_(&no_trans, &no_trans, &tail, &nrhs, &two_columns,
+                      &one, A + (k + 1) + (k - 1) * lda, &lda,
+                      x + k - 1, &ldx, &one, x + k + 1, &ldx);
             }
             int kp = -ipiv[k - 1] - 1;
             if (kp != k) {
-                std::swap(x[k], x[kp]);
+                for (int column = 0; column < nrhs; ++column) {
+                    std::swap(x[k + column * ldx], x[kp + column * ldx]);
+                }
             }
             k -= 2;
         }
@@ -514,16 +567,24 @@ void apply_diagonal_multiply(
     }
 
     int64_t k = static_cast<int64_t>(skeleton_indices->size());
+    const int64_t rhs_count = solve_data.nrhs;
 
     // Extract x[S]
-    std::vector<DataType> x_S(static_cast<size_t>(k));
-    for (int64_t i = 0; i < k; ++i) {
-        x_S[static_cast<size_t>(i)] =
-            solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])];
+    std::vector<DataType> x_S(static_cast<size_t>(k * rhs_count));
+    for (int64_t column = 0; column < rhs_count; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            x_S[static_cast<size_t>(i + column * k)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
 
     int n = static_cast<int>(k);
-    int incx = 1;
+    int nrhs = static_cast<int>(rhs_count);
+    int ldb = n;
+    char side = 'L';
+    DataType one = DataType{1};
 
     if (X_RR->format == MatrixStorage<DataType>::CHOLESKY_L) {
         // X_RR = L * L^T (real symmetric) or L * L^T (complex symmetric via zsychol_)
@@ -532,28 +593,12 @@ void apply_diagonal_multiply(
         char diag = 'N';
         int lda = static_cast<int>(k);
 
-        if constexpr (std::is_same_v<DataType, double>) {
-            // y = L^T * x
-            char trans_T = 'T';
-            dtrmv_(&uplo, &trans_T, &diag, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            // z = L * y
-            char trans_N = 'N';
-            dtrmv_(&uplo, &trans_N, &diag, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            // Complex symmetric: L * L^T (transpose, NOT conjugate transpose)
-            char trans_T = 'T';
-            ztrmv_(&uplo, &trans_T, &diag, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            char trans_N = 'N';
-            ztrmv_(&uplo, &trans_N, &diag, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-        }
+        char trans_T = 'T';
+        trmm_(&side, &uplo, &trans_T, &diag, &n, &nrhs, &one,
+              X_RR->data.data(), &lda, x_S.data(), &ldb);
+        char trans_N = 'N';
+        trmm_(&side, &uplo, &trans_N, &diag, &n, &nrhs, &one,
+              X_RR->data.data(), &lda, x_S.data(), &ldb);
 
     } else if (X_RR->format == MatrixStorage<DataType>::LU_FACTORED) {
         // X_RR = P * L * U
@@ -564,35 +609,17 @@ void apply_diagonal_multiply(
 
         int lda = static_cast<int>(k);
 
+        char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
+        trmm_(&side, &uplo_U, &trans_N, &diag_N, &n, &nrhs, &one,
+              X_RR->data.data(), &lda, x_S.data(), &ldb);
+        char uplo_L = 'L', diag_U = 'U';
+        trmm_(&side, &uplo_L, &trans_N, &diag_U, &n, &nrhs, &one,
+              X_RR->data.data(), &lda, x_S.data(), &ldb);
+        int k1 = 1, k2 = n, inc_rev = -1;
         if constexpr (std::is_same_v<DataType, double>) {
-            // y = U * x (upper triangular, non-unit diagonal)
-            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-            dtrmv_(&uplo_U, &trans_N, &diag_N, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            // z = L * y (lower triangular, unit diagonal)
-            char uplo_L = 'L', diag_U = 'U';
-            dtrmv_(&uplo_L, &trans_N, &diag_U, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            // w = P * z (apply row permutations in REVERSE order)
-            // dlaswp INCX=1 applies P^T (same as factorization order),
-            // INCX=-1 applies P (reverse order), which is what we need for A=P*L*U multiply
-            int one = 1, nrhs = 1;
-            int k1 = 1, k2 = n, inc_rev = -1;
             dlaswp_(&nrhs, x_S.data(), &n,
                     &k1, &k2, X_RR_pivots->data(), &inc_rev);
         } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-            ztrmv_(&uplo_U, &trans_N, &diag_N, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            char uplo_L = 'L', diag_U = 'U';
-            ztrmv_(&uplo_L, &trans_N, &diag_U, &n,
-                   X_RR->data.data(), &lda,
-                   x_S.data(), &incx);
-            int nrhs = 1;
-            int k1 = 1, k2 = n, inc_rev = -1;
             zlaswp_(&nrhs, x_S.data(), &n,
                     &k1, &k2, X_RR_pivots->data(), &inc_rev);
         }
@@ -601,17 +628,22 @@ void apply_diagonal_multiply(
         if (X_RR_pivots == nullptr || X_RR_pivots->size() < static_cast<size_t>(k)) {
             throw std::runtime_error("apply_diagonal_multiply: missing Bunch-Kaufman pivots");
         }
-        bunch_kaufman_multiply(n, X_RR->data.data(), n,
-                               X_RR_pivots->data(), x_S.data());
+        bunch_kaufman_multiply(
+            n, X_RR->data.data(), n, X_RR_pivots->data(),
+            x_S.data(), ldb, nrhs);
     } else {
         throw std::runtime_error(
             "apply_diagonal_multiply: unsupported X_RR format");
     }
 
     // Store result
-    for (int64_t i = 0; i < k; ++i) {
-        solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])] =
-            x_S[static_cast<size_t>(i)];
+    for (int64_t column = 0; column < rhs_count; ++column) {
+        for (int64_t i = 0; i < k; ++i) {
+            solve_data.left_side[static_cast<size_t>(
+                (*skeleton_indices)[static_cast<size_t>(i)] +
+                column * solve_data.num_points)] =
+                x_S[static_cast<size_t>(i + column * k)];
+        }
     }
 }
 
@@ -691,32 +723,40 @@ void apply_mul_backward_V_with_pending(
 
     const int64_t k = static_cast<int64_t>(skeleton_indices->size());
     const int64_t r = static_cast<int64_t>(redundant_indices->size());
+    const int64_t nrhs = solve_data.nrhs;
 
     // Extract x[R] (read-only for L^{-1})
-    std::vector<DataType> x_R(static_cast<size_t>(r));
-    for (int64_t i = 0; i < r; ++i) {
-        x_R[static_cast<size_t>(i)] =
-            solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])];
+    std::vector<DataType> x_R(static_cast<size_t>(r * nrhs));
+    for (int64_t column = 0; column < nrhs; ++column) {
+        for (int64_t i = 0; i < r; ++i) {
+            x_R[static_cast<size_t>(i + column * r)] =
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)];
+        }
     }
 
     // ===== Step 1a: L^{-1}: x[S] -= stored_X_SR * x[R] =====
     // (Compare solve forward V^{-1}: L: x[S] += stored_X_SR * x[R])
     if (X_SR->is_allocated()) {
-        std::vector<DataType> result(static_cast<size_t>(k), DataType{0.0});
+        std::vector<DataType> result(
+            static_cast<size_t>(k * nrhs), DataType{0.0});
         char trans = 'N';
-        int m = static_cast<int>(k), n = static_cast<int>(r);
-        int lda = static_cast<int>(k), incx = 1, incy = 1;
+        int m = static_cast<int>(k), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(r);
+        int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(k);
         DataType alpha = 1.0, beta = 0.0;
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha, X_SR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, result.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha, X_SR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, result.data(), &incy);
-        }
-        for (int64_t i = 0; i < k; ++i) {
-            solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])] -=
-                result[static_cast<size_t>(i)];
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              X_SR->data.data(), &lda, x_R.data(), &ldb,
+              &beta, result.data(), &ldc);
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < k; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*skeleton_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] -=
+                    result[static_cast<size_t>(i + column * k)];
+            }
         }
     }
 
@@ -726,19 +766,18 @@ void apply_mul_backward_V_with_pending(
         // No neighbor interaction; still do Step 2 below.
     } else {
         const int64_t total_neighbor_points = X_NR->rows;
-        std::vector<DataType> neighbor_updates(static_cast<size_t>(total_neighbor_points), DataType{0.0});
+        std::vector<DataType> neighbor_updates(
+            static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
 
         char trans = 'N';
-        int m = static_cast<int>(total_neighbor_points), n = static_cast<int>(r);
-        int lda = static_cast<int>(total_neighbor_points), incx = 1, incy = 1;
+        int m = static_cast<int>(total_neighbor_points);
+        int n = static_cast<int>(nrhs), inner = static_cast<int>(r);
+        int lda = static_cast<int>(X_NR->lda), ldb = static_cast<int>(r);
+        int ldc = static_cast<int>(total_neighbor_points);
         DataType alpha = 1.0, beta = 0.0;
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha, X_NR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, neighbor_updates.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha, X_NR->data.data(), &lda,
-                   x_R.data(), &incx, &beta, neighbor_updates.data(), &incy);
-        }
+        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+              X_NR->data.data(), &lda, x_R.data(), &ldb,
+              &beta, neighbor_updates.data(), &ldc);
 
         const auto neighbor_sizes = solve_neighbor_sizes_for_box(
             level, level_solve_data, solve_data, *one_hop, *use_full_set,
@@ -763,11 +802,16 @@ void apply_mul_backward_V_with_pending(
             }
 
             // Negate the updates before accumulating (sign flip from solve's forward)
-            std::vector<DataType> neg_seg(static_cast<size_t>(n_neighbor));
-            for (int64_t i = 0; i < n_neighbor; ++i) {
-                neg_seg[static_cast<size_t>(i)] =
-                    -neighbor_updates[static_cast<size_t>(row_offset + i)];
+            std::vector<DataType> neg_seg(
+                static_cast<size_t>(n_neighbor * nrhs));
+            for (int64_t column = 0; column < nrhs; ++column) {
+                for (int64_t i = 0; i < n_neighbor; ++i) {
+                    neg_seg[static_cast<size_t>(i + column * n_neighbor)] =
+                        -neighbor_updates[static_cast<size_t>(
+                            row_offset + i + column * total_neighbor_points)];
+                }
             }
+            const int64_t segment_size = n_neighbor * nrhs;
 
             auto* neighbor_target = resolve_solve_data_for_morton(
                 level, level_solve_data, neighbor_morton,
@@ -778,13 +822,13 @@ void apply_mul_backward_V_with_pending(
                         pending_updates.full_updates,
                         neighbor_morton,
                         neg_seg.data(),
-                        n_neighbor);
+                        segment_size);
                 } else {
                     accumulate_replace_then_add(
                         pending_updates.skel_updates,
                         neighbor_morton,
                         neg_seg.data(),
-                        n_neighbor);
+                        segment_size);
                 }
             }
 
@@ -804,33 +848,35 @@ void apply_mul_backward_V_with_pending(
     assert(T->is_allocated());
     if (T->is_allocated()) {
         // Re-extract x[S] after Step 1a update
-        std::vector<DataType> x_S(static_cast<size_t>(k));
-        for (int64_t i = 0; i < k; ++i) {
-            x_S[static_cast<size_t>(i)] =
-                solve_data.left_side[static_cast<size_t>((*skeleton_indices)[static_cast<size_t>(i)])];
+        std::vector<DataType> x_S(static_cast<size_t>(k * nrhs));
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < k; ++i) {
+                x_S[static_cast<size_t>(i + column * k)] =
+                    solve_data.left_side[static_cast<size_t>(
+                        (*skeleton_indices)[static_cast<size_t>(i)] +
+                        column * solve_data.num_points)];
+            }
         }
 
-        std::vector<DataType> result(static_cast<size_t>(r), DataType{0.0});
-        char trans = 'T';
-        int m = static_cast<int>(k), n = static_cast<int>(r);
-        int lda = static_cast<int>(k), incx = 1, incy = 1;
+        std::vector<DataType> result(
+            static_cast<size_t>(r * nrhs), DataType{0.0});
+        char trans_a = 'T', trans_b = 'N';
+        int m = static_cast<int>(r), n = static_cast<int>(nrhs);
+        int inner = static_cast<int>(k);
+        int lda = static_cast<int>(T->lda), ldb = static_cast<int>(k);
+        int ldc = static_cast<int>(r);
         DataType alpha = 1.0, beta = 0.0;
+        gemm_(&trans_a, &trans_b, &m, &n, &inner, &alpha,
+              T->data.data(), &lda, x_S.data(), &ldb,
+              &beta, result.data(), &ldc);
 
-        if constexpr (std::is_same_v<DataType, double>) {
-            dgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_S.data(), &incx,
-                   &beta, result.data(), &incy);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zgemv_(&trans, &m, &n, &alpha,
-                   T->data.data(), &lda,
-                   x_S.data(), &incx,
-                   &beta, result.data(), &incy);
-        }
-
-        for (int64_t i = 0; i < r; ++i) {
-            solve_data.left_side[static_cast<size_t>((*redundant_indices)[static_cast<size_t>(i)])] +=
-                result[static_cast<size_t>(i)];
+        for (int64_t column = 0; column < nrhs; ++column) {
+            for (int64_t i = 0; i < r; ++i) {
+                solve_data.left_side[static_cast<size_t>(
+                    (*redundant_indices)[static_cast<size_t>(i)] +
+                    column * solve_data.num_points)] +=
+                    result[static_cast<size_t>(i + column * r)];
+            }
         }
     }
 }

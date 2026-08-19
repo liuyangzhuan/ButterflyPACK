@@ -1000,12 +1000,9 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
-    // hierarchical_solve_parallel currently supports only a single RHS vector,
-    // not a multi-column matrix. Reject Nrhs != 1 up front.
-    if (*Nrhs != 1) {
-      throw std::runtime_error(
-        "c_bpack_solve (format 7): H2/FMM solve supports only a single "
-        "right-hand side (Nrhs == 1); got Nrhs = " + std::to_string(*Nrhs));
+    if (*Nrhs <= 0) {
+      throw std::invalid_argument(
+        "c_bpack_solve (format 7): Nrhs must be positive");
     }
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
@@ -1042,7 +1039,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		int iterations = 0;
 		double residual = 0.0;
 		butterfly::hierarchical_h2_bicgstab_parallel(
-		  H2_solver->tree.get(), rhs, iterative_solution,
+		  H2_solver->tree.get(), rhs, iterative_solution, *Nrhs,
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
 		  &iterations, &residual, verbosity >= 1);
 		std::copy(
@@ -1056,10 +1053,10 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
 		  H2_solver->options.num_levels);
 		butterfly::hierarchical_solve_parallel(
-		  H2_solver->tree.get(), rhs, solve_data, verbosity);
+		  H2_solver->tree.get(), rhs, solve_data, *Nrhs, verbosity);
 		butterfly::gather_local_solution(
 		  H2_solver->tree.get(), solve_data,
-		  reinterpret_cast<H2Data*>(x), Nloc);
+		  reinterpret_cast<H2Data*>(x), Nloc, *Nrhs);
 	  }
 
 	  double t_solve = MPI_Wtime() - t0;
@@ -1099,11 +1096,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
 
-    // guard against matrix matrix multiplication for now
-    if (*Ncol != 1) {
-      throw std::runtime_error(
-        "c_bpack_mult (format 7): H2/FMM multiplication supports only a single "
-        "left-hand side (Ncol == 1); got Ncol = " + std::to_string(*Ncol));
+    if (*Ncol <= 0) {
+      throw std::invalid_argument(
+        "c_bpack_mult (format 7): Ncol must be positive");
     }
 
     // Only F·x is implemented for format 7 (transpose/conj-transpose not yet supported).
@@ -1147,11 +1142,13 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  double t0 = MPI_Wtime();
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		butterfly::hierarchical_h2_mul_parallel(
-		  H2_solver->tree.get(), lhs, compressed_output, verbosity >= 1);
+		  H2_solver->tree.get(), lhs, compressed_output,
+		  *Ncol, verbosity >= 1);
 	  } else {
 		mul_data.resize(H2_solver->options.num_levels);
 		butterfly::hierarchical_mul_parallel(
-		  H2_solver->tree.get(), lhs, mul_data, verbosity >= 1);
+		  H2_solver->tree.get(), lhs, mul_data,
+		  *Ncol, verbosity >= 1);
 	  }
 
 	  double t_mult = MPI_Wtime() - t0;
@@ -1163,7 +1160,8 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &total);
 
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
-		if (compressed_output.size() != static_cast<size_t>(*Noutloc)) {
+		if (compressed_output.size() !=
+		    static_cast<size_t>(*Noutloc) * static_cast<size_t>(*Ncol)) {
 		  throw std::runtime_error(
 			"c_bpack_mult (format 7): compression-only output length mismatch");
 		}
@@ -1173,7 +1171,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  } else {
 		butterfly::gather_local_solution(
 		  H2_solver->tree.get(), mul_data,
-		  reinterpret_cast<H2Data*>(xout), Noutloc);
+		  reinterpret_cast<H2Data*>(xout), Noutloc, *Ncol);
 	  }
 
     } catch (const std::exception& e) {
