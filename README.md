@@ -81,6 +81,8 @@ make install
  - Tianyi Shi - tianyishi@lbl.gov (Lawrence Berkeley National Laboratory)
  - Hengrui Luo - hrluo@lbl.gov (Rice University)
  - Paul Michael Kielstra - pmkielstra@lbl.gov (University of California Berkeley)
+ - Tianyu Liang - tianyul@berkeley.edu (University of California Berkeley)
+ - Xiaomian Yang - xiaomian@mit.edu (Massachusetts Institute of Technology)
 
 ## Reference
 
