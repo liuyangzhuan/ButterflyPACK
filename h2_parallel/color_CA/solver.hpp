@@ -433,7 +433,7 @@ void gather_skeleton_to_parent(
     
     // ===== Step 1: Build parent boxes from LOCAL children =====
     
-    int children_per_parent = (dimension == 2) ? 4 : 8;
+    const int children_per_parent = morton::children_per_box(dimension);
     
     int64_t num_local_parents = child_level.num_boxes_local / children_per_parent;
     
@@ -686,7 +686,7 @@ void gather_skeleton_to_parent(
  * @param parent_level Parent tree level (level n-1) - where solution comes FROM
  * @param child_solve_data Solve data at child level (will be updated with parent values)
  * @param parent_solve_data Solve data at parent level (complete, owned by parent_level_owner)
- * @param dimension Spatial dimension (2 or 3) - determines children per parent (4 or 8)
+ * @param dimension Spatial dimension (1, 2, or 3); determines children per parent
  * 
  * @note Unlike gather_skeleton_to_parent, no metadata filling needed because parent owner
  *       sends complete data (left_side values) directly to children
@@ -848,7 +848,7 @@ void scatter_solution_to_children(
         return;
     }
 
-    int children_per_parent = (dimension == 2) ? 4 : 8;
+    const int children_per_parent = morton::children_per_box(dimension);
 
     for (auto& parent_solve : local_parent_data) {
         int64_t parent_morton = parent_solve.morton_index;

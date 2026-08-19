@@ -27,14 +27,13 @@ std::vector<int64_t> h2_interaction_list(
 
     if (box.level < 2) return {};
 
-    const int children_per_parent = (tree->dimension == 2) ? 4 : 8;
+    const int children_per_parent =
+        morton::children_per_box(tree->dimension);
     const uint32_t parent_grid_size = 1u << (box.level - 1);
     const int64_t parent_morton = box.morton_index / children_per_parent;
 
-    std::vector<uint64_t> parent_neighbors =
-        (tree->dimension == 2)
-        ? morton::neighbors_2d(parent_morton, parent_grid_size)
-        : morton::neighbors_3d(parent_morton, parent_grid_size);
+    std::vector<uint64_t> parent_neighbors = morton::neighbors_nd(
+        tree->dimension, parent_morton, parent_grid_size);
     parent_neighbors.push_back(static_cast<uint64_t>(parent_morton));
 
     std::unordered_set<int64_t> near;
@@ -302,7 +301,7 @@ std::vector<BoxData<CoordType, DataType>> build_h2_parent_boxes(
 
     if (!child_level.is_process_active || child_level.local_boxes.empty()) return {};
 
-    const int children_per_parent = (dimension == 2) ? 4 : 8;
+    const int children_per_parent = morton::children_per_box(dimension);
     if (child_level.local_boxes.size() % children_per_parent != 0 ||
         child_level.local_boxes.front().morton_index % children_per_parent != 0) {
         throw std::runtime_error("build_h2_parent_boxes: child slab is not parent aligned");
@@ -618,11 +617,8 @@ std::unordered_map<int64_t, std::vector<DataType>> exchange_h2_vectors_onehop(
     const uint32_t grid_size = 1u << level_number;
     auto owner_of_morton = [&](int64_t morton_index) {
         std::vector<uint64_t> one{static_cast<uint64_t>(morton_index)};
-        const auto regions = (tree->dimension == 2)
-            ? morton::assign_to_processes_2d(
-                  one, level.num_active_processes, grid_size)
-            : morton::assign_to_processes_3d(
-                  one, level.num_active_processes, grid_size);
+        const auto regions = morton::assign_to_processes_nd(
+            tree->dimension, one, level.num_active_processes, grid_size);
         return level.morton_to_rank.at(static_cast<int>(regions.front()));
     };
 

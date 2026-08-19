@@ -1239,7 +1239,7 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
  * - AGGRESSIVE: Reduce to single process as soon as possible
  */
 enum class ReductionPattern {
-    UNIFORM,           ///< Fixed reduction factor (4 for 2D, 8 for 3D)
+    UNIFORM,           ///< Fixed reduction factor 2^dimension
     ADAPTIVE,          ///< Dynamic based on profiling (not yet implemented)
     WORK_PRESERVING,   ///< Maintain boxes/process ratio (not yet implemented)
     AGGRESSIVE         ///< Reduce to 1 process ASAP (not yet implemented)
@@ -1259,7 +1259,7 @@ enum class ReductionPattern {
  */
 template<typename CoordType, typename DataType = CoordType>
 struct ParallelTree {
-    int dimension;            ///< 2 or 3
+    int dimension;            ///< 1, 2, or 3
     int num_levels;           ///< Number of levels (L+1), leaf is at level L
     int64_t num_points;       ///< Total number of points globally (int64_t per Section 3.4.1)
     
@@ -1278,7 +1278,8 @@ struct ParallelTree {
     int CA_level;                        ///< First factorization level using CA
 
     bool level_requests_CA(int level) const {
-        return level >= 2 && level >= CA_level && level < num_levels;
+        return dimension != 1 &&
+               level >= 2 && level >= CA_level && level < num_levels;
     }
 
     int64_t minimum_CA_boxes_per_active_process() const {
@@ -1299,6 +1300,9 @@ struct ParallelTree {
     }
 
     bool level_supports_CA_geometry(int level) const {
+        if (dimension == 1) {
+            return false;
+        }
         if (level < 0 || level >= num_levels) {
             return false;
         }

@@ -1798,14 +1798,10 @@ CARequestPlan make_CA_request_plan(
         mortons.push_back(static_cast<uint64_t>(morton));
     }
 
-    std::vector<uint32_t> owner_regions;
-    if (tree->dimension == 2) {
-        owner_regions = morton::assign_to_processes_2d(
-            mortons, lvl.num_active_processes, uint32_t{1} << level);
-    } else {
-        owner_regions = morton::assign_to_processes_3d(
-            mortons, lvl.num_active_processes, uint32_t{1} << level);
-    }
+    const std::vector<uint32_t> owner_regions =
+        morton::assign_to_processes_nd(
+            tree->dimension, mortons,
+            lvl.num_active_processes, uint32_t{1} << level);
 
     for (size_t idx = 0; idx < requested_mortons.size(); ++idx) {
         const int owner_global = lvl.morton_to_rank.at(
@@ -2272,16 +2268,10 @@ void gather_CA_factorization_data(
     auto owner_rank_for_morton = [&](int64_t morton) {
         const std::vector<uint64_t> single_box = {
             static_cast<uint64_t>(morton)};
-        std::vector<uint32_t> owner_regions;
-        if (tree->dimension == 2) {
-            owner_regions = morton::assign_to_processes_2d(
-                single_box, lvl.num_active_processes,
+        const std::vector<uint32_t> owner_regions =
+            morton::assign_to_processes_nd(
+                tree->dimension, single_box, lvl.num_active_processes,
                 uint32_t{1} << level);
-        } else {
-            owner_regions = morton::assign_to_processes_3d(
-                single_box, lvl.num_active_processes,
-                uint32_t{1} << level);
-        }
         return lvl.morton_to_rank.at(static_cast<int>(owner_regions.front()));
     };
 
@@ -2373,26 +2363,20 @@ inline bool process_morton_regions_are_neighbors(int lhs_morton_id,
         return false;
     }
 
-    if (dimension == 2) {
-        uint32_t lx = 0, ly = 0, rx = 0, ry = 0;
-        morton::decode_2d(static_cast<uint64_t>(lhs_morton_id), lx, ly);
-        morton::decode_2d(static_cast<uint64_t>(rhs_morton_id), rx, ry);
-        return std::abs(static_cast<int>(lx) - static_cast<int>(rx)) <= 1 &&
-               std::abs(static_cast<int>(ly) - static_cast<int>(ry)) <= 1;
+    uint32_t lhs[3] = {0, 0, 0};
+    uint32_t rhs[3] = {0, 0, 0};
+    morton::decode_nd(
+        dimension, static_cast<uint64_t>(lhs_morton_id),
+        lhs[0], lhs[1], lhs[2]);
+    morton::decode_nd(
+        dimension, static_cast<uint64_t>(rhs_morton_id),
+        rhs[0], rhs[1], rhs[2]);
+    for (int d = 0; d < dimension; ++d) {
+        if (std::abs(static_cast<int>(lhs[d]) - static_cast<int>(rhs[d])) > 1) {
+            return false;
+        }
     }
-
-    if (dimension == 3) {
-        uint32_t lx = 0, ly = 0, lz = 0, rx = 0, ry = 0, rz = 0;
-        morton::decode_3d(static_cast<uint64_t>(lhs_morton_id), lx, ly, lz);
-        morton::decode_3d(static_cast<uint64_t>(rhs_morton_id), rx, ry, rz);
-        return std::abs(static_cast<int>(lx) - static_cast<int>(rx)) <= 1 &&
-               std::abs(static_cast<int>(ly) - static_cast<int>(ry)) <= 1 &&
-               std::abs(static_cast<int>(lz) - static_cast<int>(rz)) <= 1;
-    }
-
-    throw std::runtime_error(
-        "process_morton_regions_are_neighbors: unsupported dimension " +
-        std::to_string(dimension));
+    return true;
 }
 
 /**
@@ -2732,10 +2716,8 @@ static int owner_rank_of_morton(
 {
     const uint32_t grid_size = 1u << level;
     std::vector<uint64_t> single = { static_cast<uint64_t>(morton) };
-    std::vector<uint32_t> region =
-        (tree->dimension == 2)
-        ? morton::assign_to_processes_2d(single, lvl.num_active_processes, grid_size)
-        : morton::assign_to_processes_3d(single, lvl.num_active_processes, grid_size);
+    std::vector<uint32_t> region = morton::assign_to_processes_nd(
+        tree->dimension, single, lvl.num_active_processes, grid_size);
     const int region_id = static_cast<int>(region[0]);
     return lvl.morton_to_rank.at(region_id);
 }
@@ -2751,24 +2733,13 @@ std::vector<int> compute_one_hop_neighbor_ranks(
 
     const uint32_t P = static_cast<uint32_t>(lvl.num_active_processes);
 
-    uint32_t k = 0;
-    uint32_t procs_per_dim = 0;
-    if (tree->dimension == 2) {
-        // P = 4^k => procs_per_dim = 2^k
-        k = __builtin_ctz(P) / 2;
-        procs_per_dim = 1u << k;
-    } else {
-        // P = 8^k => procs_per_dim = 2^k
-        k = __builtin_ctz(P) / 3;
-        procs_per_dim = 1u << k;
-    }
+    const uint32_t procs_per_dim =
+        morton::processes_per_dimension(tree->dimension, P);
 
     const uint64_t my_region = static_cast<uint64_t>(lvl.my_morton_id);
 
     std::vector<uint64_t> neigh_regions =
-        (tree->dimension == 2)
-        ? morton::neighbors_2d(my_region, procs_per_dim)      // 8 neighbors
-        : morton::neighbors_3d(my_region, procs_per_dim);     // 26 neighbors
+        morton::neighbors_nd(tree->dimension, my_region, procs_per_dim);
 
     std::vector<int> neigh_ranks;
     neigh_ranks.reserve(neigh_regions.size());
@@ -2843,10 +2814,8 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
 
     auto owner_of_morton = [&](int64_t morton_idx) -> int {
         std::vector<uint64_t> single = { static_cast<uint64_t>(morton_idx) };
-        std::vector<uint32_t> region =
-            (tree->dimension == 2)
-            ? morton::assign_to_processes_2d(single, lvl.num_active_processes, grid_size)
-            : morton::assign_to_processes_3d(single, lvl.num_active_processes, grid_size);
+        std::vector<uint32_t> region = morton::assign_to_processes_nd(
+            tree->dimension, single, lvl.num_active_processes, grid_size);
         const int rid = static_cast<int>(region[0]);
         return lvl.morton_to_rank.at(rid);
     };
@@ -3878,11 +3847,11 @@ void print_pending_factor_updates(
  *
  * This function performs sparse, neighbor-only communication (no MPI_Alltoall/Alltoallv):
  *  1) Determine the set of 1-hop neighboring MPI ranks using the process-region Morton id
- *     (lvl.my_morton_id) and morton::{neighbors_2d, neighbors_3d} on the process grid.
+ *     (lvl.my_morton_id) and the dimension-generic process-grid adjacency helper.
  *  2) Partition locally-produced updates into per-destination packets:
  *      - Step 7 REPLACE: sent only to owner(target_box)
  *      - Step 9 ADD: sent to owner(lo) and/or owner(hi); sent once if both endpoints share owner
- *     Ownership is derived from assign_to_processes_{2d,3d} followed by lvl.morton_to_rank.
+ *     Ownership is derived from assign_to_processes_nd followed by lvl.morton_to_rank.
  *     (This routine enforces the assumption that all destinations are within 1-hop neighbor ranks;
  *      it throws if violated.)
  *  3) Pairwise exchange with each neighbor:
@@ -3897,7 +3866,7 @@ void print_pending_factor_updates(
  * Assumptions:
  *  - Cross-process dependencies for this phase are limited to 1-hop process-region neighbors.
  *    If this is not true for some configurations, replace the neighbor set by a 2-hop stencil
- *    (neighbors_2hop_{2d,3d}) or generalize the neighbor discovery.
+ *    or generalize the neighbor discovery.
  *
  * Side effects:
  *  - Clears pending.replace_blocks and pending.accumulated_deltas on completion.
@@ -3935,10 +3904,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
 
     auto owner_of_morton = [&](int64_t morton_idx) -> int {
         std::vector<uint64_t> single = { static_cast<uint64_t>(morton_idx) };
-        std::vector<uint32_t> region =
-            (tree->dimension == 2)
-            ? morton::assign_to_processes_2d(single, lvl.num_active_processes, grid_size)
-            : morton::assign_to_processes_3d(single, lvl.num_active_processes, grid_size);
+        std::vector<uint32_t> region = morton::assign_to_processes_nd(
+            tree->dimension, single, lvl.num_active_processes, grid_size);
         const int rid = static_cast<int>(region[0]);
         return lvl.morton_to_rank.at(rid);
     };
@@ -4441,13 +4408,10 @@ void gather_boxes_solve(
 
     for (const auto& [morton, idx] : lvl.ghost_and_assisting_box_points_for_solve_map) {
         std::vector<uint64_t> single_box = {static_cast<uint64_t>(morton)};
-        std::vector<uint32_t> morton_ids;
-
-        if (tree->dimension == 2) {
-            morton_ids = morton::assign_to_processes_2d(single_box, lvl.num_active_processes, grid_size);
-        } else {
-            morton_ids = morton::assign_to_processes_3d(single_box, lvl.num_active_processes, grid_size);
-        }
+        const std::vector<uint32_t> morton_ids =
+            morton::assign_to_processes_nd(
+                tree->dimension, single_box,
+                lvl.num_active_processes, grid_size);
 
         int morton_region_id = static_cast<int>(morton_ids[0]);
 
@@ -4830,10 +4794,9 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
 
     auto owner_of_morton = [&](int64_t morton_idx) -> int {
         std::vector<uint64_t> single_box = { (uint64_t)morton_idx };
-        std::vector<uint32_t> region =
-            (tree->dimension == 2)
-                ? morton::assign_to_processes_2d(single_box, lvl.num_active_processes, grid_size)
-                : morton::assign_to_processes_3d(single_box, lvl.num_active_processes, grid_size);
+        std::vector<uint32_t> region = morton::assign_to_processes_nd(
+            tree->dimension, single_box,
+            lvl.num_active_processes, grid_size);
 
         const int morton_region_id = (int)region[0];
 

@@ -463,7 +463,7 @@ private:
     int64_t N_points;              ///< Total number of points
     MatrixProperty property;        ///< Matrix symmetry property
     FactorizationMethod factorization_method;  ///< Method for matrix factorization
-    int dimension;                 ///< Spatial dimension (2 or 3)
+    int dimension;                 ///< Spatial dimension (1, 2, or 3)
     KernelType* kernel; /// Kernel evaluation function
     
     // Proxy point configuration
@@ -484,9 +484,9 @@ public:
      * @param N Total number of points in the problem
      * @param prop Matrix property (symmetric, hermitian, or nonsymmetric)
      * @param kernel_func Kernel evaluator
-     * @param dim Spatial dimension (2 or 3)
+     * @param dim Spatial dimension (1, 2, or 3)
      * @param factorization_type Method for factorizing/inverting matrices (default: CHOLESKY)
-     * @param num_proxy Number of proxy points (-1 uses default 32 for 2D, 256 for 3D)
+     * @param num_proxy Number of proxy points (-1 uses 2/32/256 in 1D/2D/3D)
      * @param tol Compression tolerance (default: 1e-6)
      * @param proxy_factor Proxy surface radius factor (default: 2.5)
      */
@@ -511,8 +511,8 @@ public:
         //     throw std::invalid_argument("Kernel cannot be null");
         // }
         
-        if (dim != 2 && dim != 3) {
-            throw std::invalid_argument("Dimension must be 2 or 3");
+        if (dim < 1 || dim > 3) {
+            throw std::invalid_argument("Dimension must be 1, 2, or 3");
         }
 
         if (num_proxy < -1) {
@@ -538,7 +538,8 @@ public:
         
         // Set default proxy points based on dimension if not specified
         if (num_proxy == -1) {
-            num_proxy_points = (dim == 2) ? 32 : 256;
+            num_proxy_points =
+                (dim == 1) ? 2 : ((dim == 2) ? 32 : 256);
         } else {
             num_proxy_points = num_proxy;
         }
@@ -561,7 +562,12 @@ public:
 
         unit_proxy_points.resize(dimension * num_proxy_points);
         
-        if (dimension == 2) {
+        if (dimension == 1) {
+            // The 1D proxy surface consists of the two interval endpoints.
+            for (int i = 0; i < num_proxy_points; ++i) {
+                unit_proxy_points[i] = (i % 2 == 0) ? CoordType(-1) : CoordType(1);
+            }
+        } else if (dimension == 2) {
             // Uniform points on unit circle
             for (int i = 0; i < num_proxy_points; ++i) {
                 CoordType theta = 2.0 * M_PI * i / num_proxy_points;
@@ -2170,20 +2176,19 @@ inline bool deferred_xnn_boxes_are_one_hop(
     int dimension,
     int64_t lhs_morton,
     int64_t rhs_morton) {
-    if (dimension == 2) {
-        uint32_t lhs_x, lhs_y, rhs_x, rhs_y;
-        morton::decode_2d(lhs_morton, lhs_x, lhs_y);
-        morton::decode_2d(rhs_morton, rhs_x, rhs_y);
-        return (std::abs(static_cast<int64_t>(lhs_x) - static_cast<int64_t>(rhs_x)) <= 1 &&
-                std::abs(static_cast<int64_t>(lhs_y) - static_cast<int64_t>(rhs_y)) <= 1);
+    uint32_t lhs[3] = {0, 0, 0};
+    uint32_t rhs[3] = {0, 0, 0};
+    morton::decode_nd(
+        dimension, lhs_morton, lhs[0], lhs[1], lhs[2]);
+    morton::decode_nd(
+        dimension, rhs_morton, rhs[0], rhs[1], rhs[2]);
+    for (int d = 0; d < dimension; ++d) {
+        if (std::abs(
+                static_cast<int64_t>(lhs[d]) - static_cast<int64_t>(rhs[d])) > 1) {
+            return false;
+        }
     }
-
-    uint32_t lhs_x, lhs_y, lhs_z, rhs_x, rhs_y, rhs_z;
-    morton::decode_3d(lhs_morton, lhs_x, lhs_y, lhs_z);
-    morton::decode_3d(rhs_morton, rhs_x, rhs_y, rhs_z);
-    return (std::abs(static_cast<int64_t>(lhs_x) - static_cast<int64_t>(rhs_x)) <= 1 &&
-            std::abs(static_cast<int64_t>(lhs_y) - static_cast<int64_t>(rhs_y)) <= 1 &&
-            std::abs(static_cast<int64_t>(lhs_z) - static_cast<int64_t>(rhs_z)) <= 1);
+    return true;
 }
 
 // Owner-side accumulation may still need to run on eliminated ghost boxes: the
@@ -2668,9 +2673,7 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
         return;
     }
 
-    const int dimension = candidate_is_writable
-        ? ((candidate_box->bounds[4] == candidate_box->bounds[5]) ? 2 : 3)
-        : level.dimension;
+    const int dimension = level.dimension;
     scratch.accumulated_targets.clear();
     scratch.accumulated_target_indices.clear();
     scratch.preallocated_mirror_targets.clear();
@@ -5267,8 +5270,7 @@ void compute_step_two_internal(
                 std::cout << "DEBUG Step 9: temp2 contains NaN: " << (temp2_has_nan ? "YES" : "NO") << std::endl;
             }
             
-            // Determine dimension for Morton decoding
-            int dimension = (box->bounds[4] == box->bounds[5]) ? 2 : 3;
+            const int dimension = level.dimension;
             
             // Column-major traversal
             int64_t col_offset = 0;
@@ -5389,25 +5391,20 @@ void compute_step_two_internal(
                     // Determine 1-hop or 2-hop
                     bool is_one_hop = false;
                     
-                    if (dimension == 2) {
-                        uint32_t LG_x, LG_y, RG_x, RG_y;
-                        morton::decode_2d(LG_morton, LG_x, LG_y);
-                        morton::decode_2d(RG_morton, RG_x, RG_y);
-                        
-                        int64_t dx = std::abs(static_cast<int64_t>(LG_x) - static_cast<int64_t>(RG_x));
-                        int64_t dy = std::abs(static_cast<int64_t>(LG_y) - static_cast<int64_t>(RG_y));
-                        
-                        is_one_hop = (dx <= 1 && dy <= 1);
-                    } else {
-                        uint32_t LG_x, LG_y, LG_z, RG_x, RG_y, RG_z;
-                        morton::decode_3d(LG_morton, LG_x, LG_y, LG_z);
-                        morton::decode_3d(RG_morton, RG_x, RG_y, RG_z);
-                        
-                        int64_t dx = std::abs(static_cast<int64_t>(LG_x) - static_cast<int64_t>(RG_x));
-                        int64_t dy = std::abs(static_cast<int64_t>(LG_y) - static_cast<int64_t>(RG_y));
-                        int64_t dz = std::abs(static_cast<int64_t>(LG_z) - static_cast<int64_t>(RG_z));
-                        
-                        is_one_hop = (dx <= 1 && dy <= 1 && dz <= 1);
+                    uint32_t LG[3] = {0, 0, 0};
+                    uint32_t RG[3] = {0, 0, 0};
+                    morton::decode_nd(
+                        dimension, LG_morton, LG[0], LG[1], LG[2]);
+                    morton::decode_nd(
+                        dimension, RG_morton, RG[0], RG[1], RG[2]);
+                    is_one_hop = true;
+                    for (int d = 0; d < dimension; ++d) {
+                        if (std::abs(
+                                static_cast<int64_t>(LG[d]) -
+                                static_cast<int64_t>(RG[d])) > 1) {
+                            is_one_hop = false;
+                            break;
+                        }
                     }
 
                     // ---- Remote accumulation hook (Step 9) ----
@@ -7870,22 +7867,27 @@ std::vector<DataType> extract_child_interaction(
     }
     
     // Check hop distance between children
-    uint32_t i_x, i_y, i_z = 0, j_x, j_y, j_z = 0;
-    if (dimension == 2) {
-        morton::decode_2d(child_i->morton_index, i_x, i_y);
-        morton::decode_2d(child_j->morton_index, j_x, j_y);
-    } else {
-        morton::decode_3d(child_i->morton_index, i_x, i_y, i_z);
-        morton::decode_3d(child_j->morton_index, j_x, j_y, j_z);
+    uint32_t i_coords[3] = {0, 0, 0};
+    uint32_t j_coords[3] = {0, 0, 0};
+    morton::decode_nd(
+        dimension, child_i->morton_index,
+        i_coords[0], i_coords[1], i_coords[2]);
+    morton::decode_nd(
+        dimension, child_j->morton_index,
+        j_coords[0], j_coords[1], j_coords[2]);
+
+    bool is_one_hop = true;
+    bool is_two_hop = true;
+    bool reaches_second_hop = false;
+    for (int d = 0; d < dimension; ++d) {
+        const int64_t distance = std::abs(
+            static_cast<int64_t>(i_coords[d]) -
+            static_cast<int64_t>(j_coords[d]));
+        is_one_hop = is_one_hop && distance <= 1;
+        is_two_hop = is_two_hop && distance <= 2;
+        reaches_second_hop = reaches_second_hop || distance == 2;
     }
-    
-    int64_t dx = std::abs(static_cast<int64_t>(i_x) - static_cast<int64_t>(j_x));
-    int64_t dy = std::abs(static_cast<int64_t>(i_y) - static_cast<int64_t>(j_y));
-    int64_t dz = (dimension == 3) ? std::abs(static_cast<int64_t>(i_z) - static_cast<int64_t>(j_z)) : 0;
-    
-    bool is_one_hop = (dx <= 1 && dy <= 1 && (dimension == 2 || dz <= 1));
-    bool is_two_hop = (dx <= 2 && dy <= 2 && (dimension == 2 || dz <= 2)) &&
-                     (dx == 2 || dy == 2 || (dimension == 3 && dz == 2));
+    is_two_hop = is_two_hop && reaches_second_hop;
     
     // 1-hop or 2-hop: look for modified interaction
     if (is_one_hop || is_two_hop) {
@@ -8232,7 +8234,7 @@ std::vector<DataType> extract_child_interaction(
 /**
  * @brief Extract skeleton coordinates from PointDataRequest
  * @param request The PointDataRequest containing coords and skel_indices
- * @param dimension Spatial dimension (2 or 3)
+ * @param dimension Spatial dimension (1, 2, or 3)
  * @return Sliced coordinates containing only skeleton points (column-major)
  */
 template<typename CoordType>
@@ -8262,7 +8264,7 @@ std::vector<CoordType> extract_skeleton_coords(
 /**
  * @brief Extract skeleton indices from PointDataRequest
  * @param request The PointDataRequest containing coords and skel_indices
- * @param dimension Spatial dimension (2 or 3)
+ * @param dimension Spatial dimension (1, 2, or 3)
  * @return Vector of skeleton indices
  */ 
 template<typename CoordType>
@@ -8304,7 +8306,7 @@ std::vector<int64_t> extract_skeleton_indices(
  * @param n_source Number of skeleton points in source child
  * @param n_target Number of skeleton points in target child
  * @param child_level Tree level containing children
- * @param dimension 2 or 3
+ * @param dimension 1, 2, or 3
  * @param kernel Kernel evaluator
  * @param transpose_if_found If true, transpose A_NS when found (looking in source's view)
  * @return Interaction block (n_source × n_target, column-major)
@@ -8415,7 +8417,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
  * - Nonsymmetric: Store both A_NS and A_SN for ghosts, A_NS(B1)+A_SN(B2) for on-process
  * 
  * @param child_level Current level (being compressed)
- * @param dimension 2 or 3
+ * @param dimension 1, 2, or 3
  * @param is_symmetric Whether matrix is symmetric
  * @param is_hermitian Whether matrix is Hermitian
  * @param kernel Kernel evaluator for >= 3-hop interactions
@@ -8432,7 +8434,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
     KernelType* kernel,
     const CoordType global_bounds[6]) {
     
-    int num_children = (dimension == 2) ? 4 : 8;
+    const int num_children = morton::children_per_box(dimension);
     
     // Calculate number of parent boxes this process owns
     int64_t num_parent_boxes = child_level.local_boxes.size() / num_children;
@@ -8548,9 +8550,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
         std::vector<uint64_t> relevant_neighbors;
         relevant_neighbors.push_back(B1.morton_index);
         
-        std::vector<uint64_t> one_hop = (dimension == 2) ?
-            morton::neighbors_2d(B1.morton_index, grid_size) :
-            morton::neighbors_3d(B1.morton_index, grid_size);
+        std::vector<uint64_t> one_hop =
+            morton::neighbors_nd(dimension, B1.morton_index, grid_size);
         relevant_neighbors.insert(relevant_neighbors.end(), one_hop.begin(), one_hop.end());
         
         for (uint64_t neighbor_morton : relevant_neighbors) {

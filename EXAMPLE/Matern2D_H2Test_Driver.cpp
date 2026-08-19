@@ -27,7 +27,7 @@ struct DriverOptions {
   int64_t nmin_leaf = 64;
   bool nmin_leaf_set = false;
   double tolerance = 1e-9;
-  int64_t reduction_threshold = 256;
+  int64_t reduction_threshold = 4;
   int ca_level = 0;
   int precon = 3;
   int iter_solver = 4;
@@ -280,7 +280,7 @@ void print_usage(const char* executable) {
       << "Defaults reproduce the active CA_matern.sh case:\n"
       << "  num_levels=9, N=4194304, grid_size=2048, tolerance=1e-9\n"
       << "  length_scale=0.1, nugget=1e-3, cg_tol=1e-10\n"
-      << "  Nmin_leaf=64, reduction_threshold=256, CA_level=0\n\n"
+      << "  Nmin_leaf=64, reduction_threshold=4, CA_level=0\n\n"
       << "Options:\n"
       << "  --grid-size <n>\n"
       << "  --num-levels <count>\n"

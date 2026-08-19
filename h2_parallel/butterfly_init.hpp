@@ -24,16 +24,24 @@ inline int calc_num_levels(int64_t grid_size, int64_t grid_dim_min_leaf) {
 }
 
 
-inline int64_t default_reduction_threshold_for_dimension(int dimension) {
-    return (dimension == 2) ? 256 : 4096;
+inline int64_t min_reduction_threshold_for_dimension(int dimension) {
+    if (dimension < 1 || dimension > 3) {
+        throw std::invalid_argument("dimension must be 1, 2, or 3");
+    }
+    return int64_t{1} << dimension;
 }
 
-inline int64_t min_reduction_threshold_for_dimension(int dimension) {
-    return (dimension == 2) ? 4 : 8;
+inline int64_t default_reduction_threshold_for_dimension(int dimension) {
+    return min_reduction_threshold_for_dimension(dimension);
 }
 
 inline int default_num_proxy_for_dimension(int dimension) {
-    return (dimension == 2) ? 32 : 256;
+    switch (dimension) {
+        case 1: return 2;
+        case 2: return 32;
+        case 3: return 256;
+        default: throw std::invalid_argument("dimension must be 1, 2, or 3");
+    }
 }
 
 /**
@@ -42,8 +50,8 @@ inline int default_num_proxy_for_dimension(int dimension) {
  * Locations is point-major (interleaved), stride = dimension:
  *   [x0,y0,z0, x1,y1,z1, ...]     (matches tree_impl.hpp:801-803)
  *
- * Fills bounds as [xmin,xmax, ymin,ymax, zmin,zmax]; z entries are 0 in 2D
- * (compute_box_geometry only reads them when dimension == 3).
+ * Fills bounds as [xmin,xmax, ymin,ymax, zmin,zmax]. Entries for inactive
+ * dimensions are zero.
  *
  * A small relative pad is applied so points on the upper face fall strictly
  * inside the last box: point_to_morton computes (p - min)/box_size, which at
@@ -59,8 +67,9 @@ inline void compute_global_bounds(const CoordType* Locations,
     if (Locations == nullptr || num_points <= 0) {
         throw std::invalid_argument("compute_global_bounds: no points provided");
     }
-    if (dimension != 2 && dimension != 3) {
-        throw std::invalid_argument("compute_global_bounds: dimension must be 2 or 3");
+    if (dimension < 1 || dimension > 3) {
+        throw std::invalid_argument(
+            "compute_global_bounds: dimension must be 1, 2, or 3");
     }
 
     CoordType lo[3] = { std::numeric_limits<CoordType>::max(),
@@ -89,10 +98,15 @@ inline void compute_global_bounds(const CoordType* Locations,
         hi[d] += pad;
     }
 
-    bounds[0] = lo[0]; bounds[1] = hi[0];
-    bounds[2] = lo[1]; bounds[3] = hi[1];
-    if (dimension == 3) { bounds[4] = lo[2]; bounds[5] = hi[2]; }
-    else                { bounds[4] = CoordType(0);   bounds[5] = CoordType(0);   }
+    for (int d = 0; d < 3; ++d) {
+        if (d < dimension) {
+            bounds[2 * d] = lo[d];
+            bounds[2 * d + 1] = hi[d];
+        } else {
+            bounds[2 * d] = CoordType(0);
+            bounds[2 * d + 1] = CoordType(0);
+        }
+    }
 }
 
 
@@ -125,8 +139,8 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
     }
 
     h2_options.dimension = *Ndim;
-    if (h2_options.dimension != 2 && h2_options.dimension != 3) {
-        throw std::invalid_argument("H2 solver dimension must be either 2 or 3.");
+    if (h2_options.dimension < 1 || h2_options.dimension > 3) {
+        throw std::invalid_argument("H2 solver dimension must be 1, 2, or 3.");
     }
 
     //Compute grid_size from Npo and dimension
@@ -140,7 +154,7 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
         h2_options.grid_size = grid_size;
     } else {
         throw std::invalid_argument(
-            "N must equal grid_size^dimension for FFT verification.");
+            "N must equal grid_size^dimension for the uniform H2 tree.");
     }
 
     if (h2_options.grid_size < 2) {
@@ -180,7 +194,9 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
         throw std::invalid_argument("num_levels must be positive.");
     }
     h2_options.CA_level =
-        (CA_level < 0) ? h2_options.num_levels : CA_level;
+        (h2_options.dimension == 1 || CA_level < 0)
+        ? h2_options.num_levels
+        : CA_level;
     if (!(h2_options.tolerance > 0.0)) {
         throw std::invalid_argument("tolerance must be positive.");
     }

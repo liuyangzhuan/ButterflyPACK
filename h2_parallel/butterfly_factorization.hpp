@@ -729,7 +729,7 @@ void hierarchical_factorization_parallel(
     int dimension = tree->dimension;
     int num_levels = tree->num_levels;
     int leaf_level = num_levels - 1;
-    int num_children = (dimension == 2) ? 4 : 8;
+    const int num_children = morton::children_per_box(dimension);
     const int factorization_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
 

@@ -273,6 +273,12 @@ target_link_libraries(claplace3d_h2 ${all_link_libs_d})
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CMATERN1DH2 Matern1D_H2Test_Driver.cpp)
+add_executable(cmatern1d_h2 ${CMATERN1DH2})
+target_link_libraries(cmatern1d_h2 ${all_link_libs_d})
+endif()
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CMATERN2DH2 Matern2D_H2Test_Driver.cpp)
 add_executable(cmatern2d_h2 ${CMATERN2DH2})
 target_link_libraries(cmatern2d_h2 ${all_link_libs_d})

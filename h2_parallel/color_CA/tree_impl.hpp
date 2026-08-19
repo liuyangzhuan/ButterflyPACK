@@ -77,7 +77,7 @@ template<typename CoordType, typename DataType>
 ParallelTree<CoordType, DataType>::ParallelTree()
     : dimension(0), num_levels(0), num_points(0),
       mpi_rank(0), mpi_size(1), comm(MPI_COMM_WORLD),
-      reduction_pattern(ReductionPattern::UNIFORM), reduction_threshold(64),
+      reduction_pattern(ReductionPattern::UNIFORM), reduction_threshold(0),
       CA_level(10000) {
     for (int i = 0; i < 6; ++i) global_bounds[i] = 0.0;
 }
@@ -249,21 +249,16 @@ void compute_box_geometry(
     CoordType& size,
     CoordType bounds[6]) {
     
-    // Decode Morton index to grid coordinates
-    uint32_t x, y, z;
-    if (dimension == 2) {
-        morton::decode_2d(morton_index, x, y);
-        z = 0;
-    } else {
-        morton::decode_3d(morton_index, x, y, z);
-    }
+    // Decode Morton index to grid coordinates.
+    uint32_t x = 0, y = 0, z = 0;
+    morton::decode_nd(dimension, morton_index, x, y, z);
     
     // Calculate MAXIMUM dimension range (Section 4.4.3)
     // This ensures boxes are square/cubic for uniform proxy surfaces
-    CoordType max_range = global_bounds[1] - global_bounds[0];  // X range
-    max_range = std::max(max_range, global_bounds[3] - global_bounds[2]);  // Y range
-    if (dimension == 3) {
-        max_range = std::max(max_range, global_bounds[5] - global_bounds[4]);  // Z range
+    CoordType max_range = global_bounds[1] - global_bounds[0];
+    for (int d = 1; d < dimension; ++d) {
+        max_range = std::max(
+            max_range, global_bounds[2 * d + 1] - global_bounds[2 * d]);
     }
     
     // Number of boxes per dimension at this level
@@ -273,23 +268,19 @@ void compute_box_geometry(
     CoordType box_size = max_range / boxes_per_dim;
     
     // Compute box bounds (positioned relative to domain minimum)
-    bounds[0] = global_bounds[0] + x * box_size;  // xmin
-    bounds[1] = bounds[0] + box_size;              // xmax
-    bounds[2] = global_bounds[2] + y * box_size;  // ymin
-    bounds[3] = bounds[2] + box_size;              // ymax
-    
-    if (dimension == 3) {
-        bounds[4] = global_bounds[4] + z * box_size;  // zmin
-        bounds[5] = bounds[4] + box_size;              // zmax
-    } else {
-        bounds[4] = 0.0;
-        bounds[5] = 0.0;
+    const uint32_t grid_coordinates[3] = {x, y, z};
+    for (int d = 0; d < 3; ++d) {
+        if (d < dimension) {
+            bounds[2 * d] = global_bounds[2 * d] +
+                            grid_coordinates[d] * box_size;
+            bounds[2 * d + 1] = bounds[2 * d] + box_size;
+            center[d] = bounds[2 * d] + CoordType(0.5) * box_size;
+        } else {
+            bounds[2 * d] = CoordType(0);
+            bounds[2 * d + 1] = CoordType(0);
+            center[d] = CoordType(0);
+        }
     }
-    
-    // Compute center
-    center[0] = bounds[0] + 0.5 * box_size;
-    center[1] = bounds[2] + 0.5 * box_size;
-    center[2] = (dimension == 3) ? (bounds[4] + 0.5 * box_size) : 0.0;
     
     // Store size
     size = box_size;
@@ -308,42 +299,30 @@ int64_t point_to_morton(
     
     // Calculate MAXIMUM dimension range
     CoordType max_range = global_bounds[1] - global_bounds[0];
-    max_range = std::max(max_range, global_bounds[3] - global_bounds[2]);
-    if (dimension == 3) {
-        max_range = std::max(max_range, global_bounds[5] - global_bounds[4]);
+    for (int d = 1; d < dimension; ++d) {
+        max_range = std::max(
+            max_range, global_bounds[2 * d + 1] - global_bounds[2 * d]);
     }
     
     // Number of boxes per dimension
     uint32_t boxes_per_dim = 1U << level;
     CoordType box_size = max_range / boxes_per_dim;
     
-    // Compute grid coordinates
-    uint32_t x = static_cast<uint32_t>((point[0] - global_bounds[0]) / box_size);
-    uint32_t y = static_cast<uint32_t>((point[1] - global_bounds[2]) / box_size);
-    uint32_t z = 0;
-    
-    if (dimension == 3) {
-        z = static_cast<uint32_t>((point[2] - global_bounds[4]) / box_size);
+    uint32_t coordinates[3] = {0, 0, 0};
+    for (int d = 0; d < dimension; ++d) {
+        const auto raw = static_cast<int64_t>(
+            std::floor((point[d] - global_bounds[2 * d]) / box_size));
+        const auto clamped = std::max<int64_t>(
+            0, std::min<int64_t>(raw, boxes_per_dim - 1));
+        coordinates[d] = static_cast<uint32_t>(clamped);
     }
-    
-    // Clamp to valid range
-    x = std::min(x, boxes_per_dim - 1);
-    y = std::min(y, boxes_per_dim - 1);
-    if (dimension == 3) {
-        z = std::min(z, boxes_per_dim - 1);
+
+    for (int d = 0; d < 3; ++d) {
+        grid_coords[d] = static_cast<int32_t>(coordinates[d]);
     }
-    
-    // Store grid coordinates
-    grid_coords[0] = static_cast<int32_t>(x);
-    grid_coords[1] = static_cast<int32_t>(y);
-    grid_coords[2] = static_cast<int32_t>(z);
-    
-    // Encode to Morton index
-    if (dimension == 2) {
-        return morton::encode_2d(x, y);
-    } else {
-        return morton::encode_3d(x, y, z);
-    }
+
+    return morton::encode_nd(
+        dimension, coordinates[0], coordinates[1], coordinates[2]);
 }
 
 
@@ -371,14 +350,11 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
      * to a child rank from the wrong Morton group.
      */
     
-    if (tree->dimension == 2) {
-        if (!morton::is_power_of_4(tree->mpi_size)) {
-            throw std::invalid_argument("2D tree requires process count to be 4^k (1, 4, 16, 64, ...)");
-        }
-    } else {
-        if (!morton::is_power_of_8(tree->mpi_size)) {
-            throw std::invalid_argument("3D tree requires process count to be 8^k (1, 8, 64, 512, ...)");
-        }
+    if (!morton::is_valid_process_count(tree->dimension, tree->mpi_size)) {
+        throw std::invalid_argument(
+            std::to_string(tree->dimension) +
+            "D tree requires process count to be " +
+            std::to_string(1 << tree->dimension) + "^k");
     }
 
     std::vector<int> gathered_node_roots(tree->mpi_size, -1);
@@ -481,7 +457,7 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
         int64_t boxes_at_level = 1LL << (tree->dimension * level);
         int32_t prev_active = child_lvl.num_active_processes;
         int64_t boxes_per_process = boxes_at_level / prev_active;
-        int reduction_factor = (tree->dimension == 2) ? 4 : 8;
+        const int reduction_factor = morton::children_per_box(tree->dimension);
 
         switch (tree->reduction_pattern) {
             case ReductionPattern::UNIFORM:
@@ -639,20 +615,11 @@ void initialize_local_boxes(
         box.morton_index = morton_idx;
         box.level = level;
         
-        // Decode grid coordinates
-        if (dimension == 2) {
-            uint32_t x, y;
-            morton::decode_2d(morton_idx, x, y);
-            box.grid_coords[0] = static_cast<int32_t>(x);
-            box.grid_coords[1] = static_cast<int32_t>(y);
-            box.grid_coords[2] = 0;
-        } else {
-            uint32_t x, y, z;
-            morton::decode_3d(morton_idx, x, y, z);
-            box.grid_coords[0] = static_cast<int32_t>(x);
-            box.grid_coords[1] = static_cast<int32_t>(y);
-            box.grid_coords[2] = static_cast<int32_t>(z);
-        }
+        uint32_t x = 0, y = 0, z = 0;
+        morton::decode_nd(dimension, morton_idx, x, y, z);
+        box.grid_coords[0] = static_cast<int32_t>(x);
+        box.grid_coords[1] = static_cast<int32_t>(y);
+        box.grid_coords[2] = static_cast<int32_t>(z);
         
         // Compute geometry using helper function
         compute_box_geometry(morton_idx, level, global_bounds,
@@ -660,16 +627,8 @@ void initialize_local_boxes(
         
         // Set parent (if not root)
         if (level > 0) {
-            if (dimension == 2) {
-                uint32_t x = box.grid_coords[0];
-                uint32_t y = box.grid_coords[1];
-                box.parent_morton = morton::encode_2d(x / 2, y / 2);
-            } else {
-                uint32_t x = box.grid_coords[0];
-                uint32_t y = box.grid_coords[1];
-                uint32_t z = box.grid_coords[2];
-                box.parent_morton = morton::encode_3d(x / 2, y / 2, z / 2);
-            }
+            box.parent_morton =
+                morton_idx / morton::children_per_box(dimension);
         } else {
             box.parent_morton = -1;
         }
@@ -796,11 +755,10 @@ void assign_points_to_boxes(
     
     // Assign each point to its box
     for (int64_t pt_idx = 0; pt_idx < num_points; ++pt_idx) {
-        CoordType point[3];
-        // Column-major (interleaved) format
-        point[0] = all_points[pt_idx * tree->dimension];
-        point[1] = all_points[pt_idx * tree->dimension + 1];
-        point[2] = (tree->dimension == 3) ? all_points[pt_idx * tree->dimension + 2] : 0;
+        CoordType point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+        for (int d = 0; d < tree->dimension; ++d) {
+            point[d] = all_points[pt_idx * tree->dimension + d];
+        }
         
         // Compute Morton index for this point
         int32_t grid_coords[3];
@@ -814,10 +772,8 @@ void assign_points_to_boxes(
             box_point_indices[local_idx].push_back(pt_idx);
             
             // Store coordinates in column-major format
-            box_point_coords[local_idx].push_back(point[0]);
-            box_point_coords[local_idx].push_back(point[1]);
-            if (tree->dimension == 3) {
-                box_point_coords[local_idx].push_back(point[2]);
+            for (int d = 0; d < tree->dimension; ++d) {
+                box_point_coords[local_idx].push_back(point[d]);
             }
         }
     }
@@ -862,9 +818,11 @@ void assign_uniform_points(
         return;
     }
     
-    // Compute grid dimension
+    // Compute grid dimension.
     int n_per_dim;
-    if (tree->dimension == 2) {
+    if (tree->dimension == 1) {
+        n_per_dim = static_cast<int>(N);
+    } else if (tree->dimension == 2) {
         n_per_dim = static_cast<int>(std::sqrt(static_cast<double>(N)));
         // Ensure N = n_per_dim^2
         if (n_per_dim * n_per_dim != N) {
@@ -880,7 +838,9 @@ void assign_uniform_points(
     
     // Grid spacing
     CoordType hx = (tree->global_bounds[1] - tree->global_bounds[0]) / n_per_dim;
-    CoordType hy = (tree->global_bounds[3] - tree->global_bounds[2]) / n_per_dim;
+    CoordType hy = (tree->dimension >= 2)
+        ? (tree->global_bounds[3] - tree->global_bounds[2]) / n_per_dim
+        : CoordType(0);
     CoordType hz = (tree->dimension == 3) ? 
                    (tree->global_bounds[5] - tree->global_bounds[4]) / n_per_dim : 0;
     
@@ -891,18 +851,30 @@ void assign_uniform_points(
         // Box bounds
         CoordType x_min = box.bounds[0];
         CoordType x_max = box.bounds[1];
-        CoordType y_min = box.bounds[2];
-        CoordType y_max = box.bounds[3];
-        
         // Find grid indices that overlap with this box
         int i_min = static_cast<int>(std::floor((x_min - tree->global_bounds[0]) / hx));
         int i_max = static_cast<int>(std::floor((x_max - tree->global_bounds[0]) / hx));
-        int j_min = static_cast<int>(std::floor((y_min - tree->global_bounds[2]) / hy));
-        int j_max = static_cast<int>(std::floor((y_max - tree->global_bounds[2]) / hy));
         
         // Clamp to valid range
         i_min = std::max(0, std::min(n_per_dim - 1, i_min));
         i_max = std::max(0, std::min(n_per_dim - 1, i_max));
+
+        if (tree->dimension == 1) {
+            for (int i = i_min; i <= i_max; ++i) {
+                CoordType x = tree->global_bounds[0] + (i + 0.5) * hx;
+                if (x >= x_min && x < x_max) {
+                    box.point_indices.push_back(i);
+                    box.point_coords.push_back(x);
+                    box.num_points++;
+                }
+            }
+            continue;
+        }
+
+        CoordType y_min = box.bounds[2];
+        CoordType y_max = box.bounds[3];
+        int j_min = static_cast<int>(std::floor((y_min - tree->global_bounds[2]) / hy));
+        int j_max = static_cast<int>(std::floor((y_max - tree->global_bounds[2]) / hy));
         j_min = std::max(0, std::min(n_per_dim - 1, j_min));
         j_max = std::max(0, std::min(n_per_dim - 1, j_max));
         
@@ -979,12 +951,8 @@ bool check_boundary_condition(
     int64_t local_morton_end) {
     
     // Check criterion 1: Has neighbors on different processes
-    std::vector<uint64_t> neighbors;
-    if (dimension == 2) {
-        neighbors = morton::neighbors_2d(morton_index, grid_size);
-    } else {
-        neighbors = morton::neighbors_3d(morton_index, grid_size);
-    }
+    const std::vector<uint64_t> neighbors =
+        morton::neighbors_nd(dimension, morton_index, grid_size);
     
     for (uint64_t neighbor_morton_u : neighbors) {
         int64_t neighbor_morton = static_cast<int64_t>(neighbor_morton_u);
@@ -1070,12 +1038,8 @@ void compute_neighbor_lists(
         auto& box = local_boxes[i];
         
         // ===== Compute 1-hop neighbors =====
-        std::vector<uint64_t> neighbors_1hop;
-        if (dimension == 2) {
-            neighbors_1hop = morton::neighbors_2d(box.morton_index, grid_size);
-        } else {
-            neighbors_1hop = morton::neighbors_3d(box.morton_index, grid_size);
-        }
+        const std::vector<uint64_t> neighbors_1hop =
+            morton::neighbors_nd(dimension, box.morton_index, grid_size);
         
         // Convert and store
         box.one_hop.clear();
@@ -1087,12 +1051,8 @@ void compute_neighbor_lists(
         box.use_full_set.resize(box.one_hop.size(), 1);
         
         // ===== Compute 2-hop neighbors =====
-        std::vector<uint64_t> neighbors_2hop;
-        if (dimension == 2) {
-            neighbors_2hop = morton::neighbors_2hop_2d(box.morton_index, grid_size);
-        } else {
-            neighbors_2hop = morton::neighbors_2hop_3d(box.morton_index, grid_size);
-        }
+        const std::vector<uint64_t> neighbors_2hop =
+            morton::neighbors_2hop_nd(dimension, box.morton_index, grid_size);
         
         // Convert and store
         box.two_hop.clear();
@@ -1447,22 +1407,14 @@ void compute_assisting_boxes(
 
     for (int64_t ghost_morton : seed_mortons) {
         // Get 1-hop neighbors
-        std::vector<uint64_t> neighbors_1hop;
-        if (tree->dimension == 2) {
-            neighbors_1hop = morton::neighbors_2d(ghost_morton, grid_size);
-        } else {
-            neighbors_1hop = morton::neighbors_3d(ghost_morton, grid_size);
-        }
+        const std::vector<uint64_t> neighbors_1hop =
+            morton::neighbors_nd(tree->dimension, ghost_morton, grid_size);
         
         // Batch process assignment for 1-hop
-        std::vector<uint32_t> processes_1hop;
-        if (tree->dimension == 2) {
-            processes_1hop = morton::assign_to_processes_2d(
-                neighbors_1hop, lvl.num_active_processes, grid_size);
-        } else {
-            processes_1hop = morton::assign_to_processes_3d(
-                neighbors_1hop, lvl.num_active_processes, grid_size);
-        }
+        const std::vector<uint32_t> processes_1hop =
+            morton::assign_to_processes_nd(
+                tree->dimension, neighbors_1hop,
+                lvl.num_active_processes, grid_size);
         
         // Add 1-hop neighbors that qualify
         for (size_t i = 0; i < neighbors_1hop.size(); ++i) {
@@ -1479,22 +1431,15 @@ void compute_assisting_boxes(
         }
         
         // Get 2-hop neighbors
-        std::vector<uint64_t> neighbors_2hop;
-        if (tree->dimension == 2) {
-            neighbors_2hop = morton::neighbors_2hop_2d(ghost_morton, grid_size);
-        } else {
-            neighbors_2hop = morton::neighbors_2hop_3d(ghost_morton, grid_size);
-        }
+        const std::vector<uint64_t> neighbors_2hop =
+            morton::neighbors_2hop_nd(
+                tree->dimension, ghost_morton, grid_size);
         
         // Batch process assignment for 2-hop
-        std::vector<uint32_t> processes_2hop;
-        if (tree->dimension == 2) {
-            processes_2hop = morton::assign_to_processes_2d(
-                neighbors_2hop, lvl.num_active_processes, grid_size);
-        } else {
-            processes_2hop = morton::assign_to_processes_3d(
-                neighbors_2hop, lvl.num_active_processes, grid_size);
-        }
+        const std::vector<uint32_t> processes_2hop =
+            morton::assign_to_processes_nd(
+                tree->dimension, neighbors_2hop,
+                lvl.num_active_processes, grid_size);
         
         // Add 2-hop neighbors that qualify for factorization assistance only.
         for (size_t i = 0; i < neighbors_2hop.size(); ++i) {
@@ -1547,14 +1492,14 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     const CoordType global_bounds[6],
     int32_t dimension = 3,
     MPI_Comm comm = MPI_COMM_WORLD,
-    int64_t reduction_threshold = 64,
+    int64_t reduction_threshold = 0,
     int CA_level = 10000,
     std::vector<int>& idx_map = std::vector<int>(), 
     ReductionPattern pattern = ReductionPattern::UNIFORM) {  // NEW parameter
     
     // Validate inputs
-    if (dimension != 2 && dimension != 3) {
-        throw std::invalid_argument("Dimension must be 2 or 3");
+    if (dimension < 1 || dimension > 3) {
+        throw std::invalid_argument("Dimension must be 1, 2, or 3");
     }
     if (num_levels <= 0) {
         throw std::invalid_argument("Number of levels must be positive");
@@ -1570,8 +1515,10 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     tree->dimension = dimension;
     tree->num_levels = num_levels;
     tree->num_points = num_points;
-    tree->reduction_threshold = reduction_threshold;
-    tree->CA_level = (CA_level < 0) ? num_levels : CA_level;
+    tree->reduction_threshold = (reduction_threshold > 0)
+        ? reduction_threshold
+        : morton::children_per_box(dimension);
+    tree->CA_level = (dimension == 1 || CA_level < 0) ? num_levels : CA_level;
     tree->reduction_pattern = pattern;  // NEW
     tree->comm = comm;                  // NEW
     
@@ -1590,7 +1537,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
 
     // Root assembly requires all level-1 sibling boxes on one process. Process
     // reduction from level 2 to level 1 is supported, but level 1 to level 0 is not.
-    int reduction_factor = (tree->dimension == 2) ? 4 : 8;
+    const int reduction_factor = morton::children_per_box(tree->dimension);
     if (tree->num_levels > 1 && tree->levels[1].num_active_processes != 1) {
         long long cap = 1; 
         for (int i = 0; i < tree->num_levels - 2; ++i) cap *= reduction_factor;

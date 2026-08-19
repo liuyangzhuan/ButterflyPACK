@@ -9,6 +9,14 @@
 
 namespace morton {
 
+inline uint64_t encode_1d(uint32_t x) {
+    return static_cast<uint64_t>(x);
+}
+
+inline void decode_1d(uint64_t index, uint32_t& x) {
+    x = static_cast<uint32_t>(index);
+}
+
 /**
  * @brief Spread bits of a 32-bit value for 2D Morton encoding
  * Inserts a zero between each bit: abc -> a0b0c0
@@ -108,6 +116,24 @@ inline void decode_3d(uint64_t index, uint32_t& x, uint32_t& y, uint32_t& z) {
     x = compact_bits_3d(index);
     y = compact_bits_3d(index >> 1);
     z = compact_bits_3d(index >> 2);
+}
+
+/**
+ * @brief Get the two adjacent cells in 1D, subject to domain bounds.
+ */
+inline std::vector<uint64_t> neighbors_1d(uint64_t index, uint32_t grid_size) {
+    uint32_t x;
+    decode_1d(index, x);
+
+    std::vector<uint64_t> neighbors;
+    neighbors.reserve(2);
+    if (x > 0) {
+        neighbors.push_back(encode_1d(x - 1));
+    }
+    if (x + 1 < grid_size) {
+        neighbors.push_back(encode_1d(x + 1));
+    }
+    return neighbors;
 }
 
 /**
@@ -247,6 +273,28 @@ inline std::vector<uint64_t> neighbors_2hop_3d(uint64_t index, uint32_t grid_siz
 }
 
 /**
+ * @brief Get cells exactly two grid steps away in 1D.
+ */
+inline std::vector<uint64_t> neighbors_2hop_1d(uint64_t index, uint32_t grid_size) {
+    uint32_t x;
+    decode_1d(index, x);
+
+    std::vector<uint64_t> neighbors;
+    neighbors.reserve(2);
+    if (x >= 2) {
+        neighbors.push_back(encode_1d(x - 2));
+    }
+    if (x + 2 < grid_size) {
+        neighbors.push_back(encode_1d(x + 2));
+    }
+    return neighbors;
+}
+
+inline bool is_power_of_2(uint32_t n) {
+    return n != 0 && (n & (n - 1)) == 0;
+}
+
+/**
  * @brief Check if a number is a power of 4
  */
 inline bool is_power_of_4(uint32_t n) {
@@ -274,6 +322,33 @@ inline bool is_power_of_8(uint32_t n) {
     // Count trailing zeros - must be divisible by 3 for power of 8
     int zeros = __builtin_ctz(n);
     return (zeros % 3) == 0;
+}
+
+/**
+ * @brief Assign 1D Morton indices to contiguous process intervals.
+ */
+inline std::vector<uint32_t> assign_to_processes_1d(
+    const std::vector<uint64_t>& indices,
+    uint32_t num_processes,
+    uint32_t grid_size) {
+
+    if (!is_power_of_2(num_processes)) {
+        throw std::invalid_argument("num_processes must be 2^k for some k >= 0");
+    }
+    if (grid_size < num_processes || grid_size % num_processes != 0) {
+        throw std::invalid_argument(
+            "1D grid_size must be divisible by num_processes");
+    }
+
+    const uint32_t cells_per_process = grid_size / num_processes;
+    std::vector<uint32_t> process_ids;
+    process_ids.reserve(indices.size());
+    for (uint64_t index : indices) {
+        uint32_t x;
+        decode_1d(index, x);
+        process_ids.push_back(x / cells_per_process);
+    }
+    return process_ids;
 }
 /**
  * @brief Assign 2D Morton indices to processes
@@ -366,6 +441,98 @@ inline std::vector<uint32_t> assign_to_processes_3d(
     }
     
     return process_ids;
+}
+
+inline int children_per_box(int dimension) {
+    if (dimension < 1 || dimension > 3) {
+        throw std::invalid_argument("dimension must be 1, 2, or 3");
+    }
+    return 1 << dimension;
+}
+
+inline uint64_t encode_nd(
+    int dimension, uint32_t x, uint32_t y = 0, uint32_t z = 0) {
+    switch (dimension) {
+        case 1: return encode_1d(x);
+        case 2: return encode_2d(x, y);
+        case 3: return encode_3d(x, y, z);
+        default:
+            throw std::invalid_argument("encode_nd: dimension must be 1, 2, or 3");
+    }
+}
+
+inline void decode_nd(
+    int dimension, uint64_t index, uint32_t& x, uint32_t& y, uint32_t& z) {
+    x = y = z = 0;
+    switch (dimension) {
+        case 1:
+            decode_1d(index, x);
+            return;
+        case 2:
+            decode_2d(index, x, y);
+            return;
+        case 3:
+            decode_3d(index, x, y, z);
+            return;
+        default:
+            throw std::invalid_argument("decode_nd: dimension must be 1, 2, or 3");
+    }
+}
+
+inline std::vector<uint64_t> neighbors_nd(
+    int dimension, uint64_t index, uint32_t grid_size) {
+    switch (dimension) {
+        case 1: return neighbors_1d(index, grid_size);
+        case 2: return neighbors_2d(index, grid_size);
+        case 3: return neighbors_3d(index, grid_size);
+        default:
+            throw std::invalid_argument("neighbors_nd: dimension must be 1, 2, or 3");
+    }
+}
+
+inline std::vector<uint64_t> neighbors_2hop_nd(
+    int dimension, uint64_t index, uint32_t grid_size) {
+    switch (dimension) {
+        case 1: return neighbors_2hop_1d(index, grid_size);
+        case 2: return neighbors_2hop_2d(index, grid_size);
+        case 3: return neighbors_2hop_3d(index, grid_size);
+        default:
+            throw std::invalid_argument(
+                "neighbors_2hop_nd: dimension must be 1, 2, or 3");
+    }
+}
+
+inline bool is_valid_process_count(int dimension, uint32_t count) {
+    if (!is_power_of_2(count) || dimension < 1 || dimension > 3) {
+        return false;
+    }
+    return (__builtin_ctz(count) % dimension) == 0;
+}
+
+inline uint32_t processes_per_dimension(int dimension, uint32_t count) {
+    if (!is_valid_process_count(dimension, count)) {
+        throw std::invalid_argument(
+            "process count must be (2^dimension)^k for some k >= 0");
+    }
+    return uint32_t{1} << (__builtin_ctz(count) / dimension);
+}
+
+inline std::vector<uint32_t> assign_to_processes_nd(
+    int dimension,
+    const std::vector<uint64_t>& indices,
+    uint32_t num_processes,
+    uint32_t grid_size) {
+    switch (dimension) {
+        case 1:
+            return assign_to_processes_1d(indices, num_processes, grid_size);
+        case 2:
+            return assign_to_processes_2d(indices, num_processes, grid_size);
+        case 3:
+            return assign_to_processes_3d(indices, num_processes, grid_size);
+        default:
+            throw std::invalid_argument(
+                "assign_to_processes_nd: dimension must be 1, 2, or 3");
+    }
 }
 
 } // namespace morton
