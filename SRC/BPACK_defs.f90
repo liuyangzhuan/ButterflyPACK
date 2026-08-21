@@ -768,6 +768,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type Bmatrix
         integer Maxlevel
         type(c_ptr) :: h2 = c_null_ptr
+        DT, allocatable::xtrue(:,:), b_true(:,:) !< sparse verification vector and exact product retained for solve-error checks
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()

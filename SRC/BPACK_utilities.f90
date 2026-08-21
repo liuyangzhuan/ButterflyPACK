@@ -534,6 +534,12 @@ contains
 
       implicit none
       type(Bmatrix)::bmat
+      if (allocated(bmat%xtrue)) then
+         deallocate(bmat%xtrue)
+      endif
+      if (allocated(bmat%b_true)) then
+         deallocate(bmat%b_true)
+      endif
       if (associated(bmat%ho_bf)) then
          call HODLR_delete(bmat%ho_bf)
          deallocate (bmat%ho_bf)

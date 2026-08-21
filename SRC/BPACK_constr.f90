@@ -4978,6 +4978,15 @@ contains
       Nunk_n_loc = msh%idxe - msh%idxs + 1
       idxs= msh%idxs
 
+      if (allocated(bmat%xtrue)) then
+         call LogMemory(stats, -SIZEOF(bmat%xtrue)/1024.0d3)
+         deallocate(bmat%xtrue)
+      endif
+      if (allocated(bmat%b_true)) then
+         call LogMemory(stats, -SIZEOF(bmat%b_true)/1024.0d3)
+         deallocate(bmat%b_true)
+      endif
+
       nvec=1 !! currently this can only be 1
       allocate(x_loc(Nunk_n_loc,nvec))
       x_loc=0
@@ -5063,13 +5072,10 @@ contains
       call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
-
-      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
       call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
-      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
-      deallocate(x_loc)
       deallocate(rhs_loc)
-      deallocate(rhs_loc_ref)
+      call move_alloc(x_loc, bmat%xtrue)
+      call move_alloc(rhs_loc_ref, bmat%b_true)
       deallocate(idx_src)
 
    end subroutine BPACK_CheckError_SMVP

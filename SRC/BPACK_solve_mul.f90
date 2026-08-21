@@ -3287,6 +3287,24 @@ contains
          write (*, *) '||B-H*(H\B)||_F/||B||_F: ', sqrt(norm3/norm4)
       endif
 
+      if (allocated(bmat%xtrue) .and. allocated(bmat%b_true)) then
+         if (size(bmat%xtrue, 1) == N_unk_loc .and. size(bmat%xtrue, 2) == 1 .and. &
+            size(bmat%b_true, 1) == N_unk_loc .and. size(bmat%b_true, 2) == 1) then
+            xtrue = bmat%xtrue
+            btrue = bmat%b_true
+            x = 0
+            call BPACK_Solution(bmat, x, btrue, N_unk_loc, 1, option, ptree, stats)
+
+            rtemp1 = fnorm(xtrue - x, N_unk_loc, 1)**2d0
+            rtemp2 = fnorm(xtrue, N_unk_loc, 1)**2d0
+            call MPI_ALLREDUCE(rtemp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+            call MPI_ALLREDUCE(rtemp2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               write (*, *) '||X_t-H\(A*X_t)||_F/||X_t||_F: ', sqrt(norm1/norm2)
+            endif
+         endif
+      endif
+
       deallocate (x)
       deallocate (xtrue)
       deallocate (btrue)
