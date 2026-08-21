@@ -128,6 +128,7 @@ struct ProgramOptions {
     int dimension = 3;
     int64_t reduction_threshold = 0;
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
+    bool use_sketch = true;     // Sparse-sketch the 2-hop ID workspace before RRQR
     int num_proxy = -1;
     double wave_divisor = 32.0;
     double length_scale = 0.1;   // Matérn length scale ℓ

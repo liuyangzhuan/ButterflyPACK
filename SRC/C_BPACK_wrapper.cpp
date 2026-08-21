@@ -106,6 +106,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
 		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
+		{"h2_use_sketch",   "format-7 H2 ID mode: 1 uses sparse sketching, 0 applies RRQR to the full 2-hop workspace"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -200,6 +201,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"fft_plan_mode",         required_argument, 0, 44},
 		{"sym",         required_argument, 0, 45},
 		{"IR_HODLR", required_argument, 0, 46},
+		{"h2_use_sketch", required_argument, 0, 47},
+		{"H2_use_sketch", required_argument, 0, 47},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -423,6 +426,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "IR_HODLR", opt_i);
+		} break;
+		case 47: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_use_sketch", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -814,19 +822,26 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double precon_d;
       double verbosity_d;
       double CA_level_d;
+      double H2_use_sketch_d;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
       c_bpack_getoption(option, "precon", &precon_d);
       c_bpack_getoption(option, "verbosity", &verbosity_d);
       c_bpack_getoption(option, "CA_level", &CA_level_d);
+      c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
+      const int H2_use_sketch = static_cast<int>(std::llround(H2_use_sketch_d));
+      if (H2_use_sketch != 0 && H2_use_sketch != 1) {
+        throw std::invalid_argument("H2_use_sketch must be 0 or 1");
+      }
       H2_options = butterfly::parse_program_options(
           Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf, CA_level);
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
+      H2_options.use_sketch = H2_use_sketch != 0;
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -843,7 +858,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         std::cout << "ButterflyPACK H2, number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
                   << ", dimension=" << H2_options.dimension
                   << ", reduction_threshold=" << H2_options.reduction_threshold
-                  << ", CA_level=" << H2_options.CA_level;
+                  << ", CA_level=" << H2_options.CA_level
+                  << ", h2_use_sketch=" << (H2_options.use_sketch ? 1 : 0);
         std::cout << std::endl;
       }
 

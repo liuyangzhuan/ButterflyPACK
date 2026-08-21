@@ -169,7 +169,8 @@ void h2_skeletonize_box(
     BoxData<CoordType, DataType>* box,
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
-    double tolerance) {
+    double tolerance,
+    bool use_sketch) {
 
     FactorizationThreadScratch<CoordType, DataType> scratch;
     gather_id_workspace(
@@ -194,11 +195,19 @@ void h2_skeletonize_box(
 
     constexpr double sketch_factor = 1.0;
     constexpr int sketch_nonzeros = 4;
-    IDResult<DataType> id = compute_id_sparse_sketch(
-        scratch.workspace.data(), scratch.sketch_storage,
-        scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
-        tolerance, sketch_factor, sketch_nonzeros,
-        static_cast<uint64_t>(box->morton_index + 1));
+    IDResult<DataType> id;
+    if (use_sketch) {
+        id = compute_id_sparse_sketch(
+            scratch.workspace.data(), scratch.sketch_storage,
+            scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
+            tolerance, sketch_factor, sketch_nonzeros,
+            static_cast<uint64_t>(box->morton_index + 1));
+    } else {
+        id = compute_id_complex(
+            scratch.workspace.data(),
+            scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
+            tolerance, 0);
+    }
 
     box->skeleton_indices = std::move(id.skeleton_indices);
     box->redundant_indices = std::move(id.redundant_indices);
@@ -437,6 +446,7 @@ void hierarchical_compression_parallel(
     double tolerance,
     int64_t* out_rankmax,
     size_t* memory_per_rank,
+    bool use_sketch,
     bool verbose = true) {
 
     const int rank = tree->mpi_rank;
@@ -479,7 +489,7 @@ void hierarchical_compression_parallel(
                     try {
                         h2_skeletonize_box(
                             &level.local_boxes[static_cast<size_t>(box_index)],
-                            level, kernel, tolerance);
+                            level, kernel, tolerance, use_sketch);
                     } catch (...) {
                         if (!id_failed.exchange(true, std::memory_order_relaxed)) {
                             std::lock_guard<std::mutex> lock(id_exception_mutex);
@@ -1506,6 +1516,7 @@ void butterfly_compression_parallel(
         hierarchical_compression_parallel(
             solver->tree.get(), &solver->kernel, solver->options.tolerance,
             &solver->last_factor_rankmax, &solver->factorization_memory,
+            solver->options.use_sketch,
             solver->options.verbosity >= 1);
         double elapsed = MPI_Wtime() - start;
         MPI_Allreduce(MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, solver->comm);

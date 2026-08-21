@@ -831,6 +831,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
+        integer:: H2_use_sketch !< 1: use sparse sketching for H2 ID; 0: apply RRQR to the full 2-hop workspace
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 

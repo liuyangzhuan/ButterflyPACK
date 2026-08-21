@@ -261,6 +261,7 @@ void factorize_CA_level(
     int current_level,
     KernelType* kernel,
     double tolerance,
+    bool use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -391,7 +392,7 @@ void factorize_CA_level(
                             /*use_CA_boundary_semantics=*/true);
                         compute_and_modify(
                             dimension, box, level, kernel, scratch,
-                            tolerance, is_symmetric, is_hermitian,
+                            tolerance, use_sketch, is_symmetric, is_hermitian,
                             static_cast<PendingFactorUpdates<DataType>*>(nullptr),
                             factorization_method, use_owner_deferred_xnn);
                     } catch (...) {
@@ -703,6 +704,7 @@ void hierarchical_factorization_parallel(
     fmm::ParallelTree<CoordType, DataType>* tree,
     KernelType* kernel,
     double tolerance,
+    bool use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -905,6 +907,7 @@ void hierarchical_factorization_parallel(
             if (use_CA_level) {
                 factorize_CA_level(
                     tree, current_level, kernel, tolerance,
+                    use_sketch,
                     is_symmetric, is_hermitian, factorization_method,
                     unit_proxy_points, num_proxy, proxy_radius,
                     total_skeleton, total_redundant, local_max_skel,
@@ -1099,7 +1102,7 @@ void hierarchical_factorization_parallel(
                             compute_and_modify(dimension,
                                 &box, level, kernel,
                                 scratch,
-                                tolerance, is_symmetric, is_hermitian,
+                                tolerance, use_sketch, is_symmetric, is_hermitian,
                                 &thread_pending[tid],
                                 factorization_method, use_owner_deferred_xnn
                             );
@@ -1992,6 +1995,7 @@ void hierarchical_factorization_parallel_if_supported(
     fmm::ParallelTree<CoordType, DataType>* tree,
     KernelType* kernel,
     double tolerance,
+    bool use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -2007,6 +2011,7 @@ void hierarchical_factorization_parallel_if_supported(
             tree, 
             kernel, 
             tolerance, 
+            use_sketch,
             is_symmetric, 
             is_hermitian, 
             factorization_method, 
@@ -2062,6 +2067,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->tree.get(),
     &solver->kernel,
     solver->options.tolerance,
+    solver->options.use_sketch,
     is_symmetric,
     is_hermitian,
     factorization_method,

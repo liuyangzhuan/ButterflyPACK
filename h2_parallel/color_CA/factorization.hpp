@@ -6182,6 +6182,7 @@ void compute_and_modify(
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
     double tolerance,
+    bool use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     PendingFactorUpdates<DataType> *pending_updates,
@@ -6287,16 +6288,22 @@ void compute_and_modify(
     // );
     IDResult<DataType> id_result;
     try {
-        id_result = fmm::compute_id_sparse_sketch(
-            workspace.data(), sketch_storage,
-            workspace_rows, workspace_cols, workspace_rows,
-            tolerance, sketch_factor, sketch_nonzeros, box->morton_index + 1
-        );
+        if (use_sketch) {
+            id_result = fmm::compute_id_sparse_sketch(
+                workspace.data(), sketch_storage,
+                workspace_rows, workspace_cols, workspace_rows,
+                tolerance, sketch_factor, sketch_nonzeros, box->morton_index + 1
+            );
+        } else {
+            id_result = fmm::compute_id_complex(
+                workspace.data(),
+                workspace_rows, workspace_cols, workspace_rows,
+                tolerance, 0
+            );
+        }
     } catch (const std::exception& e) {
         const auto workspace_summary =
             summarize_colmajor_matrix(workspace, workspace_rows, workspace_cols);
-        const auto sketch_summary =
-            summarize_colmajor_matrix(sketch_storage, sketch_rows, workspace_cols);
         std::ostringstream oss;
         oss << "compute_and_modify: ID failure for box " << box->morton_index
             << " (num_points=" << box->num_points
@@ -6308,15 +6315,23 @@ void compute_and_modify(
             << ", near_field_blocks=" << box->near_field_modified_interactions.size()
             << ", workspace_rows=" << workspace_rows
             << ", workspace_cols=" << workspace_cols
-            << ", sketch_rows=" << sketch_rows
-            << ", sketch_cols=" << workspace_cols
-            << ", sketch_factor=" << sketch_factor
-            << ", sketch_nonzeros=" << sketch_nonzeros
+            << ", id_mode=" << (use_sketch ? "sparse_sketch" : "full_workspace");
+        if (use_sketch) {
+            oss << ", sketch_rows=" << sketch_rows
+                << ", sketch_cols=" << workspace_cols
+                << ", sketch_factor=" << sketch_factor
+                << ", sketch_nonzeros=" << sketch_nonzeros;
+        }
+        oss
             << ")\n  "
             << format_matrix_diagnostic_summary("workspace", workspace_summary)
-            << "\n  "
-            << format_matrix_diagnostic_summary("sketch", sketch_summary)
             << "\n  underlying_error=" << e.what();
+        if (use_sketch) {
+            const auto sketch_summary =
+                summarize_colmajor_matrix(sketch_storage, sketch_rows, workspace_cols);
+            oss << "\n  "
+                << format_matrix_diagnostic_summary("sketch", sketch_summary);
+        }
         throw std::runtime_error(oss.str());
     }
     // if (force_id_diagnostics) {
@@ -7293,6 +7308,7 @@ void compute_and_modify(
     int64_t workspace_rows,
     int64_t workspace_cols,
     double tolerance,
+    bool use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     std::vector<DataType>& X_NN_full,
@@ -7309,7 +7325,7 @@ void compute_and_modify(
 
     compute_and_modify(
         dimension, box, level, kernel, scratch,
-        tolerance, is_symmetric, is_hermitian,
+        tolerance, use_sketch, is_symmetric, is_hermitian,
         pending_updates, factorization_method, store, DEBUG, VERBOSE
     );
 
