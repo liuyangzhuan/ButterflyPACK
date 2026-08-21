@@ -169,9 +169,13 @@ while True:
     elif(flag=="factor"):
         ####################### factor
         if not nofactor_by_fid[fid] or format_by_fid[fid] == 7:
+            maxrank = ctypes.c_int(0)
             sp.py_bpack_factor(
                 ctypes.byref(pyobjs[fid]),            # void **pyobj
+                ctypes.byref(maxrank),                # int *rankmax
             )
+            if rank == 0:
+                print("maxrank from py_bpack_factor:", maxrank.value)
     elif(flag=="solve"):
         ####################### solve
         #####  read in the RHS by rank 0

@@ -15,7 +15,7 @@ seed=12345
 rng = np.random.default_rng(seed=seed)
 nrhs = 1
 verbosity=True
-Npo = 1000
+Npo = 10000
 Ndim = 2
 coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 

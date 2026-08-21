@@ -1024,7 +1024,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 	  double t0 = MPI_Wtime();
 	  if (H2_solver->options.precon == 2) {
 		if (H2_solver->build_state == butterfly::H2BuildState::UNBUILT) {
-		  compress_h2_and_update_stats(H2_solver, stats);
+		  throw std::runtime_error(
+			"c_bpack_solve (format 7): call c_bpack_factor before solving");
 		}
 		if (H2_solver->build_state != butterfly::H2BuildState::H2_COMPRESSED) {
 		  throw std::runtime_error(
@@ -1113,25 +1114,11 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
       const int verbosity = sync_h2_verbosity(option, H2_solver);
       double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
-	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
+      H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 
       if (H2_solver->build_state == butterfly::H2BuildState::UNBUILT) {
-		if (H2_solver->options.precon == 2) {
-		  compress_h2_and_update_stats(H2_solver, stats);
-		} else {
-		  double factorization_time = 0.0;
-		  double entryeval_time = 0.0;
-		  butterfly::butterfly_factorization_parallel(
-			H2_solver, &factorization_time, &entryeval_time);
-		  c_bpack_setstats(stats, "Time_Factor", &factorization_time);
-		  c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
-
-		  double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
-	      c_bpack_setstats(stats, "Rank_max", &rank_max);
-
-		  double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
-		  c_bpack_setstats(stats,"Mem_Factor", &factorization_memory_MB);
-		}
+		throw std::runtime_error(
+		  "c_bpack_mult (format 7): call c_bpack_factor before multiplication");
       }
 
       const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);

@@ -117,12 +117,15 @@ if(rank==0):
 
 ####################### factor
 start = time.time()
+maxrank.value = 0
 sp.d_py_bpack_factor(
     ctypes.byref(pyobj),            # void **pyobj
+    ctypes.byref(maxrank),           # int *rankmax
 )
 end = time.time()
 if(rank==0):
     print(f"Time spent in d_py_bpack_factor: {end - start} seconds")
+    print("maxrank from d_py_bpack_factor:", maxrank.value)
 
 
 ####################### solve

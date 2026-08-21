@@ -19,7 +19,10 @@ def py_bpack_setup(sp):
         ctypes.POINTER(ctypes.c_void_p)
     ]
     sp.py_bpack_factor.restype = None
-    sp.py_bpack_factor.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    sp.py_bpack_factor.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_int)
+    ]
     sp.py_bpack_solve.restype = None
     sp.py_bpack_solve.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.POINTER(ctypes_dt)]
     sp.py_bpack_mult.restype = None
@@ -206,5 +209,4 @@ def bpack_terminate(verbosity=False):
     end = time.time()
     if verbosity==True:
         print(f"ID {0}: Time spent in py_bpack_terminate: {end - start} seconds")
-
 

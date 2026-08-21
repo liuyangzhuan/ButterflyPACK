@@ -341,10 +341,22 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 
 
 
-void py_bpack_factor(void ** pyobj)
+void py_bpack_factor(void ** pyobj, int* rankmax)
 {
 	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
 	c_bpack_factor(&(bpack_obj->bmat),&(bpack_obj->option),&(bpack_obj->stats),&(bpack_obj->ptree),&(bpack_obj->msh));
+
+	double format_d = 0.0;
+	double precon_d = 0.0;
+	double rankmax_d = 0.0;
+	c_bpack_getoption(&(bpack_obj->option), "format", &format_d);
+	c_bpack_getoption(&(bpack_obj->option), "precon", &precon_d);
+	const char* rank_stat =
+		(static_cast<int>(format_d) == 7 && static_cast<int>(precon_d) == 2)
+		? "Rank_max_Constr" : "Rank_max";
+	c_bpack_getstats(&(bpack_obj->stats), rank_stat, &rankmax_d);
+	*rankmax = static_cast<int>(rankmax_d);
+
 	*pyobj = (void*)bpack_obj;
 }
 
