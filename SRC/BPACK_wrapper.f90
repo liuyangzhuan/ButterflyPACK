@@ -1816,11 +1816,16 @@ contains
       integer idxs, idxe
       type(c_ptr) :: msh_Cptr
       type(mesh), pointer::msh
+      integer ii
 
       allocate(msh)
       msh%Nunk = N
       allocate (msh%new2old(N))
+      allocate (msh%old2new(N))
       msh%new2old = new2old
+      do ii = 1, N
+         msh%old2new(msh%new2old(ii)) = ii
+      enddo
       msh%idxs = idxs
       msh%idxe = idxe
       msh_Cptr = c_loc(msh)

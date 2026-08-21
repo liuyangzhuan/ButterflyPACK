@@ -96,8 +96,10 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
             bpack_free(verbosity,fid=fid)
 
     DATA_FILE=os.getenv("DATA_FILE", "data.bin")
+    request_payload = dict(payload)
+    request_payload["_butterflypack_nofactor"] = bool(nofactor)
     with open(f"{DATA_FILE}.{fid}", "wb") as f:
-        pickle.dump(payload, f)
+        pickle.dump(request_payload, f)
     with open(f"{CONTROL_FILE}.{fid}", "w") as f:
         f.write("init")
     wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
@@ -105,14 +107,15 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
     if verbosity==True:
         print(f"ID {fid}: Time spent in py_bpack_init_compute: {end - start} seconds")
 
-    if nofactor==False:
-        start = time.time()
-        with open(f"{CONTROL_FILE}.{fid}", "w") as f:
-            f.write("factor")
-        wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
-        end = time.time()
-        if verbosity==True:
-            print(f"ID {fid}: Time spent in py_bpack_factor: {end - start} seconds")
+    # The worker keeps this as a no-op for non-H2 nofactor builds. For H2 it
+    # invokes c_bpack_factor with precon=2 to construct the compressed operator.
+    start = time.time()
+    with open(f"{CONTROL_FILE}.{fid}", "w") as f:
+        f.write("factor")
+    wait_for_flag("done", f"{CONTROL_FILE}.{fid}")
+    end = time.time()
+    if verbosity==True:
+        print(f"ID {fid}: Time spent in py_bpack_factor: {end - start} seconds")
 
 
 ####################### solve
@@ -203,6 +206,5 @@ def bpack_terminate(verbosity=False):
     end = time.time()
     if verbosity==True:
         print(f"ID {0}: Time spent in py_bpack_terminate: {end - start} seconds")
-
 
 

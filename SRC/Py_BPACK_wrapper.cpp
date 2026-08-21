@@ -186,7 +186,7 @@ void py_bpack_logdet(void ** pyobj, C_DT * phase, C_RDT * logabsdet)
 void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int* rankmax, int argc, char* argv[])
 {
 	pybind11::gil_scoped_acquire gil;
-    bpack_handle* bpack_obj = (bpack_handle*)malloc(sizeof(bpack_handle));
+    bpack_handle* bpack_obj = new bpack_handle{};
 	// bpack_obj->quant_ptr = (c_bpack_QuantApp*)malloc(sizeof(c_bpack_QuantApp));
 	bpack_obj->quant_ptr = new c_bpack_QuantApp();
 
@@ -324,7 +324,7 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 	c_bpack_construct_element_compute(&(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncZmn, &c_bpack_FuncZmnBlock, quant_ptr);
 
     double vtmp;
-    c_bpack_getstats(&(bpack_obj->stats),"Rank_max",&vtmp);
+    c_bpack_getstats(&(bpack_obj->stats),"Rank_max_Constr",&vtmp);
     *rankmax=int(vtmp);
 
 
@@ -401,15 +401,15 @@ void py_bpack_free(void ** pyobj)
 	py::gil_scoped_acquire gil;
 	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
 
-	c_bpack_deletestats(&(bpack_obj->stats));
-	c_bpack_deleteproctree(&(bpack_obj->ptree));
-	c_bpack_deletemesh(&(bpack_obj->msh));
-	c_bpack_deletekernelquant(&(bpack_obj->ker));
-	c_bpack_delete(&(bpack_obj->bmat));
-	c_bpack_deleteoption(&(bpack_obj->option));
+	if (bpack_obj->stats != nullptr) c_bpack_deletestats(&(bpack_obj->stats));
+	if (bpack_obj->ptree != nullptr) c_bpack_deleteproctree(&(bpack_obj->ptree));
+	if (bpack_obj->msh != nullptr) c_bpack_deletemesh(&(bpack_obj->msh));
+	if (bpack_obj->ker != nullptr) c_bpack_deletekernelquant(&(bpack_obj->ker));
+	if (bpack_obj->bmat != nullptr) c_bpack_delete(&(bpack_obj->bmat));
+	if (bpack_obj->option != nullptr) c_bpack_deleteoption(&(bpack_obj->option));
 	// free(bpack_obj->quant_ptr);
 	delete bpack_obj->quant_ptr;
-	free(bpack_obj);
+	delete bpack_obj;
 	bpack_obj = NULL;
 	*pyobj = (void*)bpack_obj;
 }
@@ -420,7 +420,7 @@ void py_bpack_terminate()
 {
 #ifdef HAVE_MPI
 	Cblacs_exit(1);
- 	MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
+    MPI_Finalize();                                 // Terminate MPI. Once called, no other MPI routines may be called
 #endif
 }
 

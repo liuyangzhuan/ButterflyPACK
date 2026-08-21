@@ -63,5 +63,7 @@ cmake .. \
 # make cvie2d_t -j16
 make cvie3d -j16
 make cvie3d cvie3d_h2 claplace3d_h2 cmatern1d_h2 cmatern2d_h2 -j16
+make d_py_bpack
+make install
 
 #       -DPaRSEC_DIR="$PARSEC_INSTALL_DIR/share/cmake/parsec" \

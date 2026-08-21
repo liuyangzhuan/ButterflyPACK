@@ -1545,7 +1545,8 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
             "H2 tree: level 1 has " + std::to_string(tree->levels[1].num_active_processes) +
             " active ranks (must be 1). Either reduce ranks to <= " + std::to_string(cap) +
             " (= reduction_factor^(num_levels-2), num_levels=" + std::to_string(tree->num_levels) +
-            "), or raise reduction_threshold.");
+            "), or add tree levels by decreasing Nmin_leaf/increasing the problem size. "
+            "Raising reduction_threshold helps only when a level is not already reducing.");
     }
     
     // Step 2-3: Build tree level by level

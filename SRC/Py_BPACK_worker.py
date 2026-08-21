@@ -38,6 +38,23 @@ def get_mpi():
         return None, 0, 1
 
 
+def get_command_line_option(arguments, name, default=None):
+    """Return the last command-line value for a ButterflyPACK option."""
+    normalized_name = name.lstrip("-").lower().replace("-", "_")
+    value = default
+    for index, argument in enumerate(arguments):
+        if not isinstance(argument, str) or not argument.startswith("-"):
+            continue
+        option, separator, inline_value = argument.lstrip("-").partition("=")
+        if option.lower().replace("-", "_") != normalized_name:
+            continue
+        if separator:
+            value = inline_value
+        elif index + 1 < len(arguments):
+            value = arguments[index + 1]
+    return value
+
+
 comm, rank, size = get_mpi()
 if comm is None:
     # Serial fallback
@@ -65,6 +82,8 @@ RESULT_FILE=os.getenv("RESULT_FILE", "result.bin")
 MAX_ID_FILE = int(os.getenv("MAX_ID_FILE", "10"))
 poll_interval = 0.001
 pyobjs = [None] * (MAX_ID_FILE + 1)
+nofactor_by_fid = [False] * (MAX_ID_FILE + 1)
+format_by_fid = [1] * (MAX_ID_FILE + 1)
 VALID_FLAGS = {"init", "factor", "solve", "mult", "logdet", "free", "terminate"}
 
 # Ensure the file exists; if not, wait a moment and try again.
@@ -102,12 +121,22 @@ while True:
         mod = importlib.import_module(payload["block_func_module"])
         compute_block = getattr(mod, payload["block_func_name"])
         meta = payload["meta"]
+        nofactor_by_fid[fid] = bool(
+            payload.get("_butterflypack_nofactor", False)
+        )
+        format_by_fid[fid] = int(
+            get_command_line_option(argv, "format", 1)
+        )
 
         if "--verbosity" in argv:
             idx = argv.index("--verbosity")
             verbosity = int(argv[idx + 1])
 
         argv_tmp = argv.copy()
+        if nofactor_by_fid[fid] and format_by_fid[fid] == 7:
+            # H2 initializes its tree using precon, so this override must be
+            # present before py_bpack_init_compute rather than at factor time.
+            argv_tmp.extend(["--precon", "2"])
         argv_tmp.append(compute_block)
         argv_tmp.append(meta)
 
@@ -139,9 +168,10 @@ while True:
 
     elif(flag=="factor"):
         ####################### factor
-        sp.py_bpack_factor(
-            ctypes.byref(pyobjs[fid]),            # void **pyobj
-        )
+        if not nofactor_by_fid[fid] or format_by_fid[fid] == 7:
+            sp.py_bpack_factor(
+                ctypes.byref(pyobjs[fid]),            # void **pyobj
+            )
     elif(flag=="solve"):
         ####################### solve
         #####  read in the RHS by rank 0
@@ -203,6 +233,8 @@ while True:
     elif(flag=="free"):
         ####################### free stuff
         sp.py_bpack_free(ctypes.byref(pyobjs[fid]))
+        nofactor_by_fid[fid] = False
+        format_by_fid[fid] = 1
     elif(flag=="terminate"):
         sp.py_bpack_terminate()
         break

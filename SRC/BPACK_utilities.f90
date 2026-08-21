@@ -1305,7 +1305,7 @@ contains
       option%cpp = 0
       option%bp_cnt_lr = 1
       option%less_adapt = 0
-      option%reduction_threshold=0
+      option%reduction_threshold=8
       option%CA_level=10000
 
    end subroutine SetDefaultOptions

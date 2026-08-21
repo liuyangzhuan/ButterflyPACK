@@ -143,19 +143,10 @@ inline ProgramOptions parse_program_options(int* Npo, int* Ndim, double* Locatio
         throw std::invalid_argument("H2 solver dimension must be 1, 2, or 3.");
     }
 
-    //Compute grid_size from Npo and dimension
-    // grid_size such that grid_size^dimension == N
+    // Approximate per-dimension grid size for the existing level-selection logic.
     int64_t grid_size = std::llround(std::pow((double)*Npo, 1.0 / *Ndim));
 
-    int64_t check = 1;
-    for (int d = 0; d < *Ndim; ++d) check *= grid_size;
-
-    if (check == *Npo) {
-        h2_options.grid_size = grid_size;
-    } else {
-        throw std::invalid_argument(
-            "N must equal grid_size^dimension for the uniform H2 tree.");
-    }
+    h2_options.grid_size = grid_size;
 
     if (h2_options.grid_size < 2) {
       throw std::invalid_argument(
