@@ -113,7 +113,7 @@ contains
             allocate(ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat(nn,nn))
             ho_bf1%levels(level_c)%BP_inverse(ii)%LL(1)%matrices_block(1)%fullmat = ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)%fullmat
 
-            if (option%ErrSol == 0 .and. option%precon == 1) then
+            if (option%ErrSol == 0 .and. option%precon == 1 .and. option%IR_HODLR <= 0) then
                 call Bplus_delete(ho_bf1%levels(level_c)%BP(ii))
             else
 #if HAVE_ZFP
@@ -188,7 +188,7 @@ endif
 
                 if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(rowblock)%pgno)) then
                     call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
-                    if (option%ErrSol == 0 .and. option%precon == 1) then
+                    if (option%ErrSol == 0 .and. option%precon == 1 .and. option%IR_HODLR <= 0) then
                         call Bplus_delete(ho_bf1%levels(level_c)%BP(rowblock))
                     endif
                     call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_update(rowblock), rtemp, rank)
@@ -296,7 +296,7 @@ endif
 
         stats%Mem_Factor = stats%Mem_SMW + stats%Mem_Sblock + stats%Mem_Direct_inv
 
-        if (option%ErrSol == 0 .and. option%precon == 1) then
+        if (option%ErrSol == 0 .and. option%precon == 1 .and. option%IR_HODLR <= 0) then
             call LogMemory(stats, stats%Mem_Factor-stats%Mem_Fill)
         else
         call LogMemory(stats, stats%Mem_Factor)

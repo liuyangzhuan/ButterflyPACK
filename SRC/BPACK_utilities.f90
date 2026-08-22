@@ -1255,7 +1255,7 @@ contains
       option%tol_LS = 1d-12
       option%tol_itersol = 1d-6
       option%n_iter = 1000
-      option%IR_HODLR = 10
+      option%IR_HODLR = 0
       option%tol_rand = option%tol_comp
       option%tol_Rdetect = option%tol_comp*1d-1
       option%level_check = 10000
