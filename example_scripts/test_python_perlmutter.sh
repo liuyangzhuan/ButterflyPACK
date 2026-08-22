@@ -19,8 +19,8 @@ python --version
 
 
 
-nmpi=4
-export OMP_NUM_THREADS=4
+nmpi=8
+export OMP_NUM_THREADS=16
 THREADS_PER_RANK=`expr $OMP_NUM_THREADS \* 2`	
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
@@ -62,8 +62,7 @@ format=7
 for fid in $(seq 0 "$MAX_ID_FILE"); do
     rm -rf "$CONTROL_FILE.$fid" "$DATA_FILE.$fid" "$RESULT_FILE.$fid"
 done
-srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores  python -u ${BPACK_PYTHON_LIB_PATH}/dPy_BPACK_worker.py -option --xyzsort 1 --sym 1 --tol_comp 1e-10 --format ${format} --reduction_threshold 8 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 32 --errsol 1 | tee a.out_seperatelaunch_worker_format${format} &
+srun -n ${nmpi} -c $THREADS_PER_RANK --cpu_bind=cores  python -u ${BPACK_PYTHON_LIB_PATH}/dPy_BPACK_worker.py -option --xyzsort 1 --sym 1 --tol_comp 1e-11 --format ${format} --reduction_threshold 8 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 32 --errsol 1 --h2_id_proxy 2 --baca_batch 32 --h2_id_radius 2 --verbosity 0 | tee a.out_seperatelaunch_worker_format${format} &
 python -u ../EXAMPLE/Test_python_master.py | tee a.out_seperatelaunch_master_format${format} 
 # python -u ../EXAMPLE/Test_python_master_2mats.py | tee a.out_seperatelaunch_master 
 python -c "from dPy_BPACK_wrapper import *; bpack_terminate()"
-

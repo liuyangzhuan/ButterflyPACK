@@ -384,7 +384,8 @@ void factorize_CA_level(
                         }
 
                         gather_id_workspace(
-                            box, level, kernel,
+                            tree,
+                            box, level, kernel, tolerance,
                             unit_proxy_points.data(), num_proxy,
                             proxy_radius, is_symmetric,
                             scratch.workspace, scratch.workspace_rows,
@@ -1089,7 +1090,8 @@ void hierarchical_factorization_parallel(
                             auto& box = *box_ptr;
 
                             gather_id_workspace(
-                                &box, level, kernel,
+                                tree,
+                                &box, level, kernel, tolerance,
                                 unit_proxy_points.data(), num_proxy,
                                 proxy_radius, is_symmetric,
                                 scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,

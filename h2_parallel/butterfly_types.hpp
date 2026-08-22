@@ -129,6 +129,10 @@ struct ProgramOptions {
     int64_t reduction_threshold = 0;
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
     bool use_sketch = true;     // Sparse-sketch the 2-hop ID workspace before RRQR
+    int id_neighborhood_radius = 2; // Diagnostic: append original-cloud rows through this box radius
+    int id_proxy_mode = 0;          // 0: none, 1: geometric surface, 2: adaptive row sampling
+    int id_proxy_points = 8;        // Geometric surface samples for mode 1
+    int id_adaptive_batch = 64;     // Adaptive rows per spatial node for mode 2
     int num_proxy = -1;
     double wave_divisor = 32.0;
     double length_scale = 0.1;   // Matérn length scale ℓ

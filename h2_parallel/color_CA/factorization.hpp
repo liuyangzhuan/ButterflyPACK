@@ -21,6 +21,7 @@
 #include <complex>
 #include <sstream>
 #include <string>
+#include <memory>
 #include <unordered_set>
 #include <unordered_map>
 #include "blas_declare.hpp"
@@ -3840,12 +3841,854 @@ static void print_workspace_stats(const std::vector<double>& v,
     }
 }
 
+class IDUnusedIndexTree {
+public:
+    IDUnusedIndexTree(
+        int64_t size,
+        std::vector<std::pair<int64_t, int64_t>> candidate_ranges)
+        : size_(size) {
+
+        std::sort(candidate_ranges.begin(), candidate_ranges.end());
+        for (const auto& range : candidate_ranges) {
+            const int64_t lo = std::max<int64_t>(0, range.first);
+            const int64_t hi = std::min<int64_t>(size_ - 1, range.second);
+            if (lo > hi) continue;
+            if (!candidate_ranges_.empty() &&
+                lo <= candidate_ranges_.back().second + 1) {
+                candidate_ranges_.back().second = std::max(
+                    candidate_ranges_.back().second, hi);
+            } else {
+                candidate_ranges_.emplace_back(lo, hi);
+            }
+        }
+
+        candidate_prefix_.assign(candidate_ranges_.size() + 1, 0);
+        for (size_t index = 0; index < candidate_ranges_.size(); ++index) {
+            candidate_prefix_[index + 1] = candidate_prefix_[index] +
+                candidate_ranges_[index].second -
+                candidate_ranges_[index].first + 1;
+        }
+    }
+
+    int64_t count(int64_t lo, int64_t hi) const {
+        const int64_t first = std::max<int64_t>(0, lo);
+        const int64_t last = std::min<int64_t>(size_ - 1, hi);
+        if (first > last) return 0;
+        const int64_t candidates =
+            candidate_count_leq(last) - candidate_count_leq(first - 1);
+        const int64_t used =
+            count_leq(root_.get(), last) - count_leq(root_.get(), first - 1);
+        return candidates - used;
+    }
+
+    void mark_used(int64_t index) {
+        if (index < 0 || index >= size_ ||
+            candidate_count_leq(index) == candidate_count_leq(index - 1)) {
+            return;
+        }
+        bool inserted = false;
+        root_ = insert(std::move(root_), index, inserted);
+    }
+
+    int64_t find_by_order(int64_t order) const {
+        if (order <= 0 || order > count(0, size_ - 1)) return -1;
+        int64_t low = 0;
+        int64_t high = size_ - 1;
+        int64_t result = -1;
+        while (low <= high) {
+            const int64_t middle = low + (high - low) / 2;
+            const int64_t unused_prefix =
+                candidate_count_leq(middle) - count_leq(root_.get(), middle);
+            if (unused_prefix >= order) {
+                result = middle;
+                high = middle - 1;
+            } else {
+                low = middle + 1;
+            }
+        }
+        return result;
+    }
+
+private:
+    struct Node {
+        explicit Node(int64_t key_value) : key(key_value) {}
+
+        int64_t key;
+        int height = 1;
+        int64_t subtree_size = 1;
+        std::unique_ptr<Node> left;
+        std::unique_ptr<Node> right;
+    };
+
+    int64_t size_;
+    std::vector<std::pair<int64_t, int64_t>> candidate_ranges_;
+    std::vector<int64_t> candidate_prefix_;
+    std::unique_ptr<Node> root_;
+
+    int64_t candidate_count_leq(int64_t index) const {
+        if (index < 0 || candidate_ranges_.empty()) return 0;
+        const auto upper = std::upper_bound(
+            candidate_ranges_.begin(), candidate_ranges_.end(), index,
+            [](int64_t value, const std::pair<int64_t, int64_t>& range) {
+                return value < range.first;
+            });
+        if (upper == candidate_ranges_.begin()) return 0;
+
+        const size_t range_index = static_cast<size_t>(
+            std::distance(candidate_ranges_.begin(), upper) - 1);
+        const auto& range = candidate_ranges_[range_index];
+        const int64_t partial = index >= range.second
+            ? range.second - range.first + 1
+            : index - range.first + 1;
+        return candidate_prefix_[range_index] + partial;
+    }
+
+    static int height(const std::unique_ptr<Node>& node) {
+        return node == nullptr ? 0 : node->height;
+    }
+
+    static int64_t subtree_size(const std::unique_ptr<Node>& node) {
+        return node == nullptr ? 0 : node->subtree_size;
+    }
+
+    static void update(Node* node) {
+        node->height = 1 + std::max(height(node->left), height(node->right));
+        node->subtree_size =
+            1 + subtree_size(node->left) + subtree_size(node->right);
+    }
+
+    static std::unique_ptr<Node> rotate_left(std::unique_ptr<Node> root) {
+        std::unique_ptr<Node> next = std::move(root->right);
+        root->right = std::move(next->left);
+        next->left = std::move(root);
+        update(next->left.get());
+        update(next.get());
+        return next;
+    }
+
+    static std::unique_ptr<Node> rotate_right(std::unique_ptr<Node> root) {
+        std::unique_ptr<Node> next = std::move(root->left);
+        root->left = std::move(next->right);
+        next->right = std::move(root);
+        update(next->right.get());
+        update(next.get());
+        return next;
+    }
+
+    static std::unique_ptr<Node> insert(
+        std::unique_ptr<Node> node,
+        int64_t key,
+        bool& inserted) {
+
+        if (node == nullptr) {
+            inserted = true;
+            return std::make_unique<Node>(key);
+        }
+        if (key < node->key) {
+            node->left = insert(std::move(node->left), key, inserted);
+        } else if (key > node->key) {
+            node->right = insert(std::move(node->right), key, inserted);
+        } else {
+            return node;
+        }
+
+        update(node.get());
+        const int balance = height(node->left) - height(node->right);
+        if (balance > 1) {
+            if (key > node->left->key) {
+                node->left = rotate_left(std::move(node->left));
+            }
+            return rotate_right(std::move(node));
+        }
+        if (balance < -1) {
+            if (key < node->right->key) {
+                node->right = rotate_right(std::move(node->right));
+            }
+            return rotate_left(std::move(node));
+        }
+        return node;
+    }
+
+    static int64_t count_leq(const Node* node, int64_t key) {
+        if (node == nullptr) return 0;
+        if (key < node->key) return count_leq(node->left.get(), key);
+        return subtree_size(node->left) + 1 +
+            count_leq(node->right.get(), key);
+    }
+};
+
+inline std::vector<int64_t> pick_evenly_spaced_unused(
+    IDUnusedIndexTree& unused,
+    int64_t lo,
+    int64_t hi,
+    int64_t requested,
+    bool consume) {
+
+    const int64_t available = unused.count(lo, hi);
+    const int64_t picks = std::min(requested, available);
+    std::vector<int64_t> positions;
+    if (picks <= 0) return positions;
+    positions.reserve(static_cast<size_t>(picks));
+
+    const int64_t prefix = unused.count(0, lo - 1);
+    for (int64_t pick = 0; pick < picks; ++pick) {
+        const int64_t local_order = picks == 1
+            ? (available + 1) / 2
+            : 1 + static_cast<int64_t>(std::llround(
+                  static_cast<long double>(pick) * (available - 1) /
+                  static_cast<long double>(picks - 1)));
+        const int64_t position = unused.find_by_order(prefix + local_order);
+        if (position >= lo && position <= hi) positions.push_back(position);
+    }
+
+    if (consume) {
+        for (const int64_t position : positions) unused.mark_used(position);
+    }
+    return positions;
+}
+
+template<typename CoordType, typename DataType>
+int id_point_hop_distance(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* box,
+    int64_t point_index) {
+
+    const CoordType* point = tree->id_source_point_coords.data() +
+        point_index * tree->dimension;
+    int32_t point_grid[3] = {0, 0, 0};
+    point_to_morton(
+        point, tree->dimension, tree->global_bounds, box->level, point_grid);
+    int distance = 0;
+    for (int d = 0; d < tree->dimension; ++d) {
+        distance = std::max(
+            distance, std::abs(point_grid[d] - box->grid_coords[d]));
+    }
+    return distance;
+}
+
+template<typename CoordType, typename DataType>
+void validate_id_source_coordinates(
+    const ParallelTree<CoordType, DataType>* tree) {
+
+    const size_t expected = static_cast<size_t>(tree->num_points) *
+        static_cast<size_t>(tree->dimension);
+    if (tree->id_source_point_coords.size() != expected) {
+        throw std::runtime_error("H2 ID proxy selection: global coordinates are unavailable");
+    }
+}
+
+template<typename CoordType, typename DataType>
+void validate_id_source_index(
+    const ParallelTree<CoordType, DataType>* tree) {
+
+    if (tree->id_source_point_order.size() !=
+        static_cast<size_t>(tree->num_points)) {
+        throw std::runtime_error(
+            "H2 ID proxy selection: spatial point order is unavailable");
+    }
+    if (tree->num_levels <= 0) {
+        throw std::runtime_error(
+            "H2 ID proxy selection: source tree has no levels");
+    }
+    const int leaf_level = tree->num_levels - 1;
+    const int64_t leaf_boxes = tree->levels[leaf_level].num_boxes_global;
+    if (leaf_boxes < 0 ||
+        tree->id_source_leaf_offsets.size() !=
+            static_cast<size_t>(leaf_boxes + 1) ||
+        tree->id_source_leaf_offsets.front() != 0 ||
+        tree->id_source_leaf_offsets.back() != tree->num_points) {
+        throw std::runtime_error(
+            "H2 ID proxy selection: leaf point offsets are unavailable");
+    }
+}
+
+template<typename CoordType, typename DataType>
+std::pair<int64_t, int64_t> id_source_point_range(
+    const ParallelTree<CoordType, DataType>* tree,
+    int source_level,
+    int64_t source_morton) {
+
+    const int leaf_level = tree->num_levels - 1;
+    if (source_level < 0 || source_level > leaf_level || source_morton < 0) {
+        throw std::runtime_error(
+            "H2 ID proxy selection: invalid source-tree box");
+    }
+
+    const uint64_t children = static_cast<uint64_t>(
+        morton::children_per_box(tree->dimension));
+    uint64_t descendant_leaves = 1;
+    for (int level = source_level; level < leaf_level; ++level) {
+        if (descendant_leaves >
+            std::numeric_limits<uint64_t>::max() / children) {
+            throw std::runtime_error(
+                "H2 ID proxy selection: source-tree range overflow");
+        }
+        descendant_leaves *= children;
+    }
+
+    const uint64_t source = static_cast<uint64_t>(source_morton);
+    if (source > std::numeric_limits<uint64_t>::max() / descendant_leaves) {
+        throw std::runtime_error(
+            "H2 ID proxy selection: source-tree Morton range overflow");
+    }
+    const uint64_t first_leaf = source * descendant_leaves;
+    const uint64_t last_leaf = first_leaf + descendant_leaves;
+    if (last_leaf >= first_leaf &&
+        last_leaf < tree->id_source_leaf_offsets.size()) {
+        return {
+            tree->id_source_leaf_offsets[static_cast<size_t>(first_leaf)],
+            tree->id_source_leaf_offsets[static_cast<size_t>(last_leaf)]};
+    }
+    throw std::runtime_error(
+        "H2 ID proxy selection: source-tree box is outside the leaf index");
+}
+
+enum class IDSourceBoxRelation {
+    NEAR,
+    FAR,
+    PARTIAL
+};
+
+template<typename CoordType, typename DataType>
+IDSourceBoxRelation classify_id_source_box(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* target_box,
+    int source_level,
+    int64_t source_morton) {
+
+    if (source_level < 0 || source_level > target_box->level) {
+        throw std::runtime_error(
+            "H2 adaptive ID: invalid source level during near-field classification");
+    }
+
+    const int target_level = target_box->level;
+    if (target_level >= 62 || target_level - source_level >= 62) {
+        throw std::runtime_error(
+            "H2 adaptive ID: tree level is too deep for source-box classification");
+    }
+    const int64_t target_grid_size = int64_t{1} << target_level;
+    const int64_t source_scale = int64_t{1} << (target_level - source_level);
+    const int64_t radius = tree->id_neighborhood_radius;
+
+    uint32_t source_grid[3] = {0, 0, 0};
+    morton::decode_nd(
+        tree->dimension, static_cast<uint64_t>(source_morton),
+        source_grid[0], source_grid[1], source_grid[2]);
+
+    bool wholly_near = true;
+    for (int d = 0; d < tree->dimension; ++d) {
+        const int64_t near_lo = std::max<int64_t>(
+            0, static_cast<int64_t>(target_box->grid_coords[d]) - radius);
+        const int64_t near_hi = std::min<int64_t>(
+            target_grid_size - 1,
+            static_cast<int64_t>(target_box->grid_coords[d]) + radius);
+        const int64_t source_lo =
+            static_cast<int64_t>(source_grid[d]) * source_scale;
+        const int64_t source_hi = source_lo + source_scale - 1;
+
+        if (source_hi < near_lo || source_lo > near_hi) {
+            return IDSourceBoxRelation::FAR;
+        }
+        if (source_lo < near_lo || source_hi > near_hi) {
+            wholly_near = false;
+        }
+    }
+    return wholly_near
+        ? IDSourceBoxRelation::NEAR
+        : IDSourceBoxRelation::PARTIAL;
+}
+
+struct IDAdaptiveFrame {
+    int source_level = -1; // -1 denotes an interval within a finest-level box
+    int64_t source_morton = -1;
+    int64_t lo = 0;
+    int64_t hi = -1;
+};
+
+template<typename CoordType, typename DataType>
+void append_id_source_children(
+    const ParallelTree<CoordType, DataType>* tree,
+    const IDAdaptiveFrame& parent,
+    std::vector<IDAdaptiveFrame>& children) {
+
+    const int leaf_level = tree->num_levels - 1;
+    if (parent.source_level >= 0 && parent.source_level < leaf_level) {
+        const int child_count = morton::children_per_box(tree->dimension);
+        const int child_level = parent.source_level + 1;
+        for (int child = 0; child < child_count; ++child) {
+            const int64_t child_morton =
+                parent.source_morton * child_count + child;
+            const auto range = id_source_point_range(
+                tree, child_level, child_morton);
+            if (range.first < range.second) {
+                children.push_back({
+                    child_level, child_morton,
+                    range.first, range.second - 1});
+            }
+        }
+        return;
+    }
+
+    const int64_t midpoint = parent.lo + (parent.hi - parent.lo) / 2;
+    if (parent.lo <= midpoint) {
+        children.push_back({-1, -1, parent.lo, midpoint});
+    }
+    if (midpoint + 1 <= parent.hi) {
+        children.push_back({-1, -1, midpoint + 1, parent.hi});
+    }
+}
+
+template<typename CoordType, typename DataType>
+std::vector<IDAdaptiveFrame> make_initial_id_far_frames(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* target_box) {
+
+    std::vector<IDAdaptiveFrame> work;
+    std::vector<IDAdaptiveFrame> far_frames;
+    const auto root_range = id_source_point_range(tree, 0, 0);
+    if (root_range.first == root_range.second) return far_frames;
+    work.push_back({0, 0, root_range.first, root_range.second - 1});
+
+    size_t work_head = 0;
+    while (work_head < work.size()) {
+        const IDAdaptiveFrame frame = work[work_head++];
+        const IDSourceBoxRelation relation = classify_id_source_box(
+            tree, target_box, frame.source_level, frame.source_morton);
+        if (relation == IDSourceBoxRelation::NEAR) continue;
+        if (relation == IDSourceBoxRelation::FAR) {
+            far_frames.push_back(frame);
+            continue;
+        }
+        append_id_source_children(tree, frame, work);
+    }
+    return far_frames;
+}
+
+template<typename CoordType, typename DataType>
+std::vector<int64_t> select_static_id_training_indices(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* box) {
+
+    // These rows train the ID but do not become structural neighbors or
+    // participate in Schur updates.
+    std::vector<int64_t> selected_indices;
+    if (tree == nullptr || box == nullptr ||
+        (tree->id_neighborhood_radius <= 2 && tree->id_proxy_mode != 1)) {
+        return selected_indices;
+    }
+    validate_id_source_index(tree);
+
+    const int dimension = tree->dimension;
+    const int64_t num_points = tree->num_points;
+    const int radius = tree->id_neighborhood_radius;
+    const int64_t grid_size = int64_t{1} << box->level;
+    int64_t grid_lo[3] = {0, 0, 0};
+    int64_t grid_hi[3] = {0, 0, 0};
+    for (int d = 0; d < dimension; ++d) {
+        grid_lo[d] = std::max<int64_t>(
+            0, static_cast<int64_t>(box->grid_coords[d]) - radius);
+        grid_hi[d] = std::min<int64_t>(
+            grid_size - 1,
+            static_cast<int64_t>(box->grid_coords[d]) + radius);
+    }
+
+    for (int64_t z = grid_lo[2]; z <= grid_hi[2]; ++z) {
+        for (int64_t y = grid_lo[1]; y <= grid_hi[1]; ++y) {
+            for (int64_t x = grid_lo[0]; x <= grid_hi[0]; ++x) {
+                const int distance = std::max({
+                    std::abs(x - static_cast<int64_t>(box->grid_coords[0])),
+                    std::abs(y - static_cast<int64_t>(box->grid_coords[1])),
+                    std::abs(z - static_cast<int64_t>(box->grid_coords[2]))});
+                if (distance <= 2) continue;
+                const int64_t source_morton = static_cast<int64_t>(
+                    morton::encode_nd(
+                        dimension, static_cast<uint32_t>(x),
+                        static_cast<uint32_t>(y), static_cast<uint32_t>(z)));
+                const auto range = id_source_point_range(
+                    tree, box->level, source_morton);
+                selected_indices.insert(
+                    selected_indices.end(),
+                    tree->id_source_point_order.begin() + range.first,
+                    tree->id_source_point_order.begin() + range.second);
+            }
+        }
+    }
+
+    if (tree->id_proxy_mode != 1) return selected_indices;
+    validate_id_source_coordinates(tree);
+
+    std::unordered_set<int64_t> selected;
+    selected.reserve(
+        selected_indices.size() + static_cast<size_t>(tree->id_proxy_points));
+    selected.insert(selected_indices.begin(), selected_indices.end());
+
+    const int num_proxy = tree->id_proxy_points;
+    const CoordType proxy_radius =
+        std::sqrt(static_cast<CoordType>(dimension)) *
+        (static_cast<CoordType>(radius) + CoordType(0.5)) * box->size;
+    for (int proxy_index = 0; proxy_index < num_proxy; ++proxy_index) {
+        CoordType unit_point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+        if (dimension == 1) {
+            unit_point[0] = (proxy_index % 2 == 0) ? CoordType(-1) : CoordType(1);
+        } else if (dimension == 2) {
+            const CoordType theta = CoordType(2.0 * M_PI) *
+                CoordType(proxy_index) / CoordType(num_proxy);
+            unit_point[0] = std::cos(theta);
+            unit_point[1] = std::sin(theta);
+        } else if (num_proxy == 1) {
+            unit_point[0] = CoordType(1);
+        } else {
+            const CoordType golden_ratio =
+                (CoordType(1) + std::sqrt(CoordType(5))) / CoordType(2);
+            const CoordType y = CoordType(1) - CoordType(2) *
+                CoordType(proxy_index) / CoordType(num_proxy - 1);
+            const CoordType radial =
+                std::sqrt(std::max(CoordType(0), CoordType(1) - y * y));
+            const CoordType theta = CoordType(2.0 * M_PI) *
+                CoordType(proxy_index) / golden_ratio;
+            unit_point[0] = radial * std::cos(theta);
+            unit_point[1] = y;
+            unit_point[2] = radial * std::sin(theta);
+        }
+
+        CoordType proxy_point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+        for (int d = 0; d < dimension; ++d) {
+            proxy_point[d] = box->center[d] + proxy_radius * unit_point[d];
+        }
+
+        int64_t nearest_index = -1;
+        long double nearest_distance =
+            std::numeric_limits<long double>::infinity();
+        for (int64_t point_index = 0; point_index < num_points; ++point_index) {
+            if (id_point_hop_distance(tree, box, point_index) <= radius ||
+                selected.count(point_index) != 0) {
+                continue;
+            }
+            const CoordType* point = tree->id_source_point_coords.data() +
+                point_index * dimension;
+            long double distance_sq = 0.0L;
+            for (int d = 0; d < dimension; ++d) {
+                const long double delta = static_cast<long double>(point[d]) -
+                    static_cast<long double>(proxy_point[d]);
+                distance_sq += delta * delta;
+            }
+            if (distance_sq < nearest_distance) {
+                nearest_distance = distance_sq;
+                nearest_index = point_index;
+            }
+        }
+        if (nearest_index >= 0) {
+            selected_indices.push_back(nearest_index);
+            selected.insert(nearest_index);
+        }
+    }
+    return selected_indices;
+}
+
+template<typename DataType>
+double id_frobenius_norm(
+    const std::vector<DataType>& matrix,
+    int64_t rows,
+    int64_t cols) {
+
+    long double norm_sq = 0.0L;
+    const size_t count = static_cast<size_t>(rows * cols);
+    for (size_t index = 0; index < count; ++index) {
+        norm_sq += static_cast<long double>(value_sq_norm(matrix[index]));
+    }
+    return std::sqrt(static_cast<double>(norm_sq));
+}
+
+template<typename DataType>
+IDResult<DataType> compute_id_from_workspace(
+    const std::vector<DataType>& workspace,
+    int64_t rows,
+    int64_t cols,
+    double tolerance) {
+
+    if (rows == 0) {
+        IDResult<DataType> empty_id;
+        empty_id.redundant_indices.resize(static_cast<size_t>(cols));
+        std::iota(
+            empty_id.redundant_indices.begin(),
+            empty_id.redundant_indices.end(), int64_t{0});
+        empty_id.interpolation.allocate(0, cols);
+        return empty_id;
+    }
+    std::vector<DataType> factored = workspace;
+    return compute_id_complex(
+        factored.data(), rows, cols, rows, tolerance, 0);
+}
+
+template<typename DataType>
+void subtract_id_approximation(
+    std::vector<DataType>& residual,
+    int64_t rows,
+    int64_t cols,
+    const IDResult<DataType>& id) {
+
+    const int64_t rank = static_cast<int64_t>(id.skeleton_indices.size());
+    if (rank == 0) return;
+    std::vector<DataType> skeleton_values(static_cast<size_t>(rank));
+    for (int64_t row = 0; row < rows; ++row) {
+        for (int64_t index = 0; index < rank; ++index) {
+            skeleton_values[static_cast<size_t>(index)] =
+                residual[static_cast<size_t>(row + id.skeleton_indices[index] * rows)];
+        }
+        for (int64_t red = 0;
+             red < static_cast<int64_t>(id.redundant_indices.size()); ++red) {
+            DataType approximation{};
+            for (int64_t index = 0; index < rank; ++index) {
+                approximation += skeleton_values[static_cast<size_t>(index)] *
+                    id.interpolation(index, red);
+            }
+            residual[static_cast<size_t>(row + id.redundant_indices[red] * rows)] -=
+                approximation;
+        }
+        for (const int64_t skeleton : id.skeleton_indices) {
+            residual[static_cast<size_t>(row + skeleton * rows)] = DataType{};
+        }
+    }
+}
+
+template<typename DataType>
+std::vector<int64_t> select_independent_residual_rows(
+    const std::vector<DataType>& residual,
+    int64_t rows,
+    int64_t cols,
+    double tolerance) {
+
+    if (rows == 0 || cols == 0) return {};
+    std::vector<DataType> transpose(static_cast<size_t>(rows * cols));
+    for (int64_t row = 0; row < rows; ++row) {
+        for (int64_t col = 0; col < cols; ++col) {
+            transpose[static_cast<size_t>(col + row * cols)] =
+                residual[static_cast<size_t>(row + col * rows)];
+        }
+    }
+    IDResult<DataType> row_id = compute_id_complex(
+        transpose.data(), cols, rows, cols, tolerance, 0);
+    return std::move(row_id.skeleton_indices);
+}
+
+template<typename DataType>
+void append_selected_workspace_rows(
+    std::vector<DataType>& workspace,
+    int64_t& workspace_rows,
+    int64_t workspace_cols,
+    const std::vector<DataType>& sampled,
+    int64_t sampled_rows,
+    const std::vector<int64_t>& selected_rows) {
+
+    if (selected_rows.empty()) return;
+    const int64_t old_rows = workspace_rows;
+    const int64_t new_rows = old_rows + static_cast<int64_t>(selected_rows.size());
+    std::vector<DataType> expanded(static_cast<size_t>(new_rows * workspace_cols));
+    for (int64_t col = 0; col < workspace_cols; ++col) {
+        if (old_rows > 0) {
+            std::copy_n(
+                workspace.data() + col * old_rows, old_rows,
+                expanded.data() + col * new_rows);
+        }
+        for (size_t index = 0; index < selected_rows.size(); ++index) {
+            const int64_t source_row = selected_rows[index];
+            expanded[static_cast<size_t>(old_rows + static_cast<int64_t>(index) +
+                                         col * new_rows)] =
+                sampled[static_cast<size_t>(source_row + col * sampled_rows)];
+        }
+    }
+    workspace.swap(expanded);
+    workspace_rows = new_rows;
+}
+
+template<typename DataType>
+std::vector<DataType> compute_adaptive_id_residual(
+    const std::vector<DataType>& sampled,
+    int64_t sampled_rows,
+    int64_t cols,
+    const IDResult<DataType>& base_id,
+    const std::vector<IDResult<DataType>>& extra_ids) {
+
+    std::vector<DataType> residual = sampled;
+    subtract_id_approximation(residual, sampled_rows, cols, base_id);
+    for (const auto& extra_id : extra_ids) {
+        subtract_id_approximation(residual, sampled_rows, cols, extra_id);
+    }
+    return residual;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+void append_adaptive_id_training_rows(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* box,
+    KernelType* kernel,
+    double tolerance,
+    bool is_symmetric,
+    std::vector<DataType>& workspace,
+    int64_t& workspace_rows,
+    int64_t workspace_cols) {
+
+    if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    if (!is_symmetric) {
+        throw std::runtime_error(
+            "adaptive H2 ID proxy selection currently requires a symmetric matrix");
+    }
+    validate_id_source_index(tree);
+
+    const std::vector<IDAdaptiveFrame> far_frames =
+        make_initial_id_far_frames(tree, box);
+    if (far_frames.empty()) return;
+
+    std::vector<std::pair<int64_t, int64_t>> far_ranges;
+    far_ranges.reserve(far_frames.size());
+    for (const IDAdaptiveFrame& frame : far_frames) {
+        far_ranges.emplace_back(frame.lo, frame.hi);
+    }
+    IDUnusedIndexTree unused(tree->num_points, std::move(far_ranges));
+
+    const auto root_range = id_source_point_range(tree, 0, 0);
+    std::vector<IDAdaptiveFrame> queue = {{
+        0, 0, root_range.first, root_range.second - 1}};
+    size_t queue_head = 0;
+
+    IDResult<DataType> base_id = compute_id_from_workspace(
+        workspace, workspace_rows, workspace_cols, tolerance);
+    std::vector<IDResult<DataType>> extra_ids;
+    int64_t extra_rank = 0;
+    const int64_t sample_batch = std::max<int64_t>(1, tree->id_adaptive_batch);
+
+    auto recompute_clean_id = [&]() {
+        base_id = compute_id_from_workspace(
+            workspace, workspace_rows, workspace_cols, tolerance);
+        extra_ids.clear();
+        extra_rank = 0;
+    };
+
+    while (queue_head < queue.size()) {
+        const IDAdaptiveFrame frame = queue[queue_head++];
+        const int64_t available_before = unused.count(frame.lo, frame.hi);
+        if (available_before == 0) continue;
+
+        const std::vector<int64_t> sample_positions = pick_evenly_spaced_unused(
+            unused, frame.lo, frame.hi, sample_batch, true);
+        const int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
+        std::vector<int64_t> sample_indices(static_cast<size_t>(sample_rows));
+        for (int64_t row = 0; row < sample_rows; ++row) {
+            sample_indices[static_cast<size_t>(row)] =
+                tree->id_source_point_order[static_cast<size_t>(
+                    sample_positions[static_cast<size_t>(row)])];
+        }
+
+        std::vector<DataType> sampled(
+            static_cast<size_t>(sample_rows * workspace_cols));
+        kernel->evaluate_block_by_index(
+            sample_indices.data(), sample_rows,
+            box->point_indices.data(), workspace_cols,
+            sampled.data(), sample_rows);
+
+        std::vector<DataType> residual = compute_adaptive_id_residual(
+            sampled, sample_rows, workspace_cols, base_id, extra_ids);
+        double residual_norm = id_frobenius_norm(
+            residual, sample_rows, workspace_cols);
+        double reference_norm = id_frobenius_norm(
+            workspace, workspace_rows, workspace_cols);
+        double threshold = reference_norm * tolerance;
+
+        const std::vector<int64_t> retained_rows =
+            select_independent_residual_rows(
+                residual, sample_rows, workspace_cols, tolerance);
+        append_selected_workspace_rows(
+            workspace, workspace_rows, workspace_cols,
+            sampled, sample_rows, retained_rows);
+
+        bool converged = residual_norm < threshold;
+        if (converged && !extra_ids.empty()) {
+            recompute_clean_id();
+            residual = compute_adaptive_id_residual(
+                sampled, sample_rows, workspace_cols, base_id, extra_ids);
+            residual_norm = id_frobenius_norm(
+                residual, sample_rows, workspace_cols);
+            reference_norm = id_frobenius_norm(
+                workspace, workspace_rows, workspace_cols);
+            threshold = reference_norm * tolerance;
+            converged = residual_norm < threshold;
+        }
+
+        bool holdout_failed = false;
+        if (converged) {
+            const int64_t holdout_count = std::min<int64_t>(
+                4, std::max<int64_t>(1, sample_batch / 2));
+            const std::vector<int64_t> holdout_positions =
+                pick_evenly_spaced_unused(
+                    unused, frame.lo, frame.hi, holdout_count, false);
+            if (!holdout_positions.empty()) {
+                const int64_t holdout_rows =
+                    static_cast<int64_t>(holdout_positions.size());
+                std::vector<int64_t> holdout_indices(
+                    static_cast<size_t>(holdout_rows));
+                for (int64_t row = 0; row < holdout_rows; ++row) {
+                    holdout_indices[static_cast<size_t>(row)] =
+                        tree->id_source_point_order[static_cast<size_t>(
+                            holdout_positions[static_cast<size_t>(row)])];
+                }
+                std::vector<DataType> holdout(
+                    static_cast<size_t>(holdout_rows * workspace_cols));
+                kernel->evaluate_block_by_index(
+                    holdout_indices.data(), holdout_rows,
+                    box->point_indices.data(), workspace_cols,
+                    holdout.data(), holdout_rows);
+                std::vector<DataType> holdout_residual =
+                    compute_adaptive_id_residual(
+                        holdout, holdout_rows, workspace_cols,
+                        base_id, extra_ids);
+                const double holdout_norm = id_frobenius_norm(
+                    holdout_residual, holdout_rows, workspace_cols);
+                if (holdout_norm >= threshold) {
+                    holdout_failed = true;
+                    const std::vector<int64_t> retained_holdout =
+                        select_independent_residual_rows(
+                            holdout_residual, holdout_rows,
+                            workspace_cols, tolerance);
+                    append_selected_workspace_rows(
+                        workspace, workspace_rows, workspace_cols,
+                        holdout, holdout_rows, retained_holdout);
+                    for (const int64_t position : holdout_positions) {
+                        unused.mark_used(position);
+                    }
+                    recompute_clean_id();
+                }
+            }
+        }
+
+        if (converged && !holdout_failed) continue;
+        if (unused.count(frame.lo, frame.hi) == 0) continue;
+
+        if (!holdout_failed && residual_norm > 0.0) {
+            const double residual_tolerance = std::min(
+                1.0, reference_norm / residual_norm * tolerance);
+            IDResult<DataType> extra_id = compute_id_from_workspace(
+                residual, sample_rows, workspace_cols, residual_tolerance);
+            if (extra_id.rank > 0 &&
+                extra_rank + extra_id.rank <= workspace_cols) {
+                extra_rank += extra_id.rank;
+                extra_ids.push_back(std::move(extra_id));
+            } else {
+                recompute_clean_id();
+            }
+        }
+
+        append_id_source_children(tree, frame, queue);
+    }
+}
+
 
 template<typename CoordType, typename DataType, typename KernelType>
 void gather_id_workspace(
+    const ParallelTree<CoordType, DataType>* tree,
     BoxData<CoordType, DataType>* box,
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
+    double id_tolerance,
     const CoordType* unit_proxy_points,
     int64_t num_proxy,
     CoordType proxy_radius_factor,
@@ -3879,6 +4722,8 @@ void gather_id_workspace(
     workspace_cols = box->num_points;
 
     assert(num_proxy == 0);
+    const std::vector<int64_t> additional_training_indices =
+        select_static_id_training_indices(tree, box);
     
     // Transform proxy points
     // std::vector<CoordType> transformed_proxy;
@@ -3966,6 +4811,10 @@ void gather_id_workspace(
     total_rows += num_proxy;
     if (!is_symmetric) {
         total_rows += num_proxy;
+    }
+    total_rows += static_cast<int64_t>(additional_training_indices.size());
+    if (!is_symmetric) {
+        total_rows += static_cast<int64_t>(additional_training_indices.size());
     }
     
     workspace_rows = total_rows;
@@ -4207,6 +5056,32 @@ void gather_id_workspace(
         
         current_row_offset += n_neighbor;
     }
+
+    if (!additional_training_indices.empty()) {
+        const int64_t additional_rows =
+            static_cast<int64_t>(additional_training_indices.size());
+        kernel->evaluate_block_by_index(
+            additional_training_indices.data(), additional_rows,
+            box->point_indices.data(), workspace_cols,
+            workspace.data() + current_row_offset, workspace_rows);
+        current_row_offset += additional_rows;
+
+        if (!is_symmetric) {
+            std::vector<DataType> transposed_block(
+                static_cast<size_t>(workspace_cols * additional_rows));
+            kernel->evaluate_block_by_index(
+                box->point_indices.data(), workspace_cols,
+                additional_training_indices.data(), additional_rows,
+                transposed_block.data(), workspace_cols);
+            for (int64_t col = 0; col < workspace_cols; ++col) {
+                for (int64_t row = 0; row < additional_rows; ++row) {
+                    workspace[(current_row_offset + row) + col * workspace_rows] =
+                        transposed_block[col + row * workspace_cols];
+                }
+            }
+            current_row_offset += additional_rows;
+        }
+    }
     
     
     
@@ -4253,6 +5128,10 @@ void gather_id_workspace(
             std::to_string(workspace_rows) + ", got " + 
             std::to_string(current_row_offset));
     }
+
+    append_adaptive_id_training_rows(
+        tree, box, kernel, id_tolerance, is_symmetric,
+        workspace, workspace_rows, workspace_cols);
 
     // if (DEBUG){
     //     print_workspace_segment_stats(workspace, workspace_rows, workspace_cols,

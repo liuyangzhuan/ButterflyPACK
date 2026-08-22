@@ -361,6 +361,11 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
 
   H2_solver->tree = std::move(tree); 
 
+  H2_solver->tree->id_neighborhood_radius = options.id_neighborhood_radius;
+  H2_solver->tree->id_proxy_mode = options.id_proxy_mode;
+  H2_solver->tree->id_proxy_points = options.id_proxy_points;
+  H2_solver->tree->id_adaptive_batch = options.id_adaptive_batch;
+
   idxs = 0;
   idxe = -1;
   allgather_idx_map_to_new2old(
@@ -371,6 +376,76 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
     idxs,
     idxe
   );
+
+  const bool needs_id_source_index =
+      options.id_neighborhood_radius > 2 || options.id_proxy_mode != 0;
+  if (needs_id_source_index) {
+      H2_solver->tree->id_source_point_order.assign(
+          new2old.begin(), new2old.end());
+
+      const int leaf_level = H2_solver->tree->num_levels - 1;
+      const auto& leaf = H2_solver->tree->levels[leaf_level];
+      if (leaf.local_boxes.size() >
+          static_cast<size_t>(std::numeric_limits<int>::max())) {
+          throw std::runtime_error(
+              "H2 ID source index: too many local leaf boxes for MPI_Allgatherv");
+      }
+
+      int comm_size = 1;
+      MPI_Comm_size(H2_solver->comm, &comm_size);
+      const int local_box_count = static_cast<int>(leaf.local_boxes.size());
+      std::vector<int> box_counts(static_cast<size_t>(comm_size), 0);
+      MPI_Allgather(
+          &local_box_count, 1, MPI_INT,
+          box_counts.data(), 1, MPI_INT, H2_solver->comm);
+
+      std::vector<int> box_displacements(static_cast<size_t>(comm_size), 0);
+      for (int process = 1; process < comm_size; ++process) {
+          box_displacements[static_cast<size_t>(process)] =
+              box_displacements[static_cast<size_t>(process - 1)] +
+              box_counts[static_cast<size_t>(process - 1)];
+      }
+      const int total_leaf_boxes =
+          box_displacements.back() + box_counts.back();
+      if (static_cast<int64_t>(total_leaf_boxes) != leaf.num_boxes_global ||
+          (local_box_count > 0 &&
+           leaf.local_morton_start != box_displacements[static_cast<size_t>(rank)])) {
+          throw std::runtime_error(
+              "H2 ID source index: leaf boxes are not rank-contiguous Morton ranges");
+      }
+
+      std::vector<int64_t> local_point_counts(
+          static_cast<size_t>(local_box_count), 0);
+      for (int box_index = 0; box_index < local_box_count; ++box_index) {
+          local_point_counts[static_cast<size_t>(box_index)] =
+              leaf.local_boxes[static_cast<size_t>(box_index)].num_points;
+      }
+      std::vector<int64_t> global_point_counts(
+          static_cast<size_t>(total_leaf_boxes), 0);
+      MPI_Allgatherv(
+          local_point_counts.data(), local_box_count, MPI_INT64_T,
+          global_point_counts.data(), box_counts.data(),
+          box_displacements.data(), MPI_INT64_T, H2_solver->comm);
+
+      auto& leaf_offsets = H2_solver->tree->id_source_leaf_offsets;
+      leaf_offsets.assign(static_cast<size_t>(total_leaf_boxes + 1), 0);
+      for (int box_index = 0; box_index < total_leaf_boxes; ++box_index) {
+          leaf_offsets[static_cast<size_t>(box_index + 1)] =
+              leaf_offsets[static_cast<size_t>(box_index)] +
+              global_point_counts[static_cast<size_t>(box_index)];
+      }
+      if (leaf_offsets.back() != options.N) {
+          throw std::runtime_error(
+              "H2 ID source index: leaf point counts do not sum to N");
+      }
+  }
+
+  if (options.id_proxy_mode == 1) {
+      const size_t coordinate_count =
+          static_cast<size_t>(options.N) * static_cast<size_t>(options.dimension);
+      H2_solver->tree->id_source_point_coords.assign(
+          Locations, Locations + coordinate_count);
+  }
   
   idxs++;// this is to convert from 0-based index to 1-based index for Fortran compatibility
   idxe++;

@@ -15,8 +15,8 @@ seed=12345
 rng = np.random.default_rng(seed=seed)
 nrhs = 1
 verbosity=True
-Npo = 10000
-Ndim = 2
+Npo = 1000000
+Ndim = 3
 coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 
 
@@ -35,7 +35,7 @@ coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 ############################################### the following tests a RBF kernel in george
 import george
 input_dim=Ndim
-intialguess=[5e-6, 1] + [1]*input_dim
+intialguess=[5e-2, 1] + [1]*input_dim
 #### Note that intialguess contains theta, but george needs theta^2
 K = george.kernels.ExpSquaredKernel(metric=np.array(intialguess[2:]), ndim=input_dim)
 amplitude = intialguess[1]

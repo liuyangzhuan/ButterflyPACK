@@ -1021,6 +1021,18 @@ contains
          val_d = option%H2_use_sketch
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then
+         val_d = option%H2_ID_radius
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy' .or. trim(str) == 'h2_id_proxy') then
+         val_d = option%H2_ID_proxy
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy_points' .or. trim(str) == 'h2_id_proxy_points') then
+         val_d = option%H2_ID_proxy_points
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1303,6 +1315,21 @@ contains
       if (trim(str) == 'H2_use_sketch' .or. trim(str) == 'h2_use_sketch') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_use_sketch = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_radius = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy' .or. trim(str) == 'h2_id_proxy') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_proxy = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy_points' .or. trim(str) == 'h2_id_proxy_points') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_proxy_points = val_i
          valid_opt = 1
       endif
 

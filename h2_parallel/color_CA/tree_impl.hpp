@@ -78,7 +78,8 @@ ParallelTree<CoordType, DataType>::ParallelTree()
     : dimension(0), num_levels(0), num_points(0),
       mpi_rank(0), mpi_size(1), comm(MPI_COMM_WORLD),
       reduction_pattern(ReductionPattern::UNIFORM), reduction_threshold(0),
-      CA_level(10000) {
+      CA_level(10000), id_neighborhood_radius(2), id_proxy_mode(0),
+      id_proxy_points(8), id_adaptive_batch(64) {
     for (int i = 0; i < 6; ++i) global_bounds[i] = 0.0;
 }
 

@@ -107,8 +107,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
 		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
 		{"h2_use_sketch",   "format-7 H2 ID mode: 1 uses sparse sketching, 0 applies RRQR to the full 2-hop workspace"},
+		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
+		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
+		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
-		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
+		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
 		{"nogeo",           "whether there is geometry information provided 1: is no geometry (xyzsort can not be 1 or 2), 0: there is geometry"},
 		{"less_adapt",      "1: improved randomized butterfly construction, default to 1"},
@@ -203,6 +206,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"IR_HODLR", required_argument, 0, 46},
 		{"h2_use_sketch", required_argument, 0, 47},
 		{"H2_use_sketch", required_argument, 0, 47},
+		{"h2_id_radius", required_argument, 0, 48},
+		{"H2_ID_radius", required_argument, 0, 48},
+		{"h2_id_proxy", required_argument, 0, 49},
+		{"H2_ID_proxy", required_argument, 0, 49},
+		{"h2_id_proxy_points", required_argument, 0, 50},
+		{"H2_ID_proxy_points", required_argument, 0, 50},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -431,6 +440,21 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_use_sketch", opt_i);
+		} break;
+		case 48: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_ID_radius", opt_i);
+		} break;
+		case 49: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_ID_proxy", opt_i);
+		} break;
+		case 50: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_ID_proxy_points", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -823,6 +847,10 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double verbosity_d;
       double CA_level_d;
       double H2_use_sketch_d;
+      double H2_ID_radius_d;
+      double H2_ID_proxy_d;
+      double H2_ID_proxy_points_d;
+      double BACA_Batch_d;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -830,18 +858,48 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "verbosity", &verbosity_d);
       c_bpack_getoption(option, "CA_level", &CA_level_d);
       c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
+      c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
+      c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
+      c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
+      c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
       const int H2_use_sketch = static_cast<int>(std::llround(H2_use_sketch_d));
+      const int H2_ID_radius = static_cast<int>(std::llround(H2_ID_radius_d));
+      const int H2_ID_proxy = static_cast<int>(std::llround(H2_ID_proxy_d));
+      const int H2_ID_proxy_points =
+          static_cast<int>(std::llround(H2_ID_proxy_points_d));
+      const int BACA_Batch = static_cast<int>(std::llround(BACA_Batch_d));
       if (H2_use_sketch != 0 && H2_use_sketch != 1) {
         throw std::invalid_argument("H2_use_sketch must be 0 or 1");
+      }
+      if (H2_ID_radius < 2) {
+        throw std::invalid_argument("H2_ID_radius must be at least 2");
+      }
+      if (H2_ID_proxy < 0 || H2_ID_proxy > 2) {
+        throw std::invalid_argument("H2_ID_proxy must be 0, 1, or 2");
+      }
+      if (H2_ID_proxy == 1 && H2_ID_proxy_points <= 0) {
+        throw std::invalid_argument(
+            "H2_ID_proxy_points must be positive when H2_ID_proxy=1");
+      }
+      if (H2_ID_proxy == 2 && BACA_Batch <= 0) {
+        throw std::invalid_argument(
+            "BACA_Batch must be positive when H2_ID_proxy=2");
       }
       H2_options = butterfly::parse_program_options(
           Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf, CA_level);
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
       H2_options.use_sketch = H2_use_sketch != 0;
+      H2_options.id_neighborhood_radius = H2_ID_radius;
+      H2_options.id_proxy_mode = H2_ID_proxy;
+      if (H2_ID_proxy == 1) {
+        H2_options.id_proxy_points = H2_ID_proxy_points;
+      } else if (H2_ID_proxy == 2) {
+        H2_options.id_adaptive_batch = BACA_Batch;
+      }
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -859,7 +917,14 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", dimension=" << H2_options.dimension
                   << ", reduction_threshold=" << H2_options.reduction_threshold
                   << ", CA_level=" << H2_options.CA_level
-                  << ", h2_use_sketch=" << (H2_options.use_sketch ? 1 : 0);
+                  << ", h2_use_sketch=" << (H2_options.use_sketch ? 1 : 0)
+                  << ", h2_id_radius=" << H2_options.id_neighborhood_radius
+                  << ", h2_id_proxy=" << H2_options.id_proxy_mode;
+        if (H2_options.id_proxy_mode == 1) {
+          std::cout << ", h2_id_proxy_points=" << H2_options.id_proxy_points;
+        } else if (H2_options.id_proxy_mode == 2) {
+          std::cout << ", baca_batch=" << H2_options.id_adaptive_batch;
+        }
         std::cout << std::endl;
       }
 

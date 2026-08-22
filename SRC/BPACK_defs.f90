@@ -811,7 +811,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         ! options for matrix construction
         integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
-        integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
+        integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5. 3: use tree-based adaptive sampling for NlogN pseudo skeleton algorithm.
         real(kind=8) tol_comp      !< matrix construction tolerance
         integer::Nmin_leaf !< leaf sizes of BPACK tree
         integer nogeo !< 1: no geometrical information available to BPACK, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided
@@ -832,6 +832,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< 1: use sparse sketching for H2 ID; 0: apply RRQR to the full 2-hop workspace
+        integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
+        integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
+        integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 
@@ -863,7 +866,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer::level_check !< check compression quality by picking random entries at level_check (only work for nmpi=1 now)
         integer::ErrFillFull !< check compression quality by computing all block elements
         integer::ErrSol !< check solution quality by using artificially generated true solution vector
-        integer::BACA_Batch !< batch size in batch ACA
+        integer::BACA_Batch !< batch size in batch ACA; rows per in H2 skeletonization when proxy mode h2_id_proxy=2; rows per interval in butterfly when forwardN15flag=3
         integer::LR_BLK_NUM !< sqrt of number of bottom-level subblocks in blocked LR
 
     end type Hoption

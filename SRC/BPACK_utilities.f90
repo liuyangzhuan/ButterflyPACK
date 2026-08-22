@@ -1314,6 +1314,9 @@ contains
       option%reduction_threshold=8
       option%CA_level=10000
       option%H2_use_sketch=1
+      option%H2_ID_radius=2
+      option%H2_ID_proxy=0
+      option%H2_ID_proxy_points=8
 
    end subroutine SetDefaultOptions
 
@@ -1362,6 +1365,12 @@ contains
                   read (strings1, *) option%CA_level
                else if (trim(strings) == '--h2_use_sketch' .or. trim(strings) == '--H2_use_sketch') then
                   read (strings1, *) option%H2_use_sketch
+               else if (trim(strings) == '--h2_id_radius' .or. trim(strings) == '--H2_ID_radius') then
+                  read (strings1, *) option%H2_ID_radius
+               else if (trim(strings) == '--h2_id_proxy' .or. trim(strings) == '--H2_ID_proxy') then
+                  read (strings1, *) option%H2_ID_proxy
+               else if (trim(strings) == '--h2_id_proxy_points' .or. trim(strings) == '--H2_ID_proxy_points') then
+                  read (strings1, *) option%H2_ID_proxy_points
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
                else if (trim(strings) == '--xyzsort') then
@@ -1484,6 +1493,9 @@ contains
       option1%Nmin_leaf = option%Nmin_leaf
       option1%CA_level = option%CA_level
       option1%H2_use_sketch = option%H2_use_sketch
+      option1%H2_ID_radius = option%H2_ID_radius
+      option1%H2_ID_proxy = option%H2_ID_proxy
+      option1%H2_ID_proxy_points = option%H2_ID_proxy_points
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS
@@ -1565,6 +1577,13 @@ contains
             write (*, '(A20,I8)') 'reduction_threshold', option%reduction_threshold
             write (*, '(A18,I8)') 'CA_level', option%CA_level
             write (*, '(A18,I8)') 'h2_use_sketch', option%H2_use_sketch
+            write (*, '(A18,I8)') 'h2_id_radius', option%H2_ID_radius
+            write (*, '(A18,I8)') 'h2_id_proxy', option%H2_ID_proxy
+            if(option%H2_ID_proxy==1)then
+               write (*, '(A20,I8)') 'h2_id_proxy_points', option%H2_ID_proxy_points
+            else if(option%H2_ID_proxy==2)then
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+            endif
             write (*, '(A18,I8)') 'n_iter', option%n_iter
             write (*, '(A18,I8)') 'precon', option%precon
             write (*, '(A18,I8)') 'verbosity', option%verbosity

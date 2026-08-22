@@ -166,6 +166,7 @@ void exchange_h2_point_metadata(
 
 template<typename CoordType, typename DataType, typename KernelType>
 void h2_skeletonize_box(
+    const ParallelTree<CoordType, DataType>* tree,
     BoxData<CoordType, DataType>* box,
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
@@ -174,7 +175,8 @@ void h2_skeletonize_box(
 
     FactorizationThreadScratch<CoordType, DataType> scratch;
     gather_id_workspace(
-        box, level, kernel,
+        tree,
+        box, level, kernel, tolerance,
         static_cast<const CoordType*>(nullptr), 0, CoordType{0}, true,
         scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,
         0, box->on_boundary);
@@ -488,6 +490,7 @@ void hierarchical_compression_parallel(
                     if (id_failed.load(std::memory_order_relaxed)) continue;
                     try {
                         h2_skeletonize_box(
+                            tree,
                             &level.local_boxes[static_cast<size_t>(box_index)],
                             level, kernel, tolerance, use_sketch);
                     } catch (...) {

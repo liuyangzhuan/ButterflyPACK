@@ -1276,6 +1276,13 @@ struct ParallelTree {
     ReductionPattern reduction_pattern;  ///< Reduction strategy
     int64_t reduction_threshold;         ///< Boxes/process threshold for reduction
     int CA_level;                        ///< First factorization level using CA
+    int id_neighborhood_radius;          ///< Diagnostic ID row-neighborhood radius
+    int id_proxy_mode;                   ///< 0: none, 1: geometric surface, 2: adaptive sampling
+    int id_proxy_points;                 ///< Geometric surface samples for mode 1
+    int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
+    std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
+    std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
+    std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box
 
     bool level_requests_CA(int level) const {
         return dimension != 1 &&
