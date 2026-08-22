@@ -63,7 +63,7 @@ case "${TEST_NUMBER}" in
     python3 -c "from dPy_BPACK_wrapper import *; bpack_terminate()";; 
 20) mpirun --allow-run-as-root --oversubscribe "-n" "2" python3 $DATA_FOLDER/Test_python_allranks.py -option --xyzsort 1 --tol_comp 1e-10 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128 --errsol 1 # all-rank python launch mode without MPI  
     mpirun --allow-run-as-root --oversubscribe "-n" "2" python3 ${BPACK_PYTHON_LIB_PATH}/dPy_BPACK_worker.py -option --xyzsort 1 --tol_comp 1e-10 --lrlevel 0 --reclr_leaf 5 --nmin_leaf 128 --errsol 1 & # master-worker python launch mode without MPI  
-    python3 $DATA_FOLDER/Test_python_master.py 
+    python3 $DATA_FOLDER/Test_python_master.py --np 10000 --ndim 1
     python3 -c "from dPy_BPACK_wrapper import *; bpack_terminate()";; 
 *) printf "${RED} ###YL: Unknown test\n" ;;
 esac
