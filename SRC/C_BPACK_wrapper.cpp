@@ -1,9 +1,10 @@
 #include "BPACK_wrapper.h"
+#ifdef HAVE_MPI
 #include "butterfly_integration.hpp"
-
-
 #include <mpi.h>
+#endif
 #include <cassert>
+#include <cmath>
 #include <complex>
 #include <cstdint>
 #include <iostream>
@@ -26,6 +27,15 @@ static inline int product(int arr[], int n) {
   return out;
 }
 
+#ifndef HAVE_MPI
+[[noreturn]] static void format7_requires_mpi(const char* caller) {
+  throw std::runtime_error(
+    std::string(caller) +
+    ": format=7 requires a build with MPI support (enable_mpi=ON)");
+}
+#endif
+
+#ifdef HAVE_MPI
 static void require_symmetric_h2_option(
     F2Cptr* option,
     MPI_Comm comm,
@@ -84,6 +94,7 @@ void compress_h2_and_update_stats(
       solver->tree.get(), &solver->kernel);
   }
 }
+#endif
 
 // The command line parser for the example related parameters
 void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2Cptr option0) {
@@ -807,6 +818,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
 	int fcomm;
 	c_bpack_get_comm(ptree, &fcomm);
 	MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
@@ -953,6 +965,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	double zero = 0.0;
 	c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &zero);   // stats bare (already F2Cptr*), &zero
 	c_bpack_wrap_h2(bmat, static_cast<C2Fptr>(H2_solver));   // *bmat now = c_loc(Fortran Bmatrix)
+#else
+	format7_requires_mpi("c_bpack_construct_init");
+#endif
   }else{
 	  c_bpack_construct_init_fortran(Npo, Ndim, Locations, nns, nlevel, tree, perms, Npo_loc, bmat, option, stats, msh, ker, ptree, C_FuncDistmn, C_FuncNearFar, C_QuantApp);
   }
@@ -972,6 +987,7 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
 	using H2Data = typename butterfly::fmm_data<C_DT>::type;
 	static_assert(std::is_same_v<C2Fptr, void*>, "H2::kernel assumes C2Fptr == void*; update butterfly_integration.hpp if this changes");
 	void* H2_raw = nullptr;
@@ -987,6 +1003,9 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	  (elem_extract == 2) ? C_FuncZmnBlock : nullptr;
 	MPI_Comm_rank(MPI_COMM_WORLD, &H2_solver->kernel.block_callback_pid);
 	H2_solver->kernel.quant = C_QuantApp;
+#else
+	format7_requires_mpi("c_bpack_construct_element_compute");
+#endif
   }else{
 	c_bpack_construct_element_compute_fortran(bmat, option, stats, msh, ker, ptree, C_FuncZmn, C_FuncZmnBlock, C_QuantApp);
   }
@@ -1011,6 +1030,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
@@ -1046,7 +1066,9 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         throw;
     }
-
+#else
+	format7_requires_mpi("c_bpack_factor");
+#endif
   }else{
 	c_bpack_factor_fortran(bmat, option, stats, ptree, msh);
   }
@@ -1081,6 +1103,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
     if (*Nrhs <= 0) {
       throw std::invalid_argument(
         "c_bpack_solve (format 7): Nrhs must be positive");
@@ -1148,7 +1171,9 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
-
+#else
+	format7_requires_mpi("c_bpack_solve");
+#endif
   }else{
 	c_bpack_solve_fortran(x, b, Nloc, Nrhs, bmat, option, stats, ptree);
   }
@@ -1169,6 +1194,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
@@ -1246,6 +1272,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
+#else
+	format7_requires_mpi("c_bpack_mult");
+#endif
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
   }
@@ -1257,6 +1286,7 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
   if(format==7){
+#ifdef HAVE_MPI
 	using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
@@ -1271,14 +1301,21 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 	double logabs_d = 0.0;
 	butterfly::hierarchical_logdet_parallel(H2_solver->tree.get(), &logabs_d, reinterpret_cast<H2Data*>(phase));
 	*logabsdet = static_cast<C_RDT>(logabs_d);
+#else
+	format7_requires_mpi("c_bpack_logdet");
+#endif
   }else{
 	c_bpack_logdet_fortran(phase, logabsdet, option, bmat);
   }
 }
 
 extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
+#ifdef HAVE_MPI
 	using H2Data = typename butterfly::fmm_data<C_DT>::type;
     delete static_cast<butterfly::H2<double,H2Data>*>(h2_ptr);
+#else
+	(void)h2_ptr;
+#endif
 }
 
 
