@@ -9,9 +9,15 @@ ButterflyPACK is written in Fortran 2003, it also has C++ interfaces. ButterflyP
 
 
 ## Installation
-### With MPI
-The installation uses CMake build system. You may need "bash" for the build process. The software also requires BLAS, LAPACK and SCALAPACK packages. Optional packages are ARPACK.
+The installation uses CMake. You may need "bash" for the build process. The base MPI build requires BLAS, LAPACK and SCALAPACK; ARPACK is optional. Optional features are enabled with CMake switches and TPL variables:
 
+- `-Denable_python=ON` builds the Python interface. This requires a working Python development environment and `pybind11`.
+- `-Denable_parsec=ON` builds optional PaRSEC PTG support for Hmat factorization. This requires MPI, a PaRSEC installation with the CMake targets `PaRSEC::parsec` and `PaRSEC::parsec-ptgpp`, and usually `CMAKE_PREFIX_PATH` pointing to the PaRSEC prefix. 
+- `-Denable_fftw=ON` enables FFTW support, used by the FFT-based circulant path for translational-invariant tensor blocks. CMake either finds FFTW through `find_package(FFTW)` or uses `TPL_FFTW_LIBRARIES`.
+- ZFP support is enabled by providing `-DTPL_ZFP_LIBRARIES=...` and `-DTPL_ZFP_INCLUDE=...`. 
+- PARPACK support is enabled by providing `-DTPL_ARPACK_LIBRARIES=...`. 
+
+### With MPI
 For an installation with GNU compiliers, do:
 ```
 git clone https://github.com/liuyangzhuan/ButterflyPACK.git
@@ -27,7 +33,6 @@ cmake .. \
 	-DTPL_BLAS_LIBRARIES="${BLAS_LIB}" \
 	-DTPL_LAPACK_LIBRARIES="${LAPACK_LIB}" \
 	-DTPL_SCALAPACK_LIBRARIES="${SCALAPACK_LIB}" \
-	-DTPL_ARPACK_LIBRARIES="${ARPACK_LIB}" \
 	-DBUILD_SHARED_LIBS=ON \
 	-DCMAKE_Fortran_COMPILER=mpif90 \
 	-DCMAKE_CXX_COMPILER=mpicxx \
@@ -83,6 +88,7 @@ make install
  - Paul Michael Kielstra - pmkielstra@lbl.gov (University of California Berkeley)
  - Tianyu Liang - tianyul@berkeley.edu (University of California Berkeley)
  - Xiaomian Yang - xiaomian@mit.edu (Massachusetts Institute of Technology)
+ - Chao Chen - chao_chen@ncsu.edu (North Carolina State University)
 
 ## Reference
 
@@ -115,6 +121,5 @@ make install
 [14] Y. Liu, "A comparative study of butterfly-enhanced direct integral and differential equation solvers for high-frequency electromagnetic analysis involving inhomogeneous dielectrics," 3rd URSI Atlantic Radio Science Meeting (AT-AP-RASC), 2022. 
 
 [15] Y. Liu, J. Song, R. Burridge, and J. Qian, "A fast butterfly-compressed Hadamard-Babich integrator for high-frequency inhomogenous Helmholtz equations in variable media," SIAM J. Multiscale Model. Simul., 2022. 
-
 
 

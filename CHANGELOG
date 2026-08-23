@@ -1,3 +1,33 @@
+Version 5.0.0: Released Aug 22, 2026
+===================================
+- H-tensor: 
+  - Added hybrid butterfly/Tucker support
+  - Added translational-invariance support
+  - Added FFT for inadmissible blocks
+  - Added block-diagonal preconditioner illustration  
+  - Added improved 3D VIE tensor drivers
+- H2: 
+  - Added the parallel H2 solver of Tianyu Liang (symmetric matrix only) with ButterflyPACK interface
+  - Improved hybrid color/CA algorithms, reduced reduction_threshold 
+  - Improved skeletonization accuracy by approximate proxy surface, enlarged n-hop, and adaptive tree-based proxies
+  - Added compression-only H2
+  - Improved peak-memory usage by assuming symmetry
+  - Improved forward and backward error computation
+  - Added support for multiple RHSs or vectors in H2 and inverse multiplication 
+  - Added illustration examples for 1D, 2D and 3D kernels and Python examples
+  - Added logdet computation
+- HODLR:
+  - Added support for symmetric HODLR factorization
+  - Added option IR_HODLR to support iterative refinement inside HODLR_Sym_Inv_Mult and HODLR_Inv_Mult
+- Hmat/BLR:
+  - Added support for PARSEC runtime systems
+- General:
+  - Added mixed-precision example EMSURF_Driver_mp.f90
+  - Added more iterative solvers: GMRES, IR, and CG
+  - Added user-supplied preconditioner matvec callbacks for black-box iterative solvers, including tensor versions.
+  - Added exact mvp with sparse true solution vectors to better reflect forward errors
+
+
 Version 4.1.0: Released Jan 22, 2026
 ===================================
 - Added tree-based adaptive proxy sampling in the butterfly construction 
