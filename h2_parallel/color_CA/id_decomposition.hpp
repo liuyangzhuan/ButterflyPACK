@@ -35,6 +35,30 @@ struct IDResult {
 };
 
 
+/**
+ * @brief Retain one skeleton DOF when a non-empty box has numerical rank zero.
+ *
+ * A zero ID workspace represents no resolved coupling to the training rows, so
+ * zero interpolation coefficients remain consistent with that workspace.  The
+ * retained DOF keeps downstream dense kernels away from zero leading dimensions.
+ */
+template<typename DataType>
+void ensure_nonempty_box_id_rank(
+    IDResult<DataType>& result,
+    int64_t num_columns) {
+
+    if (num_columns <= 0 || result.rank > 0) return;
+
+    result.rank = 1;
+    result.skeleton_indices.assign(1, int64_t{0});
+    result.redundant_indices.resize(static_cast<size_t>(num_columns - 1));
+    for (int64_t index = 1; index < num_columns; ++index) {
+        result.redundant_indices[static_cast<size_t>(index - 1)] = index;
+    }
+    result.interpolation.allocate(1, num_columns - 1);
+}
+
+
 
 /**
  * @brief Perform interpolative decomposition using RRQR

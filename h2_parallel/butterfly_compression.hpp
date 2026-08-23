@@ -210,6 +210,7 @@ void h2_skeletonize_box(
             scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
             tolerance, 0);
     }
+    ensure_nonempty_box_id_rank(id, scratch.workspace_cols);
 
     box->skeleton_indices = std::move(id.skeleton_indices);
     box->redundant_indices = std::move(id.redundant_indices);

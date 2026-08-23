@@ -7180,6 +7180,7 @@ void compute_and_modify(
                 tolerance, 0
             );
         }
+        ensure_nonempty_box_id_rank(id_result, workspace_cols);
     } catch (const std::exception& e) {
         const auto workspace_summary =
             summarize_colmajor_matrix(workspace, workspace_rows, workspace_cols);
