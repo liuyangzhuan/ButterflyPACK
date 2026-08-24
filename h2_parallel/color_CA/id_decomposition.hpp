@@ -6,6 +6,7 @@
 #include <complex>
 #include <cmath>
 #include <algorithm>
+#include <numeric>
 #include <stdexcept>
 #include "tree.hpp"
 #include <cstdint>
@@ -33,6 +34,40 @@ struct IDResult {
     
     IDResult() : rank(0) {}
 };
+
+/**
+ * @brief Normalize an ID input to avoid overflow/underflow in RRQR and R solves.
+ *
+ * Uniform scaling does not change the column permutation, numerical rank under
+ * a relative tolerance, or T = R11^{-1} R12.
+ */
+template<typename DataType>
+bool normalize_id_matrix_in_place(
+    DataType* matrix,
+    int64_t rows,
+    int64_t cols,
+    int64_t leading_dimension) {
+
+    double max_abs = 0.0;
+    for (int64_t j = 0; j < cols; ++j) {
+        for (int64_t i = 0; i < rows; ++i) {
+            const double magnitude = std::abs(matrix[i + j * leading_dimension]);
+            if (!std::isfinite(magnitude)) {
+                throw std::runtime_error("ID input contains NaN or Inf");
+            }
+            max_abs = std::max(max_abs, magnitude);
+        }
+    }
+
+    if (max_abs == 0.0) return false;
+
+    for (int64_t j = 0; j < cols; ++j) {
+        for (int64_t i = 0; i < rows; ++i) {
+            matrix[i + j * leading_dimension] /= max_abs;
+        }
+    }
+    return true;
+}
 
 
 /**
@@ -97,6 +132,14 @@ IDResult<DataType> compute_id(
     }
     
     IDResult<DataType> result;
+
+    if (!normalize_id_matrix_in_place(A, m, n, lda)) {
+        result.redundant_indices.resize(static_cast<size_t>(n));
+        std::iota(result.redundant_indices.begin(),
+                  result.redundant_indices.end(), int64_t{0});
+        result.interpolation.allocate(0, n);
+        return result;
+    }
     
     // Setup LAPACK parameters
     int M = static_cast<int>(m);
@@ -241,6 +284,13 @@ IDResult<DataType> compute_id(
         throw std::runtime_error("Triangular solve for interpolation matrix failed with INFO = " + 
                                std::to_string(INFO));
     }
+
+    for (const auto& value : result.interpolation.data) {
+        if (!std::isfinite(std::abs(value))) {
+            throw std::runtime_error(
+                "Triangular solve produced a non-finite interpolation matrix");
+        }
+    }
     
     return result;
 }
@@ -264,6 +314,14 @@ IDResult<DataType> compute_id_complex(
     }
     
     IDResult<DataType> result;
+
+    if (!normalize_id_matrix_in_place(A, m, n, lda)) {
+        result.redundant_indices.resize(static_cast<size_t>(n));
+        std::iota(result.redundant_indices.begin(),
+                  result.redundant_indices.end(), int64_t{0});
+        result.interpolation.allocate(0, n);
+        return result;
+    }
     
     // Setup LAPACK parameters
     int M = static_cast<int>(m);
@@ -403,6 +461,13 @@ IDResult<DataType> compute_id_complex(
     if (INFO != 0) {
         throw std::runtime_error("Triangular solve for interpolation matrix failed with INFO = " + 
                                std::to_string(INFO));
+    }
+
+    for (const auto& value : result.interpolation.data) {
+        if (!std::isfinite(std::abs(value))) {
+            throw std::runtime_error(
+                "Triangular solve produced a non-finite interpolation matrix");
+        }
     }
     
     return result;

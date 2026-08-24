@@ -19,6 +19,8 @@
 #include <limits>
 #include <omp.h>
 #include <complex>
+#include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <memory>
@@ -1345,6 +1347,47 @@ static void print_symmetry_report(
     os << "  ||A-A^T||_F / ||A||_F = " << r.rel_frob << "\n";
     os << "  diag min=" << r.min_diag << " max=" << r.max_diag << "\n";
     os << "  has NaN/Inf: " << (r.has_nan_or_inf ? "YES" : "NO") << "\n";
+}
+
+inline bool bunch_kaufman_diagnostics_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("H2_BK_DIAGNOSTICS");
+        return value != nullptr && std::string(value) != "0";
+    }();
+    return enabled;
+}
+
+template <typename DataType>
+void write_colmajor_matrix(
+    std::ostream& os,
+    const std::string& name,
+    const std::vector<DataType>& data,
+    int64_t rows,
+    int64_t cols) {
+    os << "MATRIX " << name << " " << rows << " " << cols << "\n";
+    os << std::scientific << std::setprecision(17);
+    for (int64_t i = 0; i < rows; ++i) {
+        for (int64_t j = 0; j < cols; ++j) {
+            if (j != 0) os << ' ';
+            const auto& value = data[static_cast<size_t>(i + j * rows)];
+            if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                os << value.real() << ',' << value.imag();
+            } else {
+                os << value;
+            }
+        }
+        os << '\n';
+    }
+}
+
+template <typename ValueType>
+void write_index_vector(
+    std::ostream& os,
+    const std::string& name,
+    const std::vector<ValueType>& values) {
+    os << "INDICES " << name << " " << values.size();
+    for (const auto& value : values) os << ' ' << value;
+    os << '\n';
 }
 
 /*
@@ -7527,6 +7570,11 @@ void compute_and_modify(
         int n = r;
         int lwork = -1;
         int info = 0;
+        const bool capture_diagnostics = bunch_kaufman_diagnostics_enabled();
+        std::vector<DataType> x_rr_before_factorization;
+        if (capture_diagnostics) {
+            x_rr_before_factorization = box->X_RR.data;
+        }
         box->X_RR_pivots.resize(static_cast<size_t>(r));
         std::vector<DataType> work(1);
         sytrf_(&uplo, &n, box->X_RR.data.data(), &n,
@@ -7540,9 +7588,178 @@ void compute_and_modify(
         work.resize(static_cast<size_t>(lwork));
         sytrf_(&uplo, &n, box->X_RR.data.data(), &n,
                box->X_RR_pivots.data(), work.data(), &lwork, &info);
-        if (info != 0)
-            throw std::runtime_error(
-                "Bunch-Kaufman factorization failed with INFO = " + std::to_string(info));
+        if (info != 0) {
+            int mpi_rank = -1;
+            MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+            const bool x_bb_from_schur = box->schur_complement.is_allocated();
+            std::string diagnostic_file;
+
+            if (capture_diagnostics) {
+                diagnostic_file =
+                    "h2_bk_failure_rank" + std::to_string(mpi_rank) +
+                    "_level" + std::to_string(level.level) +
+                    "_box" + std::to_string(box->morton_index) + ".txt";
+
+                std::vector<DataType> raw_x_bb(
+                    static_cast<size_t>(box->num_points * box->num_points));
+                kernel->evaluate_block_by_index(
+                    box->point_indices.data(), box->num_points,
+                    box->point_indices.data(), box->num_points,
+                    raw_x_bb.data(), box->num_points);
+
+                std::ofstream dump(diagnostic_file, std::ios::trunc);
+                dump << "H2_BUNCH_KAUFMAN_FAILURE_V1\n"
+                     << "rank " << mpi_rank << "\n"
+                     << "level " << level.level << "\n"
+                     << "box " << box->morton_index << "\n"
+                     << "info " << info << "\n"
+                     << "num_points " << box->num_points << "\n"
+                     << "skeleton_rank " << k << "\n"
+                     << "redundant_size " << r << "\n"
+                     << "workspace_rows " << workspace_rows << "\n"
+                     << "workspace_cols " << workspace_cols << "\n"
+                     << "x_bb_source "
+                     << (x_bb_from_schur ? "schur_complement" : "kernel") << "\n";
+
+                const auto xrr_summary = summarize_colmajor_matrix(
+                    x_rr_before_factorization, r, r);
+                const auto xbb_summary = summarize_colmajor_matrix(
+                    X_BB, box->num_points, box->num_points);
+                const auto raw_xbb_summary = summarize_colmajor_matrix(
+                    raw_x_bb, box->num_points, box->num_points);
+                const auto workspace_summary = summarize_colmajor_matrix(
+                    workspace, workspace_rows, workspace_cols);
+                const auto interpolation_summary = summarize_colmajor_matrix(
+                    T.data, k, r);
+                dump << "SUMMARY "
+                     << format_matrix_diagnostic_summary("X_RR", xrr_summary) << "\n"
+                     << "SUMMARY "
+                     << format_matrix_diagnostic_summary("X_BB", xbb_summary) << "\n"
+                     << "SUMMARY "
+                     << format_matrix_diagnostic_summary("raw_X_BB", raw_xbb_summary) << "\n"
+                     << "SUMMARY "
+                     << format_matrix_diagnostic_summary("workspace", workspace_summary) << "\n"
+                     << "SUMMARY "
+                     << format_matrix_diagnostic_summary("T", interpolation_summary) << "\n";
+
+                if constexpr (std::is_same_v<DataType, double>) {
+                    auto reconstruct_x_rr = [&](const std::vector<double>& source) {
+                        const int64_t box_size = box->num_points;
+                        std::vector<double> result(static_cast<size_t>(r * r), 0.0);
+                        for (int64_t j = 0; j < r; ++j) {
+                            const int64_t rj = box->redundant_indices[static_cast<size_t>(j)];
+                            for (int64_t i = 0; i < r; ++i) {
+                                const int64_t ri = box->redundant_indices[static_cast<size_t>(i)];
+                                double value = source[static_cast<size_t>(ri + rj * box_size)];
+                                for (int64_t s = 0; s < k; ++s) {
+                                    const int64_t ss = box->skeleton_indices[static_cast<size_t>(s)];
+                                    value -= source[static_cast<size_t>(ss + ri * box_size)] *
+                                             T.data[static_cast<size_t>(s + j * k)];
+                                    value -= source[static_cast<size_t>(ss + rj * box_size)] *
+                                             T.data[static_cast<size_t>(s + i * k)];
+                                    for (int64_t t = 0; t < k; ++t) {
+                                        const int64_t st = box->skeleton_indices[static_cast<size_t>(t)];
+                                        value += T.data[static_cast<size_t>(s + i * k)] *
+                                                 source[static_cast<size_t>(ss + st * box_size)] *
+                                                 T.data[static_cast<size_t>(t + j * k)];
+                                    }
+                                }
+                                result[static_cast<size_t>(i + j * r)] = value;
+                            }
+                        }
+                        return result;
+                    };
+
+                    const auto reconstructed_x_rr = reconstruct_x_rr(X_BB);
+                    const auto raw_x_rr = reconstruct_x_rr(raw_x_bb);
+                    double reconstruction_max_abs = 0.0;
+                    for (size_t entry = 0; entry < x_rr_before_factorization.size(); ++entry) {
+                        reconstruction_max_abs = std::max(
+                            reconstruction_max_abs,
+                            std::abs(x_rr_before_factorization[entry] -
+                                     reconstructed_x_rr[entry]));
+                    }
+                    const auto xrr_symmetry = symmetry_error_colmajor_real(
+                        x_rr_before_factorization.data(), r, r, r);
+                    const auto xbb_symmetry = symmetry_error_colmajor_real(
+                        X_BB.data(), box->num_points, box->num_points,
+                        box->num_points);
+                    dump << "SYMMETRY X_RR max_abs " << xrr_symmetry.max_abs
+                         << " rel_frob " << xrr_symmetry.rel_frob
+                         << " min_diag " << xrr_symmetry.min_diag
+                         << " max_diag " << xrr_symmetry.max_diag
+                         << " imax " << xrr_symmetry.imax
+                         << " jmax " << xrr_symmetry.jmax << "\n";
+                    dump << "SYMMETRY X_BB max_abs " << xbb_symmetry.max_abs
+                         << " rel_frob " << xbb_symmetry.rel_frob
+                         << " min_diag " << xbb_symmetry.min_diag
+                         << " max_diag " << xbb_symmetry.max_diag
+                         << " imax " << xbb_symmetry.imax
+                         << " jmax " << xbb_symmetry.jmax << "\n";
+                    dump << "RECONSTRUCTION X_RR_max_abs_difference "
+                         << reconstruction_max_abs << "\n";
+
+                    auto cholesky_info = [](std::vector<double> matrix, int order) {
+                        char lower = 'L';
+                        int chol_info = 0;
+                        dpotrf_(&lower, &order, matrix.data(), &order, &chol_info);
+                        return chol_info;
+                    };
+                    dump << "CHOLESKY_INFO X_RR "
+                         << cholesky_info(x_rr_before_factorization, static_cast<int>(r))
+                         << "\n";
+                    dump << "CHOLESKY_INFO X_BB "
+                         << cholesky_info(X_BB, static_cast<int>(box->num_points))
+                         << "\n";
+                    dump << "CHOLESKY_INFO raw_X_BB "
+                         << cholesky_info(raw_x_bb, static_cast<int>(box->num_points))
+                         << "\n";
+                    dump << "CHOLESKY_INFO reconstructed_X_RR "
+                         << cholesky_info(reconstructed_x_rr, static_cast<int>(r))
+                         << "\n";
+                    dump << "CHOLESKY_INFO raw_X_RR "
+                         << cholesky_info(raw_x_rr, static_cast<int>(r))
+                         << "\n";
+                    write_colmajor_matrix(
+                        dump, "reconstructed_X_RR", reconstructed_x_rr, r, r);
+                    write_colmajor_matrix(dump, "raw_X_RR", raw_x_rr, r, r);
+                }
+
+                write_index_vector(dump, "point_indices", box->point_indices);
+                write_index_vector(dump, "skeleton_indices", box->skeleton_indices);
+                write_index_vector(dump, "redundant_indices", box->redundant_indices);
+                write_index_vector(dump, "one_hop", box->one_hop);
+                write_index_vector(dump, "two_hop", box->two_hop);
+                write_colmajor_matrix(
+                    dump, "X_RR", x_rr_before_factorization, r, r);
+                write_colmajor_matrix(
+                    dump, "X_BB", X_BB, box->num_points, box->num_points);
+                write_colmajor_matrix(
+                    dump, "raw_X_BB", raw_x_bb,
+                    box->num_points, box->num_points);
+                write_colmajor_matrix(dump, "T", T.data, k, r);
+                write_colmajor_matrix(
+                    dump, "workspace", workspace, workspace_rows, workspace_cols);
+            }
+
+            std::ostringstream oss;
+            oss << "Bunch-Kaufman factorization failed with INFO = " << info
+                << " (rank=" << mpi_rank
+                << ", level=" << level.level
+                << ", box=" << box->morton_index
+                << ", num_points=" << box->num_points
+                << ", skeleton_rank=" << k
+                << ", redundant_size=" << r
+                << ", X_BB="
+                << (x_bb_from_schur ? "schur_complement" : "kernel");
+            if (capture_diagnostics) {
+                oss << ", diagnostics=" << diagnostic_file;
+            } else {
+                oss << ", set H2_BK_DIAGNOSTICS=1 for a matrix dump";
+            }
+            oss << ')';
+            throw std::runtime_error(oss.str());
+        }
         box->X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
 
     } else if (factorization_method == FactorizationMethod::NONE) {
