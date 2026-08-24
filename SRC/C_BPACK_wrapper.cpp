@@ -89,7 +89,7 @@ void compress_h2_and_update_stats(
     solver->factorization_memory / (1024.0 * 1024.0);
   c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
 
-  if (solver->options.verbosity >= 1) {
+  if (solver->options.verbosity >= 0) {
     (void)butterfly::h2_compression_quick_verification(
       solver->tree.get(), &solver->kernel);
   }

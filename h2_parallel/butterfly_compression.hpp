@@ -568,9 +568,6 @@ void hierarchical_compression_parallel(
     if (out_rankmax) *out_rankmax = local_rankmax;
     if (memory_per_rank) *memory_per_rank = local_memory;
 
-    if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
-        std::cout << "H2 compression-only construction complete" << std::endl;
-    }
 }
 
 template<typename CoordType, typename DataType>
@@ -1540,6 +1537,15 @@ void butterfly_compression_parallel(
             1, MPI_INT64_T, MPI_MAX, solver->comm);
         solver->build_state = H2BuildState::H2_COMPRESSED;
         solver->factorized = false;
+
+        if (solver->options.verbosity >= 0 && solver->tree->mpi_rank == 0) {
+            std::cout << "\n========================================\n"
+                      << "H2 Compression Only Complete\n"
+                      << "  total time: "
+                      << std::llround(elapsed * 1000.0) << " ms\n"
+                      << "========================================\n"
+                      << std::endl;
+        }
     }
 }
 
