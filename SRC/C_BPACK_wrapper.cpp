@@ -117,6 +117,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
 		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
+		{"reduction_threshold", "format-7 H2 boxes-per-process threshold for reducing the active MPI process count"},
 		{"h2_use_sketch",   "format-7 H2 ID mode: 1 uses sparse sketching, 0 applies RRQR to the full 2-hop workspace"},
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
@@ -223,6 +224,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_ID_proxy", required_argument, 0, 49},
 		{"h2_id_proxy_points", required_argument, 0, 50},
 		{"H2_ID_proxy_points", required_argument, 0, 50},
+		{"reduction_threshold", required_argument, 0, 51},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -466,6 +468,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_ID_proxy_points", opt_i);
+		} break;
+		case 51: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "reduction_threshold", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
