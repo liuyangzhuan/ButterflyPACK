@@ -72,16 +72,19 @@ template<typename DataType>
 inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_t lda,
                                             const std::vector<int>& pivots,
                                             double& logabs, double& arg,
-                                            double thresh = 1e-14) {
+                                            double thresh = 0.0) {
     int64_t k = 0;
     while (k < r) {
         if (pivots[static_cast<size_t>(k)] > 0) {          // 1×1 pivot
             DataType d = A[k + k * lda];
             double ad = std::abs(d);
-            if (ad <= thresh) {
-                throw std::runtime_error(
-                    "accumulate_logdet_bunch_kaufman: singular/near-singular 1x1 pivot (|d| = " +
-                    std::to_string(ad) + ")");
+            if (!(ad > thresh) || !std::isfinite(ad)) {
+                std::ostringstream oss;
+                oss << "accumulate_logdet_bunch_kaufman: singular/near-singular "
+                    << "1x1 pivot at k=" << k
+                    << " (|d|=" << std::scientific << std::setprecision(17) << ad
+                    << ", threshold=" << thresh << ", d=" << d << ')';
+                throw std::runtime_error(oss.str());
             }
             logabs += std::log(ad);
             arg    += std::arg(d);
@@ -97,10 +100,14 @@ inline void accumulate_logdet_bunch_kaufman(const DataType* A, int64_t r, int64_
             DataType b = A[(k + 1) + k       * lda];        // sub-diagonal
             DataType det2 = a * c - b * b;
             double ad2 = std::abs(det2);
-            if (ad2 <= thresh) {
-                throw std::runtime_error(
-                    "accumulate_logdet_bunch_kaufman: singular/near-singular 2x2 pivot (|det2| = " +
-                    std::to_string(ad2) + ")");
+            if (!(ad2 > thresh) || !std::isfinite(ad2)) {
+                std::ostringstream oss;
+                oss << "accumulate_logdet_bunch_kaufman: singular/near-singular "
+                    << "2x2 pivot at k=" << k
+                    << " (|det2|=" << std::scientific << std::setprecision(17) << ad2
+                    << ", threshold=" << thresh
+                    << ", a=" << a << ", b=" << b << ", c=" << c << ')';
+                throw std::runtime_error(oss.str());
             }
             logabs += std::log(ad2);
             arg    += std::arg(det2);
