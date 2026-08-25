@@ -120,6 +120,8 @@ void clear_modified_interaction_matrices(TreeLevel<CoordType, DataType>& level) 
 
         // Reset the counter.
         box.num_far_field_interactions = 0;
+
+        box.schur_complement = MatrixStorage<DataType>{};
     };
 
     // Iterate through all local boxes and clear their interaction data.

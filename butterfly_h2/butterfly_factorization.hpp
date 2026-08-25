@@ -3,6 +3,7 @@
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "butterfly_verification.hpp"
+#include "memory_report.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -787,6 +788,11 @@ void hierarchical_factorization_parallel(
             }
         }
         
+        // --- memory instrumentation: level peak, before any cleanup ---
+        // COLLECTIVE over tree->comm: every rank must call it, active or not.
+        report_level_memory(level, current_level, "post-elim",
+                            tree->comm, level_print_rank, verbose);
+
         // ===== Step 3: Gather assisting boxes post-elimination =====
         clear_ghosts(level);
         
@@ -950,6 +956,11 @@ void hierarchical_factorization_parallel(
         if (level.is_process_active) {
             clear_modified_interaction_matrices(level);
         }
+
+        // --- memory instrumentation: what carries forward after cleanup ---
+        // COLLECTIVE over tree->comm: every rank must call it, active or not.
+        report_level_memory(level, current_level, "post-clear",
+                            tree->comm, level_print_rank, verbose);
 
         // Teardown
         if (level.is_process_active) {
