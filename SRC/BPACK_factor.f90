@@ -1057,12 +1057,20 @@ endif
 #endif
 #endif
                     do ij = 1, (num_blocks-kk)*(num_blocks-kk)
+#ifdef HAVE_OPENMP
                         t_start = omp_get_wtime()
+#else
+                        t_start = MPI_Wtime()
+#endif
                         j = (ij - 1)/(num_blocks-kk) + 1
                         i = mod(ij - 1, (num_blocks-kk)) + 1
                         i = i + kk
                         j = j + kk
+#ifdef HAVE_OPENMP
                         tid = omp_get_thread_num()
+#else
+                        tid = 0
+#endif
                         call g2l(i, num_blocks, nprow, 1, iproc1, myi1)
                         call g2l(j, num_blocks, npcol, 1, jproc1, myj1)
                         if(iproc1==myrow .and. jproc1==mycol)then
@@ -1079,7 +1087,11 @@ endif
                             call Hmat_block_delete(blocks_ll)
                             call Hmat_block_delete(blocks_uu)
                         endif
+#ifdef HAVE_OPENMP
                         t_stop  = omp_get_wtime()
+#else
+                        t_stop  = MPI_Wtime()
+#endif
                         t_total(tid+1) = t_total(tid+1) + (t_stop - t_start)
                     enddo
 #ifdef HAVE_TOPLEVEL_OPENMP
