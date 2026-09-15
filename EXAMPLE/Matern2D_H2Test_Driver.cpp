@@ -29,6 +29,12 @@ struct DriverOptions {
   double tolerance = 1e-9;
   int64_t reduction_threshold = 4;
   int ca_level = 0;
+  int h2_use_sketch = 1;
+  int h2_lazy_schur = 0;
+  int h2_gemm_split = 16;
+  int h2_ca_staged_halo = 0;
+  int h2_ca_owner_component = 0;
+  int h2_ca_owner_serial = 0;
   int precon = 3;
   int iter_solver = 4;
   double cg_tolerance = 1e-10;
@@ -170,6 +176,19 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.reduction_threshold = parse_int64(value, "reduction_threshold");
     } else if (name == "ca_level") {
       options.ca_level = parse_int(value, "CA_level");
+    } else if (name == "h2_use_sketch") {
+      options.h2_use_sketch = parse_int(value, "H2_use_sketch");
+    } else if (name == "h2_lazy_schur") {
+      options.h2_lazy_schur = parse_int(value, "H2_lazy_schur");
+    } else if (name == "h2_gemm_split") {
+      options.h2_gemm_split = parse_int(value, "H2_GEMM_split");
+    } else if (name == "h2_ca_staged_halo") {
+      options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
+    } else if (name == "h2_ca_owner_component") {
+      options.h2_ca_owner_component =
+          parse_int(value, "H2_CA_owner_component");
+    } else if (name == "h2_ca_owner_serial") {
+      options.h2_ca_owner_serial = parse_int(value, "H2_CA_owner_serial");
     } else if (name == "precon") {
       options.precon = parse_int(value, "precon");
     } else if (name == "iter_solver") {
@@ -246,6 +265,28 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "this PCG driver requires precon=3 (factorized H2 preconditioner)");
   }
+  if (options.h2_use_sketch < 0 || options.h2_use_sketch > 2) {
+    throw std::invalid_argument("H2_use_sketch must be 0, 1, or 2");
+  }
+  if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
+    throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+  }
+  if (options.h2_lazy_schur != 0 && options.h2_use_sketch != 2) {
+    throw std::invalid_argument("H2_lazy_schur requires H2_use_sketch=2");
+  }
+  if (options.h2_gemm_split < 0) {
+    throw std::invalid_argument("H2_GEMM_split must be nonnegative");
+  }
+  if (options.h2_ca_staged_halo != 0 && options.h2_ca_staged_halo != 2) {
+    throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
+  }
+  if (options.h2_ca_owner_component != 0 &&
+      options.h2_ca_owner_component != 3) {
+    throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+  }
+  if (options.h2_ca_owner_serial != 0 && options.h2_ca_owner_serial != 1) {
+    throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
+  }
   // if (options.iter_solver != 4) {
   //   throw std::invalid_argument("this driver requires iter_solver=4 (CG)");
   // }
@@ -288,6 +329,12 @@ void print_usage(const char* executable) {
       << "  --Nmin_leaf <count>\n"
       << "  --reduction_threshold <count>\n"
       << "  --CA_level <level>\n"
+      << "  --H2_use_sketch <0|1|2>\n"
+      << "  --H2_lazy_schur <0|1|2>\n"
+      << "  --H2_GEMM_split <count>\n"
+      << "  --H2_CA_staged_halo <0|2>\n"
+      << "  --H2_CA_owner_component <0|3>\n"
+      << "  --H2_CA_owner_serial <0|1>\n"
       << "  --length-scale <value>\n"
       << "  --nugget <value>\n"
       << "  --cg-tol <value>\n"
@@ -706,6 +753,21 @@ void initialize_h2_resources(ButterflyResources& resources,
       static_cast<int>(driver_options.reduction_threshold));
   d_c_bpack_set_I_option(
       &resources.option, "CA_level", driver_options.ca_level);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_use_sketch", driver_options.h2_use_sketch);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_GEMM_split", driver_options.h2_gemm_split);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_CA_staged_halo",
+      driver_options.h2_ca_staged_halo);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_CA_owner_component",
+      driver_options.h2_ca_owner_component);
+  d_c_bpack_set_I_option(
+      &resources.option, "H2_CA_owner_serial",
+      driver_options.h2_ca_owner_serial);
   d_c_bpack_set_I_option(&resources.option, "precon", precon);
   d_c_bpack_set_I_option(
       &resources.option, "verbosity", driver_options.verbosity);
@@ -763,6 +825,15 @@ int main(int argc, char** argv) {
                 << "Reduction threshold: "
                 << driver_options.reduction_threshold << "\n"
                 << "CA_level: " << driver_options.ca_level << "\n"
+                << "H2_use_sketch: " << driver_options.h2_use_sketch << "\n"
+                << "H2_lazy_schur: " << driver_options.h2_lazy_schur << "\n"
+                << "H2_GEMM_split: " << driver_options.h2_gemm_split << "\n"
+                << "H2_CA_staged_halo: "
+                << driver_options.h2_ca_staged_halo << "\n"
+                << "H2_CA_owner_component: "
+                << driver_options.h2_ca_owner_component << "\n"
+                << "H2_CA_owner_serial: "
+                << driver_options.h2_ca_owner_serial << "\n"
                 << "CG tolerance: " << driver_options.cg_tolerance << "\n"
                 << "CG maximum iterations: "
                 << driver_options.cg_max_iterations << "\n"

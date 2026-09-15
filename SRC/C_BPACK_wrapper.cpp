@@ -118,7 +118,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
 		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
 		{"reduction_threshold", "format-7 H2 boxes-per-process threshold for reducing the active MPI process count"},
-		{"h2_use_sketch",   "format-7 H2 ID mode: 1 uses sparse sketching, 0 applies RRQR to the full 2-hop workspace"},
+		{"h2_use_sketch",   "format-7 H2 ID mode: 0 full workspace, 1 materialized sparse sketch, 2 streamed sparse sketch on color levels"},
+		{"h2_lazy_schur",   "format-7 H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near"},
+		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
+		{"h2_ca_staged_halo", "format-7 H2 CA halo mode: 0 legacy, 2 staged/overlapped"},
+		{"h2_ca_owner_component", "format-7 H2 CA ownership mode: 0 replicated, 3 asynchronous components"},
+		{"h2_ca_owner_serial", "serialize format-7 H2 CA component-owner events (0 or 1)"},
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
@@ -225,6 +230,16 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_proxy_points", required_argument, 0, 50},
 		{"H2_ID_proxy_points", required_argument, 0, 50},
 		{"reduction_threshold", required_argument, 0, 51},
+		{"h2_lazy_schur", required_argument, 0, 52},
+		{"H2_lazy_schur", required_argument, 0, 52},
+		{"h2_gemm_split", required_argument, 0, 53},
+		{"H2_GEMM_split", required_argument, 0, 53},
+		{"h2_ca_staged_halo", required_argument, 0, 54},
+		{"H2_CA_staged_halo", required_argument, 0, 54},
+		{"h2_ca_owner_component", required_argument, 0, 55},
+		{"H2_CA_owner_component", required_argument, 0, 55},
+		{"h2_ca_owner_serial", required_argument, 0, 56},
+		{"H2_CA_owner_serial", required_argument, 0, 56},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -473,6 +488,31 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "reduction_threshold", opt_i);
+		} break;
+		case 52: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_lazy_schur", opt_i);
+		} break;
+		case 53: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_GEMM_split", opt_i);
+		} break;
+		case 54: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_CA_staged_halo", opt_i);
+		} break;
+		case 55: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_CA_owner_component", opt_i);
+		} break;
+		case 56: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_CA_owner_serial", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -866,6 +906,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double verbosity_d;
       double CA_level_d;
       double H2_use_sketch_d;
+      double H2_lazy_schur_d;
+      double H2_GEMM_split_d;
+      double H2_CA_staged_halo_d;
+      double H2_CA_owner_component_d;
+      double H2_CA_owner_serial_d;
       double H2_ID_radius_d;
       double H2_ID_proxy_d;
       double H2_ID_proxy_points_d;
@@ -877,6 +922,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "verbosity", &verbosity_d);
       c_bpack_getoption(option, "CA_level", &CA_level_d);
       c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
+      c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
+      c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
+      c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
+      c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
+      c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
       c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
       c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
       c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
@@ -885,13 +935,48 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
       const int H2_use_sketch = static_cast<int>(std::llround(H2_use_sketch_d));
+      const int H2_lazy_schur = static_cast<int>(std::llround(H2_lazy_schur_d));
+      const int H2_GEMM_split = static_cast<int>(std::llround(H2_GEMM_split_d));
+      const int H2_CA_staged_halo =
+          static_cast<int>(std::llround(H2_CA_staged_halo_d));
+      const int H2_CA_owner_component =
+          static_cast<int>(std::llround(H2_CA_owner_component_d));
+      const int H2_CA_owner_serial =
+          static_cast<int>(std::llround(H2_CA_owner_serial_d));
       const int H2_ID_radius = static_cast<int>(std::llround(H2_ID_radius_d));
       const int H2_ID_proxy = static_cast<int>(std::llround(H2_ID_proxy_d));
       const int H2_ID_proxy_points =
           static_cast<int>(std::llround(H2_ID_proxy_points_d));
       const int BACA_Batch = static_cast<int>(std::llround(BACA_Batch_d));
-      if (H2_use_sketch != 0 && H2_use_sketch != 1) {
-        throw std::invalid_argument("H2_use_sketch must be 0 or 1");
+      if (H2_use_sketch < 0 || H2_use_sketch > 2) {
+        throw std::invalid_argument("H2_use_sketch must be 0, 1, or 2");
+      }
+      if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
+        throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+      }
+      if (H2_GEMM_split < 0) {
+        throw std::invalid_argument("H2_GEMM_split must be nonnegative");
+      }
+      if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
+        throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
+      }
+      if (H2_CA_owner_component != 0 && H2_CA_owner_component != 3) {
+        throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+      }
+      if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
+        throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
+      }
+      if (H2_CA_owner_component == 3 && H2_lazy_schur == 0) {
+        throw std::invalid_argument(
+            "H2_CA_owner_component=3 requires H2_lazy_schur=1 or 2");
+      }
+      if (H2_lazy_schur != 0 && H2_use_sketch != 2) {
+        throw std::invalid_argument(
+            "H2_lazy_schur requires H2_use_sketch=2");
+      }
+      if (H2_lazy_schur != 0 && H2_ID_proxy == 2) {
+        throw std::invalid_argument(
+            "H2_lazy_schur is not yet compatible with H2_ID_proxy=2");
       }
       if (H2_ID_radius < 2) {
         throw std::invalid_argument("H2_ID_radius must be at least 2");
@@ -911,7 +996,12 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
           Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf, CA_level);
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
-      H2_options.use_sketch = H2_use_sketch != 0;
+      H2_options.use_sketch = H2_use_sketch;
+      H2_options.lazy_schur = H2_lazy_schur;
+      H2_options.gemm_split = H2_GEMM_split;
+      H2_options.ca_staged_halo = H2_CA_staged_halo;
+      H2_options.ca_owner_component = H2_CA_owner_component;
+      H2_options.ca_owner_serial = H2_CA_owner_serial;
       H2_options.id_neighborhood_radius = H2_ID_radius;
       H2_options.id_proxy_mode = H2_ID_proxy;
       if (H2_ID_proxy == 1) {
@@ -936,7 +1026,12 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", dimension=" << H2_options.dimension
                   << ", reduction_threshold=" << H2_options.reduction_threshold
                   << ", CA_level=" << H2_options.CA_level
-                  << ", h2_use_sketch=" << (H2_options.use_sketch ? 1 : 0)
+                  << ", h2_use_sketch=" << H2_options.use_sketch
+                  << ", h2_lazy_schur=" << H2_options.lazy_schur
+                  << ", h2_gemm_split=" << H2_options.gemm_split
+                  << ", h2_ca_staged_halo=" << H2_options.ca_staged_halo
+                  << ", h2_ca_owner_component=" << H2_options.ca_owner_component
+                  << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
                   << ", h2_id_proxy=" << H2_options.id_proxy_mode;
         if (H2_options.id_proxy_mode == 1) {

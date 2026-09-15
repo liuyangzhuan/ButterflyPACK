@@ -69,7 +69,8 @@ template<typename CoordType, typename DataType>
 std::vector<std::vector<int64_t>> make_CA_box_groups(
     const TreeLevel<CoordType, DataType>& level,
     int dimension,
-    bool reverse_order) {
+    bool reverse_order,
+    bool include_boundary = true) {
     std::vector<std::vector<int64_t>> groups;
     std::vector<int64_t> interior;
     interior.reserve(level.interior_id.size());
@@ -77,7 +78,9 @@ std::vector<std::vector<int64_t>> make_CA_box_groups(
         interior.push_back(local_idx + level.local_morton_start);
     }
 
-    if (level.num_active_processes == 1) {
+    if (!include_boundary) {
+        groups.push_back(std::move(interior));
+    } else if (level.num_active_processes == 1) {
         std::vector<int64_t> boundary;
         boundary.reserve(level.boundary_id.size());
         for (int64_t local_idx : level.boundary_id) {
@@ -133,10 +136,12 @@ void apply_CA_level_schedule(
     bool reverse_order,
     bool writes_neighbors,
     BoxOperation&& operation,
-    GroupComplete&& group_complete) {
+    GroupComplete&& group_complete,
+    bool include_boundary = true) {
     if (!level.is_process_active) return;
 
-    auto groups = make_CA_box_groups(level, dimension, reverse_order);
+    auto groups = make_CA_box_groups(
+        level, dimension, reverse_order, include_boundary);
     const int num_waves = 1 << dimension;
     const int max_threads = std::max(1, omp_get_max_threads());
 
@@ -414,11 +419,22 @@ void hierarchical_solve_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
+            const bool owner_engine = owner_solve_engine_level(level);
+            OwnerSolveStats owner_stats;
+            MPI_Comm level_comm =
+                solve_comms.level[static_cast<size_t>(level)];
             get_data_start = clock::now();
             gather_CA_boxes_solve(
                 tree, level, solve_data[level],
-                solve_comms.level[static_cast<size_t>(level)]);
+                level_comm);
             communication_total_forward += (clock::now() - get_data_start);
+
+            if (owner_engine) {
+                owner_solve_forward_boundary(
+                    tree_level, solve_data[level],
+                    owner_solve_records().at(level), owner_stats,
+                    level_comm);
+            }
 
             apply_CA_level_schedule(
                 tree_level,
@@ -437,7 +453,11 @@ void hierarchical_solve_parallel(
                         /*defer_local_updates=*/true,
                         /*local_or_ghost_targets_only=*/true);
                 },
-                [](size_t, size_t) {});
+                [](size_t, size_t) {},
+                /*include_boundary=*/!owner_engine);
+            if (print_detail && owner_engine && rank == level_print_rank) {
+                owner_solve_print_stats(owner_stats, level, "forward");
+            }
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
             const int max_forward_threads = std::max(1, omp_get_max_threads());
@@ -663,10 +683,12 @@ void hierarchical_solve_parallel(
                         char uplo = 'L';
                         int n = static_cast<int>(r), rhs_columns = nrhs;
                         int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-                        sytrs_(&uplo, &n, &rhs_columns,
-                               box.X_RR.data.data(), &lda,
-                               box.X_RR_pivots.data(),
-                               b_R.data(), &ldb, &info);
+                        std::vector<DataType> work(
+                            static_cast<size_t>(std::max(n, 1)));
+                        sytrs2_(&uplo, &n, &rhs_columns,
+                                box.X_RR.data.data(), &lda,
+                                box.X_RR_pivots.data(),
+                                b_R.data(), &ldb, work.data(), &info);
                         if (info != 0) {
                             throw std::runtime_error("Bunch-Kaufman diagonal solve failed for X_RR");
                         }
@@ -776,32 +798,68 @@ void hierarchical_solve_parallel(
         
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
-            apply_CA_level_schedule(
-                tree_level,
-                solve_data[level],
-                tree->dimension,
-                /*reverse_order=*/true,
-                /*writes_neighbors=*/false,
-                [&](auto& solve_box, bool is_ghost, auto&) {
-                    apply_backward_substitution(
-                        tree_level,
-                        solve_box,
-                        solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
-                        is_ghost);
-                },
-                [&](size_t group_idx, size_t group_count) {
-                    if (tree_level.num_active_processes > 1 &&
-                        group_idx + 1 < group_count) {
-                        get_data_start = clock::now();
-                        gather_CA_boxes_solve(
-                            tree, level, solve_data[level],
-                            solve_comms.level[static_cast<size_t>(level)],
-                            /*assist_only=*/group_idx > 0);
-                        communication_total_backward +=
-                            (clock::now() - get_data_start);
-                    }
-                });
+            const bool owner_engine = owner_solve_engine_level(level);
+            MPI_Comm level_comm =
+                solve_comms.level[static_cast<size_t>(level)];
+            if (owner_engine) {
+                OwnerSolveStats owner_stats;
+                apply_CA_level_schedule(
+                    tree_level,
+                    solve_data[level],
+                    tree->dimension,
+                    /*reverse_order=*/true,
+                    /*writes_neighbors=*/false,
+                    [&](auto& solve_box, bool is_ghost, auto&) {
+                        apply_backward_substitution(
+                            tree_level,
+                            solve_box,
+                            solve_data[level],
+                            fmm::MatrixProperty::SYMMETRIC,
+                            is_ghost);
+                    },
+                    [](size_t, size_t) {},
+                    /*include_boundary=*/false);
+
+                get_data_start = clock::now();
+                gather_CA_boxes_solve(
+                    tree, level, solve_data[level], level_comm);
+                communication_total_backward +=
+                    (clock::now() - get_data_start);
+
+                owner_solve_backward_boundary(
+                    tree_level, solve_data[level],
+                    owner_solve_records().at(level), owner_stats,
+                    level_comm);
+                if (print_detail && rank == level_print_rank) {
+                    owner_solve_print_stats(owner_stats, level, "backward");
+                }
+            } else {
+                apply_CA_level_schedule(
+                    tree_level,
+                    solve_data[level],
+                    tree->dimension,
+                    /*reverse_order=*/true,
+                    /*writes_neighbors=*/false,
+                    [&](auto& solve_box, bool is_ghost, auto&) {
+                        apply_backward_substitution(
+                            tree_level,
+                            solve_box,
+                            solve_data[level],
+                            fmm::MatrixProperty::SYMMETRIC,
+                            is_ghost);
+                    },
+                    [&](size_t group_idx, size_t group_count) {
+                        if (tree_level.num_active_processes > 1 &&
+                            group_idx + 1 < group_count) {
+                            get_data_start = clock::now();
+                            gather_CA_boxes_solve(
+                                tree, level, solve_data[level], level_comm,
+                                /*assist_only=*/group_idx > 0);
+                            communication_total_backward +=
+                                (clock::now() - get_data_start);
+                        }
+                    });
+            }
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
@@ -1104,11 +1162,22 @@ void hierarchical_mul_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
+            const bool owner_engine = owner_solve_engine_level(level);
+            OwnerSolveStats owner_stats;
+            MPI_Comm level_comm =
+                solve_comms.level[static_cast<size_t>(level)];
             get_data_start = clock::now();
             gather_CA_boxes_solve(
                 tree, level, solve_data[level],
-                solve_comms.level[static_cast<size_t>(level)]);
+                level_comm);
             communication_total_forward += (clock::now() - get_data_start);
+
+            if (owner_engine) {
+                owner_mul_forward_boundary(
+                    tree_level, solve_data[level],
+                    owner_solve_records().at(level), owner_stats,
+                    level_comm);
+            }
 
             apply_CA_level_schedule(
                 tree_level,
@@ -1124,7 +1193,11 @@ void hierarchical_mul_parallel(
                         fmm::MatrixProperty::SYMMETRIC,
                         is_ghost);
                 },
-                [](size_t, size_t) {});
+                [](size_t, size_t) {},
+                /*include_boundary=*/!owner_engine);
+            if (verbose && owner_engine && rank == level_print_rank) {
+                owner_solve_print_stats(owner_stats, level, "mul-forward");
+            }
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
@@ -1394,39 +1467,77 @@ void hierarchical_mul_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
+            const bool owner_engine = owner_solve_engine_level(level);
+            MPI_Comm level_comm =
+                solve_comms.level[static_cast<size_t>(level)];
             get_data_start = clock::now();
             gather_CA_boxes_solve(
-                tree, level, solve_data[level],
-                solve_comms.level[static_cast<size_t>(level)]);
+                tree, level, solve_data[level], level_comm);
             communication_total_backward += (clock::now() - get_data_start);
 
-            apply_CA_level_schedule(
-                tree_level,
-                solve_data[level],
-                tree->dimension,
-                /*reverse_order=*/true,
-                /*writes_neighbors=*/true,
-                [&](auto& solve_box, bool is_ghost, auto& local_pending) {
-                    fmm::apply_mul_backward_V_with_pending(
-                        tree_level,
-                        solve_box,
-                        solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
-                        local_pending,
-                        is_ghost,
-                        /*local_or_ghost_targets_only=*/true);
-                },
-                [&](size_t group_idx, size_t group_count) {
-                    if (tree_level.num_active_processes > 1 &&
-                        group_idx + 1 < group_count) {
-                        get_data_start = clock::now();
-                        gather_CA_boxes_solve(
-                            tree, level, solve_data[level],
-                            solve_comms.level[static_cast<size_t>(level)]);
-                        communication_total_backward +=
-                            (clock::now() - get_data_start);
-                    }
-                });
+            if (owner_engine) {
+                OwnerSolveStats owner_stats;
+                apply_CA_level_schedule(
+                    tree_level,
+                    solve_data[level],
+                    tree->dimension,
+                    /*reverse_order=*/true,
+                    /*writes_neighbors=*/true,
+                    [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                        fmm::apply_mul_backward_V_with_pending(
+                            tree_level,
+                            solve_box,
+                            solve_data[level],
+                            fmm::MatrixProperty::SYMMETRIC,
+                            local_pending,
+                            is_ghost,
+                            /*local_or_ghost_targets_only=*/true);
+                    },
+                    [](size_t, size_t) {},
+                    /*include_boundary=*/false);
+
+                get_data_start = clock::now();
+                gather_CA_boxes_solve(
+                    tree, level, solve_data[level], level_comm);
+                communication_total_backward +=
+                    (clock::now() - get_data_start);
+
+                owner_mul_backward_boundary(
+                    tree_level, solve_data[level],
+                    owner_solve_records().at(level), owner_stats,
+                    level_comm);
+                if (verbose && rank == level_print_rank) {
+                    owner_solve_print_stats(
+                        owner_stats, level, "mul-backward");
+                }
+            } else {
+                apply_CA_level_schedule(
+                    tree_level,
+                    solve_data[level],
+                    tree->dimension,
+                    /*reverse_order=*/true,
+                    /*writes_neighbors=*/true,
+                    [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                        fmm::apply_mul_backward_V_with_pending(
+                            tree_level,
+                            solve_box,
+                            solve_data[level],
+                            fmm::MatrixProperty::SYMMETRIC,
+                            local_pending,
+                            is_ghost,
+                            /*local_or_ghost_targets_only=*/true);
+                    },
+                    [&](size_t group_idx, size_t group_count) {
+                        if (tree_level.num_active_processes > 1 &&
+                            group_idx + 1 < group_count) {
+                            get_data_start = clock::now();
+                            gather_CA_boxes_solve(
+                                tree, level, solve_data[level], level_comm);
+                            communication_total_backward +=
+                                (clock::now() - get_data_start);
+                        }
+                    });
+            }
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 

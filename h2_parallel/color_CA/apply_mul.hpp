@@ -29,8 +29,6 @@
 
 namespace fmm {
 
-// Color has no ghost/assisting boxes, so both "any" and "local-or-ghost"
-// resolvers reduce to a simple range check on the local slab.
 template<typename CoordType, typename DataType>
 inline SolveDataRequest<CoordType, DataType>* resolve_any_solve_data_for_morton(
     TreeLevel<CoordType, DataType>& level,
@@ -38,6 +36,11 @@ inline SolveDataRequest<CoordType, DataType>* resolve_any_solve_data_for_morton(
     int64_t morton) {
     if (morton >= level.local_morton_start && morton <= level.local_morton_end) {
         return &level_solve_data[static_cast<size_t>(morton - level.local_morton_start)];
+    }
+    auto it = level.ghost_and_assisting_box_points_for_solve_map.find(morton);
+    if (it != level.ghost_and_assisting_box_points_for_solve_map.end()) {
+        return &level.ghost_and_assisting_boxes_for_solve[
+            static_cast<size_t>(it->second)];
     }
     return nullptr;
 }
@@ -47,7 +50,16 @@ inline SolveDataRequest<CoordType, DataType>* resolve_local_or_ghost_solve_data_
     TreeLevel<CoordType, DataType>& level,
     std::vector<SolveDataRequest<CoordType, DataType>>& level_solve_data,
     int64_t morton) {
-    return resolve_any_solve_data_for_morton(level, level_solve_data, morton);
+    if (morton >= level.local_morton_start && morton <= level.local_morton_end) {
+        return &level_solve_data[static_cast<size_t>(morton - level.local_morton_start)];
+    }
+    auto it = level.ghost_and_assisting_box_points_for_solve_map.find(morton);
+    if (it != level.ghost_and_assisting_box_points_for_solve_map.end() &&
+        level.is_ghost_solve[static_cast<size_t>(it->second)] != 0) {
+        return &level.ghost_and_assisting_boxes_for_solve[
+            static_cast<size_t>(it->second)];
+    }
+    return nullptr;
 }
 
 // ============================================================================

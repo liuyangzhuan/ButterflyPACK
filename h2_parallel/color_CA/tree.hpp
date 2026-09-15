@@ -3,8 +3,13 @@
 
 #include <vector>
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <functional>
+#include <mutex>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <mpi.h>
 #include "morton.hpp"
@@ -14,6 +19,89 @@
 
 
 namespace fmm {
+
+enum class LazyFarFieldMode : int { OFF = 0, LAZY = 1 };
+
+struct ColorFactorizationRuntimeOptions {
+    bool streamed_sketch = false;
+    LazyFarFieldMode lazy_far = LazyFarFieldMode::OFF;
+    bool generator_near = false;
+    int gemm_split = 16;
+};
+
+struct CAFactorizationRuntimeOptions {
+    int staged_halo = 0;
+    int owner_component = 0;
+    bool owner_serial = false;
+    bool staged_prune = false;
+};
+
+inline CAFactorizationRuntimeOptions& ca_factorization_runtime_options() {
+    static CAFactorizationRuntimeOptions options;
+    return options;
+}
+
+inline void configure_ca_factorization_runtime(
+    int staged_halo,
+    int owner_component,
+    bool owner_serial,
+    bool staged_prune) {
+    auto& options = ca_factorization_runtime_options();
+    options.staged_halo = staged_halo;
+    options.owner_component = owner_component;
+    options.owner_serial = owner_serial;
+    options.staged_prune = staged_prune;
+}
+
+inline int ca_staged_halo_mode() {
+    return ca_factorization_runtime_options().staged_halo;
+}
+
+inline int ca_owner_component_mode() {
+    return ca_factorization_runtime_options().owner_component;
+}
+
+inline bool ca_owner_serial_enabled() {
+    return ca_factorization_runtime_options().owner_serial;
+}
+
+inline bool ca_staged_prune_enabled() {
+    return ca_factorization_runtime_options().staged_prune;
+}
+
+inline ColorFactorizationRuntimeOptions& color_factorization_runtime_options() {
+    static ColorFactorizationRuntimeOptions options;
+    return options;
+}
+
+inline void configure_color_factorization_runtime(
+    bool streamed_sketch,
+    int lazy_schur,
+    int gemm_split) {
+    auto& options = color_factorization_runtime_options();
+    options.streamed_sketch = streamed_sketch;
+    options.lazy_far = lazy_schur > 0
+        ? LazyFarFieldMode::LAZY
+        : LazyFarFieldMode::OFF;
+    options.generator_near = lazy_schur > 1;
+    options.gemm_split = std::max(0, gemm_split);
+}
+
+inline bool stream_sketch_enabled() {
+    return color_factorization_runtime_options().streamed_sketch;
+}
+
+inline LazyFarFieldMode lazy_far_field_mode() {
+    return color_factorization_runtime_options().lazy_far;
+}
+
+inline bool generator_near_enabled() {
+    return color_factorization_runtime_options().generator_near;
+}
+
+inline int color_gemm_split() {
+    return color_factorization_runtime_options().gemm_split;
+}
 
 // Forward declarations
 template<typename CoordType, typename DataType> struct BoxData;
@@ -68,6 +156,20 @@ struct DenseBlock {
     std::vector<DataType> data; // column-major, size rows*cols
 };
 
+template<typename DataType>
+struct GeneratorPayload {
+    int32_t wave = 0;
+    int64_t r = 0;
+    int64_t total_rows = 0;
+    std::vector<int64_t> one_hop;
+    std::vector<int64_t> neighbor_point_counts;
+    std::vector<DataType> temp2;
+    std::vector<DataType> x_rr_full;
+    int64_t k = 0;
+    std::vector<int64_t> skeleton_indices;
+    std::vector<DataType> x_rs;
+};
+
 
 template<typename DataType>
 struct PendingFactorUpdates {
@@ -76,6 +178,10 @@ struct PendingFactorUpdates {
 
     // Step 9: ADD deltas for canonical edge (lo,hi). Stored as ΔM_{lo→hi} with dims (n_hi x n_lo)
     std::unordered_map<EdgeKey, DenseBlock<DataType>, EdgeKeyHash> accumulated_deltas;
+
+    // Color lazy-Schur generators, shared while one source is routed to
+    // several neighboring ranks.
+    std::unordered_map<int64_t, std::shared_ptr<GeneratorPayload<DataType>>> generators;
 };
 
 
@@ -120,6 +226,33 @@ struct FactorizationThreadScratch {
     std::vector<DataType> eval_buffer;
     std::vector<CoordType> coord_buffer;
     std::vector<int64_t> index_buffer;
+
+    int split_threads = 1;
+    bool streamed_sketch_valid = false;
+    int64_t streamed_sketch_rows = 0;
+    std::vector<DataType> stream_block;
+    std::vector<DataType> stream_sketch_acc;
+    std::vector<DataType> stream_stored_tmp;
+    std::vector<int64_t> stream_counts;
+    std::vector<int64_t> stream_row_indices;
+    std::vector<int64_t> stream_pair_source_mortons;
+    std::vector<int64_t> stream_pair_source_offsets;
+    std::vector<int64_t> stream_box_source_mortons;
+    std::vector<BoxData<CoordType, DataType>*> stream_box_source_boxes;
+    std::vector<int64_t> stream_box_source_r;
+    std::vector<DataType> stream_P_all;
+    std::vector<DataType> stream_Trow;
+    std::vector<DataType> stream_TrowT;
+    std::vector<DataType> stream_W;
+    std::vector<int32_t> stream_row_idx;
+    std::vector<int8_t> stream_row_sign;
+    std::vector<int32_t> stream_blk_draw_idx;
+    std::vector<int8_t> stream_blk_draw_sign;
+    std::vector<int64_t> stream_blk_row_base;
+    std::vector<int64_t> stream_blk_full_size;
+    std::vector<const std::vector<int64_t>*> stream_blk_skeleton;
+    std::vector<const std::vector<int64_t>*> stream_blk_wanted;
+    std::vector<int64_t> stream_positions;
 };
 
 
@@ -699,8 +832,20 @@ struct ModifiedBlock {
         const int64_t expected_cols = source.a_ns_rows();
         if ((current_rows != 0 || current_cols != 0) &&
             (current_rows != expected_rows || current_cols != expected_cols)) {
-            throw std::runtime_error(
-                "ModifiedBlock symmetric A_NS dimension mismatch");
+            std::ostringstream oss;
+            oss << "ModifiedBlock symmetric A_NS dimension mismatch"
+                << " target_neighbor=" << neighbor_morton
+                << " source_neighbor=" << source.neighbor_morton
+                << " target=" << current_rows << "x" << current_cols
+                << " source=" << source.a_ns_rows() << "x"
+                << source.a_ns_cols()
+                << " expected=" << expected_rows << "x" << expected_cols
+                << " target_shared=" << static_cast<bool>(symmetric_A_NS)
+                << " source_shared="
+                << static_cast<bool>(source.symmetric_A_NS)
+                << " target_transposed=" << a_ns_view_is_transposed()
+                << " source_transposed=" << source.a_ns_view_is_transposed();
+            throw std::runtime_error(oss.str());
         }
 
         symmetric_A_NS = source.symmetric_A_NS;
@@ -887,6 +1032,8 @@ struct BoxData {
      * Format: FULL
      */
     MatrixStorage<DataType> X_NR;
+    MatrixStorage<DataType> X_RR_full;
+    MatrixStorage<DataType> X_RS_entry;
     std::vector<int64_t> deferred_xnn_neighbor_point_counts;
     std::vector<DataType> deferred_xnn_temp2;
 
@@ -978,6 +1125,43 @@ struct TreeLevel {
     std::unordered_map<int64_t, omp_lock_t*> box_locks;
 
     std::unordered_set<int64_t> eliminated_boxes;
+
+    // Component-owner predicates are valid only while that level's owner
+    // schedule is alive. They preserve canonical elimination visibility and
+    // pair ownership while independently owned components make progress.
+    const std::function<bool(int64_t)>* sketch_eliminated_filter = nullptr;
+    const std::function<bool(int64_t)>* pair_interest_filter = nullptr;
+
+    struct StagedPendingDelta {
+        int64_t target_morton;
+        int64_t neighbor_morton;
+        bool is_schur;
+        int64_t rows;
+        int64_t cols;
+        std::vector<DataType> delta;
+    };
+
+    struct StagedOverlapPending {
+        std::mutex mutex;
+        std::vector<StagedPendingDelta> deltas;
+        std::set<std::pair<int64_t, int64_t>> mirrors;
+    };
+
+    bool staged_overlap_on = false;
+    std::unique_ptr<StagedOverlapPending> staged_pending;
+    std::unordered_map<int64_t, int> staged_stage_map;
+    std::unordered_set<int64_t> staged_unarrived;
+
+    std::unordered_map<int64_t, int32_t> elimination_wave;
+    std::vector<BoxData<CoordType, DataType>> generator_boxes;
+    std::unordered_map<int64_t, int64_t> generator_id_to_index;
+
+    BoxData<CoordType, DataType>* find_generator_box(int64_t morton) {
+        auto it = generator_id_to_index.find(morton);
+        return it == generator_id_to_index.end()
+            ? nullptr
+            : &generator_boxes[static_cast<size_t>(it->second)];
+    }
 
     /**
      * @brief Map from Morton index to assisting_boxes_for_solve index
@@ -1192,6 +1376,8 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
     total += matrix_heap(box.schur_complement);
     total += matrix_heap(box.X_RN);
     total += matrix_heap(box.X_NR);
+    total += matrix_heap(box.X_RR_full);
+    total += matrix_heap(box.X_RS_entry);
 
     // ===== Interaction maps =====
     total += map_heap(box.near_field_interaction_map);

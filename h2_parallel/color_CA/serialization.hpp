@@ -2,6 +2,7 @@
 #define SERIALIZATION_HPP
 
 #include "tree.hpp"
+#include "blas_declare.hpp"
 #include <cstring>
 #include <vector>
 #include <chrono>
@@ -420,6 +421,47 @@ inline const char* deserialize(DenseBlock<DataType>& b, const char* ptr) {
     return ptr;
 }
 
+template <typename DataType>
+inline size_t bytes_generator(const GeneratorPayload<DataType>& g) {
+    return sizeof(int32_t) + 3 * sizeof(int64_t) +
+           ser::bytes_vector(g.one_hop) +
+           ser::bytes_vector(g.neighbor_point_counts) +
+           ser::bytes_vector(g.temp2) +
+           ser::bytes_vector(g.x_rr_full) +
+           ser::bytes_vector(g.skeleton_indices) +
+           ser::bytes_vector(g.x_rs);
+}
+
+template <typename DataType>
+inline char* serialize(const GeneratorPayload<DataType>& g, char* ptr) {
+    ptr = ser::write_pod(ptr, g.wave);
+    ptr = ser::write_pod(ptr, g.r);
+    ptr = ser::write_pod(ptr, g.total_rows);
+    ptr = ser::write_pod(ptr, g.k);
+    ptr = ser::write_vector(ptr, g.one_hop);
+    ptr = ser::write_vector(ptr, g.neighbor_point_counts);
+    ptr = ser::write_vector(ptr, g.temp2);
+    ptr = ser::write_vector(ptr, g.x_rr_full);
+    ptr = ser::write_vector(ptr, g.skeleton_indices);
+    ptr = ser::write_vector(ptr, g.x_rs);
+    return ptr;
+}
+
+template <typename DataType>
+inline const char* deserialize(GeneratorPayload<DataType>& g, const char* ptr) {
+    ptr = ser::read_pod(ptr, g.wave);
+    ptr = ser::read_pod(ptr, g.r);
+    ptr = ser::read_pod(ptr, g.total_rows);
+    ptr = ser::read_pod(ptr, g.k);
+    ptr = ser::read_vector(ptr, g.one_hop);
+    ptr = ser::read_vector(ptr, g.neighbor_point_counts);
+    ptr = ser::read_vector(ptr, g.temp2);
+    ptr = ser::read_vector(ptr, g.x_rr_full);
+    ptr = ser::read_vector(ptr, g.skeleton_indices);
+    ptr = ser::read_vector(ptr, g.x_rs);
+    return ptr;
+}
+
 
 inline size_t bytes_key(const ReplaceKey&) { return sizeof(int64_t) + sizeof(int64_t); }
 
@@ -472,6 +514,15 @@ size_t bytes_pending(const PendingFactorUpdates<DataType>& p) {
         n += bytes_denseblock(b);
     }
 
+    n += sizeof(uint64_t); // generators count
+    for (const auto& [morton, generator] : p.generators) {
+        (void)morton;
+        if (generator == nullptr) {
+            throw std::runtime_error("bytes_pending: null generator payload");
+        }
+        n += sizeof(int64_t) + bytes_generator(*generator);
+    }
+
     return n;
 }
 
@@ -487,6 +538,23 @@ size_t resident_bytes_pending(const PendingFactorUpdates<DataType>& p) {
     for (const auto& entry : p.accumulated_deltas) {
         bytes += sizeof(entry) + sizeof(void*) + sizeof(size_t);
         bytes += entry.second.data.capacity() * sizeof(DataType);
+    }
+
+    bytes += p.generators.bucket_count() * sizeof(void*);
+    std::unordered_set<const GeneratorPayload<DataType>*> seen_generators;
+    for (const auto& entry : p.generators) {
+        bytes += sizeof(entry) + sizeof(void*) + sizeof(size_t);
+        const auto* generator = entry.second.get();
+        if (generator == nullptr || !seen_generators.insert(generator).second) {
+            continue;
+        }
+        bytes += sizeof(GeneratorPayload<DataType>);
+        bytes += generator->one_hop.capacity() * sizeof(int64_t);
+        bytes += generator->neighbor_point_counts.capacity() * sizeof(int64_t);
+        bytes += generator->temp2.capacity() * sizeof(DataType);
+        bytes += generator->x_rr_full.capacity() * sizeof(DataType);
+        bytes += generator->skeleton_indices.capacity() * sizeof(int64_t);
+        bytes += generator->x_rs.capacity() * sizeof(DataType);
     }
     return bytes;
 }
@@ -515,6 +583,18 @@ char* serialize(const PendingFactorUpdates<DataType>& p, char* ptr) {
         }
     }
 
+    {
+        uint64_t count = static_cast<uint64_t>(p.generators.size());
+        ptr = ser::write_pod(ptr, count);
+        for (const auto& [morton, generator] : p.generators) {
+            if (generator == nullptr) {
+                throw std::runtime_error("serialize pending: null generator payload");
+            }
+            ptr = ser::write_pod(ptr, morton);
+            ptr = serialize(*generator, ptr);
+        }
+    }
+
     return ptr;
 }
 
@@ -524,6 +604,7 @@ const char* deserialize(PendingFactorUpdates<DataType>& p, const char* ptr) {
 
     p.replace_blocks.clear();
     p.accumulated_deltas.clear();
+    p.generators.clear();
 
     // replace_blocks
     {
@@ -550,6 +631,19 @@ const char* deserialize(PendingFactorUpdates<DataType>& p, const char* ptr) {
             ptr = deserialize(k, ptr);
             ptr = deserialize(b, ptr);
             p.accumulated_deltas.emplace(std::move(k), std::move(b));
+        }
+    }
+
+    {
+        uint64_t count = 0;
+        ptr = ser::read_pod(ptr, count);
+        p.generators.reserve(static_cast<size_t>(count));
+        for (uint64_t i = 0; i < count; ++i) {
+            int64_t morton = 0;
+            ptr = ser::read_pod(ptr, morton);
+            auto generator = std::make_shared<GeneratorPayload<DataType>>();
+            ptr = deserialize(*generator, ptr);
+            p.generators.emplace(morton, std::move(generator));
         }
     }
 
@@ -2519,6 +2613,10 @@ static void merge_pending(PendingFactorUpdates<DataType>& dst,
         DenseBlock<DataType> tmp = b;
         accumulate_denseblock(out, tmp);
     }
+
+    for (const auto& [morton, generator] : src.generators) {
+        dst.generators[morton] = generator;
+    }
 }
 
 
@@ -3842,6 +3940,434 @@ void print_pending_factor_updates(
 }
 
 
+template<typename CoordType, typename DataType>
+void emit_lazy_generators(
+    TreeLevel<CoordType, DataType>& level,
+    const std::vector<int64_t>& wave_boxes,
+    int wave,
+    PendingFactorUpdates<DataType>& pending) {
+    for (int64_t morton : wave_boxes) {
+        BoxData<CoordType, DataType>* box = level.find_local_box(morton);
+        if (box == nullptr) continue;
+
+        bool has_remote_neighbor = false;
+        for (int64_t neighbor : box->one_hop) {
+            if (level.find_local_box(neighbor) == nullptr) {
+                has_remote_neighbor = true;
+                break;
+            }
+        }
+        if (!has_remote_neighbor) continue;
+
+        const bool has_fill = box->X_NR.is_allocated() && box->X_NR.cols > 0;
+        auto generator = std::make_shared<GeneratorPayload<DataType>>();
+        generator->wave = static_cast<int32_t>(wave);
+        generator->one_hop = box->one_hop;
+
+        if (has_fill) {
+            const int64_t redundant_count = box->X_NR.cols;
+            if (!box->X_RR_full.is_allocated() ||
+                box->X_RR_full.rows != redundant_count ||
+                box->X_RR_full.cols != redundant_count ||
+                box->deferred_xnn_neighbor_point_counts.size() != box->one_hop.size() ||
+                box->X_NR.lda != box->X_NR.rows ||
+                static_cast<int64_t>(box->X_NR.data.size()) !=
+                    box->X_NR.rows * box->X_NR.cols) {
+                throw std::runtime_error(
+                    "emit_lazy_generators: incomplete state for source " +
+                    std::to_string(morton));
+            }
+
+            generator->r = redundant_count;
+            generator->total_rows = box->X_NR.rows;
+            generator->neighbor_point_counts =
+                box->deferred_xnn_neighbor_point_counts;
+            generator->temp2 = box->X_NR.data;
+            generator->x_rr_full.assign(
+                box->X_RR_full.data.begin(),
+                box->X_RR_full.data.begin() + redundant_count * redundant_count);
+
+            if (generator_near_enabled()) {
+                const int64_t skeleton_count =
+                    static_cast<int64_t>(box->skeleton_indices.size());
+                if (!box->X_RS_entry.is_allocated() ||
+                    box->X_RS_entry.rows != redundant_count ||
+                    box->X_RS_entry.cols != skeleton_count ||
+                    box->X_RS_entry.lda != redundant_count) {
+                    throw std::runtime_error(
+                        "emit_lazy_generators: X_RS_entry mismatch for source " +
+                        std::to_string(morton));
+                }
+                generator->k = skeleton_count;
+                generator->skeleton_indices = box->skeleton_indices;
+                generator->x_rs.assign(
+                    box->X_RS_entry.data.begin(),
+                    box->X_RS_entry.data.begin() +
+                        redundant_count * skeleton_count);
+            }
+        }
+
+        pending.generators[morton] = std::move(generator);
+    }
+}
+
+template<typename CoordType, typename DataType>
+std::vector<int64_t> install_remote_generators(
+    TreeLevel<CoordType, DataType>& level,
+    PendingFactorUpdates<DataType>& incoming) {
+    std::vector<int64_t> installed;
+    installed.reserve(incoming.generators.size());
+
+    for (auto& [morton, generator] : incoming.generators) {
+        if (generator == nullptr ||
+            level.generator_id_to_index.count(morton) != 0) {
+            continue;
+        }
+
+        BoxData<CoordType, DataType> box;
+        box.morton_index = morton;
+        box.one_hop = generator->one_hop;
+        box.deferred_xnn_neighbor_point_counts =
+            generator->neighbor_point_counts;
+        box.skeleton_indices = generator->skeleton_indices;
+
+        if (generator->r > 0) {
+            box.X_NR.set_owned(
+                generator->total_rows, generator->r,
+                std::move(generator->temp2), MatrixStorage<DataType>::FULL);
+            box.X_RR_full.set_owned(
+                generator->r, generator->r,
+                std::move(generator->x_rr_full), MatrixStorage<DataType>::FULL);
+            if (generator->k > 0 && !generator->x_rs.empty()) {
+                box.X_RS.set_owned(
+                    generator->r, generator->k,
+                    std::move(generator->x_rs), MatrixStorage<DataType>::FULL);
+            }
+        }
+
+        level.generator_id_to_index[morton] =
+            static_cast<int64_t>(level.generator_boxes.size());
+        level.generator_boxes.push_back(std::move(box));
+        level.elimination_wave[morton] = generator->wave;
+        installed.push_back(morton);
+    }
+
+    incoming.generators.clear();
+    return installed;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+void form_near_updates_from_generators(
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const std::vector<int64_t>& installed,
+    int dimension,
+    PendingFactorUpdates<DataType>& incoming) {
+    if (installed.empty()) return;
+
+    std::vector<int64_t> source_order(installed);
+    std::sort(source_order.begin(), source_order.end(),
+        [&](int64_t first, int64_t second) {
+            const int32_t first_wave = level.elimination_wave.at(first);
+            const int32_t second_wave = level.elimination_wave.at(second);
+            return first_wave != second_wave
+                ? first_wave < second_wave
+                : first < second;
+        });
+
+    auto are_one_hop = [&](int64_t first, int64_t second) {
+        uint32_t first_coords[3] = {0, 0, 0};
+        uint32_t second_coords[3] = {0, 0, 0};
+        morton::decode_nd(
+            dimension, first,
+            first_coords[0], first_coords[1], first_coords[2]);
+        morton::decode_nd(
+            dimension, second,
+            second_coords[0], second_coords[1], second_coords[2]);
+        for (int d = 0; d < dimension; ++d) {
+            if (std::abs(
+                    static_cast<int64_t>(first_coords[d]) -
+                    static_cast<int64_t>(second_coords[d])) > 1) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    struct FormedUpdates {
+        std::vector<std::pair<ReplaceKey, DenseBlock<DataType>>> replaces;
+        std::vector<std::pair<EdgeKey, DenseBlock<DataType>>> deltas;
+    };
+    std::vector<FormedUpdates> formed(source_order.size());
+    std::exception_ptr form_exception;
+    std::mutex form_exception_mutex;
+    std::atomic<bool> form_failed{false};
+
+    #pragma omp parallel for schedule(dynamic) if (source_order.size() > 1)
+    for (int64_t source_index = 0;
+         source_index < static_cast<int64_t>(source_order.size());
+         ++source_index) {
+        if (form_failed.load(std::memory_order_relaxed)) continue;
+        try {
+            const int64_t source_morton =
+                source_order[static_cast<size_t>(source_index)];
+            BoxData<CoordType, DataType>* source =
+                level.find_generator_box(source_morton);
+            if (source == nullptr) {
+                throw std::runtime_error(
+                    "form_near_updates_from_generators: generator missing");
+            }
+
+            const int64_t redundant_count =
+                source->X_NR.is_allocated() ? source->X_NR.cols : 0;
+            if (redundant_count == 0) continue;
+
+            const auto& neighbors = source->one_hop;
+            const auto& counts = source->deferred_xnn_neighbor_point_counts;
+            if (counts.size() != neighbors.size()) {
+                throw std::runtime_error(
+                    "form_near_updates_from_generators: count metadata mismatch");
+            }
+
+            const DataType* temp2 = source->X_NR.data.data();
+            const int64_t temp2_ld = source->X_NR.lda;
+            const DataType* x_rr = source->X_RR_full.data.data();
+            const int64_t x_rr_ld = source->X_RR_full.lda;
+            const int64_t skeleton_count =
+                source->X_RS.is_allocated() ? source->X_RS.cols : 0;
+            std::vector<int64_t> offsets(neighbors.size() + 1, 0);
+            for (size_t i = 0; i < neighbors.size(); ++i) {
+                offsets[i + 1] = offsets[i] + counts[i];
+            }
+
+            auto& output = formed[static_cast<size_t>(source_index)];
+            std::vector<DataType> product;
+            std::vector<DataType> pair_product;
+
+            for (size_t local_index = 0;
+                 local_index < neighbors.size(); ++local_index) {
+                const int64_t local_morton = neighbors[local_index];
+                const int64_t local_count = counts[local_index];
+                if (local_count == 0) continue;
+                BoxData<CoordType, DataType>* local_box =
+                    level.find_local_box(local_morton);
+                if (local_box == nullptr) continue;
+
+                const DataType* local_temp2 = temp2 + offsets[local_index];
+                product.resize(static_cast<size_t>(
+                    redundant_count * local_count));
+                {
+                    int m = static_cast<int>(redundant_count);
+                    int n = static_cast<int>(local_count);
+                    int k = static_cast<int>(redundant_count);
+                    DataType alpha = DataType{1.0};
+                    DataType beta = DataType{0.0};
+                    int lda = static_cast<int>(x_rr_ld);
+                    int ldb = static_cast<int>(temp2_ld);
+                    int ldc = static_cast<int>(redundant_count);
+                    gemm_("N", "T", &m, &n, &k, &alpha,
+                          x_rr, &lda, local_temp2, &ldb,
+                          &beta, product.data(), &ldc);
+                }
+
+                {
+                    DenseBlock<DataType> block;
+                    block.rows = local_count;
+                    block.cols = local_count;
+                    block.data.resize(static_cast<size_t>(
+                        local_count * local_count));
+                    int m = static_cast<int>(local_count);
+                    int n = static_cast<int>(local_count);
+                    int k = static_cast<int>(redundant_count);
+                    DataType alpha = DataType{-1.0};
+                    DataType beta = DataType{0.0};
+                    int lda = static_cast<int>(temp2_ld);
+                    int ldb = static_cast<int>(redundant_count);
+                    int ldc = static_cast<int>(local_count);
+                    gemm_("N", "N", &m, &n, &k, &alpha,
+                          local_temp2, &lda, product.data(), &ldb,
+                          &beta, block.data.data(), &ldc);
+                    output.deltas.emplace_back(
+                        EdgeKey{local_morton, local_morton, EdgeKind::Diag},
+                        std::move(block));
+                }
+
+                if (skeleton_count > 0) {
+                    DenseBlock<DataType> block;
+                    block.rows = skeleton_count;
+                    block.cols = local_count;
+                    block.data.resize(static_cast<size_t>(
+                        skeleton_count * local_count));
+
+                    auto near_it =
+                        local_box->near_field_interaction_map.find(source_morton);
+                    const ModifiedBlock<DataType>* stored_block =
+                        near_it == local_box->near_field_interaction_map.end()
+                            ? nullptr
+                            : &local_box->near_field_modified_interactions[
+                                  static_cast<size_t>(near_it->second)];
+                    if (stored_block != nullptr &&
+                        stored_block->a_ns_is_allocated()) {
+                        if (stored_block->a_ns_rows() !=
+                                redundant_count + skeleton_count ||
+                            stored_block->a_ns_cols() != local_count) {
+                            throw std::runtime_error(
+                                "form_near_updates_from_generators: stored block dimension mismatch");
+                        }
+                        for (int64_t column = 0; column < local_count; ++column) {
+                            for (int64_t row = 0; row < skeleton_count; ++row) {
+                                block.data[static_cast<size_t>(
+                                    row + column * skeleton_count)] =
+                                    stored_block->a_ns(
+                                        source->skeleton_indices[
+                                            static_cast<size_t>(row)],
+                                        column);
+                            }
+                        }
+                    } else {
+                        auto assist_it =
+                            level.assisting_box_points_for_kernel_evaluation.find(
+                                source_morton);
+                        if (assist_it ==
+                            level.assisting_box_points_for_kernel_evaluation.end()) {
+                            throw std::runtime_error(
+                                "form_near_updates_from_generators: source assisting data missing");
+                        }
+                        const auto& assist = level.assisting_boxes[
+                            static_cast<size_t>(assist_it->second)];
+                        std::vector<int64_t> source_indices(
+                            static_cast<size_t>(skeleton_count));
+                        for (int64_t row = 0; row < skeleton_count; ++row) {
+                            const int64_t source_row = source->skeleton_indices[
+                                static_cast<size_t>(row)];
+                            if (source_row < 0 ||
+                                source_row >= static_cast<int64_t>(assist.indices.size())) {
+                                throw std::runtime_error(
+                                    "form_near_updates_from_generators: skeleton index out of range");
+                            }
+                            source_indices[static_cast<size_t>(row)] =
+                                assist.indices[static_cast<size_t>(source_row)];
+                        }
+                        const std::vector<int64_t> local_indices =
+                            indices_for_count_from_box(
+                                *local_box, local_count, dimension);
+                        kernel->evaluate_block_by_index(
+                            source_indices.data(), skeleton_count,
+                            local_indices.data(), local_count,
+                            block.data.data(), skeleton_count);
+                    }
+
+                    int m = static_cast<int>(skeleton_count);
+                    int n = static_cast<int>(local_count);
+                    int k = static_cast<int>(redundant_count);
+                    DataType alpha = DataType{1.0};
+                    DataType beta = DataType{1.0};
+                    int lda = static_cast<int>(source->X_RS.lda);
+                    int ldb = static_cast<int>(temp2_ld);
+                    int ldc = static_cast<int>(skeleton_count);
+                    gemm_("T", "T", &m, &n, &k, &alpha,
+                          source->X_RS.data.data(), &lda,
+                          local_temp2, &ldb,
+                          &beta, block.data.data(), &ldc);
+                    output.replaces.emplace_back(
+                        ReplaceKey{local_morton, source_morton},
+                        std::move(block));
+                }
+
+                for (size_t neighbor_index = 0;
+                     neighbor_index < neighbors.size(); ++neighbor_index) {
+                    if (neighbor_index == local_index) continue;
+                    const int64_t neighbor_morton = neighbors[neighbor_index];
+                    const int64_t neighbor_count = counts[neighbor_index];
+                    if (neighbor_count == 0 ||
+                        !are_one_hop(local_morton, neighbor_morton)) {
+                        continue;
+                    }
+                    const bool neighbor_local =
+                        level.find_local_box(neighbor_morton) != nullptr;
+                    if (neighbor_local && neighbor_morton < local_morton) continue;
+
+                    const DataType* neighbor_temp2 =
+                        temp2 + offsets[neighbor_index];
+                    pair_product.resize(static_cast<size_t>(
+                        neighbor_count * local_count));
+                    {
+                        int m = static_cast<int>(neighbor_count);
+                        int n = static_cast<int>(local_count);
+                        int k = static_cast<int>(redundant_count);
+                        DataType alpha = DataType{1.0};
+                        DataType beta = DataType{0.0};
+                        int lda = static_cast<int>(temp2_ld);
+                        int ldb = static_cast<int>(redundant_count);
+                        int ldc = static_cast<int>(neighbor_count);
+                        gemm_("N", "N", &m, &n, &k, &alpha,
+                              neighbor_temp2, &lda,
+                              product.data(), &ldb,
+                              &beta, pair_product.data(), &ldc);
+                    }
+
+                    const int64_t lo =
+                        std::min(local_morton, neighbor_morton);
+                    const int64_t hi =
+                        std::max(local_morton, neighbor_morton);
+                    DenseBlock<DataType> block;
+                    if (local_morton == lo) {
+                        block.rows = neighbor_count;
+                        block.cols = local_count;
+                        block.data.resize(pair_product.size());
+                        for (size_t i = 0; i < pair_product.size(); ++i) {
+                            block.data[i] = -pair_product[i];
+                        }
+                    } else {
+                        block.rows = local_count;
+                        block.cols = neighbor_count;
+                        block.data.resize(pair_product.size());
+                        for (int64_t column = 0; column < local_count; ++column) {
+                            for (int64_t row = 0; row < neighbor_count; ++row) {
+                                block.data[static_cast<size_t>(
+                                    column + row * local_count)] =
+                                    -pair_product[static_cast<size_t>(
+                                        row + column * neighbor_count)];
+                            }
+                        }
+                    }
+                    output.deltas.emplace_back(
+                        EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
+                }
+            }
+        } catch (...) {
+            if (!form_failed.exchange(true, std::memory_order_relaxed)) {
+                std::lock_guard<std::mutex> lock(form_exception_mutex);
+                form_exception = std::current_exception();
+            }
+        }
+    }
+
+    if (form_exception) std::rethrow_exception(form_exception);
+
+    for (auto& source_updates : formed) {
+        for (auto& [key, block] : source_updates.replaces) {
+            incoming.replace_blocks[key] = std::move(block);
+        }
+        for (auto& [key, block] : source_updates.deltas) {
+            auto& destination = incoming.accumulated_deltas[key];
+            if (destination.data.empty()) {
+                destination = std::move(block);
+            } else {
+                if (destination.rows != block.rows ||
+                    destination.cols != block.cols ||
+                    destination.data.size() != block.data.size()) {
+                    throw std::runtime_error(
+                        "form_near_updates_from_generators: delta dimension mismatch");
+                }
+                for (size_t i = 0; i < destination.data.size(); ++i) {
+                    destination.data[i] += block.data[i];
+                }
+            }
+        }
+    }
+}
+
 /**
  * @brief Exchange pending factorization updates with 1-hop neighboring process-regions and apply them.
  *
@@ -3950,6 +4476,26 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
 
         if (owner_lo == owner_hi) add_to(owner_lo);
         else { add_to(owner_lo); add_to(owner_hi); }
+    }
+
+    for (const auto& [source_morton, generator] : pending.generators) {
+        if (generator == nullptr) {
+            throw std::runtime_error(
+                "transport factor updates: null lazy generator");
+        }
+        std::unordered_set<int> destinations;
+        for (int64_t neighbor_morton : generator->one_hop) {
+            const int destination = owner_of_morton(neighbor_morton);
+            if (destination != rank) destinations.insert(destination);
+        }
+        for (int destination : destinations) {
+            if (!neigh_set.count(destination)) {
+                throw std::runtime_error(
+                    "lazy generator targets non-1hop rank " +
+                    std::to_string(destination));
+            }
+            out[destination].generators[source_morton] = generator;
+        }
     }
 
     auto routed_pending_bytes = [&]() {
@@ -4164,7 +4710,14 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         memory_diagnostic(
             "pre_apply", merged_pending_bytes, payload_buffer_bytes);
     }
-    
+
+    const std::vector<int64_t> installed_generators =
+        install_remote_generators(lvl, incoming_total);
+    if (generator_near_enabled()) {
+        form_near_updates_from_generators(
+            lvl, kernel, installed_generators, tree->dimension,
+            incoming_total);
+    }
 
     // Step 6: Apply the merged updates to local boxes.
     apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);

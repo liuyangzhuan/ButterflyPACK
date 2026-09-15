@@ -2375,7 +2375,7 @@ void apply_diagonal_solve(
     SolveDataRequest<CoordType, DataType>& solve_data,
     bool is_ghost) {
     
-    const MatrixStorage<DataType>* X_RR = nullptr;
+    MatrixStorage<DataType>* X_RR = nullptr;
     const std::vector<int>* X_RR_pivots = nullptr;
     const std::vector<int64_t>* skeleton_indices = nullptr;
     
@@ -2467,9 +2467,10 @@ void apply_diagonal_solve(
         }
 
         char uplo = 'L';
-        sytrs_(&uplo, &n, &nrhs,
-               X_RR->data.data(), &lda, X_RR_pivots->data(),
-               x_S.data(), &ldb, &info);
+        std::vector<DataType> work(static_cast<size_t>(std::max(n, 1)));
+        sytrs2_(&uplo, &n, &nrhs,
+                X_RR->data.data(), &lda, X_RR_pivots->data(),
+                x_S.data(), &ldb, work.data(), &info);
 
         if (info != 0) {
             throw std::runtime_error(

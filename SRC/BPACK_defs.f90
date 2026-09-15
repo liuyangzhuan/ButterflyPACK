@@ -831,7 +831,12 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
-        integer:: H2_use_sketch !< 1: use sparse sketching for H2 ID; 0: apply RRQR to the full 2-hop workspace
+        integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
+        integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
+        integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
+        integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
+        integer:: H2_CA_owner_component !< H2 CA component ownership: 0 replicated, 3 asynchronous owner schedule
+        integer:: H2_CA_owner_serial !< 1: serialize the CA component-owner schedule as a correctness oracle
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
         integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1

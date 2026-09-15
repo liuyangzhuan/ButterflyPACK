@@ -268,7 +268,7 @@ void factorize_CA_level(
     int current_level,
     KernelType* kernel,
     double tolerance,
-    bool use_sketch,
+    int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -280,7 +280,10 @@ void factorize_CA_level(
     int64_t& local_max_skel,
     bool print_detail,
     int level_print_rank,
-    H2FactorizationMemoryDiagnostics* memory_diagnostics) {
+    H2FactorizationMemoryDiagnostics* memory_diagnostics,
+    OwnerScheduleState<CoordType, DataType>* owner_schedule,
+    StagedHaloState<CoordType, DataType>* staged_state,
+    bool staged_overlap_scheduling) {
     auto& level = tree->levels[current_level];
     const int dimension = tree->dimension;
     const int num_waves = 1 << dimension;
@@ -296,7 +299,13 @@ void factorize_CA_level(
         interior.push_back(local_idx + level.local_morton_start);
     }
 
-    if (level.num_active_processes == 1) {
+    const bool use_owner_schedule =
+        owner_schedule != nullptr && owner_schedule->active;
+
+    if (use_owner_schedule) {
+        group_names = {"interior"};
+        group_lists = {&interior};
+    } else if (level.num_active_processes == 1) {
         boundary.reserve(level.boundary_id.size());
         for (int64_t local_idx : level.boundary_id) {
             boundary.push_back(local_idx + level.local_morton_start);
@@ -319,9 +328,58 @@ void factorize_CA_level(
         group_lists.push_back(&interior);
     }
 
+    auto complete_staged_stage = [&](int stage) {
+        if (!staged_overlap_scheduling || staged_state == nullptr ||
+            staged_state->stage_arrived[stage]) {
+            return;
+        }
+        staged_halo_wait_stage(level, *staged_state, stage);
+        const auto merge_start = std::chrono::high_resolution_clock::now();
+        staged_halo_merge_stage(
+            level, *staged_state, stage, kernel);
+        staged_state->t_merge_ms[stage] +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - merge_start)
+                .count();
+    };
+
+    if (use_owner_schedule) {
+        for (int stage = 1; stage < STAGED_HALO_STAGES; ++stage) {
+            complete_staged_stage(stage);
+        }
+        owner_schedule_check_presence(level, *owner_schedule);
+        owner_schedule_run_boundary(
+            *owner_schedule, level, kernel,
+            unit_proxy_points, num_proxy, proxy_radius,
+            tolerance, is_symmetric, is_hermitian,
+            factorization_method, use_sketch);
+    }
+
     for (size_t group_idx = 0; group_idx < group_names.size(); ++group_idx) {
         const std::string& group_name = group_names[group_idx];
         const auto& group = *group_lists[group_idx];
+
+        if (staged_overlap_scheduling) {
+            if (group_name == "blue/orange") {
+                complete_staged_stage(1);
+            } else if (group_name == "boundary") {
+                complete_staged_stage(1);
+                complete_staged_stage(2);
+                complete_staged_stage(3);
+            } else if (group_name == "purple") {
+                complete_staged_stage(2);
+            } else if (group_name == "green") {
+                complete_staged_stage(2);
+                complete_staged_stage(3);
+            } else if (group_name == "interior") {
+                complete_staged_stage(2);
+                complete_staged_stage(3);
+                if (!level.staged_unarrived.empty()) {
+                    throw std::runtime_error(
+                        "staged halo overlap: unarrived ghosts at interior");
+                }
+            }
+        }
         if (print_detail && tree->mpi_rank == level_print_rank) {
             std::cout << "  Processing CA " << group_name << " group ("
                       << group.size() << " boxes)..." << std::endl;
@@ -374,10 +432,14 @@ void factorize_CA_level(
             std::atomic<bool> wave_failed{false};
             size_t wave_scratch_bytes = 0;
 
-            #pragma omp parallel default(shared) if (wave.size() > 1)
+            const int wave_split = split_threads_for(
+                static_cast<int64_t>(wave.size()), max_wave_threads);
+
+            #pragma omp parallel default(shared)
             {
                 FactorizationThreadScratch<CoordType, DataType> scratch;
-                #pragma omp for schedule(static)
+                scratch.split_threads = wave_split;
+                #pragma omp for schedule(dynamic)
                 for (int64_t idx = 0; idx < static_cast<int64_t>(wave.size()); ++idx) {
                     if (wave_failed.load(std::memory_order_relaxed)) continue;
                     try {
@@ -390,14 +452,21 @@ void factorize_CA_level(
                                 std::to_string(morton));
                         }
 
-                        gather_id_workspace(
-                            tree,
-                            box, level, kernel, tolerance,
-                            unit_proxy_points.data(), num_proxy,
-                            proxy_radius, is_symmetric,
-                            scratch.workspace, scratch.workspace_rows,
-                            scratch.workspace_cols, 0, box->on_boundary,
-                            /*use_CA_boundary_semantics=*/true);
+                        if (stream_sketch_enabled()) {
+                            gather_id_target_streamed(
+                                tree, box, level, kernel,
+                                scratch, box->on_boundary);
+                        } else {
+                            scratch.streamed_sketch_valid = false;
+                            gather_id_workspace(
+                                tree,
+                                box, level, kernel, tolerance,
+                                unit_proxy_points.data(), num_proxy,
+                                proxy_radius, is_symmetric,
+                                scratch.workspace, scratch.workspace_rows,
+                                scratch.workspace_cols, 0, box->on_boundary,
+                                /*use_CA_boundary_semantics=*/true);
+                        }
                         compute_and_modify(
                             dimension, box, level, kernel, scratch,
                             tolerance, use_sketch, is_symmetric, is_hermitian,
@@ -430,8 +499,16 @@ void factorize_CA_level(
 
             if (wave_exception) std::rethrow_exception(wave_exception);
 
+            const int32_t wave_sequence = static_cast<int32_t>(
+                use_owner_schedule
+                    ? owner_schedule->num_boundary_colors *
+                          owner_schedule->num_waves +
+                          static_cast<int>(wave_idx)
+                    : static_cast<int>(group_idx) * num_waves +
+                          static_cast<int>(wave_idx));
             for (int64_t morton : wave) {
                 level.eliminated_boxes.insert(morton);
+                level.elimination_wave[morton] = wave_sequence;
             }
             slice_far_field_blocks(level, is_symmetric, is_hermitian);
 
@@ -515,11 +592,16 @@ void factorize_CA_level(
                 std::atomic<bool> owner_failed{false};
                 size_t owner_scratch_bytes = 0;
 
-                #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
+                const int owner_split = split_threads_for(
+                    static_cast<int64_t>(wave_xnn_candidate_boxes.size()),
+                    max_wave_threads);
+
+                #pragma omp parallel default(shared)
                 {
                     DeferredXnnOwnerScratch<DataType> owner_scratch;
+                    owner_scratch.split_threads = owner_split;
 
-                    #pragma omp for schedule(static)
+                    #pragma omp for schedule(dynamic)
                     for (int64_t idx = 0;
                          idx < static_cast<int64_t>(
                                    wave_xnn_candidate_boxes.size());
@@ -617,7 +699,9 @@ void factorize_CA_level(
                     std::rethrow_exception(mirror_exception);
                 }
 
-                share_symmetric_level_edges(level);
+                if (!use_owner_schedule) {
+                    share_symmetric_level_edges(level);
+                }
 
                 std::exception_ptr finalize_exception;
                 std::mutex finalize_exception_mutex;
@@ -712,7 +796,7 @@ void hierarchical_factorization_parallel(
     fmm::ParallelTree<CoordType, DataType>* tree,
     KernelType* kernel,
     double tolerance,
-    bool use_sketch,
+    int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -721,6 +805,11 @@ void hierarchical_factorization_parallel(
     CoordType proxy_radius,
     int64_t* out_rankmax,
     size_t* memory_per_rank,
+    int lazy_schur,
+    int gemm_split,
+    int ca_staged_halo,
+    int ca_owner_component,
+    int ca_owner_serial,
     int verbosity = 1) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
@@ -742,6 +831,47 @@ void hierarchical_factorization_parallel(
     const int num_children = morton::children_per_box(dimension);
     const int factorization_header_rank =
         smallest_active_rank(tree->levels[leaf_level]);
+
+    if (use_sketch < 0 || use_sketch > 2) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: use_sketch must be 0, 1, or 2");
+    }
+    if (lazy_schur < 0 || lazy_schur > 2) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: lazy_schur must be 0, 1, or 2");
+    }
+    if (lazy_schur != 0 && use_sketch != 2) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: lazy_schur requires use_sketch=2");
+    }
+    if (gemm_split < 0) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: gemm_split must be nonnegative");
+    }
+    if (ca_staged_halo != 0 && ca_staged_halo != 2) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: ca_staged_halo must be 0 or 2");
+    }
+    if (ca_owner_component != 0 && ca_owner_component != 3) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: ca_owner_component must be 0 or 3");
+    }
+    if (ca_owner_serial != 0 && ca_owner_serial != 1) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: ca_owner_serial must be 0 or 1");
+    }
+    if (ca_owner_component == 3 && lazy_schur == 0) {
+        throw std::invalid_argument(
+            "hierarchical_factorization_parallel: ca_owner_component=3 requires lazy_schur=1 or 2");
+    }
+
+    struct FactorizationRuntimeReset {
+        ~FactorizationRuntimeReset() {
+            configure_color_factorization_runtime(false, 0, 0);
+            configure_ca_factorization_runtime(0, 0, false, false);
+        }
+    } factorization_runtime_reset;
+    owner_solve_records().clear();
 
     if (dynamic_threading.enabled &&
         !tree->levels[leaf_level].is_process_active) {
@@ -812,6 +942,38 @@ void hierarchical_factorization_parallel(
         }
         const bool CA_requested = tree->level_requests_CA(current_level);
         const bool use_CA_level = tree->level_uses_CA(current_level);
+        const bool use_streamed_level =
+            current_level > 1 && use_sketch == 2 &&
+            is_symmetric && !is_hermitian && tree->id_proxy_mode != 2;
+        const int level_lazy_schur = use_streamed_level
+            ? (use_CA_level ? std::min(lazy_schur, 1) : lazy_schur)
+            : 0;
+        configure_color_factorization_runtime(
+            use_streamed_level, level_lazy_schur, gemm_split);
+        configure_ca_factorization_runtime(
+            use_CA_level ? ca_staged_halo : 0,
+            use_CA_level ? ca_owner_component : 0,
+            use_CA_level && ca_owner_serial != 0,
+            use_CA_level && is_symmetric);
+
+        OwnerScheduleState<CoordType, DataType> owner_schedule;
+        StagedHaloState<CoordType, DataType> staged_state;
+        bool staged_overlap_scheduling = false;
+        if (level.is_process_active && use_CA_level &&
+            current_level > 1 && level.num_active_processes > 1 &&
+            ca_owner_component == 3) {
+            if (!(is_symmetric && !is_hermitian)) {
+                throw std::runtime_error(
+                    "H2_CA_owner_component=3 requires a symmetric, non-Hermitian factorization");
+            }
+            if (!use_streamed_level ||
+                lazy_far_field_mode() != LazyFarFieldMode::LAZY) {
+                throw std::runtime_error(
+                    "H2_CA_owner_component=3 requires streamed sketching and lazy Schur updates");
+            }
+            owner_schedule_setup(
+                tree, current_level, level_comm, owner_schedule);
+        }
 
         if (level.is_process_active && use_CA_level) {
             segment_start = clock::now();
@@ -825,14 +987,53 @@ void hierarchical_factorization_parallel(
                             pending, 0, 0, communication);
                     };
             }
-            gather_CA_factorization_data(
-                tree, current_level, level_comm,
-                is_symmetric && !is_hermitian,
-                gather_memory_diagnostic);
+            if (ca_staged_halo == 2 && is_symmetric && !is_hermitian) {
+                initiate_staged_halo_gather(
+                    tree, current_level, staged_state, level_comm,
+                    owner_schedule.active
+                        ? &owner_schedule.block_ghosts
+                        : nullptr);
+                staged_halo_wait_stage(level, staged_state, 0);
+
+                const bool overlap_ok =
+                    current_level > 1 &&
+                    lazy_far_field_mode() == LazyFarFieldMode::LAZY;
+                if (overlap_ok) {
+                    build_staged_stage_map(
+                        level, level.staged_stage_map);
+                    level.staged_unarrived.clear();
+                    for (int stage = 1;
+                         stage < STAGED_HALO_STAGES; ++stage) {
+                        for (const auto& peer_mortons :
+                             staged_state.recv_mortons[stage]) {
+                            level.staged_unarrived.insert(
+                                peer_mortons.begin(),
+                                peer_mortons.end());
+                        }
+                    }
+                    level.staged_pending = std::make_unique<
+                        typename TreeLevel<CoordType, DataType>::
+                            StagedOverlapPending>();
+                    level.staged_overlap_on = true;
+                    staged_overlap_scheduling = true;
+                } else {
+                    for (int stage = 1;
+                         stage < STAGED_HALO_STAGES; ++stage) {
+                        staged_halo_wait_stage(
+                            level, staged_state, stage);
+                    }
+                    staged_halo_finish(staged_state);
+                }
+            } else {
+                gather_CA_factorization_data(
+                    tree, current_level, level_comm,
+                    is_symmetric && !is_hermitian,
+                    gather_memory_diagnostic);
+            }
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
             if (print_detail && rank == level_print_rank) {
-                std::cout << "  CA ghost/assisting gather time: "
+                std::cout << "  CA initial ghost/assisting gather time: "
                           << std::chrono::duration_cast<std::chrono::milliseconds>(
                                  gather_duration).count()
                           << " ms" << std::endl;
@@ -919,7 +1120,9 @@ void hierarchical_factorization_parallel(
                     is_symmetric, is_hermitian, factorization_method,
                     unit_proxy_points, num_proxy, proxy_radius,
                     total_skeleton, total_redundant, local_max_skel,
-                    print_detail, level_print_rank, &memory_diagnostics);
+                    print_detail, level_print_rank, &memory_diagnostics,
+                    &owner_schedule, &staged_state,
+                    staged_overlap_scheduling);
             } else {
                 const int num_colors = 1 << dimension;
 
@@ -1073,12 +1276,17 @@ void hierarchical_factorization_parallel(
                 std::atomic<bool> wave_failed{false};
                 size_t wave_scratch_bytes = 0;
 
-                #pragma omp parallel default(shared) if (color_list.size() > 1)
+                const int wave_team = std::max(1, omp_get_max_threads());
+                const int wave_split = split_threads_for(
+                    static_cast<int64_t>(color_list.size()), wave_team);
+
+                #pragma omp parallel default(shared)
                 {
                     const int tid = omp_get_thread_num();
                     FactorizationThreadScratch<CoordType, DataType> scratch;
+                    scratch.split_threads = wave_split;
 
-                    #pragma omp for schedule(static)
+                    #pragma omp for schedule(dynamic)
                     for (int64_t bi = 0; bi < static_cast<int64_t>(color_list.size()); ++bi) {
                         if (wave_failed.load(std::memory_order_relaxed)) {
                             continue;
@@ -1096,15 +1304,21 @@ void hierarchical_factorization_parallel(
 
                             auto& box = *box_ptr;
 
-                            gather_id_workspace(
-                                tree,
-                                &box, level, kernel, tolerance,
-                                unit_proxy_points.data(), num_proxy,
-                                proxy_radius, is_symmetric,
-                                scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,
-                                0,
-                                box.on_boundary
-                            );
+                            if (use_streamed_level) {
+                                gather_id_target_streamed(
+                                    tree, &box, level, kernel, scratch,
+                                    box.on_boundary);
+                            } else {
+                                scratch.streamed_sketch_valid = false;
+                                gather_id_workspace(
+                                    tree,
+                                    &box, level, kernel, tolerance,
+                                    unit_proxy_points.data(), num_proxy,
+                                    proxy_radius, is_symmetric,
+                                    scratch.workspace, scratch.workspace_rows,
+                                    scratch.workspace_cols, 0,
+                                    box.on_boundary);
+                            }
 
                             thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;
 
@@ -1157,6 +1371,8 @@ void hierarchical_factorization_parallel(
                 if (use_owner_deferred_xnn) {
                     for (int64_t morton_idx : color_list) {
                         level.eliminated_boxes.insert(morton_idx);
+                        level.elimination_wave[morton_idx] =
+                            static_cast<int32_t>(counter);
                     }
 
                     slice_far_field_blocks(level, is_symmetric, is_hermitian);
@@ -1230,12 +1446,18 @@ void hierarchical_factorization_parallel(
                     std::atomic<bool> owner_failed{false};
                     size_t owner_scratch_bytes = 0;
 
-                    #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
+                    const int owner_team = std::max(1, omp_get_max_threads());
+                    const int owner_split = split_threads_for(
+                        static_cast<int64_t>(wave_xnn_candidate_boxes.size()),
+                        owner_team);
+
+                    #pragma omp parallel default(shared)
                     {
                         const int tid = omp_get_thread_num();
                         DeferredXnnOwnerScratch<DataType> scratch;
+                        scratch.split_threads = owner_split;
 
-                        #pragma omp for schedule(static)
+                        #pragma omp for schedule(dynamic)
                         for (int64_t idx = 0; idx < static_cast<int64_t>(wave_xnn_candidate_boxes.size()); ++idx) {
                             if (owner_failed.load(std::memory_order_relaxed)) {
                                 continue;
@@ -1366,6 +1588,11 @@ void hierarchical_factorization_parallel(
                     if (finalize_exception) {
                         std::rethrow_exception(finalize_exception);
                     }
+
+                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                        emit_lazy_generators(
+                            level, color_list, counter, pending_updates);
+                    }
                 } else {
                     slice_far_field_blocks(level, is_symmetric, is_hermitian);
                 }
@@ -1379,6 +1606,8 @@ void hierarchical_factorization_parallel(
                     for (size_t bi = 0; bi < color_list.size(); ++bi) {
                         const int64_t morton_idx = color_list[bi];
                         level.eliminated_boxes.insert(morton_idx);
+                        level.elimination_wave[morton_idx] =
+                            static_cast<int32_t>(counter);
                     }
                 }
 
@@ -1485,6 +1714,43 @@ void hierarchical_factorization_parallel(
                           << static_cast<double>(total_skeleton) / level.local_boxes.size()
                           << std::endl;
             }
+        }
+
+        if (current_level > 1) {
+            const bool owner_engine_level =
+                use_CA_level && ca_owner_component == 3 &&
+                level.num_active_processes > 1;
+            owner_solve_record_level(
+                owner_schedule, current_level, owner_engine_level);
+            if (level.is_process_active) {
+                if (print_detail && rank == level_print_rank &&
+                    owner_schedule.active) {
+                    owner_schedule_print_timing(
+                        owner_schedule, current_level);
+                }
+                level.pair_interest_filter = nullptr;
+                level.sketch_eliminated_filter = nullptr;
+            }
+        }
+
+        if (level.is_process_active && staged_overlap_scheduling) {
+            if (level.staged_pending != nullptr &&
+                (!level.staged_pending->deltas.empty() ||
+                 !level.staged_pending->mirrors.empty())) {
+                throw std::runtime_error(
+                    "staged halo overlap: pending updates not drained at level end");
+            }
+            level.staged_overlap_on = false;
+            level.staged_unarrived.clear();
+            level.staged_stage_map.clear();
+            level.staged_pending.reset();
+        }
+        if (level.is_process_active && staged_state.active) {
+            if (print_detail && rank == level_print_rank) {
+                staged_halo_print_timing(
+                    staged_state, current_level);
+            }
+            staged_halo_finish(staged_state);
         }
         
         // ===== Step 3: Gather assisting boxes post-elimination =====
@@ -2004,7 +2270,7 @@ void hierarchical_factorization_parallel_if_supported(
     fmm::ParallelTree<CoordType, DataType>* tree,
     KernelType* kernel,
     double tolerance,
-    bool use_sketch,
+    int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     FactorizationMethod factorization_method,
@@ -2013,6 +2279,11 @@ void hierarchical_factorization_parallel_if_supported(
     CoordType proxy_radius,
     int64_t* out_rankmax = nullptr,
     size_t* memory_per_rank = nullptr,
+    int lazy_schur = 0,
+    int gemm_split = 16,
+    int ca_staged_halo = 0,
+    int ca_owner_component = 0,
+    int ca_owner_serial = 0,
     int verbosity = 1) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
@@ -2029,6 +2300,11 @@ void hierarchical_factorization_parallel_if_supported(
             proxy_radius, 
             out_rankmax,
             memory_per_rank,
+            lazy_schur,
+            gemm_split,
+            ca_staged_halo,
+            ca_owner_component,
+            ca_owner_serial,
             verbosity);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
@@ -2085,6 +2361,11 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     0.0, // proxy_radius = 0
     &solver->last_factor_rankmax,
     &solver->factorization_memory,
+    solver->options.lazy_schur,
+    solver->options.gemm_split,
+    solver->options.ca_staged_halo,
+    solver->options.ca_owner_component,
+    solver->options.ca_owner_serial,
     solver->options.verbosity);
   double tf = MPI_Wtime() - t0;
   MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);

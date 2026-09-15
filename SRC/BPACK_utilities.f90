@@ -1314,6 +1314,11 @@ contains
       option%reduction_threshold=8
       option%CA_level=10000
       option%H2_use_sketch=1
+      option%H2_lazy_schur=0
+      option%H2_GEMM_split=16
+      option%H2_CA_staged_halo=0
+      option%H2_CA_owner_component=0
+      option%H2_CA_owner_serial=0
       option%H2_ID_radius=2
       option%H2_ID_proxy=0
       option%H2_ID_proxy_points=8
@@ -1365,6 +1370,16 @@ contains
                   read (strings1, *) option%CA_level
                else if (trim(strings) == '--h2_use_sketch' .or. trim(strings) == '--H2_use_sketch') then
                   read (strings1, *) option%H2_use_sketch
+               else if (trim(strings) == '--h2_lazy_schur' .or. trim(strings) == '--H2_lazy_schur') then
+                  read (strings1, *) option%H2_lazy_schur
+               else if (trim(strings) == '--h2_gemm_split' .or. trim(strings) == '--H2_GEMM_split') then
+                  read (strings1, *) option%H2_GEMM_split
+               else if (trim(strings) == '--h2_ca_staged_halo' .or. trim(strings) == '--H2_CA_staged_halo') then
+                  read (strings1, *) option%H2_CA_staged_halo
+               else if (trim(strings) == '--h2_ca_owner_component' .or. trim(strings) == '--H2_CA_owner_component') then
+                  read (strings1, *) option%H2_CA_owner_component
+               else if (trim(strings) == '--h2_ca_owner_serial' .or. trim(strings) == '--H2_CA_owner_serial') then
+                  read (strings1, *) option%H2_CA_owner_serial
                else if (trim(strings) == '--h2_id_radius' .or. trim(strings) == '--H2_ID_radius') then
                   read (strings1, *) option%H2_ID_radius
                else if (trim(strings) == '--h2_id_proxy' .or. trim(strings) == '--H2_ID_proxy') then
@@ -1493,6 +1508,11 @@ contains
       option1%Nmin_leaf = option%Nmin_leaf
       option1%CA_level = option%CA_level
       option1%H2_use_sketch = option%H2_use_sketch
+      option1%H2_lazy_schur = option%H2_lazy_schur
+      option1%H2_GEMM_split = option%H2_GEMM_split
+      option1%H2_CA_staged_halo = option%H2_CA_staged_halo
+      option1%H2_CA_owner_component = option%H2_CA_owner_component
+      option1%H2_CA_owner_serial = option%H2_CA_owner_serial
       option1%H2_ID_radius = option%H2_ID_radius
       option1%H2_ID_proxy = option%H2_ID_proxy
       option1%H2_ID_proxy_points = option%H2_ID_proxy_points
@@ -1577,6 +1597,11 @@ contains
             write (*, '(A20,I8)') 'reduction_threshold', option%reduction_threshold
             write (*, '(A18,I8)') 'CA_level', option%CA_level
             write (*, '(A18,I8)') 'h2_use_sketch', option%H2_use_sketch
+            write (*, '(A18,I8)') 'h2_lazy_schur', option%H2_lazy_schur
+            write (*, '(A18,I8)') 'h2_gemm_split', option%H2_GEMM_split
+            write (*, '(A20,I8)') 'h2_ca_staged_halo', option%H2_CA_staged_halo
+            write (*, '(A22,I8)') 'h2_ca_owner_component', option%H2_CA_owner_component
+            write (*, '(A19,I8)') 'h2_ca_owner_serial', option%H2_CA_owner_serial
             write (*, '(A18,I8)') 'h2_id_radius', option%H2_ID_radius
             write (*, '(A18,I8)') 'h2_id_proxy', option%H2_ID_proxy
             if(option%H2_ID_proxy==1)then

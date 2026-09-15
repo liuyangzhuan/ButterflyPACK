@@ -1021,6 +1021,26 @@ contains
          val_d = option%H2_use_sketch
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_lazy_schur' .or. trim(str) == 'h2_lazy_schur') then
+         val_d = option%H2_lazy_schur
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_GEMM_split' .or. trim(str) == 'h2_gemm_split') then
+         val_d = option%H2_GEMM_split
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then
+         val_d = option%H2_CA_staged_halo
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_owner_component' .or. trim(str) == 'h2_ca_owner_component') then
+         val_d = option%H2_CA_owner_component
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then
+         val_d = option%H2_CA_owner_serial
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then
          val_d = option%H2_ID_radius
          valid_opt = 1
@@ -1315,6 +1335,31 @@ contains
       if (trim(str) == 'H2_use_sketch' .or. trim(str) == 'h2_use_sketch') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_use_sketch = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_lazy_schur' .or. trim(str) == 'h2_lazy_schur') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_lazy_schur = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_GEMM_split' .or. trim(str) == 'h2_gemm_split') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_GEMM_split = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_staged_halo = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_owner_component' .or. trim(str) == 'h2_ca_owner_component') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_owner_component = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_owner_serial = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then

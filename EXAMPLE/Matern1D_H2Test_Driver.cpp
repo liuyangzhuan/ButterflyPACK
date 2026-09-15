@@ -28,6 +28,9 @@ struct DriverOptions {
   double tolerance = 1e-8;
   int64_t reduction_threshold = 2;
   int ca_level = 10000;
+  int h2_use_sketch = 1;
+  int h2_lazy_schur = 0;
+  int h2_gemm_split = 16;
   int precon = 1;
   int nrhs = 1;
   double length_scale = 0.1;
@@ -154,6 +157,12 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.reduction_threshold = parse_int64(value, "reduction_threshold");
     } else if (name == "ca_level") {
       options.ca_level = parse_int(value, "CA_level");
+    } else if (name == "h2_use_sketch") {
+      options.h2_use_sketch = parse_int(value, "H2_use_sketch");
+    } else if (name == "h2_lazy_schur") {
+      options.h2_lazy_schur = parse_int(value, "H2_lazy_schur");
+    } else if (name == "h2_gemm_split") {
+      options.h2_gemm_split = parse_int(value, "H2_GEMM_split");
     } else if (name == "precon") {
       options.precon = parse_int(value, "precon");
     } else if (name == "nrhs") {
@@ -230,6 +239,18 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.elem_extract != 0 && options.elem_extract != 2) {
     throw std::invalid_argument("elem_extract must be 0 or 2 for this driver");
   }
+  if (options.h2_use_sketch < 0 || options.h2_use_sketch > 2) {
+    throw std::invalid_argument("H2_use_sketch must be 0, 1, or 2");
+  }
+  if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
+    throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+  }
+  if (options.h2_lazy_schur != 0 && options.h2_use_sketch != 2) {
+    throw std::invalid_argument("H2_lazy_schur requires H2_use_sketch=2");
+  }
+  if (options.h2_gemm_split < 0) {
+    throw std::invalid_argument("H2_GEMM_split must be nonnegative");
+  }
 
   const int64_t points = options.grid_size;
   if (options.expected_points > 0 && options.expected_points != points) {
@@ -269,6 +290,9 @@ void print_usage(const char* executable) {
       << "  --Nmin_leaf <count>\n"
       << "  --reduction_threshold <count>\n"
       << "  --CA_level <level>  (accepted for compatibility; 1D stays color)\n"
+      << "  --H2_use_sketch <0|1|2>\n"
+      << "  --H2_lazy_schur <0|1|2>\n"
+      << "  --H2_GEMM_split <count>\n"
       << "  --length-scale <value>\n"
       << "  --nugget <value>\n"
       << "  --precon <1|3>\n"
@@ -434,6 +458,9 @@ int main(int argc, char** argv) {
                 << driver_options.reduction_threshold << "\n"
                 << "Requested CA_level: " << driver_options.ca_level
                 << " (1D H2 is forced to fully color)\n"
+                << "H2_use_sketch: " << driver_options.h2_use_sketch << "\n"
+                << "H2_lazy_schur: " << driver_options.h2_lazy_schur << "\n"
+                << "H2_GEMM_split: " << driver_options.h2_gemm_split << "\n"
                 << "Preconditioner mode: " << driver_options.precon << "\n"
                 << "Number of RHS: " << driver_options.nrhs << "\n"
                 << "Proxy points: 0 (current ButterflyPACK H2 interface)"
@@ -462,6 +489,12 @@ int main(int argc, char** argv) {
         static_cast<int>(driver_options.reduction_threshold));
     d_c_bpack_set_I_option(
         &resources.option, "CA_level", driver_options.ca_level);
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_use_sketch", driver_options.h2_use_sketch);
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_GEMM_split", driver_options.h2_gemm_split);
     d_c_bpack_set_I_option(
         &resources.option, "precon", driver_options.precon);
     d_c_bpack_set_I_option(

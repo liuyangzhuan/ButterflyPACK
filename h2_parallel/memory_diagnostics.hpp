@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string>
 #include <sys/resource.h>
+#include <unordered_set>
 #include <unistd.h>
 #include <vector>
 
@@ -109,6 +110,8 @@ inline void h2_diag_accumulate_box(
     factors += h2_diag_matrix_bytes(box.schur_complement);
     factors += h2_diag_matrix_bytes(box.X_RN);
     factors += h2_diag_matrix_bytes(box.X_NR);
+    factors += h2_diag_matrix_bytes(box.X_RR_full);
+    factors += h2_diag_matrix_bytes(box.X_RS_entry);
 
     size_t near = h2_diag_modified_block_bytes(
         box.near_field_modified_interactions);
@@ -193,6 +196,8 @@ inline void h2_diag_accumulate_level_metadata(
     bytes += h2_diag_map_bytes(level.ghost_and_assisting_box_points_for_solve_map);
     bytes += h2_diag_map_bytes(level.morton_to_rank);
     bytes += h2_diag_map_bytes(level.rank_to_morton);
+    bytes += h2_diag_map_bytes(level.elimination_wave);
+    bytes += h2_diag_map_bytes(level.generator_id_to_index);
     bytes += h2_diag_vector_bytes(level.solve_neighbor_size);
     for (const auto& neighbor_sizes : level.solve_neighbor_size) {
         bytes += h2_diag_vector_bytes(neighbor_sizes);
@@ -222,6 +227,19 @@ inline size_t h2_diag_pending_bytes(
     for (const auto& entry : pending.accumulated_deltas) {
         bytes += h2_diag_vector_bytes(entry.second.data);
     }
+    bytes += h2_diag_map_bytes(pending.generators);
+    std::unordered_set<const fmm::GeneratorPayload<DataType>*> seen;
+    for (const auto& entry : pending.generators) {
+        const auto* generator = entry.second.get();
+        if (generator == nullptr || !seen.insert(generator).second) continue;
+        bytes += sizeof(*generator);
+        bytes += h2_diag_vector_bytes(generator->one_hop);
+        bytes += h2_diag_vector_bytes(generator->neighbor_point_counts);
+        bytes += h2_diag_vector_bytes(generator->temp2);
+        bytes += h2_diag_vector_bytes(generator->x_rr_full);
+        bytes += h2_diag_vector_bytes(generator->skeleton_indices);
+        bytes += h2_diag_vector_bytes(generator->x_rs);
+    }
     return bytes;
 }
 
@@ -245,7 +263,30 @@ inline size_t h2_diag_factorization_scratch_bytes(
            h2_diag_vector_bytes(scratch.update_buffer) +
            h2_diag_vector_bytes(scratch.eval_buffer) +
            h2_diag_vector_bytes(scratch.coord_buffer) +
-           h2_diag_vector_bytes(scratch.index_buffer);
+           h2_diag_vector_bytes(scratch.index_buffer) +
+           h2_diag_vector_bytes(scratch.stream_block) +
+           h2_diag_vector_bytes(scratch.stream_sketch_acc) +
+           h2_diag_vector_bytes(scratch.stream_stored_tmp) +
+           h2_diag_vector_bytes(scratch.stream_counts) +
+           h2_diag_vector_bytes(scratch.stream_row_indices) +
+           h2_diag_vector_bytes(scratch.stream_pair_source_mortons) +
+           h2_diag_vector_bytes(scratch.stream_pair_source_offsets) +
+           h2_diag_vector_bytes(scratch.stream_box_source_mortons) +
+           h2_diag_vector_bytes(scratch.stream_box_source_boxes) +
+           h2_diag_vector_bytes(scratch.stream_box_source_r) +
+           h2_diag_vector_bytes(scratch.stream_P_all) +
+           h2_diag_vector_bytes(scratch.stream_Trow) +
+           h2_diag_vector_bytes(scratch.stream_TrowT) +
+           h2_diag_vector_bytes(scratch.stream_W) +
+           h2_diag_vector_bytes(scratch.stream_row_idx) +
+           h2_diag_vector_bytes(scratch.stream_row_sign) +
+           h2_diag_vector_bytes(scratch.stream_blk_draw_idx) +
+           h2_diag_vector_bytes(scratch.stream_blk_draw_sign) +
+           h2_diag_vector_bytes(scratch.stream_blk_row_base) +
+           h2_diag_vector_bytes(scratch.stream_blk_full_size) +
+           h2_diag_vector_bytes(scratch.stream_blk_skeleton) +
+           h2_diag_vector_bytes(scratch.stream_blk_wanted) +
+           h2_diag_vector_bytes(scratch.stream_positions);
 }
 
 template<typename DataType>
@@ -334,6 +375,9 @@ public:
                 h2_diag_accumulate_box(box, false, snapshot.categories);
             }
             for (const auto& box : tree_level.ghost_boxes) {
+                h2_diag_accumulate_box(box, true, snapshot.categories);
+            }
+            for (const auto& box : tree_level.generator_boxes) {
                 h2_diag_accumulate_box(box, true, snapshot.categories);
             }
         }

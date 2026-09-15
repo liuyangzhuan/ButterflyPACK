@@ -24,6 +24,7 @@
 #include <sstream>
 #include <string>
 #include <memory>
+#include <random>
 #include <unordered_set>
 #include <unordered_map>
 #include "blas_declare.hpp"
@@ -32,6 +33,18 @@
 // dpotrf_, dgetrf_, dgetri_, dgemm_/gemm_, trsm_
 
 namespace fmm {
+
+template<typename CoordType, typename DataType>
+inline bool sketch_box_eliminated(
+    const TreeLevel<CoordType, DataType>& level,
+    int64_t morton) {
+    if (level.eliminated_boxes.find(morton) ==
+        level.eliminated_boxes.end()) {
+        return false;
+    }
+    return level.sketch_eliminated_filter == nullptr ||
+        (*level.sketch_eliminated_filter)(morton);
+}
 
 template <typename T>
 bool is_nan(const T& val) {
@@ -301,6 +314,86 @@ void transpose_colmajor_back(
     }
 }
 
+inline int split_threads_for(int64_t items, int team) {
+    const int cap = color_gemm_split();
+    if (cap <= 1 || items <= 0 || team <= 1 || items >= team) {
+        return 1;
+    }
+    return std::max(1, std::min(cap, team / static_cast<int>(items)));
+}
+
+inline void split_range(
+    int64_t count,
+    int task,
+    int tasks,
+    int64_t& begin,
+    int64_t& end) {
+    begin = count * task / tasks;
+    end = count * (task + 1) / tasks;
+}
+
+constexpr int64_t H2_SPLIT_COLUMN_CHUNK = 256;
+
+template <typename Function>
+inline void split_columns_chunked(
+    int64_t columns,
+    int split_threads,
+    const Function& function) {
+    const int64_t chunks =
+        (columns + H2_SPLIT_COLUMN_CHUNK - 1) / H2_SPLIT_COLUMN_CHUNK;
+    if (split_threads > 1 && chunks > 1) {
+        const int tasks = static_cast<int>(
+            std::min<int64_t>(split_threads, chunks));
+        #pragma omp taskloop num_tasks(tasks) default(shared)
+        for (int64_t chunk = 0; chunk < chunks; ++chunk) {
+            function(
+                chunk * H2_SPLIT_COLUMN_CHUNK,
+                std::min<int64_t>(
+                    columns, (chunk + 1) * H2_SPLIT_COLUMN_CHUNK));
+        }
+    } else {
+        for (int64_t chunk = 0; chunk < chunks; ++chunk) {
+            function(
+                chunk * H2_SPLIT_COLUMN_CHUNK,
+                std::min<int64_t>(
+                    columns, (chunk + 1) * H2_SPLIT_COLUMN_CHUNK));
+        }
+    }
+}
+
+template<typename DataType, typename KernelType>
+inline void evaluate_block_by_index_split(
+    KernelType* kernel,
+    const int64_t* row_indices,
+    int64_t rows,
+    const int64_t* column_indices,
+    int64_t columns,
+    DataType* matrix,
+    int64_t leading_dimension,
+    int split_threads) {
+    if (split_threads <= 1 || columns < 2 * split_threads) {
+        kernel->evaluate_block_by_index(
+            row_indices, rows,
+            column_indices, columns,
+            matrix, leading_dimension);
+        return;
+    }
+
+    #pragma omp taskloop num_tasks(split_threads) default(shared)
+    for (int task = 0; task < split_threads; ++task) {
+        int64_t begin = 0;
+        int64_t end = 0;
+        split_range(columns, task, split_threads, begin, end);
+        if (end > begin) {
+            kernel->evaluate_block_by_index(
+                row_indices, rows,
+                column_indices + begin, end - begin,
+                matrix + begin * leading_dimension,
+                leading_dimension);
+        }
+    }
+}
+
 template <typename DataType>
 void apply_right_inverse_in_place(
     const MatrixStorage<DataType>& inverse_or_factor,
@@ -309,7 +402,8 @@ void apply_right_inverse_in_place(
     std::vector<DataType>& matrix,
     int64_t rows,
     int64_t cols,
-    const char* context) {
+    const char* context,
+    int split_threads = 1) {
     if (rows == 0 || cols == 0) {
         return;
     }
@@ -317,50 +411,180 @@ void apply_right_inverse_in_place(
         throw std::runtime_error(std::string(context) + ": right-inverse dimension mismatch");
     }
 
+    const int n = static_cast<int>(cols);
+    const int leading_dimension = static_cast<int>(rows);
+    const int factor_leading_dimension =
+        static_cast<int>(inverse_or_factor.lda);
+    const DataType* factor = inverse_or_factor.data.data();
+    constexpr int64_t row_chunk_size = 512;
+    const int64_t chunks = (rows + row_chunk_size - 1) / row_chunk_size;
+    const int tasks = (split_threads > 1 && chunks > 1)
+        ? static_cast<int>(std::min<int64_t>(split_threads, chunks))
+        : 1;
+    auto run_chunks = [&](const auto& solve_rows) {
+        if (tasks > 1) {
+            #pragma omp taskloop num_tasks(tasks) default(shared)
+            for (int64_t chunk = 0; chunk < chunks; ++chunk) {
+                solve_rows(
+                    chunk * row_chunk_size,
+                    std::min<int64_t>(rows, (chunk + 1) * row_chunk_size));
+            }
+        } else {
+            for (int64_t chunk = 0; chunk < chunks; ++chunk) {
+                solve_rows(
+                    chunk * row_chunk_size,
+                    std::min<int64_t>(rows, (chunk + 1) * row_chunk_size));
+            }
+        }
+    };
+
     if (factorization_method == FactorizationMethod::CHOLESKY) {
-        char side = 'R';
-        char uplo = 'L';
-        char transa = 'T';
-        char diag = 'N';
-        int m = static_cast<int>(rows);
-        int n = static_cast<int>(cols);
-        int lda = static_cast<int>(inverse_or_factor.lda);
-        DataType alpha = 1.0;
-
-        trsm_(&side, &uplo, &transa, &diag,
-              &m, &n, &alpha,
-              inverse_or_factor.data.data(), &lda,
-              matrix.data(), &m);
-
-        transa = 'N';
-        trsm_(&side, &uplo, &transa, &diag,
-              &m, &n, &alpha,
-              inverse_or_factor.data.data(), &lda,
-              matrix.data(), &m);
+        auto solve_rows = [&](int64_t row_begin, int64_t row_end) {
+            int block_rows = static_cast<int>(row_end - row_begin);
+            DataType alpha = 1.0;
+            DataType* block = matrix.data() + row_begin;
+            trsm_("R", "L", "T", "N", &block_rows, &n, &alpha,
+                  factor, &factor_leading_dimension,
+                  block, &leading_dimension);
+            trsm_("R", "L", "N", "N", &block_rows, &n, &alpha,
+                  factor, &factor_leading_dimension,
+                  block, &leading_dimension);
+        };
+        run_chunks(solve_rows);
     } else if (factorization_method == FactorizationMethod::LU) {
-        std::vector<DataType> transposed = transpose_colmajor_copy(matrix, rows, cols);
-        const int n = static_cast<int>(cols);
-        const int nrhs = static_cast<int>(rows);
-        const int ldb = static_cast<int>(cols);
-        char trans = 'T';
-        solve_lu_factored_system_in_place(
-            inverse_or_factor, pivots, trans, transposed.data(), n, nrhs, ldb, context);
-        transpose_colmajor_back(transposed, matrix, rows, cols);
+        if (pivots.size() < static_cast<size_t>(n)) {
+            throw std::runtime_error(std::string(context) + ": missing LU pivots");
+        }
+        auto solve_rows = [&](int64_t row_begin, int64_t row_end) {
+            int block_rows = static_cast<int>(row_end - row_begin);
+            DataType alpha = 1.0;
+            DataType* block = matrix.data() + row_begin;
+            trsm_("R", "U", "N", "N", &block_rows, &n, &alpha,
+                  factor, &factor_leading_dimension,
+                  block, &leading_dimension);
+            trsm_("R", "L", "N", "U", &block_rows, &n, &alpha,
+                  factor, &factor_leading_dimension,
+                  block, &leading_dimension);
+            for (int i = n - 1; i >= 0; --i) {
+                const int pivot = pivots[static_cast<size_t>(i)] - 1;
+                if (pivot == i) continue;
+                DataType* column_i = block + static_cast<int64_t>(i) * leading_dimension;
+                DataType* column_p = block + static_cast<int64_t>(pivot) * leading_dimension;
+                for (int row = 0; row < block_rows; ++row) {
+                    std::swap(column_i[row], column_p[row]);
+                }
+            }
+        };
+        run_chunks(solve_rows);
     } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
-        std::vector<DataType> transposed = transpose_colmajor_copy(matrix, rows, cols);
-        const int n = static_cast<int>(cols);
-        const int nrhs = static_cast<int>(rows);
-        const int ldb = n;
-        char uplo = 'L';
+        if (pivots.size() < static_cast<size_t>(n)) {
+            throw std::runtime_error(
+                std::string(context) + ": missing Bunch-Kaufman pivots");
+        }
+        std::vector<DataType> converted_factor(inverse_or_factor.data);
+        std::vector<DataType> off_diagonal(
+            static_cast<size_t>(std::max(n, 1)));
         int info = 0;
-        sytrs_(&uplo, &n, &nrhs,
-               inverse_or_factor.data.data(), &n,
-               pivots.data(), transposed.data(), &ldb, &info);
-        if (info != 0)
+        syconv_("L", "C", &n,
+                converted_factor.data(), &factor_leading_dimension,
+                pivots.data(), off_diagonal.data(), &info);
+        if (info != 0) {
             throw std::runtime_error(std::string(context) +
-                ": Bunch-Kaufman right-inverse failed with INFO = " +
+                ": Bunch-Kaufman conversion failed with INFO = " +
                 std::to_string(info));
-        transpose_colmajor_back(transposed, matrix, rows, cols);
+        }
+
+        const int* pivot_data = pivots.data();
+        auto solve_rows = [&](int64_t row_begin, int64_t row_end) {
+            const int block_rows = static_cast<int>(row_end - row_begin);
+            DataType* block = matrix.data() + row_begin;
+            const DataType one = 1.0;
+            auto swap_columns = [&](int first, int second) {
+                DataType* first_column =
+                    block + static_cast<int64_t>(first) * leading_dimension;
+                DataType* second_column =
+                    block + static_cast<int64_t>(second) * leading_dimension;
+                for (int row = 0; row < block_rows; ++row) {
+                    std::swap(first_column[row], second_column[row]);
+                }
+            };
+
+            for (int i = 0; i < n;) {
+                if (pivot_data[i] > 0) {
+                    const int pivot = pivot_data[i] - 1;
+                    if (pivot != i) swap_columns(i, pivot);
+                    ++i;
+                } else {
+                    const int pivot = -pivot_data[i] - 1;
+                    if (i + 1 < n && pivot_data[i + 1] == pivot_data[i]) {
+                        swap_columns(i + 1, pivot);
+                    }
+                    i += 2;
+                }
+            }
+
+            trsm_("R", "L", "T", "U", &block_rows, &n, &one,
+                  converted_factor.data(), &factor_leading_dimension,
+                  block, &leading_dimension);
+
+            for (int i = 0; i < n;) {
+                if (pivot_data[i] > 0) {
+                    const DataType inverse = one /
+                        converted_factor[static_cast<size_t>(i) +
+                            static_cast<size_t>(i) * factor_leading_dimension];
+                    DataType* column =
+                        block + static_cast<int64_t>(i) * leading_dimension;
+                    for (int row = 0; row < block_rows; ++row) {
+                        column[row] *= inverse;
+                    }
+                    ++i;
+                } else {
+                    const DataType coupling = off_diagonal[static_cast<size_t>(i)];
+                    const DataType diagonal_first =
+                        converted_factor[static_cast<size_t>(i) +
+                            static_cast<size_t>(i) * factor_leading_dimension] /
+                        coupling;
+                    const DataType diagonal_second =
+                        converted_factor[static_cast<size_t>(i + 1) +
+                            static_cast<size_t>(i + 1) * factor_leading_dimension] /
+                        coupling;
+                    const DataType denominator =
+                        diagonal_first * diagonal_second - one;
+                    DataType* first_column =
+                        block + static_cast<int64_t>(i) * leading_dimension;
+                    DataType* second_column =
+                        block + static_cast<int64_t>(i + 1) * leading_dimension;
+                    for (int row = 0; row < block_rows; ++row) {
+                        const DataType first = first_column[row] / coupling;
+                        const DataType second = second_column[row] / coupling;
+                        first_column[row] =
+                            (diagonal_second * first - second) / denominator;
+                        second_column[row] =
+                            (diagonal_first * second - first) / denominator;
+                    }
+                    i += 2;
+                }
+            }
+
+            trsm_("R", "L", "N", "U", &block_rows, &n, &one,
+                  converted_factor.data(), &factor_leading_dimension,
+                  block, &leading_dimension);
+
+            for (int i = n - 1; i >= 0;) {
+                if (pivot_data[i] > 0) {
+                    const int pivot = pivot_data[i] - 1;
+                    if (pivot != i) swap_columns(i, pivot);
+                    --i;
+                } else {
+                    const int pivot = -pivot_data[i] - 1;
+                    if (i > 0 && pivot_data[i - 1] == pivot_data[i]) {
+                        swap_columns(i, pivot);
+                    }
+                    i -= 2;
+                }
+            }
+        };
+        run_chunks(solve_rows);
     } else if (factorization_method == FactorizationMethod::NONE) {
         std::vector<DataType> temp = matrix;
         int m = static_cast<int>(rows);
@@ -1571,6 +1795,9 @@ struct DeferredXnnTargetKey {
     }
 };
 
+using DeferredPairFilter =
+    std::function<bool(int64_t source, int64_t x, int64_t y)>;
+
 struct DeferredXnnTargetKeyHash {
     size_t operator()(const DeferredXnnTargetKey& key) const noexcept {
         size_t h = std::hash<int64_t>{}(key.box_morton);
@@ -1666,6 +1893,7 @@ struct DeferredXnnAccumulatedTarget {
 
 template<typename DataType>
 struct DeferredXnnOwnerScratch {
+    int split_threads = 1;
     std::vector<DataType> packed_temp2_rows;
     std::vector<DataType> packed_updates;
     std::vector<DeferredXnnOwnedRowBlock> owned_row_blocks;
@@ -1970,36 +2198,61 @@ std::vector<DataType> materialize_deferred_xnn_target_matrix_for_accumulation(
             "materialize_deferred_xnn_target_matrix_for_accumulation: A_NS missing");
     }
 
-    if (block.a_ns_rows() != rows || block.a_ns_cols() != cols) {
-        std::ostringstream oss;
-        oss << "materialize_deferred_xnn_target_matrix_for_accumulation: existing block dimension mismatch"
-            << " target_box=" << target.box_morton
-            << " neighbor_box=" << target.neighbor_morton
-            << " target_kind="
-            << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
-                    "NEAR_A_NS" : "FAR_A_NS")
-            << " stored_rows=" << block.a_ns_rows()
-            << " stored_cols=" << block.a_ns_cols()
-            << " expected_rows=" << rows
-            << " expected_cols=" << cols;
-        throw std::runtime_error(oss.str());
+    std::vector<DataType> current;
+    if (block.a_ns_rows() == rows && block.a_ns_cols() == cols) {
+        current = block.copy_a_ns_data();
+    } else {
+        // Owner payloads can replace one endpoint of an edge after its
+        // reciprocal view was shared.  Reconcile that older full-size view in
+        // the same way as an asynchronously transported deferred update.
+        const bool target_eliminated =
+            deferred_xnn_box_is_eliminated(level, target.box_morton);
+        try {
+            if (target_eliminated) {
+                current =
+                    slice_modified_block_both_directions<CoordType, DataType>(
+                        block, level, target.neighbor_morton,
+                        target_box->skeleton_indices, true, rows);
+            } else {
+                current = get_sliced_neighbor_block<CoordType, DataType>(
+                    target.neighbor_morton, block, level, true,
+                    target_box->num_points);
+            }
+        } catch (const std::runtime_error& e) {
+            std::ostringstream oss;
+            oss << "materialize_deferred_xnn_target_matrix_for_accumulation: "
+                   "block slicing failed"
+                << " target_box=" << target.box_morton
+                << " neighbor_box=" << target.neighbor_morton
+                << " target_kind="
+                << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
+                        "NEAR_A_NS" : "FAR_A_NS")
+                << " stored_rows=" << block.a_ns_rows()
+                << " stored_cols=" << block.a_ns_cols()
+                << " expected_rows=" << rows
+                << " expected_cols=" << cols
+                << " target_eliminated=" << target_eliminated
+                << " cause={" << e.what() << "}";
+            throw std::runtime_error(oss.str());
+        }
     }
 
     const size_t expected_size = static_cast<size_t>(rows * cols);
-    if (block.a_ns_data_size() != expected_size) {
+    if (current.size() != expected_size) {
         std::ostringstream oss;
-        oss << "materialize_deferred_xnn_target_matrix_for_accumulation: existing block data size mismatch"
+        oss << "materialize_deferred_xnn_target_matrix_for_accumulation: "
+               "sliced block data size mismatch"
             << " target_box=" << target.box_morton
             << " neighbor_box=" << target.neighbor_morton
             << " target_kind="
             << (target.kind == DeferredXnnTargetKind::NEAR_A_NS ?
                     "NEAR_A_NS" : "FAR_A_NS")
-            << " data_size=" << block.a_ns_data_size()
+            << " data_size=" << current.size()
             << " expected_size=" << expected_size;
         throw std::runtime_error(oss.str());
     }
 
-    return block.copy_a_ns_data();
+    return current;
 }
 
 // Write one fully accumulated destination block back to box storage. At this
@@ -2095,17 +2348,13 @@ void ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
     }
 
     auto& block = modified_interactions[it->second];
-    if (block.a_ns_uses_symmetric_storage()) {
-        // The owner candidate may be replacing this shared allocation in a
-        // concurrent iteration.  Validate the settled logical dimensions in
-        // the post-owner mirror pass, after that parallel region completes.
-        return;
-    }
-
     (void)rows;
     (void)cols;
-    // A directed payload here is a stale reciprocal copy.  The mirror pass
-    // will attach this metadata entry to the canonical owner's allocation.
+    // This is the stale reciprocal view. Detach it before the owner endpoint
+    // is resized; the post-owner mirror pass attaches the metadata entry to
+    // the owner's final allocation with transpose orientation.
+    block.symmetric_A_NS.reset();
+    block.symmetric_A_NS_orientation = false;
     block.A_NS = MatrixStorage<DataType>();
 }
 
@@ -2443,6 +2692,23 @@ DeferredXnnOwnershipKey deferred_xnn_ownership_key(
 }
 
 template<typename CoordType, typename DataType>
+inline bool staged_halo_box_unarrived(
+    const TreeLevel<CoordType, DataType>& level,
+    int64_t morton) {
+    return level.staged_overlap_on &&
+        level.staged_unarrived.find(morton) !=
+            level.staged_unarrived.end();
+}
+
+template<typename CoordType, typename DataType>
+inline int staged_halo_stage_of_box(
+    const TreeLevel<CoordType, DataType>& level,
+    int64_t morton) {
+    const auto it = level.staged_stage_map.find(morton);
+    return it == level.staged_stage_map.end() ? 4 : it->second;
+}
+
+template<typename CoordType, typename DataType>
 bool deferred_xnn_first_box_owns_pair(
     TreeLevel<CoordType, DataType>& level,
     int64_t first_morton,
@@ -2454,6 +2720,24 @@ bool deferred_xnn_first_box_owns_pair(
     }
     if (second_is_assisting) {
         return true;
+    }
+    if (level.pair_interest_filter != nullptr) {
+        const bool first_interest =
+            (*level.pair_interest_filter)(first_morton);
+        const bool second_interest =
+            (*level.pair_interest_filter)(second_morton);
+        if (first_interest != second_interest) {
+            return first_interest;
+        }
+    }
+    if (level.staged_overlap_on) {
+        const bool first_unarrived =
+            staged_halo_box_unarrived(level, first_morton);
+        const bool second_unarrived =
+            staged_halo_box_unarrived(level, second_morton);
+        if (first_unarrived != second_unarrived) {
+            return !first_unarrived;
+        }
     }
     if (use_CA_ownership) {
         return deferred_xnn_ownership_key(level, first_morton) <
@@ -2598,9 +2882,21 @@ void collect_owner_deferred_xnn_candidates_for_source_box(
         return;
     }
 
+    auto sequence_of = [&](int64_t morton) -> int32_t {
+        const auto it = level.elimination_wave.find(morton);
+        return it == level.elimination_wave.end()
+            ? std::numeric_limits<int32_t>::min()
+            : it->second;
+    };
+    const int32_t source_sequence = sequence_of(source_box->morton_index);
     for (int64_t candidate_morton : source_box->one_hop) {
         if (wave_box_set.find(candidate_morton) != wave_box_set.end()) {
-            continue;
+            const int32_t candidate_sequence = sequence_of(candidate_morton);
+            if (candidate_sequence == source_sequence ||
+                candidate_sequence == std::numeric_limits<int32_t>::min() ||
+                source_sequence == std::numeric_limits<int32_t>::min()) {
+                continue;
+            }
         }
 
         DeferredXnnEndpoint<CoordType, DataType> endpoint =
@@ -2655,30 +2951,11 @@ void ensure_symmetric_owner_deferred_source_pair_target_matrix_storage(
     }
 
     auto& block = modified_interactions[it->second];
-    if (!block.a_ns_uses_symmetric_storage()) {
-        // This directed payload is the stale reciprocal view that the old
-        // mirror path zero-resized here.  Drop it now; the post-owner pass
-        // attaches this block to the updated owner's shared allocation.
-        block.A_NS = MatrixStorage<DataType>();
-        return;
-    }
-
-    if (block.a_ns_is_allocated() &&
-        (block.a_ns_rows() != rows || block.a_ns_cols() != cols)) {
-        std::ostringstream oss;
-        oss << "ensure_symmetric_owner_deferred_source_pair_target_matrix_storage: dimension mismatch"
-            << " target_box=" << target.box_morton
-            << " neighbor_box=" << target.neighbor_morton
-            << " stored_rows=" << block.a_ns_rows()
-            << " stored_cols=" << block.a_ns_cols()
-            << " expected_rows=" << rows
-            << " expected_cols=" << cols
-            << " shared=" << block.a_ns_uses_symmetric_storage()
-            << " transposed=" << block.a_ns_view_is_transposed()
-            << " physical_rows=" << block.a_ns_physical_storage().rows
-            << " physical_cols=" << block.a_ns_physical_storage().cols;
-        throw std::runtime_error(oss.str());
-    }
+    (void)rows;
+    (void)cols;
+    block.symmetric_A_NS.reset();
+    block.symmetric_A_NS_orientation = false;
+    block.A_NS = MatrixStorage<DataType>();
 }
 
 // For one candidate box, replay each previous-wave source in deterministic order.
@@ -2696,7 +2973,8 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
     DeferredXnnOwnerScratch<DataType>& scratch,
     std::vector<DeferredXnnTargetKey>& mirror_targets,
     PendingFactorUpdates<DataType>* pending,
-    bool include_ghosts = false) {
+    bool include_ghosts = false,
+    const DeferredPairFilter* pair_filter = nullptr) {
     mirror_targets.clear();
 
     DeferredXnnEndpoint<CoordType, DataType> candidate_endpoint =
@@ -2710,6 +2988,11 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
     if (!candidate_is_writable && !candidate_is_assisting) {
         return;
     }
+    const bool generated_near = generator_near_enabled() &&
+        lazy_far_field_mode() == LazyFarFieldMode::LAZY;
+    if (candidate_is_assisting && generated_near) {
+        return;
+    }
     if (candidate_is_writable &&
         (candidate_box == nullptr || candidate_box->one_hop.empty() ||
          deferred_xnn_should_skip_owner_candidate_box(
@@ -2721,6 +3004,23 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
     scratch.accumulated_targets.clear();
     scratch.accumulated_target_indices.clear();
     scratch.preallocated_mirror_targets.clear();
+
+    const bool candidate_unarrived =
+        staged_halo_box_unarrived(level, candidate_morton);
+    std::vector<typename TreeLevel<CoordType, DataType>::StagedPendingDelta>
+        local_pending;
+    std::vector<std::pair<int64_t, int64_t>> local_mirrors;
+
+    auto elimination_sequence = [&](int64_t morton) -> int32_t {
+        if (level.eliminated_boxes.find(morton) ==
+            level.eliminated_boxes.end()) {
+            return std::numeric_limits<int32_t>::min();
+        }
+        const auto it = level.elimination_wave.find(morton);
+        return it == level.elimination_wave.end()
+            ? std::numeric_limits<int32_t>::min()
+            : it->second;
+    };
 
     std::vector<int64_t> candidate_sources;
     if (candidate_is_writable) {
@@ -2745,12 +3045,28 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
         }
     }
 
+    if (candidate_sources.size() > 1) {
+        std::stable_sort(
+            candidate_sources.begin(), candidate_sources.end(),
+            [&](int64_t first, int64_t second) {
+                return elimination_sequence(first) <
+                    elimination_sequence(second);
+            });
+    }
+    const int32_t candidate_sequence =
+        elimination_sequence(candidate_morton);
+
     for (int64_t source_morton : candidate_sources) {
         // The source keeps both deferred temp2 and the original X_NR until this
         // post-wave pass consumes them.
         BoxData<CoordType, DataType>* source_box =
             resolve_deferred_xnn_box(level, source_morton);
         if (source_box == nullptr || source_box->deferred_xnn_temp2.empty()) {
+            continue;
+        }
+        const int32_t source_sequence =
+            elimination_sequence(source_morton);
+        if (candidate_sequence > source_sequence) {
             continue;
         }
         if (!source_box->X_NR.is_allocated()) {
@@ -2789,7 +3105,10 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
         // is local, mirror the already-updated Step-5 block later without a GEMM.
         // If the source pair target is remote, serialize that transpose now as a
         // REPLACE payload for the target owner.
-        if (candidate_is_writable) {
+        const bool source_pair_wanted =
+            pair_filter == nullptr ||
+            (*pair_filter)(source_morton, candidate_morton, source_morton);
+        if (candidate_is_writable && source_pair_wanted) {
             DeferredXnnTargetKey source_mirror_target;
             source_mirror_target.box_morton = candidate_morton;
             source_mirror_target.neighbor_morton = source_morton;
@@ -2797,14 +3116,19 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
             auto source_mirror_insert =
                 scratch.preallocated_mirror_targets.insert(source_mirror_target);
             if (source_mirror_insert.second) {
-                ensure_symmetric_owner_deferred_source_pair_target_matrix_storage(
-                    source_mirror_target,
-                    static_cast<int64_t>(source_box->skeleton_indices.size()),
-                    n_candidate,
-                    level);
-                mirror_targets.push_back(source_mirror_target);
+                if (candidate_unarrived) {
+                    local_mirrors.emplace_back(
+                        candidate_morton, source_morton);
+                } else {
+                    ensure_symmetric_owner_deferred_source_pair_target_matrix_storage(
+                        source_mirror_target,
+                        static_cast<int64_t>(source_box->skeleton_indices.size()),
+                        n_candidate,
+                        level);
+                    mirror_targets.push_back(source_mirror_target);
+                }
             }
-        } else {
+        } else if (!candidate_is_writable && source_pair_wanted) {
             if (pending == nullptr) {
                 throw std::runtime_error(
                     "apply_owner_deferred_xnn_updates_for_candidate_box: remote source pair requires pending updates");
@@ -2832,6 +3156,13 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
             const int64_t n_neighbor = source_neighbor_counts[row_idx];
             const bool is_diagonal = (neighbor_morton == candidate_morton);
 
+            if (pair_filter != nullptr && n_neighbor > 0 &&
+                !(*pair_filter)(
+                    source_morton, candidate_morton, neighbor_morton)) {
+                row_offset += n_neighbor;
+                continue;
+            }
+
             DeferredXnnTargetKind target_kind = DeferredXnnTargetKind::SCHUR;
             bool accumulate_locally = false;
             bool emit_remote_add = false;
@@ -2852,6 +3183,13 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
                     const bool neighbor_is_eliminated =
                         level.eliminated_boxes.find(neighbor_morton) !=
                             level.eliminated_boxes.end();
+                    const int32_t neighbor_sequence =
+                        elimination_sequence(neighbor_morton);
+                    if (neighbor_is_eliminated &&
+                        neighbor_sequence > source_sequence) {
+                        row_offset += n_neighbor;
+                        continue;
+                    }
                     if (candidate_endpoint.is_ghost &&
                         neighbor_endpoint.is_ghost &&
                         candidate_is_eliminated && neighbor_is_eliminated) {
@@ -2883,6 +3221,15 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
                             DeferredXnnTargetKind::NEAR_A_NS :
                             DeferredXnnTargetKind::FAR_A_NS;
 
+                    // CA lazy mode regenerates two-hop fill at its readers;
+                    // neither the canonical owner nor its reciprocal view
+                    // should materialize a far block here.
+                    if (target_kind == DeferredXnnTargetKind::FAR_A_NS &&
+                        lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                        row_offset += n_neighbor;
+                        continue;
+                    }
+
                     const bool candidate_owns_pair =
                         deferred_xnn_first_box_owns_pair(
                             level, candidate_morton, neighbor_morton,
@@ -2899,9 +3246,19 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
                             scratch.preallocated_mirror_targets.insert(
                                 mirror_target);
                         if (insert_result.second) {
-                            ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
-                                mirror_target, n_neighbor, n_candidate, level);
-                            mirror_targets.push_back(mirror_target);
+                            if (candidate_unarrived) {
+                                if (!staged_halo_box_unarrived(
+                                        level, neighbor_morton)) {
+                                    local_mirrors.emplace_back(
+                                        candidate_morton,
+                                        neighbor_morton);
+                                }
+                            } else {
+                                ensure_symmetric_owner_deferred_xnn_target_matrix_storage(
+                                    mirror_target, n_neighbor,
+                                    n_candidate, level);
+                                mirror_targets.push_back(mirror_target);
+                            }
                         }
                     }
                     accumulate_locally = candidate_owns_pair;
@@ -2923,6 +3280,12 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
                     dimension, candidate_morton, neighbor_morton) ?
                         DeferredXnnTargetKind::NEAR_A_NS :
                         DeferredXnnTargetKind::FAR_A_NS;
+
+                if (target_kind == DeferredXnnTargetKind::FAR_A_NS &&
+                    lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                    row_offset += n_neighbor;
+                    continue;
+                }
 
                 if (candidate_is_local) {
                     if (neighbor_endpoint.is_local) {
@@ -2956,7 +3319,7 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
                         // local storage update regardless of Morton order, and the
                         // same slice is also exported as a canonical remote ADD.
                         accumulate_locally = true;
-                        emit_remote_add = true;
+                        emit_remote_add = !generated_near;
                     }
                 } else {
                     if (!neighbor_endpoint.is_local) {
@@ -3010,12 +3373,68 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
             const DataType* source_rows_ptr =
                 source_box->deferred_xnn_temp2.data() + block.source_row_offset;
 
-            gemm_("N", "T", &m, &n, &k,
-                &alpha,
-                source_rows_ptr, &lda,
-                source_box->X_NR.data.data() + candidate_col_offset, &ldb,
-                &beta,
-                block_update.data(), &ldc);
+            const DataType* candidate_rows =
+                source_box->X_NR.data.data() + candidate_col_offset;
+            split_columns_chunked(
+                n_candidate, scratch.split_threads,
+                [&](int64_t column_begin, int64_t column_end) {
+                    int split_columns =
+                        static_cast<int>(column_end - column_begin);
+                    gemm_("N", "T", &m, &split_columns, &k,
+                        &alpha,
+                        source_rows_ptr, &lda,
+                        candidate_rows + column_begin, &ldb,
+                        &beta,
+                        block_update.data() + column_begin * block.rows,
+                        &ldc);
+                });
+
+            if (candidate_unarrived) {
+                if (block.kind == DeferredXnnTargetKind::FAR_A_NS) {
+                    throw std::runtime_error(
+                        "apply_owner_deferred_xnn_updates_for_candidate_box: "
+                        "staged halo overlap requires lazy far-field mode");
+                }
+
+                const bool is_schur_delta =
+                    block.kind == DeferredXnnTargetKind::SCHUR;
+                if (!is_schur_delta &&
+                    staged_halo_box_unarrived(
+                        level, block.neighbor_morton)) {
+                    typename TreeLevel<CoordType, DataType>::StagedPendingDelta
+                        transpose_delta;
+                    transpose_delta.target_morton = block.neighbor_morton;
+                    transpose_delta.neighbor_morton = candidate_morton;
+                    transpose_delta.is_schur = false;
+                    transpose_delta.rows = n_candidate;
+                    transpose_delta.cols = block.rows;
+                    transpose_delta.delta.resize(
+                        static_cast<size_t>(n_candidate * block.rows));
+                    for (int64_t row = 0; row < block.rows; ++row) {
+                        for (int64_t col = 0; col < n_candidate; ++col) {
+                            transpose_delta.delta[static_cast<size_t>(
+                                col + row * n_candidate)] =
+                                block_update[static_cast<size_t>(
+                                    row + col * block.rows)];
+                        }
+                    }
+                    local_pending.push_back(
+                        std::move(transpose_delta));
+                }
+
+                typename TreeLevel<CoordType, DataType>::StagedPendingDelta
+                    delta;
+                delta.target_morton = candidate_morton;
+                delta.neighbor_morton = is_schur_delta
+                    ? candidate_morton
+                    : block.neighbor_morton;
+                delta.is_schur = is_schur_delta;
+                delta.rows = block.rows;
+                delta.cols = n_candidate;
+                delta.delta = std::move(block_update);
+                local_pending.push_back(std::move(delta));
+                continue;
+            }
 
             if (block.accumulate_locally) {
                 DeferredXnnTargetKey target;
@@ -3076,6 +3495,22 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
 
     for (auto& target_state : scratch.accumulated_targets) {
         flush_deferred_xnn_target_matrix_from_accumulation(target_state, level);
+    }
+
+    if (!local_pending.empty() || !local_mirrors.empty()) {
+        if (level.staged_pending == nullptr) {
+            throw std::runtime_error(
+                "apply_owner_deferred_xnn_updates_for_candidate_box: "
+                "staged pending state missing");
+        }
+        auto& staged_pending = *level.staged_pending;
+        std::lock_guard<std::mutex> lock(staged_pending.mutex);
+        for (auto& delta : local_pending) {
+            staged_pending.deltas.push_back(std::move(delta));
+        }
+        for (const auto& mirror : local_mirrors) {
+            staged_pending.mirrors.insert(mirror);
+        }
     }
 }
 
@@ -3233,7 +3668,10 @@ void finalize_deferred_xnn_source_box(
     }
 
     std::vector<DataType>().swap(source_box->deferred_xnn_temp2);
-    std::vector<int64_t>().swap(source_box->deferred_xnn_neighbor_point_counts);
+    if (lazy_far_field_mode() == LazyFarFieldMode::OFF) {
+        std::vector<int64_t>().swap(
+            source_box->deferred_xnn_neighbor_point_counts);
+    }
 }
 
 
@@ -4753,7 +5191,7 @@ void gather_id_workspace(
     // determine neighbor box eliminated status
     for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
         int64_t neighbor_morton = box->one_hop[idx];
-        if (level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end()) {
+        if (sketch_box_eliminated(level, neighbor_morton)) {
             box->use_full_set[idx] = 0;
         }
     }
@@ -4803,8 +5241,7 @@ void gather_id_workspace(
         
         if (neighbor_box != nullptr) {
             const bool neighbor_eliminated =
-                level.eliminated_boxes.find(neighbor_morton) !=
-                    level.eliminated_boxes.end();
+                sketch_box_eliminated(level, neighbor_morton);
             const bool keep_full_boundary_neighbor =
                 use_CA_boundary_semantics && on_boundary &&
                 neighbor_box->on_boundary &&
@@ -4824,8 +5261,7 @@ void gather_id_workspace(
                 const auto& assist_box = level.assisting_boxes[assist_idx];
                 n_neighbor = assist_box.coords.size() / dimension;
                 if (!use_CA_boundary_semantics &&
-                    level.eliminated_boxes.find(neighbor_morton) !=
-                        level.eliminated_boxes.end()) {
+                    sketch_box_eliminated(level, neighbor_morton)) {
                     n_neighbor = assist_box.skel_indices.size();
                 }
             }else{
@@ -4936,8 +5372,8 @@ void gather_id_workspace(
                 
                 
                 // Check if eliminated
-                bool is_eliminated = (level.eliminated_boxes.find(neighbor_morton) != 
-                                     level.eliminated_boxes.end());
+                bool is_eliminated =
+                    sketch_box_eliminated(level, neighbor_morton);
                 const bool keep_full_boundary_neighbor =
                     use_CA_boundary_semantics && on_boundary &&
                     neighbor_box->on_boundary;
@@ -5024,8 +5460,7 @@ void gather_id_workspace(
                 // even when that Morton box has been eliminated on its owner.
                 const bool neighbor_eliminated =
                     !use_CA_boundary_semantics &&
-                    (level.eliminated_boxes.find(neighbor_morton) !=
-                     level.eliminated_boxes.end());
+                    sketch_box_eliminated(level, neighbor_morton);
 
                 const int64_t* neighbor_indices_ptr = nullptr;
                 std::vector<int64_t> neighbor_skel_indices; // storage if we need to gather skeleton coords
@@ -5341,6 +5776,10 @@ void slice_far_field_blocks(
     bool is_symmetric,
     bool is_hermitian = false) {
 
+    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+        return;
+    }
+
     // (a) Slice current box B's far-field blocks (S dimension: B's skeleton)
     // (b) Slice neighbors' reciprocal far-field blocks (N dimension: B's skeleton)
     //
@@ -5476,6 +5915,11 @@ void compute_step_two_internal(
                   "Only double precision supported currently");
     
     std::unordered_map<int64_t, omp_lock_t*>& box_locks = level.box_locks;
+    if (store) {
+        // Component-owner payload planning needs one count per one-hop slot
+        // even when this box is fully skeletonized and has no redundant solve.
+        box->deferred_xnn_neighbor_point_counts = neighbor_point_counts;
+    }
     if (box->skeleton_indices.empty() || box->redundant_indices.empty()) {
         // level.eliminated_boxes.insert(box->morton_index);
         return;
@@ -5501,7 +5945,7 @@ void compute_step_two_internal(
     
     apply_right_inverse_in_place(
         box->X_RR, box->X_RR_pivots, factorization_method, temp1, k, r,
-        "compute_step_two_internal temp1");
+        "compute_step_two_internal temp1", scratch.split_threads);
     
     for (int64_t i = 0; i < k * r; ++i) {
         temp1[i] = -temp1[i];
@@ -5517,7 +5961,7 @@ void compute_step_two_internal(
         
         apply_right_inverse_in_place(
             box->X_RR, box->X_RR_pivots, factorization_method, temp2, total_neighbor_points, r,
-            "compute_step_two_internal temp2");
+            "compute_step_two_internal temp2", scratch.split_threads);
         
         for (int64_t i = 0; i < total_neighbor_points * r; ++i) {
             temp2[i] = -temp2[i];
@@ -5539,6 +5983,14 @@ void compute_step_two_internal(
     } else {
         // X_RS is explicitly stored
         std::copy(box->X_RS.data.begin(), box->X_RS.data.end(), X_RS_original.begin());
+    }
+
+    if (store || (generator_near_enabled() &&
+                  lazy_far_field_mode() == LazyFarFieldMode::LAZY)) {
+        std::vector<DataType> x_rs_copy(
+            X_RS_original.begin(), X_RS_original.end());
+        box->X_RS_entry.set_owned(
+            r, k, std::move(x_rs_copy), MatrixStorage<DataType>::FULL);
     }
     
     // ===== Step 4: Compute Schur complement S = A_SS + temp1 * X_RS =====
@@ -6936,7 +7388,6 @@ void compute_step_two_internal(
         //   3. remote-remote -> transported canonical ADD only
         if (total_neighbor_points > 0 && !temp2.empty()) {
             box->deferred_xnn_temp2 = std::move(temp2);
-            box->deferred_xnn_neighbor_point_counts = neighbor_point_counts;
         }
     }
 
@@ -7096,6 +7547,1210 @@ void compute_step_two_internal(
  * @param is_hermitian Whether matrix is Hermitian
  * @param factorization_method How to factorize X_RR
  */
+// H2_use_sketch=2 selects the streamed-sketch ID target below on Color
+// levels. H2_use_sketch=1 keeps gather_id_workspace followed by the same
+// sparse sketch, while 0 applies RRQR to the full materialized workspace.
+// ============================================================================
+// Lazy far-field regeneration core (ported from CA_shared_memory). Sources
+// resolve to local boxes or, for remote eliminations, to their generator
+// BoxData (TreeLevel::generator_boxes); both expose X_NR (= temp2 after
+// finalize, one row slot per one_hop neighbor), X_RR_full, one_hop and
+// deferred_xnn_neighbor_point_counts.
+// ============================================================================
+
+// ----- Fill-source enumeration ----------------------------------------------
+
+struct LazyFarSource {
+    int32_t wave;      // global (color, wave) sequence number of elimination
+    int64_t morton;
+};
+
+inline void lazy_far_decode_coords(
+    int dimension, int64_t morton, int64_t out[3]) {
+    uint32_t x = 0, y = 0, z = 0;
+    morton::decode_nd(
+        dimension, static_cast<uint64_t>(morton), x, y, z);
+    out[0] = static_cast<int64_t>(x);
+    out[1] = static_cast<int64_t>(y);
+    out[2] = static_cast<int64_t>(z);
+}
+
+/**
+ * @brief Enumerate the locally eliminated common neighbors of the 2-hop pair
+ * (box, other_morton), sorted by (elimination wave, morton).
+ *
+ * These are exactly the eliminations whose deferred X_NN updates the current
+ * (eager) implementation would have accumulated into the stored 2-hop block:
+ * a box only contributes if it was processed on this rank (it must appear in
+ * eliminated_boxes AND carry deferred temp2 data). Sources eliminated in the
+ * same wave as the reader cannot exist (they would be one-hop conflicts).
+ */
+template<typename CoordType, typename DataType>
+void collect_lazy_far_sources(
+    TreeLevel<CoordType, DataType>& level,
+    const BoxData<CoordType, DataType>* box,
+    int64_t other_morton,
+    int dimension,
+    std::vector<LazyFarSource>& out) {
+
+    out.clear();
+    int64_t other_coords[3];
+    lazy_far_decode_coords(dimension, other_morton, other_coords);
+
+    for (int64_t candidate : box->one_hop) {
+        int64_t candidate_coords[3];
+        lazy_far_decode_coords(dimension, candidate, candidate_coords);
+
+        int64_t chebyshev = 0;
+        for (int d = 0; d < dimension; ++d) {
+            chebyshev = std::max(
+                chebyshev, std::abs(candidate_coords[d] - other_coords[d]));
+        }
+        if (chebyshev != 1) {
+            continue;  // not adjacent to the other endpoint (0 cannot occur)
+        }
+        if (!sketch_box_eliminated(level, candidate)) {
+            continue;
+        }
+
+        auto wave_it = level.elimination_wave.find(candidate);
+        if (wave_it == level.elimination_wave.end()) {
+            // Color: every eliminated neighbor of a local box is either local
+            // (wave recorded at elimination) or a remote source whose
+            // generators must have arrived (wave recorded at install).
+            throw std::runtime_error(
+                "collect_lazy_far_sources: eliminated source " +
+                std::to_string(candidate) + " has no wave/generator on this rank");
+        }
+        out.push_back(LazyFarSource{wave_it->second, candidate});
+    }
+
+    std::sort(out.begin(), out.end(), [](const LazyFarSource& a, const LazyFarSource& b) {
+        if (a.wave != b.wave) return a.wave < b.wave;
+        return a.morton < b.morton;
+    });
+}
+
+// ----- Endpoint row resolution ----------------------------------------------
+
+/**
+ * One endpoint of a regenerated 2-hop block.
+ *  - full_size: the endpoint's full current-level point count (for assisting
+ *    boxes: the number of rows its gathered coordinate list provides).
+ *  - skeleton:  its skeleton position list (nullptr for assisting boxes).
+ *  - wanted:    positions (into the full list) of the rows/cols the reader
+ *    needs; nullptr means all full_size rows in order.
+ */
+template<typename CoordType>
+struct LazyFarEndpoint {
+    int64_t morton = -1;
+    int64_t full_size = 0;
+    const std::vector<int64_t>* skeleton = nullptr;
+    const std::vector<int64_t>* wanted = nullptr;
+    int64_t wanted_count = 0;
+    const int64_t* indices = nullptr;
+};
+
+/**
+ * @brief Locate an endpoint inside a source's temp2 row layout and translate
+ * the reader's wanted positions into row indices of that slot.
+ *
+ * The source recorded, per one-hop neighbor, the active point count at its own
+ * elimination time (deferred_xnn_neighbor_point_counts). Because elimination
+ * is monotone, the only shapes are:
+ *  - source-time count == endpoint full size  -> slot rows are full-list
+ *    positions, so wanted positions index it directly;
+ *  - source-time count == endpoint skeleton size -> slot rows are already the
+ *    skeleton, and a reader can only want the skeleton (a full-row policy for
+ *    an eliminated endpoint implies no fill sources at all).
+ */
+template<typename CoordType, typename DataType>
+bool lazy_far_locate_endpoint_rows(
+    const BoxData<CoordType, DataType>* source_box,
+    const LazyFarEndpoint<CoordType>& endpoint,
+    int64_t& slot_row_offset,
+    int64_t& slot_count,
+    std::vector<int64_t>& row_positions) {
+
+    const auto& counts = source_box->deferred_xnn_neighbor_point_counts;
+    if (counts.size() != source_box->one_hop.size()) {
+        throw std::runtime_error(
+            "lazy_far_locate_endpoint_rows: neighbor count metadata missing "
+            "(source " + std::to_string(source_box->morton_index) + ")");
+    }
+
+    slot_row_offset = 0;
+    slot_count = -1;
+    for (size_t idx = 0; idx < source_box->one_hop.size(); ++idx) {
+        if (source_box->one_hop[idx] == endpoint.morton) {
+            slot_count = counts[idx];
+            break;
+        }
+        slot_row_offset += counts[idx];
+    }
+    if (slot_count < 0) {
+        throw std::runtime_error(
+            "lazy_far_locate_endpoint_rows: endpoint " +
+            std::to_string(endpoint.morton) + " not in one_hop of source " +
+            std::to_string(source_box->morton_index));
+    }
+    if (slot_count == 0) {
+        return false;  // endpoint contributed no rows at source time
+    }
+
+    row_positions.clear();
+    row_positions.reserve(static_cast<size_t>(endpoint.wanted_count));
+
+    if (slot_count == endpoint.full_size) {
+        // Slot rows are full-list positions.
+        if (endpoint.wanted == nullptr) {
+            for (int64_t i = 0; i < endpoint.full_size; ++i) {
+                row_positions.push_back(i);
+            }
+        } else {
+            row_positions.assign(endpoint.wanted->begin(), endpoint.wanted->end());
+        }
+        return true;
+    }
+
+    if (endpoint.skeleton != nullptr &&
+        slot_count == static_cast<int64_t>(endpoint.skeleton->size())) {
+        // Slot rows are the endpoint's skeleton. The reader must want exactly
+        // the skeleton (full-row reads of an eliminated endpoint only happen
+        // for fill-free pairs, which never reach this function).
+        if (endpoint.wanted == nullptr ||
+            static_cast<int64_t>(endpoint.wanted->size()) != slot_count) {
+            throw std::runtime_error(
+                "lazy_far_locate_endpoint_rows: full rows requested from a "
+                "skeleton-time slot (source " +
+                std::to_string(source_box->morton_index) + ", endpoint " +
+                std::to_string(endpoint.morton) + ")");
+        }
+        for (int64_t i = 0; i < slot_count; ++i) {
+            row_positions.push_back(i);
+        }
+        return true;
+    }
+
+    throw std::runtime_error(
+        "lazy_far_locate_endpoint_rows: inconsistent slot count " +
+        std::to_string(slot_count) + " for endpoint " +
+        std::to_string(endpoint.morton) + " (full " +
+        std::to_string(endpoint.full_size) + ", skeleton " +
+        std::to_string(endpoint.skeleton ? endpoint.skeleton->size() : 0) +
+        ") in source " + std::to_string(source_box->morton_index));
+}
+
+// ----- Block regeneration ----------------------------------------------------
+
+/**
+ * @brief Regenerate a 2-hop interaction block on demand.
+ *
+ * Writes the (row_end.wanted_count x col_end.wanted_count) column-major block
+ *   K(rows, cols) - sum_E temp2_E[rows] * X_RR_full_E * temp2_E[cols]^T
+ * into out (leading dimension out_ld). Sources must come from
+ * collect_lazy_far_sources (canonical order).
+ */
+template<typename CoordType, typename DataType, typename KernelType>
+void regenerate_far_block_into(
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const LazyFarEndpoint<CoordType>& row_end,
+    const LazyFarEndpoint<CoordType>& col_end,
+    const std::vector<LazyFarSource>& sources,
+    DataType* out,
+    int64_t out_ld) {
+
+    const int64_t a = row_end.wanted_count;
+    const int64_t b = col_end.wanted_count;
+    if (a == 0 || b == 0) {
+        return;
+    }
+
+    // Kernel part, evaluated directly at the wanted rows/cols.
+    if (out_ld == a) {
+        kernel->evaluate_block_by_index(
+            row_end.indices, a, col_end.indices, b, out, a);
+    } else {
+        std::vector<DataType> kernel_block(static_cast<size_t>(a * b));
+        kernel->evaluate_block_by_index(
+            row_end.indices, a, col_end.indices, b,
+            kernel_block.data(), a);
+        for (int64_t j = 0; j < b; ++j) {
+            std::copy(kernel_block.begin() + j * a,
+                      kernel_block.begin() + (j + 1) * a,
+                      out + j * out_ld);
+        }
+    }
+
+    if (sources.empty()) {
+        return;
+    }
+
+    // Per-thread scratch: regeneration runs inside box-parallel loops and is
+    // called once per (pair, read); reallocating per source is measurable.
+    static thread_local std::vector<int64_t> row_positions;
+    static thread_local std::vector<int64_t> col_positions;
+    static thread_local std::vector<DataType> Trow;
+    static thread_local std::vector<DataType> Tcol;
+    static thread_local std::vector<DataType> G;
+
+    for (const auto& source : sources) {
+        BoxData<CoordType, DataType>* source_box = level.find_local_box(source.morton);
+        if (source_box == nullptr) {
+            source_box = level.find_ghost_box(source.morton);
+        }
+        if (source_box == nullptr) {
+            source_box = level.find_generator_box(source.morton);
+        }
+        if (source_box == nullptr) {
+            throw std::runtime_error(
+                "regenerate_far_block_into: source box " +
+                std::to_string(source.morton) + " not found");
+        }
+
+        const int64_t r = source_box->X_NR.cols;
+        if (r == 0 || !source_box->X_NR.is_allocated()) {
+            continue;  // fully-skeleton source: no Schur contribution
+        }
+        if (!source_box->X_RR_full.is_allocated() ||
+            source_box->X_RR_full.rows != r || source_box->X_RR_full.cols != r) {
+            throw std::runtime_error(
+                "regenerate_far_block_into: X_RR_full missing for source " +
+                std::to_string(source.morton));
+        }
+
+        int64_t row_slot_offset = 0, row_slot_count = 0;
+        int64_t col_slot_offset = 0, col_slot_count = 0;
+        if (!lazy_far_locate_endpoint_rows(
+                source_box, row_end, row_slot_offset, row_slot_count, row_positions)) {
+            continue;
+        }
+        if (!lazy_far_locate_endpoint_rows(
+                source_box, col_end, col_slot_offset, col_slot_count, col_positions)) {
+            continue;
+        }
+
+        const DataType* temp2 = source_box->X_NR.data.data();
+        const int64_t temp2_ld = source_box->X_NR.lda;
+
+        // Gather temp2 row slices for both endpoints.
+        Trow.resize(static_cast<size_t>(a * r));
+        for (int64_t j = 0; j < r; ++j) {
+            const DataType* src_col = temp2 + j * temp2_ld + row_slot_offset;
+            for (int64_t i = 0; i < a; ++i) {
+                Trow[i + j * a] = src_col[row_positions[static_cast<size_t>(i)]];
+            }
+        }
+        Tcol.resize(static_cast<size_t>(b * r));
+        for (int64_t j = 0; j < r; ++j) {
+            const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
+            for (int64_t i = 0; i < b; ++i) {
+                Tcol[i + j * b] = src_col[col_positions[static_cast<size_t>(i)]];
+            }
+        }
+
+        // G = Trow * X_RR_full   (a x r)
+        G.resize(static_cast<size_t>(a * r));
+        {
+            int m = static_cast<int>(a);
+            int n = static_cast<int>(r);
+            int k = static_cast<int>(r);
+            DataType alpha = DataType{1.0};
+            DataType beta = DataType{0.0};
+            int lda = static_cast<int>(a);
+            int ldb = static_cast<int>(source_box->X_RR_full.lda);
+            int ldc = static_cast<int>(a);
+            gemm_("N", "N", &m, &n, &k,
+                  &alpha, Trow.data(), &lda,
+                  source_box->X_RR_full.data.data(), &ldb,
+                  &beta, G.data(), &ldc);
+        }
+
+        // out -= G * Tcol^T   (a x b)
+        {
+            int m = static_cast<int>(a);
+            int n = static_cast<int>(b);
+            int k = static_cast<int>(r);
+            DataType alpha = DataType{-1.0};
+            DataType beta = DataType{1.0};
+            int lda = static_cast<int>(a);
+            int ldb = static_cast<int>(b);
+            int ldc = static_cast<int>(out_ld);
+            gemm_("N", "T", &m, &n, &k,
+                  &alpha, G.data(), &lda,
+                  Tcol.data(), &ldb,
+                  &beta, out, &ldc);
+        }
+    }
+}
+
+/**
+ * @brief Relative Frobenius deviation between a stored block and its
+ * regenerated counterpart (CHECK mode).
+ */
+template<typename DataType>
+double lazy_far_relative_deviation(
+    const DataType* stored, int64_t stored_ld,
+    const DataType* regen, int64_t regen_ld,
+    int64_t rows, int64_t cols) {
+    double diff2 = 0.0, ref2 = 0.0;
+    for (int64_t j = 0; j < cols; ++j) {
+        for (int64_t i = 0; i < rows; ++i) {
+            const DataType d = stored[i + j * stored_ld] - regen[i + j * regen_ld];
+            diff2 += value_sq_norm(d);
+            ref2 += value_sq_norm(stored[i + j * stored_ld]);
+        }
+    }
+    if (ref2 == 0.0) {
+        return diff2 == 0.0 ? 0.0 : std::sqrt(diff2);
+    }
+    return std::sqrt(diff2 / ref2);
+}
+
+/**
+ * @brief Memo for the transition-time P-blocks, scoped to one parent-pair
+ * assembly: P_{E,c} = X_RR_full_E * temp2_E[c-rows]^T (r x k_c) is reused by
+ * every sibling row that shares the column child c and source E.
+ */
+template<typename DataType>
+struct LazyFarTransitionCache {
+    // key: (source_morton << 32) | col_morton. An empty vector memoizes a
+    // source that contributes no rows for this column box.
+    std::unordered_map<uint64_t, std::vector<DataType>> P_blocks;
+};
+
+/**
+ * @brief Apply -(temp2_E[rows] * X_RR_full_E * temp2_E[cols]^T) for each
+ * source into out (rows x cols, leading dimension out_ld), using the
+ * P-formulation: P = X_RR_full * temp2[cols]^T is formed once (or fetched
+ * from the optional cache) and each row side costs only an (a x r x c) GEMM.
+ * Sources must be in canonical order (collect_lazy_far_sources).
+ */
+template<typename CoordType, typename DataType>
+void lazy_far_apply_sources_cached(
+    TreeLevel<CoordType, DataType>& level,
+    const LazyFarEndpoint<CoordType>& row_end,
+    const LazyFarEndpoint<CoordType>& col_end,
+    const std::vector<LazyFarSource>& sources,
+    LazyFarTransitionCache<DataType>* cache,
+    DataType* out,
+    int64_t out_ld) {
+
+    const int64_t a = row_end.wanted_count;
+    const int64_t c = col_end.wanted_count;
+    if (a == 0 || c == 0 || sources.empty()) {
+        return;
+    }
+
+    static thread_local std::vector<int64_t> row_positions;
+    static thread_local std::vector<int64_t> col_positions;
+    static thread_local std::vector<DataType> Trow;
+    static thread_local std::vector<DataType> Tcol;
+    static thread_local std::vector<DataType> P_local;
+
+    const bool key_packable =
+        static_cast<uint64_t>(row_end.morton) < (uint64_t{1} << 32) &&
+        static_cast<uint64_t>(col_end.morton) < (uint64_t{1} << 32);
+
+    for (const auto& source : sources) {
+        BoxData<CoordType, DataType>* source_box = level.find_local_box(source.morton);
+        if (source_box == nullptr) {
+            source_box = level.find_ghost_box(source.morton);
+        }
+        if (source_box == nullptr) {
+            source_box = level.find_generator_box(source.morton);
+        }
+        if (source_box == nullptr) {
+            throw std::runtime_error(
+                "lazy_far_apply_sources_cached: source box " +
+                std::to_string(source.morton) + " not found");
+        }
+
+        const int64_t r = source_box->X_NR.cols;
+        if (r == 0 || !source_box->X_NR.is_allocated()) {
+            continue;
+        }
+        if (!source_box->X_RR_full.is_allocated() ||
+            source_box->X_RR_full.rows != r || source_box->X_RR_full.cols != r) {
+            throw std::runtime_error(
+                "lazy_far_apply_sources_cached: X_RR_full missing for source " +
+                std::to_string(source.morton));
+        }
+
+        const DataType* temp2 = source_box->X_NR.data.data();
+        const int64_t temp2_ld = source_box->X_NR.lda;
+
+        // ---- P = X_RR_full * temp2[cols]^T (r x c), cached when possible ----
+        const std::vector<DataType>* P_ptr = nullptr;
+        std::vector<DataType>* cache_slot = nullptr;
+        const bool use_cache =
+            cache != nullptr && key_packable &&
+            static_cast<uint64_t>(source.morton) < (uint64_t{1} << 32);
+        if (use_cache) {
+            const uint64_t key =
+                (static_cast<uint64_t>(source.morton) << 32) |
+                static_cast<uint64_t>(col_end.morton);
+            auto [it, inserted] = cache->P_blocks.try_emplace(key);
+            cache_slot = &it->second;
+            if (!inserted) {
+                if (cache_slot->empty()) {
+                    continue;  // memoized: source contributes nothing here
+                }
+                P_ptr = cache_slot;
+            }
+        }
+
+        if (P_ptr == nullptr) {
+            int64_t col_slot_offset = 0, col_slot_count = 0;
+            if (!lazy_far_locate_endpoint_rows(
+                    source_box, col_end, col_slot_offset, col_slot_count,
+                    col_positions)) {
+                continue;  // cache_slot (if any) stays empty as the memo
+            }
+
+            Tcol.resize(static_cast<size_t>(c * r));
+            for (int64_t j = 0; j < r; ++j) {
+                const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
+                for (int64_t i = 0; i < c; ++i) {
+                    Tcol[i + j * c] = src_col[col_positions[static_cast<size_t>(i)]];
+                }
+            }
+
+            std::vector<DataType>& P_dst = cache_slot ? *cache_slot : P_local;
+            P_dst.resize(static_cast<size_t>(r * c));
+            {
+                int m = static_cast<int>(r);
+                int n = static_cast<int>(c);
+                int k = static_cast<int>(r);
+                DataType alpha = DataType{1.0};
+                DataType beta = DataType{0.0};
+                int lda = static_cast<int>(source_box->X_RR_full.lda);
+                int ldb = static_cast<int>(c);
+                int ldc = static_cast<int>(r);
+                gemm_("N", "T", &m, &n, &k, &alpha,
+                      source_box->X_RR_full.data.data(), &lda,
+                      Tcol.data(), &ldb, &beta, P_dst.data(), &ldc);
+            }
+            P_ptr = &P_dst;
+        }
+
+        // ---- out -= temp2[rows] * P ----
+        int64_t row_slot_offset = 0, row_slot_count = 0;
+        if (!lazy_far_locate_endpoint_rows(
+                source_box, row_end, row_slot_offset, row_slot_count,
+                row_positions)) {
+            continue;
+        }
+
+        Trow.resize(static_cast<size_t>(a * r));
+        for (int64_t j = 0; j < r; ++j) {
+            const DataType* src_col = temp2 + j * temp2_ld + row_slot_offset;
+            for (int64_t i = 0; i < a; ++i) {
+                Trow[i + j * a] = src_col[row_positions[static_cast<size_t>(i)]];
+            }
+        }
+
+        {
+            int m = static_cast<int>(a);
+            int n = static_cast<int>(c);
+            int k = static_cast<int>(r);
+            DataType alpha = DataType{-1.0};
+            DataType beta = DataType{1.0};
+            int lda = static_cast<int>(a);
+            int ldb = static_cast<int>(r);
+            int ldc = static_cast<int>(out_ld);
+            gemm_("N", "N", &m, &n, &k, &alpha,
+                  Trow.data(), &lda, P_ptr->data(), &ldb,
+                  &beta, out, &ldc);
+        }
+    }
+}
+
+/**
+ * @brief Assemble-and-sketch the ID compression target without materializing it.
+ *
+ * Equivalent to gather_id_workspace followed by the sparse sign sketch inside
+ * compute_id_sparse_sketch, but the (m x n) stacked target never exists: each
+ * 2-hop neighbor's row block is produced in a reusable buffer and immediately
+ * accumulated into the (d x n) sketch using the same per-row stratified draws,
+ * in the same row order, from the same box-keyed RNG stream. Rows from stored
+ * far blocks are accumulated exactly as the materialized path would; kernel-
+ * fresh rows are evaluated in (row x col) orientation directly, which agrees
+ * with the transposed evaluation for the symmetric kernels this path is gated
+ * to (caller: symmetric, non-hermitian only).
+ *
+ * Per-thread memory drops from O(m*n) to O(n^2) plus one row block.
+ * Outputs via scratch: sketch_storage = Y (d x n, column-major),
+ * streamed_sketch_rows = d, streamed_sketch_valid = true, and
+ * workspace_rows/workspace_cols = (m, n) for bookkeeping.
+ */
+
+
+template<typename CoordType, typename DataType, typename KernelType>
+void gather_id_target_streamed(
+    ParallelTree<CoordType, DataType>* tree,
+    BoxData<CoordType, DataType>* box,
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    FactorizationThreadScratch<CoordType, DataType>& scratch,
+    bool on_boundary) {
+
+    scratch.streamed_sketch_valid = false;
+
+    if (box == nullptr || box->num_points == 0) {
+        scratch.workspace_rows = 0;
+        scratch.workspace_cols = 0;
+        return;
+    }
+
+    const int dimension = tree->dimension;
+    const int64_t n = box->num_points;
+    const LazyFarFieldMode lazy_mode = lazy_far_field_mode();
+    const std::vector<int64_t> extra_training_indices =
+        select_static_id_training_indices(tree, box);
+
+    // Neighbor eliminated status bookkeeping (same as gather_id_workspace).
+    for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
+        if (sketch_box_eliminated(level, box->one_hop[idx])) {
+            box->use_full_set[idx] = 0;
+        }
+    }
+
+    // Resolve a 2-hop neighbor to a box pointer (nullptr => assisting).
+    auto resolve_neighbor = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) {
+            auto ghost_it = level.ghost_id_to_index.find(morton);
+            if (ghost_it != level.ghost_id_to_index.end()) {
+                nb = &level.ghost_boxes[ghost_it->second];
+            }
+        }
+        return nb;
+    };
+    // CA levels retain remote fill generators in ghost boxes; Color levels
+    // receive the compact generator representation instead.
+    auto resolve_source = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) {
+            nb = level.find_ghost_box(morton);
+        }
+        if (nb == nullptr) {
+            nb = level.find_generator_box(morton);
+        }
+        return nb;
+    };
+
+    // ------------------------------------------------------------------
+    // Pass 1: row counts, per-pair fill sources, row policy.
+    // ------------------------------------------------------------------
+    auto& counts = scratch.stream_counts;
+    counts.clear();
+    auto& pair_src_mortons = scratch.stream_pair_source_mortons;
+    auto& pair_src_offsets = scratch.stream_pair_source_offsets;
+    pair_src_mortons.clear();
+    pair_src_offsets.clear();
+    pair_src_offsets.push_back(0);
+
+    std::vector<LazyFarSource> pair_sources_tmp;  // reused across neighbors
+
+    int64_t total_rows = 0;
+    for (size_t nb_idx = 0; nb_idx < box->two_hop.size(); ++nb_idx) {
+        const int64_t neighbor_morton = box->two_hop[nb_idx];
+        BoxData<CoordType, DataType>* nb_box = resolve_neighbor(neighbor_morton);
+
+        pair_sources_tmp.clear();
+        if (lazy_mode == LazyFarFieldMode::LAZY) {
+            collect_lazy_far_sources(
+                level, box, neighbor_morton, dimension, pair_sources_tmp);
+            for (const auto& src : pair_sources_tmp) {
+                pair_src_mortons.push_back(src.morton);
+            }
+        }
+        pair_src_offsets.push_back(static_cast<int64_t>(pair_src_mortons.size()));
+
+        int64_t n_neighbor = 0;
+        if (nb_box != nullptr) {
+            const bool both_on_boundary = on_boundary && nb_box->on_boundary;
+            const bool in_far_field_map =
+                box->far_field_interaction_map.find(neighbor_morton) !=
+                box->far_field_interaction_map.end();
+            const bool has_far_fill =
+                (lazy_mode == LazyFarFieldMode::LAZY) ? !pair_sources_tmp.empty()
+                                                      : in_far_field_map;
+            const bool nb_eliminated =
+                sketch_box_eliminated(level, neighbor_morton);
+
+            if (both_on_boundary && !has_far_fill) {
+                n_neighbor = nb_box->num_points;
+            } else if (nb_eliminated) {
+                n_neighbor = static_cast<int64_t>(nb_box->skeleton_indices.size());
+            } else {
+                n_neighbor = nb_box->num_points;
+            }
+        } else {
+            auto assist_it =
+                level.assisting_box_points_for_kernel_evaluation.find(neighbor_morton);
+            if (assist_it != level.assisting_box_points_for_kernel_evaluation.end()) {
+                const auto& assist_box = level.assisting_boxes[assist_it->second];
+                const bool assist_eliminated =
+                    level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end();
+                // Lazy: an eliminated remote box contributes its skeleton rows
+                // (the only rows its sources' temp2 slots can carry).
+                if (lazy_mode == LazyFarFieldMode::LAZY && assist_eliminated &&
+                    !assist_box.skel_indices.empty()) {
+                    n_neighbor = static_cast<int64_t>(assist_box.skel_indices.size());
+                } else {
+                    n_neighbor = static_cast<int64_t>(assist_box.indices.size());
+                }
+            }
+        }
+        if (n_neighbor == 0) {
+            throw std::runtime_error(
+                "gather_id_target_streamed: 2-hop neighbor box " +
+                std::to_string(neighbor_morton) + " not found or has no points");
+        }
+        counts.push_back(n_neighbor);
+        total_rows += n_neighbor;
+    }
+    total_rows += static_cast<int64_t>(extra_training_indices.size());
+
+    // ------------------------------------------------------------------
+    // Box-level fill sources and hoisted P_E bookkeeping (LAZY only).
+    // P_E = X_RR_full_E * temp2_E[B-full-rows]^T (r_E x n), computed on first
+    // touch into stream_P_all, shared by every pair that has E as a source.
+    // ------------------------------------------------------------------
+    auto& box_src_mortons = scratch.stream_box_source_mortons;
+    auto& box_src_boxes = scratch.stream_box_source_boxes;
+    auto& box_src_r = scratch.stream_box_source_r;
+    auto& P_all = scratch.stream_P_all;  // single P_E slot (r_max x n)
+    box_src_mortons.clear();
+    box_src_boxes.clear();
+    box_src_r.clear();
+
+    LazyFarEndpoint<CoordType> col_end;
+    col_end.morton = box->morton_index;
+    col_end.full_size = n;
+    col_end.skeleton = &box->skeleton_indices;
+    col_end.wanted = nullptr;
+    col_end.wanted_count = n;
+    col_end.indices = box->point_indices.data();
+
+    if (lazy_mode == LazyFarFieldMode::LAZY && !pair_src_mortons.empty()) {
+        int64_t r_max = 0;
+        for (int64_t candidate : box->one_hop) {
+                if (!sketch_box_eliminated(level, candidate)) {
+                continue;
+            }
+            if (level.elimination_wave.find(candidate) == level.elimination_wave.end()) {
+                continue;
+            }
+            BoxData<CoordType, DataType>* src_box = resolve_source(candidate);
+            if (src_box == nullptr) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed: fill source " +
+                    std::to_string(candidate) + " not found");
+            }
+            const int64_t r = src_box->X_NR.cols;
+            box_src_mortons.push_back(candidate);
+            box_src_boxes.push_back(src_box);
+            box_src_r.push_back(r);
+            r_max = std::max(r_max, r);
+        }
+        if (static_cast<int64_t>(P_all.size()) < r_max * n) {
+            P_all.resize(static_cast<size_t>(r_max * n));
+        }
+    }
+
+    // Computes P_E = X_RR_full_E * temp2_E[B-rows]^T (r x n) for box-source s
+    // into the single P slot; may set box_src_r[s] = 0 (nothing to contribute).
+    auto compute_P = [&](size_t s) -> const DataType* {
+        DataType* P = P_all.data();
+        BoxData<CoordType, DataType>* src_box = box_src_boxes[s];
+        const int64_t r = box_src_r[s];
+        if (r == 0 || !src_box->X_NR.is_allocated()) {
+            box_src_r[s] = 0;
+            return P;
+        }
+        if (!src_box->X_RR_full.is_allocated() ||
+            src_box->X_RR_full.rows != r || src_box->X_RR_full.cols != r) {
+            throw std::runtime_error(
+                "gather_id_target_streamed: X_RR_full missing for source " +
+                std::to_string(box_src_mortons[s]));
+        }
+
+        int64_t slot_offset = 0, slot_count = 0;
+        if (!lazy_far_locate_endpoint_rows(
+                src_box, col_end, slot_offset, slot_count, scratch.stream_positions)) {
+            box_src_r[s] = 0;  // no B rows in this source: contributes nothing
+            return P;
+        }
+
+        const DataType* temp2 = src_box->X_NR.data.data();
+        const int64_t temp2_ld = src_box->X_NR.lda;
+
+        // TB = temp2_E[B-rows] (n x r), gathered into stream_Trow.
+        auto& TB = scratch.stream_Trow;
+        TB.resize(static_cast<size_t>(n * r));
+        const int Kp = scratch.split_threads;
+        {
+            for (int64_t j = 0; j < r; ++j) {
+                const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
+                for (int64_t i = 0; i < n; ++i) {
+                    TB[i + j * n] =
+                        src_col[scratch.stream_positions[static_cast<size_t>(i)]];
+                }
+            }
+        }
+
+        // P = X_RR_full * TB^T (r x n); output columns split (op(B) = TB^T,
+        // so P[:, c0:c1) uses TB rows [c0, c1)).
+        {
+            int m_i = static_cast<int>(r);
+            int n_i = static_cast<int>(n);
+            int k_i = static_cast<int>(r);
+            DataType alpha = DataType{1.0};
+            DataType beta = DataType{0.0};
+            int lda = static_cast<int>(src_box->X_RR_full.lda);
+            int ldb = static_cast<int>(n);
+            int ldc = static_cast<int>(r);
+            split_columns_chunked(n, Kp, [&](int64_t c0, int64_t c1) {
+                int n_t = static_cast<int>(c1 - c0);
+                gemm_("N", "T", &m_i, &n_t, &k_i, &alpha, src_box->X_RR_full.data.data(), &lda,
+                      TB.data() + c0, &ldb, &beta, P + c0 * r, &ldc);
+            });
+        }
+        return P;
+    };
+
+    // ------------------------------------------------------------------
+    // Sketch accumulator: replicates compute_id_sparse_sketch's parameters
+    // (factor 1.0, sparsity 4, seed = morton + 1) and sketch_sparse_random's
+    // per-row draw sequence exactly, consuming rows in assembly order.
+    // ------------------------------------------------------------------
+    int64_t d = static_cast<int64_t>(std::ceil(1.0 * n));
+    d = std::min(d, total_rows);
+    d = std::max(d, n);
+    int sk = std::min(4, static_cast<int>(d));
+
+    int block_starts[4];
+    int block_ranges[4];
+    {
+        const int block_size = static_cast<int>(d) / sk;
+        for (int b = 0; b < sk; ++b) {
+            block_starts[b] = b * block_size;
+            const int end = (b == sk - 1) ? static_cast<int>(d) : (b + 1) * block_size;
+            block_ranges[b] = end - block_starts[b];
+        }
+    }
+    using RealType = std::conditional_t<
+        std::is_same_v<DataType, std::complex<double>>, double, DataType>;
+    const DataType norm_factor =
+        DataType(1.0 / std::sqrt(static_cast<RealType>(sk)));
+    std::mt19937_64 rng(static_cast<uint64_t>(box->morton_index + 1));
+
+    // Transposed-product organization (O' = A_b^T * S_b^T): blocks are
+    // produced ROW-major (a x n stored as its n x a column-major transpose),
+    // so each block row is contiguous, and the accumulator O' (n x d,
+    // column-major) receives it via dense unit-stride axpys into column idx.
+    // Both operands stream at unit stride and the update vectorizes; one
+    // resident n x d transpose at the end yields the column-major Y that
+    // CPQR needs. Per Y entry the contributions arrive in global row order
+    // via BLAS axpy, matching the materialized path's rounding exactly.
+    auto& Oacc = scratch.stream_sketch_acc;  // O' = Y^T (n x d, column-major)
+    Oacc.assign(static_cast<size_t>(n * d), DataType{0.0});
+
+    // rec_row0 >= 0: also record this block's draws (sketch-row index and
+    // sign per row and per b) at far-row positions rec_row0.. so the fill
+    // pass can sketch the sources' temp2 rows with the identical pattern.
+    auto& rec_idx = scratch.stream_row_idx;
+    auto& rec_sign = scratch.stream_row_sign;
+    auto& blk_idx = scratch.stream_blk_draw_idx;    // this block's draws (a x sk)
+    auto& blk_sgn = scratch.stream_blk_draw_sign;
+    auto consume_rows = [&](const DataType* blk_rowmajor, int64_t a, int64_t rec_row0) {
+        int n_int = static_cast<int>(n);
+        int inc_one = 1;
+        // Draws first (sequential RNG, recorded per block), then the axpys.
+        const size_t nd = static_cast<size_t>(a * sk);
+        if (blk_idx.size() < nd) {
+            blk_idx.resize(nd);
+            blk_sgn.resize(nd);
+        }
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const uint64_t rand_val = rng();
+                const int idx = block_starts[b] +
+                    static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                const bool positive = ((rand_val >> 63) & 1) != 0;
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                blk_idx[q] = static_cast<int32_t>(idx);
+                blk_sgn[q] = positive ? int8_t{1} : int8_t{-1};
+                if (rec_row0 >= 0) {
+                    const size_t g = static_cast<size_t>((rec_row0 + jj) * sk + b);
+                    rec_idx[g] = static_cast<int32_t>(idx);
+                    rec_sign[g] = blk_sgn[q];
+                }
+            }
+        }
+        // The axpys are memory-bound: splitting them by column ownership
+        // (tried) only multiplied cache traffic and taskloop barriers, so
+        // they stay on the box's own thread.
+        for (int64_t jj = 0; jj < a; ++jj) {
+            const DataType* row = blk_rowmajor + jj * n;  // contiguous
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                const int idx = blk_idx[q];
+                DataType sign = blk_sgn[q] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                DataType* ocol = Oacc.data() + static_cast<size_t>(idx) * n;
+                if constexpr (std::is_same_v<DataType, double>) {
+                    daxpy_(&n_int, &sign, const_cast<double*>(row), &inc_one,
+                           ocol, &inc_one);
+                } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                    zaxpy_(&n_int, &sign,
+                           const_cast<std::complex<double>*>(row), &inc_one,
+                           ocol, &inc_one);
+                }
+            }
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // Pass 2: produce each row block (kernel or stored rows only; lazy fill
+    // is deferred to pass 3, in sketch space), then sketch it.
+    // ------------------------------------------------------------------
+    auto& blockbuf = scratch.stream_block;
+    auto& row_indices = scratch.stream_row_indices;
+
+    const bool sketch_space_fill =
+        (lazy_mode == LazyFarFieldMode::LAZY) && !pair_src_mortons.empty();
+    auto& blk_row_base = scratch.stream_blk_row_base;
+    auto& blk_full_size = scratch.stream_blk_full_size;
+    auto& blk_skeleton = scratch.stream_blk_skeleton;
+    auto& blk_wanted = scratch.stream_blk_wanted;
+    if (sketch_space_fill) {
+        const size_t nblk = box->two_hop.size();
+        blk_row_base.assign(nblk, 0);
+        blk_full_size.assign(nblk, 0);
+        blk_skeleton.assign(nblk, nullptr);
+        blk_wanted.assign(nblk, nullptr);
+        const size_t need = static_cast<size_t>(
+            (total_rows - static_cast<int64_t>(extra_training_indices.size())) * sk);
+        if (rec_idx.size() < need) {
+            rec_idx.resize(need);
+            rec_sign.resize(need);
+        }
+    }
+    int64_t row_base = 0;
+
+    for (size_t nb_idx = 0; nb_idx < box->two_hop.size(); ++nb_idx) {
+        const int64_t neighbor_morton = box->two_hop[nb_idx];
+        const int64_t a = counts[nb_idx];
+        BoxData<CoordType, DataType>* nb_box = resolve_neighbor(neighbor_morton);
+
+        const int64_t src_begin = pair_src_offsets[nb_idx];
+        const int64_t src_end = pair_src_offsets[nb_idx + 1];
+        const bool lazy_fill =
+            (lazy_mode == LazyFarFieldMode::LAZY) && (src_end > src_begin);
+
+        blockbuf.resize(static_cast<size_t>(a * n));
+
+        bool produced = false;
+        if (!lazy_fill && lazy_mode != LazyFarFieldMode::LAZY) {
+            // Eager mode: stored far block if present. The slicer emits the
+            // (a x n) block column-major; transpose once (cache-resident)
+            // into the row-major layout the sketch consumes.
+            auto it = box->far_field_interaction_map.find(neighbor_morton);
+            if (it != box->far_field_interaction_map.end()) {
+                auto& stored_tmp = scratch.stream_stored_tmp;
+                get_sliced_neighbor_block_into(
+                    neighbor_morton,
+                    box->far_field_modified_interactions[it->second],
+                    level, true, n, stored_tmp);
+                // The materialized path copies whatever row count the slicer
+                // returns into a pre-zeroed workspace and advances by the counted
+                // rows: rows beyond the slice stay zero, rows beyond the count are
+                // overwritten by the next block. Replicate exactly (bitwise parity
+                // with gather_id_workspace), rather than asserting equality.
+                const int64_t avail = static_cast<int64_t>(stored_tmp.size()) / n;
+                const int64_t copy_rows = std::min(avail, a);
+                for (int64_t c = 0; c < n; ++c) {
+                    const DataType* src_col = stored_tmp.data() + c * avail;
+                    for (int64_t j = 0; j < copy_rows; ++j) {
+                        blockbuf[static_cast<size_t>(j) * n + c] = src_col[j];
+                    }
+                }
+                if (copy_rows < a) {
+                    std::fill(blockbuf.begin() + static_cast<size_t>(copy_rows) * n,
+                              blockbuf.begin() + static_cast<size_t>(a) * n, DataType{0.0});
+                }
+            produced = true;
+            }
+        }
+
+        if (!produced) {
+            // Kernel-fresh rows at the policy row set.
+            const int64_t* active_row_indices = nullptr;
+            const std::vector<int64_t>* wanted = nullptr;
+            int64_t full_size = 0;
+            const std::vector<int64_t>* skeleton = nullptr;
+
+            if (nb_box != nullptr) {
+                full_size = nb_box->num_points;
+                skeleton = &nb_box->skeleton_indices;
+
+                // Recompute the exact row policy from pass 1 (do not infer it
+                // from counts: a full-rank neighbor has skeleton == full set
+                // but in a different order).
+                const bool both_on_boundary = on_boundary && nb_box->on_boundary;
+                const bool nb_eliminated =
+                    level.eliminated_boxes.find(neighbor_morton) !=
+                    level.eliminated_boxes.end();
+                const bool has_far_fill_here = lazy_fill;  // eager stored case handled above
+                const bool use_skeleton_rows =
+                    !(both_on_boundary && !has_far_fill_here) && nb_eliminated;
+
+                if (use_skeleton_rows) {
+                    if (a != static_cast<int64_t>(nb_box->skeleton_indices.size())) {
+                        throw std::runtime_error(
+                            "gather_id_target_streamed: skeleton row count mismatch "
+                            "for neighbor " + std::to_string(neighbor_morton));
+                    }
+                    wanted = &nb_box->skeleton_indices;
+                    row_indices.resize(static_cast<size_t>(a));
+                    for (int64_t i = 0; i < a; ++i) {
+                        const int64_t src_idx =
+                            nb_box->skeleton_indices[static_cast<size_t>(i)];
+                        row_indices[static_cast<size_t>(i)] =
+                            nb_box->point_indices[static_cast<size_t>(src_idx)];
+                    }
+                    active_row_indices = row_indices.data();
+                } else {
+                    if (a != nb_box->num_points) {
+                        throw std::runtime_error(
+                            "gather_id_target_streamed: full row count mismatch "
+                            "for neighbor " + std::to_string(neighbor_morton));
+                    }
+                    active_row_indices = nb_box->point_indices.data();
+                }
+            } else {
+                auto assist_it =
+                    level.assisting_box_points_for_kernel_evaluation.find(neighbor_morton);
+                if (assist_it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                    throw std::runtime_error(
+                        "gather_id_target_streamed: could not find indices "
+                        "for neighbor " + std::to_string(neighbor_morton));
+                }
+                const auto& assist_box = level.assisting_boxes[assist_it->second];
+                full_size = static_cast<int64_t>(assist_box.indices.size());
+                const bool assist_eliminated =
+                    level.eliminated_boxes.find(neighbor_morton) != level.eliminated_boxes.end();
+                if (lazy_mode == LazyFarFieldMode::LAZY && assist_eliminated &&
+                    !assist_box.skel_indices.empty()) {
+                    if (a != static_cast<int64_t>(assist_box.skel_indices.size())) {
+                        throw std::runtime_error(
+                            "gather_id_target_streamed: assisting skeleton row count mismatch "
+                            "for neighbor " + std::to_string(neighbor_morton));
+                    }
+                    skeleton = &assist_box.skel_indices;
+                    wanted = &assist_box.skel_indices;
+                    row_indices.resize(static_cast<size_t>(a));
+                    for (int64_t i = 0; i < a; ++i) {
+                        const int64_t src_idx = assist_box.skel_indices[static_cast<size_t>(i)];
+                        row_indices[static_cast<size_t>(i)] =
+                            assist_box.indices[static_cast<size_t>(src_idx)];
+                    }
+                    active_row_indices = row_indices.data();
+                } else {
+                    active_row_indices = assist_box.indices.data();
+                }
+            }
+
+            // Swapped orientation: evaluates (n x a) column-major, which is
+            // exactly the (a x n) block in row-major layout (kernel symmetric).
+            {
+                evaluate_block_by_index_split<DataType>(
+                    kernel,
+                    box->point_indices.data(), n,
+                    active_row_indices, a,
+                    blockbuf.data(), n,
+                    scratch.split_threads);
+            }
+
+            if (lazy_fill) {
+                // The fill is applied in sketch space (pass 3); keep the row
+                // policy so the sources' temp2 rows can be located later.
+                blk_row_base[nb_idx] = row_base;
+                blk_full_size[nb_idx] = full_size;
+                blk_skeleton[nb_idx] = skeleton;
+                blk_wanted[nb_idx] = wanted;
+            }
+        }
+
+        consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+        row_base += a;
+    }
+
+    if (!extra_training_indices.empty()) {
+        const int64_t extra_rows =
+            static_cast<int64_t>(extra_training_indices.size());
+        blockbuf.resize(static_cast<size_t>(extra_rows * n));
+        evaluate_block_by_index_split<DataType>(
+            kernel,
+            box->point_indices.data(), n,
+            extra_training_indices.data(), extra_rows,
+            blockbuf.data(), n,
+            scratch.split_threads);
+        consume_rows(blockbuf.data(), extra_rows, int64_t{-1});
+    }
+
+    // ------------------------------------------------------------------
+    // Pass 3 (LAZY): apply the 2-hop fill in sketch space. For each source E
+    // (canonical order), W_E = sum over its pairs of S_pair * temp2_E[rows]
+    // (d x r) is accumulated with the recorded draws, then one product
+    // O' -= P_E^T * W_E^T folds it into the sketch. This is the same
+    // quantity as sketching (block - temp2_E[rows] * P_E) for every pair,
+    // regrouped by associativity: S_C (T_C P_E) == (S_C T_C) P_E. Cost per
+    // source drops from (sum of pair rows) * r * n to d * r * n plus a sparse
+    // row sketch, and only one W, one P and one row slice are live.
+    // ------------------------------------------------------------------
+    if (sketch_space_fill) {
+        auto& W = scratch.stream_W;      // W_E^T: r x d, column-major
+        auto& Trow = scratch.stream_Trow;
+        auto& TrowT = scratch.stream_TrowT;
+        int inc_one = 1;
+        for (size_t src_idx = 0; src_idx < box_src_mortons.size(); ++src_idx) {
+            const DataType* P = compute_P(src_idx);
+            const int64_t r = box_src_r[src_idx];
+            if (r == 0) {
+                continue;
+            }
+            BoxData<CoordType, DataType>* src_box = box_src_boxes[src_idx];
+            const int64_t src_morton = box_src_mortons[src_idx];
+            W.assign(static_cast<size_t>(r * d), DataType{0.0});
+            bool any_rows = false;
+
+            for (size_t nb_idx = 0; nb_idx < box->two_hop.size(); ++nb_idx) {
+                bool lists_source = false;
+                for (int64_t si = pair_src_offsets[nb_idx];
+                     si < pair_src_offsets[nb_idx + 1]; ++si) {
+                    if (pair_src_mortons[si] == src_morton) {
+                        lists_source = true;
+                        break;
+                    }
+                }
+                if (!lists_source) {
+                    continue;
+                }
+                const int64_t a = counts[nb_idx];
+
+                LazyFarEndpoint<CoordType> row_end;
+                row_end.morton = box->two_hop[nb_idx];
+                row_end.full_size = blk_full_size[nb_idx];
+                row_end.skeleton = blk_skeleton[nb_idx];
+                row_end.wanted = blk_wanted[nb_idx];
+                row_end.wanted_count = a;
+                row_end.indices = nullptr;
+
+                int64_t slot_offset = 0, slot_count = 0;
+                if (!lazy_far_locate_endpoint_rows(
+                        src_box, row_end, slot_offset, slot_count,
+                        scratch.stream_positions)) {
+                    continue;
+                }
+
+                // Gather the (a x r) slice column-wise (streams temp2), then
+                // transpose cache-resident so each row is contiguous.
+                const DataType* temp2 = src_box->X_NR.data.data();
+                const int64_t temp2_ld = src_box->X_NR.lda;
+                Trow.resize(static_cast<size_t>(a * r));
+                TrowT.resize(static_cast<size_t>(r * a));
+                // Memory-bound gather, transpose and sparse axpys stay on the
+                // box's own thread (splitting them multiplied cache traffic).
+                for (int64_t j = 0; j < r; ++j) {
+                    const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
+                    for (int64_t i = 0; i < a; ++i) {
+                        Trow[i + j * a] =
+                            src_col[scratch.stream_positions[static_cast<size_t>(i)]];
+                    }
+                }
+                constexpr int64_t tile = 32;
+                for (int64_t i0 = 0; i0 < a; i0 += tile) {
+                    const int64_t i1 = std::min(a, i0 + tile);
+                    for (int64_t j0 = 0; j0 < r; j0 += tile) {
+                        const int64_t j1 = std::min(r, j0 + tile);
+                        for (int64_t i = i0; i < i1; ++i) {
+                            for (int64_t j = j0; j < j1; ++j) {
+                                TrowT[j + i * r] = Trow[i + j * a];
+                            }
+                        }
+                    }
+                }
+
+                // Sketch the rows with the draws recorded for this block.
+                const int64_t rb = blk_row_base[nb_idx];
+                int r_int = static_cast<int>(r);
+                for (int64_t i = 0; i < a; ++i) {
+                    const DataType* trow = TrowT.data() + i * r;
+                    for (int b = 0; b < sk; ++b) {
+                        const size_t g = static_cast<size_t>((rb + i) * sk + b);
+                        DataType sign = rec_sign[g] > 0 ? norm_factor
+                                                        : DataType{0.0} - norm_factor;
+                        DataType* wcol = W.data() + static_cast<size_t>(rec_idx[g]) * r;
+                        if constexpr (std::is_same_v<DataType, double>) {
+                            daxpy_(&r_int, &sign, const_cast<double*>(trow), &inc_one,
+                                   wcol, &inc_one);
+                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                            zaxpy_(&r_int, &sign,
+                                   const_cast<std::complex<double>*>(trow), &inc_one,
+                                   wcol, &inc_one);
+                        }
+                    }
+                }
+                any_rows = true;
+            }
+            if (!any_rows) {
+                continue;
+            }
+
+            // O' (n x d) -= P^T (n x r) * W_E^T (r x d); output columns split.
+            int m_i = static_cast<int>(n);
+            int n_i = static_cast<int>(d);
+            int k_i = static_cast<int>(r);
+            DataType alpha = DataType{-1.0};
+            DataType beta = DataType{1.0};
+            int lda = static_cast<int>(r);
+            int ldb = static_cast<int>(r);
+            int ldc = static_cast<int>(n);
+            const int Kg = scratch.split_threads;
+            split_columns_chunked(d, Kg, [&](int64_t c0, int64_t c1) {
+                int n_t = static_cast<int>(c1 - c0);
+                gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, P, &lda, W.data() + c0 * r, &ldb,
+                      &beta, Oacc.data() + c0 * n, &ldc);
+            });
+        }
+    }
+
+    // Transpose the (n x d) accumulator O' into the column-major (d x n) Y
+    // that CPQR consumes: Y[i, j] = O'[j, i]. Cache-resident, once per box.
+    {
+        auto& Y = scratch.sketch_storage;
+        Y.resize(static_cast<size_t>(d * n));
+        for (int64_t j = 0; j < n; ++j) {
+            const DataType* ocol_base = scratch.stream_sketch_acc.data();
+            for (int64_t i = 0; i < d; ++i) {
+                Y[i + j * d] = ocol_base[static_cast<size_t>(i) * n + j];
+            }
+        }
+    }
+
+    scratch.workspace_rows = total_rows;
+    scratch.workspace_cols = n;
+    scratch.streamed_sketch_rows = d;
+    scratch.streamed_sketch_valid = true;
+}
+
+
+
 template<typename CoordType, typename DataType, typename KernelType>
 void compute_and_modify(
     int dimension,
@@ -7104,13 +8759,13 @@ void compute_and_modify(
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
     double tolerance,
-    bool use_sketch,
+    int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     PendingFactorUpdates<DataType> *pending_updates,
     FactorizationMethod factorization_method, bool store = false,
     int DEBUG = 0, int VERBOSE = 0) {
-    
+
     static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, std::complex<double>>,
                   "Only double precision supported currently");
     auto& workspace = scratch.workspace;
@@ -7118,7 +8773,7 @@ void compute_and_modify(
     const int64_t workspace_cols = scratch.workspace_cols;
     auto& X_NN_full = scratch.x_nn_full;
     auto& sketch_storage = scratch.sketch_storage;
-    
+
     if (box->num_points == 0) {
         workspace.clear();
         // level.eliminated_boxes.insert(box->morton_index);
@@ -7210,7 +8865,14 @@ void compute_and_modify(
     // );
     IDResult<DataType> id_result;
     try {
-        if (use_sketch) {
+        if (scratch.streamed_sketch_valid) {
+            id_result = fmm::compute_id_complex(
+                sketch_storage.data(),
+                scratch.streamed_sketch_rows,
+                workspace_cols,
+                scratch.streamed_sketch_rows,
+                tolerance, 0);
+        } else if (use_sketch != 0) {
             id_result = fmm::compute_id_sparse_sketch(
                 workspace.data(), sketch_storage,
                 workspace_rows, workspace_cols, workspace_rows,
@@ -7225,8 +8887,10 @@ void compute_and_modify(
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
     } catch (const std::exception& e) {
-        const auto workspace_summary =
-            summarize_colmajor_matrix(workspace, workspace_rows, workspace_cols);
+        const auto workspace_summary = summarize_colmajor_matrix(
+            workspace,
+            scratch.streamed_sketch_valid ? int64_t{0} : workspace_rows,
+            workspace_cols);
         std::ostringstream oss;
         oss << "compute_and_modify: ID failure for box " << box->morton_index
             << " (num_points=" << box->num_points
@@ -7238,9 +8902,14 @@ void compute_and_modify(
             << ", near_field_blocks=" << box->near_field_modified_interactions.size()
             << ", workspace_rows=" << workspace_rows
             << ", workspace_cols=" << workspace_cols
-            << ", id_mode=" << (use_sketch ? "sparse_sketch" : "full_workspace");
-        if (use_sketch) {
-            oss << ", sketch_rows=" << sketch_rows
+            << ", id_mode="
+            << (scratch.streamed_sketch_valid
+                    ? "streamed_sketch"
+                    : (use_sketch != 0 ? "materialized_sketch" : "full_workspace"));
+        if (use_sketch != 0) {
+            oss << ", sketch_rows="
+                << (scratch.streamed_sketch_valid
+                        ? scratch.streamed_sketch_rows : sketch_rows)
                 << ", sketch_cols=" << workspace_cols
                 << ", sketch_factor=" << sketch_factor
                 << ", sketch_nonzeros=" << sketch_nonzeros;
@@ -7249,9 +8918,13 @@ void compute_and_modify(
             << ")\n  "
             << format_matrix_diagnostic_summary("workspace", workspace_summary)
             << "\n  underlying_error=" << e.what();
-        if (use_sketch) {
+        if (use_sketch != 0) {
             const auto sketch_summary =
-                summarize_colmajor_matrix(sketch_storage, sketch_rows, workspace_cols);
+                summarize_colmajor_matrix(
+                    sketch_storage,
+                    scratch.streamed_sketch_valid
+                        ? scratch.streamed_sketch_rows : sketch_rows,
+                    workspace_cols);
             oss << "\n  "
                 << format_matrix_diagnostic_summary("sketch", sketch_summary);
         }
@@ -7281,6 +8954,12 @@ void compute_and_modify(
     int64_t r = box->redundant_indices.size();
     
     if (r == 0) {
+        if (store) {
+            // A full-rank box has no X_NR rows, but owner payloads still carry
+            // one row-count entry per one-hop slot.
+            box->deferred_xnn_neighbor_point_counts.assign(
+                box->one_hop.size(), 0);
+        }
         workspace.clear();
         // level.eliminated_boxes.insert(box->morton_index);
         return;  // Full rank, nothing to compress
@@ -7491,6 +9170,12 @@ void compute_and_modify(
                &alpha, T.data.data(), &K,
                A_SS.data(), &K,
                &beta, box->X_RS.data.data(), &M);
+    }
+
+    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY && r > 0) {
+        std::vector<DataType> x_rr_copy(box->X_RR.data);
+        box->X_RR_full.set_owned(
+            r, r, std::move(x_rr_copy), MatrixStorage<DataType>::FULL);
     }
     
     // Factorize X_RR
@@ -8048,10 +9733,12 @@ void compute_and_modify(
 
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         nb_indices, n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), n_neighbor
+                        A_NB.data(), n_neighbor,
+                        scratch.split_threads
                     );
 
                     for (int64_t j = 0; j < k; ++j) {
@@ -8081,10 +9768,12 @@ void compute_and_modify(
                     
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         skeleton_indices.data(), n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), n_neighbor
+                        A_NB.data(), n_neighbor,
+                        scratch.split_threads
                     );
                     
                     for (int64_t j = 0; j < k; ++j) {
@@ -8107,10 +9796,12 @@ void compute_and_modify(
                     // Local or ghost box that has NOT been eliminated: use full coords
                     auto& A_NB = scratch.eval_buffer;
                     A_NB.resize(static_cast<size_t>(n_neighbor * workspace_cols));
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         neighbor_box->point_indices.data(), n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), n_neighbor
+                        A_NB.data(), n_neighbor,
+                        scratch.split_threads
                     );
                     
                     for (int64_t j = 0; j < k; ++j) {
@@ -8273,10 +9964,12 @@ void compute_and_modify(
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block_by_index(
+                        evaluate_block_by_index_split<DataType>(
+                            kernel,
                             box->point_indices.data(), workspace_cols,
                             assisting_neighbor->indices.data(), n_neighbor,
-                            A_BN.data(), workspace_cols
+                            A_BN.data(), workspace_cols,
+                            scratch.split_threads
                         );
                         
                         for (int64_t j = 0; j < n_neighbor; ++j) {
@@ -8308,10 +10001,12 @@ void compute_and_modify(
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block_by_index(
+                        evaluate_block_by_index_split<DataType>(
+                            kernel,
                             box->point_indices.data(), workspace_cols,
                             skeleton_indices.data(), n_neighbor,
-                            A_BN.data(), workspace_cols
+                            A_BN.data(), workspace_cols,
+                            scratch.split_threads
                         );
                         
                         for (int64_t j = 0; j < n_neighbor; ++j) {
@@ -8405,7 +10100,7 @@ void compute_and_modify(
     int64_t workspace_rows,
     int64_t workspace_cols,
     double tolerance,
-    bool use_sketch,
+    int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
     std::vector<DataType>& X_NN_full,
@@ -8939,7 +10634,8 @@ std::vector<DataType> extract_child_interaction(
     TreeLevel<CoordType, DataType>& child_level,
     int dimension,
     KernelType* kernel,
-    bool DEBUG = false) {
+    bool DEBUG = false,
+    LazyFarTransitionCache<DataType>* lazy_cache = nullptr) {
     
     int64_t n_i = child_i->skeleton_indices.size();
     int64_t n_j = child_j->skeleton_indices.size();
@@ -9001,9 +10697,59 @@ std::vector<DataType> extract_child_interaction(
         reaches_second_hop = reaches_second_hop || distance == 2;
     }
     is_two_hop = is_two_hop && reaches_second_hop;
+
+    const LazyFarFieldMode lazy_mode = lazy_far_field_mode();
+    std::vector<LazyFarSource> lazy_sources;
+    if (is_two_hop && lazy_mode == LazyFarFieldMode::LAZY) {
+        collect_lazy_far_sources(
+            child_level, child_i, child_j->morton_index,
+            dimension, lazy_sources);
+    }
+
+    auto make_lazy_endpoint = [](
+        BoxData<CoordType, DataType>* child,
+        std::vector<int64_t>& index_storage) {
+        LazyFarEndpoint<CoordType> endpoint;
+        endpoint.morton = child->morton_index;
+        endpoint.full_size = child->num_points;
+        endpoint.skeleton = &child->skeleton_indices;
+        endpoint.wanted = &child->skeleton_indices;
+        endpoint.wanted_count =
+            static_cast<int64_t>(child->skeleton_indices.size());
+        index_storage.resize(static_cast<size_t>(endpoint.wanted_count));
+        for (int64_t i = 0; i < endpoint.wanted_count; ++i) {
+            const int64_t local_index =
+                child->skeleton_indices[static_cast<size_t>(i)];
+            index_storage[static_cast<size_t>(i)] =
+                child->point_indices[static_cast<size_t>(local_index)];
+        }
+        endpoint.indices = index_storage.data();
+        return endpoint;
+    };
+
+    if (is_two_hop && lazy_mode == LazyFarFieldMode::LAZY &&
+        !lazy_sources.empty()) {
+        std::vector<int64_t> row_indices;
+        std::vector<int64_t> column_indices;
+        LazyFarEndpoint<CoordType> row_endpoint =
+            make_lazy_endpoint(child_i, row_indices);
+        LazyFarEndpoint<CoordType> column_endpoint =
+            make_lazy_endpoint(child_j, column_indices);
+        std::vector<DataType> block(
+            static_cast<size_t>(n_i * n_j), DataType{0.0});
+        static const std::vector<LazyFarSource> no_sources;
+        regenerate_far_block_into(
+            child_level, kernel, row_endpoint, column_endpoint,
+            no_sources, block.data(), n_i);
+        lazy_far_apply_sources_cached(
+            child_level, row_endpoint, column_endpoint,
+            lazy_sources, lazy_cache, block.data(), n_i);
+        return block;
+    }
     
     // 1-hop or 2-hop: look for modified interaction
-    if (is_one_hop || is_two_hop) {
+    if ((is_one_hop || is_two_hop) &&
+        !(is_two_hop && lazy_mode == LazyFarFieldMode::LAZY)) {
         auto& interaction_map = is_one_hop ? 
             child_i->near_field_interaction_map :
             child_i->far_field_interaction_map;
@@ -9434,7 +11180,8 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
     TreeLevel<CoordType, DataType>& child_level,
     int dimension,
     KernelType* kernel,
-    bool transpose_if_found = true) {
+    bool transpose_if_found = true,
+    LazyFarTransitionCache<DataType>* lazy_cache = nullptr) {
     
 
     // int rank;
@@ -9477,8 +11224,112 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
         }
     }
     
+    const LazyFarFieldMode lazy_mode = lazy_far_field_mode();
+    std::vector<LazyFarSource> lazy_sources;
+    bool is_two_hop = false;
+    if (lazy_mode == LazyFarFieldMode::LAZY) {
+        int64_t source_coords[3] = {0, 0, 0};
+        int64_t target_coords[3] = {0, 0, 0};
+        lazy_far_decode_coords(
+            dimension, source_child->morton_index, source_coords);
+        lazy_far_decode_coords(dimension, target_morton, target_coords);
+        int64_t chebyshev_distance = 0;
+        for (int d = 0; d < dimension; ++d) {
+            chebyshev_distance = std::max(
+                chebyshev_distance,
+                std::abs(source_coords[d] - target_coords[d]));
+        }
+        is_two_hop = chebyshev_distance == 2;
+        if (is_two_hop) {
+            collect_lazy_far_sources(
+                child_level, source_child, target_morton,
+                dimension, lazy_sources);
+        }
+    }
+
+    if (is_two_hop && !lazy_sources.empty()) {
+        std::vector<int64_t> source_indices(static_cast<size_t>(n_source));
+        for (int64_t i = 0; i < n_source; ++i) {
+            const int64_t local_index =
+                source_child->skeleton_indices[static_cast<size_t>(i)];
+            source_indices[static_cast<size_t>(i)] =
+                source_child->point_indices[static_cast<size_t>(local_index)];
+        }
+
+        LazyFarEndpoint<CoordType> source_endpoint;
+        source_endpoint.morton = source_child->morton_index;
+        source_endpoint.full_size = source_child->num_points;
+        source_endpoint.skeleton = &source_child->skeleton_indices;
+        source_endpoint.wanted = &source_child->skeleton_indices;
+        source_endpoint.wanted_count = n_source;
+        source_endpoint.indices = source_indices.data();
+
+        LazyFarEndpoint<CoordType> target_endpoint;
+        target_endpoint.morton = target_morton;
+        target_endpoint.wanted_count = n_target;
+        target_endpoint.indices = target_indices.data();
+
+        BoxData<CoordType, DataType>* target_box =
+            child_level.find_local_box(target_morton);
+        if (target_box == nullptr) {
+            target_box = child_level.find_ghost_box(target_morton);
+        }
+        if (target_box != nullptr) {
+            target_endpoint.full_size = target_box->num_points;
+            target_endpoint.skeleton = &target_box->skeleton_indices;
+            target_endpoint.wanted = &target_box->skeleton_indices;
+        } else {
+            auto assist_it =
+                child_level.assisting_box_points_for_kernel_evaluation.find(
+                    target_morton);
+            if (assist_it ==
+                child_level.assisting_box_points_for_kernel_evaluation.end()) {
+                throw std::runtime_error(
+                    "extract assisting interaction: lazy target missing");
+            }
+            const auto& assist = child_level.assisting_boxes[
+                static_cast<size_t>(assist_it->second)];
+            target_endpoint.full_size =
+                static_cast<int64_t>(assist.indices.size());
+            target_endpoint.skeleton = &assist.skel_indices;
+            target_endpoint.wanted = &assist.skel_indices;
+        }
+
+        if (target_endpoint.wanted == nullptr ||
+            static_cast<int64_t>(target_endpoint.wanted->size()) != n_target) {
+            throw std::runtime_error(
+                "extract assisting interaction: lazy target size mismatch");
+        }
+
+        static const std::vector<LazyFarSource> no_sources;
+        if (transpose_if_found) {
+            std::vector<DataType> block(
+                static_cast<size_t>(n_source * n_target), DataType{0.0});
+            regenerate_far_block_into(
+                child_level, kernel, source_endpoint, target_endpoint,
+                no_sources, block.data(), n_source);
+            lazy_far_apply_sources_cached(
+                child_level, source_endpoint, target_endpoint,
+                lazy_sources, lazy_cache, block.data(), n_source);
+            return block;
+        }
+
+        std::vector<DataType> block(
+            static_cast<size_t>(n_target * n_source), DataType{0.0});
+        regenerate_far_block_into(
+            child_level, kernel, target_endpoint, source_endpoint,
+            no_sources, block.data(), n_target);
+        lazy_far_apply_sources_cached(
+            child_level, target_endpoint, source_endpoint,
+            lazy_sources, lazy_cache, block.data(), n_target);
+        return block;
+    }
+
     // Try to find in far_field_modified_interactions
     auto far_it = source_child->far_field_interaction_map.find(target_morton);
+    if (lazy_mode == LazyFarFieldMode::LAZY) {
+        far_it = source_child->far_field_interaction_map.end();
+    }
     if (far_it != source_child->far_field_interaction_map.end()) {
         auto& block = source_child->far_field_modified_interactions[far_it->second];
         
@@ -9653,8 +11504,24 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
         int64_t num_points;
         bool is_ghost;  // true if from ghost_boxes, false if from assisting_boxes
     };
-    
-    for (size_t b1_idx = 0; b1_idx < parent_boxes.size(); ++b1_idx) {
+
+    struct DeferredParentBlock {
+        size_t target_index;
+        ModifiedBlock<DataType> block;
+    };
+    std::vector<std::vector<DeferredParentBlock>> deferred_parent_blocks(
+        parent_boxes.size());
+    std::exception_ptr build_exception;
+    std::mutex build_exception_mutex;
+    std::atomic<bool> build_failed{false};
+    const bool parallel_build = is_symmetric || is_hermitian;
+
+    #pragma omp parallel for schedule(dynamic) if (parallel_build && parent_boxes.size() > 1)
+    for (int64_t b1_i = 0;
+         b1_i < static_cast<int64_t>(parent_boxes.size()); ++b1_i) {
+        const size_t b1_idx = static_cast<size_t>(b1_i);
+        if (build_failed.load(std::memory_order_relaxed)) continue;
+        try {
         auto& B1 = parent_boxes[b1_idx];
         // printf("Assembling interactions for parent box %lu (morton %lu)\n", 
         //        b1_idx, B1.morton_index);
@@ -9668,6 +11535,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
         relevant_neighbors.insert(relevant_neighbors.end(), one_hop.begin(), one_hop.end());
         
         for (uint64_t neighbor_morton : relevant_neighbors) {
+            LazyFarTransitionCache<DataType> pair_lazy_cache;
             
             
             
@@ -9694,7 +11562,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                         int64_t n_j = child_j.skeleton_indices.size();
                         
                         std::vector<DataType> C_block = extract_child_interaction(
-                            &child_i, &child_j, child_level, dimension, kernel);
+                            &child_i, &child_j, child_level, dimension, kernel,
+                            false, &pair_lazy_cache);
                         
                         for (int64_t col = 0; col < n_j; ++col) {
                             for (int64_t row = 0; row < n_i; ++row) {
@@ -9746,7 +11615,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             int64_t n_j = child_j.skeleton_indices.size();
                             
                             std::vector<DataType> C_block = extract_child_interaction(
-                                &child_i, &child_j, child_level, dimension, kernel);
+                                &child_i, &child_j, child_level, dimension, kernel,
+                                false, &pair_lazy_cache);
                             
                             for (int64_t col = 0; col < n_j; ++col) {
                                 for (int64_t row = 0; row < n_i; ++row) {
@@ -9770,6 +11640,10 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                         block_b2.set_a_ns_owned(
                             total_rows, total_cols, std::move(I_B1_B2),
                             MatrixStorage<DataType>::FULL);
+                        if (!share_symmetric_a_ns_pair(block_b2, block_b1)) {
+                            throw std::runtime_error(
+                                "build_parent_level: cannot share symmetric parent edge");
+                        }
                     } else {
                         // Preserve the directed Hermitian path until conjugate
                         // views are represented explicitly.
@@ -9798,20 +11672,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                     B1.near_field_interaction_map[B2.morton_index] =
                         block_idx_b1;
 
-                    int64_t block_idx_b2 =
-                        B2.near_field_modified_interactions.size();
-                    B2.near_field_modified_interactions.push_back(
-                        std::move(block_b2));
-                    B2.near_field_interaction_map[B1.morton_index] =
-                        block_idx_b2;
-
-                    if (is_symmetric && !is_hermitian) {
-                        share_symmetric_a_ns_pair(
-                            B2.near_field_modified_interactions[
-                                static_cast<size_t>(block_idx_b2)],
-                            B1.near_field_modified_interactions[
-                                static_cast<size_t>(block_idx_b1)]);
-                    }
+                    deferred_parent_blocks[b1_idx].push_back(
+                        DeferredParentBlock{b2_idx, std::move(block_b2)});
                     
                 } else {
                     
@@ -9886,7 +11748,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             if (child_j_info.is_ghost) {
                                 // Use extract_child_interaction for ghost boxes
                                 C_block = extract_child_interaction(
-                                    &child_i, child_j_info.box_ptr, child_level, dimension, kernel);
+                                    &child_i, child_j_info.box_ptr, child_level,
+                                    dimension, kernel, false, &pair_lazy_cache);
                                 
                             } else {
                                 // // Direct kernel evaluation for assisting boxes
@@ -9917,7 +11780,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                     child_level,
                                     dimension,
                                     kernel,
-                                    true  // TRANSPOSE: child_i.A_NS[child_j] is (n_j × n_i), need (n_i × n_j)
+                                    true, // transpose source-owned A_NS
+                                    &pair_lazy_cache
                                 );
                             }
                             
@@ -9980,7 +11844,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             int64_t n_j = child_j.skeleton_indices.size();
                             
                             std::vector<DataType> C_block = extract_child_interaction(
-                                &child_i, &child_j, child_level, dimension, kernel);
+                                &child_i, &child_j, child_level, dimension, kernel,
+                                false, &pair_lazy_cache);
                             
                             for (int64_t col = 0; col < n_j; ++col) {
                                 for (int64_t row = 0; row < n_i; ++row) {
@@ -10097,7 +11962,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             
                             if (child_j_info.is_ghost) {
                                 C_block = extract_child_interaction(
-                                    &child_i, child_j_info.box_ptr, child_level, dimension, kernel);
+                                    &child_i, child_j_info.box_ptr, child_level,
+                                    dimension, kernel, false, &pair_lazy_cache);
                             } else {
                                 // // Direct kernel evaluation
                                 // C_block.resize(n_i * n_j);
@@ -10116,7 +11982,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                     child_level,
                                     dimension,
                                     kernel,
-                                    true  // TRANSPOSE: child_i.A_NS[child_j] is (n_j × n_i), need (n_i × n_j)
+                                    true,
+                                    &pair_lazy_cache
                                 );
                             }
                             
@@ -10158,7 +12025,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                             
                             if (child_i_info.is_ghost) {
                                 C_block = extract_child_interaction(
-                                    child_i_info.box_ptr, &child_j, child_level, dimension, kernel);
+                                    child_i_info.box_ptr, &child_j, child_level,
+                                    dimension, kernel, false, &pair_lazy_cache);
                             } else {
                                 // // Direct kernel evaluation
                                 // C_block.resize(n_i * n_j);
@@ -10182,7 +12050,8 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                                     child_level,
                                     dimension,
                                     kernel,
-                                    true  // TRANSPOSE: child_j.A_NS[child_i] is (n_i × n_j), transpose to (n_j × n_i)
+                                    true,
+                                    &pair_lazy_cache
                                 );
                                 
                                 // C_block is now (n_j × n_i), but we need (n_i × n_j) for I(B2, B1)
@@ -10231,6 +12100,28 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
                     B1.near_field_modified_interactions.push_back(std::move(block_b1));
                     B1.near_field_interaction_map_nonsymmetry[neighbor_morton] = block_idx_b1;
                 }
+            }
+        }
+        } catch (...) {
+            if (!build_failed.exchange(true, std::memory_order_relaxed)) {
+                std::lock_guard<std::mutex> lock(build_exception_mutex);
+                build_exception = std::current_exception();
+            }
+        }
+    }
+
+    if (build_exception) std::rethrow_exception(build_exception);
+
+    if (parallel_build) {
+        for (size_t b1_idx = 0; b1_idx < deferred_parent_blocks.size(); ++b1_idx) {
+            const int64_t source_morton = parent_boxes[b1_idx].morton_index;
+            for (auto& deferred : deferred_parent_blocks[b1_idx]) {
+                auto& target = parent_boxes[deferred.target_index];
+                const int64_t block_index = static_cast<int64_t>(
+                    target.near_field_modified_interactions.size());
+                target.near_field_modified_interactions.push_back(
+                    std::move(deferred.block));
+                target.near_field_interaction_map[source_morton] = block_index;
             }
         }
     }

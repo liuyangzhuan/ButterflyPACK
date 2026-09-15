@@ -124,6 +124,9 @@ void clear_modified_interaction_matrices(
 
         // Reset the counter.
         box.num_far_field_interactions = 0;
+        box.X_RR_full = MatrixStorage<DataType>{};
+        box.X_RS_entry = MatrixStorage<DataType>{};
+        std::vector<int64_t>().swap(box.deferred_xnn_neighbor_point_counts);
     };
 
     // Iterate through all local boxes and clear their interaction data.
@@ -142,6 +145,9 @@ void clear_modified_interaction_matrices(
     }
     std::vector<PointDataRequest<CoordType>>().swap(level.assisting_boxes);
     level.assisting_box_points_for_kernel_evaluation.clear();
+    std::vector<BoxData<CoordType, DataType>>().swap(level.generator_boxes);
+    level.generator_id_to_index.clear();
+    level.elimination_wave.clear();
     // malloc_trim(0);
 }
 
@@ -188,6 +194,8 @@ void clear_ghosts(TreeLevel<CoordType, DataType>& level) {
 template <typename DataType>
 void clear_pending_factor_updates_memory(PendingFactorUpdates<DataType>& p)
 {
+    std::unordered_map<int64_t, std::shared_ptr<GeneratorPayload<DataType>>>().swap(
+        p.generators);
     // First free DenseBlock vectors (values) explicitly, then drop the hash tables.
     for (auto& kv : p.replace_blocks) {
         auto& b = kv.second;

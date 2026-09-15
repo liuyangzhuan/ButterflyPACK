@@ -24,6 +24,7 @@
 #include <cstdio>
 
 // FMM
+#include "phase_timer.hpp"
 #include "factorization.hpp"
 #include "runtime_thread_support.hpp"
 #include "solver.hpp"
@@ -31,6 +32,8 @@
 #include "tree_impl.hpp"
 //#include "kernel.hpp"
 #include "id_decomposition.hpp"
+#include "staged_halo.hpp"
+#include "owner_mul.hpp"
 
 
 // Extra
@@ -128,7 +131,12 @@ struct ProgramOptions {
     int dimension = 3;
     int64_t reduction_threshold = 0;
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
-    bool use_sketch = true;     // Sparse-sketch the 2-hop ID workspace before RRQR
+    int use_sketch = 1;         // 0: full workspace, 1: materialized sketch, 2: streamed sketch
+    int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
+    int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
+    int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
+    int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
+    int ca_owner_serial = 0;    // Serialize mode-3 events as a correctness oracle
     int id_neighborhood_radius = 2; // Diagnostic: append original-cloud rows through this box radius
     int id_proxy_mode = 0;          // 0: none, 1: geometric surface, 2: adaptive row sampling
     int id_proxy_points = 8;        // Geometric surface samples for mode 1

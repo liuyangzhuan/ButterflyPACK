@@ -227,11 +227,24 @@ extern "C" {
     void dsytrs_(const char* UPLO, const int* N, const int* NRHS,
                  const double* A, const int* LDA, const int* IPIV,
                  double* B, const int* LDB, int* INFO);
+    void dsytrs2_(const char* UPLO, const int* N, const int* NRHS,
+                  double* A, const int* LDA, const int* IPIV,
+                  double* B, const int* LDB, double* WORK, int* INFO);
+    void dsyconv_(const char* UPLO, const char* WAY, const int* N,
+                  double* A, const int* LDA, const int* IPIV,
+                  double* E, int* INFO);
     void zsytrf_(const char* UPLO, const int* N, std::complex<double>* A, const int* LDA,
                  int* IPIV, std::complex<double>* WORK, const int* LWORK, int* INFO);
     void zsytrs_(const char* UPLO, const int* N, const int* NRHS,
                  const std::complex<double>* A, const int* LDA, const int* IPIV,
                  std::complex<double>* B, const int* LDB, int* INFO);
+    void zsytrs2_(const char* UPLO, const int* N, const int* NRHS,
+                  std::complex<double>* A, const int* LDA, const int* IPIV,
+                  std::complex<double>* B, const int* LDB,
+                  std::complex<double>* WORK, int* INFO);
+    void zsyconv_(const char* UPLO, const char* WAY, const int* N,
+                  std::complex<double>* A, const int* LDA, const int* IPIV,
+                  std::complex<double>* E, int* INFO);
 
     // =====================
     // QR factorization without pivoting
@@ -438,6 +451,34 @@ void sytrs_(const char* uplo, const int* n, const int* nrhs,
         dsytrs_(uplo, n, nrhs, a, lda, ipiv, b, ldb, info);
     } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
         zsytrs_(uplo, n, nrhs, a, lda, ipiv, b, ldb, info);
+    } else {
+        throw std::runtime_error(
+            "Bunch-Kaufman requires double or complex<double>");
+    }
+}
+
+template <typename DataType>
+void sytrs2_(const char* uplo, const int* n, const int* nrhs,
+             DataType* a, const int* lda, const int* ipiv,
+             DataType* b, const int* ldb, DataType* work, int* info) {
+    if constexpr (std::is_same_v<DataType, double>) {
+        dsytrs2_(uplo, n, nrhs, a, lda, ipiv, b, ldb, work, info);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        zsytrs2_(uplo, n, nrhs, a, lda, ipiv, b, ldb, work, info);
+    } else {
+        throw std::runtime_error(
+            "Bunch-Kaufman requires double or complex<double>");
+    }
+}
+
+template <typename DataType>
+void syconv_(const char* uplo, const char* way, const int* n,
+             DataType* a, const int* lda, const int* ipiv,
+             DataType* e, int* info) {
+    if constexpr (std::is_same_v<DataType, double>) {
+        dsyconv_(uplo, way, n, a, lda, ipiv, e, info);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        zsyconv_(uplo, way, n, a, lda, ipiv, e, info);
     } else {
         throw std::runtime_error(
             "Bunch-Kaufman requires double or complex<double>");

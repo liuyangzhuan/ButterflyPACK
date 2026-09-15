@@ -1264,7 +1264,7 @@ if(myrank==master_rank){
 
 
 
-    
+
     vector<int> v_sub2glo(N,-1),v_glo2sub(N,-1),v_sub2glo_o(N,-1);
     Npo=0;
     int Npo_o=0;
@@ -1505,7 +1505,7 @@ if(myrank==master_rank){
     z_c_bpack_set_I_option(&option_bf, "format", 1); // don't change this matrix! Xiaomian
     if(tol_s2s > 0) z_c_bpack_set_D_option(&option_bf, "tol_comp", tol_comp_step1); // restore step-1 tol_comp
     if(Nmin_leaf_s2s >= 0) z_c_bpack_set_I_option(&option_bf, "Nmin_leaf", (int)Nmin_leaf_step1); // restore step-1 Nmin_leaf
-    
+
     z_c_bpack_mult("N",x_v.data(),b_v.data(),&myseg,&myseg,&nvec,&bmat_bf,&option_bf,&stats_bf,&ptree_bf);
     vector<_Complex double> u_sca_glo(N*nvec,{0.0,0.0});
     for (int i=0; i<myseg; i++){
@@ -1518,7 +1518,7 @@ if(myrank==master_rank){
     }
     MPI_Allreduce(MPI_IN_PLACE,u_sca_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);
 
-    
+
     if(myrank==master_rank){
       for(int nth=0; nth<nvec; nth++){
         string filename, str;
