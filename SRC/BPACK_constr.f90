@@ -1968,6 +1968,7 @@ contains
       integer::passflag = 0
       integer::mrange_dummy(1), nrange_dummy(1)
       DT::mat_dummy(1, 1)
+      DT::sym_value
       type(intersect)::submats(1)
 
       ! Memory_direct_forward=0
@@ -2002,6 +2003,7 @@ contains
          endif
          n3 = MPI_Wtime()
          do ii = Bidxs, Bidxe
+            if (option%sym > 0 .and. level_c /= ho_bf1%Maxlevel + 1 .and. mod(ii, 2) == 1) cycle
             ! do ii =Bidxs,Bidxs
             if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) then
                if (level_c /= ho_bf1%Maxlevel + 1) then
@@ -2052,6 +2054,18 @@ contains
                      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'constructing level', level
                   endif
                   call Full_construction(ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1), msh, ker, stats, option, ptree, memory)
+                  if (option%sym > 0) then
+                     associate (leaf => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1))
+                        call assert(leaf%M == leaf%N, 'a symmetric HODLR dense leaf must be square')
+                        do jj = 1, leaf%N
+                           do iii = jj + 1, leaf%M
+                              sym_value = (leaf%fullmat(iii, jj) + leaf%fullmat(jj, iii))/2d0
+                              leaf%fullmat(iii, jj) = sym_value
+                              leaf%fullmat(jj, iii) = sym_value
+                           enddo
+                        enddo
+                     end associate
+                  endif
                   stats%Mem_Direct_for = stats%Mem_Direct_for + memory
                endif
                ! ! write(*,*)level_c,ii,ho_bf1%levels(level_c)%N_block_forward
@@ -2061,6 +2075,17 @@ contains
                ! end if
             endif
          end do
+
+         if (option%sym > 0 .and. level_c /= ho_bf1%Maxlevel + 1) then
+            do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+               if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)) then
+                  call HODLR_sym_link_pair(ho_bf1%levels(level_c)%BP(2*ii - 1), &
+                     ho_bf1%levels(level_c)%BP(2*ii), &
+                     ho_bf1%levels(level_c)%BP_inverse(ii)%pgno, ptree, rtemp)
+                  stats%Mem_Comp_for = stats%Mem_Comp_for + rtemp
+               endif
+            enddo
+         endif
 
          ! call MPI_barrier(ptree%Comm, ierr)
          ! do while(option%elem_extract == 1 .and. level==2)
@@ -2077,7 +2102,11 @@ contains
          n5 = n4 - n3
          n5_tmp = n5
          call MPI_ALLREDUCE(n5_tmp, n5, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
-         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level
+         call MPI_ALLREDUCE(stats%rankmax_of_level(0:ho_bf1%Maxlevel), &
+            stats%rankmax_of_level_global(0:ho_bf1%Maxlevel), &
+            ho_bf1%Maxlevel + 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) &
+            'time', n5, 'rankmax_of_level so far:', stats%rankmax_of_level_global
       end do
       n2 = MPI_Wtime()
       stats%Time_Fill = stats%Time_Fill + n2 - n1
@@ -2116,6 +2145,67 @@ contains
       return
 
    end subroutine HODLR_construction
+
+   ! Expose A12=A21^T without duplicating A21=U1*V0^T.  The transpose view
+   ! stays on the A21 block row and swaps both the factors and their 1D
+   ! layouts; callers redistribute its input/output through the parent row.
+   subroutine HODLR_sym_link_pair(b12, b21, parent_pgno, ptree, memory)
+      implicit none
+      type(blockplus)::b12, b21
+      type(proctree)::ptree
+      type(matrixblock), pointer::block12, block21
+      integer parent_pgno, rank, rank_loc, ierr
+      real(kind=8)::memory
+
+      call assert(b12%Lplus == 1 .and. b21%Lplus == 1, &
+         'symmetric HODLR path requires option%LRlevel=0')
+      block12 => b12%LL(1)%matrices_block(1)
+      block21 => b21%LL(1)%matrices_block(1)
+
+      rank_loc = 0
+      if (IOwnPgrp(ptree, block21%pgno)) rank_loc = block21%rankmax
+      call MPI_ALLREDUCE(rank_loc, rank, 1, MPI_INTEGER, MPI_MAX, &
+         ptree%pgrp(parent_pgno)%Comm, ierr)
+
+      block12%rankmax = rank
+      block12%rankmin = rank
+      block21%rankmax = rank
+      block21%rankmin = rank
+      b12%LL(1)%rankmax = rank
+      b12%pgno = b21%pgno
+      block12%pgno = block21%pgno
+      block12%pgno_db = block21%pgno_db
+      block12%M_loc = block21%N_loc
+      block12%N_loc = block21%M_loc
+      call assert(size(block12%M_p, 1) == size(block21%N_p, 1), &
+         'symmetric HODLR transpose-view row layout mismatch')
+      call assert(size(block12%N_p, 1) == size(block21%M_p, 1), &
+         'symmetric HODLR transpose-view column layout mismatch')
+      block12%M_p = block21%N_p
+      block12%N_p = block21%M_p
+      block12%is_transpose_view = 1
+
+      block12%ButterflyU%num_blk = block21%ButterflyV%num_blk
+      block12%ButterflyV%num_blk = block21%ButterflyU%num_blk
+      block12%ButterflyU%idx = block21%ButterflyV%idx
+      block12%ButterflyV%idx = block21%ButterflyU%idx
+      block12%ButterflyU%inc = block21%ButterflyV%inc
+      block12%ButterflyV%inc = block21%ButterflyU%inc
+      block12%ButterflyU%nblk_loc = 0
+      block12%ButterflyV%nblk_loc = 0
+
+      memory = 0
+      if (IOwnPgrp(ptree, block21%pgno)) then
+         allocate(block12%ButterflyU%blocks(1))
+         allocate(block12%ButterflyV%blocks(1))
+         block12%ButterflyU%blocks(1)%matrix => block21%ButterflyV%blocks(1)%matrix
+         block12%ButterflyV%blocks(1)%matrix => block21%ButterflyU%blocks(1)%matrix
+         block12%ButterflyU%nblk_loc = 1
+         block12%ButterflyV%nblk_loc = 1
+         memory = (SIZEOF(block12%ButterflyU%blocks) + &
+            SIZEOF(block12%ButterflyV%blocks))/1024.0d3
+      endif
+   end subroutine HODLR_sym_link_pair
 
    subroutine HSS_construction(hss_bf1, option, stats, msh, ker, ptree)
 
@@ -4888,6 +4978,15 @@ contains
       Nunk_n_loc = msh%idxe - msh%idxs + 1
       idxs= msh%idxs
 
+      if (allocated(bmat%xtrue)) then
+         call LogMemory(stats, -SIZEOF(bmat%xtrue)/1024.0d3)
+         deallocate(bmat%xtrue)
+      endif
+      if (allocated(bmat%b_true)) then
+         call LogMemory(stats, -SIZEOF(bmat%b_true)/1024.0d3)
+         deallocate(bmat%b_true)
+      endif
+
       nvec=1 !! currently this can only be 1
       allocate(x_loc(Nunk_n_loc,nvec))
       x_loc=0
@@ -4973,13 +5072,10 @@ contains
       call MPI_ALLREDUCE(vtmp, v3, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, '(A30,Es14.7,Es14.7,A6,Es9.2,A7,Es9.2)') 'BPACK_CheckError(mvp): fnorm:', sqrt(v1), sqrt(v2), ' acc: ', sqrt(v3/v1), ' time: ', n2 - n1
 
-
-      call LogMemory(stats, -SIZEOF(x_loc)/1024.0d3)
       call LogMemory(stats, -SIZEOF(rhs_loc)/1024.0d3)
-      call LogMemory(stats, -SIZEOF(rhs_loc_ref)/1024.0d3)
-      deallocate(x_loc)
       deallocate(rhs_loc)
-      deallocate(rhs_loc_ref)
+      call move_alloc(x_loc, bmat%xtrue)
+      call move_alloc(rhs_loc_ref, bmat%b_true)
       deallocate(idx_src)
 
    end subroutine BPACK_CheckError_SMVP

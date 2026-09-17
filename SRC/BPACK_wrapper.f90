@@ -31,6 +31,13 @@ module BPACK_wrapper
    use Bplus_Utilities, only: BF_Switchlevel
    use iso_c_binding
 
+interface
+   subroutine c_bpack_h2_delete(h2_ptr) bind(c, name="c_bpack_h2_delete")
+      use iso_c_binding
+      type(c_ptr), value :: h2_ptr
+   end subroutine c_bpack_h2_delete
+end interface
+
 contains
 
 !>****** Fortran interface for the matvec function required by BPACK_construction_Matvec, inside which a c++ function pointer ker%C_FuncHMatVec is called \n
@@ -301,6 +308,10 @@ contains
          val_d = stats%Time_C_Mult
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_C_Mult_Wrapper') then
+         val_d = stats%Time_C_Mult_Wrapper
+         valid_opt = 1
+      endif
       if (trim(str) == 'Time_C_Extract') then
          val_d = stats%Time_C_Extract
          valid_opt = 1
@@ -403,6 +414,14 @@ contains
          val_d = stats%Mem_Peak
          valid_opt = 1
       endif
+      if (trim(str) == 'Rank_max_Constr') then
+         if (allocated(stats%rankmax_of_level_global)) then
+            val_d = dble(maxval(stats%rankmax_of_level_global))
+         else
+            val_d = 0d0
+         endif
+         valid_opt = 1
+      endif
       if (trim(str) == 'Rank_max') then
          val_d = dble(maxval(stats%rankmax_of_level_global))
          if(allocated(stats%rankmax_of_level_global_factor))val_d = NINT(max(dble(val_d),dble(maxval(stats%rankmax_of_level_global_factor))))
@@ -414,6 +433,210 @@ contains
       deallocate (str)
 
    end subroutine C_BPACK_Getstats
+
+   subroutine C_BPACK_Setstats(stats_Cptr, nam, val_d) bind(c, name="c_bpack_setstats")
+      implicit none
+      real(kind=8)::val_d
+      character(kind=c_char, len=1) :: nam(*)
+      character(kind=c_char) :: tmpc
+      type(c_ptr) :: stats_Cptr
+      type(Hstat), pointer::stats
+      ! character::nam(:)
+      ! type(c_ptr),value :: val_Cptr
+      ! integer,pointer::val_i
+      ! real(kind=8),pointer::val_d
+      integer strlen
+      character(len=:), allocatable :: str
+      integer valid_opt
+
+      valid_opt = 0
+      strlen = 1
+      tmpc=nam(strlen)
+      do while (tmpc /= c_null_char)
+         strlen = strlen + 1
+         tmpc=nam(strlen)
+      enddo
+      strlen = strlen - 1
+      allocate (character(len=strlen) :: str)
+      str = transfer(nam(1:strlen), str)
+
+      call c_f_pointer(stats_Cptr, stats)
+
+
+      if (trim(str) == 'Time_Fill') then
+         stats%Time_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry') then
+         stats%Time_Entry = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Factor') then
+         stats%Time_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Solve') then
+         stats%Time_Sol = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Sblock') then
+         stats%Time_Sblock = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Inv') then
+         stats%Time_Inv = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_SMW') then
+         stats%Time_SMW = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_PartialUpdate') then
+         stats%Time_PartialUpdate = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_RedistB') then
+         stats%Time_RedistB = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_RedistV') then
+         stats%Time_RedistV = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BLK_MVP') then
+         stats%Time_BLK_MVP = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Mult') then
+         stats%Time_C_Mult = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Mult_Wrapper') then
+         stats%Time_C_Mult_Wrapper = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_C_Extract') then
+         stats%Time_C_Extract = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_Traverse') then
+         stats%Time_Entry_Traverse = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_BF') then
+         stats%Time_Entry_BF = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Entry_Comm') then
+         stats%Time_Entry_Comm = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Direct_LU') then
+         stats%Time_Direct_LU = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Add_Multiply') then
+         stats%Time_Add_Multiply = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Multiply') then
+         stats%Time_Multiply = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_XLUM') then
+         stats%Time_XLUM = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Split') then
+         stats%Time_Split = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Comm') then
+         stats%Time_Comm = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Idle') then
+         stats%Time_Idle = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Flop_Fill') then
+         stats%Flop_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_Factor') then
+         stats%Flop_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_Solve') then
+         stats%Flop_Sol = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_C_Mult') then
+         stats%Flop_C_Mult = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_C_Extract') then
+         stats%Flop_C_Extract = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Mem_Factor') then
+         stats%Mem_Factor = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Fill') then
+         stats%Mem_Fill = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Sblock') then
+         stats%Mem_Sblock = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_SMW') then
+         stats%Mem_SMW = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Direct_inv') then
+         stats%Mem_Direct_inv = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Direct_for') then
+         stats%Mem_Direct_for = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_int_vec') then
+         stats%Mem_int_vec = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Comp_for') then
+         stats%Mem_Comp_for = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Mem_Peak') then
+         stats%Mem_Peak = val_d
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'Rank_max_Constr') then
+         if (.not. allocated(stats%rankmax_of_level_global)) allocate(stats%rankmax_of_level_global(0:0))
+         stats%rankmax_of_level_global = nint(val_d)
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Rank_max') then
+         if (.not. allocated(stats%rankmax_of_level_global))        allocate(stats%rankmax_of_level_global(0:0))
+         if (.not. allocated(stats%rankmax_of_level_global_factor)) allocate(stats%rankmax_of_level_global_factor(0:0))
+         stats%rankmax_of_level_global        = 0
+         stats%rankmax_of_level_global_factor = nint(val_d)
+         valid_opt = 1
+      endif
+
+      if (valid_opt == 0) write (*, *) 'invalid BPACK stats: '//trim(str)
+
+      deallocate (str)
+
+   end subroutine C_BPACK_Setstats
+
 
 !>**** C interface of printing statistics
    !> @param stats_Cptr: the structure containing statistics
@@ -546,6 +769,10 @@ contains
          val_d = option%n_iter
          valid_opt = 1
       endif
+      if (trim(str) == 'IR_HODLR') then
+         val_d = option%IR_HODLR
+         valid_opt = 1
+      endif
       if (trim(str) == 'precon') then
          val_d = option%precon
          valid_opt = 1
@@ -592,6 +819,10 @@ contains
       endif
       if (trim(str) == 'LRlevel') then
          val_d = option%LRlevel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sym') then
+         val_d = option%sym
          valid_opt = 1
       endif
       if (trim(str) == 'ErrFillFull') then
@@ -778,6 +1009,30 @@ contains
          val_d = option%sample_para_outer
          valid_opt = 1
       endif
+      if (trim(str) == 'reduction_threshold') then
+         val_d = option%reduction_threshold
+         valid_opt = 1
+      endif
+      if (trim(str) == 'CA_level' .or. trim(str) == 'ca_level') then
+         val_d = option%CA_level
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_use_sketch' .or. trim(str) == 'h2_use_sketch') then
+         val_d = option%H2_use_sketch
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then
+         val_d = option%H2_ID_radius
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy' .or. trim(str) == 'h2_id_proxy') then
+         val_d = option%H2_ID_proxy
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy_points' .or. trim(str) == 'h2_id_proxy_points') then
+         val_d = option%H2_ID_proxy_points
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -817,6 +1072,11 @@ contains
       if (trim(str) == 'n_iter') then
          call c_f_pointer(val_Cptr, val_i)
          option%n_iter = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'IR_HODLR') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%IR_HODLR = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'precon') then
@@ -872,6 +1132,11 @@ contains
       if (trim(str) == 'lrlevel' .or. trim(str) == 'LRlevel') then
          call c_f_pointer(val_Cptr, val_i)
          option%LRlevel = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'sym') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%sym = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'errfillfull' .or. trim(str) == 'ErrFillFull') then
@@ -1034,6 +1299,37 @@ contains
       if (trim(str) == 'use_qtt') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_qtt = val_i
+         valid_opt = 1
+      endif
+
+      if (trim(str) == 'reduction_threshold') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%reduction_threshold = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'CA_level' .or. trim(str) == 'ca_level') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%CA_level = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_use_sketch' .or. trim(str) == 'h2_use_sketch') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_use_sketch = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_radius' .or. trim(str) == 'h2_id_radius') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_radius = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy' .or. trim(str) == 'h2_id_proxy') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_proxy = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_ID_proxy_points' .or. trim(str) == 'h2_id_proxy_points') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_ID_proxy_points = val_i
          valid_opt = 1
       endif
 
@@ -1527,6 +1823,49 @@ contains
 
 
 
+   subroutine C_BPACK_Wrap_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_wrap_h2")
+      use iso_c_binding
+      implicit none
+      type(c_ptr)         :: bmat_Cptr
+      type(c_ptr), value  :: h2_ptr
+      type(Bmatrix), pointer :: bmat
+      allocate(bmat)
+      bmat%h2   = h2_ptr
+      bmat_Cptr = c_loc(bmat)
+   end subroutine C_BPACK_Wrap_H2
+
+   subroutine C_BPACK_Get_H2(bmat_Cptr, h2_ptr) bind(c, name="c_bpack_get_h2")
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: bmat_Cptr
+      type(c_ptr)        :: h2_ptr
+      type(Bmatrix), pointer :: bmat
+      call c_f_pointer(bmat_Cptr, bmat)
+      h2_ptr = bmat%h2
+   end subroutine C_BPACK_Get_H2
+
+
+   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
+      implicit none
+      integer N
+      integer new2old(N)
+      integer idxs, idxe
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer::msh
+      integer ii
+
+      allocate(msh)
+      msh%Nunk = N
+      allocate (msh%new2old(N))
+      allocate (msh%old2new(N))
+      msh%new2old = new2old
+      do ii = 1, N
+         msh%old2new(msh%new2old(ii)) = ii
+      enddo
+      msh%idxs = idxs
+      msh%idxe = idxe
+      msh_Cptr = c_loc(msh)
+   end subroutine C_BPACK_Set_Mesh_H2
 
 
 !>**** C interface of multi-dimensional BF construction via entry evaluation
@@ -4223,6 +4562,12 @@ contains
       type(Bmatrix), pointer::bmat
 
       call c_f_pointer(bmat_Cptr, bmat)
+      if (c_associated(bmat%h2)) then
+         call c_bpack_h2_delete(bmat%h2)
+         deallocate(bmat)
+         bmat_Cptr = c_null_ptr
+         return
+      end if
       call BPACK_delete(bmat)
       deallocate (bmat)
       bmat_Cptr = c_null_ptr

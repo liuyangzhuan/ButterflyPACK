@@ -59,8 +59,8 @@ module BPACK_DEFS
 
 
     !>**** the version numbers are automatically replaced with those defined in CMakeList.txt
-    integer, parameter:: BPACK_MAJOR_VERSION = 4
-    integer, parameter:: BPACK_MINOR_VERSION = 1
+    integer, parameter:: BPACK_MAJOR_VERSION = 5
+    integer, parameter:: BPACK_MINOR_VERSION = 0
     integer, parameter:: BPACK_PATCH_VERSION = 0
 
 
@@ -117,6 +117,7 @@ module BPACK_DEFS
     integer, parameter:: TFQMR = 1 !< use tfqmr
     integer, parameter:: GMRES = 2 !< use gmres
     integer, parameter:: IR = 3 !< use iterative refinement
+    integer, parameter:: CG = 4 !< use preconditioned conjugate gradient
 
     !>**** construction parameters
     integer, parameter:: SVD = 1
@@ -482,6 +483,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer col_group !< column group number
         integer row_group !< row group number
         integer style !< 1: full block 2: compressed block 4: hierarchical block
+        integer:: is_transpose_view = 0 !< 1 when U/V alias a transposed sibling block
         integer level_butterfly !< butterfly levels
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
@@ -671,6 +673,24 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer hardstart !< 1: use X0=alphaA^* as the initial guess 0: use block-diagonal approximation of A with recursive inversion as the intial guess
     end type schulz_operand
 
+    !>**** Symmetric HODLR factor associated with one binary-tree node.
+    ! The tall bases remain in the HODLR block-row layout.  The dense correction
+    ! factor and its pivots are stored only on the node process-group head.
+    type hodlr_symfactor
+        integer :: pgno = 0
+        integer :: pgno0 = 0, pgno1 = 0
+        integer :: rank = 0
+        integer :: head0 = 0, head1 = 0
+        integer :: nloc0 = 0, nloc1 = 0
+        integer :: info = 0
+        DTR :: jitter = 0
+        integer, allocatable :: ipiv(:)
+        DT, allocatable :: Q0(:, :), Q1(:, :)
+        DT, allocatable :: Z0(:, :), Z1(:, :)
+        DT, allocatable :: G0(:, :), G1(:, :)
+        DT, allocatable :: S(:, :)
+    end type hodlr_symfactor
+
     !>**** One level in BPACK
     type cascadingfactors
         integer level  !< level number
@@ -681,6 +701,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(blockplus), pointer:: BP_inverse(:) => null() !< inverse blocks
         type(blockplus), pointer:: BP_inverse_update(:) => null() !< updated blocks dimension-wise matching forward blocks
         type(blockplus), pointer:: BP_inverse_schur(:) => null() !< schur complement blocks
+        type(hodlr_symfactor), allocatable :: SymFactor(:) !< symmetric factors for inverse blocks
     end type cascadingfactors
 
     !>**** HODLR/HODBF structure
@@ -746,6 +767,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
     type Bmatrix
         integer Maxlevel
+        type(c_ptr) :: h2 = c_null_ptr
+        DT, allocatable::xtrue(:,:), b_true(:,:) !< sparse verification vector and exact product retained for solve-error checks
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
         type(hssbf), pointer::hss_bf => null()
@@ -773,6 +796,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         ! options for Bplus, Butterfly or LR
         integer::LRlevel  !< The top LRlevel level blocks are butterfly or Bplus
+        integer::sym !< 1: symmetric real HODLR compression/factorization (format=HODLR, LRlevel=0)
         integer:: lnoBP !< the bottom lnoBP levels are either Butterfly or LR, but not Bplus
         integer:: bp_cnt_lr !< only print the rank in the top-layer butterfly of a Bplus
         integer:: TwoLayerOnly  !< restrict Bplus as Butterfly + LR
@@ -787,7 +811,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         ! options for matrix construction
         integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
-        integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5
+        integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5. 3: use tree-based adaptive sampling for NlogN pseudo skeleton algorithm.
         real(kind=8) tol_comp      !< matrix construction tolerance
         integer::Nmin_leaf !< leaf sizes of BPACK tree
         integer nogeo !< 1: no geometrical information available to BPACK, use NATUTAL or TM_GRAM clustering        0: geometrical points are available for TM or CKD clustering 2: no geometrical information available, but a user-defined distance function and compressibility function is provided. 3: no geometrical information available, but an array of knn*N indicating the knn neighbours of each element is provided. 4: geometrical information available for TM or CKD clustering, and an array of knn*N indicating the knn neighbours of each element is provided
@@ -805,6 +829,12 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: fastsample_tensor !< 0: uniformly sample each dimension. 1: uniformly sample the rows of the unfolded matrices on top of 0. 2: use translation invariance
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
+        integer:: reduction_threshold !< 7: H2 process-reduction threshold
+        integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
+        integer:: H2_use_sketch !< 1: use sparse sketching for H2 ID; 0: apply RRQR to the full 2-hop workspace
+        integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
+        integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
+        integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 
@@ -813,7 +843,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_Rdetect  !< tolerance to detect numerical ranks
         real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
-        integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR or IterativeRefinement)
+        integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR, IterativeRefinement or CG)
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
         integer::schulzorder !< order (>=2) of schultz iteration
@@ -830,12 +860,13 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_itersol  !< tolerance for iterative solvers
         integer n_iter  !< maximum number of iterations for iterative solver
         integer precon  !< DIRECT: use factored BPACK as direct solver, BPACKPRECON: use factored BPACK as preconditioner, NOPRECON: use forward BPACK as fast matvec,
+        integer IR_HODLR !< maximum HODLR direct-solve refinement steps; 0 disables refinement
 
         ! options for error checking
         integer::level_check !< check compression quality by picking random entries at level_check (only work for nmpi=1 now)
         integer::ErrFillFull !< check compression quality by computing all block elements
         integer::ErrSol !< check solution quality by using artificially generated true solution vector
-        integer::BACA_Batch !< batch size in batch ACA
+        integer::BACA_Batch !< batch size in batch ACA; rows per in H2 skeletonization when proxy mode h2_id_proxy=2; rows per interval in butterfly when forwardN15flag=3
         integer::LR_BLK_NUM !< sqrt of number of bottom-level subblocks in blocked LR
 
     end type Hoption

@@ -3172,6 +3172,12 @@ end function distance_geo
 
       Maxgrp = 2**(ptree%nlevel) - 1
 
+      if (option%sym > 0) then
+         call assert(option%format == HODLR, 'option%sym>0 requires option%format=HODLR')
+         call assert(option%LRlevel == 0, 'option%sym>0 requires option%LRlevel=0')
+         call assert(option%use_zfp /= 1, 'option%sym>0 does not support ZFP-compressed dense leaves')
+      endif
+
       ho_bf1%N = msh%Nunk
       allocate (ho_bf1%levels(ho_bf1%Maxlevel + 1))
       call LogMemory(stats, SIZEOF(ho_bf1%levels)/1024.0d3)
@@ -3196,6 +3202,8 @@ end function distance_geo
          call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP_inverse_update)/1024.0d3)
          allocate (ho_bf1%levels(level_c)%BP_inverse_schur(ho_bf1%levels(level_c)%N_block_inverse))
          call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%BP_inverse_schur)/1024.0d3)
+         allocate (ho_bf1%levels(level_c)%SymFactor(ho_bf1%levels(level_c)%N_block_inverse))
+         call LogMemory(stats, SIZEOF(ho_bf1%levels(level_c)%SymFactor)/1024.0d3)
       end do
 
       ho_bf1%levels(1)%BP_inverse(1)%level = 0

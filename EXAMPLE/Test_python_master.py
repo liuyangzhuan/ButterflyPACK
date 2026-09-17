@@ -4,8 +4,29 @@ import ctypes
 import time
 import sys
 import pickle
+import argparse
 from dPy_BPACK_wrapper import *
 
+
+def positive_int(value):
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value}")
+    return parsed
+
+
+parser = argparse.ArgumentParser(
+    description="Run the ButterflyPACK Python file-interface example."
+)
+parser.add_argument(
+    "--Npo", "--npo", "--np", dest="npo", type=positive_int, default=1000000,
+    help="number of points (default: 1000000)",
+)
+parser.add_argument(
+    "--Ndim", "--ndim", dest="ndim", type=positive_int, default=3,
+    help="coordinate dimension (default: 3)",
+)
+args = parser.parse_args()
 
 
 ####################################################################################################
@@ -15,8 +36,8 @@ seed=12345
 rng = np.random.default_rng(seed=seed)
 nrhs = 1
 verbosity=True
-Npo = 1000
-Ndim = 3
+Npo = args.npo
+Ndim = args.ndim
 coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 
 
@@ -35,7 +56,7 @@ coordinates = rng.random((Npo, Ndim)).astype(np.float64)
 ############################################### the following tests a RBF kernel in george
 import george
 input_dim=Ndim
-intialguess=[5e-6, 1] + [1]*input_dim
+intialguess=[5e-2, 1] + [1]*input_dim
 #### Note that intialguess contains theta, but george needs theta^2
 K = george.kernels.ExpSquaredKernel(metric=np.array(intialguess[2:]), ndim=input_dim)
 amplitude = intialguess[1]

@@ -1435,6 +1435,177 @@ contains
    end subroutine BPACK_Ziterativerefinement_usermatvec_precon
 
 
+   !!!>**** preconditioned conjugate gradient with separate operator and preconditioner matvecs
+   subroutine BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+      blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::ntotal, nn_loc
+      integer::iter, itmax, it, ierr
+      DT, dimension(1:nn_loc,1)::x, b
+      DT, allocatable::r(:,:), z(:,:), p(:,:), q(:,:), Ax(:,:)
+      DT::x_sum, x_sum_global, norm_local, norm_sum
+      DT::rho_local, rho, rho_new_local, rho_new, pap_local, pap
+      DT::alpha, beta
+      real(kind=8)::err, tol, bmag, rerr, breakdown_tol
+      real(kind=8)::rho_real, rho_new_real, pap_real
+      logical::breakdown
+      character(len=128)::breakdown_reason
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec)::blackbox_MVP
+      procedure(HMatVec)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write(*,*)' '
+
+      tol = err
+      itmax = iter
+      if (itmax == 0) itmax = ntotal
+      itmax = max(1, itmax)
+      it = 0
+      breakdown_tol = 1d-30
+      breakdown = .false.
+      breakdown_reason = ''
+
+      x_sum = sum(x)
+      call MPI_ALLREDUCE(x_sum, x_sum_global, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if (myisnan(abs(x_sum_global))) then
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            write(*,*)'In BPACK_Zcg, the initial guess is invalid. Setting x=0.'
+         endif
+         x = 0d0
+      endif
+
+      allocate(r(nn_loc,1), z(nn_loc,1), p(nn_loc,1), q(nn_loc,1), Ax(nn_loc,1))
+
+      norm_local = dot_product(b(:,1), b(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      bmag = sqrt(abs(norm_sum))
+      if (bmag <= breakdown_tol .or. bmag /= bmag) then
+         x = 0d0
+         err = 0d0
+         iter = 0
+         deallocate(r, z, p, q, Ax)
+         return
+      endif
+
+      norm_local = dot_product(x(:,1), x(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      if (abs(norm_sum) <= breakdown_tol) then
+         r = b
+      else
+         call blackbox_MVP('N', nn_loc, nn_loc, 1, x, Ax, ker)
+         stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+         r = b - Ax
+      endif
+      norm_local = dot_product(r(:,1), r(:,1))
+      call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      rerr = sqrt(abs(norm_sum))/bmag
+
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+         print *, '# of CG,error:', 0, rerr
+      endif
+      if (rerr <= tol) then
+         err = rerr
+         iter = 0
+         deallocate(r, z, p, q, Ax)
+         return
+      endif
+
+      call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, z, ker)
+      rho_local = dot_product(r(:,1), z(:,1))
+      call MPI_ALLREDUCE(rho_local, rho, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+      rho_real = real(rho, kind=8)
+      if (rho_real <= breakdown_tol .or. myisnan(abs(rho))) then
+         breakdown = .true.
+         breakdown_reason = 'initial r^H M^{-1} r is not positive'
+      endif
+      p = z
+
+      if (.not. breakdown) then
+         do it = 1, itmax
+            call blackbox_MVP('N', nn_loc, nn_loc, 1, p, q, ker)
+            stats%Flop_Sol = stats%Flop_Sol + stats%Flop_Tmp
+
+            pap_local = dot_product(p(:,1), q(:,1))
+            call MPI_ALLREDUCE(pap_local, pap, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            pap_real = real(pap, kind=8)
+            if (pap_real <= breakdown_tol .or. myisnan(abs(pap))) then
+               breakdown = .true.
+               breakdown_reason = 'non-positive curvature p^H A p'
+               exit
+            endif
+
+            alpha = rho/pap
+            if (myisnan(abs(alpha))) then
+               breakdown = .true.
+               breakdown_reason = 'invalid alpha'
+               exit
+            endif
+
+            x = x + alpha*p
+            r = r - alpha*q
+
+            norm_local = dot_product(r(:,1), r(:,1))
+            call MPI_ALLREDUCE(norm_local, norm_sum, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            rerr = sqrt(abs(norm_sum))/bmag
+            if (rerr /= rerr) then
+               breakdown = .true.
+               breakdown_reason = 'invalid residual norm'
+               exit
+            endif
+
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               print *, '# of CG,error:', it, rerr
+            endif
+            if (rerr <= tol) then
+               err = rerr
+               iter = it
+               deallocate(r, z, p, q, Ax)
+               return
+            endif
+
+            call blackbox_precon_MVP('N', nn_loc, nn_loc, 1, r, z, ker)
+            rho_new_local = dot_product(r(:,1), z(:,1))
+            call MPI_ALLREDUCE(rho_new_local, rho_new, 1, MPI_DT, MPI_SUM, ptree%Comm, ierr)
+            rho_new_real = real(rho_new, kind=8)
+            if (rho_new_real <= breakdown_tol .or. myisnan(abs(rho_new))) then
+               breakdown = .true.
+               breakdown_reason = 'r^H M^{-1} r is not positive'
+               exit
+            endif
+
+            beta = rho_new/rho
+            if (myisnan(abs(beta))) then
+               breakdown = .true.
+               breakdown_reason = 'invalid beta'
+               exit
+            endif
+            p = z + beta*p
+            rho = rho_new
+         enddo
+      endif
+
+      err = rerr
+      if (breakdown) then
+         iter = max(0, it - 1)
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: CG breakdown: ', trim(breakdown_reason), ', residual:', err
+         endif
+      else
+         iter = itmax
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, 'Warning: CG terminated without reaching tolerance:', err
+         endif
+      endif
+
+      deallocate(r, z, p, q, Ax)
+
+      return
+   end subroutine BPACK_Zcg_usermatvec_precon
+
+
    !!!>**** dispatch usermatvec iterative solves according to option%iter_solver
    subroutine BPACK_Z_iter_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       implicit none
@@ -1455,6 +1626,9 @@ contains
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (IR)
          call BPACK_Ziterativerefinement_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (CG)
+         call BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (TFQMR)
          call BPACK_Ztfqmr_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
@@ -2323,6 +2497,52 @@ contains
    end subroutine BPACK_MD_Ziterativerefinement_usermatvec_precon
 
 
+   !!!>**** tensor callback adapter for the shared preconditioned CG implementation
+   subroutine BPACK_MD_Zcg_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, &
+      err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      implicit none
+      integer, intent(in)::Ndim, ntotal
+      integer::iter, nn_loc_MD(Ndim), nn_loc
+      DT, dimension(1:product(nn_loc_MD),1)::x, b
+      real(kind=8)::err
+      type(Hstat)::stats
+      type(kernelquant)::ker
+      procedure(HMatVec_MD)::blackbox_MVP
+      procedure(HMatVec_MD)::blackbox_precon_MVP
+      type(proctree)::ptree
+      type(Hoption)::option
+
+      nn_loc = product(nn_loc_MD)
+      call BPACK_Zcg_usermatvec_precon(ntotal, nn_loc, b, x, err, iter, &
+         blackbox_MVP_adapter, blackbox_precon_MVP_adapter, ptree, option, stats, ker)
+
+      return
+
+   contains
+
+      subroutine blackbox_MVP_adapter(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+
+         call blackbox_MVP(Ndim, trans, nn_loc_MD, nn_loc_MD, num_vect, Vin, Vout, ker)
+      end subroutine blackbox_MVP_adapter
+
+      subroutine blackbox_precon_MVP_adapter(trans, M, N, num_vect, Vin, Vout, ker)
+         implicit none
+         character trans
+         integer, intent(in)::M, N, num_vect
+         DT::Vin(:,:), Vout(:,:)
+         type(kernelquant)::ker
+
+         call blackbox_precon_MVP(Ndim, trans, nn_loc_MD, nn_loc_MD, num_vect, Vin, Vout, ker)
+      end subroutine blackbox_precon_MVP_adapter
+
+   end subroutine BPACK_MD_Zcg_usermatvec_precon
+
+
    !!!>**** dispatch tensor usermatvec iterative solves according to option%iter_solver
    subroutine BPACK_MD_Z_iter_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       implicit none
@@ -2344,6 +2564,9 @@ contains
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (IR)
          call BPACK_MD_Ziterativerefinement_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
+            blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
+      case (CG)
+         call BPACK_MD_Zcg_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
             blackbox_MVP, blackbox_precon_MVP, ptree, option, stats, ker)
       case (TFQMR)
          call BPACK_MD_Ztfqmr_usermatvec_precon(Ndim, ntotal, nn_loc_MD, b, x, err, iter, &
@@ -3064,6 +3287,24 @@ contains
          write (*, *) '||B-H*(H\B)||_F/||B||_F: ', sqrt(norm3/norm4)
       endif
 
+      if (allocated(bmat%xtrue) .and. allocated(bmat%b_true)) then
+         if (size(bmat%xtrue, 1) == N_unk_loc .and. size(bmat%xtrue, 2) == 1 .and. &
+            size(bmat%b_true, 1) == N_unk_loc .and. size(bmat%b_true, 2) == 1) then
+            xtrue = bmat%xtrue
+            btrue = bmat%b_true
+            x = 0
+            call BPACK_Solution(bmat, x, btrue, N_unk_loc, 1, option, ptree, stats)
+
+            rtemp1 = fnorm(xtrue - x, N_unk_loc, 1)**2d0
+            rtemp2 = fnorm(xtrue, N_unk_loc, 1)**2d0
+            call MPI_ALLREDUCE(rtemp1, norm1, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+            call MPI_ALLREDUCE(rtemp2, norm2, 1, MPI_double_precision, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+               write (*, *) '||X_t-H\(A*X_t)||_F/||X_t||_F: ', sqrt(norm1/norm2)
+            endif
+         endif
+      endif
+
       deallocate (x)
       deallocate (xtrue)
       deallocate (btrue)
@@ -3176,7 +3417,188 @@ contains
    end subroutine BPACK_MD_Mult
 
 
-   subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead)
+      implicit none
+      type(matrixblock)::block
+      DT::X(:, :)
+      integer xhead, lo, hi, xoff, nrow, info
+
+      lo = max(xhead, block%headm)
+      hi = min(xhead + size(X, 1) - 1, block%headm + block%M - 1)
+      if (hi < lo) return
+      nrow = hi - lo + 1
+      call assert(nrow == block%M, 'a symmetric HODLR leaf was split across block-row owners')
+      xoff = lo - xhead + 1
+      call sytrsf90(block%fullmat, block%ipiv, X(xoff:xoff + nrow - 1, :), 'L', info)
+      call assert(info == 0, 'symmetric HODLR dense-leaf solve failed')
+   end subroutine HODLR_Sym_Leaf_Apply
+
+   subroutine HODLR_Sym_Node_Apply(fac, X, xhead, ptree)
+      implicit none
+      type(hodlr_symfactor)::fac
+      type(proctree)::ptree
+      DT::X(:, :)
+      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr, info
+      DT, allocatable::c0(:, :), c1(:, :), delta(:, :), gamma(:, :), y(:, :)
+
+      rank = fac%rank
+      if (rank == 0) return
+      nrhs = size(X, 2)
+      allocate(c0(rank, nrhs), c1(rank, nrhs), delta(rank, nrhs), gamma(rank, nrhs))
+      allocate(y(2*rank, nrhs))
+      c0 = 0
+      c1 = 0
+
+      if (allocated(fac%Q0)) then
+         lo = max(xhead, fac%head0)
+         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head0 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            c0 = matmul(transpose(fac%Z0(qoff:qoff + nrow - 1, :)), &
+               X(xoff:xoff + nrow - 1, :))
+         endif
+      endif
+      if (allocated(fac%Q1)) then
+         lo = max(xhead, fac%head1)
+         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head1 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            c1 = matmul(transpose(fac%Z1(qoff:qoff + nrow - 1, :)), &
+               X(xoff:xoff + nrow - 1, :))
+         endif
+      endif
+      call MPI_ALLREDUCE(MPI_IN_PLACE, c0, rank*nrhs, MPI_DT, MPI_SUM, &
+         ptree%pgrp(fac%pgno)%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, c1, rank*nrhs, MPI_DT, MPI_SUM, &
+         ptree%pgrp(fac%pgno)%Comm, ierr)
+
+      info = 0
+      if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
+         delta = matmul(fac%G0, c1 - matmul(fac%G1, c0))
+         call getrsf90_info(fac%S, fac%ipiv, delta, 'N', info)
+         if (info == 0) then
+            delta = delta - c0
+            gamma = c1 + matmul(fac%G1, delta)
+            y(1:rank, :) = delta
+            y(rank + 1:2*rank, :) = gamma
+         endif
+      endif
+      call MPI_BCAST(info, 1, MPI_INTEGER, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+      call assert(info == 0, 'symmetric HODLR rank-r Schur solve failed')
+      call MPI_BCAST(y, 2*rank*nrhs, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
+      if (allocated(fac%Q0)) then
+         lo = max(xhead, fac%head0)
+         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head0 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
+               matmul(fac%Q0(qoff:qoff + nrow - 1, :), y(rank + 1:2*rank, :))
+         endif
+      endif
+      if (allocated(fac%Q1)) then
+         lo = max(xhead, fac%head1)
+         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         if (hi >= lo) then
+            qoff = lo - fac%head1 + 1
+            xoff = lo - xhead + 1
+            nrow = hi - lo + 1
+            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) + &
+               matmul(fac%Q1(qoff:qoff + nrow - 1, :), y(1:rank, :))
+         endif
+      endif
+      deallocate(c0, c1, delta, gamma, y)
+   end subroutine HODLR_Sym_Node_Apply
+
+   subroutine HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+      implicit none
+      integer Ns, num_vectors, level, ii, pp, xhead
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(matrixblock), pointer::rootblock, leafblock
+
+      rootblock => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
+      pp = ptree%MyID - ptree%pgrp(rootblock%pgno)%head + 1
+      xhead = rootblock%headn + rootblock%N_p(pp, 1) - 1
+#if DAT==0 || DAT==2
+      if (trans == 'C') then
+         Vout = conjg(Vin)
+      else
+         Vout = Vin
+      endif
+#else
+      Vout = Vin
+#endif
+
+      level = ho_bf1%Maxlevel + 1
+      do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+         leafblock => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
+         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead)
+      enddo
+      do level = ho_bf1%Maxlevel, 1, -1
+         do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
+            if (IOwnPgrp(ptree, ho_bf1%levels(level)%SymFactor(ii)%pgno)) then
+               call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
+            endif
+         enddo
+      enddo
+
+#if DAT==0 || DAT==2
+      if (trans == 'C') Vout = conjg(Vout)
+#endif
+   end subroutine HODLR_Sym_Inv_Apply
+
+
+   subroutine HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+      implicit none
+      integer Ns, num_vectors, refine, ierr
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      DT, allocatable::rhs(:, :), product(:, :), correction(:, :)
+      DTR rhs_norm_local, rhs_norm_global, residual_norm_local, residual_norm_global
+      DTR residual_rel, previous_residual, refine_tol
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(Hstat)::stats
+
+      call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+      Vout = Vout*option%scale_factor
+      if (option%IR_HODLR <= 0) return
+
+      allocate(rhs(Ns, num_vectors), product(Ns, num_vectors), correction(Ns, num_vectors))
+
+      rhs_norm_local = fnorm(Vin, Ns, num_vectors)**2
+      call MPI_ALLREDUCE(rhs_norm_local, rhs_norm_global, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+      refine_tol = 50*epsilon(ho_bf1%logabsdet)
+      previous_residual = huge(previous_residual)
+      if (rhs_norm_global > tiny(rhs_norm_global)) then
+         do refine = 1, option%IR_HODLR
+            call HODLR_Mult(trans, Ns, num_vectors, 1, ho_bf1%Maxlevel + 1, &
+               Vout, product, ho_bf1, ptree, option, stats)
+            rhs = Vin - product
+            residual_norm_local = fnorm(rhs, Ns, num_vectors)**2
+            call MPI_ALLREDUCE(residual_norm_local, residual_norm_global, 1, MPI_DTR, &
+               MPI_SUM, ptree%Comm, ierr)
+            residual_rel = sqrt(residual_norm_global/rhs_norm_global)
+            if (residual_rel <= refine_tol) exit
+            if (residual_rel >= previous_residual) exit
+            previous_residual = residual_rel
+            call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree)
+            Vout = Vout + correction*option%scale_factor
+         enddo
+      endif
+      deallocate(rhs, product, correction)
+   end subroutine HODLR_Sym_Inv_Mult
+
+   subroutine HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
 
 
 
@@ -3201,7 +3623,6 @@ contains
       type(hobf)::ho_bf1
       type(proctree)::ptree
       type(Hstat)::stats
-      type(Hoption)::option
       integer istart, iend, iinc
 
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
@@ -3264,10 +3685,57 @@ contains
          Vout = conjg(cmplx(Vout, kind=8))
          Vin = conjg(cmplx(Vin, kind=8))
       endif
-      Vout = Vout*option%scale_factor
 
       return
 
+   end subroutine HODLR_Inv_Apply
+
+
+   subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+      implicit none
+      integer Ns, num_vectors, refine, ierr
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      DT, allocatable::rhs(:, :), product(:, :), correction(:, :)
+      DTR rhs_norm_local, rhs_norm_global, residual_norm_local, residual_norm_global
+      DTR residual_rel, previous_residual, refine_tol
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hoption)::option
+      type(Hstat)::stats
+
+      if (option%sym > 0) then
+         call HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+         return
+      endif
+
+      call HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
+      Vout = Vout*option%scale_factor
+      if (option%IR_HODLR <= 0) return
+
+      allocate(rhs(Ns, num_vectors), product(Ns, num_vectors), correction(Ns, num_vectors))
+
+      rhs_norm_local = fnorm(Vin, Ns, num_vectors)**2
+      call MPI_ALLREDUCE(rhs_norm_local, rhs_norm_global, 1, MPI_DTR, MPI_SUM, ptree%Comm, ierr)
+      refine_tol = 50*epsilon(ho_bf1%logabsdet)
+      previous_residual = huge(previous_residual)
+      if (rhs_norm_global > tiny(rhs_norm_global)) then
+         do refine = 1, option%IR_HODLR
+            call HODLR_Mult(trans, Ns, num_vectors, 1, ho_bf1%Maxlevel + 1, &
+               Vout, product, ho_bf1, ptree, option, stats)
+            rhs = Vin - product
+            residual_norm_local = fnorm(rhs, Ns, num_vectors)**2
+            call MPI_ALLREDUCE(residual_norm_local, residual_norm_global, 1, MPI_DTR, &
+               MPI_SUM, ptree%Comm, ierr)
+            residual_rel = sqrt(residual_norm_global/rhs_norm_global)
+            if (residual_rel <= refine_tol) exit
+            if (residual_rel >= previous_residual) exit
+            previous_residual = residual_rel
+            call HODLR_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree, stats)
+            Vout = Vout + correction*option%scale_factor
+         enddo
+      endif
+      deallocate(rhs, product, correction)
    end subroutine HODLR_Inv_Mult
 
    subroutine HSS_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, hss_bf1, ptree, option, stats)
@@ -3347,6 +3815,7 @@ contains
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
 
       trans_tmp = trans
+      if (option%sym > 0) trans_tmp = 'N'
       if (trans == 'C') then
          trans_tmp = 'T'
          Vin = conjg(cmplx(Vin, kind=8))

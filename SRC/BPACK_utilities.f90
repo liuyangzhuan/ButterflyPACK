@@ -225,6 +225,10 @@ contains
          ! write(*,*)ho_bf_o%levels(level_c)%N_block_inverse,'g1'
          allocate (ho_bf_o%levels(level_c)%BP_inverse_update(ho_bf_o%levels(level_c)%N_block_forward))
          allocate (ho_bf_o%levels(level_c)%BP_inverse_schur(ho_bf_o%levels(level_c)%N_block_inverse))
+         allocate (ho_bf_o%levels(level_c)%SymFactor(ho_bf_o%levels(level_c)%N_block_inverse))
+         if (allocated(ho_bf_i%levels(level_c)%SymFactor)) then
+            ho_bf_o%levels(level_c)%SymFactor = ho_bf_i%levels(level_c)%SymFactor
+         endif
 
          do ii = 1, ho_bf_o%levels(level_c)%N_block_forward
             call Bplus_copy(ho_bf_i%levels(level_c)%BP(ii), ho_bf_o%levels(level_c)%BP(ii))
@@ -403,6 +407,7 @@ contains
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_update)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse)
          deallocate (ho_bf_o%levels(level_c)%BP_inverse_schur)
+         if (allocated(ho_bf_o%levels(level_c)%SymFactor)) deallocate (ho_bf_o%levels(level_c)%SymFactor)
       end do
       deallocate (ho_bf_o%levels)
       if(allocated(ho_bf_o%fullmat2D))then
@@ -529,6 +534,12 @@ contains
 
       implicit none
       type(Bmatrix)::bmat
+      if (allocated(bmat%xtrue)) then
+         deallocate(bmat%xtrue)
+      endif
+      if (allocated(bmat%b_true)) then
+         deallocate(bmat%b_true)
+      endif
       if (associated(bmat%ho_bf)) then
          call HODLR_delete(bmat%ho_bf)
          deallocate (bmat%ho_bf)
@@ -1244,6 +1255,7 @@ contains
       option%tol_LS = 1d-12
       option%tol_itersol = 1d-6
       option%n_iter = 1000
+      option%IR_HODLR = 0
       option%tol_rand = option%tol_comp
       option%tol_Rdetect = option%tol_comp*1d-1
       option%level_check = 10000
@@ -1258,6 +1270,7 @@ contains
       option%schulzsplitlevel = 1
       option%schulzlevel = 3000
       option%LRlevel = 0
+      option%sym = 0
       option%ErrFillFull = 0
       option%BACA_Batch = 64
       option%RecLR_leaf = BACA
@@ -1298,6 +1311,12 @@ contains
       option%cpp = 0
       option%bp_cnt_lr = 1
       option%less_adapt = 0
+      option%reduction_threshold=8
+      option%CA_level=10000
+      option%H2_use_sketch=1
+      option%H2_ID_radius=2
+      option%H2_ID_proxy=0
+      option%H2_ID_proxy_points=8
 
    end subroutine SetDefaultOptions
 
@@ -1336,10 +1355,22 @@ contains
                   read (strings1, *) option%tol_LS
                else if (trim(strings) == '--n_iter') then
                   read (strings1, *) option%n_iter
+               else if (trim(strings) == '--IR_HODLR') then
+                  read (strings1, *) option%IR_HODLR
                else if (trim(strings) == '--level_check') then
                   read (strings1, *) option%level_check
                else if (trim(strings) == '--precon') then
                   read (strings1, *) option%precon
+               else if (trim(strings) == '--ca_level' .or. trim(strings) == '--CA_level') then
+                  read (strings1, *) option%CA_level
+               else if (trim(strings) == '--h2_use_sketch' .or. trim(strings) == '--H2_use_sketch') then
+                  read (strings1, *) option%H2_use_sketch
+               else if (trim(strings) == '--h2_id_radius' .or. trim(strings) == '--H2_ID_radius') then
+                  read (strings1, *) option%H2_ID_radius
+               else if (trim(strings) == '--h2_id_proxy' .or. trim(strings) == '--H2_ID_proxy') then
+                  read (strings1, *) option%H2_ID_proxy
+               else if (trim(strings) == '--h2_id_proxy_points' .or. trim(strings) == '--H2_ID_proxy_points') then
+                  read (strings1, *) option%H2_ID_proxy_points
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
                else if (trim(strings) == '--xyzsort') then
@@ -1354,6 +1385,8 @@ contains
                   read (strings1, *) option%schulzlevel
                else if (trim(strings) == '--lrlevel' .or. trim(strings) == '--LRlevel') then
                   read (strings1, *) option%LRlevel
+               else if (trim(strings) == '--sym') then
+                  read (strings1, *) option%sym
                else if (trim(strings) == '--errfillfull' .or. trim(strings) == '--ErrFillFull') then
                   read (strings1, *) option%ErrFillFull
                else if (trim(strings) == '--forwardn15flag' .or. trim(strings) == '--forwardN15flag') then
@@ -1458,11 +1491,17 @@ contains
       type(Hoption)::option, option1
 
       option1%Nmin_leaf = option%Nmin_leaf
+      option1%CA_level = option%CA_level
+      option1%H2_use_sketch = option%H2_use_sketch
+      option1%H2_ID_radius = option%H2_ID_radius
+      option1%H2_ID_proxy = option%H2_ID_proxy
+      option1%H2_ID_proxy_points = option%H2_ID_proxy_points
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS
       option1%tol_itersol = option%tol_itersol
       option1%n_iter = option%n_iter
+      option1%IR_HODLR = option%IR_HODLR
       option1%tol_rand = option%tol_rand
       option1%level_check = option%level_check
       option1%precon = option%precon
@@ -1477,6 +1516,7 @@ contains
       option1%schulzsplitlevel = option%schulzsplitlevel
       option1%schulzlevel = option%schulzlevel
       option1%LRlevel = option%LRlevel
+      option1%sym = option%sym
       option1%ErrFillFull = option%ErrFillFull
       option1%BACA_Batch = option%BACA_Batch
       option1%RecLR_leaf = option%RecLR_leaf
@@ -1530,7 +1570,30 @@ contains
          write (*, '(A25)') 'Printing Solver Options:'
          write (*, '(A18,I8)') 'format', option%format
          write (*, '(A18,I8)') 'lrlevel', option%LRlevel
-         if(option%format==HMAT)then
+         write (*, '(A18,I8)') 'sym', option%sym
+         if(option%format==H2)then
+            write (*, '(A18,A10)') 'algorithm', 'H2'
+            write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
+            write (*, '(A20,I8)') 'reduction_threshold', option%reduction_threshold
+            write (*, '(A18,I8)') 'CA_level', option%CA_level
+            write (*, '(A18,I8)') 'h2_use_sketch', option%H2_use_sketch
+            write (*, '(A18,I8)') 'h2_id_radius', option%H2_ID_radius
+            write (*, '(A18,I8)') 'h2_id_proxy', option%H2_ID_proxy
+            if(option%H2_ID_proxy==1)then
+               write (*, '(A20,I8)') 'h2_id_proxy_points', option%H2_ID_proxy_points
+            else if(option%H2_ID_proxy==2)then
+               write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
+            endif
+            write (*, '(A18,I8)') 'n_iter', option%n_iter
+            write (*, '(A18,I8)') 'precon', option%precon
+            write (*, '(A18,I8)') 'verbosity', option%verbosity
+            write (*, '(A18,I8)') 'elem_extract', option%elem_extract
+            write (*, '(A18,I8)') 'iter_solver', option%iter_solver
+            write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp
+            write (*, '(A18,Es14.7)') 'tol_itersol', option%tol_itersol
+            write (*, *) '***************************'
+            write (*, *) ' '
+         else if(option%format==HMAT)then
             if(option%LRlevel==0)then
                write (*, '(A18,A10)') 'algorithm', 'H-LR'
                write (*, '(A18,Es14.7)') 'near_para', option%near_para
@@ -1638,6 +1701,7 @@ contains
                write (*, '(A18,I8)') 'reclr_leaf', option%RecLR_leaf
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
+               write (*, '(A18,I8)') 'IR_HODLR', option%IR_HODLR
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)

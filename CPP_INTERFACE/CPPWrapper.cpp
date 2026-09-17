@@ -1159,7 +1159,7 @@ namespace butterflypack {
           {"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
           {"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
           {"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
-          {"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5"},
+          {"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive proxy rows per spatial node in H2 when h2_id_proxy=2; adaptive proxy rows per interval in butterfly when forwardN15flag=3"},
           {"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
           {"nogeo",           "whether there is geometry information provided 1: is no geometry (xyzsort can not be 1 or 2), 0: there is geometry"},
           {"less_adapt",      "1: improved randomized butterfly construction, default to 1"},
