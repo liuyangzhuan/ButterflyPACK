@@ -28,8 +28,18 @@ module BPACK_wrapper
 #endif
    use MISC_Utilities
    use BPACK_Solve_Mul
-   use Bplus_Utilities, only: BF_Switchlevel
+   use Bplus_Utilities, only: BF_Switchlevel, BP_Mult
    use iso_c_binding
+
+!> Opaque C BP handle. Callback values must outlive the bind(c) entry points;
+!> pointers to VALUE dummy arguments would dangle after those calls return.
+   type C_BP_handle
+      type(blockplus) :: BP
+      integer :: format
+      type(c_funptr) :: dist = c_null_funptr, nearfar = c_null_funptr
+      type(c_funptr) :: entry = c_null_funptr, entries = c_null_funptr
+   end type C_BP_handle
+   private :: C_BP_handle
 
 interface
    subroutine c_bpack_h2_delete(h2_ptr) bind(c, name="c_bpack_h2_delete")
@@ -2487,6 +2497,91 @@ contains
 
    end subroutine C_BPACK_Construct_Matvec_Compute
 
+!>**** C interface of BP construction from existing row/column meshes.
+   !> Same argument layout as C_BF_Construct_Init, but returns a BP handle.
+   !> Supported formats: HODLR (one BF/LR block), HMAT, HSS, and BLR.
+   !> nnsr/nnsc use reordered, 1-based opposite-axis indices, with 0 for missing
+   !> neighbours, packed as (knn,M)/(knn,N). Referenced only for nogeo=3/4, knn>0.
+   !> Entry/distance callbacks use signed indices: +row, -column, both 1-based
+   !> within the respective reordered meshes (the same convention as C_BF_*).
+   !> msh/ker are new handles; mshr/mshc remain owned by the caller.
+   subroutine C_BP_Construct_Init(M, N, M_loc, N_loc, nnsr, nnsc, mshr_Cptr, mshc_Cptr, bp_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bp_construct_init")
+      implicit none
+      integer :: M, N, M_loc, N_loc, nnsr(*), nnsc(*)
+      type(c_ptr) :: mshr_Cptr, mshc_Cptr, bp_Cptr, option_Cptr, stats_Cptr
+      type(c_ptr) :: msh_Cptr, ker_Cptr, ptree_Cptr
+      type(c_ptr), intent(in), target :: C_QuantApp
+      type(c_funptr), intent(in), value :: C_FuncDistmn, C_FuncNearFar
+      type(C_BP_handle), pointer :: handle
+      type(Hoption), pointer :: option
+      type(Hstat), pointer :: stats
+      type(mesh), pointer :: msh, mshr, mshc
+      type(kernelquant), pointer :: ker
+      type(proctree), pointer :: ptree
+      integer, allocatable :: nns_m(:, :), nns_n(:, :)
+
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call c_f_pointer(mshr_Cptr, mshr)
+      call c_f_pointer(mshc_Cptr, mshc)
+      call assert(option%format == HODLR .or. option%format == HMAT .or. option%format == HSS .or. option%format == BLR, &
+                  'C_BP_Construct_Init supports only HODLR, HMAT, HSS, and BLR')
+      call assert(option%cpp == 1, 'C_BP_Construct_Init requires option cpp=1')
+      call assert(M > 0 .and. N > 0, 'C_BP_Construct_Init requires positive dimensions')
+      allocate(handle, msh, ker)
+      handle%format = option%format
+      handle%dist = C_FuncDistmn
+      handle%nearfar = C_FuncNearFar
+      ! C_QuantApp follows the existing callback ABI: it aliases the user object,
+      ! whose address is passed through unchanged to the C callbacks.
+      ker%C_QuantApp => C_QuantApp
+      if (option%nogeo == 2) then
+         ker%C_FuncDistmn => handle%dist
+         ker%C_FuncNearFar => handle%nearfar
+      endif
+      if ((option%nogeo == 3 .or. option%nogeo == 4) .and. option%knn > 0) then
+         allocate(nns_m(option%knn, M), nns_n(option%knn, N))
+         nns_m = reshape(nnsr(1:option%knn*M), shape(nns_m))
+         nns_n = reshape(nnsc(1:option%knn*N), shape(nns_n))
+      endif
+      call init_random_seed()
+      call BP_Construct_Init_from_mshrc(M, N, M_loc, N_loc, mshr, mshc, handle%BP, option, stats, msh, ker, ptree, nns_m, nns_n)
+      bp_Cptr = c_loc(handle)
+      msh_Cptr = c_loc(msh)
+      ker_Cptr = c_loc(ker)
+   end subroutine C_BP_Construct_Init
+
+!>**** C interface of BP construction via entry evaluation/extraction.
+   !> option%format must match initialization. Use a fresh stats handle for each
+   !> BP construction, as in the standalone BF examples. C_QuantApp must remain live.
+   subroutine C_BP_Construct_Element_Compute(bp_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncZmn, C_FuncZmnBlock, C_QuantApp) bind(c, name="c_bp_construct_element_compute")
+      implicit none
+      type(c_ptr) :: bp_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr
+      type(c_ptr), intent(in), target :: C_QuantApp
+      type(c_funptr), intent(in), value :: C_FuncZmn, C_FuncZmnBlock
+      type(C_BP_handle), pointer :: handle
+      type(Hoption), pointer :: option
+      type(Hstat), pointer :: stats
+      type(mesh), pointer :: msh
+      type(kernelquant), pointer :: ker
+      type(proctree), pointer :: ptree
+
+      call c_f_pointer(bp_Cptr, handle)
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(msh_Cptr, msh)
+      call c_f_pointer(ker_Cptr, ker)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call assert(option%format == handle%format, 'C_BP_Construct_Element_Compute: format changed after initialization')
+      handle%entry = C_FuncZmn
+      handle%entries = C_FuncZmnBlock
+      ker%C_QuantApp => C_QuantApp
+      ker%C_FuncZmn => handle%entry
+      ker%C_FuncZmnBlock => handle%entries
+      call BP_Construct_Element_Compute(handle%BP, option, stats, msh, ker, ptree)
+   end subroutine C_BP_Construct_Element_Compute
+
 !>**** C interface of BF construction via blackbox matvec or entry extraction
    !> @param M,N: matrix size (in)
    !> @param M_loc,N_loc: number of local row/column indices (out)
@@ -3927,6 +4022,106 @@ contains
       deallocate (str)
    end subroutine C_BF_Mult
 
+!>**** C interface of BP multiplication on reordered, distributed vectors.
+   !> trans = 'N', 'T', or 'C'; vectors are column-major (local dimension,Ncol).
+   !> Input/output buffers must not overlap. The result is divided by scale_factor,
+   !> matching C_BF_Mult. Swap local row/column sizes for 'T' and 'C'.
+   subroutine C_BP_Mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bp_Cptr, option_Cptr, stats_Cptr, ptree_Cptr) bind(c, name="c_bp_mult")
+      implicit none
+      character(kind=c_char, len=1) :: trans(*)
+      integer :: Ninloc, Noutloc, Ncol
+      DT :: xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+      DT, allocatable :: xin_conj(:, :)
+      type(c_ptr), intent(in) :: bp_Cptr, option_Cptr, stats_Cptr, ptree_Cptr
+      type(C_BP_handle), pointer :: handle
+      type(Hoption), pointer :: option
+      type(Hstat), pointer :: stats
+      type(proctree), pointer :: ptree
+      type(matrixblock), pointer :: blocks
+      character :: op
+      real(kind=8) :: t1, t2
+
+      call c_f_pointer(bp_Cptr, handle)
+      call c_f_pointer(option_Cptr, option)
+      call c_f_pointer(stats_Cptr, stats)
+      call c_f_pointer(ptree_Cptr, ptree)
+      op = trans(1)
+      call assert(op == 'N' .or. op == 'T' .or. op == 'C', 'C_BP_Mult: trans must be N, T, or C')
+      blocks => handle%BP%LL(1)%matrices_block(1)
+      if (op == 'N') then
+         call assert(Ninloc == blocks%N_loc .and. Noutloc == blocks%M_loc, 'C_BP_Mult: incorrect local dimensions')
+      else
+         call assert(Ninloc == blocks%M_loc .and. Noutloc == blocks%N_loc, 'C_BP_Mult: incorrect transposed local dimensions')
+      endif
+      call assert(Ncol >= 0, 'C_BP_Mult: negative number of vectors')
+      call assert(option%scale_factor /= 0, 'C_BP_Mult: scale_factor must be nonzero')
+      t1 = MPI_Wtime()
+      stats%Flop_Tmp = 0
+      stats%Flop_C_Mult = 0
+      stats%Time_C_Mult = 0
+      stats%Time_C_Mult_Wrapper = 0
+      stats%Time_C_Mult_Block = 0
+      stats%Time_C_Mult_Init = 0
+      stats%Time_C_Mult_Right = 0
+      stats%Time_C_Mult_All2All = 0
+      stats%Time_C_Mult_Middle = 0
+      stats%Time_C_Mult_Left = 0
+      stats%Time_C_Mult_Cleanup = 0
+      stats%Time_C_Mult_RedistIn = 0
+      stats%Time_C_Mult_RedistOut = 0
+      stats%Time_C_Mult_Level = 0
+      stats%Time_C_Mult_TransPlan = 0
+      stats%Time_C_Mult_RedistSelf = 0
+      stats%Time_C_Mult_RedistPack = 0
+      stats%Time_C_Mult_RedistMPI = 0
+      stats%Time_C_Mult_RedistUnpack = 0
+      stats%Time_C_Mult_RedistSetup = 0
+      stats%Time_C_Mult_RedistSetupLocal = 0
+      stats%Time_C_Mult_RedistAlloc = 0
+      stats%Time_C_Mult_RedistFree = 0
+      stats%Time_C_Mult_RedistTotal = 0
+      stats%Time_C_Mult_Pack = 0
+      stats%Time_C_Mult_Full = 0
+      stats%Time_C_Mult_Unpack = 0
+      stats%Time_C_Mult_Final = 0
+      stats%Time_C_Mult_Reshape = 0
+      stats%Time_C_Mult_Gemm = 0
+      stats%Time_C_Mult_Reshape_Init = 0
+      stats%Time_C_Mult_Reshape_Right = 0
+      stats%Time_C_Mult_Reshape_Middle = 0
+      stats%Time_C_Mult_Reshape_Left = 0
+      stats%Time_C_Mult_Reshape_Final = 0
+      stats%Time_C_Mult_FFT_Total = 0
+      stats%Time_C_Mult_FFT_Check = 0
+      stats%Time_C_Mult_FFT_Apply = 0
+      stats%Time_C_Mult_FFT_Alloc = 0
+      stats%Time_C_Mult_FFT_Input = 0
+      stats%Time_C_Mult_FFT_Forward = 0
+      stats%Time_C_Mult_FFT_Multiply = 0
+      stats%Time_C_Mult_FFT_Backward = 0
+      stats%Time_C_Mult_FFT_Output = 0
+      xout = 0
+      ! Bplus_block_MVP_dat implements N/T. Use A^H*x = conjg(A^T*conjg(x))
+      ! for C without modifying the caller's input buffer.
+      if (op == 'C') then
+#if DAT==0 || DAT==2
+         allocate(xin_conj(Ninloc, Ncol))
+         xin_conj = conjg(xin)
+         call BP_Mult(handle%BP, 'T', xin_conj, xout, Ninloc, Noutloc, Ncol, ptree, stats)
+         xout = conjg(xout)
+#else
+         call BP_Mult(handle%BP, 'T', xin, xout, Ninloc, Noutloc, Ncol, ptree, stats)
+#endif
+      else
+         call BP_Mult(handle%BP, op, xin, xout, Ninloc, Noutloc, Ncol, ptree, stats)
+      endif
+      xout = xout/option%scale_factor
+      t2 = MPI_Wtime()
+      stats%Time_C_Mult_Wrapper = stats%Time_C_Mult_Wrapper + t2 - t1
+      stats%Time_C_Mult = stats%Time_C_Mult + t2 - t1
+      stats%Flop_C_Mult = stats%Flop_C_Mult + stats%Flop_Tmp
+   end subroutine C_BP_Mult
+
 !>**** C interface of parallel extraction of a list of intersections from a block
    !> @param block_Cptr: the structure containing the block
    !> @param option_Cptr: the structure containing option
@@ -4586,6 +4781,20 @@ contains
       deallocate (blocks)
       bf_Cptr = c_null_ptr
    end subroutine C_BF_DeleteBF
+
+!>**** Delete a BP handle and its callback storage (safe for a null handle).
+   !> Release msh/ker separately with C_BPACK_Deletemesh/Deletekernelquant.
+   !> Do not use the associated ker for callbacks after deleting this BP.
+   subroutine C_BP_Delete(bp_Cptr) bind(c, name="c_bp_delete")
+      implicit none
+      type(c_ptr), intent(inout) :: bp_Cptr
+      type(C_BP_handle), pointer :: handle
+      if (.not. c_associated(bp_Cptr)) return
+      call c_f_pointer(bp_Cptr, handle)
+      call BP_Delete(handle%BP)
+      deallocate(handle)
+      bp_Cptr = c_null_ptr
+   end subroutine C_BP_Delete
 
 !>**** C interface of deleting Hoption
    !> @param option_Cptr: the structure containing Hoption

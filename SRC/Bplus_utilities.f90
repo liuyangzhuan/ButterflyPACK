@@ -286,7 +286,7 @@ contains
       real(kind=8)::rtemp
 
       if (associated(bplus%LL)) then
-      do ll = 1, LplusMax
+      do ll = 1, size(bplus%LL)
          if (bplus%LL(ll)%Nbound > 0) then
             if (associated(bplus%LL(ll)%matrices_block)) then
             do bb = 1, bplus%LL(ll)%Nbound

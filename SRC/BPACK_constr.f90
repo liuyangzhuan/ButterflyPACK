@@ -907,7 +907,7 @@ contains
          do ii = 1, N
          do kk = 1, option%knn
             knn = option%knn
-            if (nns_m(kk,ii) /= 0) then
+            if (nns_n(kk,ii) /= 0) then
                msh%nns(ii + M, kk) = nns_n(kk,ii)
             else
                msh%nns(ii + M, kk) = 0
@@ -1418,7 +1418,7 @@ contains
             call BF_sym2asym(blocks)
          elseif (option%forwardN15flag == 2) then
             call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
-            call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, -1, error)
+            call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, -1, error)
             if(error>50*option%tol_comp)then
                pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
                if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: error ',error,',  with the N15 algorithm'

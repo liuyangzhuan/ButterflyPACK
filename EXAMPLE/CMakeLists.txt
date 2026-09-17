@@ -303,3 +303,17 @@ endif()
 
 
 endif()
+
+# Optional standalone BP C-interface regressions; build these targets explicitly.
+if(enable_mpi)
+  foreach(bp_precision d z s c)
+    add_executable(${bp_precision}bp_interface_test EXCLUDE_FROM_ALL InterfaceBPTest.cpp)
+    target_link_libraries(${bp_precision}bp_interface_test ${all_link_libs_${bp_precision}})
+    if(bp_precision STREQUAL "z" OR bp_precision STREQUAL "c")
+      target_compile_definitions(${bp_precision}bp_interface_test PRIVATE BP_TEST_COMPLEX)
+    endif()
+    if(bp_precision STREQUAL "s" OR bp_precision STREQUAL "c")
+      target_compile_definitions(${bp_precision}bp_interface_test PRIVATE BP_TEST_SINGLE)
+    endif()
+  endforeach()
+endif()
