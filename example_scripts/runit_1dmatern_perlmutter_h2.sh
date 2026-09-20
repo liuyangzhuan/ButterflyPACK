@@ -38,6 +38,7 @@ ELEM_EXTRACT=2
 VERBOSITY=1
 LENGTH_SCALE=0.1
 NUGGET=1e-3
+DISTRIBUTED64=${DISTRIBUTED64:-1}  # 0: legacy 32-bit API; 1: distributed 64-bit API
 
 srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
   /usr/bin/time -f "MaxRSS=%M KB" \
@@ -56,6 +57,7 @@ srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
   --dimension 1 \
   --num-proxy 0 \
   --format 7 \
+  --distributed64 "${DISTRIBUTED64}" \
   --sym 1 \
   --elem_extract "${ELEM_EXTRACT}" \
   --verbosity "${VERBOSITY}" \

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <numeric>
+
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 
@@ -18,6 +20,10 @@ double verify_solution_direct(
     
     int rank;
     MPI_Comm_rank(comm, &rank);
+
+    std::vector<int64_t> verification_indices(static_cast<size_t>(N));
+    std::iota(verification_indices.begin(), verification_indices.end(), 0);
+    kernel->ensure_coordinates_collective(verification_indices, comm);
     
     if (rank != 0) {
         return 0.0;  // Only verify on rank 0
@@ -546,6 +552,7 @@ SparseMvpVerificationData<DataType> make_sparse_mvp_verification_data(
     const int64_t Npt_src = std::min<int64_t>(num_src, N);
     const SparseTestVector<DataType> stv =
         make_sparse_test_vector<DataType>(N, Npt_src, seed);
+    kernel->ensure_coordinates_collective(stv.idx, tree->comm);
 
     std::unordered_map<int64_t, DataType> sparse_values;
     sparse_values.reserve(static_cast<size_t>(Npt_src) * 2);

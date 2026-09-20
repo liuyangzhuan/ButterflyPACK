@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <algorithm>
 #include <pthread.h>
@@ -15,6 +16,7 @@
 #include <cassert>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <vector>
 #include <atomic>
 #include <mpi.h>
@@ -659,6 +661,55 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
   (void)Nalldat_loc;
 }
 
+inline void C_FuncZmn_BF_S2S64(
+    const int64_t* row, const int64_t* column,
+    const double* row_coordinate, const double* column_coordinate,
+    const int* dimension, _Complex double* value, C2Fptr quant) {
+  C_QuantApp_BF* Q = static_cast<C_QuantApp_BF*>(quant);
+  if (*dimension != 3) {
+    throw std::invalid_argument("C_FuncZmn_BF_S2S64 requires dimension=3");
+  }
+  assemble_fromD1D2Tau_s2s(
+      row_coordinate[0], column_coordinate[0],
+      row_coordinate[1], column_coordinate[1],
+      row_coordinate[2], column_coordinate[2], value, Q);
+  (void)row;
+  (void)column;
+}
+
+inline void C_FuncZmnBlock_BF_S2S64(
+    const int64_t* rows, const int64_t* columns,
+    const int64_t* row_ids, const int64_t* column_ids,
+    const double* row_coordinates, const double* column_coordinates,
+    const int* dimension, _Complex double* output,
+    const int64_t* leading_dimension, C2Fptr quant) {
+  C_QuantApp_BF* Q = static_cast<C_QuantApp_BF*>(quant);
+  if (*dimension != 3 || *leading_dimension < *rows) {
+    throw std::invalid_argument("invalid VIE distributed block metadata");
+  }
+
+  const double s0 = 2.0;
+  const double k0_squared = pow(s0 * Q->_w, 2.0);
+  const int nx = round(Q->_x0max / Q->_h);
+  const int ny = round(Q->_y0max / Q->_h);
+  const int nz = round(Q->_z0max / Q->_h);
+  for (int64_t column = 0; column < *columns; ++column) {
+    const double* y = column_coordinates + 3 * column;
+    const double s1 = slowness(
+        y[0], y[1], y[2], Q->_slow_x0, Q->_slow_y0, Q->_slow_z0,
+        Q->_ivelo, Q->_slowness_array.data(), Q->_h, nx, ny, nz);
+    const double coef = k0_squared * (pow(s1 / s0, 2.0) - 1.0);
+    for (int64_t row = 0; row < *rows; ++row) {
+      const double* x = row_coordinates + 3 * row;
+      assemble_fromD1D2Tau_s2s_with_coef(
+          x[0], y[0], x[1], y[1], x[2], y[2], coef,
+          &output[row + column * *leading_dimension], Q);
+    }
+  }
+  (void)row_ids;
+  (void)column_ids;
+}
+
 
 
 
@@ -795,6 +846,7 @@ if(myrank==master_rank){
   int CA_level = 10000;
 
   int format_s2s = 7;   // 7 = default: s2s format-7. Override with --format_s2s
+  int distributed64 = 0;
 
   FILE *fout1;
 
@@ -847,6 +899,7 @@ if(myrank==master_rank){
       {"reduction_threshold", required_argument, 0, 36},
       {"Nmin_leaf",         required_argument, 0, 37},
       {"CA_level",          required_argument, 0, 38},
+      {"distributed64",     required_argument, 0, 39},
       {NULL, 0, NULL, 0}
     };
   int c, option_index = 0;
@@ -1008,8 +1061,26 @@ if(myrank==master_rank){
       std::istringstream iss(optarg);
       iss >> CA_level;
     } break;
+    case 39: {
+      std::istringstream iss(optarg);
+      iss >> distributed64;
+    } break;
     default: break;
     }
+  }
+
+  if (distributed64 != 0 && distributed64 != 1) {
+    if (myrank == master_rank) {
+      cerr << "distributed64 must be 0 or 1" << endl;
+    }
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+  if (distributed64 == 1 && format_s2s != 7) {
+    if (myrank == master_rank) {
+      cerr << "the distributed64 API currently supports only format_s2s=7"
+           << endl;
+    }
+    MPI_Abort(MPI_COMM_WORLD, 1);
   }
 
 
@@ -1446,7 +1517,7 @@ if(myrank==master_rank){
     }
 
 
-  	C_QuantApp_BF *quant_ptr_bf_s2s;
+    C_QuantApp_BF *quant_ptr_bf_s2s;
     z_c_bpack_set_I_option(&option_bf, "format", format_s2s); // change this one! Xiaomian
     // Format-7 (s2s) reads tol_comp at construct_init below, so override it HERE (before line ~1341).
     // Capture the format-1 value first so it can be restored for step 3.
@@ -1460,20 +1531,85 @@ if(myrank==master_rank){
     F2Cptr kerquant_bf_s2s;   //kernel quantities structure returned by Fortran code
     int myseg_s2s;
 
+    const int64_t Npo_s2s_64 = Npo;
+    int64_t input_first_s2s = 0;
+    int64_t input_count_s2s = 0;
+    vector<int64_t> input_ids_s2s;
+    vector<double> input_coordinates_s2s;
+    if (distributed64 == 1) {
+      const int64_t base = Npo_s2s_64 / size;
+      const int64_t remainder = Npo_s2s_64 % size;
+      input_count_s2s = base + (myrank < remainder ? 1 : 0);
+      input_first_s2s = static_cast<int64_t>(myrank) * base +
+          std::min<int64_t>(myrank, remainder);
+      if (input_count_s2s > std::numeric_limits<int>::max()) {
+        throw std::overflow_error(
+            "the local VIE input count exceeds the current solve API limit");
+      }
+      input_ids_s2s.resize(static_cast<size_t>(input_count_s2s));
+      input_coordinates_s2s.resize(
+          static_cast<size_t>(input_count_s2s) * Ndim);
+      for (int64_t local = 0; local < input_count_s2s; ++local) {
+        const int64_t global = input_first_s2s + local;
+        input_ids_s2s[static_cast<size_t>(local)] = global + 1;
+        std::copy_n(
+            data_geo.data() + static_cast<size_t>(global) * Ndim, Ndim,
+            input_coordinates_s2s.data() +
+                static_cast<size_t>(local) * Ndim);
+      }
+    }
+
     // create hodlr data structures
     z_c_bpack_createstats(&stats_bf_s2s);
-    quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, scaleGreen, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,slowness_array,rmax,verbose,vs, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
+    vector<double> callback_data = distributed64 == 1
+        ? vector<double>() : data_geo;
+    quant_ptr_bf_s2s=new C_QuantApp_BF(
+        std::move(callback_data), Ndim, scaleGreen, w, x0min, x0max,
+        y0min, y0max, z0min, z0max, h, dl, ivelo, slowness_array, rmax,
+        verbose, vs, x_cheb, y_cheb, z_cheb, u1_square_int_cheb,
+        D1_int_cheb, D2_int_cheb);
 
     if(myrank==0){
       cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" From: "<< Npo <<" To: "<< Npo <<endl;
+      cout<<"C API: "
+          <<(distributed64 == 1 ? "distributed 64-bit" : "legacy 32-bit")
+          <<endl;
     }
     // construct hodlr with geometrical points
-    z_c_bpack_construct_init(&Npo, &Ndim, data_geo.data(), nns_ptr_s2s,&nlevel, tree_bf, perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
-    quant_ptr_bf_s2s->_Hperm.resize(Npo);
-    std::copy(perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
+    if (distributed64 == 1) {
+      int bounds_provided = 1;
+      const double global_bounds[6] = {
+          x0min, x0max, y0min, y0max, z0min, z0max};
+      int64_t internal_local_s2s = 0;
+      z_c_bpack_construct_init_distributed64(
+          &Npo_s2s_64, &input_count_s2s, &Ndim, input_ids_s2s.data(),
+          input_coordinates_s2s.data(), &bounds_provided, global_bounds,
+          &internal_local_s2s, &bmat_bf_s2s, &option_bf, &stats_bf_s2s,
+          &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf);
+      myseg_s2s = static_cast<int>(input_count_s2s);
+    } else {
+      z_c_bpack_construct_init(
+          &Npo, &Ndim, data_geo.data(), nns_ptr_s2s, &nlevel, tree_bf,
+          perms_bf, &myseg_s2s, &bmat_bf_s2s, &option_bf,
+          &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf,
+          &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s);
+      quant_ptr_bf_s2s->_Hperm.resize(Npo);
+      std::copy(
+          perms_bf, perms_bf + Npo, quant_ptr_bf_s2s->_Hperm.begin());
+    }
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-  	z_c_bpack_construct_element_compute(&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
+    if (distributed64 == 1) {
+      z_c_bpack_construct_element_compute_distributed64(
+          &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,
+          &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S64,
+          &C_FuncZmnBlock_BF_S2S64, quant_ptr_bf_s2s);
+    } else {
+      z_c_bpack_construct_element_compute(
+          &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,
+          &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S,
+          &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s);
+    }
 
 
     if(myrank==master_rank)std::cout<<"\n\nFactoring the scatterer-scatterer operator: "<<std::endl;
@@ -1517,18 +1653,27 @@ if(myrank==master_rank){
 
     vector<_Complex double> x_v_glo(N*nvec,{0.0,0.0});
     for (int i=0; i<myseg_s2s; i++){
-      int i_new_loc = i+1;
-      int i_old;
-      z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+      int64_t i_old_64 = 0;
+      if (distributed64 == 1) {
+        i_old_64 = input_ids_s2s[static_cast<size_t>(i)];
+      } else {
+        int i_new_loc = i+1;
+        int i_old = 0;
+        z_c_bpack_new2old(&msh_bf_s2s,&i_new_loc,&i_old);
+        i_old_64 = i_old;
+      }
       for (int nth=0; nth<nvec; nth++){
-        double xs = data_geo[(i_old-1) * Ndim];
-        double ys = data_geo[(i_old-1) * Ndim+1];
-        double zs = data_geo[(i_old-1) * Ndim+2];
+        const size_t old_offset =
+            static_cast<size_t>(i_old_64 - 1) * Ndim;
+        double xs = data_geo[old_offset];
+        double ys = data_geo[old_offset+1];
+        double zs = data_geo[old_offset+2];
         double ss = slowness(xs,ys,zs, slow_x0, slow_y0,slow_z0, ivelo,slowness_array.data(),h, Iint, Jint, Kint);
         double s0=2;
         double k0 = s0*w;
         double coef = pow(k0,2.0)*(pow(ss/s0,2.0)-1);
-        x_v_glo[v_sub2glo[i_old-1]+nth*N]=x_s[i+nth*myseg_s2s]*coef;
+        x_v_glo[v_sub2glo[static_cast<size_t>(i_old_64 - 1)]+nth*N]=
+            x_s[i+nth*myseg_s2s]*coef;
       }
     }
     MPI_Allreduce(MPI_IN_PLACE,x_v_glo.data(), N*nvec, MPI_C_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD);

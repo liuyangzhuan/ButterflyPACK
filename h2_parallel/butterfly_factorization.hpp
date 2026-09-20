@@ -334,6 +334,7 @@ void factorize_CA_level(
             return;
         }
         staged_halo_wait_stage(level, *staged_state, stage);
+        kernel->register_level_coordinates(level);
         const auto merge_start = std::chrono::high_resolution_clock::now();
         staged_halo_merge_stage(
             level, *staged_state, stage, kernel);
@@ -1038,6 +1039,10 @@ void hierarchical_factorization_parallel(
                                  gather_duration).count()
                           << " ms" << std::endl;
             }
+        }
+
+        if (level.is_process_active) {
+            kernel->register_level_coordinates(level);
         }
 
         memory_diagnostics.record(

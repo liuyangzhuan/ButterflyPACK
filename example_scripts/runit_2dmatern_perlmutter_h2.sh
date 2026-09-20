@@ -48,6 +48,7 @@ h2_lazy_schur=0
 h2_gemm_split=16
 H2_CA_STAGED_HALO=2         # 0 or 2
 H2_CA_OWNER_COMPONENT=0     #  0 or 3
+DISTRIBUTED64=${DISTRIBUTED64:-1}  # 0: legacy 32-bit API; 1: distributed 64-bit API
 
 
 # srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
@@ -65,6 +66,7 @@ H2_CA_OWNER_COMPONENT=0     #  0 or 3
 #   --precon 3 \
 #   --iter_solver 4 \
 #   --elem_extract "${ELEM_EXTRACT}" \
+#   --distributed64 "${DISTRIBUTED64}" \
 #   --verbosity "${VERBOSITY}" --h2_use_sketch ${h2_use_sketch} --h2_lazy_schur ${h2_lazy_schur} --h2_gemm_split ${h2_gemm_split} --H2_CA_staged_halo ${H2_CA_STAGED_HALO} --H2_CA_owner_component ${H2_CA_OWNER_COMPONENT} \
 #   2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}_tol${TOL}__h2_use_sketch${h2_use_sketch}_h2_lazy_schur${h2_lazy_schur}_H2_CA_STAGED_HALO${H2_CA_STAGED_HALO}_H2_CA_OWNER_COMPONENT${H2_CA_OWNER_COMPONENT}.log
 
@@ -85,5 +87,6 @@ srun --export=ALL -N "${NNODES}" -n "${NMPI}" --cpu-bind=none \
   --precon 3 \
   --iter_solver 4 \
   --elem_extract "${ELEM_EXTRACT}" \
+  --distributed64 "${DISTRIBUTED64}" \
   --verbosity "${VERBOSITY}" --h2_use_sketch ${h2_use_sketch} --h2_lazy_schur ${h2_lazy_schur} --h2_gemm_split ${h2_gemm_split} --H2_CA_staged_halo ${H2_CA_STAGED_HALO} --H2_CA_owner_component ${H2_CA_OWNER_COMPONENT} \
   2>&1 | tee matern2d_h2_${GRID_SIZE}_2_calv_${CA_LEVEL}_rt${REDUCTION_THRESHOLD}_tol${TOL}__h2_use_sketch${h2_use_sketch}_h2_lazy_schur${h2_lazy_schur}_H2_CA_STAGED_HALO${H2_CA_STAGED_HALO}_H2_CA_OWNER_COMPONENT${H2_CA_OWNER_COMPONENT}.log

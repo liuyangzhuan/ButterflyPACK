@@ -40,6 +40,8 @@ struct DriverOptions {
   int verbosity = 1;
   int elem_extract = 2;
   int lrlevel = 0;
+  int format = 7;
+  int distributed64 = 0;
   bool show_help = false;
 };
 
@@ -194,6 +196,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.elem_extract = parse_int(value, "elem_extract");
     } else if (name == "lrlevel") {
       options.lrlevel = parse_int(value, "lrlevel");
+    } else if (name == "distributed64") {
+      options.distributed64 = parse_int(value, "distributed64");
     } else if (name == "kernel") {
       if (normalize_option_name(value) != "laplace") {
         throw std::invalid_argument("this driver supports only --kernel laplace");
@@ -212,9 +216,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
             "the ButterflyPACK H2 interface currently supports num_proxy=0 only");
       }
     } else if (name == "format") {
-      if (parse_int(value, "format") != 7) {
-        throw std::invalid_argument("this driver requires --format 7");
-      }
+      options.format = parse_int(value, "format");
     } else if (name == "sym") {
       if (parse_int(value, "sym") != 1) {
         throw std::invalid_argument("this driver requires --sym 1");
@@ -264,6 +266,16 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_ca_owner_serial != 0 && options.h2_ca_owner_serial != 1) {
     throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
   }
+  if (options.format != 1 && options.format != 7) {
+    throw std::invalid_argument("format must be 1 (HODLR) or 7 (H2)");
+  }
+  if (options.distributed64 != 0 && options.distributed64 != 1) {
+    throw std::invalid_argument("distributed64 must be 0 or 1");
+  }
+  if (options.distributed64 == 1 && options.format != 7) {
+    throw std::invalid_argument(
+        "the distributed64 API currently supports only format=7");
+  }
 
   derive_nmin_leaf_from_levels(options);
   const int64_t points = checked_cube(options.grid_size, "grid_size");
@@ -271,9 +283,11 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "N must equal grid_size^3; expected " + std::to_string(points));
   }
-  if (points > std::numeric_limits<int>::max()) {
+  if (options.distributed64 == 0 &&
+      points > std::numeric_limits<int>::max()) {
     throw std::invalid_argument(
-        "this ButterflyPACK C interface requires N <= INT_MAX");
+        "the legacy ButterflyPACK C API requires N <= INT_MAX; use "
+        "--distributed64 1 for format=7");
   }
   if (options.nmin_leaf > points) {
     throw std::invalid_argument("Nmin_leaf cannot exceed N");
@@ -310,6 +324,8 @@ void print_usage(const char* executable) {
       << "  --H2_CA_owner_serial <0|1>\n"
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
+      << "  --format <1|7>\n"
+      << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|2>\n"
       << "  --verbosity <-1|0|1>\n";
 }
@@ -344,24 +360,15 @@ double laplace_self_cell_integral(int64_t grid_size) {
 
 class Laplace3DApplication {
  public:
-  explicit Laplace3DApplication(int64_t grid_size)
+  Laplace3DApplication(int64_t grid_size, bool materialize_locations)
       : grid_size_(grid_size),
         point_count_(checked_cube(grid_size, "grid_size")),
         inverse_4pi_n_(1.0 / (4.0 * kPi * static_cast<double>(point_count_))),
-        diagonal_(laplace_self_cell_integral(grid_size)),
-        locations_(static_cast<size_t>(point_count_) * 3) {
-    const double h = 1.0 / static_cast<double>(grid_size_);
-    for (int64_t i = 0; i < grid_size_; ++i) {
-      const double x = (static_cast<double>(i) + 0.5) * h;
-      for (int64_t j = 0; j < grid_size_; ++j) {
-        const double y = (static_cast<double>(j) + 0.5) * h;
-        for (int64_t k = 0; k < grid_size_; ++k) {
-          const double z = (static_cast<double>(k) + 0.5) * h;
-          const int64_t index = (i * grid_size_ + j) * grid_size_ + k;
-          locations_[static_cast<size_t>(3 * index)] = x;
-          locations_[static_cast<size_t>(3 * index + 1)] = y;
-          locations_[static_cast<size_t>(3 * index + 2)] = z;
-        }
+        diagonal_(laplace_self_cell_integral(grid_size)) {
+    if (materialize_locations) {
+      locations_.resize(static_cast<size_t>(point_count_) * 3);
+      for (int64_t index = 0; index < point_count_; ++index) {
+        coordinate(index, locations_.data() + static_cast<size_t>(3 * index));
       }
     }
   }
@@ -369,16 +376,31 @@ class Laplace3DApplication {
   double* locations() { return locations_.data(); }
   double diagonal() const { return diagonal_; }
 
-  double evaluate(int row, int column) const {
-    if (row == column) return diagonal_;
+  void coordinate(int64_t index, double* point) const {
+    const int64_t k = index % grid_size_;
+    const int64_t quotient = index / grid_size_;
+    const int64_t j = quotient % grid_size_;
+    const int64_t i = quotient / grid_size_;
+    const double h = 1.0 / static_cast<double>(grid_size_);
+    point[0] = (static_cast<double>(i) + 0.5) * h;
+    point[1] = (static_cast<double>(j) + 0.5) * h;
+    point[2] = (static_cast<double>(k) + 0.5) * h;
+  }
 
-    const double* x = locations_.data() + static_cast<size_t>(3 * row);
-    const double* y = locations_.data() + static_cast<size_t>(3 * column);
+  double evaluate_coordinates(int64_t row_id, int64_t column_id,
+                              const double* x, const double* y) const {
+    if (row_id == column_id) return diagonal_;
     const double dx = x[0] - y[0];
     const double dy = x[1] - y[1];
     const double dz = x[2] - y[2];
     const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
     return inverse_4pi_n_ / r;
+  }
+
+  double evaluate(int row, int column) const {
+    const double* x = locations_.data() + static_cast<size_t>(3 * row);
+    const double* y = locations_.data() + static_cast<size_t>(3 * column);
+    return evaluate_coordinates(row + 1, column + 1, x, y);
   }
 
   void evaluate_block(int rows, int columns, const int* row_indices,
@@ -388,17 +410,9 @@ class Laplace3DApplication {
       const double* y = locations_.data() + static_cast<size_t>(3 * column);
       for (int i = 0; i < rows; ++i) {
         const int row = row_indices[i] - 1;
-        if (row == column) {
-          output[i + static_cast<int64_t>(j) * rows] = diagonal_;
-          continue;
-        }
-
         const double* x = locations_.data() + static_cast<size_t>(3 * row);
-        const double dx = x[0] - y[0];
-        const double dy = x[1] - y[1];
-        const double dz = x[2] - y[2];
-        const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-        output[i + static_cast<int64_t>(j) * rows] = inverse_4pi_n_ / r;
+        output[i + static_cast<int64_t>(j) * rows] = evaluate_coordinates(
+            row + 1, column + 1, x, y);
       }
     }
   }
@@ -459,6 +473,65 @@ void laplace_block_callback(
   (void)nalldat_loc;
 }
 
+void laplace_entry_callback64(
+    const int64_t* row, const int64_t* column, const double* row_coordinate,
+    const double* column_coordinate, const int* dimension, double* value,
+    C2Fptr quant) {
+  const auto* application = static_cast<Laplace3DApplication*>(quant);
+  if (*dimension != 3) {
+    throw std::invalid_argument("laplace_entry_callback64 requires dimension=3");
+  }
+  *value = application->evaluate_coordinates(
+      *row, *column, row_coordinate, column_coordinate);
+}
+
+void laplace_block_callback64(
+    const int64_t* rows, const int64_t* columns, const int64_t* row_ids,
+    const int64_t* column_ids, const double* row_coordinates,
+    const double* column_coordinates, const int* dimension, double* output,
+    const int64_t* leading_dimension, C2Fptr quant) {
+  const auto* application = static_cast<Laplace3DApplication*>(quant);
+  if (*dimension != 3 || *leading_dimension < *rows) {
+    throw std::invalid_argument("invalid Laplace distributed block metadata");
+  }
+  for (int64_t column = 0; column < *columns; ++column) {
+    const double* y = column_coordinates + 3 * column;
+    for (int64_t row = 0; row < *rows; ++row) {
+      const double* x = row_coordinates + 3 * row;
+      output[row + column * *leading_dimension] =
+          application->evaluate_coordinates(
+              row_ids[row], column_ids[column], x, y);
+    }
+  }
+}
+
+struct DistributedInput {
+  int64_t first = 0;
+  int64_t count = 0;
+  std::vector<int64_t> global_ids;
+  std::vector<double> coordinates;
+};
+
+DistributedInput make_distributed_input(
+    int64_t global_count, int rank, int mpi_size,
+    const Laplace3DApplication& application) {
+  DistributedInput input;
+  const int64_t base = global_count / mpi_size;
+  const int64_t remainder = global_count % mpi_size;
+  input.count = base + (rank < remainder ? 1 : 0);
+  input.first = static_cast<int64_t>(rank) * base +
+      std::min<int64_t>(rank, remainder);
+  input.global_ids.resize(static_cast<size_t>(input.count));
+  input.coordinates.resize(static_cast<size_t>(input.count) * 3);
+  for (int64_t local = 0; local < input.count; ++local) {
+    const int64_t global = input.first + local;
+    input.global_ids[static_cast<size_t>(local)] = global + 1;
+    application.coordinate(
+        global, input.coordinates.data() + static_cast<size_t>(3 * local));
+  }
+  return input;
+}
+
 void distance_callback(int*, int*, double* value, C2Fptr) { *value = 0.0; }
 void near_far_callback(int*, int*, int* value, C2Fptr) { *value = 0; }
 
@@ -501,9 +574,9 @@ int main(int argc, char** argv) {
 
     const int64_t point_count_64 =
         checked_cube(driver_options.grid_size, "grid_size");
-    int point_count = static_cast<int>(point_count_64);
     int dimension = 3;
-    Laplace3DApplication application(driver_options.grid_size);
+    Laplace3DApplication application(
+        driver_options.grid_size, driver_options.distributed64 == 0);
 
     if (rank == 0) {
       std::cout << "=== ButterflyPACK H2 3D Laplace Test ===\n"
@@ -511,6 +584,12 @@ int main(int argc, char** argv) {
                 << driver_options.grid_size << " x "
                 << driver_options.grid_size << "\n"
                 << "Total points: " << point_count_64 << "\n"
+                << "Format: " << driver_options.format << "\n"
+                << "C API: "
+                << (driver_options.distributed64 == 1
+                        ? "distributed 64-bit"
+                        : "legacy 32-bit")
+                << "\n"
                 << "Tolerance: " << driver_options.tolerance << "\n"
                 << "Nmin_leaf: " << driver_options.nmin_leaf << "\n"
                 << "Reduction threshold: "
@@ -544,7 +623,8 @@ int main(int argc, char** argv) {
 
     d_c_bpack_set_D_option(
         &resources.option, "tol_comp", driver_options.tolerance);
-    d_c_bpack_set_I_option(&resources.option, "format", 7);
+    d_c_bpack_set_I_option(
+        &resources.option, "format", driver_options.format);
     d_c_bpack_set_I_option(&resources.option, "sym", 1);
     d_c_bpack_set_I_option(
         &resources.option, "Nmin_leaf", static_cast<int>(driver_options.nmin_leaf));
@@ -578,22 +658,52 @@ int main(int argc, char** argv) {
     d_c_bpack_set_I_option(&resources.option, "cpp", 1);
     d_c_bpack_set_I_option(&resources.option, "nogeo", 0);
 
-    int nlevel = 0;
-    int user_tree = point_count;
     int local_points = 0;
     F2Cptr kernel_quantities = nullptr;
-    d_c_bpack_construct_init(
-        &point_count, &dimension, application.locations(), nullptr,
-        &nlevel, &user_tree, nullptr, &local_points,
-        &resources.matrix, &resources.option, &resources.stats,
-        &resources.mesh, &kernel_quantities, &resources.process_tree,
-        &distance_callback, &near_far_callback, &application);
+    DistributedInput distributed_input;
+    if (driver_options.distributed64 == 1) {
+      distributed_input = make_distributed_input(
+          point_count_64, rank, mpi_size, application);
+      if (distributed_input.count > std::numeric_limits<int>::max()) {
+        throw std::overflow_error(
+            "the local input count exceeds the current solve API limit");
+      }
+      int bounds_provided = 1;
+      const double global_bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
+      int64_t internal_local_points = 0;
+      d_c_bpack_construct_init_distributed64(
+          &point_count_64, &distributed_input.count, &dimension,
+          distributed_input.global_ids.data(),
+          distributed_input.coordinates.data(), &bounds_provided,
+          global_bounds, &internal_local_points, &resources.matrix,
+          &resources.option, &resources.stats, &resources.mesh,
+          &kernel_quantities, &resources.process_tree);
+      local_points = static_cast<int>(distributed_input.count);
+    } else {
+      int point_count = static_cast<int>(point_count_64);
+      int nlevel = 0;
+      int user_tree = point_count;
+      std::vector<int> permutation(static_cast<size_t>(point_count));
+      d_c_bpack_construct_init(
+          &point_count, &dimension, application.locations(), nullptr,
+          &nlevel, &user_tree, permutation.data(), &local_points,
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &kernel_quantities, &resources.process_tree,
+          &distance_callback, &near_far_callback, &application);
+    }
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
-    d_c_bpack_construct_element_compute(
-        &resources.matrix, &resources.option, &resources.stats,
-        &resources.mesh, &kernel_quantities, &resources.process_tree,
-        &laplace_entry_callback, &laplace_block_callback, &application);
+    if (driver_options.distributed64 == 1) {
+      d_c_bpack_construct_element_compute_distributed64(
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &kernel_quantities, &resources.process_tree,
+          &laplace_entry_callback64, &laplace_block_callback64, &application);
+    } else {
+      d_c_bpack_construct_element_compute(
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &kernel_quantities, &resources.process_tree,
+          &laplace_entry_callback, &laplace_block_callback, &application);
+    }
 
     if (rank == 0) {
       std::cout << "\nFactoring the 3D Laplace operator:" << std::endl;
@@ -608,10 +718,13 @@ int main(int argc, char** argv) {
     std::vector<double> rhs(value_count);
     for (int column = 0; column < number_of_rhs; ++column) {
       for (int row = 0; row < local_points; ++row) {
+        const int64_t global_row = driver_options.distributed64 == 1
+            ? distributed_input.first + row
+            : static_cast<int64_t>(row) + 17 * rank;
         rhs[static_cast<size_t>(row) +
             static_cast<size_t>(column) * local_points] =
             1.0 + 0.125 * column +
-            0.001 * ((row + 17 * rank) % 97);
+            0.001 * (global_row % 97);
       }
     }
 

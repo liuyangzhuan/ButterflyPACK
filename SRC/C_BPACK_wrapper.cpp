@@ -94,6 +94,160 @@ void compress_h2_and_update_stats(
       solver->tree.get(), &solver->kernel);
   }
 }
+
+static butterfly::ProgramOptions read_h2_program_options64(
+    F2Cptr* option, int64_t point_count, int dimension) {
+  double tolerance = 0.0;
+  double reduction_threshold_d = 0.0;
+  double Nmin_leaf_d = 0.0;
+  double precon_d = 0.0;
+  double verbosity_d = 0.0;
+  double CA_level_d = 0.0;
+  double H2_use_sketch_d = 0.0;
+  double H2_lazy_schur_d = 0.0;
+  double H2_GEMM_split_d = 0.0;
+  double H2_CA_staged_halo_d = 0.0;
+  double H2_CA_owner_component_d = 0.0;
+  double H2_CA_owner_serial_d = 0.0;
+  double H2_ID_radius_d = 0.0;
+  double H2_ID_proxy_d = 0.0;
+  double H2_ID_proxy_points_d = 0.0;
+  double BACA_Batch_d = 0.0;
+  c_bpack_getoption(option, "tol_comp", &tolerance);
+  c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
+  c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
+  c_bpack_getoption(option, "precon", &precon_d);
+  c_bpack_getoption(option, "verbosity", &verbosity_d);
+  c_bpack_getoption(option, "CA_level", &CA_level_d);
+  c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
+  c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
+  c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
+  c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
+  c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
+  c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
+  c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
+  c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
+  c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
+  c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
+
+  const int64_t reduction_threshold =
+      static_cast<int64_t>(reduction_threshold_d);
+  const int64_t Nmin_leaf = static_cast<int64_t>(Nmin_leaf_d);
+  const int CA_level = static_cast<int>(std::llround(CA_level_d));
+  const int H2_use_sketch =
+      static_cast<int>(std::llround(H2_use_sketch_d));
+  const int H2_lazy_schur =
+      static_cast<int>(std::llround(H2_lazy_schur_d));
+  const int H2_GEMM_split =
+      static_cast<int>(std::llround(H2_GEMM_split_d));
+  const int H2_CA_staged_halo =
+      static_cast<int>(std::llround(H2_CA_staged_halo_d));
+  const int H2_CA_owner_component =
+      static_cast<int>(std::llround(H2_CA_owner_component_d));
+  const int H2_CA_owner_serial =
+      static_cast<int>(std::llround(H2_CA_owner_serial_d));
+  const int H2_ID_radius =
+      static_cast<int>(std::llround(H2_ID_radius_d));
+  const int H2_ID_proxy =
+      static_cast<int>(std::llround(H2_ID_proxy_d));
+  const int H2_ID_proxy_points =
+      static_cast<int>(std::llround(H2_ID_proxy_points_d));
+  const int BACA_Batch =
+      static_cast<int>(std::llround(BACA_Batch_d));
+
+  if (H2_use_sketch < 0 || H2_use_sketch > 2) {
+    throw std::invalid_argument("H2_use_sketch must be 0, 1, or 2");
+  }
+  if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
+    throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+  }
+  if (H2_GEMM_split < 0) {
+    throw std::invalid_argument("H2_GEMM_split must be nonnegative");
+  }
+  if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
+    throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
+  }
+  if (H2_CA_owner_component != 0 && H2_CA_owner_component != 3) {
+    throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+  }
+  if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
+    throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
+  }
+  if (H2_CA_owner_component == 3 && H2_lazy_schur == 0) {
+    throw std::invalid_argument(
+        "H2_CA_owner_component=3 requires H2_lazy_schur=1 or 2");
+  }
+  if (H2_lazy_schur != 0 && H2_use_sketch != 2) {
+    throw std::invalid_argument("H2_lazy_schur requires H2_use_sketch=2");
+  }
+  if (H2_lazy_schur != 0 && H2_ID_proxy == 2) {
+    throw std::invalid_argument(
+        "H2_lazy_schur is not yet compatible with H2_ID_proxy=2");
+  }
+  if (H2_ID_radius < 2) {
+    throw std::invalid_argument("H2_ID_radius must be at least 2");
+  }
+  if (H2_ID_proxy < 0 || H2_ID_proxy > 2) {
+    throw std::invalid_argument("H2_ID_proxy must be 0, 1, or 2");
+  }
+  if (H2_ID_proxy == 1 && H2_ID_proxy_points <= 0) {
+    throw std::invalid_argument(
+        "H2_ID_proxy_points must be positive when H2_ID_proxy=1");
+  }
+  if (H2_ID_proxy == 2 && BACA_Batch <= 0) {
+    throw std::invalid_argument(
+        "BACA_Batch must be positive when H2_ID_proxy=2");
+  }
+
+  butterfly::ProgramOptions result = butterfly::parse_program_options64(
+      point_count, dimension, tolerance, reduction_threshold,
+      Nmin_leaf, CA_level);
+  result.precon = static_cast<int>(std::llround(precon_d));
+  result.verbosity = static_cast<int>(std::llround(verbosity_d));
+  result.use_sketch = H2_use_sketch;
+  result.lazy_schur = H2_lazy_schur;
+  result.gemm_split = H2_GEMM_split;
+  result.ca_staged_halo = H2_CA_staged_halo;
+  result.ca_owner_component = H2_CA_owner_component;
+  result.ca_owner_serial = H2_CA_owner_serial;
+  result.id_neighborhood_radius = H2_ID_radius;
+  result.id_proxy_mode = H2_ID_proxy;
+  if (H2_ID_proxy == 1) {
+    result.id_proxy_points = H2_ID_proxy_points;
+  } else if (H2_ID_proxy == 2) {
+    result.id_adaptive_batch = BACA_Batch;
+  }
+  if (result.precon == 2) result.CA_level = result.num_levels;
+  return result;
+}
+
+template<typename H2Data>
+static butterfly::H2<double, H2Data>* get_h2_solver(F2Cptr* bmat,
+                                                    const char* caller) {
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument(std::string(caller) + ": null matrix handle");
+  }
+  void* raw = nullptr;
+  c_bpack_get_h2(*bmat, &raw);
+  if (raw == nullptr) {
+    throw std::runtime_error(
+        std::string(caller) +
+        ": currently implemented only for format=7 (H2)");
+  }
+  return static_cast<butterfly::H2<double, H2Data>*>(raw);
+}
+
+template<typename H2Data>
+static butterfly::DistributedLayout64* get_distributed_layout(
+    F2Cptr* bmat, const char* caller) {
+  auto* solver = get_h2_solver<H2Data>(bmat, caller);
+  if (!solver->distributed_layout) {
+    throw std::runtime_error(
+        std::string(caller) +
+        ": matrix was not initialized with the distributed64 API");
+  }
+  return solver->distributed_layout.get();
+}
 #endif
 
 // The command line parser for the example related parameters
@@ -1075,6 +1229,182 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
   }
 }
 
+/*
+ * Distributed 64-bit ordering API.
+ *
+ * The caller owns an arbitrary rank-local subset of the global points and
+ * supplies one-based int64_t IDs plus point-major coordinates.  This
+ * constructor redistributes those points into ButterflyPACK's tree ordering
+ * and retains the bidirectional map in the matrix handle.  Consequently,
+ * c_bpack_solve and c_bpack_mult still consume and return vectors in the
+ * caller's original rank-local order; their format-7 paths perform the
+ * required redistribution transparently.
+ *
+ * These entry-point names are format-neutral so that other ButterflyPACK
+ * formats can adopt the same interface later.  The current implementation is
+ * intentionally restricted to format=7 and reports that restriction at run
+ * time.  Global counts and IDs are 64-bit, while each MPI_Alltoallv peer count
+ * and the existing solve/multiply local-size arguments remain INT_MAX-limited.
+ */
+void c_bpack_construct_init_distributed64(
+    const int64_t* N_global, const int64_t* N_input_local,
+    const int* Ndim, const int64_t* input_global_ids,
+    const double* input_locations, const int* bounds_provided,
+    const double* global_bounds, int64_t* N_internal_local,
+    F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh,
+    F2Cptr* ker, F2Cptr* ptree) {
+#ifdef HAVE_MPI
+  if (N_global == nullptr || N_input_local == nullptr || Ndim == nullptr ||
+      bounds_provided == nullptr || N_internal_local == nullptr ||
+      bmat == nullptr || option == nullptr || stats == nullptr ||
+      msh == nullptr || ptree == nullptr) {
+    throw std::invalid_argument(
+        "c_bpack_construct_init_distributed64: null required argument");
+  }
+
+  int fcomm = 0;
+  c_bpack_get_comm(ptree, &fcomm);
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int rank = 0;
+  MPI_Comm_rank(comm, &rank);
+
+  try {
+    double format_d = 0.0;
+    c_bpack_getoption(option, "format", &format_d);
+    const int format = static_cast<int>(std::llround(format_d));
+    if (format != 7) {
+      throw std::runtime_error(
+          "c_bpack_construct_init_distributed64 currently supports only "
+          "format=7; support for other ButterflyPACK formats is TODO");
+    }
+    require_symmetric_h2_option(
+        option, comm, "c_bpack_construct_init_distributed64");
+    if (*N_global <= 0 || *N_input_local < 0) {
+      throw std::invalid_argument(
+          "c_bpack_construct_init_distributed64: invalid point count");
+    }
+    if (*bounds_provided != 0 && *bounds_provided != 1) {
+      throw std::invalid_argument(
+          "c_bpack_construct_init_distributed64: bounds_provided must be 0 or 1");
+    }
+
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    auto solver = std::make_unique<butterfly::H2<double, H2Data>>();
+    solver->comm = comm;
+    solver->options = read_h2_program_options64(
+        option, *N_global, *Ndim);
+    // global_bounds has 2*Ndim entries in [min0,max0,min1,max1,...]
+    // order.  When bounds_provided is zero, the bounds are reduced from the
+    // distributed coordinates instead.
+    butterfly::bpack_initiate_distributed64(
+        solver.get(), solver->options, *N_input_local,
+        input_global_ids, input_locations, *bounds_provided != 0,
+        global_bounds);
+    *N_internal_local =
+        solver->distributed_layout->internal_local_size;
+
+    c_bpack_set_mesh_distributed64(
+        N_global, N_input_local, N_internal_local,
+        &solver->distributed_layout->internal_global_start, msh);
+    solver->kernel.entryeval_time_per_thread.assign(
+        omp_get_max_threads(), 0.0);
+    double zero = 0.0;
+    c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &zero);
+    if (ker != nullptr) *ker = nullptr;
+    c_bpack_wrap_h2(bmat, static_cast<C2Fptr>(solver.release()));
+  } catch (const std::exception& error) {
+    if (rank == 0) {
+      std::cerr << "c_bpack_construct_init_distributed64: "
+                << error.what() << std::endl;
+    }
+    MPI_Abort(comm, 1);
+    throw;
+  }
+#else
+  (void)N_global;
+  (void)N_input_local;
+  (void)Ndim;
+  (void)input_global_ids;
+  (void)input_locations;
+  (void)bounds_provided;
+  (void)global_bounds;
+  (void)N_internal_local;
+  (void)bmat;
+  (void)option;
+  (void)stats;
+  (void)msh;
+  (void)ker;
+  (void)ptree;
+  format7_requires_mpi("c_bpack_construct_init_distributed64");
+#endif
+}
+
+/*
+ * Install coordinate-aware matrix-entry callbacks for a matrix created by
+ * c_bpack_construct_init_distributed64.  Scalar callbacks receive one-based
+ * global IDs and the two Ndim-coordinate points.  Block callbacks receive
+ * point-major row/column coordinates and fill a column-major matrix using the
+ * supplied 64-bit leading dimension.  C_QuantApp is passed through unchanged
+ * as the callback context.
+ */
+void c_bpack_construct_element_compute_distributed64(
+    F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh,
+    F2Cptr* ker, F2Cptr* ptree,
+    c_bpack_func_zmn64 C_FuncZmn,
+    c_bpack_func_zmn_block64 C_FuncZmnBlock,
+    C2Fptr C_QuantApp) {
+  (void)stats;
+  (void)msh;
+  (void)ker;
+  (void)ptree;
+#ifdef HAVE_MPI
+  double format_d = 0.0;
+  c_bpack_getoption(option, "format", &format_d);
+  if (static_cast<int>(std::llround(format_d)) != 7) {
+    throw std::runtime_error(
+        "c_bpack_construct_element_compute_distributed64 currently "
+        "supports only format=7; support for other formats is TODO");
+  }
+  if (C_FuncZmn == nullptr) {
+    throw std::invalid_argument(
+        "c_bpack_construct_element_compute_distributed64: entry callback is null");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* solver = get_h2_solver<H2Data>(
+      bmat, "c_bpack_construct_element_compute_distributed64");
+  require_symmetric_h2_option(
+      option, solver->comm,
+      "c_bpack_construct_element_compute_distributed64");
+  if (!solver->distributed_layout) {
+    throw std::runtime_error(
+        "c_bpack_construct_element_compute_distributed64 requires the "
+        "distributed64 constructor");
+  }
+  solver->kernel.kernel = nullptr;
+  solver->kernel.block_kernel = nullptr;
+  solver->kernel.kernel64 = C_FuncZmn;
+  double elem_extract_d = 0.0;
+  c_bpack_getoption(option, "elem_extract", &elem_extract_d);
+  const int elem_extract =
+      static_cast<int>(std::llround(elem_extract_d));
+  solver->kernel.block_kernel64 =
+      elem_extract == 2 ? C_FuncZmnBlock : nullptr;
+  solver->kernel.quant = C_QuantApp;
+  solver->kernel.dimension = solver->options.dimension;
+  MPI_Comm_rank(solver->comm, &solver->kernel.block_callback_pid);
+  solver->kernel.register_level_coordinates(
+      solver->tree->levels[solver->tree->num_levels - 1]);
+#else
+  (void)bmat;
+  (void)option;
+  (void)C_FuncZmn;
+  (void)C_FuncZmnBlock;
+  (void)C_QuantApp;
+  format7_requires_mpi(
+      "c_bpack_construct_element_compute_distributed64");
+#endif
+}
+
 
 void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,
 	F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr),
@@ -1098,6 +1428,9 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	require_symmetric_h2_option(
 	  option, H2_solver->comm, "c_bpack_construct_element_compute");
 	H2_solver->kernel.kernel = C_FuncZmn;
+	H2_solver->kernel.kernel64 = nullptr;
+	H2_solver->kernel.block_kernel64 = nullptr;
+	H2_solver->kernel.dimension = H2_solver->options.dimension;
 	double elem_extract_d = 0.0;
 	c_bpack_getoption(option, "elem_extract", &elem_extract_d);
 	const int elem_extract = static_cast<int>(std::llround(elem_extract_d));
@@ -1111,6 +1444,164 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
   }else{
 	c_bpack_construct_element_compute_fortran(bmat, option, stats, msh, ker, ptree, C_FuncZmn, C_FuncZmnBlock, C_QuantApp);
   }
+}
+
+
+/* Return counts for both orderings and the one-based first internal index. */
+void c_bpack_get_distributed_layout64(
+    F2Cptr* bmat, int64_t* N_global, int64_t* N_input_local,
+    int64_t* N_internal_local, int64_t* internal_global_start) {
+#ifdef HAVE_MPI
+  if (N_global == nullptr || N_input_local == nullptr ||
+      N_internal_local == nullptr || internal_global_start == nullptr) {
+    throw std::invalid_argument(
+        "c_bpack_get_distributed_layout64: null output argument");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const auto* layout = get_distributed_layout<H2Data>(
+      bmat, "c_bpack_get_distributed_layout64");
+  *N_global = layout->global_size;
+  *N_input_local = layout->input_local_size;
+  *N_internal_local = layout->internal_local_size;
+  *internal_global_start = layout->internal_global_start;
+#else
+  (void)bmat;
+  (void)N_global;
+  (void)N_input_local;
+  (void)N_internal_local;
+  (void)internal_global_start;
+  format7_requires_mpi("c_bpack_get_distributed_layout64");
+#endif
+}
+
+/*
+ * Return original one-based point IDs in internal tree order.  The requested
+ * rank-local offset is also one-based.
+ */
+void c_bpack_get_internal_global_ids64(
+    F2Cptr* bmat, const int64_t* internal_local_offset,
+    const int64_t* count, int64_t* global_ids) {
+#ifdef HAVE_MPI
+  if (internal_local_offset == nullptr || count == nullptr ||
+      (*count > 0 && global_ids == nullptr)) {
+    throw std::invalid_argument(
+        "c_bpack_get_internal_global_ids64: null argument");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const auto* layout = get_distributed_layout<H2Data>(
+      bmat, "c_bpack_get_internal_global_ids64");
+  const int64_t offset = *internal_local_offset - 1;
+  if (*internal_local_offset < 1 || *count < 0 ||
+      offset > layout->internal_local_size ||
+      *count > layout->internal_local_size - offset) {
+    throw std::out_of_range(
+        "c_bpack_get_internal_global_ids64: local range is invalid");
+  }
+  if (*count == 0) return;
+  std::copy_n(layout->internal_global_ids.data() + offset,
+              static_cast<size_t>(*count), global_ids);
+#else
+  (void)bmat;
+  (void)internal_local_offset;
+  (void)count;
+  (void)global_ids;
+  format7_requires_mpi("c_bpack_get_internal_global_ids64");
+#endif
+}
+
+/*
+ * Describe where each caller-local point moved.  Owner ranks are zero-based
+ * MPI ranks; IDs, input_local_offset, and internal_global_indices are
+ * one-based.
+ */
+void c_bpack_get_input_to_internal_map64(
+    F2Cptr* bmat, const int64_t* input_local_offset,
+    const int64_t* count, int64_t* global_ids,
+    int* internal_owner_ranks, int64_t* internal_global_indices) {
+#ifdef HAVE_MPI
+  if (input_local_offset == nullptr || count == nullptr ||
+      (*count > 0 && (global_ids == nullptr ||
+                      internal_owner_ranks == nullptr ||
+                      internal_global_indices == nullptr))) {
+    throw std::invalid_argument(
+        "c_bpack_get_input_to_internal_map64: null argument");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const auto* layout = get_distributed_layout<H2Data>(
+      bmat, "c_bpack_get_input_to_internal_map64");
+  const int64_t offset = *input_local_offset - 1;
+  if (*input_local_offset < 1 || *count < 0 ||
+      offset > layout->input_local_size ||
+      *count > layout->input_local_size - offset) {
+    throw std::out_of_range(
+        "c_bpack_get_input_to_internal_map64: local range is invalid");
+  }
+  for (int64_t index = 0; index < *count; ++index) {
+    const size_t source = static_cast<size_t>(offset + index);
+    global_ids[index] = layout->input_global_ids[source];
+    internal_owner_ranks[index] = layout->input_internal_owner[source];
+    internal_global_indices[index] =
+        layout->input_internal_global_index[source];
+  }
+#else
+  (void)bmat;
+  (void)input_local_offset;
+  (void)count;
+  (void)global_ids;
+  (void)internal_owner_ranks;
+  (void)internal_global_indices;
+  format7_requires_mpi("c_bpack_get_input_to_internal_map64");
+#endif
+}
+
+/*
+ * Explicitly redistribute a column-major local multivector from caller input
+ * ownership to internal tree ownership.  All nrhs columns are packed into one
+ * collective rather than issuing one collective per column.
+ */
+void c_bpack_input_to_internal(
+    F2Cptr* bmat, const int* nrhs,
+    const C_DT* input_values, C_DT* internal_values) {
+#ifdef HAVE_MPI
+  if (nrhs == nullptr) {
+    throw std::invalid_argument("c_bpack_input_to_internal: nrhs is null");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const auto* layout = get_distributed_layout<H2Data>(
+      bmat, "c_bpack_input_to_internal");
+  layout->input_to_internal(
+      reinterpret_cast<const H2Data*>(input_values),
+      reinterpret_cast<H2Data*>(internal_values), *nrhs);
+#else
+  (void)bmat;
+  (void)nrhs;
+  (void)input_values;
+  (void)internal_values;
+  format7_requires_mpi("c_bpack_input_to_internal");
+#endif
+}
+
+/* Inverse of c_bpack_input_to_internal, with the same batched layout. */
+void c_bpack_internal_to_input(
+    F2Cptr* bmat, const int* nrhs,
+    const C_DT* internal_values, C_DT* input_values) {
+#ifdef HAVE_MPI
+  if (nrhs == nullptr) {
+    throw std::invalid_argument("c_bpack_internal_to_input: nrhs is null");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const auto* layout = get_distributed_layout<H2Data>(
+      bmat, "c_bpack_internal_to_input");
+  layout->internal_to_input(
+      reinterpret_cast<const H2Data*>(internal_values),
+      reinterpret_cast<H2Data*>(input_values), *nrhs);
+#else
+  (void)bmat;
+  (void)nrhs;
+  (void)internal_values;
+  (void)input_values;
+  format7_requires_mpi("c_bpack_internal_to_input");
+#endif
 }
 
 
@@ -1221,13 +1712,40 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 
     try {
       const int verbosity = sync_h2_verbosity(option, H2_solver);
+      double t0 = MPI_Wtime();
       const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
-      std::vector<H2Data> rhs(b_h2, b_h2 + (*Nloc) * (*Nrhs));
+	  // A distributed64 handle exposes the caller's input ownership at this
+	  // public boundary.  Convert the entire RHS batch to tree ownership before
+	  // solving and convert the solution back below.  Legacy handles have no
+	  // layout object and already use the solver's internal ownership.
+	  const auto* distributed_layout = H2_solver->distributed_layout.get();
+	  int internal_nloc = *Nloc;
+	  if (distributed_layout != nullptr) {
+		if (distributed_layout->input_local_size != *Nloc) {
+		  throw std::invalid_argument(
+			"c_bpack_solve (distributed64): Nloc must equal the input-local size");
+		}
+		if (distributed_layout->internal_local_size >
+			std::numeric_limits<int>::max()) {
+		  throw std::overflow_error(
+			"c_bpack_solve (distributed64): internal local size exceeds INT_MAX");
+		}
+		internal_nloc = static_cast<int>(
+			distributed_layout->internal_local_size);
+	  }
+	  std::vector<H2Data> rhs(
+		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
+	  if (distributed_layout != nullptr) {
+		distributed_layout->input_to_internal(
+		  b_h2, rhs.data(), *Nrhs);
+	  } else {
+		std::copy_n(b_h2, rhs.size(), rhs.data());
+	  }
+	  std::vector<H2Data> internal_solution;
 	  double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
 	  H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
 
-	  double t0 = MPI_Wtime();
 	  if (H2_solver->options.precon == 2) {
 		if (H2_solver->build_state == butterfly::H2BuildState::UNBUILT) {
 		  throw std::runtime_error(
@@ -1242,16 +1760,12 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		double max_iterations_d = 0.0;
 		c_bpack_getoption(option, "tol_itersol", &tolerance);
 		c_bpack_getoption(option, "n_iter", &max_iterations_d);
-		std::vector<H2Data> iterative_solution;
 		int iterations = 0;
 		double residual = 0.0;
 		butterfly::hierarchical_h2_bicgstab_parallel(
-		  H2_solver->tree.get(), rhs, iterative_solution, *Nrhs,
+		  H2_solver->tree.get(), rhs, internal_solution, *Nrhs,
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
 		  &iterations, &residual, verbosity >= 1);
-		std::copy(
-		  iterative_solution.begin(), iterative_solution.end(),
-		  reinterpret_cast<H2Data*>(x));
 	  } else {
 		if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
 		  throw std::runtime_error(
@@ -1261,9 +1775,24 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		  H2_solver->options.num_levels);
 		butterfly::hierarchical_solve_parallel(
 		  H2_solver->tree.get(), rhs, solve_data, *Nrhs, verbosity);
+		internal_solution.resize(
+		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
 		butterfly::gather_local_solution(
 		  H2_solver->tree.get(), solve_data,
-		  reinterpret_cast<H2Data*>(x), Nloc, *Nrhs);
+		  internal_solution.data(), &internal_nloc, *Nrhs);
+	  }
+
+	  if (internal_solution.size() !=
+		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs)) {
+		throw std::runtime_error(
+		  "c_bpack_solve (format 7): internal solution length mismatch");
+	  }
+	  if (distributed_layout != nullptr) {
+		distributed_layout->internal_to_input(
+		  internal_solution.data(), reinterpret_cast<H2Data*>(x), *Nrhs);
+	  } else {
+		std::copy(internal_solution.begin(), internal_solution.end(),
+		          reinterpret_cast<H2Data*>(x));
 	  }
 
 	  double t_solve = MPI_Wtime() - t0;
@@ -1321,6 +1850,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
     try {
       const int verbosity = sync_h2_verbosity(option, H2_solver);
+      double t0 = MPI_Wtime();
       double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
       H2_solver->options.precon = static_cast<int>(std::llround(precon_d));
@@ -1331,11 +1861,36 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
       }
 
       const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
-      std::vector<H2Data> lhs(xin_h2, xin_h2 + (*Ninloc) * (*Ncol));
+	  // Keep the public multiply contract in caller input order for a
+	  // distributed64 handle; the H2 multiply itself operates in tree order.
+	  // Legacy handles bypass both redistributions.
+	  const auto* distributed_layout = H2_solver->distributed_layout.get();
+	  int internal_nloc = *Ninloc;
+	  if (distributed_layout != nullptr) {
+		if (distributed_layout->input_local_size != *Ninloc ||
+			distributed_layout->input_local_size != *Noutloc) {
+		  throw std::invalid_argument(
+			"c_bpack_mult (distributed64): Ninloc and Noutloc must equal "
+			"the input-local size");
+		}
+		if (distributed_layout->internal_local_size >
+			std::numeric_limits<int>::max()) {
+		  throw std::overflow_error(
+			"c_bpack_mult (distributed64): internal local size exceeds INT_MAX");
+		}
+		internal_nloc = static_cast<int>(
+			distributed_layout->internal_local_size);
+	  }
+	  std::vector<H2Data> lhs(
+		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Ncol));
+	  if (distributed_layout != nullptr) {
+		distributed_layout->input_to_internal(xin_h2, lhs.data(), *Ncol);
+	  } else {
+		std::copy_n(xin_h2, lhs.size(), lhs.data());
+	  }
 	  std::vector<H2Data> compressed_output;
 	  std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data;
 
-	  double t0 = MPI_Wtime();
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		butterfly::hierarchical_h2_mul_parallel(
 		  H2_solver->tree.get(), lhs, compressed_output,
@@ -1347,28 +1902,37 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 		  *Ncol, verbosity >= 1);
 	  }
 
-	  double t_mult = MPI_Wtime() - t0;
-	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
-
-	  double prev = 0.0;
-	  c_bpack_getstats(stats, "Time_C_Mult_Wrapper", &prev);   // read-modify-write
-	  double total = prev + t_mult;
-	  c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &total);
-
+	  std::vector<H2Data> internal_output;
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		if (compressed_output.size() !=
-		    static_cast<size_t>(*Noutloc) * static_cast<size_t>(*Ncol)) {
+		    static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Ncol)) {
 		  throw std::runtime_error(
 			"c_bpack_mult (format 7): compression-only output length mismatch");
 		}
-		std::copy(
-		  compressed_output.begin(), compressed_output.end(),
-		  reinterpret_cast<H2Data*>(xout));
+		internal_output = std::move(compressed_output);
 	  } else {
+		internal_output.resize(
+		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Ncol));
 		butterfly::gather_local_solution(
 		  H2_solver->tree.get(), mul_data,
-		  reinterpret_cast<H2Data*>(xout), Noutloc, *Ncol);
+		  internal_output.data(), &internal_nloc, *Ncol);
 	  }
+	  if (distributed_layout != nullptr) {
+		distributed_layout->internal_to_input(
+		  internal_output.data(), reinterpret_cast<H2Data*>(xout), *Ncol);
+	  } else {
+		std::copy(internal_output.begin(), internal_output.end(),
+		          reinterpret_cast<H2Data*>(xout));
+	  }
+
+	  double t_mult = MPI_Wtime() - t0;
+	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX,
+	                H2_solver->comm);
+
+	  double prev = 0.0;
+	  c_bpack_getstats(stats, "Time_C_Mult_Wrapper", &prev);
+	  double total = prev + t_mult;
+	  c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &total);
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;

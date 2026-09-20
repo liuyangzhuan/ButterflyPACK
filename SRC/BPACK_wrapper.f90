@@ -1912,6 +1912,29 @@ contains
       msh_Cptr = c_loc(msh)
    end subroutine C_BPACK_Set_Mesh_H2
 
+   subroutine C_BPACK_Set_Mesh_Distributed64(N_global, N_input_local, N_internal_local, internal_global_start, msh_Cptr) bind(c, name="c_bpack_set_mesh_distributed64")
+      use iso_c_binding
+      implicit none
+      integer(c_int64_t), intent(in) :: N_global
+      integer(c_int64_t), intent(in) :: N_input_local
+      integer(c_int64_t), intent(in) :: N_internal_local
+      integer(c_int64_t), intent(in) :: internal_global_start
+      type(c_ptr) :: msh_Cptr
+      type(mesh), pointer :: msh
+
+      allocate(msh)
+      msh%Nunk = 0
+      msh%idxs = 1
+      msh%idxe = 0
+      msh%distributed64 = .true.
+      msh%Nunk64 = N_global
+      msh%Ninput_loc64 = N_input_local
+      msh%Ninternal_loc64 = N_internal_local
+      msh%idxs64 = internal_global_start
+      msh%idxe64 = internal_global_start + N_internal_local - 1
+      msh_Cptr = c_loc(msh)
+   end subroutine C_BPACK_Set_Mesh_Distributed64
+
 
 !>**** C interface of multi-dimensional BF construction via entry evaluation
    !> @param Ns: size for each dimension (in)

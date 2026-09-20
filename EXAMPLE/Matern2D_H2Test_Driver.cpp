@@ -44,6 +44,7 @@ struct DriverOptions {
   int verbosity = 1;
   int elem_extract = 2;
   int lrlevel = 0;
+  int distributed64 = 0;
   bool show_help = false;
 };
 
@@ -207,6 +208,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.elem_extract = parse_int(value, "elem_extract");
     } else if (name == "lrlevel") {
       options.lrlevel = parse_int(value, "lrlevel");
+    } else if (name == "distributed64") {
+      options.distributed64 = parse_int(value, "distributed64");
     } else if (name == "kernel") {
       const std::string kernel = normalize_option_name(value);
       if (kernel != "matern52" && kernel != "matern5/2" &&
@@ -287,6 +290,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_ca_owner_serial != 0 && options.h2_ca_owner_serial != 1) {
     throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
   }
+  if (options.distributed64 != 0 && options.distributed64 != 1) {
+    throw std::invalid_argument("distributed64 must be 0 or 1");
+  }
   // if (options.iter_solver != 4) {
   //   throw std::invalid_argument("this driver requires iter_solver=4 (CG)");
   // }
@@ -297,9 +303,11 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "N must equal grid_size^2; expected " + std::to_string(points));
   }
-  if (points > std::numeric_limits<int>::max()) {
+  if (options.distributed64 == 0 &&
+      points > std::numeric_limits<int>::max()) {
     throw std::invalid_argument(
-        "this ButterflyPACK C interface requires N <= INT_MAX");
+        "the legacy ButterflyPACK C API requires N <= INT_MAX; use "
+        "--distributed64 1");
   }
   if (options.nmin_leaf > points) {
     throw std::invalid_argument("Nmin_leaf cannot exceed N");
@@ -341,6 +349,7 @@ void print_usage(const char* executable) {
       << "  --cg-max-iterations <count>\n"
       << "  --precon 3\n"
       << "  --iter_solver 4\n"
+      << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|2>\n"
       << "  --verbosity <-1|0|1>\n";
 }
@@ -348,39 +357,47 @@ void print_usage(const char* executable) {
 class Matern2DApplication {
  public:
   Matern2DApplication(int64_t grid_size, double length_scale, double nugget,
-                      MPI_Comm communicator)
+                      MPI_Comm communicator, bool materialize_locations)
       : grid_size_(grid_size),
         point_count_(checked_square(grid_size, "grid_size")),
         length_scale_(length_scale),
         nugget_(nugget),
-        communicator_(communicator),
-        locations_(static_cast<size_t>(point_count_) * 2) {
-    const double spacing = 1.0 / static_cast<double>(grid_size_);
-    for (int64_t i = 0; i < grid_size_; ++i) {
-      const double x = (static_cast<double>(i) + 0.5) * spacing;
-      for (int64_t j = 0; j < grid_size_; ++j) {
-        const double y = (static_cast<double>(j) + 0.5) * spacing;
-        const int64_t index = i * grid_size_ + j;
-        locations_[static_cast<size_t>(2 * index)] = x;
-        locations_[static_cast<size_t>(2 * index + 1)] = y;
+        communicator_(communicator) {
+    if (materialize_locations) {
+      locations_.resize(static_cast<size_t>(point_count_) * 2);
+      for (int64_t index = 0; index < point_count_; ++index) {
+        coordinate(index,
+                   locations_.data() + static_cast<size_t>(2 * index));
       }
     }
   }
 
   double* locations() { return locations_.data(); }
   int64_t point_count() const { return point_count_; }
-  const std::vector<int>& local_old_indices() const {
+  const std::vector<int64_t>& local_old_indices() const {
     return local_old_indices_;
   }
 
-  double evaluate(int row, int column) const {
-    if (row == column) return 1.0 + nugget_;
+  void coordinate(int64_t index, double* point) const {
+    const int64_t j = index % grid_size_;
+    const int64_t i = index / grid_size_;
+    const double spacing = 1.0 / static_cast<double>(grid_size_);
+    point[0] = (static_cast<double>(i) + 0.5) * spacing;
+    point[1] = (static_cast<double>(j) + 0.5) * spacing;
+  }
 
-    const double* x = locations_.data() + static_cast<size_t>(2 * row);
-    const double* y = locations_.data() + static_cast<size_t>(2 * column);
+  double evaluate_coordinates(int64_t row_id, int64_t column_id,
+                              const double* x, const double* y) const {
+    if (row_id == column_id) return 1.0 + nugget_;
     const double dx = x[0] - y[0];
     const double dy = x[1] - y[1];
     return kernel_value(std::sqrt(dx * dx + dy * dy));
+  }
+
+  double evaluate(int row, int column) const {
+    const double* x = locations_.data() + static_cast<size_t>(2 * row);
+    const double* y = locations_.data() + static_cast<size_t>(2 * column);
+    return evaluate_coordinates(row + 1, column + 1, x, y);
   }
 
   void evaluate_block(int rows, int columns, const int* row_indices,
@@ -391,16 +408,9 @@ class Matern2DApplication {
           locations_.data() + static_cast<size_t>(2 * column);
       for (int i = 0; i < rows; ++i) {
         const int row = row_indices[i] - 1;
-        if (row == column) {
-          output[i + static_cast<int64_t>(j) * rows] = 1.0 + nugget_;
-          continue;
-        }
-
         const double* x = locations_.data() + static_cast<size_t>(2 * row);
-        const double dx = x[0] - y[0];
-        const double dy = x[1] - y[1];
-        output[i + static_cast<int64_t>(j) * rows] =
-            kernel_value(std::sqrt(dx * dx + dy * dy));
+        output[i + static_cast<int64_t>(j) * rows] = evaluate_coordinates(
+            row + 1, column + 1, x, y);
       }
     }
   }
@@ -428,6 +438,23 @@ class Matern2DApplication {
         throw std::runtime_error("ButterflyPACK permutation is invalid");
       }
       local_old_indices_[static_cast<size_t>(i)] = old_global_index - 1;
+    }
+  }
+
+  void configure_distributed_input(
+      const std::vector<int64_t>& input_global_ids) {
+    if (input_global_ids.size() >
+        static_cast<size_t>(std::numeric_limits<int>::max())) {
+      throw std::overflow_error("distributed local point count exceeds INT_MAX");
+    }
+    local_points_ = static_cast<int>(input_global_ids.size());
+    local_start_ = 0;
+    local_old_indices_.resize(input_global_ids.size());
+    for (size_t i = 0; i < input_global_ids.size(); ++i) {
+      if (input_global_ids[i] < 1 || input_global_ids[i] > point_count_) {
+        throw std::runtime_error("distributed global point ID is invalid");
+      }
+      local_old_indices_[i] = input_global_ids[i] - 1;
     }
   }
 
@@ -554,7 +581,7 @@ class Matern2DApplication {
   int local_points_ = 0;
   int local_start_ = 0;
   std::vector<double> locations_;
-  std::vector<int> local_old_indices_;
+  std::vector<int64_t> local_old_indices_;
   F2Cptr operator_matrix_ = nullptr;
   F2Cptr operator_option_ = nullptr;
   F2Cptr operator_stats_ = nullptr;
@@ -614,6 +641,65 @@ void matern_block_callback(
   (void)nalldat_loc;
 }
 
+void matern_entry_callback64(
+    const int64_t* row, const int64_t* column, const double* row_coordinate,
+    const double* column_coordinate, const int* dimension, double* value,
+    C2Fptr quant) {
+  const auto* application = static_cast<Matern2DApplication*>(quant);
+  if (*dimension != 2) {
+    throw std::invalid_argument("matern_entry_callback64 requires dimension=2");
+  }
+  *value = application->evaluate_coordinates(
+      *row, *column, row_coordinate, column_coordinate);
+}
+
+void matern_block_callback64(
+    const int64_t* rows, const int64_t* columns, const int64_t* row_ids,
+    const int64_t* column_ids, const double* row_coordinates,
+    const double* column_coordinates, const int* dimension, double* output,
+    const int64_t* leading_dimension, C2Fptr quant) {
+  const auto* application = static_cast<Matern2DApplication*>(quant);
+  if (*dimension != 2 || *leading_dimension < *rows) {
+    throw std::invalid_argument("invalid Matern-2D distributed block metadata");
+  }
+  for (int64_t column = 0; column < *columns; ++column) {
+    const double* y = column_coordinates + 2 * column;
+    for (int64_t row = 0; row < *rows; ++row) {
+      const double* x = row_coordinates + 2 * row;
+      output[row + column * *leading_dimension] =
+          application->evaluate_coordinates(
+              row_ids[row], column_ids[column], x, y);
+    }
+  }
+}
+
+struct DistributedInput {
+  int64_t first = 0;
+  int64_t count = 0;
+  std::vector<int64_t> global_ids;
+  std::vector<double> coordinates;
+};
+
+DistributedInput make_distributed_input(
+    int64_t global_count, int rank, int mpi_size,
+    const Matern2DApplication& application) {
+  DistributedInput input;
+  const int64_t base = global_count / mpi_size;
+  const int64_t remainder = global_count % mpi_size;
+  input.count = base + (rank < remainder ? 1 : 0);
+  input.first = static_cast<int64_t>(rank) * base +
+      std::min<int64_t>(rank, remainder);
+  input.global_ids.resize(static_cast<size_t>(input.count));
+  input.coordinates.resize(static_cast<size_t>(input.count) * 2);
+  for (int64_t local = 0; local < input.count; ++local) {
+    const int64_t global = input.first + local;
+    input.global_ids[static_cast<size_t>(local)] = global + 1;
+    application.coordinate(
+        global, input.coordinates.data() + static_cast<size_t>(2 * local));
+  }
+  return input;
+}
+
 void h2_operator_callback(const char* trans, int* input_local_size,
                           int* output_local_size, int* number_of_vectors,
                           const double* input, double* output, C2Fptr quant) {
@@ -667,7 +753,7 @@ double centered_uniform_from_hash(uint64_t key) {
   return static_cast<double>(uniform - 0.5L);
 }
 
-double make_true_solution_entry(int global_index) {
+double make_true_solution_entry(int64_t global_index) {
   const uint64_t base =
       splitmix64(kTrueSolutionSeed ^ static_cast<uint64_t>(global_index));
   return centered_uniform_from_hash(base);
@@ -787,7 +873,9 @@ int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
 
   int rank = 0;
+  int mpi_size = 1;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
   int return_code = 0;
   try {
@@ -805,17 +893,31 @@ int main(int argc, char** argv) {
         !std::isfinite(operator_tolerance)) {
       throw std::invalid_argument("0.01*tol_comp is outside the double range");
     }
-    int point_count = static_cast<int>(point_count_64);
     int dimension = 2;
     Matern2DApplication application(
         driver_options.grid_size, driver_options.length_scale,
-        driver_options.nugget, MPI_COMM_WORLD);
+        driver_options.nugget, MPI_COMM_WORLD,
+        driver_options.distributed64 == 0);
+    DistributedInput distributed_input;
+    if (driver_options.distributed64 == 1) {
+      distributed_input = make_distributed_input(
+          point_count_64, rank, mpi_size, application);
+      if (distributed_input.count > std::numeric_limits<int>::max()) {
+        throw std::overflow_error(
+            "the local input count exceeds the current iterative API limit");
+      }
+    }
 
     if (rank == 0) {
       std::cout << "=== ButterflyPACK H2 2D Matern 5/2 PCG Test ===\n"
                 << "Grid size: " << driver_options.grid_size << " x "
                 << driver_options.grid_size << "\n"
                 << "Total points: " << point_count_64 << "\n"
+                << "C API: "
+                << (driver_options.distributed64 == 1
+                        ? "distributed 64-bit"
+                        : "legacy 32-bit")
+                << "\n"
                 << "H2 operator tolerance: " << operator_tolerance << "\n"
                 << "H2 preconditioner tolerance: "
                 << driver_options.tolerance << "\n"
@@ -852,20 +954,49 @@ int main(int argc, char** argv) {
         preconditioner_resources, driver_options, driver_options.tolerance,
         driver_options.precon, MPI_COMM_WORLD);
 
-    int operator_nlevel = 0;
-    int operator_user_tree = point_count;
     int operator_local_points = 0;
-    d_c_bpack_construct_init(
-        &point_count, &dimension, application.locations(), nullptr,
-        &operator_nlevel, &operator_user_tree, nullptr, &operator_local_points,
-        &operator_resources.matrix, &operator_resources.option,
-        &operator_resources.stats, &operator_resources.mesh,
-        &operator_resources.construction_kernel,
-        &operator_resources.process_tree,
-        &distance_callback, &near_far_callback, &application);
-
-    application.configure_distribution(
-        operator_resources.mesh, operator_local_points);
+    int64_t operator_internal_points = 0;
+    int64_t operator_internal_start = 0;
+    if (driver_options.distributed64 == 1) {
+      int bounds_provided = 1;
+      const double global_bounds[4] = {0.0, 1.0, 0.0, 1.0};
+      d_c_bpack_construct_init_distributed64(
+          &point_count_64, &distributed_input.count, &dimension,
+          distributed_input.global_ids.data(),
+          distributed_input.coordinates.data(), &bounds_provided,
+          global_bounds, &operator_internal_points,
+          &operator_resources.matrix, &operator_resources.option,
+          &operator_resources.stats, &operator_resources.mesh,
+          &operator_resources.construction_kernel,
+          &operator_resources.process_tree);
+      operator_local_points = static_cast<int>(distributed_input.count);
+      int64_t queried_global = 0;
+      int64_t queried_input = 0;
+      int64_t queried_internal = 0;
+      d_c_bpack_get_distributed_layout64(
+          &operator_resources.matrix, &queried_global, &queried_input,
+          &queried_internal, &operator_internal_start);
+      if (queried_global != point_count_64 ||
+          queried_input != distributed_input.count ||
+          queried_internal != operator_internal_points) {
+        throw std::runtime_error("operator distributed layout is inconsistent");
+      }
+      application.configure_distributed_input(distributed_input.global_ids);
+    } else {
+      int point_count = static_cast<int>(point_count_64);
+      int operator_nlevel = 0;
+      int operator_user_tree = point_count;
+      d_c_bpack_construct_init(
+          &point_count, &dimension, application.locations(), nullptr,
+          &operator_nlevel, &operator_user_tree, nullptr,
+          &operator_local_points, &operator_resources.matrix,
+          &operator_resources.option, &operator_resources.stats,
+          &operator_resources.mesh, &operator_resources.construction_kernel,
+          &operator_resources.process_tree, &distance_callback,
+          &near_far_callback, &application);
+      application.configure_distribution(
+          operator_resources.mesh, operator_local_points);
+    }
     application.attach_operator(
         operator_resources.matrix, operator_resources.option,
         operator_resources.stats, operator_resources.process_tree,
@@ -877,32 +1008,72 @@ int main(int argc, char** argv) {
     }
     d_c_bpack_printoption(
         &operator_resources.option, &operator_resources.process_tree);
-    d_c_bpack_construct_element_compute(
-        &operator_resources.matrix, &operator_resources.option,
-        &operator_resources.stats, &operator_resources.mesh,
-        &operator_resources.construction_kernel,
-        &operator_resources.process_tree, &matern_entry_callback,
-        &matern_block_callback, &application);
+    if (driver_options.distributed64 == 1) {
+      d_c_bpack_construct_element_compute_distributed64(
+          &operator_resources.matrix, &operator_resources.option,
+          &operator_resources.stats, &operator_resources.mesh,
+          &operator_resources.construction_kernel,
+          &operator_resources.process_tree, &matern_entry_callback64,
+          &matern_block_callback64, &application);
+    } else {
+      d_c_bpack_construct_element_compute(
+          &operator_resources.matrix, &operator_resources.option,
+          &operator_resources.stats, &operator_resources.mesh,
+          &operator_resources.construction_kernel,
+          &operator_resources.process_tree, &matern_entry_callback,
+          &matern_block_callback, &application);
+    }
     d_c_bpack_factor(
         &operator_resources.matrix, &operator_resources.option,
         &operator_resources.stats, &operator_resources.process_tree,
         &operator_resources.mesh);
 
-    int preconditioner_nlevel = 0;
-    int preconditioner_user_tree = point_count;
     int preconditioner_local_points = 0;
-    d_c_bpack_construct_init(
-        &point_count, &dimension, application.locations(), nullptr,
-        &preconditioner_nlevel, &preconditioner_user_tree, nullptr,
-        &preconditioner_local_points, &preconditioner_resources.matrix,
-        &preconditioner_resources.option, &preconditioner_resources.stats,
-        &preconditioner_resources.mesh,
-        &preconditioner_resources.construction_kernel,
-        &preconditioner_resources.process_tree, &distance_callback,
-        &near_far_callback, &application);
-
-    application.verify_matching_distribution(
-        preconditioner_resources.mesh, preconditioner_local_points);
+    if (driver_options.distributed64 == 1) {
+      int bounds_provided = 1;
+      const double global_bounds[4] = {0.0, 1.0, 0.0, 1.0};
+      int64_t preconditioner_internal_points = 0;
+      d_c_bpack_construct_init_distributed64(
+          &point_count_64, &distributed_input.count, &dimension,
+          distributed_input.global_ids.data(),
+          distributed_input.coordinates.data(), &bounds_provided,
+          global_bounds, &preconditioner_internal_points,
+          &preconditioner_resources.matrix, &preconditioner_resources.option,
+          &preconditioner_resources.stats, &preconditioner_resources.mesh,
+          &preconditioner_resources.construction_kernel,
+          &preconditioner_resources.process_tree);
+      preconditioner_local_points = static_cast<int>(distributed_input.count);
+      int64_t queried_global = 0;
+      int64_t queried_input = 0;
+      int64_t queried_internal = 0;
+      int64_t queried_start = 0;
+      d_c_bpack_get_distributed_layout64(
+          &preconditioner_resources.matrix, &queried_global, &queried_input,
+          &queried_internal, &queried_start);
+      if (queried_global != point_count_64 ||
+          queried_input != distributed_input.count ||
+          queried_internal != preconditioner_internal_points ||
+          queried_internal != operator_internal_points ||
+          queried_start != operator_internal_start) {
+        throw std::runtime_error(
+            "operator and preconditioner distributed layouts do not match");
+      }
+    } else {
+      int point_count = static_cast<int>(point_count_64);
+      int preconditioner_nlevel = 0;
+      int preconditioner_user_tree = point_count;
+      d_c_bpack_construct_init(
+          &point_count, &dimension, application.locations(), nullptr,
+          &preconditioner_nlevel, &preconditioner_user_tree, nullptr,
+          &preconditioner_local_points, &preconditioner_resources.matrix,
+          &preconditioner_resources.option, &preconditioner_resources.stats,
+          &preconditioner_resources.mesh,
+          &preconditioner_resources.construction_kernel,
+          &preconditioner_resources.process_tree, &distance_callback,
+          &near_far_callback, &application);
+      application.verify_matching_distribution(
+          preconditioner_resources.mesh, preconditioner_local_points);
+    }
     application.attach_preconditioner(
         preconditioner_resources.matrix, preconditioner_resources.option,
         preconditioner_resources.stats,
@@ -915,12 +1086,23 @@ int main(int argc, char** argv) {
     d_c_bpack_printoption(
         &preconditioner_resources.option,
         &preconditioner_resources.process_tree);
-    d_c_bpack_construct_element_compute(
-        &preconditioner_resources.matrix, &preconditioner_resources.option,
-        &preconditioner_resources.stats, &preconditioner_resources.mesh,
-        &preconditioner_resources.construction_kernel,
-        &preconditioner_resources.process_tree, &matern_entry_callback,
-        &matern_block_callback, &application);
+    if (driver_options.distributed64 == 1) {
+      d_c_bpack_construct_element_compute_distributed64(
+          &preconditioner_resources.matrix,
+          &preconditioner_resources.option,
+          &preconditioner_resources.stats, &preconditioner_resources.mesh,
+          &preconditioner_resources.construction_kernel,
+          &preconditioner_resources.process_tree, &matern_entry_callback64,
+          &matern_block_callback64, &application);
+    } else {
+      d_c_bpack_construct_element_compute(
+          &preconditioner_resources.matrix,
+          &preconditioner_resources.option,
+          &preconditioner_resources.stats, &preconditioner_resources.mesh,
+          &preconditioner_resources.construction_kernel,
+          &preconditioner_resources.process_tree, &matern_entry_callback,
+          &matern_block_callback, &application);
+    }
     d_c_bpack_factor(
         &preconditioner_resources.matrix, &preconditioner_resources.option,
         &preconditioner_resources.stats,
@@ -932,7 +1114,7 @@ int main(int argc, char** argv) {
     std::vector<double> true_solution(static_cast<size_t>(local_points));
     std::vector<double> rhs(static_cast<size_t>(local_points));
     std::vector<double> solution(static_cast<size_t>(local_points));
-    const std::vector<int>& local_old_indices =
+    const std::vector<int64_t>& local_old_indices =
         application.local_old_indices();
     for (int i = 0; i < local_points; ++i) {
       true_solution[static_cast<size_t>(i)] =

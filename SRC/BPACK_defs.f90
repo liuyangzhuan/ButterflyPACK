@@ -904,6 +904,12 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     !>**** quantities related to geometries, meshes, unknowns and points
     type mesh
         integer Nunk !< size of the matrix
+        logical :: distributed64 = .false. !< uses the distributed 64-bit ordering interface
+        integer(c_int64_t) :: Nunk64 = 0
+        integer(c_int64_t) :: Ninput_loc64 = 0
+        integer(c_int64_t) :: Ninternal_loc64 = 0
+        integer(c_int64_t) :: idxs64 = 1
+        integer(c_int64_t) :: idxe64 = 0
         integer Dist_level !< used in Hmatrix solver, the level at which parallelization is performed
         integer Maxgroup !< number of nodes in the partition tree
         integer idxs, idxe  !< range of local row/column indices after reordering

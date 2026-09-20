@@ -38,6 +38,8 @@ struct DriverOptions {
   int verbosity = 1;
   int elem_extract = 2;
   int lrlevel = 0;
+  int format = 7;
+  int distributed64 = 0;
   bool show_help = false;
 };
 
@@ -177,6 +179,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.elem_extract = parse_int(value, "elem_extract");
     } else if (name == "lrlevel") {
       options.lrlevel = parse_int(value, "lrlevel");
+    } else if (name == "distributed64") {
+      options.distributed64 = parse_int(value, "distributed64");
     } else if (name == "kernel") {
       const std::string kernel = normalize_option_name(value);
       if (kernel != "matern52" && kernel != "matern5/2" &&
@@ -199,9 +203,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
             "the ButterflyPACK H2 interface currently supports num_proxy=0 only");
       }
     } else if (name == "format") {
-      if (parse_int(value, "format") != 7) {
-        throw std::invalid_argument("this driver requires --format 7");
-      }
+      options.format = parse_int(value, "format");
     } else if (name == "sym") {
       if (parse_int(value, "sym") != 1) {
         throw std::invalid_argument("this driver requires --sym 1");
@@ -251,6 +253,16 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_gemm_split < 0) {
     throw std::invalid_argument("H2_GEMM_split must be nonnegative");
   }
+  if (options.format != 1 && options.format != 7) {
+    throw std::invalid_argument("format must be 1 (HODLR) or 7 (H2)");
+  }
+  if (options.distributed64 != 0 && options.distributed64 != 1) {
+    throw std::invalid_argument("distributed64 must be 0 or 1");
+  }
+  if (options.distributed64 == 1 && options.format != 7) {
+    throw std::invalid_argument(
+        "the distributed64 API currently supports only format=7");
+  }
 
   const int64_t points = options.grid_size;
   if (options.expected_points > 0 && options.expected_points != points) {
@@ -258,9 +270,11 @@ DriverOptions parse_driver_options(int argc, char** argv) {
         "N must equal grid_size for the 1D driver; expected " +
         std::to_string(points));
   }
-  if (points > std::numeric_limits<int>::max()) {
+  if (options.distributed64 == 0 &&
+      points > std::numeric_limits<int>::max()) {
     throw std::invalid_argument(
-        "this ButterflyPACK C interface requires N <= INT_MAX");
+        "the legacy ButterflyPACK C API requires N <= INT_MAX; use "
+        "--distributed64 1 for format=7");
   }
   if (options.nmin_leaf > points) {
     throw std::invalid_argument("Nmin_leaf cannot exceed N");
@@ -297,32 +311,44 @@ void print_usage(const char* executable) {
       << "  --nugget <value>\n"
       << "  --precon <1|3>\n"
       << "  --nrhs <count>\n"
+      << "  --format <1|7>\n"
+      << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|2>\n"
       << "  --verbosity <-1|0|1>\n";
 }
 
 class Matern1DApplication {
  public:
-  Matern1DApplication(int64_t point_count, double length_scale, double nugget)
+  Matern1DApplication(int64_t point_count, double length_scale, double nugget,
+                      bool materialize_locations)
       : point_count_(point_count),
         length_scale_(length_scale),
-        nugget_(nugget),
-        locations_(static_cast<size_t>(point_count)) {
-    const double spacing = 1.0 / static_cast<double>(point_count_);
-    for (int64_t i = 0; i < point_count_; ++i) {
-      locations_[static_cast<size_t>(i)] =
-          (static_cast<double>(i) + 0.5) * spacing;
+        nugget_(nugget) {
+    if (materialize_locations) {
+      locations_.resize(static_cast<size_t>(point_count_));
+      for (int64_t i = 0; i < point_count_; ++i) {
+        locations_[static_cast<size_t>(i)] = coordinate(i);
+      }
     }
   }
 
   double* locations() { return locations_.data(); }
 
+  double coordinate(int64_t index) const {
+    return (static_cast<double>(index) + 0.5) /
+        static_cast<double>(point_count_);
+  }
+
+  double evaluate_coordinates(int64_t row_id, int64_t column_id,
+                              const double* x, const double* y) const {
+    if (row_id == column_id) return 1.0 + nugget_;
+    return kernel_value(std::abs(*x - *y));
+  }
+
   double evaluate(int row, int column) const {
-    if (row == column) return 1.0 + nugget_;
-    const double distance = std::abs(
-        locations_[static_cast<size_t>(row)] -
-        locations_[static_cast<size_t>(column)]);
-    return kernel_value(distance);
+    return evaluate_coordinates(
+        row + 1, column + 1, &locations_[static_cast<size_t>(row)],
+        &locations_[static_cast<size_t>(column)]);
   }
 
   void evaluate_block(int rows, int columns, const int* row_indices,
@@ -396,6 +422,64 @@ void matern_block_callback(
   (void)nalldat_loc;
 }
 
+void matern_entry_callback64(
+    const int64_t* row, const int64_t* column, const double* row_coordinate,
+    const double* column_coordinate, const int* dimension, double* value,
+    C2Fptr quant) {
+  const auto* application = static_cast<Matern1DApplication*>(quant);
+  if (*dimension != 1) {
+    throw std::invalid_argument("matern_entry_callback64 requires dimension=1");
+  }
+  *value = application->evaluate_coordinates(
+      *row, *column, row_coordinate, column_coordinate);
+}
+
+void matern_block_callback64(
+    const int64_t* rows, const int64_t* columns, const int64_t* row_ids,
+    const int64_t* column_ids, const double* row_coordinates,
+    const double* column_coordinates, const int* dimension, double* output,
+    const int64_t* leading_dimension, C2Fptr quant) {
+  const auto* application = static_cast<Matern1DApplication*>(quant);
+  if (*dimension != 1 || *leading_dimension < *rows) {
+    throw std::invalid_argument("invalid Matern-1D distributed block metadata");
+  }
+  for (int64_t column = 0; column < *columns; ++column) {
+    for (int64_t row = 0; row < *rows; ++row) {
+      output[row + column * *leading_dimension] =
+          application->evaluate_coordinates(
+              row_ids[row], column_ids[column], row_coordinates + row,
+              column_coordinates + column);
+    }
+  }
+}
+
+struct DistributedInput {
+  int64_t first = 0;
+  int64_t count = 0;
+  std::vector<int64_t> global_ids;
+  std::vector<double> coordinates;
+};
+
+DistributedInput make_distributed_input(
+    int64_t global_count, int rank, int mpi_size,
+    const Matern1DApplication& application) {
+  DistributedInput input;
+  const int64_t base = global_count / mpi_size;
+  const int64_t remainder = global_count % mpi_size;
+  input.count = base + (rank < remainder ? 1 : 0);
+  input.first = static_cast<int64_t>(rank) * base +
+      std::min<int64_t>(rank, remainder);
+  input.global_ids.resize(static_cast<size_t>(input.count));
+  input.coordinates.resize(static_cast<size_t>(input.count));
+  for (int64_t local = 0; local < input.count; ++local) {
+    const int64_t global = input.first + local;
+    input.global_ids[static_cast<size_t>(local)] = global + 1;
+    input.coordinates[static_cast<size_t>(local)] =
+        application.coordinate(global);
+  }
+  return input;
+}
+
 void distance_callback(int*, int*, double* value, C2Fptr) { *value = 0.0; }
 void near_far_callback(int*, int*, int* value, C2Fptr) { *value = 0; }
 
@@ -441,15 +525,21 @@ int main(int argc, char** argv) {
     }
 
     const int64_t point_count_64 = driver_options.grid_size;
-    int point_count = static_cast<int>(point_count_64);
     int dimension = 1;
     Matern1DApplication application(
-        point_count_64, driver_options.length_scale, driver_options.nugget);
+        point_count_64, driver_options.length_scale, driver_options.nugget,
+        driver_options.distributed64 == 0);
 
     if (rank == 0) {
       std::cout << "=== ButterflyPACK H2 1D Matern 5/2 Test ===\n"
                 << "Grid size: " << driver_options.grid_size << "\n"
                 << "Total points: " << point_count_64 << "\n"
+                << "Format: " << driver_options.format << "\n"
+                << "C API: "
+                << (driver_options.distributed64 == 1
+                        ? "distributed 64-bit"
+                        : "legacy 32-bit")
+                << "\n"
                 << "Tolerance: " << driver_options.tolerance << "\n"
                 << "Length scale: " << driver_options.length_scale << "\n"
                 << "Nugget: " << driver_options.nugget << "\n"
@@ -479,7 +569,8 @@ int main(int argc, char** argv) {
 
     d_c_bpack_set_D_option(
         &resources.option, "tol_comp", driver_options.tolerance);
-    d_c_bpack_set_I_option(&resources.option, "format", 7);
+    d_c_bpack_set_I_option(
+        &resources.option, "format", driver_options.format);
     d_c_bpack_set_I_option(&resources.option, "sym", 1);
     d_c_bpack_set_I_option(
         &resources.option, "Nmin_leaf",
@@ -506,23 +597,54 @@ int main(int argc, char** argv) {
     d_c_bpack_set_I_option(&resources.option, "cpp", 1);
     d_c_bpack_set_I_option(&resources.option, "nogeo", 0);
 
-    int nlevel = 0;
-    int user_tree = point_count;
     int local_points = 0;
-    d_c_bpack_construct_init(
-        &point_count, &dimension, application.locations(), nullptr,
-        &nlevel, &user_tree, nullptr, &local_points,
-        &resources.matrix, &resources.option, &resources.stats,
-        &resources.mesh, &resources.kernel_quantities,
-        &resources.process_tree, &distance_callback, &near_far_callback,
-        &application);
+    DistributedInput distributed_input;
+    if (driver_options.distributed64 == 1) {
+      distributed_input = make_distributed_input(
+          point_count_64, rank, mpi_size, application);
+      if (distributed_input.count > std::numeric_limits<int>::max()) {
+        throw std::overflow_error(
+            "the local input count exceeds the current solve API limit");
+      }
+      int bounds_provided = 1;
+      const double global_bounds[2] = {0.0, 1.0};
+      int64_t internal_local_points = 0;
+      d_c_bpack_construct_init_distributed64(
+          &point_count_64, &distributed_input.count, &dimension,
+          distributed_input.global_ids.data(),
+          distributed_input.coordinates.data(), &bounds_provided,
+          global_bounds, &internal_local_points, &resources.matrix,
+          &resources.option, &resources.stats, &resources.mesh,
+          &resources.kernel_quantities, &resources.process_tree);
+      local_points = static_cast<int>(distributed_input.count);
+    } else {
+      int point_count = static_cast<int>(point_count_64);
+      int nlevel = 0;
+      int user_tree = point_count;
+      std::vector<int> permutation(static_cast<size_t>(point_count));
+      d_c_bpack_construct_init(
+          &point_count, &dimension, application.locations(), nullptr,
+          &nlevel, &user_tree, permutation.data(), &local_points,
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &resources.kernel_quantities,
+          &resources.process_tree, &distance_callback, &near_far_callback,
+          &application);
+    }
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
-    d_c_bpack_construct_element_compute(
-        &resources.matrix, &resources.option, &resources.stats,
-        &resources.mesh, &resources.kernel_quantities,
-        &resources.process_tree, &matern_entry_callback,
-        &matern_block_callback, &application);
+    if (driver_options.distributed64 == 1) {
+      d_c_bpack_construct_element_compute_distributed64(
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &resources.kernel_quantities,
+          &resources.process_tree, &matern_entry_callback64,
+          &matern_block_callback64, &application);
+    } else {
+      d_c_bpack_construct_element_compute(
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &resources.kernel_quantities,
+          &resources.process_tree, &matern_entry_callback,
+          &matern_block_callback, &application);
+    }
 
     if (rank == 0) {
       std::cout << "\nFactoring the 1D Matern operator:" << std::endl;
@@ -534,19 +656,27 @@ int main(int argc, char** argv) {
     const int number_of_rhs = driver_options.nrhs;
     const size_t value_count = static_cast<size_t>(local_points) *
         static_cast<size_t>(number_of_rhs);
-    std::vector<int> old_global_indices(static_cast<size_t>(local_points));
-    for (int row = 0; row < local_points; ++row) {
-      int new_local_index = row + 1;
-      int old_global_index = 0;
-      d_c_bpack_new2old(
-          &resources.mesh, &new_local_index, &old_global_index);
-      old_global_indices[static_cast<size_t>(row)] = old_global_index - 1;
+    std::vector<int64_t> old_global_indices(static_cast<size_t>(local_points));
+    if (driver_options.distributed64 == 1) {
+      for (int row = 0; row < local_points; ++row) {
+        old_global_indices[static_cast<size_t>(row)] =
+            distributed_input.global_ids[static_cast<size_t>(row)] - 1;
+      }
+    } else {
+      for (int row = 0; row < local_points; ++row) {
+        int new_local_index = row + 1;
+        int old_global_index = 0;
+        d_c_bpack_new2old(
+            &resources.mesh, &new_local_index, &old_global_index);
+        old_global_indices[static_cast<size_t>(row)] = old_global_index - 1;
+      }
     }
 
     std::vector<double> rhs(value_count);
     for (int column = 0; column < number_of_rhs; ++column) {
       for (int row = 0; row < local_points; ++row) {
-        const int old_index = old_global_indices[static_cast<size_t>(row)];
+        const int64_t old_index =
+            old_global_indices[static_cast<size_t>(row)];
         rhs[static_cast<size_t>(row) +
             static_cast<size_t>(column) * local_points] =
             1.0 + 0.125 * column + 0.001 * (old_index % 97);

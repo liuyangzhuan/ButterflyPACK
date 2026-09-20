@@ -4711,6 +4711,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             "pre_apply", merged_pending_bytes, payload_buffer_bytes);
     }
 
+    kernel->register_level_coordinates(lvl);
+
     const std::vector<int64_t> installed_generators =
         install_remote_generators(lvl, incoming_total);
     if (generator_near_enabled()) {

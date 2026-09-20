@@ -27,6 +27,7 @@
 #include "phase_timer.hpp"
 #include "factorization.hpp"
 #include "runtime_thread_support.hpp"
+#include "distributed_layout.hpp"
 #include "solver.hpp"
 #include "apply_mul.hpp"
 #include "tree_impl.hpp"
@@ -163,12 +164,24 @@ struct H2Kernel {
     using BlockKernel = void (*)(
         int*, int*, int*, int64_t*, int*, int*, kerData*,
         int*, int*, int*, int*, int*, void*);
+    using EntryKernel64 = void (*)(
+        const int64_t*, const int64_t*, const CoordType*, const CoordType*,
+        const int*, kerData*, void*);
+    using BlockKernel64 = void (*)(
+        const int64_t*, const int64_t*, const int64_t*, const int64_t*,
+        const CoordType*, const CoordType*, const int*, kerData*,
+        const int64_t*, void*);
 
     void (*kernel)(int*, int*, kerData*, void*) = nullptr;
     BlockKernel block_kernel = nullptr;
+    EntryKernel64 kernel64 = nullptr;
+    BlockKernel64 block_kernel64 = nullptr;
     void* quant = nullptr;
     int block_callback_pid = 0;
+    int dimension = 0;
     mutable std::vector<double> entryeval_time_per_thread;
+    mutable std::unordered_map<int64_t, std::array<CoordType, 3>>
+        coordinate_cache;
 
 
     H2Kernel() = default;
@@ -176,12 +189,116 @@ struct H2Kernel {
     H2Kernel(void (*kernel_)(int*, int*, kerData*, void*), void* quant_)
         : kernel(kernel_), quant(quant_) {}
 
+    bool uses_distributed64_callbacks() const noexcept {
+        return kernel64 != nullptr || block_kernel64 != nullptr;
+    }
+
+    void register_points(const std::vector<int64_t>& indices,
+                         const std::vector<CoordType>& coords) {
+        if (!uses_distributed64_callbacks()) return;
+        if (dimension < 1 || dimension > 3 ||
+            coords.size() != indices.size() * static_cast<size_t>(dimension)) {
+            throw std::runtime_error(
+                "H2Kernel::register_points: inconsistent point metadata");
+        }
+        coordinate_cache.reserve(coordinate_cache.size() + indices.size());
+        for (size_t point = 0; point < indices.size(); ++point) {
+            std::array<CoordType, 3> coordinate{CoordType(0), CoordType(0),
+                                                CoordType(0)};
+            for (int d = 0; d < dimension; ++d) {
+                coordinate[static_cast<size_t>(d)] =
+                    coords[point * static_cast<size_t>(dimension) + d];
+            }
+            coordinate_cache[indices[point]] = coordinate;
+        }
+    }
+
+    template<typename LevelData>
+    void register_level_coordinates(const LevelData& level) {
+        if (!uses_distributed64_callbacks()) return;
+        for (const auto& box : level.local_boxes) {
+            register_points(box.point_indices, box.point_coords);
+        }
+        for (const auto& box : level.ghost_boxes) {
+            register_points(box.point_indices, box.point_coords);
+        }
+        for (const auto& request : level.assisting_boxes) {
+            if (!request.indices.empty()) {
+                register_points(request.indices, request.coords);
+            }
+        }
+    }
+
+    void ensure_coordinates_collective(const std::vector<int64_t>& indices,
+                                       MPI_Comm comm) const {
+        if (!uses_distributed64_callbacks() || indices.empty()) return;
+        std::vector<CoordType> sums(
+            indices.size() * static_cast<size_t>(dimension), CoordType(0));
+        std::vector<int> counts(indices.size(), 0);
+        for (size_t point = 0; point < indices.size(); ++point) {
+            const auto found = coordinate_cache.find(indices[point]);
+            if (found == coordinate_cache.end()) continue;
+            counts[point] = 1;
+            for (int d = 0; d < dimension; ++d) {
+                sums[point * static_cast<size_t>(dimension) + d] =
+                    found->second[static_cast<size_t>(d)];
+            }
+        }
+
+        MPI_Allreduce(MPI_IN_PLACE, counts.data(),
+                      static_cast<int>(counts.size()), MPI_INT, MPI_SUM, comm);
+        const MPI_Datatype coordinate_type =
+            std::is_same_v<CoordType, float> ? MPI_FLOAT : MPI_DOUBLE;
+        if (sums.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::overflow_error(
+                "H2Kernel::ensure_coordinates_collective: request too large");
+        }
+        MPI_Allreduce(MPI_IN_PLACE, sums.data(), static_cast<int>(sums.size()),
+                      coordinate_type, MPI_SUM, comm);
+
+        for (size_t point = 0; point < indices.size(); ++point) {
+            if (counts[point] <= 0) {
+                throw std::runtime_error(
+                    "H2Kernel::ensure_coordinates_collective: global point ID " +
+                    std::to_string(indices[point] + 1) + " was not found");
+            }
+            std::array<CoordType, 3> coordinate{CoordType(0), CoordType(0),
+                                                CoordType(0)};
+            for (int d = 0; d < dimension; ++d) {
+                coordinate[static_cast<size_t>(d)] =
+                    sums[point * static_cast<size_t>(dimension) + d] /
+                    static_cast<CoordType>(counts[point]);
+            }
+            coordinate_cache[indices[point]] = coordinate;
+        }
+    }
+
+    const CoordType* coordinate(int64_t index) const {
+        const auto found = coordinate_cache.find(index);
+        if (found == coordinate_cache.end()) {
+            throw std::runtime_error(
+                "H2Kernel: coordinates are unavailable for global point ID " +
+                std::to_string(index + 1));
+        }
+        return found->second.data();
+    }
+
     // Evaluate the single (i, j) entry into a column-major matrix A with leading dimension lda:
     //   A[i + j*lda] = K(i, j),  i = row, j = column (0-based global DOF indices).
     // Routes to the same C_FuncZmn callback as evaluate_block_by_index (1-based), so the entry
     // matches exactly what the H2 solver compressed/factored -- including the self/diagonal term
     // when i == j. This is what lets direct-verify test the true operator, not a built-in kernel.
     void evaluate_by_index(const int64_t i, const int64_t j, DataType* A, int64_t lda) const {
+        if (kernel64 != nullptr) {
+            const int64_t row = i + 1;
+            const int64_t column = j + 1;
+            kernel64(&row, &column, coordinate(i), coordinate(j), &dimension,
+                     reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
+            return;
+        }
+        if (kernel == nullptr) {
+            throw std::runtime_error("H2Kernel::evaluate_by_index: callback is null");
+        }
         int m = static_cast<int>(i) + 1;   // 1-based row
         int n = static_cast<int>(j) + 1;   // 1-based column
         kernel(&m, &n, reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
@@ -203,7 +320,45 @@ struct H2Kernel {
 
         double t0 = MPI_Wtime();
 
-        if (block_kernel != nullptr) {
+        if (block_kernel64 != nullptr) {
+            std::vector<int64_t> row_ids(static_cast<size_t>(x_size));
+            std::vector<int64_t> column_ids(static_cast<size_t>(y_size));
+            std::vector<CoordType> row_coords(
+                static_cast<size_t>(x_size) * dimension);
+            std::vector<CoordType> column_coords(
+                static_cast<size_t>(y_size) * dimension);
+            for (int64_t i = 0; i < x_size; ++i) {
+                row_ids[static_cast<size_t>(i)] = x_indices[i] + 1;
+                const CoordType* point = coordinate(x_indices[i]);
+                std::copy_n(point, dimension,
+                            row_coords.data() + i * dimension);
+            }
+            for (int64_t j = 0; j < y_size; ++j) {
+                column_ids[static_cast<size_t>(j)] = y_indices[j] + 1;
+                const CoordType* point = coordinate(y_indices[j]);
+                std::copy_n(point, dimension,
+                            column_coords.data() + j * dimension);
+            }
+
+            std::vector<DataType> packed;
+            DataType* output = A;
+            int64_t callback_lda = lda;
+            if (lda != x_size) {
+                packed.resize(static_cast<size_t>(x_size * y_size));
+                output = packed.data();
+                callback_lda = x_size;
+            }
+            block_kernel64(
+                &x_size, &y_size, row_ids.data(), column_ids.data(),
+                row_coords.data(), column_coords.data(), &dimension,
+                reinterpret_cast<kerData*>(output), &callback_lda, quant);
+            if (!packed.empty()) {
+                for (int64_t j = 0; j < y_size; ++j) {
+                    std::copy_n(packed.data() + j * x_size, x_size,
+                                A + j * lda);
+                }
+            }
+        } else if (block_kernel != nullptr) {
             if (x_size > std::numeric_limits<int>::max() ||
                 y_size > std::numeric_limits<int>::max()) {
                 throw std::overflow_error(
@@ -252,7 +407,22 @@ struct H2Kernel {
                         A + j * lda);
                 }
             }
+        } else if (kernel64 != nullptr) {
+            for (int64_t j = 0; j < y_size; ++j) {
+                const int64_t column = y_indices[j] + 1;
+                for (int64_t i = 0; i < x_size; ++i) {
+                    const int64_t row = x_indices[i] + 1;
+                    kernel64(
+                        &row, &column, coordinate(x_indices[i]),
+                        coordinate(y_indices[j]), &dimension,
+                        reinterpret_cast<kerData*>(&A[i + j * lda]), quant);
+                }
+            }
         } else {
+            if (kernel == nullptr) {
+                throw std::runtime_error(
+                    "H2Kernel::evaluate_block_by_index: callback is null");
+            }
             for (int64_t j = 0; j < y_size; ++j) {
                 int n = static_cast<int>(y_indices[j]) + 1;   // 1-based column
                 for (int64_t i = 0; i < x_size; ++i) {
@@ -282,6 +452,7 @@ struct H2 {
     
     H2Kernel<CoordType, DataType> kernel;
     std::unique_ptr<fmm::ParallelTree<CoordType, DataType>> tree;
+    std::unique_ptr<DistributedLayout64> distributed_layout;
     ProgramOptions options;
 
     //temporary comment

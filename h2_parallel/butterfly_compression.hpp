@@ -464,6 +464,7 @@ void hierarchical_compression_parallel(
 
     if (leaf_level < 2) {
         exchange_h2_point_metadata(tree, leaf_level, false, false, true);
+        kernel->register_level_coordinates(tree->levels[leaf_level]);
         build_h2_blocks_for_level(tree, leaf_level, kernel, false, true);
     } else {
         for (int level_number = leaf_level; level_number >= 2; --level_number) {
@@ -478,6 +479,7 @@ void hierarchical_compression_parallel(
 
             exchange_h2_point_metadata(
                 tree, level_number, true, true, level_number == leaf_level);
+            kernel->register_level_coordinates(level);
 
             if (level.is_process_active) {
                 std::exception_ptr id_exception;
@@ -512,6 +514,7 @@ void hierarchical_compression_parallel(
             // Refresh remote records after all owners have selected skeletons.
             exchange_h2_point_metadata(
                 tree, level_number, true, true, level_number == leaf_level);
+            kernel->register_level_coordinates(level);
             build_h2_blocks_for_level(
                 tree, level_number, kernel, true, level_number == leaf_level);
 
