@@ -859,18 +859,22 @@ void staged_halo_merge_stage(
             partner.symmetric_A_NS == target.symmetric_A_NS) {
             return;
         }
+
+        // A staged mirror deliberately supersedes the target's entry-state
+        // view.  An earlier color may already have reduced the partner to its
+        // skeleton, so the stale target and current partner transpose need
+        // not have the same dimensions before this rebind.
         const int64_t expected_rows = partner.a_ns_cols();
         const int64_t expected_cols = partner.a_ns_rows();
-        if (target.a_ns_is_allocated() &&
-            (target.a_ns_rows() != expected_rows ||
-             target.a_ns_cols() != expected_cols)) {
-            throw std::runtime_error(
-                "staged_halo_merge_stage: mirror dimension mismatch");
-        }
         target.symmetric_A_NS.reset();
         target.symmetric_A_NS_orientation = false;
         target.A_NS = MatrixStorage<DataType>();
         target.share_transposed_a_ns_from(partner);
+        if (target.a_ns_rows() != expected_rows ||
+            target.a_ns_cols() != expected_cols) {
+            throw std::runtime_error(
+                "staged_halo_merge_stage: mirror rebind dimension mismatch");
+        }
     };
 
     const int dimension = level.dimension;

@@ -1494,6 +1494,9 @@ struct OwnerPayloads {
     std::map<int32_t, std::map<uint32_t, int64_t>> counts;               ///< boxes per payload
 };
 
+template<typename CoordType, typename DataType>
+int owner_schedule_post_headers(OwnerScheduleState<CoordType, DataType>& st);
+
 /// Snapshot the just-eliminated `boxes` (pre-pass) into their recipients'
 /// payloads: per (box, recipient) a section tailored to that recipient (X_NR
 /// row diet, home-rank blocks), serialized directly into the destination
@@ -1655,6 +1658,11 @@ void owner_schedule_push(OwnerScheduleState<CoordType, DataType>& st, OwnerPaylo
     for (auto& per_comp : payloads.bufs) {
         const int32_t id = per_comp.first;
         for (auto& per_dest : per_comp.second) {
+            // A batch can contain thousands of large wire segments.  Keep
+            // older sends moving and post peers' matching receives before
+            // adding another destination to the outbox.
+            owner_schedule_progress_outbox(st, false);
+            owner_schedule_post_headers(st);
             const uint32_t dest_pid = per_dest.first;
             auto it = st.pid_to_rank.find(static_cast<int>(dest_pid));
             if (it == st.pid_to_rank.end()) throw std::runtime_error("owner_schedule_push: no rank for pid " + std::to_string(dest_pid));
@@ -1680,6 +1688,7 @@ void owner_schedule_push(OwnerScheduleState<CoordType, DataType>& st, OwnerPaylo
                 for (size_t off = 0; off < sg.len; off += st.PART_BYTES)
                     msg.header.push_back(static_cast<int64_t>(std::min(st.PART_BYTES, sg.len - off)));
             MPI_Request r;
+            owner_schedule_post_headers(st);
             owner_mpi_check(MPI_Isend(msg.header.data(), static_cast<int>(msg.header.size()), MPI_INT64_T, dest, st.TAG_HDR,
                                       st.comm, &r),
                             "MPI_Isend(header)");
@@ -1688,6 +1697,11 @@ void owner_schedule_push(OwnerScheduleState<CoordType, DataType>& st, OwnerPaylo
                 const char* base = sg.ext ? sg.ext : msg.buf.data() + sg.off;
                 for (size_t off = 0; off < sg.len; off += st.PART_BYTES) {
                     const size_t len = std::min(st.PART_BYTES, sg.len - off);
+                    // MPI_Isend may internally wait for transport resources.
+                    // Polling headers between postings prevents a set of
+                    // owners from filling those resources while none of them
+                    // reaches the receive-posting path.
+                    owner_schedule_post_headers(st);
                     owner_mpi_check(MPI_Isend(base + off, static_cast<int>(len), MPI_CHAR, dest, st.TAG_PART,
                                               st.comm, &r),
                                     "MPI_Isend(part)");
@@ -1698,6 +1712,8 @@ void owner_schedule_push(OwnerScheduleState<CoordType, DataType>& st, OwnerPaylo
             st.parts_sent += nparts;
         }
     }
+    owner_schedule_progress_outbox(st, false);
+    owner_schedule_post_headers(st);
     payloads.bufs.clear();
     payloads.segs.clear();
     payloads.counts.clear();
@@ -1746,6 +1762,25 @@ void owner_schedule_receive_one(OwnerScheduleState<CoordType, DataType>& st, con
     st.pending_recv.push_back(std::move(pr));
 }
 
+/// Post matching receives for every owner payload header currently available.
+/// This is separate from owner_schedule_poll so the send-posting loop can make
+/// receive-side progress without touching the outbox entry it is still building.
+template<typename CoordType, typename DataType>
+int owner_schedule_post_headers(OwnerScheduleState<CoordType, DataType>& st) {
+    int posted = 0;
+    while (true) {
+        int flag = 0;
+        MPI_Status status;
+        owner_mpi_check(
+            MPI_Iprobe(MPI_ANY_SOURCE, st.TAG_HDR, st.comm, &flag, &status),
+            "MPI_Iprobe(header)");
+        if (!flag) break;
+        owner_schedule_receive_one(st, status);
+        ++posted;
+    }
+    return posted;
+}
+
 /// Hand every fully landed payload to the inbox and the runtime.  Returns
 /// how many completed.
 template<typename CoordType, typename DataType>
@@ -1781,19 +1816,7 @@ template<typename CoordType, typename DataType>
 void owner_schedule_poll(OwnerScheduleState<CoordType, DataType>& st, bool block) {
     using clock = std::chrono::high_resolution_clock;
     owner_schedule_progress_outbox(st, false);
-    auto post_headers = [&]() {
-        int posted = 0;
-        while (true) {
-            int flag = 0;
-            MPI_Status status;
-            owner_mpi_check(MPI_Iprobe(MPI_ANY_SOURCE, st.TAG_HDR, st.comm, &flag, &status), "MPI_Iprobe(header)");
-            if (!flag) break;
-            owner_schedule_receive_one(st, status);
-            ++posted;
-        }
-        return posted;
-    };
-    post_headers();
+    owner_schedule_post_headers(st);
     if (owner_schedule_complete_receives(st) > 0 || !block) return;
     const auto t0 = clock::now();
     if (st.pending_recv.empty()) {
@@ -1802,14 +1825,14 @@ void owner_schedule_poll(OwnerScheduleState<CoordType, DataType>& st, bool block
         owner_mpi_check(MPI_Probe(MPI_ANY_SOURCE, st.TAG_HDR, st.comm, &status), "MPI_Probe(header)");
         st.t_wait_ms += std::chrono::duration<double, std::milli>(clock::now() - t0).count();
         owner_schedule_receive_one(st, status);
-        post_headers();
+        owner_schedule_post_headers(st);
         owner_schedule_complete_receives(st);
         return;
     }
     // parts in flight: spin on their completion (the main thread has nothing
     // else to do), taking new headers as they come
     while (true) {
-        post_headers();
+        owner_schedule_post_headers(st);
         if (owner_schedule_complete_receives(st) > 0) break;
         if (st.pending_recv.empty()) break;
         int idx = 0, flag = 0;
