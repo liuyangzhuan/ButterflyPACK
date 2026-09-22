@@ -146,6 +146,16 @@ PROGRAM ButterflyPACK_IE_3D
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
+						else if (trim(strings)=='--cfie_alpha')then
+							read(strings1,*)quant%CFIE_alpha
+						else if (trim(strings)=='--rcs_static')then
+							read(strings1,*)quant%RCS_static
+						else if (trim(strings)=='--rcs_nsample')then
+							read(strings1,*)quant%RCS_Nsample
+						else if (trim(strings)=='--mesh_normal')then
+							read(strings1,*)quant%mesh_normal
+						else if (trim(strings)=='--scaling')then
+							read(strings1,*)quant%scaling
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -237,7 +247,6 @@ PROGRAM ButterflyPACK_IE_3D
     ! ! ! ! pause
 
 end PROGRAM ButterflyPACK_IE_3D
-
 
 
 

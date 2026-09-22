@@ -55,6 +55,13 @@ add_executable(ie3d ${FZEXM3})
 target_link_libraries(ie3d ${all_link_libs_z})
 add_dependencies(ie3d ie2deigen)
 
+set(CZEXM3 EMSURF_Driver.cpp EMSURF_Module.f90 EMSURF_C_Bindings.f90)
+add_executable(cie3d ${CZEXM3})
+target_link_libraries(cie3d ${all_link_libs_z})
+set_target_properties(cie3d PROPERTIES
+  Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cie3d_modules")
+install(TARGETS cie3d RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
 set(FZEXM4 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3deigen ${FZEXM4})
 target_link_libraries(ie3deigen ${all_link_libs_z})
