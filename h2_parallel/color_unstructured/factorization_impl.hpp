@@ -437,6 +437,63 @@ void hierarchical_factorization_unstructured(
             //   [num_colors, 2*num_colors-1]: interior sub-waves
 
             PendingFactorUpdates<DataType> pending_updates;
+            auto pending_updates_empty = [&]() {
+                return pending_updates.replace_blocks.empty() &&
+                    pending_updates.accumulated_deltas.empty() &&
+                    pending_updates.generators.empty();
+            };
+            std::vector<int> lazy_interior_flush_after_wave(
+                static_cast<size_t>(num_colors), 0);
+            bool lazy_interior_schedule_ready =
+                lazy_far_field_mode() != LazyFarFieldMode::LAZY;
+            auto build_lazy_interior_flush_schedule = [&]() {
+                std::vector<int> local_flush_after_wave(
+                    static_cast<size_t>(num_colors), 0);
+
+                // An interior wave can publish state only when one of its
+                // occupied boxes crosses a process boundary. Generators use
+                // this exact test in emit_lazy_generators; replacement and
+                // additive updates are likewise routed through one-hop
+                // owners. Requesters discovered by assisting exchanges can
+                // add generator destinations, but cannot make a purely local
+                // source emit a generator.
+                for (int color = 0; color < num_colors; ++color) {
+                    const auto& wave = color_bins[static_cast<size_t>(
+                        interior_start_loc + color)];
+                    for (int64_t morton : wave) {
+                        const auto* box = level.find_local_box(morton);
+                        if (box == nullptr) continue;
+                        for (int64_t neighbor : box->one_hop) {
+                            if (level.find_local_box(neighbor) == nullptr) {
+                                local_flush_after_wave[
+                                    static_cast<size_t>(color)] = 1;
+                                break;
+                            }
+                        }
+                        if (local_flush_after_wave[
+                                static_cast<size_t>(color)] != 0) {
+                            break;
+                        }
+                    }
+                }
+
+                const auto decision_start = clock::now();
+                MPI_Allreduce(
+                    local_flush_after_wave.data(),
+                    lazy_interior_flush_after_wave.data(),
+                    num_colors, MPI_INT, MPI_MAX, level_comm);
+                const auto decision_duration =
+                    clock::now() - decision_start;
+                level_reduction += decision_duration;
+                if (profile_deep_level) {
+                    const double decision_ms =
+                        std::chrono::duration<double, std::milli>(
+                            decision_duration).count();
+                    deep_phase_ms[DEEP_TRANSPORT_WALL] += decision_ms;
+                    deep_phase_ms[DEEP_TRANSPORT_MPI] += decision_ms;
+                }
+                lazy_interior_schedule_ready = true;
+            };
             auto transport_color_updates =
                 [&](const FactorizationMemoryDiagnosticCallback& diagnostic) {
                     return transport_and_apply_factor_updates_symmetric_onehop(
@@ -500,11 +557,29 @@ void hierarchical_factorization_unstructured(
                 // interior box has no remote numerical state to publish. In
                 // an unstructured tree, however, owner and assisting copies
                 // can classify the same occupied box differently at a sparse
-                // process boundary. Lazy reconstruction must therefore
-                // publish/install each sub-wave generator before a later
-                // color can consume it.
-                if (lazy_far_field_mode() == LazyFarFieldMode::LAZY ||
-                    !is_interior || counter == interior_start_loc) {
+                // process boundary. Preserve the corrected lazy ordering for
+                // every interior wave that can publish remote state. The
+                // schedule is agreed once per level after the mandatory first
+                // interior transport has completed its assisting exchange.
+                bool transport_required =
+                    !is_interior || counter == interior_start_loc;
+                if (!transport_required &&
+                    lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                    if (!lazy_interior_schedule_ready) {
+                        throw std::runtime_error(
+                            "lazy interior transport schedule is not ready");
+                    }
+                    const int previous_interior_color =
+                        counter - interior_start_loc - 1;
+                    transport_required =
+                        lazy_interior_flush_after_wave[static_cast<size_t>(
+                            previous_interior_color)] != 0;
+                    if (!transport_required && !pending_updates_empty()) {
+                        throw std::runtime_error(
+                            "lazy interior transport schedule missed pending updates");
+                    }
+                }
+                if (transport_required) {
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -556,8 +631,10 @@ void hierarchical_factorization_unstructured(
                     }
                 }
 
-
-
+                if (lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
+                    counter == interior_start_loc) {
+                    build_lazy_interior_flush_schedule();
+                }
 
                 const auto& color_list = color_bins[static_cast<size_t>(counter)];
                 auto mark_assisting_boxes_eliminated = [&]() {
