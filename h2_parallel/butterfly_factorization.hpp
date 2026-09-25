@@ -820,6 +820,7 @@ void hierarchical_factorization_parallel(
     int size = tree->mpi_size;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
+    const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -1561,6 +1562,15 @@ void hierarchical_factorization_parallel(
 
                     share_symmetric_level_edges(level);
 
+                    // Package the generator while X_NR still contains the
+                    // original one-hop coupling. Finalization replaces X_NR
+                    // with temp2, which remains the representation retained
+                    // by local and installed generator boxes.
+                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                        emit_lazy_generators(
+                            level, color_list, counter, pending_updates);
+                    }
+
                     std::exception_ptr finalize_exception;
                     std::mutex finalize_exception_mutex;
                     std::atomic<bool> finalize_failed{false};
@@ -1594,10 +1604,6 @@ void hierarchical_factorization_parallel(
                         std::rethrow_exception(finalize_exception);
                     }
 
-                    if (lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
-                        emit_lazy_generators(
-                            level, color_list, counter, pending_updates);
-                    }
                 } else {
                     slice_far_field_blocks(level, is_symmetric, is_hermitian);
                 }
@@ -1707,16 +1713,43 @@ void hierarchical_factorization_parallel(
                 min_elim_ms,
                 max_elim_ms);
             
+            const int64_t local_box_count =
+                static_cast<int64_t>(level.local_boxes.size());
+            const int64_t local_compression_counts[3] = {
+                total_skeleton,
+                total_redundant,
+                local_box_count
+            };
+            int64_t global_compression_counts[3] = {0, 0, 0};
+            MPI_Reduce(
+                local_compression_counts,
+                global_compression_counts,
+                3,
+                MPI_INT64_T,
+                MPI_SUM,
+                0,
+                level_comm);
+
             if (print_detail && rank == level_print_rank) {
                 std::cout << "  Elimination time: shortest=" << std::llround(min_elim_ms)
                           << " ms, longest=" << std::llround(max_elim_ms) << " ms" << std::endl;
-                
-                const double compression =
-                    static_cast<double>(total_skeleton) / (total_skeleton + total_redundant);
+
+                const int64_t global_skeleton = global_compression_counts[0];
+                const int64_t global_redundant = global_compression_counts[1];
+                const int64_t global_box_count = global_compression_counts[2];
+                const int64_t global_original =
+                    global_skeleton + global_redundant;
+                const double compression = global_original > 0
+                    ? static_cast<double>(global_skeleton) /
+                        static_cast<double>(global_original)
+                    : 0.0;
                 std::cout << "  Compression ratio: " << compression
                           << " (" << (compression * 100) << "%)" << std::endl;
                 std::cout << "  Average skeleton size: "
-                          << static_cast<double>(total_skeleton) / level.local_boxes.size()
+                          << (global_box_count > 0
+                              ? static_cast<double>(global_skeleton) /
+                                  static_cast<double>(global_box_count)
+                              : 0.0)
                           << std::endl;
             }
         }
@@ -1971,7 +2004,7 @@ void hierarchical_factorization_parallel(
             // This process will become inactive at parent level
             parent_level.local_boxes.clear();
 
-            if (print_detail) {
+            if (print_trace) {
                 std::cout << "  Process " << rank << " sending " << parent_boxes.size() 
                           << " parent boxes to process " << level.parent_level_owner << std::endl;
             }
@@ -2054,7 +2087,7 @@ void hierarchical_factorization_parallel(
     auto& root_level = tree->levels[0];
     
     if (!root_level.is_process_active || root_level.local_boxes.empty()) {
-        if (print_detail) {
+        if (print_trace) {
             std::cout << "  Process " << rank << " has no boxes at root level" << std::endl;
         }
     } else {

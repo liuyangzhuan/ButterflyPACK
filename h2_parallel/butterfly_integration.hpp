@@ -26,3 +26,4 @@
 #include "butterfly_compression.hpp"
 #include "butterfly_verification.hpp"
 #include "butterfly_factorization.hpp"
+#include "h2_backend_dispatch.hpp"

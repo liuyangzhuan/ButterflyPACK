@@ -127,6 +127,7 @@ void clear_modified_interaction_matrices(
         box.X_RR_full = MatrixStorage<DataType>{};
         box.X_RS_entry = MatrixStorage<DataType>{};
         std::vector<int64_t>().swap(box.deferred_xnn_neighbor_point_counts);
+        std::vector<DataType>().swap(box.lazy_original_x_nr);
     };
 
     // Iterate through all local boxes and clear their interaction data.
@@ -148,6 +149,7 @@ void clear_modified_interaction_matrices(
     std::vector<BoxData<CoordType, DataType>>().swap(level.generator_boxes);
     level.generator_id_to_index.clear();
     level.elimination_wave.clear();
+    level.lazy_generator_requesters.clear();
     // malloc_trim(0);
 }
 

@@ -28,6 +28,7 @@ struct DriverOptions {
   bool nmin_leaf_set = false;
   double tolerance = 1e-3;
   int64_t reduction_threshold = 8;
+  int h2_unstructured = 0;
   int ca_level = 0;
   int h2_use_sketch = 1;
   int h2_lazy_schur = 0;
@@ -171,6 +172,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.nmin_leaf_set = true;
     } else if (name == "reduction_threshold") {
       options.reduction_threshold = parse_int64(value, "reduction_threshold");
+    } else if (name == "h2_unstructured") {
+      options.h2_unstructured = parse_int(value, "H2_unstructured");
     } else if (name == "ca_level") {
       options.ca_level = parse_int(value, "CA_level");
     } else if (name == "h2_use_sketch") {
@@ -247,6 +250,13 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_use_sketch < 0 || options.h2_use_sketch > 2) {
     throw std::invalid_argument("H2_use_sketch must be 0, 1, or 2");
   }
+  if (options.h2_unstructured != 0 && options.h2_unstructured != 1) {
+    throw std::invalid_argument("H2_unstructured must be 0 or 1");
+  }
+  if (options.h2_unstructured == 1 && options.h2_lazy_schur == 1) {
+    throw std::invalid_argument(
+        "color_unstructured supports H2_lazy_schur=0 or 2 only");
+  }
   if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
   }
@@ -315,6 +325,7 @@ void print_usage(const char* executable) {
       << "  --tol-comp <value>\n"
       << "  --Nmin_leaf <count>\n"
       << "  --reduction_threshold <count>\n"
+      << "  --H2_unstructured <0|1>\n"
       << "  --CA_level <level>\n"
       << "  --H2_use_sketch <0|1|2>\n"
       << "  --H2_lazy_schur <0|1|2>\n"
@@ -594,6 +605,8 @@ int main(int argc, char** argv) {
                 << "Nmin_leaf: " << driver_options.nmin_leaf << "\n"
                 << "Reduction threshold: "
                 << driver_options.reduction_threshold << "\n"
+                << "H2_unstructured: "
+                << driver_options.h2_unstructured << "\n"
                 << "CA_level: " << driver_options.ca_level << "\n"
                 << "H2_use_sketch: " << driver_options.h2_use_sketch << "\n"
                 << "H2_lazy_schur: " << driver_options.h2_lazy_schur << "\n"
@@ -631,6 +644,9 @@ int main(int argc, char** argv) {
     d_c_bpack_set_I_option(
         &resources.option, "reduction_threshold",
         static_cast<int>(driver_options.reduction_threshold));
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_unstructured",
+        driver_options.h2_unstructured);
     d_c_bpack_set_I_option(
         &resources.option, "CA_level", driver_options.ca_level);
     d_c_bpack_set_I_option(
@@ -737,6 +753,60 @@ int main(int argc, char** argv) {
         &number_of_rhs,
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree);
+
+    if (driver_options.format == 7) {
+      std::vector<double> product(value_count, 0.0);
+      int output_local_points = local_points;
+      const char trans = 'N';
+      d_c_bpack_mult(
+          &trans, solution.data(), product.data(),
+          &local_points, &output_local_points, &number_of_rhs,
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.process_tree);
+
+      std::vector<double> solution_sum(static_cast<size_t>(number_of_rhs), 0.0);
+      std::vector<double> solution_norm2(static_cast<size_t>(number_of_rhs), 0.0);
+      std::vector<double> residual_norm2(static_cast<size_t>(number_of_rhs), 0.0);
+      std::vector<double> rhs_norm2(static_cast<size_t>(number_of_rhs), 0.0);
+      for (int column = 0; column < number_of_rhs; ++column) {
+        for (int row = 0; row < local_points; ++row) {
+          const size_t index = static_cast<size_t>(row) +
+              static_cast<size_t>(column) * local_points;
+          const double residual = product[index] - rhs[index];
+          solution_sum[static_cast<size_t>(column)] += solution[index];
+          solution_norm2[static_cast<size_t>(column)] +=
+              solution[index] * solution[index];
+          residual_norm2[static_cast<size_t>(column)] += residual * residual;
+          rhs_norm2[static_cast<size_t>(column)] += rhs[index] * rhs[index];
+        }
+      }
+      MPI_Allreduce(
+          MPI_IN_PLACE, solution_sum.data(), number_of_rhs,
+          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(
+          MPI_IN_PLACE, solution_norm2.data(), number_of_rhs,
+          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(
+          MPI_IN_PLACE, residual_norm2.data(), number_of_rhs,
+          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(
+          MPI_IN_PLACE, rhs_norm2.data(), number_of_rhs,
+          MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+      if (rank == 0) {
+        for (int column = 0; column < number_of_rhs; ++column) {
+          const size_t index = static_cast<size_t>(column);
+          const double relative_residual = std::sqrt(
+              residual_norm2[index] / rhs_norm2[index]);
+          std::cout << std::setprecision(17)
+                    << "H2 solution check RHS " << column
+                    << ": sum=" << solution_sum[index]
+                    << ", norm=" << std::sqrt(solution_norm2[index])
+                    << ", relative residual=" << relative_residual
+                    << std::setprecision(6) << std::endl;
+        }
+      }
+    }
 
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);
   } catch (const std::exception& error) {

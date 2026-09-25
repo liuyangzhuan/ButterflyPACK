@@ -1312,6 +1312,7 @@ contains
       option%bp_cnt_lr = 1
       option%less_adapt = 0
       option%reduction_threshold=8
+      option%H2_unstructured=0
       option%CA_level=10000
       option%H2_use_sketch=1
       option%H2_lazy_schur=0
@@ -1368,6 +1369,8 @@ contains
                   read (strings1, *) option%precon
                else if (trim(strings) == '--ca_level' .or. trim(strings) == '--CA_level') then
                   read (strings1, *) option%CA_level
+               else if (trim(strings) == '--h2_unstructured' .or. trim(strings) == '--H2_unstructured') then
+                  read (strings1, *) option%H2_unstructured
                else if (trim(strings) == '--h2_use_sketch' .or. trim(strings) == '--H2_use_sketch') then
                   read (strings1, *) option%H2_use_sketch
                else if (trim(strings) == '--h2_lazy_schur' .or. trim(strings) == '--H2_lazy_schur') then
@@ -1506,6 +1509,7 @@ contains
       type(Hoption)::option, option1
 
       option1%Nmin_leaf = option%Nmin_leaf
+      option1%H2_unstructured = option%H2_unstructured
       option1%CA_level = option%CA_level
       option1%H2_use_sketch = option%H2_use_sketch
       option1%H2_lazy_schur = option%H2_lazy_schur
@@ -1595,6 +1599,7 @@ contains
             write (*, '(A18,A10)') 'algorithm', 'H2'
             write (*, '(A18,I8)') 'nmin_leaf', option%Nmin_leaf
             write (*, '(A20,I8)') 'reduction_threshold', option%reduction_threshold
+            write (*, '(A20,I8)') 'h2_unstructured', option%H2_unstructured
             write (*, '(A18,I8)') 'CA_level', option%CA_level
             write (*, '(A18,I8)') 'h2_use_sketch', option%H2_use_sketch
             write (*, '(A18,I8)') 'h2_lazy_schur', option%H2_lazy_schur

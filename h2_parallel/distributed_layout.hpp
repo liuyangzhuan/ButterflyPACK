@@ -9,7 +9,7 @@
 
 #include <mpi.h>
 
-#include "runtime_thread_support.hpp"
+#include "color_CA/runtime_thread_support.hpp"
 
 namespace butterfly {
 

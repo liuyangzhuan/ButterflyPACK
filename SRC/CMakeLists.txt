@@ -98,8 +98,7 @@ endif ()
 
 add_library(butterflypack OBJECT ${sources} ${headers})
 target_include_directories(butterflypack PRIVATE
-  ${CMAKE_SOURCE_DIR}/h2_parallel
-  ${CMAKE_SOURCE_DIR}/h2_parallel/color_CA)
+  ${CMAKE_SOURCE_DIR}/h2_parallel)
 
 if (enable_parsec)
   set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)

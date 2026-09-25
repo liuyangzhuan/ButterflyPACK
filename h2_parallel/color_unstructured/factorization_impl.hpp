@@ -135,12 +135,56 @@ void hierarchical_factorization_unstructured(
     clock::duration total_reduction_time{};
     int64_t local_max_skel = 0;
 
+    enum DeepFactorizationPhase : size_t {
+        DEEP_TRANSPORT_WALL = 0,
+        DEEP_TRANSPORT_MPI,
+        DEEP_POST_TRANSPORT,
+        DEEP_WAVE_SETUP,
+        DEEP_PRIMARY,
+        DEEP_OWNER_PREP,
+        DEEP_OWNER_REPLAY,
+        DEEP_MIRROR,
+        DEEP_SHARE,
+        DEEP_GENERATOR,
+        DEEP_FINALIZE,
+        DEEP_BOOKKEEPING,
+        DEEP_OTHER,
+        DEEP_PHASE_COUNT
+    };
+    const std::array<const char*, DEEP_PHASE_COUNT> deep_phase_names = {{
+        "transport wall",
+        "  MPI inside transport",
+        "post-transport refresh/slicing",
+        "wave setup",
+        "primary ID/elimination",
+        "owner candidate preparation",
+        "owner replay",
+        "symmetric mirror",
+        "symmetric edge sharing",
+        "lazy generator packaging",
+        "source finalization",
+        "pending merge/bookkeeping",
+        "other/unaccounted"
+    }};
+
     memory_diagnostics.record(tree, leaf_level, "setup", "factor_start");
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
         clock::duration level_data_exchange{};
         clock::duration level_reduction{};
+        std::array<double, DEEP_PHASE_COUNT> deep_phase_ms{};
+        double deep_elimination_local_ms = 0.0;
+        const bool profile_deep_level =
+            print_detail &&
+            current_level >= std::max(2, leaf_level - 2);
+        auto record_deep_phase = [&](DeepFactorizationPhase phase,
+                                     const clock::time_point& start) {
+            if (!profile_deep_level) return;
+            deep_phase_ms[static_cast<size_t>(phase)] +=
+                std::chrono::duration<double, std::milli>(
+                    clock::now() - start).count();
+        };
 
         auto& level = tree->levels[current_level];
         auto& parent_level = tree->levels[current_level - 1];
@@ -481,11 +525,22 @@ void hierarchical_factorization_unstructured(
                                     0, 0, communication);
                             };
                     }
+                    const auto transport_wall_start = clock::now();
                     const auto comm_duration_raw =
                         transport_color_updates(transport_memory_diagnostic);
+                    record_deep_phase(
+                        DEEP_TRANSPORT_WALL, transport_wall_start);
+                    if (profile_deep_level) {
+                        deep_phase_ms[DEEP_TRANSPORT_MPI] +=
+                            std::chrono::duration<double, std::milli>(
+                                comm_duration_raw).count();
+                    }
+                    const auto post_transport_start = clock::now();
                     refresh_installed_lazy_remote_state();
                     level_data_exchange += comm_duration_raw;
                     update_neighbor_slicing_for_level(level, is_symmetric);
+                    record_deep_phase(
+                        DEEP_POST_TRANSPORT, post_transport_start);
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -544,6 +599,7 @@ void hierarchical_factorization_unstructured(
                     continue;
                 }
 
+                const auto wave_setup_start = clock::now();
                 const bool enable_deferred_xnn =
                     to_store && (store_interior_wave || !is_interior);
                 const bool use_owner_deferred_xnn =
@@ -598,6 +654,8 @@ void hierarchical_factorization_unstructured(
                 const int wave_team = std::max(1, omp_get_max_threads());
                 const int wave_split = split_threads_for(
                     static_cast<int64_t>(color_list.size()), wave_team);
+                record_deep_phase(DEEP_WAVE_SETUP, wave_setup_start);
+                const auto primary_start = clock::now();
 
                 #pragma omp parallel default(shared)
                 {
@@ -697,8 +755,10 @@ void hierarchical_factorization_unstructured(
                 for (int local_boundary_count : thread_boundary_counts) {
                     boundary_count += local_boundary_count;
                 }
+                record_deep_phase(DEEP_PRIMARY, primary_start);
 
                 if (use_owner_deferred_xnn) {
+                    const auto owner_prep_start = clock::now();
                     for (int64_t morton_idx : color_list) {
                         level.eliminated_boxes.insert(morton_idx);
                         level.elimination_wave[morton_idx] =
@@ -811,6 +871,8 @@ void hierarchical_factorization_unstructured(
                             static_cast<size_t>(owner_color)].push_back(idx);
                     }
 
+                    record_deep_phase(DEEP_OWNER_PREP, owner_prep_start);
+                    const auto owner_replay_start = clock::now();
                     for (const auto& owner_color_bin : owner_color_bins) {
                         if (owner_color_bin.empty()) continue;
                         const int owner_split = split_threads_for(
@@ -893,10 +955,13 @@ void hierarchical_factorization_unstructured(
                         }
                     }
 
+                    record_deep_phase(
+                        DEEP_OWNER_REPLAY, owner_replay_start);
                     if (owner_exception) {
                         std::rethrow_exception(owner_exception);
                     }
 
+                    const auto mirror_start = clock::now();
                     std::exception_ptr mirror_exception;
                     std::mutex mirror_exception_mutex;
                     std::atomic<bool> mirror_failed{false};
@@ -937,9 +1002,13 @@ void hierarchical_factorization_unstructured(
                     if (mirror_exception) {
                         std::rethrow_exception(mirror_exception);
                     }
+                    record_deep_phase(DEEP_MIRROR, mirror_start);
 
+                    const auto share_start = clock::now();
                     share_symmetric_level_edges(level);
+                    record_deep_phase(DEEP_SHARE, share_start);
 
+                    const auto generator_start = clock::now();
                     // Package the generator while X_NR still contains the
                     // original one-hop coupling. Finalization replaces X_NR
                     // with temp2, which remains the representation retained
@@ -957,7 +1026,9 @@ void hierarchical_factorization_unstructured(
                             level, occupied_color_list, counter,
                             pending_updates);
                     }
+                    record_deep_phase(DEEP_GENERATOR, generator_start);
 
+                    const auto finalize_start = clock::now();
                     std::exception_ptr finalize_exception;
                     std::mutex finalize_exception_mutex;
                     std::atomic<bool> finalize_failed{false};
@@ -994,10 +1065,12 @@ void hierarchical_factorization_unstructured(
                     if (finalize_exception) {
                         std::rethrow_exception(finalize_exception);
                     }
+                    record_deep_phase(DEEP_FINALIZE, finalize_start);
 
                 } else {
                     slice_far_field_blocks(level, is_symmetric, is_hermitian);
                 }
+                const auto bookkeeping_start = clock::now();
                 for (int t = 0; t < max_threads; ++t) {
                     merge_pending(pending_updates, thread_pending[t]);
                     clear_pending_factor_updates_memory(thread_pending[t]);
@@ -1014,6 +1087,7 @@ void hierarchical_factorization_unstructured(
 
                 // Advance remote assisting boxes after local numerical work.
                 mark_assisting_boxes_eliminated();
+                record_deep_phase(DEEP_BOOKKEEPING, bookkeeping_start);
 
                 if (memory_diagnostics.enabled()) {
                     memory_diagnostics.record(
@@ -1044,11 +1118,22 @@ void hierarchical_factorization_unstructured(
                             0, 0, communication);
                     };
             }
+            const auto final_transport_wall_start = clock::now();
             const auto final_comm_duration =
                 transport_color_updates(final_transport_memory_diagnostic);
+            record_deep_phase(
+                DEEP_TRANSPORT_WALL, final_transport_wall_start);
+            if (profile_deep_level) {
+                deep_phase_ms[DEEP_TRANSPORT_MPI] +=
+                    std::chrono::duration<double, std::milli>(
+                        final_comm_duration).count();
+            }
+            const auto final_post_transport_start = clock::now();
             refresh_installed_lazy_remote_state();
             level_data_exchange += final_comm_duration;
             update_neighbor_slicing_for_level(level, is_symmetric);
+            record_deep_phase(
+                DEEP_POST_TRANSPORT, final_post_transport_start);
             if (memory_diagnostics.enabled()) {
                 memory_diagnostics.record(
                     tree, current_level, "color", "final_post_transport",
@@ -1069,6 +1154,11 @@ void hierarchical_factorization_unstructured(
             const auto elim_end = std::chrono::high_resolution_clock::now();
             elim_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 elim_end - elim_start);
+            if (profile_deep_level) {
+                deep_elimination_local_ms =
+                    std::chrono::duration<double, std::milli>(
+                        elim_end - elim_start).count();
+            }
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
             if (print_detail && rank == level_print_rank) {
@@ -1081,6 +1171,54 @@ void hierarchical_factorization_unstructured(
             "post_elimination");
 
         if (current_level > 1 && level.is_process_active) {
+            if (profile_deep_level && !use_CA_level) {
+                double exclusive_ms = 0.0;
+                for (size_t phase = 0; phase < DEEP_PHASE_COUNT; ++phase) {
+                    if (phase != DEEP_TRANSPORT_MPI &&
+                        phase != DEEP_OTHER) {
+                        exclusive_ms += deep_phase_ms[phase];
+                    }
+                }
+                deep_phase_ms[DEEP_OTHER] = std::max(
+                    0.0, deep_elimination_local_ms - exclusive_ms);
+
+                std::array<double, DEEP_PHASE_COUNT> min_phase_ms{};
+                std::array<double, DEEP_PHASE_COUNT> max_phase_ms{};
+                std::array<double, DEEP_PHASE_COUNT> sum_phase_ms{};
+                MPI_Reduce(
+                    deep_phase_ms.data(), min_phase_ms.data(),
+                    DEEP_PHASE_COUNT, MPI_DOUBLE, MPI_MIN, 0, level_comm);
+                MPI_Reduce(
+                    deep_phase_ms.data(), max_phase_ms.data(),
+                    DEEP_PHASE_COUNT, MPI_DOUBLE, MPI_MAX, 0, level_comm);
+                MPI_Reduce(
+                    deep_phase_ms.data(), sum_phase_ms.data(),
+                    DEEP_PHASE_COUNT, MPI_DOUBLE, MPI_SUM, 0, level_comm);
+
+                if (rank == level_print_rank) {
+                    std::cout
+                        << "  Temporary color_unstructured phase profile"
+                        << " (min / average / max across "
+                        << level.num_active_processes << " active ranks):"
+                        << std::endl;
+                    for (size_t phase = 0;
+                         phase < DEEP_PHASE_COUNT; ++phase) {
+                        const double average =
+                            sum_phase_ms[phase] /
+                            static_cast<double>(
+                                level.num_active_processes);
+                        std::printf(
+                            "    %-34s %10.3f / %10.3f / %10.3f ms\n",
+                            deep_phase_names[phase],
+                            min_phase_ms[phase], average,
+                            max_phase_ms[phase]);
+                    }
+                    std::cout
+                        << "    (MPI inside transport is a subset of"
+                        << " transport wall.)" << std::endl;
+                }
+            }
+
             double min_elim_ms = 0.0;
             double max_elim_ms = 0.0;
             reduce_active_duration_bounds_ms(

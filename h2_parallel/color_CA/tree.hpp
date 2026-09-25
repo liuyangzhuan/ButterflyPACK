@@ -164,6 +164,7 @@ struct GeneratorPayload {
     std::vector<int64_t> one_hop;
     std::vector<int64_t> neighbor_point_counts;
     std::vector<DataType> temp2;
+    std::vector<DataType> original_x_nr;
     std::vector<DataType> x_rr_full;
     int64_t k = 0;
     std::vector<int64_t> skeleton_indices;
@@ -1036,6 +1037,9 @@ struct BoxData {
     MatrixStorage<DataType> X_RS_entry;
     std::vector<int64_t> deferred_xnn_neighbor_point_counts;
     std::vector<DataType> deferred_xnn_temp2;
+    // Remote lazy generators keep the source-time one-hop coupling so mode 2
+    // can reproduce eager near updates without reconstructing it through X_RR.
+    std::vector<DataType> lazy_original_x_nr;
 
     
     // ===== Near-Field and Far-Field Interactions =====
@@ -1155,6 +1159,11 @@ struct TreeLevel {
     std::unordered_map<int64_t, int32_t> elimination_wave;
     std::vector<BoxData<CoordType, DataType>> generator_boxes;
     std::unordered_map<int64_t, int64_t> generator_id_to_index;
+    // Unstructured Color ranks that requested each remote box as assisting
+    // state. These ranks can also need its lazy generator while assembling
+    // the next level, even when they own none of its direct endpoints.
+    std::unordered_map<int64_t, std::unordered_set<int>>
+        lazy_generator_requesters;
 
     BoxData<CoordType, DataType>* find_generator_box(int64_t morton) {
         auto it = generator_id_to_index.find(morton);

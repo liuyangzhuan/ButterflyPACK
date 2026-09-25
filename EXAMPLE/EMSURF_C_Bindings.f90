@@ -99,6 +99,7 @@ contains
       complex(c_double_complex), intent(out), target :: alldat(*)
       type(c_ptr), value :: context
       integer(c_int), pointer :: pmaps_2d(:, :)
+      integer(c_int) :: pgidx_fortran(Ninter)
       class(*), pointer :: quant_ptr
       integer :: local_data_count
 
@@ -107,10 +108,11 @@ contains
       end if
       local_data_count = int(Nalldat_loc)
       call c_f_pointer(c_loc(pmaps(1)), pmaps_2d, [Npmap, 3])
+      pgidx_fortran(1:Ninter) = pgidx(1:Ninter) + 1_c_int
       quant_ptr => quant_c
       call Zelem_EMSURF_block(Ninter, allrows(1:Nallrows), allcols(1:Nallcols), &
          alldat(1:local_data_count), rowidx(1:Ninter), colidx(1:Ninter), &
-         pgidx(1:Ninter), Npmap, pmaps_2d, quant_ptr)
+         pgidx_fortran, Npmap, pmaps_2d, quant_ptr)
    end subroutine emsurf_block_c
 
    subroutine emsurf_incident_c(edge, polarization, theta, phi, value) bind(C)

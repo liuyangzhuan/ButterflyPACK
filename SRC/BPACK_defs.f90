@@ -830,6 +830,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: trans_invariant !< 1: reuse HTENSOR blocks by relative offset; 2: reuse by squared offset distance
         integer:: htensor_mvp_level_batch !< number of HTENSOR levels grouped in one MVP call; 1 keeps level-by-level memory
         integer:: reduction_threshold !< 7: H2 process-reduction threshold
+        integer:: H2_unstructured !< 1: use the color-only unstructured H2 backend; 0: structured Color/CA
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near

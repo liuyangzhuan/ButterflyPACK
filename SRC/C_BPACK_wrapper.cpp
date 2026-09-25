@@ -76,7 +76,7 @@ void compress_h2_and_update_stats(
 
   double compression_time = 0.0;
   double entryeval_time = 0.0;
-  butterfly::butterfly_compression_parallel(
+  butterfly::dispatch_h2_compression(
     solver, &compression_time, &entryeval_time);
 
   c_bpack_setstats(stats, "Time_Fill", &compression_time);
@@ -90,8 +90,7 @@ void compress_h2_and_update_stats(
   c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
 
   if (solver->options.verbosity >= 0) {
-    (void)butterfly::h2_compression_quick_verification(
-      solver->tree.get(), &solver->kernel);
+    (void)butterfly::dispatch_h2_compression_verification(solver);
   }
 }
 
@@ -102,6 +101,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double Nmin_leaf_d = 0.0;
   double precon_d = 0.0;
   double verbosity_d = 0.0;
+  double H2_unstructured_d = 0.0;
   double CA_level_d = 0.0;
   double H2_use_sketch_d = 0.0;
   double H2_lazy_schur_d = 0.0;
@@ -118,6 +118,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
   c_bpack_getoption(option, "precon", &precon_d);
   c_bpack_getoption(option, "verbosity", &verbosity_d);
+  c_bpack_getoption(option, "H2_unstructured", &H2_unstructured_d);
   c_bpack_getoption(option, "CA_level", &CA_level_d);
   c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
   c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
@@ -134,6 +135,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
       static_cast<int64_t>(reduction_threshold_d);
   const int64_t Nmin_leaf = static_cast<int64_t>(Nmin_leaf_d);
   const int CA_level = static_cast<int>(std::llround(CA_level_d));
+  const int H2_unstructured =
+      static_cast<int>(std::llround(H2_unstructured_d));
   const int H2_use_sketch =
       static_cast<int>(std::llround(H2_use_sketch_d));
   const int H2_lazy_schur =
@@ -204,6 +207,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
       Nmin_leaf, CA_level);
   result.precon = static_cast<int>(std::llround(precon_d));
   result.verbosity = static_cast<int>(std::llround(verbosity_d));
+  result.unstructured = H2_unstructured;
   result.use_sketch = H2_use_sketch;
   result.lazy_schur = H2_lazy_schur;
   result.gemm_split = H2_GEMM_split;
@@ -218,6 +222,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
     result.id_adaptive_batch = BACA_Batch;
   }
   if (result.precon == 2) result.CA_level = result.num_levels;
+  butterfly::validate_h2_backend_selection(result);
   return result;
 }
 
@@ -272,6 +277,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
 		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
 		{"reduction_threshold", "format-7 H2 boxes-per-process threshold for reducing the active MPI process count"},
+		{"h2_unstructured", "format-7 H2 backend: 0 structured Color/CA, 1 color_unstructured (Color only)"},
 		{"h2_use_sketch",   "format-7 H2 ID mode: 0 full workspace, 1 materialized sparse sketch, 2 streamed sparse sketch on color levels"},
 		{"h2_lazy_schur",   "format-7 H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near"},
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
@@ -394,6 +400,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_CA_owner_component", required_argument, 0, 55},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
+		{"h2_unstructured", required_argument, 0, 57},
+		{"H2_unstructured", required_argument, 0, 57},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -667,6 +675,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_CA_owner_serial", opt_i);
+		} break;
+		case 57: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_unstructured", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -1058,6 +1071,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double Nmin_leaf_d;
       double precon_d;
       double verbosity_d;
+      double H2_unstructured_d;
       double CA_level_d;
       double H2_use_sketch_d;
       double H2_lazy_schur_d;
@@ -1074,6 +1088,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
       c_bpack_getoption(option, "precon", &precon_d);
       c_bpack_getoption(option, "verbosity", &verbosity_d);
+      c_bpack_getoption(option, "H2_unstructured", &H2_unstructured_d);
       c_bpack_getoption(option, "CA_level", &CA_level_d);
       c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
       c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
@@ -1088,6 +1103,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
+      const int H2_unstructured =
+          static_cast<int>(std::llround(H2_unstructured_d));
       const int H2_use_sketch = static_cast<int>(std::llround(H2_use_sketch_d));
       const int H2_lazy_schur = static_cast<int>(std::llround(H2_lazy_schur_d));
       const int H2_GEMM_split = static_cast<int>(std::llround(H2_GEMM_split_d));
@@ -1150,6 +1167,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
           Npo, Ndim, Locations, tolerance, reduction_threshold, Nmin_leaf, CA_level);
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
+      H2_options.unstructured = H2_unstructured;
       H2_options.use_sketch = H2_use_sketch;
       H2_options.lazy_schur = H2_lazy_schur;
       H2_options.gemm_split = H2_GEMM_split;
@@ -1166,6 +1184,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
+      butterfly::validate_h2_backend_selection(H2_options);
       H2_solver->options = H2_options;
     } catch (const std::exception& e) {
       if (rank == 0) {
@@ -1179,6 +1198,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         std::cout << "ButterflyPACK H2, number_type=" << butterfly::number_kind_to_string(H2_options.number_kind)
                   << ", dimension=" << H2_options.dimension
                   << ", reduction_threshold=" << H2_options.reduction_threshold
+                  << ", h2_unstructured=" << H2_options.unstructured
                   << ", CA_level=" << H2_options.CA_level
                   << ", h2_use_sketch=" << H2_options.use_sketch
                   << ", h2_lazy_schur=" << H2_options.lazy_schur
@@ -1643,7 +1663,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 	  } else {
 		double factorization_time = 0.0;
 		double entryeval_time = 0.0;
-		butterfly::butterfly_factorization_parallel(
+		butterfly::dispatch_h2_factorization(
 		  H2_solver, &factorization_time, &entryeval_time);
 		c_bpack_setstats(stats, "Time_Factor", &factorization_time);
 		c_bpack_setstats(stats, "Time_Entry", &entryeval_time);
@@ -1762,8 +1782,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		c_bpack_getoption(option, "n_iter", &max_iterations_d);
 		int iterations = 0;
 		double residual = 0.0;
-		butterfly::hierarchical_h2_bicgstab_parallel(
-		  H2_solver->tree.get(), rhs, internal_solution, *Nrhs,
+		butterfly::dispatch_h2_iterative_solve(
+		  H2_solver, rhs, internal_solution, *Nrhs,
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
 		  &iterations, &residual, verbosity >= 1);
 	  } else {
@@ -1773,8 +1793,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		}
 		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
 		  H2_solver->options.num_levels);
-		butterfly::hierarchical_solve_parallel(
-		  H2_solver->tree.get(), rhs, solve_data, *Nrhs, verbosity);
+		butterfly::dispatch_h2_solve(
+		  H2_solver, rhs, solve_data, *Nrhs, verbosity);
 		internal_solution.resize(
 		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
 		butterfly::gather_local_solution(
@@ -1892,13 +1912,13 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data;
 
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
-		butterfly::hierarchical_h2_mul_parallel(
-		  H2_solver->tree.get(), lhs, compressed_output,
+		butterfly::dispatch_h2_compressed_multiply(
+		  H2_solver, lhs, compressed_output,
 		  *Ncol, verbosity >= 1);
 	  } else {
 		mul_data.resize(H2_solver->options.num_levels);
-		butterfly::hierarchical_mul_parallel(
-		  H2_solver->tree.get(), lhs, mul_data,
+		butterfly::dispatch_h2_multiply(
+		  H2_solver, lhs, mul_data,
 		  *Ncol, verbosity >= 1);
 	  }
 

@@ -427,6 +427,7 @@ inline size_t bytes_generator(const GeneratorPayload<DataType>& g) {
            ser::bytes_vector(g.one_hop) +
            ser::bytes_vector(g.neighbor_point_counts) +
            ser::bytes_vector(g.temp2) +
+           ser::bytes_vector(g.original_x_nr) +
            ser::bytes_vector(g.x_rr_full) +
            ser::bytes_vector(g.skeleton_indices) +
            ser::bytes_vector(g.x_rs);
@@ -441,6 +442,7 @@ inline char* serialize(const GeneratorPayload<DataType>& g, char* ptr) {
     ptr = ser::write_vector(ptr, g.one_hop);
     ptr = ser::write_vector(ptr, g.neighbor_point_counts);
     ptr = ser::write_vector(ptr, g.temp2);
+    ptr = ser::write_vector(ptr, g.original_x_nr);
     ptr = ser::write_vector(ptr, g.x_rr_full);
     ptr = ser::write_vector(ptr, g.skeleton_indices);
     ptr = ser::write_vector(ptr, g.x_rs);
@@ -456,6 +458,7 @@ inline const char* deserialize(GeneratorPayload<DataType>& g, const char* ptr) {
     ptr = ser::read_vector(ptr, g.one_hop);
     ptr = ser::read_vector(ptr, g.neighbor_point_counts);
     ptr = ser::read_vector(ptr, g.temp2);
+    ptr = ser::read_vector(ptr, g.original_x_nr);
     ptr = ser::read_vector(ptr, g.x_rr_full);
     ptr = ser::read_vector(ptr, g.skeleton_indices);
     ptr = ser::read_vector(ptr, g.x_rs);
@@ -552,6 +555,7 @@ size_t resident_bytes_pending(const PendingFactorUpdates<DataType>& p) {
         bytes += generator->one_hop.capacity() * sizeof(int64_t);
         bytes += generator->neighbor_point_counts.capacity() * sizeof(int64_t);
         bytes += generator->temp2.capacity() * sizeof(DataType);
+        bytes += generator->original_x_nr.capacity() * sizeof(DataType);
         bytes += generator->x_rr_full.capacity() * sizeof(DataType);
         bytes += generator->skeleton_indices.capacity() * sizeof(int64_t);
         bytes += generator->x_rs.capacity() * sizeof(DataType);
@@ -2896,7 +2900,8 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     int level,
     const std::vector<int>& neighbor_ranks,
     const std::vector<int64_t>& needed_remote_mortons,
-    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {})
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {},
+    bool track_lazy_generator_requesters = false)
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -3034,6 +3039,11 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
 
         size_t total = 0;
         for (int64_t morton_idx : req_received[i]) {
+            if (track_lazy_generator_requesters &&
+                lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                lvl.lazy_generator_requesters[morton_idx].insert(
+                    neighbor_ranks[i]);
+            }
             auto* b = lvl.find_local_box(morton_idx);
             if (!b) throw std::runtime_error("assist: requested morton not local " + std::to_string(morton_idx));
 
@@ -3042,7 +3052,16 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             p.source_rank  = rank;
             p.coords       = b->point_coords;
             p.indices      = b->point_indices;
-            p.skel_indices = b->skeleton_indices;
+            // During a level, skeleton_indices is meaningful to a remote
+            // reader only after this owner has eliminated the box. Parent
+            // construction may leave a nonempty current-point mapping before
+            // that elimination; publishing it would falsely advance the
+            // remote lazy-Schur state.
+            if (lvl.eliminated_boxes.count(morton_idx) != 0) {
+                p.skel_indices = b->skeleton_indices;
+            } else {
+                p.skel_indices.clear();
+            }
             p.on_boundary  = b->on_boundary;
 
             total += sizeof(uint64_t) + get_serialized_size(p);
@@ -3058,7 +3077,16 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             p.source_rank  = rank;
             p.coords       = b->point_coords;
             p.indices      = b->point_indices;
-            p.skel_indices = b->skeleton_indices;
+            // During a level, skeleton_indices is meaningful to a remote
+            // reader only after this owner has eliminated the box. Parent
+            // construction may leave a nonempty current-point mapping before
+            // that elimination; publishing it would falsely advance the
+            // remote lazy-Schur state.
+            if (lvl.eliminated_boxes.count(morton_idx) != 0) {
+                p.skel_indices = b->skeleton_indices;
+            } else {
+                p.skel_indices.clear();
+            }
             p.on_boundary  = b->on_boundary;
 
             const uint64_t nbytes = (uint64_t)get_serialized_size(p);
@@ -3972,6 +4000,8 @@ void emit_lazy_generators(
                 box->deferred_xnn_neighbor_point_counts.size() != box->one_hop.size() ||
                 box->X_NR.lda != box->X_NR.rows ||
                 static_cast<int64_t>(box->X_NR.data.size()) !=
+                    box->X_NR.rows * box->X_NR.cols ||
+                static_cast<int64_t>(box->deferred_xnn_temp2.size()) !=
                     box->X_NR.rows * box->X_NR.cols) {
                 throw std::runtime_error(
                     "emit_lazy_generators: incomplete state for source " +
@@ -3982,7 +4012,13 @@ void emit_lazy_generators(
             generator->total_rows = box->X_NR.rows;
             generator->neighbor_point_counts =
                 box->deferred_xnn_neighbor_point_counts;
-            generator->temp2 = box->X_NR.data;
+            // Emit before finalize_deferred_xnn_source_box: X_NR is still the
+            // original one-hop coupling and deferred_xnn_temp2 is the solved
+            // multiplier used by both eager and lazy Schur updates.
+            generator->temp2 = box->deferred_xnn_temp2;
+            if (generator_near_enabled()) {
+                generator->original_x_nr = box->X_NR.data;
+            }
             generator->x_rr_full.assign(
                 box->X_RR_full.data.begin(),
                 box->X_RR_full.data.begin() + redundant_count * redundant_count);
@@ -4035,6 +4071,7 @@ std::vector<int64_t> install_remote_generators(
             box.X_NR.set_owned(
                 generator->total_rows, generator->r,
                 std::move(generator->temp2), MatrixStorage<DataType>::FULL);
+            box.lazy_original_x_nr = std::move(generator->original_x_nr);
             box.X_RR_full.set_owned(
                 generator->r, generator->r,
                 std::move(generator->x_rr_full), MatrixStorage<DataType>::FULL);
@@ -4131,8 +4168,13 @@ void form_near_updates_from_generators(
 
             const DataType* temp2 = source->X_NR.data.data();
             const int64_t temp2_ld = source->X_NR.lda;
-            const DataType* x_rr = source->X_RR_full.data.data();
-            const int64_t x_rr_ld = source->X_RR_full.lda;
+            if (source->lazy_original_x_nr.size() !=
+                static_cast<size_t>(source->X_NR.rows * redundant_count)) {
+                throw std::runtime_error(
+                    "form_near_updates_from_generators: original X_NR missing");
+            }
+            const DataType* original_x_nr =
+                source->lazy_original_x_nr.data();
             const int64_t skeleton_count =
                 source->X_RS.is_allocated() ? source->X_RS.cols : 0;
             std::vector<int64_t> offsets(neighbors.size() + 1, 0);
@@ -4141,7 +4183,6 @@ void form_near_updates_from_generators(
             }
 
             auto& output = formed[static_cast<size_t>(source_index)];
-            std::vector<DataType> product;
             std::vector<DataType> pair_product;
 
             for (size_t local_index = 0;
@@ -4154,21 +4195,8 @@ void form_near_updates_from_generators(
                 if (local_box == nullptr) continue;
 
                 const DataType* local_temp2 = temp2 + offsets[local_index];
-                product.resize(static_cast<size_t>(
-                    redundant_count * local_count));
-                {
-                    int m = static_cast<int>(redundant_count);
-                    int n = static_cast<int>(local_count);
-                    int k = static_cast<int>(redundant_count);
-                    DataType alpha = DataType{1.0};
-                    DataType beta = DataType{0.0};
-                    int lda = static_cast<int>(x_rr_ld);
-                    int ldb = static_cast<int>(temp2_ld);
-                    int ldc = static_cast<int>(redundant_count);
-                    gemm_("N", "T", &m, &n, &k, &alpha,
-                          x_rr, &lda, local_temp2, &ldb,
-                          &beta, product.data(), &ldc);
-                }
+                const DataType* local_original_x_nr =
+                    original_x_nr + offsets[local_index];
 
                 {
                     DenseBlock<DataType> block;
@@ -4179,13 +4207,13 @@ void form_near_updates_from_generators(
                     int m = static_cast<int>(local_count);
                     int n = static_cast<int>(local_count);
                     int k = static_cast<int>(redundant_count);
-                    DataType alpha = DataType{-1.0};
+                    DataType alpha = DataType{1.0};
                     DataType beta = DataType{0.0};
                     int lda = static_cast<int>(temp2_ld);
-                    int ldb = static_cast<int>(redundant_count);
+                    int ldb = static_cast<int>(temp2_ld);
                     int ldc = static_cast<int>(local_count);
-                    gemm_("N", "N", &m, &n, &k, &alpha,
-                          local_temp2, &lda, product.data(), &ldb,
+                    gemm_("N", "T", &m, &n, &k, &alpha,
+                          local_temp2, &lda, local_original_x_nr, &ldb,
                           &beta, block.data.data(), &ldc);
                     output.deltas.emplace_back(
                         EdgeKey{local_morton, local_morton, EdgeKind::Diag},
@@ -4298,11 +4326,11 @@ void form_near_updates_from_generators(
                         DataType alpha = DataType{1.0};
                         DataType beta = DataType{0.0};
                         int lda = static_cast<int>(temp2_ld);
-                        int ldb = static_cast<int>(redundant_count);
+                        int ldb = static_cast<int>(temp2_ld);
                         int ldc = static_cast<int>(neighbor_count);
-                        gemm_("N", "N", &m, &n, &k, &alpha,
+                        gemm_("N", "T", &m, &n, &k, &alpha,
                               neighbor_temp2, &lda,
-                              product.data(), &ldb,
+                              local_original_x_nr, &ldb,
                               &beta, pair_product.data(), &ldc);
                     }
 
@@ -4314,10 +4342,7 @@ void form_near_updates_from_generators(
                     if (local_morton == lo) {
                         block.rows = neighbor_count;
                         block.cols = local_count;
-                        block.data.resize(pair_product.size());
-                        for (size_t i = 0; i < pair_product.size(); ++i) {
-                            block.data[i] = -pair_product[i];
-                        }
+                        block.data = pair_product;
                     } else {
                         block.rows = local_count;
                         block.cols = neighbor_count;
@@ -4326,7 +4351,7 @@ void form_near_updates_from_generators(
                             for (int64_t row = 0; row < neighbor_count; ++row) {
                                 block.data[static_cast<size_t>(
                                     column + row * local_count)] =
-                                    -pair_product[static_cast<size_t>(
+                                    pair_product[static_cast<size_t>(
                                         row + column * neighbor_count)];
                             }
                         }
@@ -4412,7 +4437,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     KernelType* kernel,
     PendingFactorUpdates<DataType>& pending,
     bool is_hermitian=false,
-    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {})
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {},
+    bool participate_empty_assisting_exchange = false)
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -4487,6 +4513,13 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         for (int64_t neighbor_morton : generator->one_hop) {
             const int destination = owner_of_morton(neighbor_morton);
             if (destination != rank) destinations.insert(destination);
+        }
+        auto requester_it =
+            lvl.lazy_generator_requesters.find(source_morton);
+        if (requester_it != lvl.lazy_generator_requesters.end()) {
+            for (int destination : requester_it->second) {
+                if (destination != rank) destinations.insert(destination);
+            }
         }
         for (int destination : destinations) {
             if (!neigh_set.count(destination)) {
@@ -4687,7 +4720,12 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     for (const auto& kv : lvl.assisting_box_points_for_kernel_evaluation) {
         need_assist.push_back(kv.first);
     }
-    if (!need_assist.empty()) {
+    // The assisting-data protocol is pairwise but collective over the process
+    // neighbor graph: a rank with no requests must still enter it to serve
+    // requests from its neighbors. Structured callers historically assume
+    // every rank has a request. The unstructured path opts in explicitly
+    // because empty process regions make an empty local request list common.
+    if (participate_empty_assisting_exchange || !need_assist.empty()) {
         FactorizationMemoryDiagnosticCallback assisting_diagnostic;
         if (memory_diagnostic) {
             assisting_diagnostic =
@@ -4703,7 +4741,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         }
         communication_time += exchange_assisting_for_mortons_onehop(
             tree, lvl, level, neighbor_ranks, need_assist,
-            assisting_diagnostic);
+            assisting_diagnostic, participate_empty_assisting_exchange);
     }
 
     if (memory_diagnostic) {
@@ -4719,6 +4757,17 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         form_near_updates_from_generators(
             lvl, kernel, installed_generators, tree->dimension,
             incoming_total);
+        // The source-time coupling is needed only while forming mode-2 near
+        // updates. Release it before applying the updates so it does not stay
+        // resident for the rest of the level; lazy far updates use X_NR,
+        // X_RR_full, and X_RS instead.
+        for (int64_t morton : installed_generators) {
+            auto* generator_box = lvl.find_generator_box(morton);
+            if (generator_box != nullptr) {
+                std::vector<DataType>().swap(
+                    generator_box->lazy_original_x_nr);
+            }
+        }
     }
 
     // Step 6: Apply the merged updates to local boxes.
@@ -4828,7 +4877,8 @@ void gather_boxes_solve(
     const std::vector<SolveDataRequest<CoordType, DataType>>& local_solve_data, 
     bool minimal_only = false,
     bool assist_only = false,
-    bool DEBUG = false) {
+    bool DEBUG = false,
+    bool participate_process_neighbors = false) {
 
     auto& lvl = tree->levels[level];
 
@@ -4990,11 +5040,32 @@ void gather_boxes_solve(
     }
 
     std::vector<int> neighbor_ranks;
-    neighbor_ranks.reserve(solve_requests_to_send.size());
-    for (const auto& [dest_rank, _] : solve_requests_to_send) {
-        neighbor_ranks.push_back(dest_rank);
+    if (participate_process_neighbors) {
+        // This request/response protocol is collective over the process-neighbor
+        // graph: a rank with no outgoing requests must still participate so it
+        // can serve requests from an adjacent rank. Empty occupied regions make
+        // that case common in color_unstructured. Its solve cache contains only
+        // occupied one-hop boxes, so the symmetric process-neighbor graph is the
+        // complete peer set without requiring a global all-to-all discovery.
+        neighbor_ranks = compute_one_hop_neighbor_ranks(tree, lvl, level);
+        const std::unordered_set<int> neighbor_set(
+            neighbor_ranks.begin(), neighbor_ranks.end());
+        for (const auto& [dest_rank, _] : solve_requests_to_send) {
+            if (neighbor_set.count(dest_rank) == 0) {
+                throw std::runtime_error(
+                    "gather_boxes_solve: request owner rank " +
+                    std::to_string(dest_rank) +
+                    " is outside the one-hop process-neighbor graph at level " +
+                    std::to_string(level));
+            }
+        }
+    } else {
+        neighbor_ranks.reserve(solve_requests_to_send.size());
+        for (const auto& [dest_rank, _] : solve_requests_to_send) {
+            neighbor_ranks.push_back(dest_rank);
+        }
+        std::sort(neighbor_ranks.begin(), neighbor_ranks.end());
     }
-    std::sort(neighbor_ranks.begin(), neighbor_ranks.end());
 
     std::vector<MPI_Request> requests;
     std::vector<int> send_counts;
@@ -5328,7 +5399,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
     TreeLevel<CoordType, DataType>& lvl,
     int level_index,
     PendingSolveUpdates<DataType>& pending,
-    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data)
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data,
+    bool participate_process_neighbors = false)
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -5365,18 +5437,28 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
     // Step 1: Build the 1-hop neighbor rank list from the solve ghost/assist map.
     // ========================================================================
     std::unordered_set<int> neigh_set;
-    neigh_set.reserve(lvl.ghost_and_assisting_box_points_for_solve_map.size());
-
-    for (const auto& [morton, idx] : lvl.ghost_and_assisting_box_points_for_solve_map) {
-        (void)idx;
-        const int owner_rank = owner_of_morton(morton);
-        if (owner_rank != rank) neigh_set.insert(owner_rank);
-    }
-
     std::vector<int> neighbor_ranks;
-    neighbor_ranks.reserve(neigh_set.size());
-    for (int r : neigh_set) neighbor_ranks.push_back(r);
-    std::sort(neighbor_ranks.begin(), neighbor_ranks.end());
+    if (participate_process_neighbors) {
+        // Empty occupied regions can have no local ghost/assist entries while
+        // an adjacent process still sends updates to this rank. Use the same
+        // symmetric one-hop process graph on every color wave so zero-update
+        // ranks remain available as receivers.
+        neighbor_ranks = compute_one_hop_neighbor_ranks(
+            tree, lvl, level_index);
+        neigh_set.insert(neighbor_ranks.begin(), neighbor_ranks.end());
+    } else {
+        neigh_set.reserve(
+            lvl.ghost_and_assisting_box_points_for_solve_map.size());
+        for (const auto& [morton, idx] :
+             lvl.ghost_and_assisting_box_points_for_solve_map) {
+            (void)idx;
+            const int owner_rank = owner_of_morton(morton);
+            if (owner_rank != rank) neigh_set.insert(owner_rank);
+        }
+        neighbor_ranks.reserve(neigh_set.size());
+        for (int r : neigh_set) neighbor_ranks.push_back(r);
+        std::sort(neighbor_ranks.begin(), neighbor_ranks.end());
+    }
 
     // ========================================================================
     // Step 2: Build per-destination solve-update packets and apply local ones immediately.

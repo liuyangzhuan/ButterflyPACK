@@ -243,8 +243,8 @@ subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, coli
 	integer::Npmap, pmaps(Npmap, 3)
 	integer::myid,nmpi,ierr,nn,pp,nprow,npcol,pid,nr,nc,nn1
 	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e,iii,jjj
-	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
-	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
+	integer(kind=8)::idx_row,idx_col,idx_val,idx_temp
+	integer::NinterNew,nrmax,ncmax,nvalmax,idxr,idxc,m_1,n_1,m,n
 	integer(kind=8)::idx_row_map(Ninter)
 	integer(kind=8)::idx_col_map(Ninter)
 	integer(kind=8)::idx_val_map(Ninter)
@@ -300,7 +300,7 @@ subroutine Zelem_EMSURF_block(Ninter, allrows, allcols, alldat_loc, rowidx, coli
 			alldat_loc(1:idx_val)=0
 		endif
 
-		!$omp parallel do default(shared) private(nn1)
+		!$omp parallel do default(shared) private(nn1) if(NinterNew > 1)
 		do nn1=1,NinterNew
 			call Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, rowidx, colidx, idx_row_map,idx_col_map,idx_val_map, quant)
 
@@ -351,8 +351,8 @@ subroutine Zelem_EMSURF_oneblock(nn1,inter_map,allrows, allcols, alldat_loc, row
 	integer::colidx(:), rowidx(:)
 	integer::myid,nmpi,ierr,nn,pp,nprow,npcol,pid,nr,nc,nn1
 	integer::idxcnt_m,idxcnt_n,idx_m_s,idx_m_e,idx_n_s,idx_n_e
-	integer(kind=8)::idx_row=0,idx_col=0,idx_val=0,idx_temp
-	integer::NinterNew=0,nrmax=0,ncmax=0,nvalmax=0,idxr,idxc,m_1,n_1,m,n
+	integer(kind=8)::idx_row,idx_col,idx_val,idx_temp
+	integer::NinterNew,nrmax,ncmax,nvalmax,idxr,idxc,m_1,n_1,m,n
 	integer(kind=8)::idx_row_map(:)
 	integer(kind=8)::idx_col_map(:)
 	integer(kind=8)::idx_val_map(:)

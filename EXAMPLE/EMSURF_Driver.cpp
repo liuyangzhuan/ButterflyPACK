@@ -294,6 +294,9 @@ int main(int argc, char** argv) {
     z_c_bpack_set_I_option(&option, "knn", 50);
     z_c_bpack_set_I_option(&option, "cpp", 1);
     z_c_bpack_set_option_from_command_line(argc, argv, option);
+    double format_value = 0.0;
+    z_c_bpack_getoption(&option, "format", &format_value);
+    const int matrix_format = static_cast<int>(std::llround(format_value));
 
     double minimum_edge_length = 0.0;
     emsurf_get_minedgelength_c(&minimum_edge_length);
@@ -360,7 +363,7 @@ int main(int argc, char** argv) {
 
     z_c_bpack_deletestats(&statistics);
     z_c_bpack_deletemesh(&mesh);
-    z_c_bpack_deletekernelquant(&kernel);
+    if (matrix_format != 7 && kernel != nullptr) z_c_bpack_deletekernelquant(&kernel);
     z_c_bpack_delete(&matrix);
     z_c_bpack_deleteoption(&option);
     z_c_bpack_deleteproctree(&process_tree);

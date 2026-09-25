@@ -7618,9 +7618,21 @@ void collect_lazy_far_sources(
             // Color: every eliminated neighbor of a local box is either local
             // (wave recorded at elimination) or a remote source whose
             // generators must have arrived (wave recorded at install).
+            auto assist_it =
+                level.assisting_box_points_for_kernel_evaluation.find(candidate);
+            const size_t assist_skeleton =
+                assist_it == level.assisting_box_points_for_kernel_evaluation.end()
+                    ? 0
+                    : level.assisting_boxes[static_cast<size_t>(assist_it->second)]
+                          .skel_indices.size();
             throw std::runtime_error(
                 "collect_lazy_far_sources: eliminated source " +
-                std::to_string(candidate) + " has no wave/generator on this rank");
+                std::to_string(candidate) +
+                " has no wave/generator on this rank (reader " +
+                std::to_string(box->morton_index) + ", endpoint " +
+                std::to_string(other_morton) + ", ghost " +
+                std::to_string(level.ghost_id_to_index.count(candidate)) +
+                ", assist_skeleton " + std::to_string(assist_skeleton) + ")");
         }
         out.push_back(LazyFarSource{wave_it->second, candidate});
     }

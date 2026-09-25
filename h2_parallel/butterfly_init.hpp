@@ -780,6 +780,7 @@ int bpack_initiate_distributed64(
     throw std::invalid_argument(
         "bpack_initiate_distributed64: solver is null");
   }
+  validate_h2_backend_selection(options);
   if (options.id_neighborhood_radius != 2 || options.id_proxy_mode != 0) {
     throw std::invalid_argument(
         "c_bpack_construct_init_distributed64 currently requires "
@@ -830,6 +831,7 @@ int bpack_initiate_distributed64(
 
 template<typename CoordType, typename DataType>
 int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& options, CoordType* Locations, int rank, std::vector<int>& new2old, int& idxs, int& idxe) {
+  validate_h2_backend_selection(options);
   // from H2 struct, set typename CoordType, DataType
   // from H2 struct, get kernel
   // from H2 struct, get rank, size
