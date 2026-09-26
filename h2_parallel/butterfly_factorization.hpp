@@ -2366,7 +2366,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   MPI_Comm_rank(solver->comm, &rank);
 
   const auto factorization_method =
-    fmm::FactorizationMethod::BUNCH_KAUFMAN;
+    h2_xrr_factorization_method(solver->options);
   fmm::HierarchicalFactorization<CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
     solver->options.N,
     fmm::MatrixProperty::SYMMETRIC,

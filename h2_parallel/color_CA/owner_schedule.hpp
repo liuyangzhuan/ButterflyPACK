@@ -979,6 +979,16 @@ inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow:
     // (2); the greedy variants can do better on irregular strips (purple).
     // A plain greedy alone can need 13 classes on a blue clump, so the parity
     // candidate is the safety net that keeps every colour at <= 8 waves.
+    // Debug (H2_OWNER_PARITY_WAVES=1): wave = raw Morton parity, the order
+    // the replicated code uses, so mode 3 can be diffed box by box against
+    // mode 0.  Must be set identically on every rank.
+    const char* parity_env = std::getenv("H2_OWNER_PARITY_WAVES");
+    if (parity_env != nullptr && std::atoi(parity_env) != 0) {
+        for (const auto& k : graph.comps)
+            for (int64_t m : k.boxes) wave.emplace(m, static_cast<int32_t>(m % parity_classes));
+        num_waves = parity_classes;
+        return wave;
+    }
     std::vector<int64_t> boxes;
     std::vector<int32_t> cls;   // class of boxes[i] in the candidate being built
     std::unordered_map<int64_t, size_t> index_of;

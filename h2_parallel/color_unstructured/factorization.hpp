@@ -28,7 +28,8 @@ void factorize(H2<CoordType, DataType>* solver,
 
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
-    const auto factorization_method = fmm::FactorizationMethod::BUNCH_KAUFMAN;
+    const auto factorization_method =
+        butterfly::h2_xrr_factorization_method(solver->options);
     fmm::HierarchicalFactorization<
         CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
             solver->options.N,

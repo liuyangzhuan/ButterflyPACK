@@ -33,6 +33,7 @@ struct DriverOptions {
   int h2_use_sketch = 1;
   int h2_lazy_schur = 0;
   int h2_gemm_split = 16;
+  int h2_xrr_factor = 0;
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
   int h2_ca_owner_serial = 0;
@@ -182,6 +183,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_lazy_schur = parse_int(value, "H2_lazy_schur");
     } else if (name == "h2_gemm_split") {
       options.h2_gemm_split = parse_int(value, "H2_GEMM_split");
+    } else if (name == "h2_xrr_factor") {
+      options.h2_xrr_factor = parse_int(value, "H2_XRR_factor");
     } else if (name == "h2_ca_staged_halo") {
       options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
     } else if (name == "h2_ca_owner_component") {
@@ -266,6 +269,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_gemm_split < 0) {
     throw std::invalid_argument("H2_GEMM_split must be nonnegative");
   }
+  if (options.h2_xrr_factor != 0 && options.h2_xrr_factor != 1) {
+    throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
+  }
   if (options.h2_ca_staged_halo != 0 && options.h2_ca_staged_halo != 2) {
     throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
   }
@@ -330,6 +336,7 @@ void print_usage(const char* executable) {
       << "  --H2_use_sketch <0|1|2>\n"
       << "  --H2_lazy_schur <0|1|2>\n"
       << "  --H2_GEMM_split <count>\n"
+      << "  --H2_XRR_factor <0|1>\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_owner_serial <0|1>\n"
@@ -611,6 +618,7 @@ int main(int argc, char** argv) {
                 << "H2_use_sketch: " << driver_options.h2_use_sketch << "\n"
                 << "H2_lazy_schur: " << driver_options.h2_lazy_schur << "\n"
                 << "H2_GEMM_split: " << driver_options.h2_gemm_split << "\n"
+                << "H2_XRR_factor: " << driver_options.h2_xrr_factor << "\n"
                 << "H2_CA_staged_halo: "
                 << driver_options.h2_ca_staged_halo << "\n"
                 << "H2_CA_owner_component: "
@@ -655,6 +663,8 @@ int main(int argc, char** argv) {
         &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
     d_c_bpack_set_I_option(
         &resources.option, "H2_GEMM_split", driver_options.h2_gemm_split);
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_XRR_factor", driver_options.h2_xrr_factor);
     d_c_bpack_set_I_option(
         &resources.option, "H2_CA_staged_halo",
         driver_options.h2_ca_staged_halo);

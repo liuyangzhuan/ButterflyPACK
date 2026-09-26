@@ -34,6 +34,30 @@
 
 namespace fmm {
 
+// Debug trace of the ID target of every compressed box: set H2_ID_TRACE to a
+// file prefix; each rank appends one line per box to <prefix>.rank<r>.
+inline bool h2_id_trace_enabled() {
+    static const bool enabled = [] {
+        const char* prefix = std::getenv("H2_ID_TRACE");
+        return prefix != nullptr && prefix[0] != '\0';
+    }();
+    return enabled;
+}
+
+inline void h2_id_trace_write(const std::string& line) {
+    static std::mutex trace_mutex;
+    static std::ofstream trace_file;
+    std::lock_guard<std::mutex> lock(trace_mutex);
+    if (!trace_file.is_open()) {
+        int rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        trace_file.open(std::string(std::getenv("H2_ID_TRACE")) + ".rank" +
+                        std::to_string(rank));
+    }
+    trace_file << line << '\n';
+    trace_file.flush();
+}
+
 template<typename CoordType, typename DataType>
 inline bool sketch_box_eliminated(
     const TreeLevel<CoordType, DataType>& level,
@@ -7643,6 +7667,33 @@ void collect_lazy_far_sources(
     });
 }
 
+// ----- Source temp2 access ----------------------------------------------------
+
+/**
+ * @brief temp2 (= -X_NR X_RR^{-1}, one row slot per one_hop neighbor) of a
+ * fill source, in X_NR's shape.
+ *
+ * Until finalize_deferred_xnn_source_box runs, X_NR still holds the unsolved
+ * block and temp2 lives in deferred_xnn_temp2. The replicated and Color paths
+ * finalize every source before a later box reads it, but the component-owner
+ * schedule finalizes boundary sources only at its final event (its sends read
+ * X_NR in place), so boundary readers there see pending sources.
+ */
+template<typename CoordType, typename DataType>
+const DataType* lazy_far_source_temp2(const BoxData<CoordType, DataType>* source_box) {
+    if (source_box->deferred_xnn_temp2.empty()) {
+        return source_box->X_NR.data.data();
+    }
+    if (source_box->X_NR.lda != source_box->X_NR.rows ||
+        static_cast<int64_t>(source_box->deferred_xnn_temp2.size()) !=
+            source_box->X_NR.rows * source_box->X_NR.cols) {
+        throw std::runtime_error(
+            "lazy_far_source_temp2: pending temp2 does not match X_NR for source " +
+            std::to_string(source_box->morton_index));
+    }
+    return source_box->deferred_xnn_temp2.data();
+}
+
 // ----- Endpoint row resolution ----------------------------------------------
 
 /**
@@ -7843,7 +7894,7 @@ void regenerate_far_block_into(
             continue;
         }
 
-        const DataType* temp2 = source_box->X_NR.data.data();
+        const DataType* temp2 = lazy_far_source_temp2(source_box);
         const int64_t temp2_ld = source_box->X_NR.lda;
 
         // Gather temp2 row slices for both endpoints.
@@ -7990,7 +8041,7 @@ void lazy_far_apply_sources_cached(
                 std::to_string(source.morton));
         }
 
-        const DataType* temp2 = source_box->X_NR.data.data();
+        const DataType* temp2 = lazy_far_source_temp2(source_box);
         const int64_t temp2_ld = source_box->X_NR.lda;
 
         // ---- P = X_RR_full * temp2[cols]^T (r x c), cached when possible ----
@@ -8166,6 +8217,11 @@ void gather_id_target_streamed(
 
     std::vector<LazyFarSource> pair_sources_tmp;  // reused across neighbors
 
+    const bool trace = h2_id_trace_enabled();
+    if (trace) {
+        scratch.id_trace.clear();
+    }
+
     int64_t total_rows = 0;
     for (size_t nb_idx = 0; nb_idx < box->two_hop.size(); ++nb_idx) {
         const int64_t neighbor_morton = box->two_hop[nb_idx];
@@ -8224,6 +8280,30 @@ void gather_id_target_streamed(
         }
         counts.push_back(n_neighbor);
         total_rows += n_neighbor;
+
+        if (trace) {
+            // policy: B full (boundary pair, no fill), S skeleton, F full,
+            // a/s assisting full/skeleton; then the fill sources of the pair
+            char policy = 'F';
+            if (nb_box != nullptr) {
+                const bool both_on_boundary = on_boundary && nb_box->on_boundary;
+                const bool has_far_fill = !pair_sources_tmp.empty();
+                if (both_on_boundary && !has_far_fill) {
+                    policy = 'B';
+                } else if (sketch_box_eliminated(level, neighbor_morton)) {
+                    policy = 'S';
+                }
+            } else {
+                policy = n_neighbor < static_cast<int64_t>(
+                    level.assisting_boxes[level.assisting_box_points_for_kernel_evaluation
+                        .at(neighbor_morton)].indices.size()) ? 's' : 'a';
+            }
+            scratch.id_trace += ' ' + std::to_string(neighbor_morton) + ':' +
+                std::to_string(n_neighbor) + policy;
+            for (const auto& src : pair_sources_tmp) {
+                scratch.id_trace += '+' + std::to_string(src.morton);
+            }
+        }
     }
     total_rows += static_cast<int64_t>(extra_training_indices.size());
 
@@ -8298,7 +8378,7 @@ void gather_id_target_streamed(
             return P;
         }
 
-        const DataType* temp2 = src_box->X_NR.data.data();
+        const DataType* temp2 = lazy_far_source_temp2(src_box);
         const int64_t temp2_ld = src_box->X_NR.lda;
 
         // TB = temp2_E[B-rows] (n x r), gathered into stream_Trow.
@@ -8672,7 +8752,7 @@ void gather_id_target_streamed(
 
                 // Gather the (a x r) slice column-wise (streams temp2), then
                 // transpose cache-resident so each row is contiguous.
-                const DataType* temp2 = src_box->X_NR.data.data();
+                const DataType* temp2 = lazy_far_source_temp2(src_box);
                 const int64_t temp2_ld = src_box->X_NR.lda;
                 Trow.resize(static_cast<size_t>(a * r));
                 TrowT.resize(static_cast<size_t>(r * a));
@@ -8740,6 +8820,20 @@ void gather_id_target_streamed(
                       &beta, Oacc.data() + c0 * n, &ldc);
             });
         }
+    }
+
+    if (trace) {
+        double sketch_norm2 = 0.0;
+        for (const auto& v : scratch.stream_sketch_acc) {
+            sketch_norm2 += value_sq_norm(v);
+        }
+        std::ostringstream tail;
+        tail << std::setprecision(10) << " | rows=" << total_rows << " d=" << d
+             << " sketch_norm=" << std::sqrt(sketch_norm2) << " box_sources=";
+        for (size_t s = 0; s < box_src_mortons.size(); ++s) {
+            tail << box_src_mortons[s] << (box_src_r[s] > 0 ? "" : "(0)") << ',';
+        }
+        scratch.id_trace += tail.str();
     }
 
     // Transpose the (n x d) accumulator O' into the column-major (d x n) Y
@@ -8961,6 +9055,19 @@ void compute_and_modify(
     box->skeleton_indices = id_result.skeleton_indices;
     box->redundant_indices = id_result.redundant_indices;
     box->interpolation_matrix = std::move(id_result.interpolation);
+
+    if (h2_id_trace_enabled() && scratch.streamed_sketch_valid) {
+        auto wave_it = level.elimination_wave.find(box->morton_index);
+        h2_id_trace_write(
+            "L" + std::to_string(level.level) +
+            " m=" + std::to_string(box->morton_index) +
+            " local=" + std::to_string(level.find_local_box(box->morton_index) != nullptr) +
+            " ob=" + std::to_string(box->on_boundary) +
+            " n=" + std::to_string(box->num_points) +
+            " k=" + std::to_string(box->skeleton_indices.size()) +
+            " wave=" + std::to_string(wave_it == level.elimination_wave.end() ? -1 : wave_it->second) +
+            " |" + scratch.id_trace);
+    }
     
     int64_t k = box->skeleton_indices.size();
     int64_t r = box->redundant_indices.size();

@@ -1033,6 +1033,10 @@ contains
          val_d = option%H2_GEMM_split
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_XRR_factor' .or. trim(str) == 'h2_xrr_factor') then
+         val_d = option%H2_XRR_factor
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then
          val_d = option%H2_CA_staged_halo
          valid_opt = 1
@@ -1354,6 +1358,11 @@ contains
       if (trim(str) == 'H2_GEMM_split' .or. trim(str) == 'h2_gemm_split') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_GEMM_split = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_XRR_factor' .or. trim(str) == 'h2_xrr_factor') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_XRR_factor = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then

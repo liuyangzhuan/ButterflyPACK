@@ -136,6 +136,7 @@ struct ProgramOptions {
     int use_sketch = 1;         // 0: full workspace, 1: materialized sketch, 2: streamed sketch
     int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
+    int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
     int ca_owner_serial = 0;    // Serialize mode-3 events as a correctness oracle
@@ -168,6 +169,18 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
             "color_unstructured is Color-only; CA_level must be at least the number of H2 levels");
     }
     // H2_CA_* values are inert when every level selects Color.
+}
+
+// Bunch-Kaufman reads the lower triangle of X_RR and LU reads the full square;
+// X_RR is assembled with both triangles, so either serves the symmetric path.
+inline fmm::FactorizationMethod h2_xrr_factorization_method(const ProgramOptions& options) {
+    switch (options.xrr_factor) {
+        case 0: return fmm::FactorizationMethod::BUNCH_KAUFMAN;
+        case 1: return fmm::FactorizationMethod::LU;
+        default:
+            throw std::invalid_argument(
+                "H2_XRR_factor must be 0 (Bunch-Kaufman) or 1 (LU)");
+    }
 }
 
 enum class H2BuildState {

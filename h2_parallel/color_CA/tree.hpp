@@ -210,6 +210,7 @@ struct FactorizationThreadScratch {
     std::vector<DataType> sketch_storage;
     int64_t workspace_rows = 0;
     int64_t workspace_cols = 0;
+    std::string id_trace;  // H2_ID_TRACE: ID-target description of the current box
 
     std::vector<DataType> x_bb;
     std::vector<int64_t> neighbor_point_counts;
