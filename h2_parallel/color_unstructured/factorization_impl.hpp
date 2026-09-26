@@ -918,116 +918,83 @@ void hierarchical_factorization_unstructured(
                     size_t owner_scratch_bytes = 0;
 
                     const int owner_team = std::max(1, omp_get_max_threads());
-                    // A candidate replay can touch every pair in the
-                    // candidate's two-hop neighborhood. Use a modulo-three
-                    // spatial coloring so candidates executed together have
-                    // disjoint writable neighborhoods.
-                    const int owner_color_count =
-                        (dimension == 3) ? 27 : 9;
-                    std::vector<std::vector<int64_t>> owner_color_bins(
-                        static_cast<size_t>(owner_color_count));
-                    for (int64_t idx = 0;
-                         idx < static_cast<int64_t>(
-                             wave_xnn_candidate_boxes.size());
-                         ++idx) {
-                        uint32_t x = 0;
-                        uint32_t y = 0;
-                        uint32_t z = 0;
-                        morton::decode_nd(
-                            dimension,
-                            wave_xnn_candidate_boxes[
-                                static_cast<size_t>(idx)],
-                            x, y, z);
-                        const int owner_color =
-                            static_cast<int>(x % 3) +
-                            3 * static_cast<int>(y % 3) +
-                            (dimension == 3
-                                ? 9 * static_cast<int>(z % 3)
-                                : 0);
-                        owner_color_bins[
-                            static_cast<size_t>(owner_color)].push_back(idx);
-                    }
+                    const int owner_split = split_threads_for(
+                        static_cast<int64_t>(
+                            wave_xnn_candidate_boxes.size()),
+                        owner_team);
 
                     record_deep_phase(DEEP_OWNER_PREP, owner_prep_start);
                     const auto owner_replay_start = clock::now();
-                    for (const auto& owner_color_bin : owner_color_bins) {
-                        if (owner_color_bin.empty()) continue;
-                        const int owner_split = split_threads_for(
-                            static_cast<int64_t>(owner_color_bin.size()),
-                            owner_team);
-                        #pragma omp parallel default(shared)
-                        {
-                            const int tid = omp_get_thread_num();
-                            DeferredXnnOwnerScratch<DataType> scratch;
-                            scratch.split_threads = owner_split;
+                    #pragma omp parallel default(shared)
+                    {
+                        const int tid = omp_get_thread_num();
+                        DeferredXnnOwnerScratch<DataType> scratch;
+                        scratch.split_threads = owner_split;
 
-                            #pragma omp for schedule(dynamic)
-                            for (int64_t bin_slot = 0;
-                                 bin_slot < static_cast<int64_t>(
-                                     owner_color_bin.size());
-                                 ++bin_slot) {
-                                if (owner_failed.load(
-                                        std::memory_order_relaxed)) {
-                                    continue;
-                                }
-
-                                try {
-                                    const int64_t idx = owner_color_bin[
-                                        static_cast<size_t>(bin_slot)];
-                                    const int64_t candidate_morton =
-                                        wave_xnn_candidate_boxes[
-                                            static_cast<size_t>(idx)];
-
-                                    // Deferred store=true replay:
-                                    //   local-local   -> local owner replay + local mirror
-                                    //   local-remote  -> local replay + remote transport
-                                    //   remote-remote -> remote transport only
-                                    apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
-                                        candidate_morton,
-                                        level,
-                                        kernel,
-                                        wave_box_set,
-                                        scratch,
-                                        wave_xnn_mirror_targets[
-                                            static_cast<size_t>(idx)],
-                                        &thread_pending[
-                                            static_cast<size_t>(tid)]);
-                                } catch (...) {
-                                    if (!owner_failed.exchange(
-                                            true,
-                                            std::memory_order_relaxed)) {
-                                        std::lock_guard<std::mutex> lock(
-                                            owner_exception_mutex);
-                                        owner_exception =
-                                            std::current_exception();
-                                    }
-                                }
+                        #pragma omp for schedule(dynamic)
+                        for (int64_t idx = 0;
+                             idx < static_cast<int64_t>(
+                                 wave_xnn_candidate_boxes.size());
+                             ++idx) {
+                            if (owner_failed.load(
+                                    std::memory_order_relaxed)) {
+                                continue;
                             }
 
-                            if (memory_diagnostics.enabled()) {
-                                const size_t thread_scratch_bytes =
-                                    h2_diag_deferred_owner_scratch_bytes(
-                                        scratch);
-                                #pragma omp atomic update
-                                owner_scratch_bytes += thread_scratch_bytes;
-                                #pragma omp barrier
-                                #pragma omp single
-                                {
-                                    size_t all_pending_bytes =
-                                        h2_diag_pending_bytes(pending_updates);
-                                    for (const auto& thread_updates :
-                                         thread_pending) {
-                                        all_pending_bytes +=
-                                            h2_diag_pending_bytes(
-                                                thread_updates);
-                                    }
-                                    memory_diagnostics.record(
-                                        tree, current_level, "color",
-                                        "wave" + std::to_string(counter) +
-                                            "_owner",
-                                        all_pending_bytes,
-                                        owner_scratch_bytes);
+                            try {
+                                const int64_t candidate_morton =
+                                    wave_xnn_candidate_boxes[
+                                        static_cast<size_t>(idx)];
+
+                                // Deferred store=true replay:
+                                //   local-local   -> local owner replay + local mirror
+                                //   local-remote  -> local replay + remote transport
+                                //   remote-remote -> remote transport only
+                                apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
+                                    candidate_morton,
+                                    level,
+                                    kernel,
+                                    wave_box_set,
+                                    scratch,
+                                    wave_xnn_mirror_targets[
+                                        static_cast<size_t>(idx)],
+                                    &thread_pending[
+                                        static_cast<size_t>(tid)]);
+                            } catch (...) {
+                                if (!owner_failed.exchange(
+                                        true,
+                                        std::memory_order_relaxed)) {
+                                    std::lock_guard<std::mutex> lock(
+                                        owner_exception_mutex);
+                                    owner_exception =
+                                        std::current_exception();
                                 }
+                            }
+                        }
+
+                        if (memory_diagnostics.enabled()) {
+                            const size_t thread_scratch_bytes =
+                                h2_diag_deferred_owner_scratch_bytes(
+                                    scratch);
+                            #pragma omp atomic update
+                            owner_scratch_bytes += thread_scratch_bytes;
+                            #pragma omp barrier
+                            #pragma omp single
+                            {
+                                size_t all_pending_bytes =
+                                    h2_diag_pending_bytes(pending_updates);
+                                for (const auto& thread_updates :
+                                     thread_pending) {
+                                    all_pending_bytes +=
+                                        h2_diag_pending_bytes(
+                                            thread_updates);
+                                }
+                                memory_diagnostics.record(
+                                    tree, current_level, "color",
+                                    "wave" + std::to_string(counter) +
+                                        "_owner",
+                                    all_pending_bytes,
+                                    owner_scratch_bytes);
                             }
                         }
                     }
