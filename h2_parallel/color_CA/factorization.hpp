@@ -28,6 +28,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "blas_declare.hpp"
+#include "phase_timer.hpp"
 
 /* used blas functions */
 // dpotrf_, dgetrf_, dgetri_, dgemm_/gemm_, trsm_
@@ -1932,6 +1933,33 @@ struct DeferredXnnOwnerScratch {
         preallocated_mirror_targets;
 };
 
+// The owner pass of one candidate box, recorded instead of executed so an
+// accelerator can run its GEMMs: task t computes
+//   update = temp2[a_row_offset : +rows, :] * x_nr[b_row_offset : +cols, :]^T
+// (both ld x r, column-major) and adds it to targets[target] (if >= 0) and/or
+// emits it as a remote ADD.  Tasks sharing a target are in canonical order.
+template<typename DataType>
+struct DeferredXnnOwnerRecord {
+    struct Task {
+        const DataType* temp2 = nullptr;
+        const DataType* x_nr = nullptr;
+        int64_t source_morton = -1;
+        int64_t ld = 0;
+        int64_t r = 0;
+        int64_t a_row_offset = 0;
+        int64_t rows = 0;
+        int64_t b_row_offset = 0;
+        int64_t cols = 0;
+        int32_t target = -1;
+        bool emit_remote_add = false;
+        int64_t neighbor_morton = -1;
+        DeferredXnnTargetKind kind = DeferredXnnTargetKind::SCHUR;
+    };
+    int64_t candidate_morton = -1;
+    std::vector<Task> tasks;
+    std::vector<DeferredXnnAccumulatedTarget<DataType>> targets;
+};
+
 template<typename CoordType, typename DataType>
 DeferredXnnEndpoint<CoordType, DataType> resolve_deferred_xnn_endpoint(
     TreeLevel<CoordType, DataType>& level,
@@ -2998,8 +3026,14 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
     std::vector<DeferredXnnTargetKey>& mirror_targets,
     PendingFactorUpdates<DataType>* pending,
     bool include_ghosts = false,
-    const DeferredPairFilter* pair_filter = nullptr) {
+    const DeferredPairFilter* pair_filter = nullptr,
+    DeferredXnnOwnerRecord<DataType>* record = nullptr) {
     mirror_targets.clear();
+    if (record != nullptr) {
+        record->candidate_morton = candidate_morton;
+        record->tasks.clear();
+        record->targets.clear();
+    }
 
     DeferredXnnEndpoint<CoordType, DataType> candidate_endpoint =
         resolve_deferred_xnn_endpoint(level, candidate_morton);
@@ -3383,7 +3417,65 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
             continue;
         }
 
+        // Index of the accumulation buffer of a locally owned block, loaded
+        // (or synthesized from the kernel) on its first use for this candidate.
+        auto accumulation_target_index =
+            [&](const DeferredXnnOwnedRowBlock& block) -> size_t {
+            DeferredXnnTargetKey target;
+            target.box_morton = candidate_morton;
+            target.neighbor_morton = block.neighbor_morton;
+            target.kind = block.kind;
+
+            auto state_it = scratch.accumulated_target_indices.find(target);
+            if (state_it == scratch.accumulated_target_indices.end()) {
+                size_t new_idx = scratch.accumulated_targets.size();
+                scratch.accumulated_target_indices.emplace(target, new_idx);
+
+                DeferredXnnAccumulatedTarget<DataType> target_state;
+                target_state.target = target;
+                target_state.rows = block.rows;
+                target_state.cols = n_candidate;
+                target_state.data =
+                    materialize_deferred_xnn_target_matrix_for_accumulation(
+                        target, block.rows, n_candidate, level, kernel, dimension);
+                scratch.accumulated_targets.push_back(std::move(target_state));
+                return new_idx;
+            }
+            auto& existing = scratch.accumulated_targets[state_it->second];
+            if (existing.rows != block.rows || existing.cols != n_candidate) {
+                throw std::runtime_error(
+                    "apply_owner_deferred_xnn_updates_for_candidate_box: inconsistent target dimensions");
+            }
+            return state_it->second;
+        };
+
         for (const auto& block : scratch.owned_row_blocks) {
+            if (record != nullptr) {
+                if (candidate_unarrived) {
+                    throw std::runtime_error(
+                        "apply_owner_deferred_xnn_updates_for_candidate_box: "
+                        "a recorded pass cannot defer staged-halo deltas");
+                }
+                typename DeferredXnnOwnerRecord<DataType>::Task task;
+                task.temp2 = source_box->deferred_xnn_temp2.data();
+                task.x_nr = source_box->X_NR.data.data();
+                task.source_morton = source_morton;
+                task.ld = total_neighbor_points;
+                task.r = r;
+                task.a_row_offset = block.source_row_offset;
+                task.rows = block.rows;
+                task.b_row_offset = candidate_col_offset;
+                task.cols = n_candidate;
+                if (block.accumulate_locally) {
+                    task.target = static_cast<int32_t>(accumulation_target_index(block));
+                }
+                task.emit_remote_add = block.emit_remote_add;
+                task.neighbor_morton = block.neighbor_morton;
+                task.kind = block.kind;
+                record->tasks.push_back(task);
+                continue;
+            }
+
             std::vector<DataType> block_update(
                 static_cast<size_t>(block.rows * n_candidate));
             int m = static_cast<int>(block.rows);
@@ -3461,34 +3553,8 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
             }
 
             if (block.accumulate_locally) {
-                DeferredXnnTargetKey target;
-                target.box_morton = candidate_morton;
-                target.neighbor_morton = block.neighbor_morton;
-                target.kind = block.kind;
-
-                auto state_it = scratch.accumulated_target_indices.find(target);
-                if (state_it == scratch.accumulated_target_indices.end()) {
-                    size_t new_idx = scratch.accumulated_targets.size();
-                    scratch.accumulated_target_indices.emplace(target, new_idx);
-
-                    DeferredXnnAccumulatedTarget<DataType> target_state;
-                    target_state.target = target;
-                    target_state.rows = block.rows;
-                    target_state.cols = n_candidate;
-                    target_state.data =
-                        materialize_deferred_xnn_target_matrix_for_accumulation(
-                            target, block.rows, n_candidate, level, kernel, dimension);
-                    scratch.accumulated_targets.push_back(std::move(target_state));
-                    state_it = scratch.accumulated_target_indices.find(target);
-                } else {
-                    auto& existing = scratch.accumulated_targets[state_it->second];
-                    if (existing.rows != block.rows || existing.cols != n_candidate) {
-                        throw std::runtime_error(
-                            "apply_owner_deferred_xnn_updates_for_candidate_box: inconsistent target dimensions");
-                    }
-                }
-
-                auto& target_state = scratch.accumulated_targets[state_it->second];
+                auto& target_state =
+                    scratch.accumulated_targets[accumulation_target_index(block)];
                 accumulate_deferred_xnn_matrix_in_place(
                     target_state.data, block_update);
             }
@@ -3517,8 +3583,14 @@ void apply_owner_deferred_xnn_updates_for_candidate_box(
         }
     }
 
-    for (auto& target_state : scratch.accumulated_targets) {
-        flush_deferred_xnn_target_matrix_from_accumulation(target_state, level);
+    if (record != nullptr) {
+        // The accelerator adds the recorded updates, then flushes these.
+        record->targets = std::move(scratch.accumulated_targets);
+        scratch.accumulated_targets.clear();
+    } else {
+        for (auto& target_state : scratch.accumulated_targets) {
+            flush_deferred_xnn_target_matrix_from_accumulation(target_state, level);
+        }
     }
 
     if (!local_pending.empty() || !local_mirrors.empty()) {
@@ -5961,6 +6033,7 @@ void compute_step_two_internal(
         total_neighbor_points = box->X_NR.rows;
     }
     
+    FMM_PHASE_LAP_BEGIN(s2_lap);
     // ===== Step 1: Compute temp1 = -X_SR * X_RR^{-1} =====
     
     auto& temp1 = scratch.temp1;
@@ -5992,6 +6065,7 @@ void compute_step_two_internal(
         }
     }
 
+    FMM_PHASE_LAP(s2_lap, S2_TEMP);
     // ===== Step 3: Get original X_RS =====
     
     auto& X_RS_original = scratch.x_rs_original;
@@ -6170,6 +6244,7 @@ void compute_step_two_internal(
         }
     }
     
+    FMM_PHASE_LAP(s2_lap, S2_ANS);
     // ===== Step 6: Nonsymmetric - compute temp3, temp4 and update A_SN =====
     // ===== Declare temp3 and temp4 for nonsymmetric case =====
     
@@ -7532,6 +7607,7 @@ void compute_step_two_internal(
     //     }
     // }
     
+    FMM_PHASE_LAP(s2_lap, S2_REST);
     // ===== Step 10: Store elimination matrices for solve phase =====
     
     box->X_SR.data.assign(temp1.begin(), temp1.end());
@@ -8660,6 +8736,7 @@ void gather_id_target_streamed(
             // Swapped orientation: evaluates (n x a) column-major, which is
             // exactly the (a x n) block in row-major layout (kernel symmetric).
             {
+                FMM_PHASE_SCOPE(SK_KERNEL);
                 evaluate_block_by_index_split<DataType>(
                     kernel,
                     box->point_indices.data(), n,
@@ -8678,7 +8755,10 @@ void gather_id_target_streamed(
             }
         }
 
-        consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+        {
+            FMM_PHASE_SCOPE(SK_CONSUME);
+            consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+        }
         row_base += a;
     }
 
@@ -8711,7 +8791,9 @@ void gather_id_target_streamed(
         auto& TrowT = scratch.stream_TrowT;
         int inc_one = 1;
         for (size_t src_idx = 0; src_idx < box_src_mortons.size(); ++src_idx) {
+            FMM_PHASE_LAP_BEGIN(fill_lap);
             const DataType* P = compute_P(src_idx);
+            FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
             const int64_t r = box_src_r[src_idx];
             if (r == 0) {
                 continue;
@@ -8778,6 +8860,7 @@ void gather_id_target_streamed(
                     }
                 }
 
+                FMM_PHASE_LAP(fill_lap, SK_FILL_GATHER);
                 // Sketch the rows with the draws recorded for this block.
                 const int64_t rb = blk_row_base[nb_idx];
                 int r_int = static_cast<int>(r);
@@ -8799,6 +8882,7 @@ void gather_id_target_streamed(
                     }
                 }
                 any_rows = true;
+                FMM_PHASE_LAP(fill_lap, SK_FILL_AXPY);
             }
             if (!any_rows) {
                 continue;
@@ -8819,6 +8903,7 @@ void gather_id_target_streamed(
                 gemm_("T", "N", &m_i, &n_t, &k_i, &alpha, P, &lda, W.data() + c0 * r, &ldb,
                       &beta, Oacc.data() + c0 * n, &ldc);
             });
+            FMM_PHASE_LAP(fill_lap, SK_FILL_GEMM);
         }
     }
 
@@ -8970,6 +9055,7 @@ void compute_and_modify(
     //     tolerance, 1.0, box->morton_index + 1
     // );
     IDResult<DataType> id_result;
+    FMM_PHASE_LAP_BEGIN(box_lap);
     try {
         if (scratch.streamed_sketch_valid) {
             id_result = fmm::compute_id_complex(
@@ -9052,6 +9138,7 @@ void compute_and_modify(
     // auto id_duration = std::chrono::duration_cast<std::chrono::milliseconds>(id_end - id_start);
     // std::cout << "  id time: " << id_duration.count() << " ms" << std::endl;
     
+    FMM_PHASE_LAP(box_lap, BOX_ID);
     box->skeleton_indices = id_result.skeleton_indices;
     box->redundant_indices = id_result.redundant_indices;
     box->interpolation_matrix = std::move(id_result.interpolation);
@@ -9612,6 +9699,7 @@ void compute_and_modify(
 
         box->X_RR.format = MatrixStorage<DataType>::INVERSE;
     }
+    FMM_PHASE_LAP(box_lap, BOX_FACTOR);
     
     // ===== Compute X_RN and X_NR from 1-hop near-field neighbors =====
     // Also preserve unmodified A_NS and A_SN for part 2
@@ -10194,6 +10282,7 @@ void compute_and_modify(
     // ========================================================================
     // STEP 2: Second Elimination (Section 2.4) - Call internal helper
     // ========================================================================
+    FMM_PHASE_LAP(box_lap, BOX_NEAR);
     
     compute_step_two_internal(
         box, level, X_BB,
@@ -11507,16 +11596,20 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
  * @param global_bounds Global domain bounds [xmin, xmax, ymin, ymax, zmin, zmax]
  * @return Vector of parent level local boxes
  */
-template<typename CoordType, typename DataType, typename KernelType>
-std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
+/**
+ * @brief Parent boxes of this process's child boxes, without interactions:
+ * geometry, neighbor lists, boundary flags, children, and the parent point
+ * sets (the children's skeleton points, child by child).  Shared by the host
+ * transition below and the GPU backend, which assembles the interactions on
+ * the device.
+ */
+template<typename CoordType, typename DataType>
+std::vector<BoxData<CoordType, DataType>> build_parent_level_structure(
     TreeLevel<CoordType, DataType>& child_level,
     TreeLevel<CoordType, DataType>& parent_level,
     int dimension,
-    bool is_symmetric,
-    bool is_hermitian,
-    KernelType* kernel,
     const CoordType global_bounds[6]) {
-    
+
     const int num_children = morton::children_per_box(dimension);
     
     // Calculate number of parent boxes this process owns
@@ -11614,6 +11707,26 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
         }
     }
     
+    return parent_boxes;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions(
+    TreeLevel<CoordType, DataType>& child_level,
+    TreeLevel<CoordType, DataType>& parent_level,
+    int dimension,
+    bool is_symmetric,
+    bool is_hermitian,
+    KernelType* kernel,
+    const CoordType global_bounds[6]) {
+    
+    const int num_children = morton::children_per_box(dimension);
+    std::vector<BoxData<CoordType, DataType>> parent_boxes =
+        build_parent_level_structure(child_level, parent_level, dimension, global_bounds);
+    uint32_t grid_size = 1u << (child_level.level - 1);
+    int64_t local_morton_start = child_level.local_boxes[0].morton_index / num_children;
+    int64_t local_morton_end = child_level.local_boxes.back().morton_index / num_children;
+
     // ===== Step 4: Build parent-level modified interactions =====
     
     // Helper struct to store child info (either from ghost or assisting boxes)

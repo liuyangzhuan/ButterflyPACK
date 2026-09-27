@@ -137,6 +137,7 @@ struct ProgramOptions {
     int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
+    int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
     int ca_owner_serial = 0;    // Serialize mode-3 events as a correctness oracle
@@ -157,6 +158,10 @@ struct ProgramOptions {
 inline void validate_h2_backend_selection(const ProgramOptions& options) {
     if (options.unstructured < 0 || options.unstructured > 1) {
         throw std::invalid_argument("H2_unstructured must be 0 or 1");
+    }
+    if (options.unstructured == 1 && options.use_gpu != 0) {
+        throw std::invalid_argument(
+            "H2_use_gpu is supported only by the structured Color backend (H2_unstructured=0)");
     }
     if (options.unstructured == 0) return;
 
@@ -210,6 +215,14 @@ struct H2Kernel {
     void* quant = nullptr;
     int block_callback_pid = 0;
     int dimension = 0;
+    // Device-evaluable form of the kernel for the GPU box path (H2_use_gpu=1),
+    // registered by the application with c_bpack_h2_set_gpu_kernel.
+    //   kind 0: none;  kind 1: params[1] when the global ids match, else
+    //   params[0] / |x - y|  (3D)
+    struct GpuSpec {
+        int kind = 0;
+        double params[4] = {0.0, 0.0, 0.0, 0.0};
+    } gpu_spec;
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>
         coordinate_cache;

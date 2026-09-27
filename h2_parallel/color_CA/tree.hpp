@@ -27,6 +27,7 @@ struct ColorFactorizationRuntimeOptions {
     LazyFarFieldMode lazy_far = LazyFarFieldMode::OFF;
     bool generator_near = false;
     int gemm_split = 16;
+    bool use_gpu = false;  // run the supported Color phases on the GPU backend
 };
 
 struct CAFactorizationRuntimeOptions {
@@ -101,6 +102,14 @@ inline bool generator_near_enabled() {
 
 inline int color_gemm_split() {
     return color_factorization_runtime_options().gemm_split;
+}
+
+inline void configure_color_gpu(bool use_gpu) {
+    color_factorization_runtime_options().use_gpu = use_gpu;
+}
+
+inline bool color_gpu_enabled() {
+    return color_factorization_runtime_options().use_gpu;
 }
 
 // Forward declarations

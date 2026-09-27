@@ -65,6 +65,16 @@ inline const char* read_vector(const char* ptr, std::vector<T>& v) {
 
 namespace fmm {
 
+// Wall-time split of the rank exchange of factor updates (per level).
+struct TransportTimers {
+    double sizes = 0.0, serialize = 0.0, payload = 0.0, deserialize = 0.0, assisting = 0.0, install = 0.0;
+    double bytes_sent = 0.0, bytes_received = 0.0;
+};
+inline TransportTimers& transport_timers() {
+    static TransportTimers timers;
+    return timers;
+}
+
 using FactorizationMemoryDiagnosticCallback =
     std::function<void(const char*, size_t, size_t)>;
 
@@ -3866,6 +3876,18 @@ static void apply_updates_with_kernel_symmetric(
     }
 
     if (!is_hermitian) {
+        // A delta of two local boxes went to the lower box's view only.  The
+        // higher box needs its reciprocal entry for the views to be shared:
+        // it has none yet when only remote sources have touched the pair,
+        // and would otherwise rebuild the block from the kernel.
+        for (const auto& [ek, delta_lo_hi] : incoming.accumulated_deltas) {
+            (void)delta_lo_hi;
+            if (ek.kind != EdgeKind::Near) continue;
+            const int64_t local_lo = local_box_index(ek.lo);
+            const int64_t local_hi = local_box_index(ek.hi);
+            if (local_lo < 0 || local_hi < 0) continue;
+            upsert_block_symmetric(lvl.local_boxes[static_cast<size_t>(local_hi)], ek.lo, EdgeKind::Near);
+        }
         share_symmetric_level_edges(lvl);
     }
 }
@@ -4438,12 +4460,18 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     PendingFactorUpdates<DataType>& pending,
     bool is_hermitian=false,
     const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {},
-    bool participate_empty_assisting_exchange = false)
+    bool participate_empty_assisting_exchange = false,
+    std::vector<int64_t>* device_installed = nullptr)
 {
+    // device_installed != nullptr (GPU box path): exchange and install the
+    // generators and refresh the assisting data, but leave the updates of
+    // the local blocks to the caller, which holds them on the device; the
+    // Morton indices of the installed generators are returned there.
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
 
     auto& lvl = tree->levels[level];
+    if (device_installed != nullptr) device_installed->clear();
     if (!lvl.is_process_active) return communication_time;
 
     int rank = 0;
@@ -4554,6 +4582,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         send_sizes[i] = (it == out.end()) ? 0ull : (uint64_t)bytes_pending(it->second);
     }
 
+    auto& timers = transport_timers();
+    auto seconds_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
     auto comm_start = clock::now();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
@@ -4592,6 +4622,11 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         requests.clear();
     }
     communication_time += (clock::now() - comm_start);
+    timers.sizes += seconds_since(comm_start);
+    for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
+        timers.bytes_sent += static_cast<double>(send_sizes[i]);
+        timers.bytes_received += static_cast<double>(recv_sizes[i]);
+    }
 
     // Step 3: Post all payload receives, then send the serialized update payloads.
     std::vector<std::vector<char>> recv_bufs(neighbor_ranks.size());
@@ -4643,8 +4678,10 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
                 "transport_and_apply_factor_updates_symmetric_onehop: missing payload for rank " +
                 std::to_string(peer));
         }
+        const auto t_serialize = clock::now();
         send_buffer.resize((size_t)send_sizes[i]);
         char* end_ptr = serialize(it->second, send_buffer.data());
+        timers.serialize += seconds_since(t_serialize);
         if ((size_t)(end_ptr - send_buffer.data()) != (size_t)send_sizes[i]) {
             throw std::runtime_error("serialize pending: byte mismatch");
         }
@@ -4672,6 +4709,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
         requests.clear();
     }
     communication_time += (clock::now() - comm_start);
+    timers.payload += seconds_since(comm_start);
     const size_t payload_buffer_bytes = memory_diagnostic
         ? recv_buffer_bytes + send_buffer.capacity()
         : 0;
@@ -4682,6 +4720,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     }
 
     // Step 4: Merge incoming updates from all neighbors.
+    const auto t_deserialize = clock::now();
     PendingFactorUpdates<DataType> incoming_total;
     merge_pending(incoming_total, local_apply);
     size_t remaining_payloads = 0;
@@ -4715,7 +4754,9 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             payload_buffer_bytes);
     }
     
+    timers.deserialize += seconds_since(t_deserialize);
     // Step 5: Refresh assisting-box data needed by the apply path.
+    const auto t_assisting = clock::now();
     std::vector<int64_t> need_assist;
     for (const auto& kv : lvl.assisting_box_points_for_kernel_evaluation) {
         need_assist.push_back(kv.first);
@@ -4750,6 +4791,20 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     }
 
     kernel->register_level_coordinates(lvl);
+    timers.assisting += seconds_since(t_assisting);
+
+    if (device_installed != nullptr) {
+        if (!incoming_total.replace_blocks.empty() || !incoming_total.accumulated_deltas.empty()) {
+            throw std::runtime_error(
+                "transport_and_apply_factor_updates_symmetric_onehop: the device path "
+                "expects generators only (lazy Schur mode 2)");
+        }
+        const auto t_install = clock::now();
+        *device_installed = install_remote_generators(lvl, incoming_total);
+        clear_pending_factor_updates_memory(pending);
+        timers.install += seconds_since(t_install);
+        return communication_time;
+    }
 
     const std::vector<int64_t> installed_generators =
         install_remote_generators(lvl, incoming_total);

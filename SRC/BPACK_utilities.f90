@@ -1318,6 +1318,7 @@ contains
       option%H2_lazy_schur=0
       option%H2_GEMM_split=16
       option%H2_XRR_factor=0
+      option%H2_use_gpu=0
       option%H2_CA_staged_halo=0
       option%H2_CA_owner_component=0
       option%H2_CA_owner_serial=0
@@ -1380,6 +1381,8 @@ contains
                   read (strings1, *) option%H2_GEMM_split
                else if (trim(strings) == '--h2_xrr_factor' .or. trim(strings) == '--H2_XRR_factor') then
                   read (strings1, *) option%H2_XRR_factor
+               else if (trim(strings) == '--h2_use_gpu' .or. trim(strings) == '--H2_use_gpu') then
+                  read (strings1, *) option%H2_use_gpu
                else if (trim(strings) == '--h2_ca_staged_halo' .or. trim(strings) == '--H2_CA_staged_halo') then
                   read (strings1, *) option%H2_CA_staged_halo
                else if (trim(strings) == '--h2_ca_owner_component' .or. trim(strings) == '--H2_CA_owner_component') then
@@ -1518,6 +1521,7 @@ contains
       option1%H2_lazy_schur = option%H2_lazy_schur
       option1%H2_GEMM_split = option%H2_GEMM_split
       option1%H2_XRR_factor = option%H2_XRR_factor
+      option1%H2_use_gpu = option%H2_use_gpu
       option1%H2_CA_staged_halo = option%H2_CA_staged_halo
       option1%H2_CA_owner_component = option%H2_CA_owner_component
       option1%H2_CA_owner_serial = option%H2_CA_owner_serial
@@ -1609,6 +1613,7 @@ contains
             write (*, '(A18,I8)') 'h2_lazy_schur', option%H2_lazy_schur
             write (*, '(A18,I8)') 'h2_gemm_split', option%H2_GEMM_split
             write (*, '(A18,I8)') 'h2_xrr_factor', option%H2_XRR_factor
+            write (*, '(A18,I8)') 'h2_use_gpu', option%H2_use_gpu
             write (*, '(A20,I8)') 'h2_ca_staged_halo', option%H2_CA_staged_halo
             write (*, '(A22,I8)') 'h2_ca_owner_component', option%H2_CA_owner_component
             write (*, '(A19,I8)') 'h2_ca_owner_serial', option%H2_CA_owner_serial

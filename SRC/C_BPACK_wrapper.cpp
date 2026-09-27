@@ -3,6 +3,7 @@
 #include "butterfly_integration.hpp"
 #include <mpi.h>
 #endif
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <complex>
@@ -107,6 +108,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_lazy_schur_d = 0.0;
   double H2_GEMM_split_d = 0.0;
   double H2_XRR_factor_d = 0.0;
+  double H2_use_gpu_d = 0.0;
   double H2_CA_staged_halo_d = 0.0;
   double H2_CA_owner_component_d = 0.0;
   double H2_CA_owner_serial_d = 0.0;
@@ -125,6 +127,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
   c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
   c_bpack_getoption(option, "H2_XRR_factor", &H2_XRR_factor_d);
+  c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
   c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
   c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
   c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
@@ -147,6 +150,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
       static_cast<int>(std::llround(H2_GEMM_split_d));
   const int H2_XRR_factor =
       static_cast<int>(std::llround(H2_XRR_factor_d));
+  const int H2_use_gpu =
+      static_cast<int>(std::llround(H2_use_gpu_d));
   const int H2_CA_staged_halo =
       static_cast<int>(std::llround(H2_CA_staged_halo_d));
   const int H2_CA_owner_component =
@@ -174,6 +179,14 @@ static butterfly::ProgramOptions read_h2_program_options64(
   if (H2_XRR_factor != 0 && H2_XRR_factor != 1) {
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
+  if (H2_use_gpu < 0 || H2_use_gpu > 2) {
+    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+  }
+#ifndef H2_HAVE_GPU
+  if (H2_use_gpu != 0) {
+    throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+  }
+#endif
   if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
     throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
   }
@@ -219,6 +232,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.lazy_schur = H2_lazy_schur;
   result.gemm_split = H2_GEMM_split;
   result.xrr_factor = H2_XRR_factor;
+  result.use_gpu = H2_use_gpu;
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
   result.ca_owner_serial = H2_CA_owner_serial;
@@ -290,6 +304,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_lazy_schur",   "format-7 H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near"},
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
+		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"h2_ca_staged_halo", "format-7 H2 CA halo mode: 0 legacy, 2 staged/overlapped"},
 		{"h2_ca_owner_component", "format-7 H2 CA ownership mode: 0 replicated, 3 asynchronous components"},
 		{"h2_ca_owner_serial", "serialize format-7 H2 CA component-owner events (0 or 1)"},
@@ -413,6 +428,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_unstructured", required_argument, 0, 57},
 		{"h2_xrr_factor", required_argument, 0, 58},
 		{"H2_XRR_factor", required_argument, 0, 58},
+		{"h2_use_gpu", required_argument, 0, 59},
+		{"H2_use_gpu", required_argument, 0, 59},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -696,6 +713,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_XRR_factor", opt_i);
+		} break;
+		case 59: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_use_gpu", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -1093,6 +1115,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_lazy_schur_d;
       double H2_GEMM_split_d;
       double H2_XRR_factor_d;
+      double H2_use_gpu_d;
       double H2_CA_staged_halo_d;
       double H2_CA_owner_component_d;
       double H2_CA_owner_serial_d;
@@ -1111,6 +1134,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
       c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
       c_bpack_getoption(option, "H2_XRR_factor", &H2_XRR_factor_d);
+      c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
       c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
       c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
       c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
@@ -1127,6 +1151,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       const int H2_lazy_schur = static_cast<int>(std::llround(H2_lazy_schur_d));
       const int H2_GEMM_split = static_cast<int>(std::llround(H2_GEMM_split_d));
       const int H2_XRR_factor = static_cast<int>(std::llround(H2_XRR_factor_d));
+      const int H2_use_gpu = static_cast<int>(std::llround(H2_use_gpu_d));
       const int H2_CA_staged_halo =
           static_cast<int>(std::llround(H2_CA_staged_halo_d));
       const int H2_CA_owner_component =
@@ -1150,6 +1175,14 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_XRR_factor != 0 && H2_XRR_factor != 1) {
         throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
       }
+      if (H2_use_gpu < 0 || H2_use_gpu > 2) {
+        throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+      }
+#ifndef H2_HAVE_GPU
+      if (H2_use_gpu != 0) {
+        throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+      }
+#endif
       if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
         throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
       }
@@ -1194,6 +1227,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.lazy_schur = H2_lazy_schur;
       H2_options.gemm_split = H2_GEMM_split;
       H2_options.xrr_factor = H2_XRR_factor;
+      H2_options.use_gpu = H2_use_gpu;
       H2_options.ca_staged_halo = H2_CA_staged_halo;
       H2_options.ca_owner_component = H2_CA_owner_component;
       H2_options.ca_owner_serial = H2_CA_owner_serial;
@@ -1227,6 +1261,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_lazy_schur=" << H2_options.lazy_schur
                   << ", h2_gemm_split=" << H2_options.gemm_split
                   << ", h2_xrr_factor=" << H2_options.xrr_factor
+                  << ", h2_use_gpu=" << H2_options.use_gpu
                   << ", h2_ca_staged_halo=" << H2_options.ca_staged_halo
                   << ", h2_ca_owner_component=" << H2_options.ca_owner_component
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
@@ -1515,6 +1550,31 @@ void c_bpack_get_distributed_layout64(
   (void)N_internal_local;
   (void)internal_global_start;
   format7_requires_mpi("c_bpack_get_distributed_layout64");
+#endif
+}
+
+void c_bpack_h2_set_gpu_kernel(
+    F2Cptr* bmat, const int* kind, const double* params, const int* nparams) {
+#ifdef HAVE_MPI
+  if (kind == nullptr || nparams == nullptr || (*nparams > 0 && params == nullptr)) {
+    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: null argument");
+  }
+  if (*kind != 0 && *kind != 1) {
+    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: kind must be 0 or 1");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel");
+  auto& spec = solver->kernel.gpu_spec;
+  spec = {};
+  spec.kind = *kind;
+  const int count = std::min(*nparams, 4);
+  for (int i = 0; i < count; ++i) spec.params[i] = params[i];
+#else
+  (void)bmat;
+  (void)kind;
+  (void)params;
+  (void)nparams;
+  format7_requires_mpi("c_bpack_h2_set_gpu_kernel");
 #endif
 }
 

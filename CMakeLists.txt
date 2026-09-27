@@ -302,6 +302,25 @@ if(MAGMA_FOUND)
   set(CMAKE_C_FLAGS "-DHAVE_MAGMA ${CMAKE_C_FLAGS}")
 endif()
 
+#--------------------- H2 GPU backend ---------------------
+# GPU backend of the format-7 H2 Color factorization (C++ only; independent of
+# HAVE_MAGMA, which selects MAGMA kernels in the Fortran butterfly code).
+option(enable_h2_gpu "Build the GPU backend of the H2 Color factorization" OFF)
+if(enable_h2_gpu)
+  if(NOT TPL_H2_MAGMA_LIBRARIES OR NOT TPL_H2_MAGMA_INCLUDE_DIRS)
+    message(FATAL_ERROR "enable_h2_gpu requires TPL_H2_MAGMA_LIBRARIES and TPL_H2_MAGMA_INCLUDE_DIRS")
+  endif()
+  find_package(CUDAToolkit REQUIRED)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 80)  # A100
+  endif()
+  enable_language(CUDA)
+  message("-- Using H2 GPU backend: MAGMA '${TPL_H2_MAGMA_LIBRARIES}', CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES}")
+  set(CMAKE_CXX_FLAGS "-DH2_HAVE_GPU -DADD_ ${CMAKE_CXX_FLAGS}")
+  include_directories(${TPL_H2_MAGMA_INCLUDE_DIRS} ${CUDAToolkit_INCLUDE_DIRS})
+  set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart)
+endif()
+
 #--------------------- ARPACK ---------------------
 if(enable_mpi)
 if(TPL_ARPACK_LIBRARIES)
@@ -529,12 +548,26 @@ add_subdirectory(CPP_INTERFACE)
 
 include(GNUInstallDirs)
 
+set(H2_GPU_OBJECTS "")
+if (enable_h2_gpu)
+  # CUDA kernels of the H2 Color GPU backend (the rest is header-only C++)
+  add_library(h2_gpu_kernels OBJECT h2_parallel/color_gpu/device_kernels.cu
+                                    h2_parallel/color_gpu/device_id.cu
+                                    h2_parallel/color_gpu/device_gemm.cu
+                                    h2_parallel/color_gpu/device_sketch.cu
+                                    h2_parallel/color_gpu/solve_kernels.cu)
+  set_target_properties(h2_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  target_compile_definitions(h2_gpu_kernels PRIVATE H2_HAVE_GPU)
+  set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels>)
+endif()
+
 add_library(butterflypack
   $<TARGET_OBJECTS:dbutterflypack>
   $<TARGET_OBJECTS:zbutterflypack>
   $<TARGET_OBJECTS:sbutterflypack>
   $<TARGET_OBJECTS:cbutterflypack>
-  $<TARGET_OBJECTS:butterflypack_cpp>)
+  $<TARGET_OBJECTS:butterflypack_cpp>
+  ${H2_GPU_OBJECTS})
 
 if (enable_mpi)
   target_link_libraries(butterflypack PUBLIC
@@ -550,6 +583,10 @@ endif()
 if (enable_parsec)
   find_package(PaRSEC CONFIG REQUIRED)
   target_link_libraries(butterflypack PUBLIC PaRSEC::parsec)
+endif()
+
+if (enable_h2_gpu)
+  target_link_libraries(butterflypack PUBLIC ${H2_GPU_LIB})
 endif()
 
 set_target_properties(butterflypack PROPERTIES

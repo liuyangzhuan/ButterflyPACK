@@ -64,6 +64,13 @@ typedef void (*c_bpack_func_zmn_block64)(const int64_t*, const int64_t*, const i
 void c_bpack_construct_init_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int* Ndim, const int64_t* input_global_ids, const double* input_locations, const int* bounds_provided, const double* global_bounds, int64_t* N_internal_local, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree);
 void c_bpack_construct_element_compute_distributed64(F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, c_bpack_func_zmn64 C_FuncZmn, c_bpack_func_zmn_block64 C_FuncZmnBlock, C2Fptr C_QuantApp);
 void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* N_input_local, int64_t* N_internal_local, int64_t* internal_global_start);
+/*
+ * Register a device-evaluable form of the matrix kernel for the GPU backend
+ * of the format-7 H2 factorization (H2_use_gpu=1 or 2).  kind 1: entry params[1]
+ * when the two one-based global IDs match, else params[0] / |x - y| (3D).
+ * Without a registered kernel the GPU runs only the Schur-update pass.
+ */
+void c_bpack_h2_set_gpu_kernel(F2Cptr* bmat, const int* kind, const double* params, const int* nparams);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);

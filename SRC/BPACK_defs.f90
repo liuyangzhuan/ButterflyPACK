@@ -836,6 +836,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
+        integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
         integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
         integer:: H2_CA_owner_component !< H2 CA component ownership: 0 replicated, 3 asynchronous owner schedule
         integer:: H2_CA_owner_serial !< 1: serialize the CA component-owner schedule as a correctness oracle

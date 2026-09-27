@@ -4,6 +4,8 @@
 #include "butterfly_solve.hpp"
 #include "butterfly_verification.hpp"
 #include "memory_diagnostics.hpp"
+#include "color_gpu/owner_pass_gpu.hpp"
+#include "color_gpu/level_eliminator.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -792,6 +794,13 @@ void factorize_CA_level(
  * @param proxy_radius Proxy sphere radius multiplier
  * @param verbosity -1: quiet, 0: summary, 1+: detailed progress
  */
+// Wall time of the logdet and quick verification that end
+// hierarchical_factorization_parallel (reported apart from the factorization).
+inline double& h2_verification_seconds() {
+    static double seconds = 0.0;
+    return seconds;
+}
+
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_parallel(
     fmm::ParallelTree<CoordType, DataType>* tree,
@@ -822,6 +831,9 @@ void hierarchical_factorization_parallel(
     const bool print_detail = verbosity >= 1;
     const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
+#ifdef H2_HAVE_GPU
+    gpu::invalidate_device_solve();  // the device copies of the previous factors
+#endif
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
     FactorizationCommunicatorSet factorization_comms =
@@ -919,8 +931,41 @@ void hierarchical_factorization_parallel(
 
     memory_diagnostics.record(tree, leaf_level, "setup", "factor_start");
 
+#ifdef H2_HAVE_GPU
+    // Blocks of the next level, assembled on the device by the transition of
+    // the level below (H2_use_gpu=1), and whether the device box path runs a
+    // given level (the test made where the level starts).
+    std::unique_ptr<gpu::DeviceLevelBlocks> gpu_blocks;
+    auto gpu_box_path_runs = [&](int lvl) {
+        if (!color_gpu_enabled() || lvl <= 1 || tree->level_uses_CA(lvl)) return false;
+        if (!tree->levels[static_cast<size_t>(lvl)].is_process_active) return false;
+        const bool streamed = use_sketch == 2 && is_symmetric && !is_hermitian && tree->id_proxy_mode != 2;
+        if (!streamed || lazy_schur == 0) return false;
+        return gpu::level_eliminator_would_run(tree, lvl, kernel, factorization_method);
+    };
+    // Level 1 is not eliminated: its transition builds the root, which is
+    // factored on the device when level 1 runs on one rank.
+    auto gpu_root_path_runs = [&]() {
+        if (!color_gpu_enabled() || tree->num_levels < 2) return false;
+        const auto& l1 = tree->levels[1];
+        const auto& l0 = tree->levels[0];
+        if (!l1.is_process_active || l1.num_active_processes != 1) return false;
+        if (!l0.is_process_active || l0.num_active_processes != 1) return false;
+        if (factorization_method != FactorizationMethod::LU) return false;
+        return gpu::level_eliminator_would_run(tree, 1, kernel, factorization_method);
+    };
+    // where the blocks of level `lvl` are used next
+    auto gpu_keeps_blocks_of = [&](int lvl) {
+        return lvl == 0 ? true : (lvl == 1 ? gpu_root_path_runs() : gpu_box_path_runs(lvl));
+    };
+#endif
+
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
+#ifdef H2_HAVE_GPU
+        // the device box path of this level (kept until the transition)
+        std::unique_ptr<gpu::LevelEliminatorBase<CoordType, DataType>> gpu_level;
+#endif
         clock::duration level_data_exchange{};
         clock::duration level_reduction{};
         
@@ -928,6 +973,19 @@ void hierarchical_factorization_parallel(
         auto& parent_level = tree->levels[current_level - 1];
         const bool participates_in_transition =
             level.is_process_active || parent_level.is_process_active;
+        // H2_PHASE_REPORT=1: per-level elimination phase breakdown
+        static const bool phase_report = [] {
+            const char* v = std::getenv("H2_PHASE_REPORT");
+            return v != nullptr && std::atoi(v) != 0;
+        }();
+        if (phase_report) {
+            FMM_PHASE_RESET();
+#ifdef H2_HAVE_GPU
+            gpu::owner_pass_stats() = gpu::OwnerPassStats{};
+            gpu::eliminator_stats() = gpu::EliminatorStats{};
+            transport_timers() = TransportTimers{};
+#endif
+        }
         if (!participates_in_transition) {
             continue;
         }
@@ -1164,18 +1222,56 @@ void hierarchical_factorization_parallel(
 
             PendingFactorUpdates<DataType> pending_updates;
             int boundary_count = 0;
+            // After a wave, the assisting boxes (other ranks') of its color:
+            // boundary ones in boundary waves, interior ones in interior
+            // sub-waves.
+            auto mark_assisting_eliminated = [&](int color, bool interior) {
+                for (const auto& kv : level.assisting_box_points_for_kernel_evaluation) {
+                    const int  assisting_color    = static_cast<int>(kv.first & (num_colors - 1));
+                    const bool is_boundary_assist = level.assisting_boxes[kv.second].on_boundary;
+                    if (assisting_color == color && is_boundary_assist != interior) {
+                        level.eliminated_boxes.insert(kv.first);
+                    }
+                }
+            };
             bool to_store = true;
             const bool store_interior_wave = true;
+
+#ifdef H2_HAVE_GPU
+            // H2_use_gpu=1: the device box path takes the whole level when it
+            // covers it (see color_gpu/level_eliminator.hpp); otherwise the
+            // host box region runs and only the owner pass uses the GPU.
+            if (color_gpu_enabled() && use_streamed_level &&
+                lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
+                is_symmetric && !is_hermitian) {
+                std::string gpu_reason;
+                gpu_level = gpu::make_level_eliminator(
+                    tree, current_level, kernel, tolerance,
+                    factorization_method, &gpu_reason, std::move(gpu_blocks));
+                if (print_detail && rank == level_print_rank) {
+                    std::cout << "  GPU box path: "
+                              << (gpu_level ? std::string(gpu::tensor_core_gemm()
+                                                              ? "on (FP64 tensor-core GEMMs)" : "on")
+                                            : "off (" + gpu_reason + ")")
+                              << std::endl;
+                }
+            }
+            const bool gpu_level_local = gpu_level && level.num_active_processes == 1;
+#else
+            const bool gpu_level_local = false;
+#endif
 
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
 
                 const int  color_id_mod    = counter % num_colors;
                 const bool is_interior     = (counter >= interior_start_loc);
+                FMM_PHASE_LAP_BEGIN(wave_lap);  // master-thread wall laps of this wave
 
                 // ----------------------------------------------------------------
                 // Communication / transport step (single-threaded)
                 // ----------------------------------------------------------------
-                if (!is_interior || counter == interior_start_loc) {
+                // (a single-rank device level has nothing to transport)
+                if ((!is_interior || counter == interior_start_loc) && !gpu_level_local) {
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -1196,10 +1292,33 @@ void hierarchical_factorization_parallel(
                                     0, 0, communication);
                             };
                     }
-                    const auto comm_duration_raw =
-                        transport_and_apply_factor_updates_symmetric_onehop(
-                            tree, current_level, kernel, pending_updates, false,
-                            transport_memory_diagnostic);
+                    std::chrono::high_resolution_clock::duration comm_duration_raw{};
+#ifdef H2_HAVE_GPU
+                    if (gpu_level && gpu_level->device_exchange()) {
+                        // device level on several ranks, CUDA-aware MPI
+                        comm_duration_raw = gpu_level->exchange();
+                    } else if (gpu_level) {
+                        // device level on several ranks: generators only
+                        const auto t_emit = std::chrono::steady_clock::now();
+                        gpu_level->emit_generators(pending_updates);
+                        const auto t_exchange = std::chrono::steady_clock::now();
+                        std::vector<int64_t> installed;
+                        comm_duration_raw =
+                            transport_and_apply_factor_updates_symmetric_onehop(
+                                tree, current_level, kernel, pending_updates, false,
+                                transport_memory_diagnostic, false, &installed);
+                        gpu::eliminator_stats().emit += std::chrono::duration<double>(t_exchange - t_emit).count();
+                        gpu::eliminator_stats().exchange +=
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
+                        gpu_level->receive_remote(installed);
+                    } else
+#endif
+                    {
+                        comm_duration_raw =
+                            transport_and_apply_factor_updates_symmetric_onehop(
+                                tree, current_level, kernel, pending_updates, false,
+                                transport_memory_diagnostic);
+                    }
                     level_data_exchange += comm_duration_raw;
                     update_neighbor_slicing_for_level(level, is_symmetric);
                     if (memory_diagnostics.enabled()) {
@@ -1229,7 +1348,9 @@ void hierarchical_factorization_parallel(
                             << " (" << color_list.size() << " boxes)..." << std::endl;
                 }
 
+                FMM_PHASE_LAP(wave_lap, WALL_STAGED);  // transport
                 if (color_list.empty()) continue;
+                FMM_PHASE_NOTE_WAVE(color_list.size());
 
                 const bool enable_deferred_xnn =
                     to_store && (store_interior_wave || !is_interior);
@@ -1263,6 +1384,23 @@ void hierarchical_factorization_parallel(
                     }
                 }
 
+#ifdef H2_HAVE_GPU
+                if (gpu_level) {
+                    // Box region, owner pass, mirror and finalize on the
+                    // device.  One active rank: nothing is pending for other
+                    // ranks and there are no assisting boxes to mark.
+                    boundary_count += gpu_level->eliminate_wave(color_list, counter);
+                    for (int64_t morton_idx : color_list) {
+                        level.eliminated_boxes.insert(morton_idx);
+                        level.elimination_wave[morton_idx] =
+                            static_cast<int32_t>(counter);
+                    }
+                    mark_assisting_eliminated(color_id_mod, is_interior);
+                    FMM_PHASE_LAP(wave_lap, WALL_BOX);
+                    FMM_PHASE_WAVE_BOX_DONE();
+                    continue;
+                }
+#endif
                 const int max_threads = std::max(1, omp_get_max_threads());
                 std::vector<PendingFactorUpdates<DataType>> thread_pending(
                     static_cast<size_t>(max_threads));
@@ -1309,6 +1447,8 @@ void hierarchical_factorization_parallel(
                             }
 
                             auto& box = *box_ptr;
+                            FMM_PHASE_BOX_SCOPE();
+                            FMM_PHASE_LAP_BEGIN(sketch_lap);
 
                             if (use_streamed_level) {
                                 gather_id_target_streamed(
@@ -1327,6 +1467,7 @@ void hierarchical_factorization_parallel(
                             }
 
                             thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;
+                            FMM_PHASE_LAP(sketch_lap, BOX_SKETCH);
 
                             compute_and_modify(dimension,
                                 &box, level, kernel,
@@ -1369,6 +1510,8 @@ void hierarchical_factorization_parallel(
                 if (wave_exception) {
                     std::rethrow_exception(wave_exception);
                 }
+                FMM_PHASE_LAP(wave_lap, WALL_BOX);
+                FMM_PHASE_WAVE_BOX_DONE();
 
                 for (int local_boundary_count : thread_boundary_counts) {
                     boundary_count += local_boundary_count;
@@ -1452,65 +1595,77 @@ void hierarchical_factorization_parallel(
                     std::atomic<bool> owner_failed{false};
                     size_t owner_scratch_bytes = 0;
 
+                    FMM_PHASE_LAP(wave_lap, WALL_CANDIDATES);
                     const int owner_team = std::max(1, omp_get_max_threads());
                     const int owner_split = split_threads_for(
                         static_cast<int64_t>(wave_xnn_candidate_boxes.size()),
                         owner_team);
 
-                    #pragma omp parallel default(shared)
-                    {
-                        const int tid = omp_get_thread_num();
-                        DeferredXnnOwnerScratch<DataType> scratch;
-                        scratch.split_threads = owner_split;
+                    bool owner_on_gpu = false;
+#ifdef H2_HAVE_GPU
+                    if (color_gpu_enabled()) {
+                        gpu::run_owner_pass(
+                            wave_xnn_candidate_boxes, level, kernel, wave_box_set,
+                            wave_xnn_mirror_targets, thread_pending, owner_split);
+                        owner_on_gpu = true;
+                    }
+#endif
+                    if (!owner_on_gpu) {
+                        #pragma omp parallel default(shared)
+                        {
+                            const int tid = omp_get_thread_num();
+                            DeferredXnnOwnerScratch<DataType> scratch;
+                            scratch.split_threads = owner_split;
 
-                        #pragma omp for schedule(dynamic)
-                        for (int64_t idx = 0; idx < static_cast<int64_t>(wave_xnn_candidate_boxes.size()); ++idx) {
-                            if (owner_failed.load(std::memory_order_relaxed)) {
-                                continue;
-                            }
+                            #pragma omp for schedule(dynamic)
+                            for (int64_t idx = 0; idx < static_cast<int64_t>(wave_xnn_candidate_boxes.size()); ++idx) {
+                                if (owner_failed.load(std::memory_order_relaxed)) {
+                                    continue;
+                                }
 
-                            try {
-                                const int64_t candidate_morton =
-                                    wave_xnn_candidate_boxes[static_cast<size_t>(idx)];
+                                try {
+                                    const int64_t candidate_morton =
+                                        wave_xnn_candidate_boxes[static_cast<size_t>(idx)];
 
-                                // Deferred store=true replay:
-                                //   local-local   -> local owner replay + local mirror
-                                //   local-remote  -> local replay + remote transport
-                                //   remote-remote -> remote transport only
-                                apply_owner_deferred_xnn_updates_for_candidate_box(
-                                    candidate_morton,
-                                    level,
-                                    kernel,
-                                    wave_box_set,
-                                    scratch,
-                                    wave_xnn_mirror_targets[static_cast<size_t>(idx)],
-                                    &thread_pending[static_cast<size_t>(tid)]);
-                            } catch (...) {
-                                if (!owner_failed.exchange(true, std::memory_order_relaxed)) {
-                                    std::lock_guard<std::mutex> lock(owner_exception_mutex);
-                                    owner_exception = std::current_exception();
+                                    // Deferred store=true replay:
+                                    //   local-local   -> local owner replay + local mirror
+                                    //   local-remote  -> local replay + remote transport
+                                    //   remote-remote -> remote transport only
+                                    apply_owner_deferred_xnn_updates_for_candidate_box(
+                                        candidate_morton,
+                                        level,
+                                        kernel,
+                                        wave_box_set,
+                                        scratch,
+                                        wave_xnn_mirror_targets[static_cast<size_t>(idx)],
+                                        &thread_pending[static_cast<size_t>(tid)]);
+                                } catch (...) {
+                                    if (!owner_failed.exchange(true, std::memory_order_relaxed)) {
+                                        std::lock_guard<std::mutex> lock(owner_exception_mutex);
+                                        owner_exception = std::current_exception();
+                                    }
                                 }
                             }
-                        }
 
-                        if (memory_diagnostics.enabled()) {
-                            const size_t thread_scratch_bytes =
-                                h2_diag_deferred_owner_scratch_bytes(scratch);
-                            #pragma omp atomic update
-                            owner_scratch_bytes += thread_scratch_bytes;
-                            #pragma omp barrier
-                            #pragma omp single
-                            {
-                                size_t all_pending_bytes =
-                                    h2_diag_pending_bytes(pending_updates);
-                                for (const auto& thread_updates : thread_pending) {
-                                    all_pending_bytes +=
-                                        h2_diag_pending_bytes(thread_updates);
+                            if (memory_diagnostics.enabled()) {
+                                const size_t thread_scratch_bytes =
+                                    h2_diag_deferred_owner_scratch_bytes(scratch);
+                                #pragma omp atomic update
+                                owner_scratch_bytes += thread_scratch_bytes;
+                                #pragma omp barrier
+                                #pragma omp single
+                                {
+                                    size_t all_pending_bytes =
+                                        h2_diag_pending_bytes(pending_updates);
+                                    for (const auto& thread_updates : thread_pending) {
+                                        all_pending_bytes +=
+                                            h2_diag_pending_bytes(thread_updates);
+                                    }
+                                    memory_diagnostics.record(
+                                        tree, current_level, "color",
+                                        "wave" + std::to_string(counter) + "_owner",
+                                        all_pending_bytes, owner_scratch_bytes);
                                 }
-                                memory_diagnostics.record(
-                                    tree, current_level, "color",
-                                    "wave" + std::to_string(counter) + "_owner",
-                                    all_pending_bytes, owner_scratch_bytes);
                             }
                         }
                     }
@@ -1518,6 +1673,7 @@ void hierarchical_factorization_parallel(
                     if (owner_exception) {
                         std::rethrow_exception(owner_exception);
                     }
+                    FMM_PHASE_LAP(wave_lap, WALL_OWNER);
 
                     std::exception_ptr mirror_exception;
                     std::mutex mirror_exception_mutex;
@@ -1559,6 +1715,7 @@ void hierarchical_factorization_parallel(
                     if (mirror_exception) {
                         std::rethrow_exception(mirror_exception);
                     }
+                    FMM_PHASE_LAP(wave_lap, WALL_MIRROR);
 
                     share_symmetric_level_edges(level);
 
@@ -1603,6 +1760,7 @@ void hierarchical_factorization_parallel(
                     if (finalize_exception) {
                         std::rethrow_exception(finalize_exception);
                     }
+                    FMM_PHASE_LAP(wave_lap, WALL_FINALIZE);
 
                 } else {
                     slice_far_field_blocks(level, is_symmetric, is_hermitian);
@@ -1622,23 +1780,7 @@ void hierarchical_factorization_parallel(
                     }
                 }
 
-                // ----------------------------------------------------------------
-                // Mark assisting boxes as eliminated after this wave.
-                // Boundary assisting boxes are marked by their boundary color wave.
-                // Interior assisting boxes are marked by their interior sub-wave.
-                // ----------------------------------------------------------------
-                for (const auto& kv : level.assisting_box_points_for_kernel_evaluation) {
-                    const int  assisting_color    = static_cast<int>(kv.first & (num_colors - 1));
-                    const bool is_boundary_assist = level.assisting_boxes[kv.second].on_boundary;
-
-                    const bool mark =
-                        (!is_interior && is_boundary_assist  && assisting_color == color_id_mod) ||
-                        ( is_interior && !is_boundary_assist && assisting_color == color_id_mod);
-
-                    if (mark) {
-                        level.eliminated_boxes.insert(kv.first);
-                    }
-                }
+                mark_assisting_eliminated(color_id_mod, is_interior);
 
                 if (memory_diagnostics.enabled()) {
                     memory_diagnostics.record(
@@ -1669,17 +1811,63 @@ void hierarchical_factorization_parallel(
                             0, 0, communication);
                     };
             }
-            const auto final_comm_duration =
-                transport_and_apply_factor_updates_symmetric_onehop(
-                    tree, current_level, kernel, pending_updates, false,
-                    final_transport_memory_diagnostic);
-            level_data_exchange += final_comm_duration;
-            update_neighbor_slicing_for_level(level, is_symmetric);
+            if (!gpu_level_local) {
+                std::chrono::high_resolution_clock::duration final_comm_duration{};
+#ifdef H2_HAVE_GPU
+                if (gpu_level && gpu_level->device_exchange()) {
+                    final_comm_duration = gpu_level->exchange();
+                } else if (gpu_level) {
+                    const auto t_emit = std::chrono::steady_clock::now();
+                    gpu_level->emit_generators(pending_updates);
+                    const auto t_exchange = std::chrono::steady_clock::now();
+                    std::vector<int64_t> installed;
+                    final_comm_duration =
+                        transport_and_apply_factor_updates_symmetric_onehop(
+                            tree, current_level, kernel, pending_updates, false,
+                            final_transport_memory_diagnostic, false, &installed);
+                    gpu::eliminator_stats().emit += std::chrono::duration<double>(t_exchange - t_emit).count();
+                    gpu::eliminator_stats().exchange +=
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
+                    gpu_level->receive_remote(installed);
+                } else
+#endif
+                {
+                    final_comm_duration =
+                        transport_and_apply_factor_updates_symmetric_onehop(
+                            tree, current_level, kernel, pending_updates, false,
+                            final_transport_memory_diagnostic);
+                }
+                level_data_exchange += final_comm_duration;
+                update_neighbor_slicing_for_level(level, is_symmetric);
+            }
             if (memory_diagnostics.enabled()) {
                 memory_diagnostics.record(
                     tree, current_level, "color", "final_post_transport",
                     h2_diag_pending_bytes(pending_updates));
             }
+#ifdef H2_HAVE_GPU
+            if (gpu_level) {
+                // after the final transport: its generators' host copies
+                gpu_level->finish();  // factors on the host; blocks stay for the transition
+                if (gpu_level_local && (!pending_updates.replace_blocks.empty() ||
+                                        !pending_updates.accumulated_deltas.empty() ||
+                                        !pending_updates.generators.empty())) {
+                    throw std::runtime_error("device level left updates for other ranks");
+                }
+            }
+            // The solve's factors stay on the device only if every rank of
+            // the level still holds all of its own.
+            if (gpu::device_solve_enabled() && gpu::device_solve_keep()) {
+                int kept = gpu_level && gpu_level->solve_factors_kept() ? 1 : 0;
+                MPI_Allreduce(MPI_IN_PLACE, &kept, 1, MPI_INT, MPI_MIN, level_comm);
+                if (gpu_level) gpu_level->commit_solve_factors(kept != 0);
+                if (print_detail && rank == level_print_rank) {
+                    std::printf("  [gpu] level %d solve factors: %s\n", current_level,
+                                kept ? "kept on the device" : "to be uploaded at the first solve");
+                    std::fflush(stdout);
+                }
+            }
+#endif
             
             for (const auto& box : level.local_boxes) {
                 total_skeleton += box.skeleton_indices.size();
@@ -1751,6 +1939,66 @@ void hierarchical_factorization_parallel(
                                   static_cast<double>(global_box_count)
                               : 0.0)
                           << std::endl;
+            }
+            if (phase_report) {
+                int level_rank = 0;
+                MPI_Comm_rank(level_comm, &level_rank);
+                FMM_PHASE_REPORT(level_comm, 0, true, level_rank, current_level,
+                                 omp_get_max_threads(), print_detail);
+#ifdef H2_HAVE_GPU
+                if (color_gpu_enabled() && print_detail && level_rank == 0 &&
+                    gpu::eliminator_stats().boxes > 0) {
+                    const auto& e = gpu::eliminator_stats();
+                    std::printf(
+                        "  [gpu] level %d box path (rank 0): begin %.2f s, sketch %.2f s, ID %.2f s, plan %.2f s, "
+                        "device %.2f s, download %.2f s, store %.2f s, finish %.2f s | up %.2f GB, "
+                        "down %.2f GB | owner %lld gemms in %lld batches, %lld new targets | heap peak %.2f GB, %lld reclaims\n",
+                        current_level, e.begin, e.sketch, e.id, e.plan, e.device, e.download, e.store, e.finish,
+                        e.bytes_up / 1e9, e.bytes_down / 1e9, static_cast<long long>(e.owner_gemms),
+                        static_cast<long long>(e.owner_batches), static_cast<long long>(e.new_targets),
+                        static_cast<double>(e.heap_peak) / 1e9, static_cast<long long>(e.heap_reclaims));
+                    std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
+                                "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
+                                "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",
+                                current_level, e.sketch_plan, e.sketch_gpu, e.sk_meta, e.sk_upload, e.sk_rows,
+                                e.sk_stored, e.sk_p, e.sk_fill, e.sk_id, e.sk_download, e.finish_store, e.finish_sources);
+                    std::printf("  [gpu] level %d background copier: busy %.2f s, of which waiting for device data "
+                                "%.2f s\n", current_level, e.finish_store, e.copier_wait);
+                    std::printf("  [gpu] level %d elimination device: fills %.2f, X_RR/X_SR %.2f, LU %.2f, X_NR %.2f, "
+                                "solves %.2f, Schur+near %.2f, owner targets %.2f, owner GEMMs %.2f s\n",
+                                current_level, e.el[0], e.el[1], e.el[2], e.el[3], e.el[4], e.el[5], e.el[6], e.el[7]);
+                    std::printf("  [gpu] level %d host: plan boxes %.2f s, owner pass %.2f s (overlapped), launch %.2f s, "
+                                "sketch wait %.2f s, heap-reclaim wait %.2f s, exchange-buffer wait %.2f s | "
+                                "GF/s: owner %.0f, solves %.0f\n",
+                                current_level, e.plan_boxes, e.plan_owner, e.launch, e.sk_wait, e.reclaim_wait,
+                                e.exchange_wait,
+                                e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
+                                e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
+                    if (e.remote_generators > 0 || e.exchange > 0.0) {
+                        const auto& tt = transport_timers();
+                        std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, payload %.2f "
+                                    "(serialize %.2f), deserialize %.2f, assisting %.2f, install %.2f; sent %.2f GB, "
+                                    "received %.2f GB], receive %.2f s (%lld remote generators, %lld buffers "
+                                    "outside the exchange arena)\n",
+                                    current_level, e.device_exchange ? "device" : "host", e.emit, e.exchange,
+                                    tt.sizes, tt.payload, tt.serialize,
+                                    tt.deserialize, tt.assisting, tt.install, tt.bytes_sent / 1e9,
+                                    tt.bytes_received / 1e9, e.remote, static_cast<long long>(e.remote_generators),
+                                    static_cast<long long>(e.exchange_fallbacks));
+                    }
+                    std::fflush(stdout);
+                } else if (color_gpu_enabled() && print_detail && level_rank == 0) {
+                    const auto& g = gpu::owner_pass_stats();
+                    std::printf(
+                        "  [gpu] level %d owner pass (rank 0): record %.2f s, pack %.2f s, "
+                        "upload %.2f s (%.2f GB), gemm %.2f s (%lld gemms, %lld launches, %lld chunks), "
+                        "download %.2f s (%.2f GB), write-back %.2f s\n",
+                        current_level, g.record, g.pack, g.transfer_in, g.bytes_in / 1e9, g.gemm,
+                        static_cast<long long>(g.gemms), static_cast<long long>(g.launches),
+                        static_cast<long long>(g.chunks), g.transfer_out, g.bytes_out / 1e9, g.write_back);
+                    std::fflush(stdout);
+                }
+#endif
             }
         }
 
@@ -1849,6 +2097,17 @@ void hierarchical_factorization_parallel(
             }
         }
         
+#ifdef H2_HAVE_GPU
+        if (current_level == 1 && level.is_process_active && gpu_blocks) {
+            // level 1 adopts the blocks of the level-2 transition; its own
+            // transition builds the root on the device
+            std::string gpu_reason;
+            gpu_level = gpu::make_level_eliminator(
+                tree, current_level, kernel, tolerance,
+                factorization_method, &gpu_reason, std::move(gpu_blocks));
+            gpu_level->adopt_without_elimination();
+        }
+#endif
         auto transition_start = std::chrono::high_resolution_clock::now();
         // if(rank == 1)
         // {
@@ -1865,7 +2124,43 @@ void hierarchical_factorization_parallel(
         // MPI_Barrier(tree->comm);
         // exit(0);
         std::vector<BoxData<CoordType, DataType>> parent_boxes;
-        if (level.is_process_active) {
+        bool transition_on_device = false;
+#ifdef H2_HAVE_GPU
+        // Device transition: this level's blocks never leave the device, and
+        // the parent's go to the next level's eliminator (or to the host when
+        // that level runs there).  Each rank builds the parents of its own
+        // boxes, with its copies of the blocks shared with other ranks; at a
+        // process reduction they then go to the host, for their new owner.
+        const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
+        transition_on_device =
+            gpu_level && gpu_level->can_build_parent() &&
+            (reduction_ahead || parent_level.is_process_active) && is_symmetric && !is_hermitian;
+        if (level.is_process_active && transition_on_device) {
+            parent_boxes = build_parent_level_structure(
+                level, tree->levels[current_level - 1], dimension, tree->global_bounds);
+            gpu_blocks = gpu_level->build_parent(parent_boxes);
+            gpu_level.reset();
+            if (reduction_ahead || !gpu_keeps_blocks_of(current_level - 1)) {
+                gpu::download_level_blocks(*gpu_blocks, parent_boxes);
+                gpu_blocks.reset();
+            }
+            if (print_detail && rank == level_print_rank) {
+                const auto& e = gpu::eliminator_stats();
+                std::printf("  [gpu] level %d device transition: %.2f s (%lld chunks: plan %.2f [restore %.2f, %.2f GB], blocks %.2f, P %.2f, fill %.2f), "
+                            "%lld fill GEMMs (%.1f GFLOP), blocks %s\n",
+                            current_level, e.transition, static_cast<long long>(e.tr_chunks), e.tr_plan, e.tr_restore,
+                            e.tr_restore_bytes / 1e9, e.tr_blocks, e.tr_p, e.tr_fill,
+                            static_cast<long long>(e.transition_fill_gemms), e.transition_flops / 1e9,
+                            gpu_blocks ? "kept on the device" : "copied to the host");
+                std::fflush(stdout);
+            }
+        }
+        if (gpu_level) {
+            gpu_level->download_blocks();  // host transition
+            gpu_level.reset();
+        }
+#endif
+        if (level.is_process_active && !transition_on_device) {
             parent_boxes = build_parent_level_interactions<CoordType, DataType, KernelType>(
                 level,
                 tree->levels[current_level - 1],
@@ -1889,9 +2184,14 @@ void hierarchical_factorization_parallel(
         
         auto transition_end = std::chrono::high_resolution_clock::now();
         auto transition_duration = std::chrono::duration_cast<std::chrono::milliseconds>(transition_end - transition_start);
+        long long transition_max_ms = static_cast<long long>(transition_duration.count());
+        if (print_detail) {
+            MPI_Allreduce(MPI_IN_PLACE, &transition_max_ms, 1, MPI_LONG_LONG, MPI_MAX, transition_comm);
+        }
         
         if (print_detail && rank == level_print_rank) {
-            std::cout << "  Level transition time: " << transition_duration.count() << " ms" << std::endl;
+            std::cout << "  Level transition time: " << transition_duration.count() << " ms (max over ranks "
+                      << transition_max_ms << " ms)" << std::endl;
             std::cout << "  Parent boxes created: " << parent_boxes.size() << std::endl;
         }
         
@@ -1906,12 +2206,18 @@ void hierarchical_factorization_parallel(
 
         std::vector<char> send_buffer;
         int64_t send_buffer_size = 0;
+        // wall-time split of the reduction (this rank): pack, barrier, receive,
+        // unpack, edge sharing, send, clear
+        double red_t[7] = {0, 0, 0, 0, 0, 0, 0};
+        auto red_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
+        auto red_mark = clock::now();
         if (sends_parent_boxes) {
             // Pre-pack parent boxes before the synchronization point so the
             // communication timer excludes sender-side serialization work.
             send_buffer = serialize_boxes(parent_boxes);
             send_buffer_size = static_cast<int64_t>(send_buffer.size());
         }
+        red_t[0] = red_since(red_mark);
 
         if (memory_diagnostics.enabled()) {
             memory_diagnostics.record(
@@ -1925,7 +2231,9 @@ void hierarchical_factorization_parallel(
             // Synchronize after parent-box construction/packing so the reduction
             // communication timer does not count time spent waiting for slower
             // ranks that are still preparing their payloads.
+            red_mark = clock::now();
             MPI_Barrier(transition_comm);
+            red_t[1] = red_since(red_mark);
         }
 
         if (!reduction_occurred) {
@@ -1954,6 +2262,8 @@ void hierarchical_factorization_parallel(
                 recv_buffer.resize(buffer_size);
                 MPI_Recv_large(recv_buffer.data(), buffer_size, MPI_CHAR, child_rank, 1, tree->comm, &status);
                 level_reduction += (clock::now() - segment_start);
+                red_t[2] += red_since(segment_start);
+                red_mark = clock::now();
 
                 if (memory_diagnostics.enabled()) {
                     memory_diagnostics.record(
@@ -1966,6 +2276,7 @@ void hierarchical_factorization_parallel(
                 
                 std::vector<BoxData<CoordType, DataType>> child_parent_boxes =
                     deserialize_boxes<CoordType, DataType>(recv_buffer);
+                red_t[3] += red_since(red_mark);
 
                 if (memory_diagnostics.enabled()) {
                     memory_diagnostics.record(
@@ -1987,11 +2298,14 @@ void hierarchical_factorization_parallel(
             parent_level.local_boxes = std::move(all_parent_boxes);
         }
 
+        red_mark = clock::now();
         if (parent_level.is_process_active &&
             is_symmetric && !is_hermitian) {
             share_symmetric_level_edges(parent_level);
         }
+        red_t[4] = red_since(red_mark);
 
+        red_mark = clock::now();
         if (sends_parent_boxes) {
             // This process does NOT own the parent - send to parent_level_owner
             segment_start = clock::now();
@@ -2018,9 +2332,24 @@ void hierarchical_factorization_parallel(
                 h2_diag_vector_bytes(send_buffer));
         }
         
+        red_t[5] = red_since(red_mark);
         // Clear modified interaction matrices to free memory
+        red_mark = clock::now();
         if (level.is_process_active) {
             clear_modified_interaction_matrices(level, use_CA_level);
+        }
+        red_t[6] = red_since(red_mark);
+        if (reduction_occurred && print_detail) {
+            double red_max[7];
+            MPI_Reduce(red_t, red_max, 7, MPI_DOUBLE, MPI_MAX, 0, transition_comm);
+            int transition_rank = 0;
+            MPI_Comm_rank(transition_comm, &transition_rank);
+            if (transition_rank == 0) {
+                std::printf("  process reduction (max over ranks): pack %.2f s, barrier %.2f s, receive %.2f s, "
+                            "unpack %.2f s, share edges %.2f s, send %.2f s, clear %.2f s\n",
+                            red_max[0], red_max[1], red_max[2], red_max[3], red_max[4], red_max[5], red_max[6]);
+                std::fflush(stdout);
+            }
         }
 
         memory_diagnostics.record(
@@ -2103,120 +2432,139 @@ void hierarchical_factorization_parallel(
             std::cout << "  Root box points: " << root_box.num_points << std::endl;
         }
         
-        // At level 0, the assembled matrix is just the schur complement
-        if (!root_box.schur_complement.is_allocated()) {
-            throw std::runtime_error(
-                "hierarchical_factorization_parallel: Root box schur complement not allocated");
-        }
-        
-        int64_t n = root_box.schur_complement.rows;
-        
-        if (print_detail && rank == root_print_rank) {
-            std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
-        }
-        
-        // Factorize the root schur complement for diagonal solve
-        root_box.X_RR.allocate(n, n, MatrixStorage<DataType>::FULL);
-        
-        if (factorization_method == FactorizationMethod::CHOLESKY) {
-            root_box.X_RR_pivots.clear();
-            // Copy schur complement to X_RR
-            root_box.X_RR.data = root_box.schur_complement.data;
-            
-            // Perform Cholesky factorization in-place
-            char uplo = 'L';
-            int nn = n;
-            int info = 0;
-            
-            if constexpr (std::is_same_v<DataType, double>) {
-                dpotrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn, &info);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zsychol_(&uplo, &nn, root_box.X_RR.data.data(), &nn, &info);
-            }
-            
-            if (info != 0) {
-                throw std::runtime_error(
-                    "hierarchical_factorization_parallel: Cholesky factorization of root failed at pivot " +
-                    std::to_string(info));
-            }
-            
-            root_box.X_RR.format = MatrixStorage<DataType>::CHOLESKY_L;
-            
+        int64_t n = root_box.num_points;
+        bool root_on_device = false;
+#ifdef H2_HAVE_GPU
+        if (gpu_blocks) {
+            // root block assembled on the device by the level-1 transition
             if (print_detail && rank == root_print_rank) {
-                std::cout << "  ✓ Root Cholesky factorization complete" << std::endl;
+                std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
             }
-            
-        } else if (factorization_method == FactorizationMethod::LU) {
-            root_box.X_RR.data = root_box.schur_complement.data;
-            root_box.X_RR_pivots.resize(static_cast<size_t>(n));
-
-            int nn = n;
-            int info = 0;
-
-            if constexpr (std::is_same_v<DataType, double>) {
-                dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
-            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
-                        root_box.X_RR_pivots.data(), &info);
-            }
-
-            if (info != 0) {
-                throw std::runtime_error(
-                    "hierarchical_factorization_parallel: LU factorization of root failed at pivot " +
-                    std::to_string(info));
-            }
-
-            root_box.X_RR.format = MatrixStorage<DataType>::LU_FACTORED;
-
+            gpu::factor_root_on_device(*gpu_blocks, root_box);
+            gpu_blocks.reset();
+            root_on_device = true;
             if (print_detail && rank == root_print_rank) {
-                std::cout << "  ✓ Root LU factorization complete" << std::endl;
-            }
-
-        } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
-            root_box.X_RR.data = root_box.schur_complement.data;
-            root_box.X_RR_pivots.resize(static_cast<size_t>(n));
-
-            char uplo = 'L';
-            int nn = n;
-            int lwork = -1;
-            int info = 0;
-            std::vector<DataType> work(1);
-            sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
-                   root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
-            if (info != 0) {
-                throw std::runtime_error(
-                    "hierarchical_factorization_parallel: Bunch-Kaufman root workspace query failed with INFO = " +
-                    std::to_string(info));
-            }
-            lwork = std::max(1, static_cast<int>(std::real(work[0])));
-            work.resize(static_cast<size_t>(lwork));
-            sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
-                   root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
-
-            if (info != 0) {
-                throw std::runtime_error(
-                    "hierarchical_factorization_parallel: Bunch-Kaufman factorization of root failed at pivot " +
-                    std::to_string(info));
-            }
-
-            root_box.X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
-
-            if (print_detail && rank == root_print_rank) {
-                std::cout << "  ✓ Root Bunch-Kaufman factorization complete" << std::endl;
-            }
-
-        } else {
-            // No factorization: just copy schur complement to X_RR
-            root_box.X_RR.data = root_box.schur_complement.data;
-            root_box.X_RR.format = MatrixStorage<DataType>::FULL;
-            root_box.X_RR_pivots.clear();
-            
-            if (print_detail && rank == root_print_rank) {
-                std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
+                std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
             }
         }
+#endif
+        if (!root_on_device) {
+            // At level 0, the assembled matrix is just the schur complement
+            if (!root_box.schur_complement.is_allocated()) {
+                throw std::runtime_error(
+                    "hierarchical_factorization_parallel: Root box schur complement not allocated");
+            }
         
+            n = root_box.schur_complement.rows;
+        
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
+            }
+        
+            // Factorize the root schur complement for diagonal solve
+            root_box.X_RR.allocate(n, n, MatrixStorage<DataType>::FULL);
+        
+            if (factorization_method == FactorizationMethod::CHOLESKY) {
+                root_box.X_RR_pivots.clear();
+                // Copy schur complement to X_RR
+                root_box.X_RR.data = root_box.schur_complement.data;
+            
+                // Perform Cholesky factorization in-place
+                char uplo = 'L';
+                int nn = n;
+                int info = 0;
+            
+                if constexpr (std::is_same_v<DataType, double>) {
+                    dpotrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn, &info);
+                } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                    zsychol_(&uplo, &nn, root_box.X_RR.data.data(), &nn, &info);
+                }
+            
+                if (info != 0) {
+                    throw std::runtime_error(
+                        "hierarchical_factorization_parallel: Cholesky factorization of root failed at pivot " +
+                        std::to_string(info));
+                }
+            
+                root_box.X_RR.format = MatrixStorage<DataType>::CHOLESKY_L;
+            
+                if (print_detail && rank == root_print_rank) {
+                    std::cout << "  ✓ Root Cholesky factorization complete" << std::endl;
+                }
+            
+            } else if (factorization_method == FactorizationMethod::LU) {
+                root_box.X_RR.data = root_box.schur_complement.data;
+                root_box.X_RR_pivots.resize(static_cast<size_t>(n));
+
+                int nn = n;
+                int info = 0;
+
+                if constexpr (std::is_same_v<DataType, double>) {
+                    dgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
+                            root_box.X_RR_pivots.data(), &info);
+                } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                    zgetrf_(&nn, &nn, root_box.X_RR.data.data(), &nn,
+                            root_box.X_RR_pivots.data(), &info);
+                }
+
+                if (info != 0) {
+                    throw std::runtime_error(
+                        "hierarchical_factorization_parallel: LU factorization of root failed at pivot " +
+                        std::to_string(info));
+                }
+
+                root_box.X_RR.format = MatrixStorage<DataType>::LU_FACTORED;
+
+                if (print_detail && rank == root_print_rank) {
+                    std::cout << "  ✓ Root LU factorization complete" << std::endl;
+                }
+
+            } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
+                root_box.X_RR.data = root_box.schur_complement.data;
+                root_box.X_RR_pivots.resize(static_cast<size_t>(n));
+
+                char uplo = 'L';
+                int nn = n;
+                int lwork = -1;
+                int info = 0;
+                std::vector<DataType> work(1);
+                sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
+                       root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
+                if (info != 0) {
+                    throw std::runtime_error(
+                        "hierarchical_factorization_parallel: Bunch-Kaufman root workspace query failed with INFO = " +
+                        std::to_string(info));
+                }
+                lwork = std::max(1, static_cast<int>(std::real(work[0])));
+                work.resize(static_cast<size_t>(lwork));
+                sytrf_(&uplo, &nn, root_box.X_RR.data.data(), &nn,
+                       root_box.X_RR_pivots.data(), work.data(), &lwork, &info);
+
+                if (info != 0) {
+                    throw std::runtime_error(
+                        "hierarchical_factorization_parallel: Bunch-Kaufman factorization of root failed at pivot " +
+                        std::to_string(info));
+                }
+
+                root_box.X_RR.format = MatrixStorage<DataType>::BUNCH_KAUFMAN;
+
+                if (print_detail && rank == root_print_rank) {
+                    std::cout << "  ✓ Root Bunch-Kaufman factorization complete" << std::endl;
+                }
+
+            } else {
+                // No factorization: just copy schur complement to X_RR
+                root_box.X_RR.data = root_box.schur_complement.data;
+                root_box.X_RR.format = MatrixStorage<DataType>::FULL;
+                root_box.X_RR_pivots.clear();
+            
+                if (print_detail && rank == root_print_rank) {
+                    std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
+                }
+            }
+        
+        }
+
         // Mark root as skeleton only (no redundant DOFs at this level)
         root_box.skeleton_indices.resize(n);
         for (int64_t i = 0; i < n; ++i) {
@@ -2287,6 +2635,7 @@ void hierarchical_factorization_parallel(
 
     memory_diagnostics.record(tree, 0, "retained", "factorization_complete");
 
+    const auto verification_start = clock::now();
     if (print_summary) {
         double logabsdet;
         DataType phase;
@@ -2298,6 +2647,7 @@ void hierarchical_factorization_parallel(
 
         (void)butterfly::h2_quick_verification(tree, kernel);
     }
+    h2_verification_seconds() = std::chrono::duration<double>(clock::now() - verification_start).count();
 
     memory_diagnostics.record(tree, 0, "verification", "post_quick_verification");
     memory_diagnostics.print(tree->comm, rank, size);
@@ -2367,6 +2717,10 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
 
   const auto factorization_method =
     h2_xrr_factorization_method(solver->options);
+  configure_color_gpu(solver->options.use_gpu != 0);
+#ifdef H2_HAVE_GPU
+  fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+#endif
   fmm::HierarchicalFactorization<CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
     solver->options.N,
     fmm::MatrixProperty::SYMMETRIC,
@@ -2386,6 +2740,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
 
 //   auto total_start = std::chrono::high_resolution_clock::now();
   double t0 = MPI_Wtime();
+  butterfly::h2_verification_seconds() = 0.0;
   butterfly::hierarchical_factorization_parallel_if_supported(
     solver->tree.get(),
     &solver->kernel,
@@ -2405,9 +2760,16 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
     solver->options.verbosity);
-  double tf = MPI_Wtime() - t0;
+  // the logdet and quick verification that end the call are not factorization
+  double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds();
   MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
   *factorization_time = tf;
+  double tv = butterfly::h2_verification_seconds();
+  MPI_Allreduce(MPI_IN_PLACE, &tv, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
+  if (solver->tree->mpi_rank == 0 && solver->options.verbosity >= 0) {
+    std::printf("  logdet and quick verification: %.2f s (not in the factor time)\n", tv);
+    std::fflush(stdout);
+  }
   
   double t_entry = 0.0;
   if (!ev.empty()) {
