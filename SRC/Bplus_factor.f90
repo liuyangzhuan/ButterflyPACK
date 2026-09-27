@@ -1910,7 +1910,7 @@ endif
       !!!! level level_butterfly_o+1 and level_butterfly_o only requires flop operations and communication
       if (IOwnPgrp(ptree, pgno_i)) then
          level_butterfly_dummy = max(level_butterfly_o - 1, 0)
-         write (*, *) 1, 's', ptree%MyID, ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc
+         if (option%verbosity >= 2) write (*, *) 1, 's', ptree%MyID, ptree%pgrp(pgno_i)%nproc, ptree%pgrp(pgno_o)%nproc
          do iii = 1, 2
             blocks_dummyL(iii)%level_butterfly = level_butterfly_dummy
             blocks_dummyL(iii)%level_half = level_butterfly_dummy - 1 ! the value of level_half is only used to guarantee column-wise all2all
@@ -1967,8 +1967,8 @@ endif
                   nn2 = size(partitioned_block%sons(iii, 2)%ButterflyU%blocks(ii)%matrix, 2)
                   mm = size(partitioned_block%sons(iii, 1)%ButterflyU%blocks(ii)%matrix, 1)
                   allocate (matrixtemp1(mm, nn1 + nn2))
-                  index_i = (ii - 1)*blocks_dummyL(iii)%ButterflyU%inc + blocks_dummyL(iii)%ButterflyU%idx
-                  row_group = blocks_o%row_group*2**level_butterfly_o + (index_i*2 - 1) - 1
+                  index_i = (ii - 1)*partitioned_block%sons(iii, 1)%ButterflyU%inc + partitioned_block%sons(iii, 1)%ButterflyU%idx ! leaf index of the child
+                  row_group = blocks_o%row_group*2**level_butterfly_o + (iii - 1)*2**(level_butterfly_o - 1) + (index_i*2 - 1) - 1 ! index_i is local to the row half iii
                   mm1 = msh%basis_group(row_group)%tail - msh%basis_group(row_group)%head + 1
                   mm2 = mm - mm1
                   matrixtemp1(:, 1:nn1) = partitioned_block%sons(iii, 1)%ButterflyU%blocks(ii)%matrix
@@ -2075,8 +2075,8 @@ endif
                   nn = size(partitioned_block%sons(1, jjj)%ButterflyV%blocks(ii)%matrix, 1)
                   allocate (matrixtemp1(mm1 + mm2, nn))
 
-                  index_j = (ii - 1)*blocks_dummyR(jjj)%ButterflyV%inc + blocks_dummyR(jjj)%ButterflyV%idx
-                  col_group = blocks_o%col_group*2**level_butterfly_o + (index_j*2 - 1) - 1
+                  index_j = (ii - 1)*partitioned_block%sons(1, jjj)%ButterflyV%inc + partitioned_block%sons(1, jjj)%ButterflyV%idx ! leaf index of the child
+                  col_group = blocks_o%col_group*2**level_butterfly_o + (jjj - 1)*2**(level_butterfly_o - 1) + (index_j*2 - 1) - 1 ! index_j is local to the column half jjj
                   nn1 = msh%basis_group(col_group)%tail - msh%basis_group(col_group)%head + 1
                   nn2 = nn - nn1
                   call copymatT(partitioned_block%sons(1, jjj)%ButterflyV%blocks(ii)%matrix, matrixtemp1(1:mm1, :), nn, mm1)
@@ -2674,7 +2674,9 @@ endif
          call assert(option%pat_comp/=2,'pat_comp==2 not yet supported in BF_MoveSingular_Ker')
          if(option%pat_comp==3 .and. block_o%level_butterfly>0)then
             call BF_ChangePattern(block_o, option%pat_comp, 1, stats, ptree)
+            stats%Flop_Tmp = 0
             call BF_MoveSingular_Ker(block_o, 'N', floor_safe(dble(block_o%level_butterfly)/2d0) +1, block_o%level_butterfly, ptree, stats, option%tol_rand)
+            stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
          endif
          call BF_ChangePattern(block_o, 1, 2, stats, ptree)
 

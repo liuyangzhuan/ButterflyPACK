@@ -488,6 +488,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
         integer:: rankmin=BPACK_BigINT !< minimum butterfly ranks
+        real(kind=8):: normest=-1d0 !< estimate of the spectral norm of the block (bf_algebra=1: scale of the truncation of the products added to it, set by BFD_Hmat_normest; <0: not computed)
         DTR:: logabsdet=0 !< store the value of logdet
         DT:: phase=1 !< store the sign of logdet
         integer dimension_rank !< estimated maximum rank
@@ -719,6 +720,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type Hmat
         integer Maxlevel, N !< H matrix levels and sizes
         integer Dist_level !< used in Hmatrix solver, the level at which parallelization is performed
+        integer:: num_blocks=0 !< number of top-level row (and column) clusters: 2**Dist_level for a single tree, ntree*2**(Dist_level-forest_level) for a forest
+        integer, allocatable:: topgroups(:) !< tree group of each top-level cluster
         integer idxs, idxe !< same as msh%idxs and msh%idxe
         DTR:: logabsdet=0 !< store the value of logdet
         DT:: phase=1 !< store the sign of logdet
@@ -807,10 +810,12 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: pat_comp !< pattern of entry-evaluation-based butterfly compression: 1 from right to left, 2 from left to right, 3 from outer to inner
         integer:: use_zfp  !< 1: use zfp for the dense blocks (zfp must be used to install ButterflyPACK) 2: use zfp for the dense blocks (excluding diagonal blocks) 0: do not use zfp
         integer:: use_parsec  !< 1: use PaRSEC PTG factorization when ButterflyPACK is built with PaRSEC support 0: use the native factorization
+        integer:: bf_algebra  !< butterfly algebra in the H-BF LU (format=2, LRlevel>0) 0: randomized (matvec-based) reconstruction 1: deterministic butterfly algebra (Heldring-Ubeda-Rius), truncated with tol_rand
         integer:: use_qtt  !< 1: use qtt for the dense blocks 0: do not use qtt
 
         ! options for matrix construction
         integer Hextralevel !< HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks
+        integer ntree !< HMAT/BLR: number of trees in the user-provided cluster tree (the tree argument of BPACK_construction_Init holds ntree complete trees of equal depth, concatenated); 1: a single tree
         integer forwardN15flag !< 1 use N^1.5 algorithm. 0: use NlogN pseudo skeleton algorithm. 2: use NlogN first, if not accurate enough, switch to N^1.5. 3: use tree-based adaptive sampling for NlogN pseudo skeleton algorithm.
         real(kind=8) tol_comp      !< matrix construction tolerance
         integer::Nmin_leaf !< leaf sizes of BPACK tree
@@ -893,6 +898,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
         integer, allocatable:: Add_random_CNT(:), Mul_random_CNT(:), XLUM_random_CNT(:) !< record number of randomized operations
         real(kind=8), allocatable:: Add_random_Time(:), Mul_random_Time(:), XLUM_random_Time(:) !< record number of randomized operations
+        real(kind=8), allocatable:: Add_random_Flop(:), Mul_random_Flop(:), XLUM_random_Flop(:) !< flops of the butterfly add, multiply and L/U solve operations (H-LU), per level
         integer, allocatable:: leafs_of_level(:) !< number of compressed blocks at each level
     end type Hstat
 
@@ -900,6 +906,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type mesh
         integer Nunk !< size of the matrix
         integer Dist_level !< used in Hmatrix solver, the level at which parallelization is performed
+        integer:: ntree=1 !< number of trees in a user-provided forest (see option%ntree), 1 for a single tree
+        integer:: forest_level=0 !< level of the forest roots in the embedded binary tree: groups 2**forest_level ... 2**forest_level+ntree-1; the other groups at that level are empty
         integer Maxgroup !< number of nodes in the partition tree
         integer idxs, idxe  !< range of local row/column indices after reordering
         real(kind=8), allocatable:: xyz(:, :)   !< coordinates of the points

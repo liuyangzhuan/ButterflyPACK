@@ -16,7 +16,7 @@ include../make.inc
 #
 SRC = LAPACK_dgeqp3mod.o LAPACK_zgeqp3mod.o LAPACK_sgeqp3mod.o LAPACK_cgeqp3mod.o SCALAPACK_pdgeqpfmod.o SCALAPACK_pzgeqpfmod.o SCALAPACK_psgeqpfmod.o SCALAPACK_pcgeqpfmod.o MISC_linkedlist.o\
 BPACK_defs.o MISC_DenseLA.o MISC_utilities.o Bplus_utilities.o BPACK_utilities.o Bplus_pack_unpack_for_MPI.o\
-BPACK_structure.o Bplus_randomized.o Bplus_compress.o Bplus_factor.o BPACK_solve_mul.o\
+BPACK_structure.o Bplus_randomized.o Bplus_compress.o Bplus_factor.o Bplus_deterministic.o BPACK_solve_mul.o\
 BPACK_constr.o BPACK_randomized.o BPACK_factor.o BPACK_wrapper.o
 
 all:lib

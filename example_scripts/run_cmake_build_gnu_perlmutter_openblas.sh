@@ -1,6 +1,6 @@
 module load PrgEnv-gnu
 module load cmake
-module load python/3.12
+module load python/3.13
 module unload cray-libsci
 module load cray-fftw 
 
@@ -13,9 +13,12 @@ export CRAYPE_LINK_TYPE=dynamic
 # export ZFP_INSTALL_DIR=$HOME/zfp-install
 export ZFP_INSTALL_DIR=$CFS/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
 export PARSEC_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install
-export CMAKE_PREFIX_PATH="$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH}"
+export TCMALLOC_ROOT=/global/cfs/cdirs/m2957/lib/lib/PrgEnv-gnu/gperftools-2.18.1
+export TCMALLOC_LIBRARY="$TCMALLOC_ROOT/lib/libtcmalloc.so"
+export TCMALLOC_LINK_FLAGS="-Wl,--no-as-needed $TCMALLOC_LIBRARY -Wl,--as-needed -Wl,-rpath,$TCMALLOC_ROOT/lib"
+export CMAKE_PREFIX_PATH="$TCMALLOC_ROOT:$PARSEC_INSTALL_DIR:${CMAKE_PREFIX_PATH:-}"
 export PATH="$PARSEC_INSTALL_DIR/bin:${PATH}"
-export LD_LIBRARY_PATH="$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$TCMALLOC_ROOT/lib:$PARSEC_INSTALL_DIR/lib64:${LD_LIBRARY_PATH:-}"
 
 rm -rf CMakeCache.txt
 rm -rf DartConfiguration.tcl
@@ -26,6 +29,8 @@ rm -rf SRC_DOUBLE SRC_DOUBLECOMPLEX SRC_SINGLE SRC_COMPLEX
 cmake .. \
 	-DCMAKE_Fortran_FLAGS="-DMPIMODULE" \
     -DCMAKE_CXX_FLAGS="" \
+	-DCMAKE_EXE_LINKER_FLAGS="$TCMALLOC_LINK_FLAGS" \
+	-DCMAKE_SHARED_LINKER_FLAGS="$TCMALLOC_LINK_FLAGS" \
 	-DBUILD_SHARED_LIBS=ON \
 	-Denable_python=ON \
 	-Denable_parsec=ON \

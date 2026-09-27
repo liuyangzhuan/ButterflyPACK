@@ -59,6 +59,7 @@ contains
       option_o%pat_comp = option_i%pat_comp
       option_o%use_zfp = option_i%use_zfp
       option_o%use_parsec = option_i%use_parsec
+      option_o%bf_algebra = option_i%bf_algebra
       option_o%use_qtt = option_i%use_qtt
 
       option_o%Hextralevel = option_i%Hextralevel

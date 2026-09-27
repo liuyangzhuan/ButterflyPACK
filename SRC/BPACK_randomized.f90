@@ -353,7 +353,7 @@ contains
       num_vect = rmax
 
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-      num_blocks = 2**h_mat%Dist_level
+      num_blocks = h_mat%num_blocks
 
 
 ! not merge matvecs of different colors

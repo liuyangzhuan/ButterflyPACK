@@ -149,6 +149,13 @@ sh ./EM3D_DATA/preprocessor_3dmesh/run_gmsh.sh ! this preprocessor generates a f
 mpirun -n nmpi ./EXAMPLE/ie3d
 ```
 
+Acoustic_SURF_Driver_CHEB.f90 and Acoustic_SURF_Module_CHEB.f90:
+(double-complex) A 3D sound-soft acoustic scattering example using the Chebyshev-based rectangular-polar Nystrom method of Bruno and Garza (J. Comput. Phys. 421, 2020). Built-in analytic geometries: sphere (cubed-sphere patches), cube (closed surfaces, combined-field equation), disk and square plate (open surfaces, single-layer equation). This example precomputes the self/near-singular weights, constructs (with entry evaluation), factors the matrix and solves it with a plane-wave excitation. For the sphere it checks the forward map against the exact spherical-harmonic eigenvalues and the far field against the Mie series. Geometries with edges need more near-field quadrature points (e.g. --nbeta 200) for accuracies below 1e-5.
+```
+mpirun -n nmpi ./EXAMPLE/ie3dacousticcheb -quant --geo sphere --wavelength 1 --N 16 -option --tol_comp 1e-8
+mpirun -n nmpi ./EXAMPLE/ie3dacousticcheb -quant --geo cube --wavenum 1 --N 20 --nbeta 200
+```
+
 EMSURF_Driver_sp.f90 and EMSURF_Module_sp.f90:
 (single-complex) A 3D EFIE/CFIE example for 3D PEC surfaces. This example constructs (with entry evaluation), factor the EFIE/CFIE matrix and solve it with plane-wave excitations.
 ```

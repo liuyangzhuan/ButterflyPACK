@@ -22,6 +22,7 @@
 module BPACK_factor
     use iso_c_binding, only: c_int, c_loc, c_ptr
     use Bplus_factor
+    use Bplus_deterministic
     use BPACK_DEFS
     use MISC_Utilities
 #ifdef HAVE_OPENMP
@@ -99,6 +100,7 @@ contains
         stats%rankmax_of_level_global_factor = 0
 
         nn1 = MPI_Wtime()
+        if (option%bf_algebra == 1) call BFD_timers(ptree, option, 0)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
 
@@ -187,7 +189,14 @@ endif
             do rowblock = rowblock_inv*2 - 1, rowblock_inv*2
 
                 if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(rowblock)%pgno)) then
-                    call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                    if (option%bf_algebra == 1 .and. ho_bf1%levels(level_c)%BP(rowblock)%Lplus == 1) then
+                        stats%Flop_Tmp = 0
+                        call BFD_Sblock(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                        stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+                        stats%Flop_Tmp = 0
+                    else
+                        call Bplus_Sblock_randomized_memfree(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                    endif
                     if (option%ErrSol == 0 .and. option%precon == 1 .and. option%IR_HODLR <= 0) then
                         call Bplus_delete(ho_bf1%levels(level_c)%BP(rowblock))
                     endif
@@ -216,7 +225,14 @@ endif
                     call Bplus_ReDistribute_Inplace(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2 - 1), stats, ptree, msh)
                     call Bplus_ReDistribute_Inplace(ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2), stats, ptree, msh)
 
-                    call Bplus_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                    if (option%bf_algebra == 1 .and. ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%Lplus == 1) then
+                        stats%Flop_Tmp = 0
+                        call BFD_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                        stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
+                        stats%Flop_Tmp = 0
+                    else
+                        call Bplus_inverse_schur_partitionedinverse(ho_bf1, level_c, rowblock, option, stats, ptree, msh)
+                    endif
                     call Bplus_ComputeMemory(ho_bf1%levels(level_c)%BP_inverse_schur(rowblock), rtemp,rank)
                     stats%Mem_SMW = stats%Mem_SMW + rtemp
                     stats%rankmax_of_level_global_factor(level_c) = max(stats%rankmax_of_level_global_factor(level_c),rank)
@@ -245,6 +261,7 @@ endif
        if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing updated forward block time:', rtemp, 'Seconds'
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing inverse block time:', rtemp, 'Seconds'
+        if (option%bf_algebra == 1) call BFD_timers(ptree, option, 1)
         call MPI_ALLREDUCE(stats%Time_random(1), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Init:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(2), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
@@ -797,6 +814,9 @@ endif
         if (allocated(stats%Add_random_Time)) deallocate(stats%Add_random_Time)
         if (allocated(stats%Mul_random_Time)) deallocate(stats%Mul_random_Time)
         if (allocated(stats%XLUM_random_Time)) deallocate(stats%XLUM_random_Time)
+        if (allocated(stats%Add_random_Flop)) deallocate(stats%Add_random_Flop)
+        if (allocated(stats%Mul_random_Flop)) deallocate(stats%Mul_random_Flop)
+        if (allocated(stats%XLUM_random_Flop)) deallocate(stats%XLUM_random_Flop)
         allocate(stats%Add_random_CNT(0:h_mat%Maxlevel))
         allocate(stats%Mul_random_CNT(0:h_mat%Maxlevel))
         allocate(stats%XLUM_random_CNT(0:h_mat%Maxlevel))
@@ -809,6 +829,13 @@ endif
         stats%Add_random_Time = 0d0
         stats%Mul_random_Time = 0d0
         stats%XLUM_random_Time = 0d0
+        allocate(stats%Add_random_Flop(0:h_mat%Maxlevel), stats%Mul_random_Flop(0:h_mat%Maxlevel), stats%XLUM_random_Flop(0:h_mat%Maxlevel))
+        stats%Add_random_Flop = 0d0
+        stats%Mul_random_Flop = 0d0
+        stats%XLUM_random_Flop = 0d0
+        if (option%bf_algebra == 1) call BFD_recstats(ptree, option, 0)
+        if (option%bf_algebra == 1) call BFD_mulstats(ptree, option, 0)
+        if (option%bf_algebra == 1) call BFD_Hmat_normest(h_mat, stats, ptree)
 
 #ifdef HAVE_TOPLEVEL_OPENMP
 #ifdef HAVE_TASKLOOP
@@ -843,7 +870,7 @@ endif
 #ifdef HAVE_PARSEC
             if(option%use_parsec==1)then
                 call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-                num_blocks = 2**h_mat%Dist_level
+                num_blocks = h_mat%num_blocks
 
                 if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting PaRSEC PTG HMAT factorization"
                 call c_bpack_hmat_factorization_ptg(c_loc(h_mat), c_loc(option), c_loc(stats), c_loc(ptree), c_loc(msh), int(num_blocks, c_int), ptg_ierr)
@@ -864,7 +891,7 @@ endif
 
 
             call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-            num_blocks = 2**h_mat%Dist_level
+            num_blocks = h_mat%num_blocks
             do kk=1,num_blocks
                 if(ptree%MyID==Main_ID .and. option%verbosity>=0)write(*,*) "starting panel ", kk
 
@@ -1176,6 +1203,10 @@ endif
         call MPI_allreduce(MPI_IN_PLACE, stats%Add_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
         call MPI_allreduce(MPI_IN_PLACE, stats%Mul_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
         call MPI_allreduce(MPI_IN_PLACE, stats%XLUM_random_Time(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_max, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Add_random_Flop(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%Mul_random_Flop(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(MPI_IN_PLACE, stats%XLUM_random_Flop(0:h_mat%Maxlevel), h_mat%Maxlevel + 1, MPI_DOUBLE_PRECISION, MPI_sum, ptree%Comm, ierr)
+        call MPI_allreduce(stats%Flop_Factor, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_sum, ptree%Comm, ierr)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
             write (*, *) ''
@@ -1193,7 +1224,17 @@ endif
                 endif
             enddo
             ! write(*,*)'max inverse butterfly rank:', butterflyrank_inverse
+            write (*, *) 'Butterfly OPs: flops (sum over processes)'
+            do level = 0, h_mat%Maxlevel
+                if (stats%Add_random_CNT(level) + stats%Mul_random_CNT(level) + stats%XLUM_random_CNT(level) /= 0) then
+                write (*, '(A7,I5,A7,Es10.2,A7,Es10.2,A8,Es10.2)') " level:", level, ' add:', stats%Add_random_Flop(level), ' mul:', stats%Mul_random_Flop(level), ' XLUM:', stats%XLUM_random_Flop(level)
+                endif
+            enddo
+            write (*, '(A,Es10.2,A,Es10.2)') '  butterfly OPs total:', sum(stats%Add_random_Flop) + sum(stats%Mul_random_Flop) + sum(stats%XLUM_random_Flop), &
+               '   other factorization flops:', rtemp - sum(stats%Add_random_Flop) - sum(stats%Mul_random_Flop) - sum(stats%XLUM_random_Flop)
         endif
+        if (option%bf_algebra == 1) call BFD_recstats(ptree, option, 1)
+        if (option%bf_algebra == 1) call BFD_mulstats(ptree, option, 1)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
             write (*, *) ''
@@ -1286,6 +1327,7 @@ endif
         type(matrixblock), pointer :: matrices_tmpblock
         type(matrixblock), target :: block2, block1, block3
         type(matrixblock), pointer :: block1_son, block2_son, block3_son
+        type(matrixblock) :: block_det !< result of the deterministic butterfly algebra (option%bf_algebra=1)
 
         tid = 0
 #ifdef HAVE_OPENMP
@@ -1360,13 +1402,24 @@ endif
             h_mat%blocks_1(tid+1)%ptr => block1
             h_mat%blocks_2(tid+1)%ptr => block2
             rank0 = block3%rankmax
+            if (option%bf_algebra == 1) then
+                stats%Flop_Tmp = 0
+                call BFD_SubHH(block3, chara, block1, block2, block_det, option, stats, ptree, msh)
+                if (option%verbosity >= 2) then
+                    call BF_Test_Reconstruction_Error(block_det, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, ptree, stats, chara)
+                    write (*, '(A38,A6,I5,A8,I3,A8,Es14.7)') ' Add_Multiply (deterministic) ', ' rank:', block_det%rankmax, ' L_butt:', block_det%level_butterfly, ' error:', error
+                endif
+                call BFD_Install(block3, block_det, ptree)
+            else
             call BF_randomized(block3%pgno, block3%level_butterfly, rank0, option%rankrate, block3, h_mat, BF_block_MVP_Add_Multiply_dat, error, 'Add_Multiply', option, stats, ptree, msh, operand1=chara)
+            endif
             T1 = MPI_Wtime()
             stats%rankmax_of_level_global_factor(block3%level)=max(stats%rankmax_of_level_global_factor(block3%level),block3%rankmax)
             stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp
             stats%Time_Add_Multiply = stats%Time_Add_Multiply + T1 - T0
             ! time_tmp = time_tmp + T1 - T0
             stats%Add_random_Time(level_blocks) = stats%Add_random_Time(level_blocks) + T1 - T0
+            stats%Add_random_Flop(level_blocks) = stats%Add_random_Flop(level_blocks) + stats%Flop_Tmp
             stats%Add_random_CNT(level_blocks) = stats%Add_random_CNT(level_blocks) + 1
 
         endif
@@ -1416,6 +1469,7 @@ endif
         real(kind=8) T0, T1, T2, T3, error, tol_used
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         type(matrixblock) :: blocks_l, blocks_m
+        type(matrixblock) :: block_det !< result of the deterministic butterfly algebra (option%bf_algebra=1)
         DT:: ctemp
         integer rank0
 
@@ -1458,9 +1512,20 @@ endif
             else
                 T2 = MPI_Wtime()
                 rank0 = blocks_m%rankmax
+                if (option%bf_algebra == 1) then
+                    stats%Flop_Tmp = 0
+                    call BFD_LXM(blocks_l, blocks_m, block_det, option, stats, ptree, msh)
+                    if (option%verbosity >= 2) then
+                        call BF_Test_Reconstruction_Error(block_det, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, ptree, stats)
+                        write (*, '(A38,A6,I5,A8,I3,A8,Es14.7)') ' XLM (deterministic) ', ' rank:', block_det%rankmax, ' L_butt:', block_det%level_butterfly, ' error:', error
+                    endif
+                    call BFD_Install(blocks_m, block_det, ptree)
+                else
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_l, BF_block_MVP_XLM_dat, error, 'XLM', option, stats, ptree, msh)
+                endif
                 T3 = MPI_Wtime()
                 stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T3 - T2
+                stats%XLUM_random_Flop(blocks_m%level) = stats%XLUM_random_Flop(blocks_m%level) + stats%Flop_Tmp
                 stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
             endif
             T1 = MPI_Wtime()
@@ -1549,6 +1614,7 @@ endif
         integer mm_1, mm_2, nn_1, nn_2, rank_1, rank_2, mm_3, nn_3, rank_3
         real(kind=8) T0, T1, T2, T3, error, tol_used
         type(matrixblock) :: blocks_u, blocks_m
+        type(matrixblock) :: block_det !< result of the deterministic butterfly algebra (option%bf_algebra=1)
         type(matrixblock), pointer :: blocks1, blocks2, blocks3
         integer rank0
 
@@ -1589,9 +1655,20 @@ endif
             else
                 T2 = MPI_Wtime()
                 rank0 = blocks_m%rankmax
+                if (option%bf_algebra == 1) then
+                    stats%Flop_Tmp = 0
+                    call BFD_XUM(blocks_u, blocks_m, block_det, option, stats, ptree, msh)
+                    if (option%verbosity >= 2) then
+                        call BF_Test_Reconstruction_Error(block_det, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, ptree, stats)
+                        write (*, '(A38,A6,I5,A8,I3,A8,Es14.7)') ' XUM (deterministic) ', ' rank:', block_det%rankmax, ' L_butt:', block_det%level_butterfly, ' error:', error
+                    endif
+                    call BFD_Install(blocks_m, block_det, ptree)
+                else
                 call BF_randomized(blocks_m%pgno, blocks_m%level_butterfly, rank0, option%rankrate, blocks_m, blocks_u, BF_block_MVP_XUM_dat, error, 'XUM', option, stats, ptree, msh)
+                endif
                 T3 = MPI_Wtime()
                 stats%XLUM_random_Time(blocks_m%level) = stats%XLUM_random_Time(blocks_m%level) + T3 - T2
+                stats%XLUM_random_Flop(blocks_m%level) = stats%XLUM_random_Flop(blocks_m%level) + stats%Flop_Tmp
                 stats%XLUM_random_CNT(blocks_m%level) = stats%XLUM_random_CNT(blocks_m%level) + 1
             endif
             T1 = MPI_Wtime()
@@ -1655,6 +1732,7 @@ endif
         type(matrixblock) :: blocks
         real*8:: error_inout
         type(matrixblock), pointer::block_agent
+        type(matrixblock) :: block_det !< result of the deterministic butterfly algebra (option%bf_algebra=1)
         integer rank0
 
         tid = 0
@@ -1701,9 +1779,20 @@ endif
             endif
         else
             T2 = MPI_Wtime()
+            if (option%bf_algebra == 1) then
+                stats%Flop_Tmp = 0
+                call BFD_Multiply(block1, block2, block_agent, block_det, blocks, option, stats, ptree, msh)
+                if (option%verbosity >= 2) then
+                    call BF_Test_Reconstruction_Error(block_det, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, ptree, stats, 'm')
+                    write (*, '(A38,A6,I5,A8,I3,A8,Es14.7)') ' Multiply (deterministic) ', ' rank:', block_det%rankmax, ' L_butt:', block_det%level_butterfly, ' error:', error_inout
+                endif
+                call BFD_Install(block_agent, block_det, ptree)
+            else
             call BF_randomized(block_agent%pgno, level_butterfly, rank0, option%rankrate, block_agent, h_mat, BF_block_MVP_Add_Multiply_dat, error_inout, 'Multiply', option, stats, ptree, msh, operand1='m')
+            endif
             T3 = MPI_Wtime()
             stats%Mul_random_Time(blocks%level) = stats%Mul_random_Time(blocks%level) + T3 - T2
+            stats%Mul_random_Flop(blocks%level) = stats%Mul_random_Flop(blocks%level) + stats%Flop_Tmp
             stats%Mul_random_CNT(blocks%level) = stats%Mul_random_CNT(blocks%level) + 1
         endif
         T1 = MPI_Wtime()
@@ -1731,6 +1820,7 @@ endif
         type(matrixblock)::blocks_o
         type(matrixblock), target::blocks_1
         type(matrixblock), pointer::blocks_1_son, blocks_o_son
+        type(matrixblock) :: block_det !< result of the deterministic butterfly algebra (option%bf_algebra=1)
         character chara
         real(kind=8) error,flop
         real(kind=8) T0, T1, T2, T3
@@ -1746,8 +1836,12 @@ endif
         if (blocks_o%style == 4) then
             T0 = MPI_Wtime()
             if (blocks_1%style /= 4) then
+                if (option%bf_algebra == 1) then
+                    call BFD_SplitNative(blocks_1, option, stats, ptree, msh)
+                else
                 allocate (blocks_1%sons(2, 2))
                 call BF_split(blocks_1, blocks_1, ptree, stats, msh, option)
+                endif
             endif
             T1 = MPI_Wtime()
             stats%Time_Split = stats%Time_Split + T1 - T0
@@ -1811,6 +1905,23 @@ endif
                      deallocate(matVnew)
                      blocks_o%rankmax = ranknew
 
+                else if (option%bf_algebra == 1) then
+                    stats%Flop_Tmp = 0
+                    T2 = MPI_Wtime()
+                    call BFD_AddBF(blocks_o, chara, blocks_1, block_det, option, stats, ptree, msh)
+                    T3 = MPI_Wtime()
+                    stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T3 - T2
+                    stats%Add_random_CNT(blocks_o%level) = stats%Add_random_CNT(blocks_o%level) + 1
+                    stats%Add_random_Flop(blocks_o%level) = stats%Add_random_Flop(blocks_o%level) + stats%Flop_Tmp
+                    if (option%verbosity >= 2) then
+                        if (chara == '+') then
+                            call BF_Test_Reconstruction_Error(block_det, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, ptree, stats, 'a')
+                        else
+                            call BF_Test_Reconstruction_Error(block_det, blocks_o, h_mat, BF_block_MVP_Add_Multiply_dat, error, ptree, stats, 's')
+                        endif
+                        write (*, '(A38,A6,I5,A8,I3,A8,Es14.7)') ' Add (deterministic) ', ' rank:', block_det%rankmax, ' L_butt:', block_det%level_butterfly, ' error:', error
+                    endif
+                    call BFD_Install(blocks_o, block_det, ptree)
                 else
                     T2 = MPI_Wtime()
                     if (chara == '+') then
@@ -1821,6 +1932,7 @@ endif
                     T3 = MPI_Wtime()
                     stats%Add_random_Time(blocks_o%level) = stats%Add_random_Time(blocks_o%level) + T3 - T2
                     stats%Add_random_CNT(blocks_o%level) = stats%Add_random_CNT(blocks_o%level) + 1
+                    stats%Add_random_Flop(blocks_o%level) = stats%Add_random_Flop(blocks_o%level) + stats%Flop_Tmp
                 endif
             T1 = MPI_Wtime()
             ! time_tmp = time_tmp + T1-T0

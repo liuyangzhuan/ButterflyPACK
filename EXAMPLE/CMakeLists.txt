@@ -61,6 +61,11 @@ target_link_libraries(ie3deigen ${all_link_libs_z})
 add_dependencies(ie3deigen ie3d)
 install(TARGETS ie3deigen RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
 
+set(FZEXM3CHEB Acoustic_SURF_Driver_CHEB.f90 Acoustic_SURF_Module_CHEB.f90)
+add_executable(ie3dacousticcheb ${FZEXM3CHEB})
+target_link_libraries(ie3dacousticcheb ${all_link_libs_z})
+install(TARGETS ie3dacousticcheb RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+
 set(FZEXM5 SMAT_Driver.f90)
 add_executable(smat ${FZEXM5})
 target_link_libraries(smat ${all_link_libs_z})

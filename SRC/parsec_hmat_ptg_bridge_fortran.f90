@@ -46,8 +46,8 @@ contains
       call c_f_pointer(hmat_Cptr, h_mat)
       call c_f_pointer(ptree_Cptr, ptree)
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-      call g2l(row0 + 1, 2**h_mat%Dist_level, nprow, 1, iproc, myi)
-      call g2l(col0 + 1, 2**h_mat%Dist_level, npcol, 1, jproc, myj)
+      call g2l(row0 + 1, h_mat%num_blocks, nprow, 1, iproc, myi)
+      call g2l(col0 + 1, h_mat%num_blocks, npcol, 1, jproc, myj)
       owner = blacs_pnum_wp(nprow, npcol, iproc, jproc)
    end subroutine c_bpack_hmat_ptg_owner_of
 
@@ -240,8 +240,8 @@ contains
       integer :: nprow, npcol, myrow, mycol, iproc, jproc
 
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-      call g2l(grow, 2**h_mat%Dist_level, nprow, 1, iproc, myi)
-      call g2l(gcol, 2**h_mat%Dist_level, npcol, 1, jproc, myj)
+      call g2l(grow, h_mat%num_blocks, nprow, 1, iproc, myi)
+      call g2l(gcol, h_mat%num_blocks, npcol, 1, jproc, myj)
    end subroutine bpack_hmat_ptg_local_indices
 
    integer function bpack_hmat_ptg_pgno(h_mat, ptree, grow, gcol)

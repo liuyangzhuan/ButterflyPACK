@@ -119,7 +119,9 @@ contains
 
       t1 = MPI_Wtime()
       nlevel = 0
-      if (present(tree)) then
+      if (present(tree) .and. option%ntree > 1) then ! a forest of option%ntree trees, see Forest_to_pretree
+         call Forest_to_pretree(msh, option, tree, size(tree, 1))
+      else if (present(tree)) then
          nlevel = ceiling_safe(log(dble(size(tree, 1)))/log(2d0))
          Maxlevel = nlevel
          allocate (msh%pretree(2**Maxlevel))
@@ -4511,7 +4513,7 @@ contains
                case (HODLR)
                   call HODLR_MapIntersec2Block(bmat%ho_bf, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, 1, 0)
                case (HMAT,BLR)
-                  num_blocks = 2**msh%Dist_level
+                  num_blocks = bmat%h_mat%num_blocks
                   call Hmat_MapIntersec2Block(bmat%h_mat, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, num_blocks)
                case (HSS)
                   call BP_MapIntersec2Block(bmat%hss_bf%BP, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, bmat%hss_bf%BP%LL(1)%Nbound)

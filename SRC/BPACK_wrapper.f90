@@ -859,6 +859,10 @@ contains
          val_d = option%hextralevel
          valid_opt = 1
       endif
+      if (trim(str) == 'ntree') then
+         val_d = option%ntree
+         valid_opt = 1
+      endif
       if (trim(str) == 'less_adapt') then
          val_d = option%less_adapt
          valid_opt = 1
@@ -957,6 +961,10 @@ contains
       endif
       if (trim(str) == 'fftw_plan_mode' .or. trim(str) == 'fft_plan_mode') then
          val_d = option%fftw_plan_mode
+         valid_opt = 1
+      endif
+      if (trim(str) == 'bf_algebra') then
+         val_d = option%bf_algebra
          valid_opt = 1
       endif
       if (trim(str) == 'use_parsec') then
@@ -1179,6 +1187,11 @@ contains
          option%hextralevel = val_i
          valid_opt = 1
       endif
+      if (trim(str) == 'ntree') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%ntree = val_i
+         valid_opt = 1
+      endif
       if (trim(str) == 'less_adapt') then
          call c_f_pointer(val_Cptr, val_i)
          option%less_adapt = val_i
@@ -1300,6 +1313,11 @@ contains
          valid_opt = 1
       endif
 
+      if (trim(str) == 'bf_algebra') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%bf_algebra = val_i
+         valid_opt = 1
+      endif
       if (trim(str) == 'use_parsec') then
          call c_f_pointer(val_Cptr, val_i)
          option%use_parsec = val_i
@@ -1724,7 +1742,10 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
 
-      if(nlevel>0)then
+      if(option%ntree>1)then ! a forest of option%ntree trees, each with 2**nlevel leaves, see Forest_to_pretree
+         call assert(nlevel >= 0, 'option%ntree>1 requires nlevel>=0 (the depth of each tree) and tree holding ntree*2**nlevel leaf sizes')
+         call Forest_to_pretree(msh, option, tree, option%ntree*2**nlevel)
+      else if(nlevel>0)then
          Maxlevel = nlevel
          allocate (msh%pretree(2**Maxlevel))
 

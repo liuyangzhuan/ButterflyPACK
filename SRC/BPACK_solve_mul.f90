@@ -3921,7 +3921,7 @@ contains
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       nprow = ptree%pgrp(1)%nprow
       npcol = ptree%pgrp(1)%npcol
-      num_blocks = 2**h_mat%Dist_level
+      num_blocks = h_mat%num_blocks
       do ii = 1, nproc
          idxs_i = h_mat%N_p(ii, 1)
          idxe_i = h_mat%N_p(ii, 2)
@@ -4181,7 +4181,7 @@ contains
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       nprow = ptree%pgrp(1)%nprow
       npcol = ptree%pgrp(1)%npcol
-      num_blocks = 2**h_mat%Dist_level
+      num_blocks = h_mat%num_blocks
       do ii = 1, nproc
          idxs_o = h_mat%N_p(ii, 1)
          idxe_o = h_mat%N_p(ii, 2)
@@ -4649,7 +4649,7 @@ contains
          endif
 
          call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
-         num_blocks = 2**h_mat%Dist_level
+         num_blocks = h_mat%num_blocks
          if (trans == 'N') then
             mode_i='C'
             mode_o='R'
@@ -4785,7 +4785,7 @@ contains
 
       if (trans == 'N') then
          Nreq=0
-         num_blocks = 2**h_mat%Dist_level
+         num_blocks = h_mat%num_blocks
          call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
          nrecvx=0
          nrecvmod=0
@@ -5067,7 +5067,7 @@ contains
       if (trans == 'N') then
 
          Nreq=0
-         num_blocks = 2**h_mat%Dist_level
+         num_blocks = h_mat%num_blocks
          call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
          nrecvx=0
          nrecvmod=0

@@ -1187,6 +1187,7 @@ namespace butterflypack {
           {"use_fft_circulant","whether to use FFT-based circulant representative blocks"},
           {"fftw_plan_mode",  "FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive"},
           {"use_parsec",      "whether to use PaRSEC PTG factorization"},
+          {"bf_algebra",      "H-BF LU butterfly algebra: 0 randomized, 1 deterministic"},
           {"use_qtt",         "whether to use qtt compression"},
           {"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
           {"help",            "print this help message"}
@@ -1247,6 +1248,7 @@ namespace butterflypack {
           {"use_fft_circulant",         required_argument, 0, 40},
           {"fftw_plan_mode",         required_argument, 0, 41},
           {"fft_plan_mode",         required_argument, 0, 42},
+          {"bf_algebra",         required_argument, 0, 43},
           {NULL, 0, NULL, 0}
           };
         int c, option_index = 0;
@@ -1470,6 +1472,11 @@ namespace butterflypack {
             std::istringstream iss(optarg);
             iss >> opt_i;
             d_c_bpack_set_I_option(&option0, "fftw_plan_mode", opt_i);
+          } break;
+          case 43: {
+            std::istringstream iss(optarg);
+            iss >> opt_i;
+            d_c_bpack_set_I_option(&option0, "bf_algebra", opt_i);
           } break;
           default: break;
           }

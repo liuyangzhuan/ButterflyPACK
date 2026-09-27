@@ -146,6 +146,8 @@ PROGRAM ButterflyPACK_IE_3D
 						else if (trim(strings)=='--freq')then
 							read(strings1,*)quant%freq
 							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
+						else if (trim(strings)=='--CFIE_alpha')then
+							read(strings1,*)quant%CFIE_alpha
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif

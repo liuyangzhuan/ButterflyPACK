@@ -73,6 +73,7 @@ BPACK_structure.f90
 Bplus_randomized.f90
 Bplus_compress.f90
 Bplus_factor.f90
+Bplus_deterministic.f90
 BPACK_solve_mul.f90
 BPACK_constr.f90
 BPACK_randomized.f90

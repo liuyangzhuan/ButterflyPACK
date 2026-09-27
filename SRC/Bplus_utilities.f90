@@ -2360,9 +2360,10 @@ contains
             else
                rank = 0
             endif
-            call assert(MPI_COMM_NULL /= ptree%pgrp(pgno_new)%Comm, 'communicator should not be null 4')
+            ! the process groups are nested: reduce over the enclosing one (as BF_all2all_UV does), so that the block can also move to a subgroup
+            call assert(MPI_COMM_NULL /= ptree%pgrp(min(blocks%pgno, pgno_new))%Comm, 'communicator should not be null 4')
             rankmax = 0
-            call MPI_ALLREDUCE(rank, rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno_new)%Comm, ierr)
+            call MPI_ALLREDUCE(rank, rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(min(blocks%pgno, pgno_new))%Comm, ierr)
             rank = rankmax
 
             blocks_dummy%level = blocks%level
@@ -2480,7 +2481,11 @@ contains
       ! call MPI_barrier(ptree%pgrp(pgno_new)%Comm,ierr)
       n1 = MPI_Wtime()
 
-      if (blocks%level_butterfly > 0) then
+      if (blocks%level_butterfly > 0 .and. pat_i /= pat_o .and. ptree%pgrp(blocks%pgno)%nproc == 1) then
+         !>*** one process: the row-wise and column-wise local layouts of every kernel level coincide (all blocks, same
+         !> indices), so only level_half changes
+         blocks%level_half = BF_Switchlevel(blocks%level_butterfly, pat_o)
+      elseif (blocks%level_butterfly > 0) then
          if (pat_i /= pat_o) then
 
             !>*** make sure every process has blocks%ButterflyKerl allocated
@@ -2503,6 +2508,7 @@ contains
       endif
 
       n2 = MPI_Wtime()
+      !$omp atomic
       stats%Time_RedistB = stats%Time_RedistB + n2 - n1
 
    end subroutine BF_ChangePattern
@@ -4170,15 +4176,20 @@ contains
       allocate(agent_block%M_p(ptree%pgrp(agent_block%pgno)%nproc,2))
       allocate(agent_block%N_p(ptree%pgrp(agent_block%pgno)%nproc,2))
 
+      if (ptree%pgrp(agent_block%pgno)%nproc == 1) then ! no collective on one process (callers may run as concurrent OpenMP tasks)
+         agent_block%M_p(1, 1) = agent_block%M_loc
+         agent_block%N_p(1, 1) = agent_block%N_loc
+      else
 #ifdef HAVE_MPI3
-      call MPI_IALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqm, ierr)
-      call MPI_IALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqn, ierr)
-      call MPI_Wait(reqm, statusm, ierr)
-      call MPI_Wait(reqn, statusn, ierr)
+         call MPI_IALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqm, ierr)
+         call MPI_IALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, reqn, ierr)
+         call MPI_Wait(reqm, statusm, ierr)
+         call MPI_Wait(reqn, statusn, ierr)
 #else
-      call MPI_ALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
-      call MPI_ALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
+         call MPI_ALLGATHER(agent_block%M_loc, 1, MPI_INTEGER, agent_block%M_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
+         call MPI_ALLGATHER(agent_block%N_loc, 1, MPI_INTEGER, agent_block%N_p, 1, MPI_INTEGER, ptree%pgrp(agent_block%pgno)%Comm, ierr)
 #endif
+      endif
 
       agent_block%M = 0
       agent_block%N = 0
@@ -4327,6 +4338,7 @@ contains
          enddo
       end if
 
+      !$omp atomic
       block_o%rankmax = max(block_o%rankmax,agent_block%rankmax)
    end subroutine BF_copyback_partial
 
@@ -6674,6 +6686,21 @@ contains
 
 !>*********** all to all communication of one level of a butterfly from an old process pgno_i to an new process group pgno_o
 !**  it is also assummed row-wise ordering mapped to row-wise ordering, column-wise ordering mapped to column-wise ordering
+!>**** whether (index_i,index_j) is a valid block index of a level_butterfly-level butterfly at level (for 'R': 2^level x 2^(level_butterfly-level) blocks, for 'C': 2^(level-1) x 2^(level_butterfly-level+1) blocks). Used to skip output blocks that do not come from the input butterfly when an offset is used (BF_Aggregate)
+   logical function BF_all2all_inrange(mode, level, level_butterfly, index_i, index_j)
+      implicit none
+      character mode
+      integer level, level_butterfly, index_i, index_j, nr, nc
+      if (mode == 'R') then
+         nr = 2**level
+         nc = 2**(level_butterfly - level)
+      else
+         nr = 2**(level - 1)
+         nc = 2**(level_butterfly - level + 1)
+      endif
+      BF_all2all_inrange = index_i >= 1 .and. index_i <= nr .and. index_j >= 1 .and. index_j <= nc
+   end function BF_all2all_inrange
+
    subroutine BF_all2all_ker(block_i, pgno_i, kerls_i, level_i, offset_r, offset_c, block_o, pgno_o, kerls_o, level_o, stats, ptree)
 
 
@@ -6797,6 +6824,7 @@ contains
             index_i0 = floor_safe((index_i - 1)/2d0) + 1
             index_j0 = index_j
          endif
+         if (.not. BF_all2all_inrange(mode, level_i, level_butterfly_i, index_i0, index_j0)) cycle ! this output block is not from the input butterfly
          call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i0, index_j0, mode, pgno_sub)
          pid = ptree%pgrp(pgno_sub)%head
          if (pid /= -1) then
@@ -8014,6 +8042,7 @@ contains
             index_i = (ii - 1)*inc + idx - offset
             index_j = 1
          endif
+         if (index_i < 1 .or. index_j < 1 .or. max(index_i, index_j) > 2**level_butterfly_i) cycle ! this output block is not from the input butterfly
          call GetBlockPID(ptree, pgno_i, level_i, level_butterfly_i, index_i, index_j, mode, pgno_sub)
          pid = ptree%pgrp(pgno_sub)%head
          if (pid /= -1) then
@@ -11000,6 +11029,7 @@ contains
             t_gemm = t_gemm + n4 - n3
             t_gemm_leaf = t_gemm_leaf + n4 - n3
             flops_gemm_leaf = flops_gemm_leaf + flop
+            !$omp atomic
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 2')
             if (ptree%pgrp(pgno)%nproc > 1) then
@@ -11014,6 +11044,7 @@ contains
             t_gemm = t_gemm + n4 - n3
             t_gemm_leaf = t_gemm_leaf + n4 - n3
             flops_gemm_leaf = flops_gemm_leaf + flop
+            !$omp atomic
             stats%Flop_Tmp = stats%Flop_Tmp + flop
          else if (chara == 'T') then !Vout=V*U^T*Vin
             n3 = MPI_Wtime()
@@ -11022,6 +11053,7 @@ contains
             t_gemm = t_gemm + n4 - n3
             t_gemm_leaf = t_gemm_leaf + n4 - n3
             flops_gemm_leaf = flops_gemm_leaf + flop
+            !$omp atomic
             stats%Flop_Tmp = stats%Flop_Tmp + flop
             call assert(MPI_COMM_NULL /= comm, 'communicator should not be null 3')
             if (ptree%pgrp(pgno)%nproc > 1) then
@@ -11036,6 +11068,7 @@ contains
             t_gemm = t_gemm + n4 - n3
             t_gemm_leaf = t_gemm_leaf + n4 - n3
             flops_gemm_leaf = flops_gemm_leaf + flop
+            !$omp atomic
             stats%Flop_Tmp = stats%Flop_Tmp + flop
          endif
 
@@ -11143,6 +11176,7 @@ contains
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_leaf = flops_gemm_leaf + flops
                      n4 = MPI_Wtime()
@@ -11201,6 +11235,7 @@ contains
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
@@ -11323,6 +11358,7 @@ contains
                         ! time_tmp = time_tmp + n4-n3
 
                      endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_leaf = flops_gemm_leaf + flops
                   else
@@ -11435,6 +11471,7 @@ contains
 #endif
 
                      endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
@@ -11540,6 +11577,7 @@ contains
                      t_gemm = t_gemm + n4 - n3
                      t_gemm_leaf = t_gemm_leaf + n4 - n3
                      ! time_tmp = time_tmp + n4-n3
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_leaf = flops_gemm_leaf + flops
 
@@ -11594,6 +11632,7 @@ contains
 #ifdef HAVE_TASKLOOP
                      !$omp end taskloop
 #endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
@@ -11714,6 +11753,7 @@ contains
                         t_gemm = t_gemm + n4 - n3
                         t_gemm_leaf = t_gemm_leaf + n4 - n3
                      endif
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_leaf = flops_gemm_leaf + flops
                      ! time_tmp = time_tmp + n4-n3
@@ -11821,6 +11861,7 @@ contains
 
                      endif
 
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                      flops_gemm_kernel = flops_gemm_kernel + flops
                      n4 = MPI_Wtime()
@@ -19841,10 +19882,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   enddo
                endif
             enddo
-            vtmp = block_i%rankmax
-            call MPI_ALLREDUCE(vtmp, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
-            vtmp = block_i%rankmin
-            call MPI_ALLREDUCE(vtmp, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            if (ptree%pgrp(block_i%pgno)%nproc > 1) then ! no collective on one process (callers may run as concurrent OpenMP tasks)
+               vtmp = block_i%rankmax
+               call MPI_ALLREDUCE(vtmp, block_i%rankmax, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(block_i%pgno)%Comm, ierr)
+               vtmp = block_i%rankmin
+               call MPI_ALLREDUCE(vtmp, block_i%rankmin, 1, MPI_INTEGER, MPI_MIN, ptree%pgrp(block_i%pgno)%Comm, ierr)
+            endif
 
          endif
       endif
@@ -20152,9 +20195,241 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine BF_sym2asym
 
 
+!>**** truncation rank of a descending singular value array, same rule as SVD_Truncate (relative tolerance, at least 1).
+!> With scale > 0 the threshold is tolerance*max(Singular(1), scale): singular values are truncated relative to scale
+!> (e.g. the norm of the block a product is added to) whenever the block itself is smaller than that
+   integer function BF_TruncRank(Singular, mn, tolerance, scale)
+      implicit none
+      integer mn, i
+      DTR:: Singular(mn)
+      real(kind=8):: tolerance, thr
+      real(kind=8), optional:: scale
+
+      BF_TruncRank = mn
+      if (mn == 0) return
+      thr = Singular(1)
+      if (present(scale)) thr = max(thr, scale)
+      thr = thr*tolerance
+      if (Singular(1) < BPACK_SafeUnderflow) then
+         BF_TruncRank = 1
+         return
+      endif
+      do i = 1, mn
+         if (Singular(i) <= thr) then
+            BF_TruncRank = i
+            if (Singular(i) < thr/10) BF_TruncRank = i - 1
+            exit
+         end if
+      end do
+      BF_TruncRank = max(BF_TruncRank, 1)
+   end function BF_TruncRank
+
+!>**** thin QR A = Q*R of an m x n matrix: Q is m x k with orthonormal columns, R is k x n, k = min(m, n)
+   subroutine BF_QR_thin(A, m, n, Q, R, k, flop)
+      implicit none
+      integer m, n, k, i
+      DT::A(:, :), Q(:, :), R(:, :)
+      DT, allocatable::W(:, :), tau(:)
+      real(kind=8), optional::flop  ! if present, the flops of the QR are added to it
+      real(kind=8)::flop1
+      k = min(m, n)
+      Q = 0
+      R = 0
+      if (k == 0) return
+      allocate (W(m, n), tau(k))
+      W = A(1:m, 1:n)
+      flop1 = 0
+      call geqrff90(W, tau, flop=flop1)
+      if (present(flop)) flop = flop + flop1
+      do i = 1, k
+         R(i, i:n) = W(i, i:n)
+      enddo
+      flop1 = 0
+      call un_or_gqrf90(W, tau, m, k, k, flop=flop1)
+      if (present(flop)) flop = flop + flop1
+      Q(1:m, 1:k) = W(:, 1:k)
+      deallocate (W, tau)
+   end subroutine BF_QR_thin
+
+!>**** thin LQ A = L*Q of an m x n matrix (via the QR of A^T): L is m x k, Q is k x n with orthonormal rows, k = min(m, n)
+   subroutine BF_LQ_thin(A, m, n, L, Q, k, flop)
+      implicit none
+      integer m, n, k
+      DT::A(:, :), L(:, :), Q(:, :)
+      real(kind=8), optional::flop  ! if present, the flops of the LQ are added to it
+      DT, allocatable::At(:, :), Qt(:, :), Rt(:, :)
+      k = min(m, n)
+      allocate (At(n, m), Qt(n, max(k, 1)), Rt(max(k, 1), m))
+      At = transpose(A(1:m, 1:n))
+      call BF_QR_thin(At, n, m, Qt, Rt, k, flop)
+      L = 0
+      Q = 0
+      if (k > 0) then
+         L(1:m, 1:k) = transpose(Rt(1:k, 1:m))
+         Q(1:k, 1:n) = transpose(Qt(1:n, 1:k))
+      endif
+      deallocate (At, Qt, Rt)
+   end subroutine BF_LQ_thin
+
+!>**** orthonormalize a leaf (U or V) block: leaf = leaf_new*transpose(Mt), where leaf_new has orthonormal columns and Mt is r x rnew.
+!> The leaf can be row-distributed over the communicator comm with nproc>1 processes: then the local R factors are gathered, the head
+!> factorizes them and broadcasts the result, so that every process gets the same Mt. If dotrunc=.true., the factorization is an SVD
+!> truncated with the relative tolerance (BF_TruncRank with the optional scale), otherwise it is exact (QR on one process, SVD dropping only
+!> exactly zero singular values otherwise).
+   subroutine BF_LeafOrth(leaf, Mt, dotrunc, tolerance, comm, nproc, stats, scale)
+      implicit none
+      type(butterflymatrix)::leaf
+      DT, allocatable::Mt(:, :)
+      logical dotrunc
+      real(kind=8)::tolerance
+      real(kind=8), optional::scale
+      integer comm, nproc
+      type(Hstat)::stats
+      DT, allocatable::W(:, :), tau(:), Q(:, :), Rloc(:, :), Rall(:, :), Stack(:, :), UU(:, :), VV(:, :)
+      DTR, allocatable::Singular(:)
+      integer m, r, k, i, p, mn, rnew, myid, ierr, dims(2)
+      real(kind=8)::flop
+
+      m = size(leaf%matrix, 1)
+      r = size(leaf%matrix, 2)
+      if (allocated(Mt)) deallocate (Mt)
+
+      if (nproc == 1) then
+         if (dotrunc) then
+            mn = min(m, r)
+            allocate (UU(m, mn), VV(mn, r), Singular(mn), W(m, r))
+            W = leaf%matrix
+            call gesvd_robust(W, Singular, UU, VV, m, r, mn, flop=flop)
+            !$omp atomic
+            stats%Flop_Tmp = stats%Flop_Tmp + flop
+            rnew = BF_TruncRank(Singular, mn, tolerance, scale)
+            allocate (Mt(r, rnew))
+            do i = 1, rnew
+               Mt(:, i) = VV(i, :)*Singular(i)
+            enddo
+            deallocate (leaf%matrix)
+            allocate (leaf%matrix(m, rnew))
+            leaf%matrix = UU(:, 1:rnew)
+            deallocate (UU, VV, Singular, W)
+         else
+            k = min(m, r)
+            allocate (W(m, r), tau(max(k, 1)))
+            W = leaf%matrix
+            allocate (Mt(r, k))
+            Mt = 0
+            if (k > 0) then
+               call geqrff90(W, tau, flop=flop)
+               !$omp atomic
+               stats%Flop_Tmp = stats%Flop_Tmp + flop
+               do i = 1, k
+                  Mt(i:r, i) = W(i, i:r)
+               enddo
+               call un_or_gqrf90(W, tau, m, k, k, flop=flop)
+               !$omp atomic
+               stats%Flop_Tmp = stats%Flop_Tmp + flop
+            endif
+            deallocate (leaf%matrix)
+            allocate (leaf%matrix(m, k))
+            leaf%matrix = W(:, 1:k)
+            deallocate (W, tau)
+         endif
+         return
+      endif
+
+      !>**** row-distributed leaf: local QR, R factors padded to r x r and gathered as a (nproc*r) x r stack
+      call MPI_Comm_rank(comm, myid, ierr)
+      k = min(m, r)
+      allocate (Q(m, max(k, 1)), Rloc(r, r), W(m, r), tau(max(k, 1)))
+      Q = 0
+      Rloc = 0
+      W = leaf%matrix
+      if (k > 0) then
+         call geqrff90(W, tau, flop=flop)
+         !$omp atomic
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         do i = 1, k
+            Rloc(i, i:r) = W(i, i:r)
+         enddo
+         call un_or_gqrf90(W, tau, m, k, k, flop=flop)
+         !$omp atomic
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         Q(:, 1:k) = W(:, 1:k)
+      endif
+      deallocate (W, tau)
+      allocate (Rall(r, r*nproc))
+      call MPI_Allgather(Rloc, r*r, MPI_DT, Rall, r*r, MPI_DT, comm, ierr)
+      allocate (Stack(r*nproc, r))
+      do p = 1, nproc
+         Stack((p - 1)*r + 1:p*r, :) = Rall(:, (p - 1)*r + 1:p*r)
+      enddo
+      deallocate (Rall, Rloc)
+
+      !>**** the head factorizes the stack, Stack = Ws*S*Zs, and broadcasts Ws(:,1:rnew) and Mt = transpose(S*Zs)(:,1:rnew)
+      if (myid == 0) then
+         mn = r
+         allocate (UU(r*nproc, mn), VV(mn, r), Singular(mn))
+         call gesvd_robust(Stack, Singular, UU, VV, r*nproc, r, mn, flop=flop)
+         !$omp atomic
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+         if (dotrunc) then
+            rnew = BF_TruncRank(Singular, mn, tolerance, scale)
+         else
+            rnew = max(1, count(Singular > max(Singular(1)*1d-14, BPACK_SafeUnderflow)))
+         endif
+         dims(1) = rnew
+      endif
+      call MPI_Bcast(dims, 1, MPI_INTEGER, 0, comm, ierr)
+      rnew = dims(1)
+      allocate (Mt(r, rnew), W(r*nproc, rnew))
+      if (myid == 0) then
+         do i = 1, rnew
+            Mt(:, i) = VV(i, :)*Singular(i)
+         enddo
+         W = UU(:, 1:rnew)
+         deallocate (UU, VV, Singular)
+      endif
+      call MPI_Bcast(Mt, r*rnew, MPI_DT, 0, comm, ierr)
+      call MPI_Bcast(W, r*nproc*rnew, MPI_DT, 0, comm, ierr)
+      deallocate (leaf%matrix)
+      allocate (leaf%matrix(m, rnew))
+      leaf%matrix = 0
+      if (k > 0) then
+         call gemmf90(Q, m, W(myid*r + 1, 1), r*nproc, leaf%matrix, m, 'N', 'N', m, rnew, k, BPACK_cone, BPACK_czero, flop=flop)
+         !$omp atomic
+         stats%Flop_Tmp = stats%Flop_Tmp + flop
+      endif
+      deallocate (Q, W, Stack)
+   end subroutine BF_LeafOrth
 
 
-   subroutine BF_MoveSingular_Ker(blocks, chara, level_start, level_end, ptree, stats, tolerance)
+!>**** leaf = leaf*C for a leaf (U or V) block
+   subroutine BF_LeafRmul(leaf, C, flop)
+      implicit none
+      type(butterflymatrix)::leaf
+      DT::C(:, :)
+      DT, allocatable::T(:, :)
+      integer m, k, n
+      real(kind=8), optional::flop  ! if present, the flops of the product are added to it
+      real(kind=8)::flop1
+      m = size(leaf%matrix, 1)
+      k = size(C, 1)
+      n = size(C, 2)
+      call assert(size(leaf%matrix, 2) == k, 'BF_LeafRmul: dimension mismatch')
+      allocate (T(m, n))
+      T = 0
+      flop1 = 0
+      if (m > 0 .and. k > 0 .and. n > 0) call gemmf90(leaf%matrix, m, C, k, T, m, 'N', 'N', m, n, k, BPACK_cone, BPACK_czero, flop=flop1)
+      if (present(flop)) flop = flop + flop1
+      deallocate (leaf%matrix)
+      allocate (leaf%matrix(m, n))
+      leaf%matrix = T
+      deallocate (T)
+   end subroutine BF_LeafRmul
+
+!>**** move the singular values of the kernels from level_start to level_end ('N': towards U, 'T': towards V). Level 0 is V and level level_butterfly+1 is U:
+!> starting at a leaf level orthonormalizes the leaf, ending at a leaf level absorbs the carried factor into it. If truncate=.true., each SVD is truncated with the relative tolerance
+!> (BF_TruncRank with the optional scale)
+   subroutine BF_MoveSingular_Ker(blocks, chara, level_start, level_end, ptree, stats, tolerance, truncate, useqr, scale)
 
       implicit none
 
@@ -20171,15 +20446,28 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(proctree)::ptree
       integer pgno, comm, ierr, mn_min
       type(Hstat)::stats
-      real(kind=8)::flop, flops,n1,n2, tolerance
+      real(kind=8)::flop, flop1, flops,n1,n2, tolerance
       integer index_ii, index_jj, index_ii_loc, index_jj_loc, index_i_loc, index_i_loc_s, index_i_loc_k, index_j_loc, index_j_loc0, index_i_loc0, index_j_loc_s, index_j_loc_k
       DTR, allocatable :: Singular(:)
       DT, allocatable :: UU(:, :), VV(:, :)
 
       type(butterfly_vec) :: BFvec
       DT, allocatable::matrixtemp(:, :), matrixtemp1(:, :), Vout_tmp(:, :)
+      logical, optional :: truncate, useqr
+      real(kind=8), optional :: scale
+      real(kind=8) :: sc
+      logical :: dotrunc, doqr, thr
+      DT, allocatable :: Mt(:, :)
+      integer :: dims(2)
 
       n1 = MPI_Wtime()
+      dotrunc = .false.
+      if (present(truncate)) dotrunc = truncate
+      sc = 0d0
+      if (present(scale)) sc = scale
+      doqr = .false.
+      if (present(useqr)) doqr = useqr .and. .not. dotrunc ! an exact sweep only needs orthonormal factors: QR/LQ instead of SVD
+      thr = present(useqr) .or. present(truncate) ! the node loops below run as OpenMP tasks for these callers only
 
       level_butterfly = blocks%level_butterfly
       pgno = blocks%pgno
@@ -20187,12 +20475,13 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       if (comm == MPI_COMM_NULL) then
          write (*, *) 'ninin', pgno, comm == MPI_COMM_NULL, ptree%MyID
       endif
-      if(level_butterfly<=1)return
+      if(level_butterfly==0)return
+      if(level_butterfly==1 .and. min(level_start,level_end)>=1 .and. max(level_start,level_end)<=level_butterfly)return
 
       call assert(IOwnPgrp(ptree, pgno), 'I do not share this block!')
       call assert(blocks%style == 2 .and.level_butterfly>=1, 'BF should have at least one level in BF_MoveSingular_Ker')
-      call assert(1<=level_start .and. level_start<=level_butterfly, 'it should be 1<=level_start<=level_butterfly in BF_MoveSingular_Ker')
-      call assert(1<=level_end .and. level_end<=level_butterfly, 'it should be 1<=level_end<=level_butterfly in BF_MoveSingular_Ker')
+      call assert(0<=level_start .and. level_start<=level_butterfly+1, 'it should be 0<=level_start<=level_butterfly+1 in BF_MoveSingular_Ker')
+      call assert(0<=level_end .and. level_end<=level_butterfly+1, 'it should be 0<=level_end<=level_butterfly+1 in BF_MoveSingular_Ker')
 
 #ifdef HAVE_TASKLOOP
       !$omp parallel
@@ -20243,12 +20532,24 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   endif
 
 
-                  if (level == 0) then
+                  if (level == 0) then ! V = V_new*transpose(Mt): V_new has orthonormal columns, Mt is carried to the columns of the level-1 kernels
+                     call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c, 'R', pgno_sub)
+                     !$omp taskloop default(shared) private(j, index_j, index_j_loc_s, Mt) if(thr .and. ptree%pgrp(pgno_sub)%nproc == 1)
+                     do j = 1, blocks%ButterflyV%nblk_loc
+                        index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
+                        index_j_loc_s = (index_j - BFvec%vec(1)%idx_c)/BFvec%vec(1)%inc_c + 1
+                        call BF_LeafOrth(blocks%ButterflyV%blocks(j), Mt, dotrunc, tolerance, ptree%pgrp(pgno_sub)%Comm, ptree%pgrp(pgno_sub)%nproc, stats, sc)
+                        allocate (BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix(size(Mt, 1), size(Mt, 2)))
+                        BFvec%vec(1)%blocks(1, index_j_loc_s)%matrix = Mt
+                        deallocate (Mt)
+                     enddo
+                     !$omp end taskloop
                   elseif (level == level_butterfly + 1) then
                   else
                      flops = 0
-                     !!$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop)
+                     !$omp taskloop default(shared) private(index_ij,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc,index_i_loc_s,index_i_loc_k, index_j_loc,index_j_loc_s,index_j_loc_k,ij,ii,jj,kk,i,j,index_i,index_j,mm,mm1,mm2,nn,nn1,nn2,flop,flop1,rank,num_vectors1,num_vectors2,mn_min,ranknew,matrixtemp,UU,VV,Singular) if(thr)
                      do index_ij = 1, nr*nc
+                        flop = 0
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of row-wise ordering at current level
                         index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of row-wise ordering at current level
@@ -20280,6 +20581,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            matrixtemp=0
                            call gemmf77('N', 'N', rank, num_vectors1, nn1, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn1, BPACK_czero, matrixtemp(1, 1), rank)
                            call gemmf77('N', 'N', rank, num_vectors2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, rank, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc+1)%matrix, nn2, BPACK_czero, matrixtemp(1, 1+num_vectors1), rank)
+                           flop = flop + flops_gemm(rank, num_vectors1, nn1) + flops_gemm(rank, num_vectors2, nn2)
                         endif
 
                         if(level==level_end)then
@@ -20300,8 +20602,16 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            call assert(.not. myisnan(fnorm(matrixtemp, rank, num_vectors1 + num_vectors2)), 'matrixtemp NAN at 4')
 
                            ! call SVD_Truncate(matrixtemp, rank, num_vectors1 + num_vectors2, mn_min, UU, VV, Singular, tolerance, BPACK_SafeUnderflow, ranknew)
-                           call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min)
-                           ranknew = mn_min
+                           if (doqr) then
+                              call BF_LQ_thin(matrixtemp, rank, num_vectors1 + num_vectors2, UU, VV, ranknew, flop)
+                              Singular = 1
+                           else
+                              flop1 = 0
+                              call gesvd_robust(matrixtemp, Singular, UU, VV, rank, num_vectors1 + num_vectors2, mn_min, flop=flop1)
+                              flop = flop + flop1
+                              ranknew = mn_min
+                              if (dotrunc) ranknew = BF_TruncRank(Singular, mn_min, tolerance, sc)
+                           endif
                            call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
 
                            do ii = 1, ranknew
@@ -20320,8 +20630,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            deallocate(UU,VV,Singular)
                         endif
                         deallocate(matrixtemp)
+                        !$omp atomic
+                        flops = flops + flop
                      enddo
-                     !!$omp end taskloop
+                     !$omp end taskloop
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -20348,7 +20661,34 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'C')
                if (level == 0) then
                   write (*, *) 'should not arrive here'
-               elseif (level == level_butterfly + 1) then
+               elseif (level == level_butterfly + 1) then ! U = U*carry
+                  call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r0, 1, 'C', pgno_sub)
+                  if (ptree%pgrp(pgno_sub)%nproc > 1) then ! the U block is row-distributed, only the head holds the carry
+                     if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
+                        index_i_loc_s = (idx_r0 - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+                        dims = shape(BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix)
+                     endif
+                     call MPI_Bcast(dims, 2, MPI_INTEGER, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     allocate (Mt(dims(1), dims(2)))
+                     if (ptree%MyID == ptree%pgrp(pgno_sub)%head) Mt = BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix
+                     call MPI_Bcast(Mt, dims(1)*dims(2), MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     flop = 0
+                     call BF_LeafRmul(blocks%ButterflyU%blocks(1), Mt, flop)
+                     !$omp atomic
+                     stats%Flop_Tmp = stats%Flop_Tmp + flop
+                     deallocate (Mt)
+                  else
+                     !$omp taskloop default(shared) private(i, index_i, index_i_loc_s, flop) if(thr)
+                     do i = 1, nr0
+                        index_i = (i - 1)*inc_r0 + idx_r0
+                        index_i_loc_s = (index_i - BFvec%vec(level)%idx_r)/BFvec%vec(level)%inc_r + 1
+                        flop = 0
+                        call BF_LeafRmul(blocks%ButterflyU%blocks(i), BFvec%vec(level)%blocks(index_i_loc_s, 1)%matrix, flop)
+                        !$omp atomic
+                        stats%Flop_Tmp = stats%Flop_Tmp + flop
+                     enddo
+                     !$omp end taskloop
+                  endif
                else
                   flops = 0
 
@@ -20371,6 +20711,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      allocate (matrixtemp(mm, num_vectors))
                      matrixtemp = 0
                      call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
+                     flops = flops + flop
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(mm, num_vectors))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrixtemp
@@ -20382,6 +20723,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      allocate (matrixtemp(mm, num_vectors))
                      matrixtemp = 0
                      call gemmf90(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, nn, matrixtemp, mm, 'N', 'N', mm, num_vectors, nn, BPACK_cone, BPACK_czero, flop=flop)
+                     flops = flops + flop
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix(mm, num_vectors))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix = matrixtemp
@@ -20389,6 +20731,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
                   enddo
                   !!$omp end taskloop
+                  !$omp atomic
+                  stats%Flop_Tmp = stats%Flop_Tmp + flops
 
                endif
 
@@ -20451,12 +20795,24 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                   allocate (BFvec%vec(level_butterfly - level + 2)%blocks(BFvec%vec(level_butterfly - level + 2)%nr, BFvec%vec(level_butterfly - level + 2)%nc))
                   endif
 
-                  if (level == level_butterfly + 1) then
+                  if (level == level_butterfly + 1) then ! U = U_new*transpose(Mt): U_new has orthonormal columns, Mt is carried to the rows of the level-K kernels
+                     call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, idx_r, 1, 'C', pgno_sub)
+                     !$omp taskloop default(shared) private(i, index_i, index_i_loc_s, Mt) if(thr .and. ptree%pgrp(pgno_sub)%nproc == 1)
+                     do i = 1, blocks%ButterflyU%nblk_loc
+                        index_i = (i - 1)*blocks%ButterflyU%inc + blocks%ButterflyU%idx
+                        index_i_loc_s = (index_i - BFvec%vec(1)%idx_r)/BFvec%vec(1)%inc_r + 1
+                        call BF_LeafOrth(blocks%ButterflyU%blocks(i), Mt, dotrunc, tolerance, ptree%pgrp(pgno_sub)%Comm, ptree%pgrp(pgno_sub)%nproc, stats, sc)
+                        allocate (BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix(size(Mt, 1), size(Mt, 2)))
+                        BFvec%vec(1)%blocks(index_i_loc_s, 1)%matrix = Mt
+                        deallocate (Mt)
+                     enddo
+                     !$omp end taskloop
                   elseif (level == 0) then
                   else
                      flops = 0
-                     !!$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop)
+                     !$omp taskloop default(shared) private(index_ij,ii,jj,kk,ctemp,i,j,index_i,index_j,index_i_loc,index_j_loc,index_ii,index_jj,index_ii_loc,index_jj_loc,index_i_loc_s,index_j_loc_s,index_i_loc_k,index_j_loc_k,mm,mm1,mm2,nn,nn1,nn2,flop,flop1,rank,num_vectors1,num_vectors2,mn_min,ranknew,matrixtemp,UU,VV,Singular) if(thr)
                      do index_ij = 1, nr*nc
+                        flop = 0
                         index_j_loc = (index_ij - 1)/nr + 1
                         index_i_loc = mod(index_ij - 1, nr) + 1  !index_i_loc is local index of column-wise ordering at current level
                         index_i = (index_i_loc - 1)*inc_r + idx_r  !index_i is global index of column-wise ordering at current level
@@ -20490,6 +20846,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            call gemmf77('T', 'N', num_vectors1,rank, mm1, BPACK_cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm1, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm1, BPACK_czero, matrixtemp(1, 1), num_vectors1 + num_vectors2)
 
                            call gemmf77('T', 'N', num_vectors2,rank, mm2, BPACK_cone, BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc+1, index_jj_loc)%matrix, mm2, blocks%ButterflyKerl(level)%blocks(index_i_loc_k+1, index_j_loc_k)%matrix, mm2, BPACK_czero, matrixtemp(1+num_vectors1, 1), num_vectors1 + num_vectors2)
+                           flop = flop + flops_gemm(num_vectors1, rank, mm1) + flops_gemm(num_vectors2, rank, mm2)
                         endif
 
                         if(level==level_end)then
@@ -20514,8 +20871,16 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            call assert(.not. myisnan(fnorm(matrixtemp, num_vectors1 + num_vectors2,rank)), 'matrixtemp NAN at 4')
 
                            ! call SVD_Truncate(matrixtemp, num_vectors1 + num_vectors2, rank, mn_min, UU, VV, Singular, tolerance, BPACK_SafeUnderflow, ranknew)
-                           call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min)
-                           ranknew=mn_min
+                           if (doqr) then
+                              call BF_QR_thin(matrixtemp, num_vectors1 + num_vectors2, rank, UU, VV, ranknew, flop)
+                              Singular = 1
+                           else
+                              flop1 = 0
+                              call gesvd_robust(matrixtemp, Singular, UU, VV, num_vectors1 + num_vectors2, rank, mn_min, flop=flop1)
+                              flop = flop + flop1
+                              ranknew=mn_min
+                              if (dotrunc) ranknew = BF_TruncRank(Singular, mn_min, tolerance, sc)
+                           endif
 
 
                            call assert(.not. myisnan(sum(Singular)), 'Singular NAN at 4')
@@ -20536,8 +20901,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                            deallocate(UU,VV,Singular)
                         endif
                         deallocate(matrixtemp)
+                        !$omp atomic
+                        flops = flops + flop
                      enddo
-                     !!$omp end taskloop
+                     !$omp end taskloop
+                     !$omp atomic
                      stats%Flop_Tmp = stats%Flop_Tmp + flops
                   endif
                endif
@@ -20561,7 +20929,34 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                call BF_all2all_vec_n_ker(blocks, BFvec%vec(level_butterfly - level_half + 1), stats, ptree, ptree%pgrp(blocks%pgno)%nproc, level_half + 1, 'C', 'R', 0)
                call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, idx_r0, inc_r0, nr0, idx_c0, inc_c0, nc0, 'R')
                if (level == level_butterfly + 1) then
-               elseif (level == 0) then
+               elseif (level == 0) then ! V = V*carry
+                  call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, 1, idx_c0, 'R', pgno_sub)
+                  if (ptree%pgrp(pgno_sub)%nproc > 1) then ! the V block is row-distributed, only the head holds the carry
+                     if (ptree%MyID == ptree%pgrp(pgno_sub)%head) then
+                        index_j_loc_s = (blocks%ButterflyV%idx - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+                        dims = shape(BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix)
+                     endif
+                     call MPI_Bcast(dims, 2, MPI_INTEGER, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     allocate (Mt(dims(1), dims(2)))
+                     if (ptree%MyID == ptree%pgrp(pgno_sub)%head) Mt = BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix
+                     call MPI_Bcast(Mt, dims(1)*dims(2), MPI_DT, Main_ID, ptree%pgrp(pgno_sub)%Comm, ierr)
+                     flop = 0
+                     call BF_LeafRmul(blocks%ButterflyV%blocks(1), Mt, flop)
+                     !$omp atomic
+                     stats%Flop_Tmp = stats%Flop_Tmp + flop
+                     deallocate (Mt)
+                  else
+                     !$omp taskloop default(shared) private(j, index_j, index_j_loc_s, flop) if(thr)
+                     do j = 1, blocks%ButterflyV%nblk_loc
+                        index_j = (j - 1)*blocks%ButterflyV%inc + blocks%ButterflyV%idx
+                        index_j_loc_s = (index_j - BFvec%vec(level_butterfly + 1)%idx_c)/BFvec%vec(level_butterfly + 1)%inc_c + 1
+                        flop = 0
+                        call BF_LeafRmul(blocks%ButterflyV%blocks(j), BFvec%vec(level_butterfly + 1)%blocks(1, index_j_loc_s)%matrix, flop)
+                        !$omp atomic
+                        stats%Flop_Tmp = stats%Flop_Tmp + flop
+                     enddo
+                     !$omp end taskloop
+                  endif
                else
 
                   flops = 0
@@ -20587,6 +20982,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      allocate (matrixtemp(num_vectors,nn))
                      matrixtemp = 0
                      call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, BPACK_cone, BPACK_cone, flop=flop)
+                     flops = flops + flop
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(num_vectors,nn))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix = matrixtemp
@@ -20598,12 +20994,15 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                      allocate (matrixtemp(num_vectors,nn))
                      matrixtemp = 0
                      call gemmf90(BFvec%vec(level_butterfly - level + 1)%blocks(index_ii_loc, index_jj_loc)%matrix, mm, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix, mm, matrixtemp, num_vectors, 'T', 'N', num_vectors,nn, mm, BPACK_cone, BPACK_cone, flop=flop)
+                     flops = flops + flop
                      deallocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix)
                      allocate(blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix(num_vectors,nn))
                      blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k+1)%matrix = matrixtemp
                      deallocate(matrixtemp)
                   enddo
                   !!$omp end taskloop
+                  !$omp atomic
+                  stats%Flop_Tmp = stats%Flop_Tmp + flops
                endif
 
                do j = 1, BFvec%vec(level_butterfly - level + 1)%nc

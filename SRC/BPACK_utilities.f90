@@ -257,6 +257,11 @@ contains
       h_mat_o%Maxlevel=h_mat_i%Maxlevel
       h_mat_o%N=h_mat_i%N
       h_mat_o%Dist_level=h_mat_i%Dist_level
+      h_mat_o%num_blocks=h_mat_i%num_blocks
+      if(allocated(h_mat_i%topgroups))then
+         allocate(h_mat_o%topgroups(size(h_mat_i%topgroups)))
+         h_mat_o%topgroups=h_mat_i%topgroups
+      endif
       h_mat_o%idxs=h_mat_i%idxs
       h_mat_o%idxe=h_mat_i%idxe
       h_mat_o%myArows=h_mat_i%myArows
@@ -342,6 +347,7 @@ contains
 
       if (associated(h_mat%N_p)) deallocate (h_mat%N_p)
       if (allocated(h_mat%basis_group)) deallocate (h_mat%basis_group)
+      if (allocated(h_mat%topgroups)) deallocate (h_mat%topgroups)
       if (associated(h_mat%Local_blocks)) then
          bm = size(h_mat%Local_blocks, 1)
          bn = size(h_mat%Local_blocks, 2)
@@ -729,6 +735,8 @@ contains
       type(mesh)msh_i,msh_o
       msh_o%Nunk=msh_i%Nunk
       msh_o%Dist_level=msh_i%Dist_level
+      msh_o%ntree=msh_i%ntree
+      msh_o%forest_level=msh_i%forest_level
       msh_o%Maxgroup=msh_i%Maxgroup
       msh_o%idxs=msh_i%idxs
       msh_o%idxe=msh_i%idxe
@@ -1277,6 +1285,7 @@ contains
       option%nogeo = 0
       option%per_geo = 0
       option%hextralevel = 0
+      option%ntree = 1
       option%periods = 0
       option%ErrSol = 0
       option%LR_BLK_NUM = 1
@@ -1303,6 +1312,7 @@ contains
       option%sample_para_outer = 2.0d0
       option%use_zfp = 0
       option%use_parsec = 0
+      option%bf_algebra = 0
       option%use_qtt = 0
       ! option%sample_heuristic = 1
       option%pat_comp = 3
@@ -1407,6 +1417,8 @@ contains
                   read (strings1, *) option%per_geo
                else if (trim(strings) == '--hextralevel') then
                   read (strings1, *) option%hextralevel
+               else if (trim(strings) == '--ntree') then
+                  read (strings1, *) option%ntree
                else if (trim(strings) == '--period1') then
                   read (strings1, *) option%periods(1)
                else if (trim(strings) == '--period2') then
@@ -1453,6 +1465,8 @@ contains
                   read (strings1, *) option%fftw_plan_mode
                else if (trim(strings) == '--use_parsec') then
                   read (strings1, *) option%use_parsec
+               else if (trim(strings) == '--bf_algebra') then
+                  read (strings1, *) option%bf_algebra
                else if (trim(strings) == '--use_qtt') then
                   read (strings1, *) option%use_qtt
                ! else if (trim(strings) == '--sample_heuristic') then
@@ -1523,6 +1537,7 @@ contains
       option1%nogeo = option%nogeo
       option1%per_geo = option%per_geo
       option1%hextralevel = option%hextralevel
+      option1%ntree = option%ntree
       option1%periods = option%periods
       option1%ErrSol = option%ErrSol
       option1%LR_BLK_NUM = option%LR_BLK_NUM
@@ -1549,6 +1564,7 @@ contains
       option1%sample_para_outer = option%sample_para_outer
       option1%use_zfp = option%use_zfp
       option1%use_parsec = option%use_parsec
+      option1%bf_algebra = option%bf_algebra
       option1%use_qtt = option%use_qtt
       ! option1%sample_heuristic = option%sample_heuristic
       option1%pat_comp = option%pat_comp
@@ -1606,6 +1622,7 @@ contains
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
                write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               write (*, '(A18,I8)') 'ntree', option%ntree
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)
@@ -1652,6 +1669,7 @@ contains
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
                write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               write (*, '(A18,I8)') 'ntree', option%ntree
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)
@@ -1674,6 +1692,7 @@ contains
                write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'bf_algebra', option%bf_algebra
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'rankrate', option%rankrate
@@ -1801,6 +1820,7 @@ contains
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
                write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               write (*, '(A18,I8)') 'ntree', option%ntree
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)
@@ -1846,6 +1866,7 @@ contains
                write (*, '(A18,I8)') 'nogeo', option%nogeo
                write (*, '(A18,I8)') 'per_geo', option%per_geo
                write (*, '(A18,I8)') 'hextralevel', option%hextralevel
+               write (*, '(A18,I8)') 'ntree', option%ntree
                if(option%per_geo==1)then
                   write (*, '(A18,Es14.7)') 'period1', option%periods(1)
                   write (*, '(A18,Es14.7)') 'period2', option%periods(2)

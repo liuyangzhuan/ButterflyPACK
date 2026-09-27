@@ -486,6 +486,46 @@ end function distance_geo
    end subroutine Hmat_construct_local_tree
 
 
+   !>**** whether a cluster-tree group has no indices (only happens for the unused root slots of an embedded forest)
+   logical function group_is_empty(msh, group)
+      implicit none
+      type(mesh)::msh
+      integer group
+      group_is_empty = msh%basis_group(group)%tail < msh%basis_group(group)%head
+   end function group_is_empty
+
+   !>**** convert a user-provided forest into msh%pretree of the embedded binary tree.
+   ! tree(1:nleaf) holds the leaf sizes of option%ntree complete binary trees of equal depth, concatenated tree by tree in the user's index order.
+   ! The roots are placed at level msh%forest_level=ceil(log2(ntree)) as groups 2**forest_level ... 2**forest_level+ntree-1; the remaining groups at that level (and their subtrees) are empty.
+   subroutine Forest_to_pretree(msh, option, tree, nleaf)
+      implicit none
+      type(mesh)::msh
+      type(Hoption)::option
+      integer nleaf, tree(nleaf)
+      integer d, D0, nl
+
+      call assert(option%format == HMAT .or. option%format == BLR, 'option%ntree>1 (a forest of cluster trees) is only supported by the HMAT and BLR formats')
+      call assert(mod(nleaf, option%ntree) == 0, 'option%ntree must divide the number of leaves in tree')
+      nl = nleaf/option%ntree
+      d = 0
+      do while (2**d < nl)
+         d = d + 1
+      enddo
+      call assert(2**d == nl, 'each tree of the forest must be a complete binary tree: the number of leaves per tree must be a power of two')
+      call assert(minval(tree(1:nleaf)) > 0, 'zero leaf sizes are not allowed in a forest')
+      call assert(sum(tree(1:nleaf)) == msh%Nunk, 'the leaf sizes of the forest must add up to the matrix size')
+      D0 = 0
+      do while (2**D0 < option%ntree)
+         D0 = D0 + 1
+      enddo
+      msh%ntree = option%ntree
+      msh%forest_level = D0
+      if (allocated(msh%pretree)) deallocate (msh%pretree)
+      allocate (msh%pretree(2**(D0 + d)))
+      msh%pretree = 0
+      msh%pretree(1:nleaf) = tree(1:nleaf)
+   end subroutine Forest_to_pretree
+
    subroutine Cluster_partition(bmat, option, msh, ker, stats, ptree)
 
 
@@ -555,6 +595,10 @@ end function distance_geo
       ! the following is needed when bplus is used as bplus only support even number of levels for now.
       if (Maxlevel == ptree%nlevel .and. option%lnoBP < Maxlevel) then
          Maxlevel = ptree%nlevel + 1
+      endif
+      if (msh%ntree > 1) then ! a forest: the user-provided trees define all levels, the leaves are not split further
+         Maxlevel = nlevel_pre
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'forest of', msh%ntree, 'trees, roots at level', msh%forest_level, ', leaves at level', Maxlevel
       endif
 
       select case (option%format)
@@ -634,7 +678,7 @@ end function distance_geo
                else
                   groupsize = msh%pretree(group - 2**nlevel_pre + 1)
                endif
-               call assert(groupsize > 0, 'zero leafsize may not be handled')
+               call assert(groupsize > 0 .or. msh%ntree > 1, 'zero leafsize may not be handled')
                msh%basis_group(group)%head = idxstart
                msh%basis_group(group)%tail = idxstart + groupsize - 1
                idxstart = idxstart + groupsize
@@ -642,6 +686,7 @@ end function distance_geo
                msh%basis_group(group)%head = msh%basis_group(2*group)%head
                msh%basis_group(group)%tail = msh%basis_group(2*group + 1)%tail
             endif
+            if (group_is_empty(msh, group)) cycle ! an empty root slot of a forest
 
             !>***** the following is needed for the near_or_far function in H matrix, this needs to be improved
             if (allocated(msh%xyz)) then
@@ -677,7 +722,7 @@ end function distance_geo
          enddo
       enddo
 
-      if (ptree%MyID == Main_ID) then
+      if (ptree%MyID == Main_ID .and. msh%ntree == 1) then ! a forest keeps the user's order: its leaves are final
 
          !>**** if necessary, continue ordering the sub-trees using clustering method specified by option%xyzsort
          do level = nlevel_pre, Maxlevel
@@ -872,6 +917,7 @@ end function distance_geo
       !>**** generate tree structures on other processes
       do level = nlevel_pre, Maxlevel
          do group = 2**level, 2**(level + 1) - 1
+            if (group_is_empty(msh, group)) cycle ! an empty root slot of a forest
             ! msh%basis_group(group)%level=level
 
             if (allocated(msh%xyz)) then
@@ -1587,6 +1633,7 @@ end function distance_geo
       else
          do ii = 1, 2
          do jj = 1, 2
+            if (group_is_empty(msh, group_m*2 + ii - 1) .or. group_is_empty(msh, group_n*2 + jj - 1)) cycle ! empty root slots of a forest
             if (near_or_far_user(group_m*2 + ii - 1, group_n*2 + jj - 1, msh, option, ker, option%knn_near_para) == 0) call append_nlist(ker, option, stats, msh, ptree, group_m*2 + ii - 1, group_n*2 + jj - 1, flag,Bidxs, Bidxe)
          enddo
          enddo
@@ -3712,6 +3759,7 @@ end function distance_geo
       integer i, j, ii, jj, iii, jjj, k, kk, kkk
       integer level, edge, node, patch, group, group_m, group_n, group_tmp(1)
       integer mm, nn, num_blocks,group_start,gg
+      integer dtree, dtop, nleaf, l1, l2, pp
       type(matrixblock), pointer :: blocks
       type(matrixblock) :: blocks_dummy
       integer Maxgrp, ierr, row_group, col_group
@@ -3730,6 +3778,27 @@ end function distance_geo
          level = level + 1
       enddo
 
+      if (msh%ntree > 1) then ! a forest: the top-level clusters are the nodes at depth dtop below the ntree roots
+         dtree = h_mat%Maxlevel - msh%forest_level ! depth of each tree
+         dtop = 0
+         do while (msh%ntree*2**dtop < ii)
+            dtop = dtop + 1
+         enddo
+         if(option%format==BLR)then ! same rule as a single tree, measured from the forest roots
+            dtop = max(min(dtree,dtop),dtree-option%hextralevel)
+         else
+            dtop = min(dtree,dtop+option%hextralevel)
+         endif
+         msh%Dist_level = msh%forest_level + dtop
+         h_mat%Dist_level = msh%Dist_level
+         h_mat%num_blocks = msh%ntree*2**dtop
+         allocate (h_mat%topgroups(h_mat%num_blocks))
+         do k = 1, msh%ntree
+            do gg = 1, 2**dtop
+               h_mat%topgroups((k - 1)*2**dtop + gg) = (2**msh%forest_level + k - 1)*2**dtop + gg - 1
+            enddo
+         enddo
+      else
       if(option%format==BLR)then ! Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks, the butterfly level of each B-BF block is option%hextralevel
          msh%Dist_level = max(min(h_mat%Maxlevel,level),h_mat%Maxlevel-option%hextralevel)
          h_mat%Dist_level = max(min(h_mat%Maxlevel,level),h_mat%Maxlevel-option%hextralevel)
@@ -3738,9 +3807,45 @@ end function distance_geo
          msh%Dist_level = min(h_mat%Maxlevel,level)
          h_mat%Dist_level = min(h_mat%Maxlevel,level)
       endif
+         h_mat%num_blocks = 2**msh%Dist_level
+         allocate (h_mat%topgroups(h_mat%num_blocks))
+         do gg = 1, h_mat%num_blocks
+            h_mat%topgroups(gg) = h_mat%num_blocks + gg - 1
+         enddo
+      endif
 
 
       Maxgrp = 2**(ptree%nlevel) - 1
+      h_mat%N = msh%Nunk
+      if (msh%ntree > 1) then
+         ! rows: contiguous ranges of whole leaves balanced over the processes (by unknowns if there are more processes than leaves)
+         nleaf = msh%ntree*2**dtree ! the leaves of the forest are the first nleaf groups at Maxlevel
+         allocate (h_mat%N_p(ptree%nproc, 2))
+         do pp = 1, ptree%nproc
+            if (ptree%nproc <= nleaf) then
+               l1 = ((pp - 1)*nleaf)/ptree%nproc + 1
+               l2 = (pp*nleaf)/ptree%nproc
+               h_mat%N_p(pp, 1) = msh%basis_group(2**h_mat%Maxlevel + l1 - 1)%head
+               h_mat%N_p(pp, 2) = msh%basis_group(2**h_mat%Maxlevel + l2 - 1)%tail
+            else
+               h_mat%N_p(pp, 1) = int((int(pp - 1, 8)*msh%Nunk)/ptree%nproc) + 1
+               h_mat%N_p(pp, 2) = int((int(pp, 8)*msh%Nunk)/ptree%nproc)
+            endif
+         enddo
+         msh%idxs = h_mat%N_p(ptree%MyID + 1, 1)
+         msh%idxe = h_mat%N_p(ptree%MyID + 1, 2)
+         ! each H block is owned by a single process: use this rank's single-process group at the deepest process level
+         mypgno = 0
+         do gg = 2**(ptree%nlevel - 1), Maxgrp
+            if (ptree%pgrp(gg)%nproc == 1 .and. ptree%pgrp(gg)%head == ptree%MyID) then
+               mypgno = gg
+               exit
+            endif
+         enddo
+         call assert(mypgno > 0, 'no single-process group found for this rank')
+         h_mat%idxs = msh%idxs
+         h_mat%idxe = msh%idxe
+      else
       do level = h_mat%Maxlevel, h_mat%Maxlevel
          do group = 2**level, 2**(level + 1) - 1
             group_tmp(1) = group
@@ -3752,7 +3857,6 @@ end function distance_geo
          enddo
       enddo
 
-      h_mat%N = msh%Nunk
       h_mat%idxs = msh%idxs
       h_mat%idxe = msh%idxe
 
@@ -3767,13 +3871,13 @@ end function distance_geo
       h_mat%N_p = blocks_dummy%N_p
       deallocate(blocks_dummy%N_p)
       deallocate(blocks_dummy%M_p)
+      endif
 
-      num_blocks = 2**msh%Dist_level
+      num_blocks = h_mat%num_blocks
       allocate (h_mat%basis_group(num_blocks))
-      group_start = num_blocks - 1
       do gg=1,num_blocks
-         h_mat%basis_group(gg)%head = msh%basis_group(gg+group_start)%head
-         h_mat%basis_group(gg)%tail = msh%basis_group(gg+group_start)%tail
+         h_mat%basis_group(gg)%head = msh%basis_group(h_mat%topgroups(gg))%head
+         h_mat%basis_group(gg)%tail = msh%basis_group(h_mat%topgroups(gg))%tail
       enddo
 
       allocate (stats%leafs_of_level(0:h_mat%Maxlevel))
@@ -3791,11 +3895,15 @@ end function distance_geo
       stats%XLUM_random_CNT = 0
       allocate (stats%XLUM_random_Time(0:h_mat%Maxlevel))
       stats%XLUM_random_Time = 0
+      allocate (stats%Add_random_Flop(0:h_mat%Maxlevel), stats%Mul_random_Flop(0:h_mat%Maxlevel), stats%XLUM_random_Flop(0:h_mat%Maxlevel))
+      stats%Add_random_Flop = 0
+      stats%Mul_random_Flop = 0
+      stats%XLUM_random_Flop = 0
 
       call blacs_gridinfo_wrp(ptree%pgrp(1)%ctxt, nprow, npcol, myrow, mycol)
       if (myrow /= -1 .and. mycol /= -1) then
 
-         num_blocks = 2**msh%Dist_level
+         num_blocks = h_mat%num_blocks
          myArows = numroc_wp(num_blocks, 1, myrow, 0, nprow)
          myAcols = numroc_wp(num_blocks, 1, mycol, 0, npcol)
          h_mat%myArows = myArows
@@ -3811,8 +3919,8 @@ end function distance_geo
                call l2g(j, mycol, num_blocks, npcol, 1, jj)
                blocks => h_mat%Local_blocks(j, i)
                blocks%level = msh%Dist_level
-               blocks%row_group = num_blocks + ii - 1
-               blocks%col_group = num_blocks + jj - 1
+               blocks%row_group = h_mat%topgroups(ii)
+               blocks%col_group = h_mat%topgroups(jj)
 
                if (blocks%level > option%LRlevel) then
                   blocks%level_butterfly = 0 ! low rank below LRlevel
@@ -3896,6 +4004,7 @@ end function distance_geo
          allocate(h_mat%admissibles(msh%Maxgroup))
          call LogMemory(stats, SIZEOF(h_mat%admissibles)/1024.0d3)
       endif
+      if (group_is_empty(msh, group_m) .or. group_is_empty(msh, group_n)) return ! empty root slots of a forest (never the root itself)
 
       if (level >= msh%Dist_level .and. near_or_far_user(group_m, group_n, msh, option, ker, option%near_para) == 1) then
          p%i=group_n
