@@ -20,6 +20,7 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <complex>
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
@@ -37,8 +38,15 @@ public:
     struct Segment {
         std::vector<double>* doubles = nullptr;  // exactly one destination
         std::vector<int>* ints = nullptr;
+        std::vector<std::complex<double>>* complexes = nullptr;
         size_t offset = 0;                       // bytes into the device block
         size_t bytes = 0;
+        Segment() = default;
+        Segment(std::vector<double>* d, std::vector<int>* i, size_t off, size_t b)
+            : doubles(d), ints(i), offset(off), bytes(b) {}
+        Segment(std::vector<std::complex<double>>* c, std::vector<int>* i, size_t off, size_t b)
+            : ints(i), complexes(c), offset(off), bytes(b) {}
+        Segment(std::nullptr_t, std::vector<int>* i, size_t off, size_t b) : ints(i), offset(off), bytes(b) {}
     };
     struct Job {
         char* device = nullptr;
@@ -173,6 +181,9 @@ private:
                 if (seg.doubles) {
                     seg.doubles->clear();
                     seg.doubles->reserve(seg.bytes / sizeof(double));
+                } else if (seg.complexes) {
+                    seg.complexes->clear();
+                    seg.complexes->reserve(seg.bytes / sizeof(std::complex<double>));
                 } else {
                     seg.ints->clear();
                     seg.ints->reserve(seg.bytes / sizeof(int));
@@ -233,6 +244,10 @@ private:
                 if (seg.doubles) {
                     const double* p = reinterpret_cast<const double*>(src);
                     seg.doubles->insert(seg.doubles->end(), p, p + (hi - lo) / sizeof(double));
+                } else if (seg.complexes) {
+                    // (chunk boundaries and segment offsets are multiples of 16 bytes)
+                    const std::complex<double>* p = reinterpret_cast<const std::complex<double>*>(src);
+                    seg.complexes->insert(seg.complexes->end(), p, p + (hi - lo) / sizeof(std::complex<double>));
                 } else {
                     const int* p = reinterpret_cast<const int*>(src);
                     seg.ints->insert(seg.ints->end(), p, p + (hi - lo) / sizeof(int));

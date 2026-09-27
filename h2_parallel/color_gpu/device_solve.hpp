@@ -141,10 +141,10 @@ struct DeviceSolveLevel {
 // Factors of a level kept on the device during the factorization (all ranks
 // of the level agreed), consumed by the first solve's preparation.
 struct KeptSolveBox {
-    const double* T = nullptr;
-    const double* xsr = nullptr;
-    const double* xnr = nullptr;
-    const double* lu = nullptr;
+    const void* T = nullptr;  // elements of the factorization's type
+    const void* xsr = nullptr;
+    const void* xnr = nullptr;
+    const void* lu = nullptr;
     const int* ipiv = nullptr;
     int k = 0, r = 0, ntot = 0;
 };
@@ -603,12 +603,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
     store.release_prepared();
     store.tree = tree;
     store.decided = true;
-    if constexpr (!std::is_same_v<DataType, double>) {
-        return false;
-    } else {
+    {
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
-        const size_t D = sizeof(double), I = sizeof(int);
+        const size_t D = sizeof(DataType), I = sizeof(int);
         const int leaf = tree->num_levels - 1;
         int rank = 0;
         MPI_Comm_rank(tree->comm, &rank);
@@ -821,9 +819,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     char* p = h + offset_in[pc.box];
                     const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
                     auto put = [&](size_t at, const MatrixStorage<DataType>& m, size_t rows) {
-                        double* d = reinterpret_cast<double*>(p + at);
+                        DataType* d = reinterpret_cast<DataType*>(p + at);
                         for (size_t j = pc.col0; j < pc.col1; ++j)
-                            std::memcpy(d + j * rows, m.data.data() + j * static_cast<size_t>(m.lda), rows * sizeof(double));
+                            std::memcpy(d + j * rows, m.data.data() + j * static_cast<size_t>(m.lda), rows * D);
                     };
                     switch (pc.what) {
                         case 0: put(l.T, box.interpolation_matrix, k); break;
@@ -877,10 +875,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     sb.lu = kb->lu;
                     sb.ipiv = kb->ipiv;
                 } else {
-                    sb.T = eliminated && l.has_T ? reinterpret_cast<const double*>(p + l.T) : nullptr;
-                    sb.xsr = eliminated && l.has_xsr ? reinterpret_cast<const double*>(p + l.xsr) : nullptr;
-                    sb.xnr = eliminated ? reinterpret_cast<const double*>(p + l.xnr) : nullptr;
-                    sb.lu = eliminated ? reinterpret_cast<const double*>(p + l.lu) : nullptr;
+                    sb.T = eliminated && l.has_T ? p + l.T : nullptr;
+                    sb.xsr = eliminated && l.has_xsr ? p + l.xsr : nullptr;
+                    sb.xnr = eliminated ? p + l.xnr : nullptr;
+                    sb.lu = eliminated ? p + l.lu : nullptr;
                     sb.ipiv = eliminated ? reinterpret_cast<const int*>(p + l.ipiv) : nullptr;
                 }
                 sb.slot0 = static_cast<int>(L.slots.size());
@@ -968,45 +966,48 @@ struct DeviceSolveTimes {
 
 template<typename CoordType, typename DataType>
 class DeviceSolveRun {
+    using S = typename DeviceScalar<DataType>::type;  // vector elements on the device
+    static constexpr int kWords = static_cast<int>(sizeof(S) / sizeof(double));  // MPI_DOUBLE per element
+
 public:
     DeviceSolveRun(ParallelTree<CoordType, DataType>* tree, int nrhs) : tree_(tree), nrhs_(nrhs) {}
 
     // a level's vectors: host solve data -> device
-    double* upload(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+    S* upload(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
         const auto t0 = std::chrono::steady_clock::now();
         const size_t len = static_cast<size_t>(L.points) * nrhs_;
-        double* d = heap_.alloc<double>(std::max<size_t>(len, 1) * sizeof(double));
-        double* h = static_cast<double*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(double)));
+        S* d = heap_.alloc<S>(std::max<size_t>(len, 1) * sizeof(S));
+        S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
         for (size_t b = 0; b < L.boxes.size(); ++b) {
             const auto& v = data[b].left_side;
             if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) throw std::runtime_error("device solve: vector size");
-            std::memcpy(h + L.boxes[b].vec * nrhs_, v.data(), v.size() * sizeof(double));
+            std::memcpy(h + L.boxes[b].vec * nrhs_, v.data(), v.size() * sizeof(DataType));
         }
-        check_cuda(cudaMemcpyAsync(d, h, len * sizeof(double), cudaMemcpyHostToDevice, stream_), "solve upload");
+        check_cuda(cudaMemcpyAsync(d, h, len * sizeof(S), cudaMemcpyHostToDevice, stream_), "solve upload");
         check_cuda(cudaStreamSynchronize(stream_), "solve upload");
         times.transfer += seconds_since(t0);
         return d;
     }
-    void download(DeviceSolveLevel& L, double* d, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+    void download(DeviceSolveLevel& L, S* d, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
         const auto t0 = std::chrono::steady_clock::now();
         const size_t len = static_cast<size_t>(L.points) * nrhs_;
-        double* h = static_cast<double*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(double)));
-        check_cuda(cudaMemcpyAsync(h, d, len * sizeof(double), cudaMemcpyDeviceToHost, stream_), "solve download");
+        S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
+        check_cuda(cudaMemcpyAsync(h, d, len * sizeof(S), cudaMemcpyDeviceToHost, stream_), "solve download");
         check_cuda(cudaStreamSynchronize(stream_), "solve download");
         for (size_t b = 0; b < L.boxes.size(); ++b) {
             auto& v = data[b].left_side;
-            std::memcpy(v.data(), h + L.boxes[b].vec * nrhs_, v.size() * sizeof(double));
+            std::memcpy(v.data(), h + L.boxes[b].vec * nrhs_, v.size() * sizeof(DataType));
         }
         heap_.free(d);
         times.transfer += seconds_since(t0);
     }
 
     // The forward waves of a level, then its diagonal solves.
-    void forward(DeviceSolveLevel& L, double* vec) {
+    void forward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
-        double* work = alloc_points(L.work_points);
-        double* outbox = alloc_message(L.out_max);
-        double* inbox = alloc_message(L.in_max);
+        S* work = alloc_points(L.work_points);
+        S* outbox = alloc_message(L.out_max);
+        S* inbox = alloc_message(L.in_max);
         for (const auto& W : L.waves) {
             launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
@@ -1029,12 +1030,12 @@ public:
 
     // The backward waves of a level, in reverse, other ranks' neighbor
     // vectors refreshed before each.
-    void backward(DeviceSolveLevel& L, double* vec) {
+    void backward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
-        double* work = alloc_points(L.work_points);
-        double* ghost = alloc_points(L.ghost_points);
-        double* sendbox = alloc_message(L.send_max);
-        double* inbox = alloc_message(L.recv_max);
+        S* work = alloc_points(L.work_points);
+        S* ghost = alloc_points(L.ghost_points);
+        S* sendbox = alloc_message(L.send_max);
+        S* inbox = alloc_message(L.recv_max);
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
             if (!L.peers.empty()) refresh(L, W.ref[0], vec, ghost, sendbox, inbox);
@@ -1052,12 +1053,12 @@ public:
     // The multiply F x (color_CA/apply_mul.hpp): a level's forward W waves
     // in order (reading neighbors, other ranks' vectors refreshed before
     // each), then its diagonal multiplies (x_R final by then).
-    void mul_forward(DeviceSolveLevel& L, double* vec) {
+    void mul_forward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
-        double* work = alloc_points(L.work_points);
-        double* ghost = alloc_points(L.ghost_points);
-        double* sendbox = alloc_message(L.send_max);
-        double* inbox = alloc_message(L.recv_max);
+        S* work = alloc_points(L.work_points);
+        S* ghost = alloc_points(L.ghost_points);
+        S* sendbox = alloc_message(L.send_max);
+        S* inbox = alloc_message(L.recv_max);
         for (const auto& W : L.waves) {
             if (!L.peers.empty()) refresh(L, W.ref[1], vec, ghost, sendbox, inbox);
             launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, ghost, work, nrhs_, L.max_n,
@@ -1077,11 +1078,11 @@ public:
     // A level's backward V waves in reverse (reverse Morton order within a
     // wave), their neighbor updates applied after each as in the solve's
     // forward sweep.
-    void mul_backward(DeviceSolveLevel& L, double* vec) {
+    void mul_backward(DeviceSolveLevel& L, S* vec) {
         const auto t0 = std::chrono::steady_clock::now();
-        double* work = alloc_points(L.work_points);
-        double* outbox = alloc_message(L.out_max);
-        double* inbox = alloc_message(L.in_max);
+        S* work = alloc_points(L.work_points);
+        S* outbox = alloc_message(L.out_max);
+        S* inbox = alloc_message(L.in_max);
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
             launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
@@ -1105,27 +1106,27 @@ private:
     static double seconds_since(std::chrono::steady_clock::time_point t) {
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
     }
-    double* alloc_points(int64_t points) {
-        return points > 0 ? heap_.alloc<double>(static_cast<size_t>(points) * nrhs_ * sizeof(double)) : nullptr;
+    S* alloc_points(int64_t points) {
+        return points > 0 ? heap_.alloc<S>(static_cast<size_t>(points) * nrhs_ * sizeof(S)) : nullptr;
     }
-    void free_points(double* p) {
+    void free_points(S* p) {
         if (p != nullptr) heap_.free(p);
     }
     // Message buffers: in the MPI exchange arena when MPI is CUDA-aware
     // (sent and received in device memory), else staged through the host.
-    double* alloc_message(int64_t points) {
+    S* alloc_message(int64_t points) {
         if (points <= 0) return nullptr;
-        const size_t bytes = static_cast<size_t>(points) * nrhs_ * sizeof(double);
+        const size_t bytes = static_cast<size_t>(points) * nrhs_ * sizeof(S);
         static const bool direct = [] {  // H2_GPU_SOLVE_DIRECT=0: stage through the host
             const char* v = std::getenv("H2_GPU_SOLVE_DIRECT");
             return v == nullptr || std::atoi(v) != 0;
         }();
         if (direct && device_exchange_enabled()) {
-            if (char* p = DeviceHeap::exchange_arena().try_alloc(bytes)) return reinterpret_cast<double*>(p);
+            if (char* p = DeviceHeap::exchange_arena().try_alloc(bytes)) return reinterpret_cast<S*>(p);
         }
-        return heap_.alloc<double>(bytes);
+        return heap_.alloc<S>(bytes);
     }
-    void free_message(double* p) {
+    void free_message(S* p) {
         if (p == nullptr) return;
         DeviceHeap& arena = DeviceHeap::exchange_arena();
         if (arena.owns(p)) {
@@ -1135,8 +1136,8 @@ private:
         }
     }
     // Other ranks' vectors that changed, into the ghost area.
-    void refresh(DeviceSolveLevel& L, const DeviceSolveLevel::Wave::Refresh& R, double* vec, double* ghost,
-                 double* sendbox, double* inbox) {
+    void refresh(DeviceSolveLevel& L, const DeviceSolveLevel::Wave::Refresh& R, S* vec, S* ghost,
+                 S* sendbox, S* inbox) {
         launch_solve_copy(L.d_copies + R.send0, R.nsend, R.send_max_n, nrhs_, vec, sendbox, stream_);
         exchange(L, R.send, R.recv, sendbox, inbox, 760);
         launch_solve_copy(L.d_copies + R.recv0, R.nrecv, R.recv_max_n, nrhs_, inbox, ghost, stream_);
@@ -1146,7 +1147,7 @@ private:
     // to and from peer q, in device memory when both buffers are in the MPI
     // exchange arena, else staged through the host.
     void exchange(DeviceSolveLevel& L, const std::vector<int64_t>& out, const std::vector<int64_t>& in,
-                  const double* d_out, double* d_in, int tag) {
+                  const S* d_out, S* d_in, int tag) {
         const size_t np = L.peers.size();
         int64_t total_out = 0, total_in = 0;
         for (size_t q = 0; q < np; ++q) {
@@ -1163,7 +1164,7 @@ private:
             for (size_t q = 0; q < np; ++q) {
                 if (in[q] > 0) {
                     reqs.emplace_back();
-                    MPI_Irecv(d_in + at * nrhs_, static_cast<int>(in[q] * nrhs_), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
+                    MPI_Irecv(d_in + at * nrhs_, static_cast<int>(in[q] * nrhs_ * kWords), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
                               &reqs.back());
                 }
                 at += in[q];
@@ -1172,7 +1173,7 @@ private:
             for (size_t q = 0; q < np; ++q) {
                 if (out[q] > 0) {
                     reqs.emplace_back();
-                    MPI_Isend(d_out + at * nrhs_, static_cast<int>(out[q] * nrhs_), MPI_DOUBLE, L.peers[q], tag,
+                    MPI_Isend(d_out + at * nrhs_, static_cast<int>(out[q] * nrhs_ * kWords), MPI_DOUBLE, L.peers[q], tag,
                               tree_->comm, &reqs.back());
                 }
                 at += out[q];
@@ -1183,10 +1184,10 @@ private:
             return;
         }
         if (total_out + total_in > 0) ++times.staged_messages;
-        double* h_out = static_cast<double*>(host_out_.reserve(std::max<int64_t>(total_out, 1) * nrhs_ * sizeof(double)));
-        double* h_in = static_cast<double*>(host_in_.reserve(std::max<int64_t>(total_in, 1) * nrhs_ * sizeof(double)));
+        S* h_out = static_cast<S*>(host_out_.reserve(std::max<int64_t>(total_out, 1) * nrhs_ * sizeof(S)));
+        S* h_in = static_cast<S*>(host_in_.reserve(std::max<int64_t>(total_in, 1) * nrhs_ * sizeof(S)));
         if (total_out > 0) {
-            check_cuda(cudaMemcpy(h_out, d_out, static_cast<size_t>(total_out) * nrhs_ * sizeof(double),
+            check_cuda(cudaMemcpy(h_out, d_out, static_cast<size_t>(total_out) * nrhs_ * sizeof(S),
                                   cudaMemcpyDeviceToHost), "solve messages");
         }
         std::vector<MPI_Request> reqs;
@@ -1194,7 +1195,7 @@ private:
         for (size_t q = 0; q < np; ++q) {
             if (in[q] > 0) {
                 reqs.emplace_back();
-                MPI_Irecv(h_in + at * nrhs_, static_cast<int>(in[q] * nrhs_), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
+                MPI_Irecv(h_in + at * nrhs_, static_cast<int>(in[q] * nrhs_ * kWords), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
                           &reqs.back());
             }
             at += in[q];
@@ -1203,14 +1204,14 @@ private:
         for (size_t q = 0; q < np; ++q) {
             if (out[q] > 0) {
                 reqs.emplace_back();
-                MPI_Isend(h_out + at * nrhs_, static_cast<int>(out[q] * nrhs_), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
+                MPI_Isend(h_out + at * nrhs_, static_cast<int>(out[q] * nrhs_ * kWords), MPI_DOUBLE, L.peers[q], tag, tree_->comm,
                           &reqs.back());
             }
             at += out[q];
         }
         MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
         if (total_in > 0) {
-            check_cuda(cudaMemcpyAsync(d_in, h_in, static_cast<size_t>(total_in) * nrhs_ * sizeof(double),
+            check_cuda(cudaMemcpyAsync(d_in, h_in, static_cast<size_t>(total_in) * nrhs_ * sizeof(S),
                                        cudaMemcpyHostToDevice, stream_), "solve messages");
         }
         times.comm += seconds_since(t0);
@@ -1245,7 +1246,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
         auto& lvl = tree->levels[static_cast<size_t>(level)];
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            double* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+            auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
             run.forward(L, vec);
             run.download(L, vec, solve_data[static_cast<size_t>(level)]);
         }
@@ -1270,7 +1271,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
         host_seconds += std::chrono::duration<double>(clock::now() - ts).count();
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            double* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+            auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
             run.backward(L, vec);
             run.download(L, vec, solve_data[static_cast<size_t>(level)]);
         }
@@ -1307,7 +1308,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         auto& lvl = tree->levels[static_cast<size_t>(level)];
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            double* vec = run.upload(L, data[static_cast<size_t>(level)]);
+            auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
             run.mul_forward(L, vec);
             run.download(L, vec, data[static_cast<size_t>(level)]);
         }
@@ -1332,7 +1333,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         host_seconds += std::chrono::duration<double>(clock::now() - ts).count();
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            double* vec = run.upload(L, data[static_cast<size_t>(level)]);
+            auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
             run.mul_backward(L, vec);
             run.download(L, vec, data[static_cast<size_t>(level)]);
         }

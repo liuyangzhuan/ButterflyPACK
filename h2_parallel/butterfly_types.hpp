@@ -216,12 +216,17 @@ struct H2Kernel {
     int block_callback_pid = 0;
     int dimension = 0;
     // Device-evaluable form of the kernel for the GPU box path (H2_use_gpu=1),
-    // registered by the application with c_bpack_h2_set_gpu_kernel.
-    //   kind 0: none;  kind 1: params[1] when the global ids match, else
-    //   params[0] / |x - y|  (3D)
+    // registered by the application with c_bpack_h2_set_gpu_kernel (3D).
+    //   kind 0: none
+    //   kind 1 (real): params[1] when the global ids match, else
+    //     params[0] / r
+    //   kind 2 (complex, symmetric): params[3] + i params[4] when the global
+    //     ids match, else (params[1] + i params[2]) e^{i params[0] r} /
+    //     (params[5] r)
+    // with r = |x - y|.
     struct GpuSpec {
         int kind = 0;
-        double params[4] = {0.0, 0.0, 0.0, 0.0};
+        double params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     } gpu_spec;
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>

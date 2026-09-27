@@ -6,11 +6,15 @@
 // n x nrhs block (column-major) at nrhs * (its point offset); the work,
 // ghost, and message buffers follow the same convention.  All offsets in the
 // tables below are in points, so the tables do not depend on nrhs or on
-// where a solve's buffers live.  See device_solve.hpp.
+// where a solve's buffers live.  The vectors and factors are real (double)
+// or complex (dcomplex) as the launch's element type T; the factors of a box
+// are untyped pointers in the tables.  See device_solve.hpp.
 
 #ifdef H2_HAVE_GPU
 
 #include <cuda_runtime.h>
+
+#include "device_scalar.hpp"
 
 #include <cstdint>
 
@@ -19,16 +23,16 @@ namespace gpu {
 
 // A box of a level.  The factors are the host solve's: T (interpolation,
 // k x r), X_SR (-X_SR X_RR^{-1}, k x r), X_NR (-X_NR X_RR^{-1}, ntot x r),
-// the LU of X_RR (r x r) and its 1-based row interchanges.
+// the LU of X_RR (r x r) and its 1-based row interchanges, of element type T.
 struct SolveBox {
     int64_t vec;          // its vector in the level vector
     int n, k, r, ntot;
     const int* skel;      // k positions in the box
     const int* red;       // r positions
-    const double* T;      // ld k (null: no step)
-    const double* xsr;    // ld k (null: no step)
-    const double* xnr;    // ld ntot
-    const double* lu;     // ld r
+    const void* T;        // ld k (null: no step)
+    const void* xsr;      // ld k (null: no step)
+    const void* xnr;      // ld ntot
+    const void* lu;       // ld r
     const int* ipiv;
     int slot0, nslots;    // its one-hop slots
     int64_t work;         // its ntot rows in the work buffer of its wave
@@ -80,30 +84,38 @@ struct CopySpan {
 constexpr size_t kSolveSharedLimit = 96 * 1024;
 
 // forward: x_R -= T^T x_S;  x_S += X_SR x_R;  work = X_NR x_R
-void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, double* vec, double* work, int nrhs,
-                          int max_n, cudaStream_t stream);
+template<typename T>
+void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
+                          cudaStream_t stream);
 // backward: x_R += X_SR^T x_S + X_NR^T x_N;  x_S -= T x_R (x_N gathered into work)
-void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, double* vec,
-                           const double* ghost, double* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
+template<typename T>
+void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
+                           const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
 // x_R = X_RR^{-1} x_R (the LU)
-void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, double* vec, int nrhs, int max_r,
+template<typename T>
+void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
                            cudaStream_t stream);
-void launch_solve_accum(const SolveAccum* items, const SolvePart* parts, int count, int max_count, int nrhs,
-                        double* vec, const double* work, double* outbox, const double* inbox, cudaStream_t stream);
-void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, const double* src, double* dst,
+template<typename T>
+void launch_solve_accum(const SolveAccum* items, const SolvePart* parts, int count, int max_count, int nrhs, T* vec,
+                        const T* work, T* outbox, const T* inbox, cudaStream_t stream);
+template<typename T>
+void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, const T* src, T* dst,
                        cudaStream_t stream);
 void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cudaStream_t stream);
 
 // The multiply F x (the factorization applied), color_CA/apply_mul.hpp:
 // forward W:  x_S += T x_R;  x_R -= X_SR^T x_S + X_NR^T x_N  (x_N gathered into work)
-void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, double* vec,
-                        const double* ghost, double* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
+template<typename T>
+void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
+                        const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
 // x_R = X_RR x_R (P L U)
-void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, double* vec, int nrhs, int max_r,
+template<typename T>
+void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
                          cudaStream_t stream);
 // backward V:  x_S -= X_SR x_R;  work = -X_NR x_R;  x_R += T^T x_S
-void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, double* vec, double* work, int nrhs,
-                         int max_n, cudaStream_t stream);
+template<typename T>
+void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
+                         cudaStream_t stream);
 
 }  // namespace gpu
 }  // namespace fmm

@@ -1,6 +1,7 @@
 // Batched element kernels of the H2 Color GPU backend.  See device_kernels.hpp.
 
 #include "device_kernels.hpp"
+#include "kernel_eval.cuh"
 
 #include <algorithm>
 #include <cstdint>
@@ -28,21 +29,9 @@ __device__ __forceinline__ int index_at(const char* meta, const IndexList& list,
     return list.base + (list.offset < 0 ? i : reinterpret_cast<const int*>(meta + list.offset)[i]);
 }
 
-__device__ __forceinline__ double kernel_value(const KernelSpec& spec,
-                                               const double* x, int64_t x_id,
-                                               const double* y, int64_t y_id) {
-    // kind 1 (inverse distance); the only kind accepted on the host so far
-    if (x_id == y_id) return spec.p[1];
-    const double dx = x[0] - y[0];
-    const double dy = x[1] - y[1];
-    const double dz = x[2] - y[2];
-    const double r = sqrt(dx * dx + dy * dy + dz * dz);
-    return spec.p[0] / r;
-}
-
-__global__ void eval_kernel(const EvalItem* items, const char* meta, KernelSpec spec,
-                            PointTable points) {
-    const EvalItem item = items[blockIdx.x];
+template<typename T>
+__global__ void eval_kernel(const EvalItemT<T>* items, const char* meta, KernelSpec spec, PointTable points) {
+    const EvalItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.m || j0 >= item.n) return;
@@ -54,12 +43,13 @@ __global__ void eval_kernel(const EvalItem* items, const char* meta, KernelSpec 
         if (j >= item.n) break;
         const int sj = index_at(meta, item.cols, j);
         item.out[i + static_cast<int64_t>(j) * item.ld] =
-            kernel_value(spec, x, x_id, points.xyz + 3 * static_cast<int64_t>(sj), points.ids[sj]);
+            kernel_value<T>(spec, x, x_id, points.xyz + 3 * static_cast<int64_t>(sj), points.ids[sj]);
     }
 }
 
-__global__ void gather_kernel(const GatherItem* items, const char* meta) {
-    const GatherItem item = items[blockIdx.x];
+template<typename T>
+__global__ void gather_kernel(const GatherItemT<T>* items, const char* meta) {
+    const GatherItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.m || j0 >= item.n) return;
@@ -72,8 +62,9 @@ __global__ void gather_kernel(const GatherItem* items, const char* meta) {
     }
 }
 
-__global__ void add_store_kernel(const AddStoreItem* items) {
-    const AddStoreItem item = items[blockIdx.x];
+template<typename T>
+__global__ void add_store_kernel(const AddStoreItemT<T>* items) {
+    const AddStoreItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.m || j0 >= item.n) return;
@@ -86,66 +77,71 @@ __global__ void add_store_kernel(const AddStoreItem* items) {
     }
 }
 
-__global__ void sym_add_kernel(const SymAddItem* items) {
-    const SymAddItem item = items[blockIdx.x];
+template<typename T>
+__global__ void sym_add_kernel(const SymAddItemT<T>* items) {
+    const SymAddItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.n || j0 >= item.n) return;
     for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
         const int j = j0 + jj;
         if (j >= item.n) break;
-        double& x = item.x[i + static_cast<int64_t>(j) * item.ldx];
+        T& x = item.x[i + static_cast<int64_t>(j) * item.ldx];
         x += item.t[i + static_cast<int64_t>(j) * item.ldt] + item.t[j + static_cast<int64_t>(i) * item.ldt];
     }
 }
 
-__global__ void sum_add_kernel(const SumAddItem* items, const char* meta) {
-    const SumAddItem item = items[blockIdx.x];
+template<typename T>
+__global__ void sum_add_kernel(const SumAddItemT<T>* items, const char* meta) {
+    const SumAddItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.rows || j0 >= item.cols) return;
-    const double* const* parts = reinterpret_cast<const double* const*>(meta + item.parts_offset);
+    const T* const* parts = reinterpret_cast<const T* const*>(meta + item.parts_offset);
     for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
         const int j = j0 + jj;
         if (j >= item.cols) break;
         const int64_t at = i + static_cast<int64_t>(j) * item.rows;
-        double sum = parts[0][at];
+        T sum = parts[0][at];
         for (int p = 1; p < item.nparts; ++p) sum += parts[p][at];
         item.target[i + static_cast<int64_t>(j) * item.ldt] += sum;
     }
 }
 
-__global__ void identity_kernel(const IdentityItem* items) {
-    const IdentityItem item = items[blockIdx.x];
+template<typename T>
+__global__ void identity_kernel(const IdentityItemT<T>* items) {
+    const IdentityItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
     const int j0 = blockIdx.z * kTile;
     if (i >= item.n || j0 >= item.n) return;
     for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
         const int j = j0 + jj;
         if (j >= item.n) break;
-        item.a[i + static_cast<int64_t>(j) * item.ld] = i == j ? 1.0 : 0.0;
+        item.a[i + static_cast<int64_t>(j) * item.ld] = T(i == j ? 1.0 : 0.0);
     }
 }
 
-__global__ void column_swap_kernel(const ColumnSwapItem* items) {
-    const ColumnSwapItem item = items[blockIdx.x];
+template<typename T>
+__global__ void column_swap_kernel(const ColumnSwapItemT<T>* items) {
+    const ColumnSwapItemT<T> item = items[blockIdx.x];
     // Each thread owns whole rows, so the sequential swaps need no barrier.
     for (int row = threadIdx.x; row < item.rows; row += blockDim.x) {
         for (int i = item.n - 1; i >= 0; --i) {
             const int p = item.piv[i] - 1;
             if (p == i) continue;
-            double* ci = item.b + static_cast<int64_t>(i) * item.ldb + row;
-            double* cp = item.b + static_cast<int64_t>(p) * item.ldb + row;
-            const double t = *ci;
+            T* ci = item.b + static_cast<int64_t>(i) * item.ldb + row;
+            T* cp = item.b + static_cast<int64_t>(p) * item.ldb + row;
+            const T t = *ci;
             *ci = *cp;
             *cp = t;
         }
     }
 }
 
-__global__ void transpose_kernel(const TransposeItem* items) {
-    __shared__ double tile[kTile][kTile + 1];
-    const TransposeItem item = items[blockIdx.x];
+template<typename T>
+__global__ void transpose_kernel(const TransposeItemT<T>* items) {
+    __shared__ T tile[kTile][kTile + 1];
+    const TransposeItemT<T> item = items[blockIdx.x];
     const int i0 = blockIdx.y * kTile;
     const int j0 = blockIdx.z * kTile;
     if (i0 >= item.m || j0 >= item.n) return;  // uniform over the block
@@ -168,53 +164,82 @@ dim3 tile_grid(int count, int max_m, int max_n) {
 
 }  // namespace
 
-void launch_eval(const EvalItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
                  const char* meta, KernelSpec spec, PointTable points, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    if (spec.kind != 1) throw std::runtime_error("launch_eval: unsupported device kernel kind");
-    eval_kernel<<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(
-        items, meta, spec, points);
+    if (spec.kind != (is_complex_scalar<T> ? 2 : 1)) {
+        throw std::runtime_error("launch_eval: device kernel kind does not match the data type");
+    }
+    eval_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta, spec, points);
     check_launch("eval_kernel");
 }
 
-void launch_gather(const GatherItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
                    const char* meta, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    gather_kernel<<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    gather_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
     check_launch("gather_kernel");
 }
 
-void launch_add_store(const AddStoreItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int max_n,
                       cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    add_store_kernel<<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
+    add_store_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
     check_launch("add_store_kernel");
 }
 
-void launch_sym_add(const SymAddItem* items, int count, int max_n, cudaStream_t stream) {
+template<typename T>
+void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStream_t stream) {
     if (count <= 0 || max_n <= 0) return;
-    sym_add_kernel<<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
+    sym_add_kernel<T><<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
     check_launch("sym_add_kernel");
 }
 
-void launch_sum_add(const SumAddItem* items, int count, int max_rows, int max_cols, const char* meta,
+template<typename T>
+void launch_sum_add(const SumAddItemT<T>* items, int count, int max_rows, int max_cols, const char* meta,
                     cudaStream_t stream) {
     if (count <= 0 || max_rows <= 0 || max_cols <= 0) return;
-    sum_add_kernel<<<tile_grid(count, max_rows, max_cols), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
+    sum_add_kernel<T><<<tile_grid(count, max_rows, max_cols), dim3(kTile, kTileRows), 0, stream>>>(items, meta);
     check_launch("sum_add_kernel");
 }
 
-void launch_identity(const IdentityItem* items, int count, int max_n, cudaStream_t stream) {
+template<typename T>
+void launch_identity(const IdentityItemT<T>* items, int count, int max_n, cudaStream_t stream) {
     if (count <= 0 || max_n <= 0) return;
-    identity_kernel<<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
+    identity_kernel<T><<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
     check_launch("identity_kernel");
 }
 
-void launch_transpose(const TransposeItem* items, int count, int max_m, int max_n, cudaStream_t stream) {
+template<typename T>
+void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int max_n, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    transpose_kernel<<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
+    transpose_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
     check_launch("transpose_kernel");
 }
+
+template<typename T>
+void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_t stream) {
+    if (count <= 0) return;
+    column_swap_kernel<T><<<static_cast<unsigned>(count), 128, 0, stream>>>(items);
+    check_launch("column_swap_kernel");
+}
+
+#define H2_ELEMENT_LAUNCHES(T)                                                                                     \
+    template void launch_eval<T>(const EvalItemT<T>*, int, int, int, const char*, KernelSpec, PointTable,          \
+                                 cudaStream_t);                                                                    \
+    template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
+    template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
+    template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \
+    template void launch_sum_add<T>(const SumAddItemT<T>*, int, int, int, const char*, cudaStream_t);              \
+    template void launch_identity<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                             \
+    template void launch_transpose<T>(const TransposeItemT<T>*, int, int, int, cudaStream_t);                      \
+    template void launch_column_swaps<T>(const ColumnSwapItemT<T>*, int, cudaStream_t);
+H2_ELEMENT_LAUNCHES(double)
+H2_ELEMENT_LAUNCHES(dcomplex)
+#undef H2_ELEMENT_LAUNCHES
 
 __global__ void copy_bytes_kernel(int4* __restrict__ dst, const int4* __restrict__ src, size_t count) {
     for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < count;
@@ -233,12 +258,6 @@ void launch_copy_bytes(void* dst, const void* src, size_t bytes, cudaStream_t st
     const unsigned blocks = static_cast<unsigned>(std::min<size_t>((count + 255) / 256, 1024));
     copy_bytes_kernel<<<blocks, 256, 0, stream>>>(static_cast<int4*>(dst), static_cast<const int4*>(src), count);
     check_launch("copy_bytes_kernel");
-}
-
-void launch_column_swaps(const ColumnSwapItem* items, int count, cudaStream_t stream) {
-    if (count <= 0) return;
-    column_swap_kernel<<<static_cast<unsigned>(count), 128, 0, stream>>>(items);
-    check_launch("column_swap_kernel");
 }
 
 }  // namespace gpu

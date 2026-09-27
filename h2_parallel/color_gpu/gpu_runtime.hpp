@@ -146,11 +146,14 @@ inline size_t align_up(size_t bytes, size_t alignment = 256) {
 template<typename DataType> struct MagmaScalar;
 template<> struct MagmaScalar<double> { using type = double; };
 template<> struct MagmaScalar<std::complex<double>> { using type = magmaDoubleComplex; };
+template<> struct MagmaScalar<dcomplex> { using type = magmaDoubleComplex; };
 
 template<typename DataType>
 typename MagmaScalar<DataType>::type to_magma(DataType value) {
     if constexpr (std::is_same_v<DataType, double>) {
         return value;
+    } else if constexpr (std::is_same_v<DataType, dcomplex>) {
+        return MAGMA_Z_MAKE(value.re, value.im);
     } else {
         return MAGMA_Z_MAKE(value.real(), value.imag());
     }

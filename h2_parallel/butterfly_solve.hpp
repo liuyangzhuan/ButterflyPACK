@@ -328,7 +328,7 @@ void hierarchical_solve_parallel(
 #ifdef H2_HAVE_GPU
     // Device solve (color_gpu/device_solve.hpp): decided collectively, with
     // the factors on the device from the first solve after a factorization.
-    if constexpr (std::is_same_v<DataType, double>) {
+    if constexpr (gpu::gpu_data_type<DataType>) {
         if (!gpu::device_solve_suspended() && gpu::device_solve_enabled() &&
             gpu::prepare_device_solve(tree, verbosity)) {
             gpu::device_solve_sweeps(tree, solve_data, nrhs, verbosity);
@@ -344,8 +344,8 @@ void hierarchical_solve_parallel(
                         const auto& x = solve_data[leaf_level][b].left_side;
                         const auto& y = host_data[leaf_level][b].left_side;
                         for (size_t i = 0; i < x.size(); ++i) {
-                            sums[0] += (x[i] - y[i]) * (x[i] - y[i]);
-                            sums[1] += y[i] * y[i];
+                            sums[0] += std::norm(x[i] - y[i]);
+                            sums[1] += std::norm(y[i]);
                         }
                     }
                 }
@@ -1189,7 +1189,7 @@ void hierarchical_mul_parallel(
 
 #ifdef H2_HAVE_GPU
     // Device multiply (color_gpu/device_solve.hpp), with the solve's factors.
-    if constexpr (std::is_same_v<DataType, double>) {
+    if constexpr (gpu::gpu_data_type<DataType>) {
         if (!gpu::device_solve_suspended() && gpu::device_solve_enabled() &&
             gpu::prepare_device_solve(tree, verbose ? 1 : -1)) {
             gpu::device_mul_sweeps(tree, solve_data, nrhs, verbose);
@@ -1205,8 +1205,8 @@ void hierarchical_mul_parallel(
                         const auto& x = solve_data[leaf_level][b].left_side;
                         const auto& y = host_data[leaf_level][b].left_side;
                         for (size_t i = 0; i < x.size(); ++i) {
-                            sums[0] += (x[i] - y[i]) * (x[i] - y[i]);
-                            sums[1] += y[i] * y[i];
+                            sums[0] += std::norm(x[i] - y[i]);
+                            sums[1] += std::norm(y[i]);
                         }
                     }
                 }

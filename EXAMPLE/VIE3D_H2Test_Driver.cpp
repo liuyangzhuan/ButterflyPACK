@@ -1599,6 +1599,20 @@ if(myrank==master_rank){
     }
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
+    if (scaleGreen == 1) {
+      // Device form of the S2S kernel for H2_use_gpu=1 (complex symmetric,
+      // as assemble_fromD1D2Tau_s2s_with_coef): -e^{i 2 w r} / (4 pi r), and
+      // -SampleSelf on the diagonal.  The column-scaled scaleGreen=0 kernel
+      // is not symmetric and has no device form.
+      _Complex double self_value = 0.0;
+      quant_ptr_bf_s2s->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
+      const int gpu_kernel_kind = 2;
+      const int gpu_kernel_params = 6;
+      const double gpu_params[6] = {2.0 * w, -1.0, 0.0, -__real__ self_value,
+                                    -__imag__ self_value, 4.0 * pi};
+      z_c_bpack_h2_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
+                                  &gpu_kernel_params);
+    }
     if (distributed64 == 1) {
       z_c_bpack_construct_element_compute_distributed64(
           &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,

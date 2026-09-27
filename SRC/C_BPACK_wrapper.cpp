@@ -1559,15 +1559,19 @@ void c_bpack_h2_set_gpu_kernel(
   if (kind == nullptr || nparams == nullptr || (*nparams > 0 && params == nullptr)) {
     throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: null argument");
   }
-  if (*kind != 0 && *kind != 1) {
-    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: kind must be 0 or 1");
-  }
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  // kind 1 is a real kernel, kind 2 a complex one (see H2Kernel::GpuSpec)
+  constexpr int data_kind = std::is_same_v<H2Data, double> ? 1 : 2;
+  if (*kind != 0 && *kind != data_kind) {
+    throw std::invalid_argument(std::string("c_bpack_h2_set_gpu_kernel: kind must be 0 or ") +
+                                std::to_string(data_kind) + " for this data type");
+  }
   auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel");
   auto& spec = solver->kernel.gpu_spec;
   spec = {};
   spec.kind = *kind;
-  const int count = std::min(*nparams, 4);
+  constexpr int max_params = static_cast<int>(sizeof(spec.params) / sizeof(spec.params[0]));
+  const int count = std::min(*nparams, max_params);
   for (int i = 0; i < count; ++i) spec.params[i] = params[i];
 #else
   (void)bmat;

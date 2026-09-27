@@ -935,7 +935,7 @@ void hierarchical_factorization_parallel(
     // Blocks of the next level, assembled on the device by the transition of
     // the level below (H2_use_gpu=1), and whether the device box path runs a
     // given level (the test made where the level starts).
-    std::unique_ptr<gpu::DeviceLevelBlocks> gpu_blocks;
+    std::unique_ptr<gpu::DeviceLevelBlocks<DataType>> gpu_blocks;
     auto gpu_box_path_runs = [&](int lvl) {
         if (!color_gpu_enabled() || lvl <= 1 || tree->level_uses_CA(lvl)) return false;
         if (!tree->levels[static_cast<size_t>(lvl)].is_process_active) return false;
@@ -2444,6 +2444,14 @@ void hierarchical_factorization_parallel(
             gpu_blocks.reset();
             root_on_device = true;
             if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
+            }
+        } else if (color_gpu_enabled() && factorization_method == FactorizationMethod::LU &&
+                   gpu::factor_host_root_on_device(root_box)) {
+            // root block assembled on the host (multi-rank runs)
+            root_on_device = true;
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
                 std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
             }
         }

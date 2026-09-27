@@ -4,9 +4,13 @@
 // Every launch processes a list of items that lives in device memory.  Items
 // hold absolute pointers into device matrices; index lists are byte offsets
 // into a per-wave metadata block, whose device address is passed with the
-// launch.  All matrices are column-major.
+// launch.  All matrices are column-major.  Items and launches are templates
+// on the element type T (double or dcomplex, device_scalar.hpp); the names
+// without the T suffix are the real items.
 
 #ifdef H2_HAVE_GPU
+
+#include "device_scalar.hpp"
 
 #include <cuda_runtime.h>
 
@@ -16,10 +20,14 @@ namespace fmm {
 namespace gpu {
 
 // Device-evaluable kernel K(x, y) registered by the application.
-//   kind 1: K = p[1] if the global ids match, else p[0] / |x - y|  (3D)
+//   kind 1 (real):    K = p[1] if the global ids match, else p[0] / |x - y|  (3D)
+//   kind 2 (complex): K = (p[3], p[4]) if the global ids match, else
+//                     (p[1], p[2]) e^{i p[0] r} / (p[5] r), r = |x - y|  (3D;
+//                     symmetric Helmholtz, p[5] = 4 pi as the host forms it)
+constexpr int kKernelParams = 8;
 struct KernelSpec {
     int kind = 0;
-    double p[4] = {0.0, 0.0, 0.0, 0.0};
+    double p[kKernelParams] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 };
 
 // Coordinates (xyz per slot) and global ids of the points of one level.
@@ -37,66 +45,78 @@ struct IndexList {
 };
 
 // out(i, j) = K(point rows[i], point cols[j])
-struct EvalItem {
-    double* out;
+template<typename T>
+struct EvalItemT {
+    T* out;
     int ld;
     int m;
     int n;
     IndexList rows;
     IndexList cols;
 };
+using EvalItem = EvalItemT<double>;
 
 // out(i, j) = src[rows[i] * rs + cols[j] * cs]
-struct GatherItem {
-    double* out;
+template<typename T>
+struct GatherItemT {
+    T* out;
     int ld;
     int m;
     int n;
-    const double* src;
+    const T* src;
     int64_t rs;
     int64_t cs;
     IndexList rows;
     IndexList cols;
 };
+using GatherItem = GatherItemT<double>;
 
 // out[i * ors + j * ocs] = a(i, j) + b(i, j)
-struct AddStoreItem {
-    double* out;
+template<typename T>
+struct AddStoreItemT {
+    T* out;
     int64_t ors;
     int64_t ocs;
     int m;
     int n;
-    const double* a;
+    const T* a;
     int lda;
-    const double* b;
+    const T* b;
     int ldb;
 };
+using AddStoreItem = AddStoreItemT<double>;
 
 // x(i, j) += t(i, j) + t(j, i) on an n x n block
 // a (n x n, leading dimension ld) = I
-struct IdentityItem {
-    double* a;
+template<typename T>
+struct IdentityItemT {
+    T* a;
     int ld;
     int n;
 };
+using IdentityItem = IdentityItemT<double>;
 
-struct SymAddItem {
-    double* x;
+template<typename T>
+struct SymAddItemT {
+    T* x;
     int ldx;
-    const double* t;
+    const T* t;
     int ldt;
     int n;
 };
+using SymAddItem = SymAddItemT<double>;
 
 // Undo LU row pivoting on the columns of b (rows x n): for i = n-1 .. 0 swap
 // columns i and piv[i] - 1 (piv holds 1-based LAPACK pivots).
-struct ColumnSwapItem {
-    double* b;
+template<typename T>
+struct ColumnSwapItemT {
+    T* b;
     int ldb;
     int rows;
     const int* piv;
     int n;
 };
+using ColumnSwapItem = ColumnSwapItemT<double>;
 
 // ---- device construction of the sketch lists (device_sketch.cu)
 //
@@ -161,8 +181,9 @@ struct SourceListsItem {
 // sign * scale * value(row, c), where value is K(point row_slots[row],
 // point col_base + c) for kernel rows, else src[c + row_index[row] *
 // row_stride].  ptr / entries: the lists of the owner warps.
-struct OrderedSketchItem {
-    double* out;
+template<typename T>
+struct OrderedSketchItemT {
+    T* out;
     int ldo;
     int d;
     int ncols;
@@ -172,34 +193,39 @@ struct OrderedSketchItem {
     double scale;
     const int* row_slots;
     int col_base;
-    const double* src;
+    const T* src;
     int row_stride;
     const int* row_index;
 };
+using OrderedSketchItem = OrderedSketchItemT<double>;
 
-void launch_ordered_sketch(const OrderedSketchItem* items, int count, int max_d, int max_cols, bool kernel_rows,
+template<typename T>
+void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int max_d, int max_cols, bool kernel_rows,
                            KernelSpec spec, PointTable points, cudaStream_t stream);
 
 void launch_sketch_lists(const SketchListsItem* boxes, int num_boxes, int max_blocks,
                          const SourceListsItem* sources, int num_sources, const char* meta, cudaStream_t stream);
 
 // dst (n x m, leading dimension ld_dst) = src (m x n)^T
-struct TransposeItem {
-    const double* src;
+template<typename T>
+struct TransposeItemT {
+    const T* src;
     int ld_src;
-    double* dst;
+    T* dst;
     int ld_dst;
     int m;
     int n;
 };
+using TransposeItem = TransposeItemT<double>;
 
 // Interpolative decomposition of one sketch a (m x n, leading dimension lda),
 // in place (device_id.cu).  On exit: rank K; jpvt, the n column indices with
 // the skeleton first; T = R11^{-1} R12 in rows 0..K-1 of columns K..n-1 (for
 // K = 0, row 0 of columns 1..n-1 is zero); norm, the Frobenius norm of the
 // input; flag 1 for a non-finite input, 2 for a non-finite T.
-struct QrcpItem {
-    double* a;
+template<typename T>
+struct QrcpItemT {
+    T* a;
     int m;
     int n;
     int lda;
@@ -208,11 +234,14 @@ struct QrcpItem {
     double* norm;
     int* flag;
 };
+using QrcpItem = QrcpItemT<double>;
 
 // Device work (bytes, 16-byte aligned) that launch_qrcp needs for `count`
 // items of at most max_n columns; 0 when it needs none.
+template<typename T>
 size_t qrcp_work_bytes(int count, int max_n);
-void launch_qrcp(const QrcpItem* items, int count, int max_n, double tol, void* work, cudaStream_t stream);
+template<typename T>
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream);
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays
@@ -224,31 +253,41 @@ void launch_dgemm_vbatched_tc(bool trans_a, bool trans_b, const int* m, const in
                               double beta, double* const* c, const int* ldc, const int2* blocks, int num_blocks,
                               int tile, cudaStream_t stream);
 
-void launch_eval(const EvalItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
                  const char* meta, KernelSpec spec, PointTable points, cudaStream_t stream);
-void launch_gather(const GatherItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
                    const char* meta, cudaStream_t stream);
-void launch_add_store(const AddStoreItem* items, int count, int max_m, int max_n,
+template<typename T>
+void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int max_n,
                       cudaStream_t stream);
-void launch_sym_add(const SymAddItem* items, int count, int max_n, cudaStream_t stream);
+template<typename T>
+void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStream_t stream);
 
 // target(i, j) += ((part_0(i, j) + part_1(i, j)) + ...) + part_{n-1}(i, j):
 // parts summed in order first (as the host sums transported deltas), each
 // rows x cols with leading dimension rows; their pointers are a
 // meta-relative array.
-struct SumAddItem {
-    double* target;
+template<typename T>
+struct SumAddItemT {
+    T* target;
     int ldt;
     int rows;
     int cols;
     int64_t parts_offset;
     int nparts;
 };
-void launch_sum_add(const SumAddItem* items, int count, int max_rows, int max_cols, const char* meta,
+using SumAddItem = SumAddItemT<double>;
+template<typename T>
+void launch_sum_add(const SumAddItemT<T>* items, int count, int max_rows, int max_cols, const char* meta,
                     cudaStream_t stream);
-void launch_identity(const IdentityItem* items, int count, int max_n, cudaStream_t stream);
-void launch_column_swaps(const ColumnSwapItem* items, int count, cudaStream_t stream);
-void launch_transpose(const TransposeItem* items, int count, int max_m, int max_n, cudaStream_t stream);
+template<typename T>
+void launch_identity(const IdentityItemT<T>* items, int count, int max_n, cudaStream_t stream);
+template<typename T>
+void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_t stream);
+template<typename T>
+void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int max_n, cudaStream_t stream);
 // Copy `bytes` (a multiple of 16, both pointers 16-byte aligned) with SM
 // stores.  Used to write small results straight into mapped pinned host
 // memory, so they do not queue behind bulk copies on the copy engine.

@@ -1,6 +1,6 @@
 // Batched interpolative decomposition of the H2 Color GPU backend: column-
 // pivoted Householder QR with the host's rank rule, then T = R11^{-1} R12.
-// See QrcpItem in device_kernels.hpp.
+// Real (dgeqp3) or complex (zgeqp3) data.  See QrcpItemT in device_kernels.hpp.
 
 #include "device_kernels.hpp"
 
@@ -22,6 +22,7 @@ __device__ __forceinline__ double warp_sum(double v) {
     for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
     return v;
 }
+__device__ __forceinline__ dcomplex warp_sum(dcomplex v) { return dcomplex(warp_sum(v.re), warp_sum(v.im)); }
 
 // Sum over the block in a fixed order (deterministic); all threads get it.
 template<int kWarps>
@@ -74,36 +75,148 @@ __device__ int block_argmax(double v, int idx, double* vscratch, int* iscratch) 
     return best_idx;
 }
 
+// Loads of data other blocks write between barriers bypass L1 (it is not
+// coherent across multiprocessors).
+template<typename T>
+__device__ __forceinline__ T ldg2(const T* p) { return __ldcg(p); }
+__device__ __forceinline__ dcomplex ldg2(const dcomplex* p) {
+    const double2 v = __ldcg(reinterpret_cast<const double2*>(p));
+    return dcomplex(v.x, v.y);
+}
+template<bool kUncached, typename T>
+__device__ __forceinline__ T load(const T* p) {
+    if constexpr (kUncached) {
+        return ldg2(p);
+    } else {
+        return *p;
+    }
+}
+
+// Householder reflector of col[i:m) by one warp (LAPACK dlarfg): col[i] =
+// beta, col[i+1:m) = v; returns tau and beta.
+template<bool kUncached>
+__device__ __forceinline__ void make_reflector(double* col, int i, int m, int lane, double& tau, double& beta) {
+    const double alpha = load<kUncached>(col + i);
+    double s = 0.0;
+    for (int r = i + 1 + lane; r < m; r += 32) {
+        const double x = load<kUncached>(col + r);
+        s += x * x;
+    }
+    const double xnorm = sqrt(warp_sum(s));
+    tau = 0.0;
+    beta = alpha;
+    if (xnorm != 0.0) {
+        beta = -copysign(sqrt(alpha * alpha + xnorm * xnorm), alpha);
+        tau = (beta - alpha) / beta;
+        const double scal = 1.0 / (alpha - beta);
+        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
+        __syncwarp();
+        if (lane == 0) col[i] = beta;
+    }
+}
+// Complex (LAPACK zlarfg): beta is real, so the reflector also acts on a
+// complex alpha with x = 0 (the last row), and the diagonal of R is real.
+template<bool kUncached>
+__device__ __forceinline__ void make_reflector(dcomplex* col, int i, int m, int lane, dcomplex& tau, double& beta) {
+    const dcomplex alpha = load<kUncached>(col + i);
+    double s = 0.0;
+    for (int r = i + 1 + lane; r < m; r += 32) s += abs2(load<kUncached>(col + r));
+    const double xnorm = sqrt(warp_sum(s));
+    tau = dcomplex(0.0);
+    beta = alpha.re;
+    if (xnorm != 0.0 || alpha.im != 0.0) {
+        beta = -copysign(norm3d(alpha.re, alpha.im, xnorm), alpha.re);  // dlapy3
+        tau = dcomplex((beta - alpha.re) / beta, -alpha.im / beta);
+        const dcomplex scal = dcomplex(1.0) / (alpha - dcomplex(beta));
+        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
+        __syncwarp();
+        if (lane == 0) col[i] = dcomplex(beta);
+    }
+}
+
+// H^H = I - conj(tau) v v^H applied to col by one warp (v_i = 1 implicit).
+template<bool kUncached, typename T>
+__device__ __forceinline__ void apply_reflector(const T* v, T tau, T* col, int i, int m, int lane) {
+    T s = lane == 0 ? load<kUncached>(col + i) : T(0.0);
+    for (int r = i + 1 + lane; r < m; r += 32) s += conj(load<kUncached>(v + r)) * load<kUncached>(col + r);
+    const T w = conj(tau) * warp_sum(s);
+    if (w != T(0.0)) {
+        if (lane == 0) col[i] = load<kUncached>(col + i) - w;
+        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) - w * load<kUncached>(v + r);
+    }
+}
+
+// LAPACK dlaqp2's partial norm downdate of a trailing column after step i.
+template<bool kUncached, typename T>
+__device__ __forceinline__ void downdate_norm(const T* col, int i, int m, int lane, double tol3z, double* vn1j,
+                                              double* vn2j) {
+    const double n1 = load<kUncached>(vn1j);
+    if (n1 != 0.0) {
+        double temp = magnitude(load<kUncached>(col + i)) / n1;
+        temp = fmax(1.0 - temp * temp, 0.0);
+        const double ratio = n1 / load<kUncached>(vn2j);
+        if (temp * ratio * ratio <= tol3z) {
+            double s2 = 0.0;
+            for (int r = i + 1 + lane; r < m; r += 32) s2 += abs2(load<kUncached>(col + r));
+            const double fresh = i < m - 1 ? sqrt(warp_sum(s2)) : 0.0;
+            if (lane == 0) *vn1j = *vn2j = fresh;
+        } else if (lane == 0) {
+            *vn1j = n1 * sqrt(temp);
+        }
+    }
+}
+
+// Column j of T = R11^{-1} R12 in place by one warp (no conjugates: ztrtrs
+// 'N'); returns false for a non-finite entry.
+template<bool kUncached, typename T>
+__device__ __forceinline__ bool solve_r11(const T* A, int lda, int rank, T* col, int lane) {
+    bool ok = true;
+    for (int p = rank - 1; p >= 0; --p) {
+        T s = T(0.0);
+        for (int q = p + 1 + lane; q < rank; q += 32) {
+            s += load<kUncached>(A + p + static_cast<int64_t>(q) * lda) * load<kUncached>(col + q);
+        }
+        s = warp_sum(s);
+        const T x = (load<kUncached>(col + p) - s) / load<kUncached>(A + p + static_cast<int64_t>(p) * lda);
+        __syncwarp();
+        if (lane == 0) col[p] = x;
+        __syncwarp();
+        if (!is_finite(x)) ok = false;
+    }
+    return ok;
+}
+
 // One matrix per block.  Mirrors fmm::compute_id_complex: normalize by the
 // largest magnitude, factor A P = Q R with column pivoting (LAPACK dlaqp2's
 // pivot choice and norm downdating), stop at the first |R_ii| <= tol |R_00|,
 // and solve R11 T = R12 in place.  The factorization stops at the rank, so
 // the redundant columns keep the order of that step (the host's full
 // factorization permutes them further; the skeleton is the same).
-template<int kThreads>
-__global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, double tol) {
+template<typename T, int kThreads>
+__global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* items, double tol) {
     constexpr int kWarps = kThreads / 32;
     extern __shared__ double smem[];
-    const QrcpItem item = items[blockIdx.x];
+    const QrcpItemT<T> item = items[blockIdx.x];
     const int m = item.m, n = item.n, lda = item.lda;
-    double* A = item.a;
+    T* A = item.a;
     double* vn1 = smem;
     double* vn2 = smem + n;
     double* scratch = smem + 2 * n;                             // kMaxWarps doubles
     int* iscratch = reinterpret_cast<int*>(scratch + kMaxWarps);  // kMaxWarps ints
     int* jpvt = iscratch + kMaxWarps;                           // n ints
-    __shared__ double s_tau, s_beta;
+    __shared__ T s_tau;
+    __shared__ double s_beta;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
 
     // ---- norm (for traces), finiteness, normalization
     double amax = 0.0, ssq = 0.0, bad = 0.0;
     for (int j = warp; j < n; j += kWarps) {
-        const double* col = A + static_cast<int64_t>(j) * lda;
+        const T* col = A + static_cast<int64_t>(j) * lda;
         for (int r = lane; r < m; r += 32) {
-            const double x = col[r];
-            if (!isfinite(x)) bad = 1.0;
-            amax = fmax(amax, fabs(x));
-            ssq += x * x;
+            const T x = col[r];
+            if (!is_finite(x)) bad = 1.0;
+            amax = fmax(amax, magnitude(x));
+            ssq += abs2(x);
         }
     }
     bad = block_max<kWarps>(bad, scratch);
@@ -119,22 +232,22 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, d
         __syncthreads();
         for (int j = tid; j < n; j += kThreads) {
             item.jpvt[j] = j;
-            if (j >= 1 && m > 0) A[static_cast<int64_t>(j) * lda] = 0.0;
+            if (j >= 1 && m > 0) A[static_cast<int64_t>(j) * lda] = T(0.0);
         }
         if (tid == 0) *item.rank = 0;
         return;
     }
     for (int j = warp; j < n; j += kWarps) {
-        double* col = A + static_cast<int64_t>(j) * lda;
+        T* col = A + static_cast<int64_t>(j) * lda;
         for (int r = lane; r < m; r += 32) col[r] /= amax;
     }
     __syncthreads();
 
     // ---- initial column norms
     for (int j = warp; j < n; j += kWarps) {
-        const double* col = A + static_cast<int64_t>(j) * lda;
+        const T* col = A + static_cast<int64_t>(j) * lda;
         double s = 0.0;
-        for (int r = lane; r < m; r += 32) s += col[r] * col[r];
+        for (int r = lane; r < m; r += 32) s += abs2(col[r]);
         s = warp_sum(s);
         if (lane == 0) vn1[j] = vn2[j] = sqrt(s);
     }
@@ -156,10 +269,10 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, d
         }
         const int pvt = block_argmax<kWarps>(best, best_idx, scratch, iscratch);
         if (pvt != i) {
-            double* ci = A + static_cast<int64_t>(i) * lda;
-            double* cp = A + static_cast<int64_t>(pvt) * lda;
+            T* ci = A + static_cast<int64_t>(i) * lda;
+            T* cp = A + static_cast<int64_t>(pvt) * lda;
             for (int r = tid; r < m; r += kThreads) {
-                const double t = ci[r];
+                const T t = ci[r];
                 ci[r] = cp[r];
                 cp[r] = t;
             }
@@ -173,59 +286,30 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, d
         }
         __syncthreads();
 
-        // Householder reflector of column i (LAPACK dlarfg)
+        // Householder reflector of column i (LAPACK dlarfg / zlarfg)
         if (warp == 0) {
-            double* col = A + static_cast<int64_t>(i) * lda;
-            const double alpha = col[i];
-            double s = 0.0;
-            for (int r = i + 1 + lane; r < m; r += 32) s += col[r] * col[r];
-            const double xnorm = sqrt(warp_sum(s));
-            double tau = 0.0, beta = alpha;
-            if (xnorm != 0.0) {
-                beta = -copysign(sqrt(alpha * alpha + xnorm * xnorm), alpha);
-                tau = (beta - alpha) / beta;
-                const double scal = 1.0 / (alpha - beta);
-                for (int r = i + 1 + lane; r < m; r += 32) col[r] *= scal;
-                __syncwarp();
-                if (lane == 0) col[i] = beta;
-            }
+            T tau;
+            double beta;
+            make_reflector<false>(A + static_cast<int64_t>(i) * lda, i, m, lane, tau, beta);
             if (lane == 0) {
                 s_tau = tau;
                 s_beta = beta;
             }
         }
         __syncthreads();
-        const double tau = s_tau, beta = s_beta;
+        const T tau = s_tau;
+        const double beta = s_beta;
         if (i == 0) r00 = fabs(beta);
         if (!(fabs(beta) > tol * r00)) break;  // rank rule of compute_id_complex
         rank = i + 1;
 
         // apply the reflector to the trailing columns and downdate their norms
-        const double* v = A + static_cast<int64_t>(i) * lda;
+        const T* v = A + static_cast<int64_t>(i) * lda;
         for (int j = i + 1 + warp; j < n; j += kWarps) {
-            double* col = A + static_cast<int64_t>(j) * lda;
-            double s = lane == 0 ? col[i] : 0.0;
-            for (int r = i + 1 + lane; r < m; r += 32) s += v[r] * col[r];
-            const double w = tau * warp_sum(s);
-            if (w != 0.0) {
-                if (lane == 0) col[i] -= w;
-                for (int r = i + 1 + lane; r < m; r += 32) col[r] -= w * v[r];
-            }
+            T* col = A + static_cast<int64_t>(j) * lda;
+            apply_reflector<false>(v, tau, col, i, m, lane);
             __syncwarp();
-            const double n1 = vn1[j];
-            if (n1 != 0.0) {
-                double temp = fabs(col[i]) / n1;
-                temp = fmax(1.0 - temp * temp, 0.0);
-                const double ratio = n1 / vn2[j];
-                if (temp * ratio * ratio <= tol3z) {
-                    double s2 = 0.0;
-                    for (int r = i + 1 + lane; r < m; r += 32) s2 += col[r] * col[r];
-                    const double fresh = i < m - 1 ? sqrt(warp_sum(s2)) : 0.0;
-                    if (lane == 0) vn1[j] = vn2[j] = fresh;
-                } else if (lane == 0) {
-                    vn1[j] = n1 * sqrt(temp);
-                }
-            }
+            downdate_norm<false>(col, i, m, lane, tol3z, vn1 + j, vn2 + j);
             __syncwarp();
         }
         __syncthreads();
@@ -234,20 +318,10 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, d
     // ---- T = R11^{-1} R12, one warp per column, in place
     double t_bad = 0.0;
     if (rank == 0) {
-        for (int j = 1 + tid; j < n; j += kThreads) A[static_cast<int64_t>(j) * lda] = 0.0;
+        for (int j = 1 + tid; j < n; j += kThreads) A[static_cast<int64_t>(j) * lda] = T(0.0);
     } else {
         for (int j = rank + warp; j < n; j += kWarps) {
-            double* col = A + static_cast<int64_t>(j) * lda;
-            for (int p = rank - 1; p >= 0; --p) {
-                double s = 0.0;
-                for (int q = p + 1 + lane; q < rank; q += 32) s += A[p + static_cast<int64_t>(q) * lda] * col[q];
-                s = warp_sum(s);
-                const double x = (col[p] - s) / A[p + static_cast<int64_t>(p) * lda];
-                __syncwarp();
-                if (lane == 0) col[p] = x;
-                __syncwarp();
-                if (!isfinite(x)) t_bad = 1.0;
-            }
+            if (!solve_r11<false>(A, lda, rank, A + static_cast<int64_t>(j) * lda, lane)) t_bad = 1.0;
         }
     }
     t_bad = block_max<kWarps>(t_bad, scratch);
@@ -270,7 +344,18 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItem* items, d
 constexpr int kCoopThreads = 256;
 
 __host__ __device__ inline size_t coop_box_doubles(int max_n, int cpb) {
-    return 2 * static_cast<size_t>(max_n) + 4 * static_cast<size_t>(cpb) + 4;  // vn1, vn2, cand, partials, tau/beta/r00
+    return 2 * static_cast<size_t>(max_n) + 4 * static_cast<size_t>(cpb) + 4;  // vn1, vn2, cand, partials, tau (2)/beta/r00
+}
+
+// tau in box_d[0] (real) or box_d[0..1] (complex)
+__device__ __forceinline__ void put_tau(double* p, double v) { p[0] = v; }
+__device__ __forceinline__ void put_tau(double* p, dcomplex v) {
+    p[0] = v.re;
+    p[1] = v.im;
+}
+template<typename T>
+__device__ __forceinline__ T get_tau(const double* p) {
+    return make_scalar<T>(ldg2(p), is_complex_scalar<T> ? ldg2(p + 1) : 0.0);
 }
 __host__ __device__ inline size_t coop_box_ints(int cpb) { return static_cast<size_t>(cpb) + 2; }  // cand, stopped, rank
 
@@ -306,22 +391,18 @@ __device__ void block_argmax_pair(double& v, int& idx, double* vscratch, int* is
     }
 }
 
-// Loads of data other blocks write between barriers bypass L1 (it is not
-// coherent across multiprocessors).
 template<typename T>
-__device__ __forceinline__ T ldg2(const T* p) { return __ldcg(p); }
-
 __global__ void __launch_bounds__(kCoopThreads)
-qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double tol, double* dwork, int* iwork) {
+qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, double tol, double* dwork, int* iwork) {
     namespace cg = cooperative_groups;
     cg::grid_group grid = cg::this_grid();
     constexpr int kWarps = kCoopThreads / 32;
     __shared__ double scratch[kMaxWarps];
     __shared__ int iscratch[kMaxWarps];
     const int box = blockIdx.x / cpb, part = blockIdx.x % cpb;
-    const QrcpItem item = items[box];
+    const QrcpItemT<T> item = items[box];
     const int m = item.m, n = item.n, lda = item.lda;
-    double* A = item.a;
+    T* A = item.a;
     int* jpvt = item.jpvt;  // the working permutation
     double* vn1 = dwork + static_cast<size_t>(box) * coop_box_doubles(max_n, cpb);
     double* vn2 = vn1 + max_n;
@@ -329,7 +410,7 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
     double* part_amax = cand_v + cpb;
     double* part_ssq = part_amax + cpb;
     double* part_bad = part_ssq + cpb;
-    double* box_d = part_bad + cpb;  // tau, beta, r00
+    double* box_d = part_bad + cpb;  // tau (2), beta, r00
     int* cand_i = iwork + static_cast<size_t>(box) * coop_box_ints(cpb);
     int* box_i = cand_i + cpb;       // stopped, rank
     int* stopped_count = iwork + static_cast<size_t>(count) * coop_box_ints(cpb);
@@ -341,12 +422,12 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
     for (int t = warp;; t += kWarps) {
         const int j = part + stride * t;
         if (j >= n) break;
-        const double* col = A + static_cast<int64_t>(j) * lda;
+        const T* col = A + static_cast<int64_t>(j) * lda;
         for (int r = lane; r < m; r += 32) {
-            const double x = ldg2(col + r);
-            if (!isfinite(x)) bad = 1.0;
-            amax = fmax(amax, fabs(x));
-            ssq += x * x;
+            const T x = ldg2(col + r);
+            if (!is_finite(x)) bad = 1.0;
+            amax = fmax(amax, magnitude(x));
+            ssq += abs2(x);
         }
     }
     bad = block_max<kWarps>(bad, scratch);
@@ -389,14 +470,11 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
         for (int t = warp;; t += kWarps) {
             const int j = part + stride * t;
             if (j >= n) break;
-            double* col = A + static_cast<int64_t>(j) * lda;
+            T* col = A + static_cast<int64_t>(j) * lda;
             for (int r = lane; r < m; r += 32) col[r] = ldg2(col + r) / amax;
             __syncwarp();
             double s = 0.0;
-            for (int r = lane; r < m; r += 32) {
-                const double x = ldg2(col + r);
-                s += x * x;
-            }
+            for (int r = lane; r < m; r += 32) s += abs2(ldg2(col + r));
             s = warp_sum(s);
             if (lane == 0) vn1[j] = vn2[j] = sqrt(s);
         }
@@ -448,10 +526,10 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
                     }
                 }
                 if (pvt != i) {
-                    double* ci = A + static_cast<int64_t>(i) * lda;
-                    double* cp = A + static_cast<int64_t>(pvt) * lda;
+                    T* ci = A + static_cast<int64_t>(i) * lda;
+                    T* cp = A + static_cast<int64_t>(pvt) * lda;
                     for (int r = tid; r < m; r += kCoopThreads) {
-                        const double t = ldg2(ci + r);
+                        const T t = ldg2(ci + r);
                         ci[r] = ldg2(cp + r);
                         cp[r] = t;
                     }
@@ -465,28 +543,14 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
                 }
                 __syncthreads();
                 if (warp == 0) {
-                    double* col = A + static_cast<int64_t>(i) * lda;
-                    const double alpha = ldg2(col + i);
-                    double s = 0.0;
-                    for (int r = i + 1 + lane; r < m; r += 32) {
-                        const double x = ldg2(col + r);
-                        s += x * x;
-                    }
-                    const double xnorm = sqrt(warp_sum(s));
-                    double tau = 0.0, beta = alpha;
-                    if (xnorm != 0.0) {
-                        beta = -copysign(sqrt(alpha * alpha + xnorm * xnorm), alpha);
-                        tau = (beta - alpha) / beta;
-                        const double scal = 1.0 / (alpha - beta);
-                        for (int r = i + 1 + lane; r < m; r += 32) col[r] = ldg2(col + r) * scal;
-                        __syncwarp();
-                        if (lane == 0) col[i] = beta;
-                    }
+                    T tau;
+                    double beta;
+                    make_reflector<true>(A + static_cast<int64_t>(i) * lda, i, m, lane, tau, beta);
                     if (lane == 0) {
-                        if (i == 0) box_d[2] = fabs(beta);
-                        const double r00 = i == 0 ? fabs(beta) : ldg2(box_d + 2);
-                        box_d[0] = tau;
-                        box_d[1] = beta;
+                        if (i == 0) box_d[3] = fabs(beta);
+                        const double r00 = i == 0 ? fabs(beta) : ldg2(box_d + 3);
+                        put_tau(box_d, tau);
+                        box_d[2] = beta;
                         if (!(fabs(beta) > tol * r00)) {  // rank rule of compute_id_complex
                             box_i[0] = 1;
                             box_i[1] = i;
@@ -506,37 +570,15 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
             continue;
         }
         // ---- the reflector on the owned trailing columns, norm downdates
-        const double tau = ldg2(box_d);
-        const double* v = A + static_cast<int64_t>(i) * lda;
+        const T tau = get_tau<T>(box_d);
+        const T* v = A + static_cast<int64_t>(i) * lda;
         for (int t = first_owned(i + 1, part, stride) + warp;; t += kWarps) {
             const int j = part + stride * t;
             if (j >= n) break;
-            double* col = A + static_cast<int64_t>(j) * lda;
-            double s = lane == 0 ? ldg2(col + i) : 0.0;
-            for (int r = i + 1 + lane; r < m; r += 32) s += ldg2(v + r) * ldg2(col + r);
-            const double w = tau * warp_sum(s);
-            if (w != 0.0) {
-                if (lane == 0) col[i] = ldg2(col + i) - w;
-                for (int r = i + 1 + lane; r < m; r += 32) col[r] = ldg2(col + r) - w * ldg2(v + r);
-            }
+            T* col = A + static_cast<int64_t>(j) * lda;
+            apply_reflector<true>(v, tau, col, i, m, lane);
             __syncwarp();
-            const double n1 = ldg2(vn1 + j);
-            if (n1 != 0.0) {
-                double temp = fabs(ldg2(col + i)) / n1;
-                temp = fmax(1.0 - temp * temp, 0.0);
-                const double ratio = n1 / ldg2(vn2 + j);
-                if (temp * ratio * ratio <= tol3z) {
-                    double s2 = 0.0;
-                    for (int r = i + 1 + lane; r < m; r += 32) {
-                        const double x = ldg2(col + r);
-                        s2 += x * x;
-                    }
-                    const double fresh = i < m - 1 ? sqrt(warp_sum(s2)) : 0.0;
-                    if (lane == 0) vn1[j] = vn2[j] = fresh;
-                } else if (lane == 0) {
-                    vn1[j] = n1 * sqrt(temp);
-                }
-            }
+            downdate_norm<true>(col, i, m, lane, tol3z, vn1 + j, vn2 + j);
             __syncwarp();
         }
     }
@@ -549,24 +591,14 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
         for (int t = tid;; t += kCoopThreads) {
             const int j = part + stride * t;
             if (j >= n) break;
-            if (j >= 1 && m > 0) A[static_cast<int64_t>(j) * lda] = 0.0;
+            if (j >= 1 && m > 0) A[static_cast<int64_t>(j) * lda] = T(0.0);
             jpvt[j] = j;  // rank 0 keeps column 0 (the host's convention)
         }
     } else {
         for (int t = first_owned(rank, part, stride) + warp;; t += kWarps) {
             const int j = part + stride * t;
             if (j >= n) break;
-            double* col = A + static_cast<int64_t>(j) * lda;
-            for (int p = rank - 1; p >= 0; --p) {
-                double s = 0.0;
-                for (int q = p + 1 + lane; q < rank; q += 32) s += ldg2(A + p + static_cast<int64_t>(q) * lda) * ldg2(col + q);
-                s = warp_sum(s);
-                const double x = (ldg2(col + p) - s) / ldg2(A + p + static_cast<int64_t>(p) * lda);
-                __syncwarp();
-                if (lane == 0) col[p] = x;
-                __syncwarp();
-                if (!isfinite(x)) t_bad = 1.0;
-            }
+            if (!solve_r11<true>(A, lda, rank, A + static_cast<int64_t>(j) * lda, lane)) t_bad = 1.0;
         }
     }
     t_bad = block_max<kWarps>(t_bad, scratch);
@@ -577,6 +609,7 @@ qrcp_coop_kernel(const QrcpItem* items, int count, int cpb, int max_n, double to
 }
 
 // Blocks per box of the cooperative path (0: one block per box instead).
+template<typename T>
 int coop_blocks_per_box(int count, int max_n) {
     static const int sms = [] {
         int device = 0, value = 0;
@@ -586,7 +619,7 @@ int coop_blocks_per_box(int count, int max_n) {
     }();
     static const int resident = [] {
         int per_sm = 0;
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, qrcp_coop_kernel, kCoopThreads, 0);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, qrcp_coop_kernel<T>, kCoopThreads, 0);
         return per_sm * sms;
     }();
     if (count <= 0 || count > sms) return 0;
@@ -599,20 +632,22 @@ int coop_blocks_per_box(int count, int max_n) {
     return cpb >= kMinBlocksPerBox ? cpb : 0;
 }
 
-template<int kThreads>
-void launch_qrcp_with(const QrcpItem* items, int count, size_t shared, double tol, cudaStream_t stream) {
+template<typename T, int kThreads>
+void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, double tol, cudaStream_t stream) {
     if (shared > 48 * 1024) {
-        const cudaError_t attr = cudaFuncSetAttribute(qrcp_kernel<kThreads>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+        const cudaError_t attr = cudaFuncSetAttribute(qrcp_kernel<T, kThreads>,
+                                                      cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                       static_cast<int>(shared));
         if (attr != cudaSuccess) throw std::runtime_error("launch_qrcp: box too large for shared memory");
     }
-    qrcp_kernel<kThreads><<<static_cast<unsigned>(count), kThreads, shared, stream>>>(items, tol);
+    qrcp_kernel<T, kThreads><<<static_cast<unsigned>(count), kThreads, shared, stream>>>(items, tol);
 }
 
 }  // namespace
 
+template<typename T>
 size_t qrcp_work_bytes(int count, int max_n) {
-    const int cpb = coop_blocks_per_box(count, max_n);
+    const int cpb = coop_blocks_per_box<T>(count, max_n);
     if (cpb == 0) return 0;
     return static_cast<size_t>(count) * coop_box_doubles(max_n, cpb) * sizeof(double) +
            (static_cast<size_t>(count) * coop_box_ints(cpb) + 1) * sizeof(int);
@@ -621,15 +656,16 @@ size_t qrcp_work_bytes(int count, int max_n) {
 // Few boxes (at most 2 x multiprocessors / kMinBlocksPerBox): the cooperative
 // path, several blocks per box.  Otherwise one block per box: large blocks for
 // few boxes, small ones (several per multiprocessor) for many.
-void launch_qrcp(const QrcpItem* items, int count, int max_n, double tol, void* work, cudaStream_t stream) {
+template<typename T>
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream) {
     if (count <= 0) return;
-    int cpb = coop_blocks_per_box(count, max_n);
+    int cpb = coop_blocks_per_box<T>(count, max_n);
     if (cpb > 0) {
         if (work == nullptr) throw std::runtime_error("launch_qrcp: the cooperative path needs its work block");
         double* dwork = static_cast<double*>(work);
         int* iwork = reinterpret_cast<int*>(dwork + static_cast<size_t>(count) * coop_box_doubles(max_n, cpb));
-        void* args[] = {const_cast<QrcpItem**>(&items), &count, &cpb, &max_n, &tol, &dwork, &iwork};
-        const cudaError_t status = cudaLaunchCooperativeKernel(reinterpret_cast<const void*>(qrcp_coop_kernel),
+        void* args[] = {const_cast<QrcpItemT<T>**>(&items), &count, &cpb, &max_n, &tol, &dwork, &iwork};
+        const cudaError_t status = cudaLaunchCooperativeKernel(reinterpret_cast<const void*>(qrcp_coop_kernel<T>),
                                                                dim3(static_cast<unsigned>(count * cpb)),
                                                                dim3(kCoopThreads), args, 0, stream);
         if (status != cudaSuccess) {
@@ -640,15 +676,20 @@ void launch_qrcp(const QrcpItem* items, int count, int max_n, double tol, void* 
     const size_t shared = static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
                           static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
     if (count < 216) {
-        launch_qrcp_with<1024>(items, count, shared, tol, stream);
+        launch_qrcp_with<T, 1024>(items, count, shared, tol, stream);
     } else {
-        launch_qrcp_with<256>(items, count, shared, tol, stream);
+        launch_qrcp_with<T, 256>(items, count, shared, tol, stream);
     }
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA launch failed in qrcp_kernel: ") + cudaGetErrorString(status));
     }
 }
+
+template size_t qrcp_work_bytes<double>(int, int);
+template size_t qrcp_work_bytes<dcomplex>(int, int);
+template void launch_qrcp<double>(const QrcpItemT<double>*, int, int, double, void*, cudaStream_t);
+template void launch_qrcp<dcomplex>(const QrcpItemT<dcomplex>*, int, int, double, void*, cudaStream_t);
 
 }  // namespace gpu
 }  // namespace fmm
