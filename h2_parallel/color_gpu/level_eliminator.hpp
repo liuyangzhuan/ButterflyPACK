@@ -33,6 +33,7 @@
 #include "host_copier.hpp"
 #include "kernel_tables.hpp"
 #include "emsurf_blocks.hpp"
+#include "emsurf_plan.hpp"
 
 #include <omp.h>
 
@@ -188,24 +189,6 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
         }
     }
     return true;
-}
-
-// The device sketch covers the level's ID targets, unless H2_GPU_SKETCH=0
-// keeps the host sketch (for comparisons).  Static training rows
-// (H2_ID_radius > 2, H2_ID_proxy 1: points anywhere in the tree) join the
-// level's point table: a kernel of coordinates needs their global
-// coordinates (kept for H2_ID_proxy 1), kind 3 only their ids.  Adaptive rows
-// (H2_ID_proxy 2) are not streamed.
-template<typename CoordType, typename DataType>
-bool device_sketch_supported(const ParallelTree<CoordType, DataType>* tree, int kernel_kind) {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_GPU_SKETCH");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    if (!enabled || tree->id_proxy_mode == 2) return false;
-    if (tree->id_neighborhood_radius <= 2 && tree->id_proxy_mode != 1) return true;
-    const size_t coordinates = static_cast<size_t>(tree->num_points) * static_cast<size_t>(tree->dimension);
-    return kernel_kind == 3 || tree->id_source_point_coords.size() == coordinates;
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -589,12 +572,13 @@ private:
     MetaBuilder& meta_ = pinned_pool().meta;
     DeviceBuffer meta_device_;
     MetaBuilder& owner_meta_ = pinned_pool().owner_meta;  // a wave's owner pass
-    // kind 3 blocks of eval_blocks: the host ids of the point slots, the host
-    // copies of the device skeleton lists, and the lists' image
+    // kind 3 blocks of eval_blocks: the host ids of the point slots and the
+    // host copies of the device skeleton lists; the evaluator's blocks of the
+    // sketch rows and of eval_blocks
     std::vector<int64_t> host_ids_;
     std::unordered_map<const int*, const std::vector<int>*> host_lists_;
-    MetaBuilder efie_meta_;
-    DeviceBuffer efie_meta_device_;
+    EfieBlockSet& efie_rows_ = efie_block_sets().rows;
+    EfieBlockSet& efie_eval_ = efie_block_sets().eval;
     DeviceBuffer owner_meta_device_;
     std::unique_ptr<StreamMarks> elim_marks_;  // of the last wave, read at the next synchronization
     DeviceBuffer getrf_work_;
@@ -904,8 +888,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::eval_blocks(const std::ve
         return;
     }
     if constexpr (std::is_same_v<S, dcomplex>) {
-        const size_t D = sizeof(S);
-        const std::vector<int>& mesh_ints = kernel_->gpu_spec.table_int;
         // the point ids of an index list (as index_at on the device)
         auto ids_of = [&](const IndexList& list, int count, std::vector<int>& out) {
             out.resize(static_cast<size_t>(count));
@@ -922,94 +904,26 @@ void LevelEliminator<CoordType, DataType, KernelType>::eval_blocks(const std::ve
                 out[static_cast<size_t>(i)] = static_cast<int>(host_ids_[static_cast<size_t>(slot)]);
             }
         };
-        auto side = [&](const std::vector<int>& edges, std::vector<int>& tri_of, std::vector<int>& tris) {
-            tris.clear();
-            for (int e : edges) {
-                for (int a = 0; a < 2; ++a) {
-                    const int t = mesh_ints[6 * static_cast<size_t>(e) + 2 + static_cast<size_t>(a)];
-                    if (t >= 0) tris.push_back(t);
-                }
-            }
-            std::sort(tris.begin(), tris.end());
-            tris.erase(std::unique(tris.begin(), tris.end()), tris.end());
-            tri_of.resize(2 * edges.size());
-            for (size_t i = 0; i < edges.size(); ++i) {
-                for (int a = 0; a < 2; ++a) {
-                    const int t = mesh_ints[6 * static_cast<size_t>(edges[i]) + 2 + static_cast<size_t>(a)];
-                    tri_of[2 * i + static_cast<size_t>(a)] =
-                        t < 0 ? -1 : static_cast<int>(std::lower_bound(tris.begin(), tris.end(), t) - tris.begin());
-                }
-            }
-        };
-        // the blocks' lists (in parallel), then groups of pair sums within a budget
-        struct Lists { std::vector<int> rows, cols, row_tri, col_tri, tr, tc; };
-        std::vector<Lists> lists(items.size());
+        // the blocks' edges (in parallel), then the evaluator in groups within a budget
+        std::vector<std::vector<int>> rows(items.size()), cols(items.size());
         #pragma omp parallel for schedule(dynamic)
         for (int64_t b = 0; b < static_cast<int64_t>(items.size()); ++b) {
             const EvalItem& it = items[static_cast<size_t>(b)];
-            Lists& l = lists[static_cast<size_t>(b)];
             if (it.m <= 0 || it.n <= 0) continue;
-            ids_of(it.rows, it.m, l.rows);
-            ids_of(it.cols, it.n, l.cols);
-            side(l.rows, l.row_tri, l.tr);
-            side(l.cols, l.col_tri, l.tc);
+            ids_of(it.rows, it.m, rows[static_cast<size_t>(b)]);
+            ids_of(it.cols, it.n, cols[static_cast<size_t>(b)]);
         }
-        efie_meta_.clear();
-        std::vector<EfieBlockItem> blocks;
-        std::vector<size_t> sums_at;
-        std::vector<size_t> group{0};
-        std::vector<int64_t> group_pairs, group_entries;
-        const size_t budget = std::max<size_t>(size_t{256} << 20,
-                                               std::min<size_t>(size_t{2} << 30, heap_.largest_free() / 4));
-        size_t group_bytes = 0, scratch_bytes = 0;
-        int64_t max_pairs = 0, max_entries = 0;
+        efie_eval_.clear();
         for (size_t b = 0; b < items.size(); ++b) {
             const EvalItem& it = items[b];
-            const Lists& l = lists[b];
             if (it.m <= 0 || it.n <= 0) continue;
-            const size_t sums = align_up(l.tr.size() * l.tc.size() * kEfieSums * D);
-            if (group_bytes > 0 && group_bytes + sums > budget) {
-                group.push_back(blocks.size());
-                group_pairs.push_back(max_pairs);
-                group_entries.push_back(max_entries);
-                group_bytes = 0;
-                max_pairs = max_entries = 0;
-            }
-            EfieBlockItem e;
-            e.nrow = it.m;
-            e.ncol = it.n;
-            e.ntr = static_cast<int>(l.tr.size());
-            e.ntc = static_cast<int>(l.tc.size());
-            e.row_edges = static_cast<int64_t>(efie_meta_.append(l.rows));
-            e.col_edges = static_cast<int64_t>(efie_meta_.append(l.cols));
-            e.row_tri = static_cast<int64_t>(efie_meta_.append(l.row_tri));
-            e.col_tri = static_cast<int64_t>(efie_meta_.append(l.col_tri));
-            e.tr = static_cast<int64_t>(efie_meta_.append(l.tr));
-            e.tc = static_cast<int64_t>(efie_meta_.append(l.tc));
-            e.out = reinterpret_cast<dcomplex*>(it.out);  // out(r, c) = out[r + c * ld]
-            e.rs = 1;
-            e.cs = it.ld;
-            sums_at.push_back(group_bytes);
-            group_bytes += sums;
-            scratch_bytes = std::max(scratch_bytes, group_bytes);
-            max_pairs = std::max<int64_t>(max_pairs, static_cast<int64_t>(l.tr.size() * l.tc.size()));
-            max_entries = std::max<int64_t>(max_entries, static_cast<int64_t>(it.m) * it.n);
-            blocks.push_back(e);
+            // out(r, c) = out[r + c * ld]
+            efie_eval_.add(std::move(rows[b]), std::move(cols[b]), reinterpret_cast<dcomplex*>(it.out), 1, it.ld);
         }
-        group.push_back(blocks.size());
-        group_pairs.push_back(max_pairs);
-        group_entries.push_back(max_entries);
-        if (blocks.empty()) return;
-        char* scratch = heap_.alloc(std::max<size_t>(scratch_bytes, 1));
-        for (size_t b = 0; b < blocks.size(); ++b) blocks[b].M = reinterpret_cast<dcomplex*>(scratch + sums_at[b]);
-        const size_t off_blocks = efie_meta_.append(blocks);
-        char* emd = efie_meta_.upload(efie_meta_device_, stream);
-        for (size_t g = 0; g + 1 < group.size(); ++g) {
-            launch_efie_blocks(reinterpret_cast<const EfieBlockItem*>(emd + off_blocks) + group[g],
-                               static_cast<int>(group[g + 1] - group[g]), group_pairs[g], group_entries[g], emd, spec_,
-                               stream);
-        }
-        heap_.free(scratch);  // later launches are ordered after these
+        efie_eval_.plan(kernel_->gpu_spec.table_int,
+                        std::max<size_t>(size_t{256} << 20, std::min<size_t>(size_t{2} << 30, heap_.largest_free() / 4)));
+        efie_eval_.launch_all(spec_, stream);
+        efie_eval_.release();
     } else {
         (void)meta;
     }
@@ -1066,74 +980,23 @@ void LevelEliminator<CoordType, DataType, KernelType>::check_device_kernel() {
     // kind 3: the same blocks by the triangle-pair evaluator of the sketch
     std::vector<DataType> dev_pairs;
     if constexpr (std::is_same_v<S, dcomplex>) {
-        if (spec_.kind == 3) {
-            const std::vector<int>& mesh_ints = kernel_->gpu_spec.table_int;
-            auto side = [&](const std::vector<int>& edges, std::vector<int>& tri_of, std::vector<int>& tris) {
-                for (int e : edges) {
-                    for (int q = 0; q < 2; ++q) {
-                        const int t = mesh_ints[6 * static_cast<size_t>(e) + 2 + static_cast<size_t>(q)];
-                        if (t >= 0) tris.push_back(t);
-                    }
-                }
-                std::sort(tris.begin(), tris.end());
-                tris.erase(std::unique(tris.begin(), tris.end()), tris.end());
-                for (int e : edges) {
-                    for (int q = 0; q < 2; ++q) {
-                        const int t = mesh_ints[6 * static_cast<size_t>(e) + 2 + static_cast<size_t>(q)];
-                        tri_of.push_back(t < 0 ? -1
-                                               : static_cast<int>(std::lower_bound(tris.begin(), tris.end(), t) -
-                                                                  tris.begin()));
-                    }
-                }
-            };
-            meta_.clear();
-            std::vector<EfieBlockItem> items;
-            std::vector<size_t> sums_at;
-            size_t sums_bytes = 0;
-            int64_t max_pairs = 0, max_entries = 0;
+        if (spec_.kind == 3) {  // into d_out again (its entries are on the host)
+            efie_eval_.clear();
             for (int p = 0; p < 3; ++p) {
                 const Box& a = level_.local_boxes[static_cast<size_t>(pairs[p][0])];
                 const Box& c = level_.local_boxes[static_cast<size_t>(pairs[p][1])];
                 const int m = std::min(static_cast<int>(a.num_points), 32), n = std::min(static_cast<int>(c.num_points), 32);
-                std::vector<int> test(a.point_indices.begin(), a.point_indices.begin() + m);
-                std::vector<int> src(c.point_indices.begin(), c.point_indices.begin() + n);
-                std::vector<int> test_tri, src_tri, tt, st;
-                side(test, test_tri, tt);
-                side(src, src_tri, st);
-                EfieBlockItem e;
-                e.nrow = m;
-                e.ncol = n;
-                e.ntr = static_cast<int>(tt.size());
-                e.ntc = static_cast<int>(st.size());
-                e.row_edges = static_cast<int64_t>(meta_.append(test));
-                e.col_edges = static_cast<int64_t>(meta_.append(src));
-                e.row_tri = static_cast<int64_t>(meta_.append(test_tri));
-                e.col_tri = static_cast<int64_t>(meta_.append(src_tri));
-                e.tr = static_cast<int64_t>(meta_.append(tt));
-                e.tc = static_cast<int64_t>(meta_.append(st));
-                e.rs = 1;
-                e.cs = m;
-                sums_at.push_back(sums_bytes);
-                sums_bytes = align_up(sums_bytes + tt.size() * st.size() * kEfieSums * sizeof(S));
-                max_pairs = std::max<int64_t>(max_pairs, static_cast<int64_t>(tt.size() * st.size()));
-                max_entries = std::max<int64_t>(max_entries, static_cast<int64_t>(m) * n);
-                items.push_back(e);
+                efie_eval_.add(std::vector<int>(a.point_indices.begin(), a.point_indices.begin() + m),
+                               std::vector<int>(c.point_indices.begin(), c.point_indices.begin() + n),
+                               reinterpret_cast<dcomplex*>(d_out + offset[static_cast<size_t>(p)]), 1, m);
             }
-            char* scratch = heap_.alloc(std::max<size_t>(sums_bytes, 1) + offset[3] * sizeof(S));
-            for (int p = 0; p < 3; ++p) {
-                items[static_cast<size_t>(p)].M = reinterpret_cast<dcomplex*>(scratch + sums_at[static_cast<size_t>(p)]);
-                items[static_cast<size_t>(p)].out =
-                    reinterpret_cast<dcomplex*>(scratch + std::max<size_t>(sums_bytes, 1)) + offset[static_cast<size_t>(p)];
-            }
-            const size_t off_items = meta_.append(items);
-            char* md2 = meta_.upload(meta_device_, stream);
-            launch_efie_blocks(reinterpret_cast<const EfieBlockItem*>(md2 + off_items), 3, max_pairs, max_entries, md2,
-                               spec_, stream);
+            efie_eval_.plan(kernel_->gpu_spec.table_int, size_t{256} << 20);
+            efie_eval_.launch_all(spec_, stream);
+            efie_eval_.release();
             dev_pairs.resize(offset[3]);
-            check_cuda(cudaMemcpyAsync(dev_pairs.data(), scratch + std::max<size_t>(sums_bytes, 1),
-                                       offset[3] * sizeof(S), cudaMemcpyDeviceToHost, stream), "kernel check");
+            check_cuda(cudaMemcpyAsync(dev_pairs.data(), d_out, offset[3] * sizeof(S), cudaMemcpyDeviceToHost, stream),
+                       "kernel check");
             check_cuda(cudaStreamSynchronize(stream), "kernel check");
-            heap_.free(scratch);
         }
     }
     heap_.free(d_out);
@@ -1272,9 +1135,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         char* lists_block = nullptr;
         std::string trace;
         // kind 3: the kernel rows as a block of the triangle-pair evaluator
-        // (emsurf_blocks.hpp): test edges = the box's points, source edges =
-        // the rows, and each side's triangles
-        std::vector<int> efie_test, efie_src, efie_test_tri, efie_src_tri, efie_tt, efie_st;
+        // (emsurf_plan.hpp): test edges = the box's points, source edges = the rows
+        std::vector<int> efie_test, efie_src;
         S* Y = nullptr;        // d x n
         size_t off_y = 0;
         int fill_rank = 0;          // sum of the sources' r
@@ -1285,26 +1147,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const bool trace = h2_id_trace_enabled();
     // kind 3: the rows' kernel values by triangle pairs (efie_* of the plans)
     const bool efie = spec_.kind == 3;
-    const std::vector<int>& mesh_ints = kernel_->gpu_spec.table_int;
-    auto efie_side = [&](const std::vector<int>& edges, std::vector<int>& tri_of, std::vector<int>& tris) {
-        tris.clear();
-        for (int e : edges) {
-            for (int a = 0; a < 2; ++a) {
-                const int t = mesh_ints[6 * static_cast<size_t>(e) + 2 + static_cast<size_t>(a)];
-                if (t >= 0) tris.push_back(t);
-            }
-        }
-        std::sort(tris.begin(), tris.end());
-        tris.erase(std::unique(tris.begin(), tris.end()), tris.end());
-        tri_of.resize(2 * edges.size());
-        for (size_t i = 0; i < edges.size(); ++i) {
-            for (int a = 0; a < 2; ++a) {
-                const int t = mesh_ints[6 * static_cast<size_t>(edges[i]) + 2 + static_cast<size_t>(a)];
-                tri_of[2 * i + static_cast<size_t>(a)] =
-                    t < 0 ? -1 : static_cast<int>(std::lower_bound(tris.begin(), tris.end(), t) - tris.begin());
-            }
-        }
-    };
 
     // ---- host plans (index lists only)
     {
@@ -1390,8 +1232,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                         throw std::runtime_error("LevelEliminator: kind 3 rows do not match the sketch rows");
                     }
                     p.efie_test.assign(box->point_indices.begin(), box->point_indices.end());
-                    efie_side(p.efie_test, p.efie_test_tri, p.efie_tt);
-                    efie_side(p.efie_src, p.efie_src_tri, p.efie_st);
                 }
 
                 // sketch parameters (compute_id_sparse_sketch's); the draws
@@ -1634,60 +1474,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // kind 3: the rows of groups of boxes, one group at a time in one
     // scratch buffer (triangle-pair sums, then the rows) within a memory
     // budget; each group's rows are sketched before the next group runs
-    std::vector<EfieBlockItem> efie_items;
-    std::vector<size_t> efie_group{0};  // group g: boxes [efie_group[g], efie_group[g + 1])
-    std::vector<int64_t> efie_max_pairs, efie_max_entries;
-    char* efie_scratch = nullptr;
-    if (efie) {
-        const size_t budget = std::max<size_t>(size_t{256} << 20,
-                                               std::min<size_t>(size_t{4} << 30, heap_.largest_free() / 4));
-        std::vector<size_t> sums_off(plans.size()), rows_off(plans.size());
-        size_t group_bytes = 0, scratch_bytes = 0;
-        int64_t max_pairs = 0, max_entries = 0;
-        for (size_t bi = 0; bi < plans.size(); ++bi) {
-            const Plan& p = plans[bi];
-            const size_t sums = align_up(p.efie_tt.size() * p.efie_st.size() * kEfieSums * D);
-            const size_t rows = align_up(static_cast<size_t>(p.total_rows) * p.n * D);
-            if (group_bytes > 0 && group_bytes + sums + rows > budget) {
-                efie_group.push_back(bi);
-                efie_max_pairs.push_back(max_pairs);
-                efie_max_entries.push_back(max_entries);
-                group_bytes = 0;
-                max_pairs = max_entries = 0;
-            }
-            sums_off[bi] = group_bytes;
-            rows_off[bi] = group_bytes + sums;
-            group_bytes += sums + rows;
-            scratch_bytes = std::max(scratch_bytes, group_bytes);
-            max_pairs = std::max<int64_t>(max_pairs, static_cast<int64_t>(p.efie_tt.size() * p.efie_st.size()));
-            max_entries = std::max<int64_t>(max_entries, p.total_rows * p.n);
-        }
-        efie_group.push_back(plans.size());
-        efie_max_pairs.push_back(max_pairs);
-        efie_max_entries.push_back(max_entries);
-        efie_scratch = heap_.alloc(std::max<size_t>(scratch_bytes, 1));
-        for (size_t bi = 0; bi < plans.size(); ++bi) {
-            Plan& p = plans[bi];
-            EfieBlockItem e;
-            e.nrow = p.n;  // test edges: the box's points
-            e.ncol = static_cast<int>(p.total_rows);
-            e.ntr = static_cast<int>(p.efie_tt.size());
-            e.ntc = static_cast<int>(p.efie_st.size());
-            e.row_edges = static_cast<int64_t>(meta_.append(p.efie_test));
-            e.col_edges = static_cast<int64_t>(meta_.append(p.efie_src));
-            e.row_tri = static_cast<int64_t>(meta_.append(p.efie_test_tri));
-            e.col_tri = static_cast<int64_t>(meta_.append(p.efie_src_tri));
-            e.tr = static_cast<int64_t>(meta_.append(p.efie_tt));
-            e.tc = static_cast<int64_t>(meta_.append(p.efie_st));
-            e.M = reinterpret_cast<dcomplex*>(efie_scratch + sums_off[bi]);
-            e.out = reinterpret_cast<dcomplex*>(efie_scratch + rows_off[bi]);
-            e.rs = 1;  // stored row c (source edge), column r (test edge): out[c * n + r]
-            e.cs = p.n;
-            efie_items.push_back(e);
-            row_items[bi].src = reinterpret_cast<const S*>(e.out);
-        }
+    if (efie) {  // one block per box, its rows in the scratch: row c (source edge), column r (test edge) at out[c * n + r]
+        efie_rows_.clear();
+        for (Plan& p : plans) efie_rows_.add(std::move(p.efie_test), std::move(p.efie_src), nullptr, 1, p.n);
+        efie_rows_.plan(kernel_->gpu_spec.table_int,
+                        std::max<size_t>(size_t{256} << 20, std::min<size_t>(size_t{4} << 30, heap_.largest_free() / 4)));
+        for (size_t bi = 0; bi < plans.size(); ++bi) row_items[bi].src = reinterpret_cast<const S*>(efie_rows_.out(bi));
     }
-    const size_t off_efie = meta_.append(efie_items);
     const size_t off_list_items = meta_.append(list_items);
     const size_t off_source_list_items = meta_.append(source_list_items);
     const size_t off_rows = meta_.append(row_items);
@@ -1709,15 +1502,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     marks.mark(stream);
     if (efie) {
         if constexpr (std::is_same_v<S, dcomplex>) {
-            for (size_t g = 0; g + 1 < efie_group.size(); ++g) {
-                const size_t b0 = efie_group[g], count = efie_group[g + 1] - b0;
-                launch_efie_blocks(reinterpret_cast<const EfieBlockItem*>(md + off_efie) + b0, static_cast<int>(count),
-                                   efie_max_pairs[g], efie_max_entries[g], md, spec_, stream);
+            for (size_t g = 0; g < efie_rows_.groups(); ++g) {
+                const size_t b0 = efie_rows_.group_begin(g), count = efie_rows_.group_end(g) - b0;
+                efie_rows_.launch(g, spec_, stream);
                 launch_ordered_sketch(reinterpret_cast<const OrderedSketchItem*>(md + off_rows) + b0,
                                       static_cast<int>(count), max_d, max_n, false, spec_, points_, stream);
             }
         }
-        heap_.free(efie_scratch);  // later launches are ordered after the sketch
+        efie_rows_.release();  // later launches are ordered after the sketch
     } else {
         launch_ordered_sketch(reinterpret_cast<const OrderedSketchItem*>(md + off_rows),
                               static_cast<int>(row_items.size()), max_d, max_n, true, spec_, points_, stream);

@@ -3,7 +3,8 @@
 // precon=2 with H2_use_gpu).  Per level:
 //   ids     the ID of every local box: its two-hop ring (all points of every
 //           ring box, as gather_id_workspace forms it when no box is
-//           eliminated), sketched on the device with the host's sparse sign
+//           eliminated) and its static training rows (H2_ID_radius > 2,
+//           H2_ID_proxy 1), sketched on the device with the host's sparse sign
 //           draws (compute_id_sparse_sketch: std::mt19937_64 seeded with
 //           morton + 1, 4 per row, sketch size n) and factored by the device
 //           pivoted QR.  Skeleton, redundant and T go to the box as
@@ -14,12 +15,15 @@
 //           level the near block K(points t, points s), evaluated on the
 //           device and copied into the boxes' h2 block lists in the host's
 //           order (as build_h2_blocks_for_level forms them).
-// The host keeps the metadata exchanges and the parent boxes.
+// Kind 3 (EMSURF EFIE) evaluates the ring rows and the blocks by triangle
+// pairs (emsurf_plan.hpp).  Empty boxes (unstructured trees) have no ID and
+// no blocks.  The host keeps the metadata exchanges and the parent boxes.
 
 #ifdef H2_HAVE_GPU
 
 #include "device_heap.hpp"
 #include "device_kernels.hpp"
+#include "emsurf_plan.hpp"
 #include "gpu_runtime.hpp"
 #include "h2_matvec_store.hpp"
 #include "host_copier.hpp"
@@ -33,9 +37,11 @@
 #include <complex>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <string>
@@ -61,8 +67,8 @@ inline CompressionStats& compression_stats() {
 }
 
 // The device covers the compression of this tree: a registered device form
-// of the kernel for the data type, 3D, and ID targets without static
-// training rows.
+// of the kernel for the data type, and 3D.  Its IDs also need
+// device_sketch_supported (no adaptive training rows).
 template<typename CoordType, typename DataType, typename KernelType>
 bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const KernelType* kernel,
                            std::string* reason) {
@@ -76,9 +82,6 @@ bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const 
         if (tree->dimension != 3) return fail("the device kernels are 3D");
         const char* why = nullptr;
         if (!device_kernel_registered<DataType>(kernel->gpu_spec, &why)) return fail(why);
-        if (tree->id_neighborhood_radius > 2 || tree->id_proxy_mode == 1) {
-            return fail("ID targets with static training rows are not ported");
-        }
         return true;
     }
 }
@@ -102,7 +105,10 @@ inline void begin_device_compression(int num_levels) {
 namespace compression_detail {
 
 // Points of a level on the device: every local box, then every remote box
-// with point data (the assisting records the metadata exchanges filled).
+// with point data (the assisting records the metadata exchanges filled),
+// then the static training points of the level's IDs (global indices, with
+// the tree's retained global coordinates when it has them: kind 3 reads only
+// the ids).  The ids stay on the host too, for the kind-3 blocks.
 template<typename CoordType, typename DataType>
 class LevelPoints {
 public:
@@ -117,7 +123,8 @@ public:
     LevelPoints& operator=(const LevelPoints&) = delete;
     ~LevelPoints() { release(); }
 
-    void build(TreeLevel<CoordType, DataType>& level, cudaStream_t stream) {
+    void build(TreeLevel<CoordType, DataType>& level, cudaStream_t stream, const std::vector<int64_t>& training = {},
+               const std::vector<CoordType>* global_coords = nullptr) {  // global_coords: 3 per point, or none
         release();
         entries_.clear();
         int64_t slots = 0;
@@ -141,9 +148,12 @@ public:
                                      &assist.skel_indices};
             slots += static_cast<int64_t>(assist.indices.size());
         }
+        training_slot0_ = static_cast<int>(slots);
+        slots += static_cast<int64_t>(training.size());
         if (slots >= std::numeric_limits<int>::max()) throw std::runtime_error("device compression: too many points");
         std::vector<double> xyz(static_cast<size_t>(3 * slots));
-        std::vector<int64_t> ids(static_cast<size_t>(slots));
+        std::vector<int64_t>& ids = ids_;
+        ids.assign(static_cast<size_t>(slots), 0);
         for (const auto& box : level.local_boxes) {
             const size_t at = static_cast<size_t>(entries_.at(box.morton_index).slot);
             for (int64_t i = 0; i < box.num_points; ++i) {
@@ -161,13 +171,22 @@ public:
                 ids[at + i] = assist.indices[i];
             }
         }
+        for (size_t t = 0; t < training.size(); ++t) {
+            const size_t at = static_cast<size_t>(training_slot0_) + t;
+            ids[at] = training[t];
+            for (int d = 0; d < 3; ++d) {
+                xyz[3 * at + d] =
+                    global_coords != nullptr ? static_cast<double>((*global_coords)[3 * static_cast<size_t>(training[t]) + d])
+                                             : 0.0;
+            }
+        }
         DeviceHeap& heap = DeviceHeap::instance();
         xyz_ = heap.alloc_resident<double>(std::max<size_t>(xyz.size(), 1) * sizeof(double));
-        ids_ = heap.alloc_resident<int64_t>(std::max<size_t>(ids.size(), 1) * sizeof(int64_t));
+        d_ids_ = heap.alloc_resident<int64_t>(std::max<size_t>(ids.size(), 1) * sizeof(int64_t));
         if (!xyz.empty()) {
             check_cuda(cudaMemcpyAsync(xyz_, xyz.data(), xyz.size() * sizeof(double), cudaMemcpyHostToDevice, stream),
                        "compression points");
-            check_cuda(cudaMemcpyAsync(ids_, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice, stream),
+            check_cuda(cudaMemcpyAsync(d_ids_, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice, stream),
                        "compression ids");
             // pageable copies: staged before the calls return, so the host
             // vectors may go
@@ -179,21 +198,25 @@ public:
         auto it = entries_.find(morton);
         return it == entries_.end() ? nullptr : &it->second;
     }
-    PointTable table() const { return PointTable{xyz_, ids_}; }
+    PointTable table() const { return PointTable{xyz_, d_ids_}; }
+    int training_slot0() const { return training_slot0_; }
+    int64_t host_id(int slot) const { return ids_[static_cast<size_t>(slot)]; }
     double bytes() const { return bytes_; }
 
     void release() {
         DeviceHeap& heap = DeviceHeap::instance();
         heap.free(xyz_);
-        heap.free(ids_);
+        heap.free(d_ids_);
         xyz_ = nullptr;
-        ids_ = nullptr;
+        d_ids_ = nullptr;
     }
 
 private:
     std::unordered_map<int64_t, Entry> entries_;
     double* xyz_ = nullptr;
-    int64_t* ids_ = nullptr;
+    int64_t* d_ids_ = nullptr;
+    std::vector<int64_t> ids_;
+    int training_slot0_ = 0;
     double bytes_ = 0.0;
 };
 
@@ -228,21 +251,64 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     const KernelSpec spec = device_kernel_spec(kernel->gpu_spec);
     const bool trace = h2_id_trace_enabled();
 
+    // ---- static training rows (H2_ID_radius > 2, H2_ID_proxy 1), as the
+    // host selects them: their points after the level's, each once, and a
+    // list of their slots per box
+    const size_t nb = level.local_boxes.size();
+    std::vector<std::vector<int64_t>> training(nb);
+    std::vector<int64_t> training_points;  // global indices, in slot order
+    std::vector<int> training_lists;       // per box, slots relative to the first training slot
+    std::vector<size_t> training_at(nb, 0);
+    if (tree->id_neighborhood_radius > 2 || tree->id_proxy_mode == 1) {
+        std::exception_ptr failure;
+        std::mutex failure_mutex;
+        #pragma omp parallel for schedule(dynamic)
+        for (int64_t b = 0; b < static_cast<int64_t>(nb); ++b) {
+            const auto& box = level.local_boxes[static_cast<size_t>(b)];
+            if (box.num_points <= 0) continue;
+            try {
+                training[static_cast<size_t>(b)] = select_static_id_training_indices(tree, &box);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(failure_mutex);
+                if (!failure) failure = std::current_exception();
+            }
+        }
+        if (failure) std::rethrow_exception(failure);
+        std::unordered_map<int64_t, int> slot_of;
+        for (size_t b = 0; b < nb; ++b) {
+            training_at[b] = training_lists.size();
+            for (int64_t index : training[b]) {
+                auto it = slot_of.emplace(index, static_cast<int>(training_points.size())).first;
+                if (it->second == static_cast<int>(training_points.size())) training_points.push_back(index);
+                training_lists.push_back(it->second);
+            }
+        }
+    }
+    const bool have_coords = tree->id_source_point_coords.size() == 3 * static_cast<size_t>(tree->num_points);
     compression_detail::LevelPoints<CoordType, DataType> points;
-    points.build(level, stream);
+    points.build(level, stream, training_points, have_coords ? &tree->id_source_point_coords : nullptr);
     stats.bytes_up += points.bytes();
+    int* d_training = nullptr;
+    if (!training_lists.empty()) {
+        d_training = heap.alloc_resident<int>(training_lists.size() * sizeof(int));
+        check_cuda(cudaMemcpyAsync(d_training, training_lists.data(), training_lists.size() * sizeof(int),
+                                   cudaMemcpyHostToDevice, stream), "compression training rows");
+        stats.bytes_up += static_cast<double>(training_lists.size() * sizeof(int));
+    }
 
     // ---- per box: its ring blocks (all points of each two-hop box, in
-    // two_hop order) and sketch shape (compute_id_sparse_sketch's)
+    // two_hop order), then its training rows, and the sketch shape
+    // (compute_id_sparse_sketch's); kind 3: the rows' edges for the evaluator
+    const bool efie = spec.kind == 3;
     struct Plan {
         int64_t box = -1;
         int n = 0, d = 0, sk = 0, slot = 0;
         int64_t rows = 0;
         double scale = 0.0;
         std::vector<RowBlockDesc> blocks;
+        std::vector<int> test_edges, row_edges;
     };
     std::vector<Plan> plans;
-    const size_t nb = level.local_boxes.size();
     for (size_t b = 0; b < nb; ++b) {
         auto& box = level.local_boxes[b];
         box.h2_interaction_blocks.clear();
@@ -266,6 +332,18 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             }
             p.blocks.push_back(RowBlockDesc{row_base, e->n, e->slot, nullptr});
             row_base += e->n;
+            if (efie) {
+                for (int i = 0; i < e->n; ++i) p.row_edges.push_back(static_cast<int>(points.host_id(e->slot + i)));
+            }
+        }
+        // static training rows after the ring (their draws continue the box's stream, as on the host)
+        if (!training[b].empty()) {
+            const int nt = static_cast<int>(training[b].size());
+            p.blocks.push_back(RowBlockDesc{row_base, nt, points.training_slot0(), d_training + training_at[b]});
+            row_base += nt;
+            if (efie) {
+                for (int64_t index : training[b]) p.row_edges.push_back(static_cast<int>(index));
+            }
         }
         p.rows = row_base;
         if (p.rows == 0) {  // no ring rows: every point is a skeleton point (h2_skeletonize_box)
@@ -287,6 +365,9 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         if (p.rows > kEntryRowMask || p.d > kEntryDestMask) {
             host_boxes.push_back(p.box);  // too large for the packed list entries
             continue;
+        }
+        if (efie) {
+            for (int i = 0; i < p.n; ++i) p.test_edges.push_back(static_cast<int>(points.host_id(p.slot + i)));
         }
         plans.push_back(std::move(p));
     }
@@ -385,6 +466,21 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                              reinterpret_cast<int*>(d_id + id_rank) + i, reinterpret_cast<double*>(d_id + id_norm) + i,
                              reinterpret_cast<int*>(d_id + id_flag) + i};
         }
+        EfieBlockSet& efie_rows = efie_block_sets().compression;
+        if (efie) {  // row c (ring or training edge), column r (box edge) at out[c * n + r]
+            efie_rows.clear();
+            for (int i = 0; i < count; ++i) {
+                Plan& p = plans[c0 + static_cast<size_t>(i)];
+                efie_rows.add(std::move(p.test_edges), std::move(p.row_edges), nullptr, 1, p.n);
+            }
+            efie_rows.plan(kernel->gpu_spec.table_int, compression_detail::chunk_budget());
+            for (int i = 0; i < count; ++i) {
+                OrderedSketchItemT<S>& item = row_items[static_cast<size_t>(i)];
+                item.src = reinterpret_cast<const S*>(efie_rows.out(static_cast<size_t>(i)));
+                item.row_stride = item.ncols;
+                item.row_index = nullptr;
+            }
+        }
         const size_t off_list_items = meta.append(list_items);
         const size_t off_rows = meta.append(row_items);
         const size_t off_id = meta.append(id_items);
@@ -395,8 +491,21 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         stats.bytes_up += static_cast<double>(meta.size());
         launch_sketch_lists(reinterpret_cast<const SketchListsItem*>(md + off_list_items), count, max_blocks, nullptr, 0,
                             md, stream);
-        launch_ordered_sketch(reinterpret_cast<const OrderedSketchItemT<S>*>(md + off_rows), count, max_d, max_n, true,
-                              spec, points.table(), stream);
+        if (efie) {
+            if constexpr (std::is_same_v<S, dcomplex>) {
+                for (size_t g = 0; g < efie_rows.groups(); ++g) {
+                    efie_rows.launch(g, spec, stream);
+                    launch_ordered_sketch(reinterpret_cast<const OrderedSketchItemT<S>*>(md + off_rows) +
+                                              efie_rows.group_begin(g),
+                                          static_cast<int>(efie_rows.group_end(g) - efie_rows.group_begin(g)), max_d,
+                                          max_n, false, spec, points.table(), stream);
+                }
+            }
+            efie_rows.release();  // later launches are ordered after the sketch
+        } else {
+            launch_ordered_sketch(reinterpret_cast<const OrderedSketchItemT<S>*>(md + off_rows), count, max_d, max_n,
+                                  true, spec, points.table(), stream);
+        }
         char* d_qrcp_work = nullptr;
         if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
         launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance, d_qrcp_work, stream);
@@ -497,6 +606,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         stats.id_boxes += count;
         c0 = c1;
     }
+    heap.free(d_training);  // later launches are ordered after the sketches
     stats.host_id_boxes += static_cast<int64_t>(host_boxes.size());
     stats.ids += std::chrono::duration<double>(clock::now() - t0).count();
     return host_boxes;
@@ -689,6 +799,11 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
         int m, n;
         IndexList rows, cols;
         int64_t source;
+        // the same rows and columns for the host (kind 3): slots, and the
+        // skeleton positions in the box (none: all its points)
+        int row_slot, col_slot;
+        const std::vector<int64_t>* row_skeleton;
+        const std::vector<int64_t>* col_skeleton;
     };
     std::vector<Block> blocks;
     for (size_t b = 0; b < nb; ++b) {
@@ -708,7 +823,8 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
                 kept.push_back(sm);
                 blocks.push_back(Block{b, false, kept.size() - 1, kt, static_cast<int>(se->skeleton->size()),
                                        IndexList{skeleton_list(target.morton_index, target.skeleton_indices), te->slot},
-                                       IndexList{skeleton_list(sm, *se->skeleton), se->slot}, sm});
+                                       IndexList{skeleton_list(sm, *se->skeleton), se->slot}, sm, te->slot, se->slot,
+                                       &target.skeleton_indices, se->skeleton});
             }
             target.h2_interaction_blocks.resize(kept.size());
             for (size_t j = 0; j < kept.size(); ++j) target.h2_interaction_blocks[j].source_morton = kept[j];
@@ -725,7 +841,8 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
                 if (se->n == 0) continue;
                 kept.push_back(sm);
                 blocks.push_back(Block{b, true, kept.size() - 1, static_cast<int>(target.num_points), se->n,
-                                       IndexList{-1, te->slot, nullptr}, IndexList{-1, se->slot, nullptr}, sm});
+                                       IndexList{-1, te->slot, nullptr}, IndexList{-1, se->slot, nullptr}, sm, te->slot,
+                                       se->slot, nullptr, nullptr});
             }
             target.h2_near_blocks.resize(kept.size());
             for (size_t j = 0; j < kept.size(); ++j) target.h2_near_blocks[j].source_morton = kept[j];
@@ -772,7 +889,11 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
     // With a symmetric kernel, the near block of local boxes t < s is not
     // kept (the block of s, t serves both): such blocks go in chunks of
     // their own after the others, and those chunks only go to the host.
-    const bool symmetric = keep && near && device_matvec_symmetric();
+    // Kind 3 keeps every block: the EMSURF near field is symmetric only to
+    // about 1e-6 (a self-triangle pair integrates the test side by Gauss
+    // points and the source side analytically), and the host matvec applies
+    // each block as evaluated.
+    const bool symmetric = keep && near && device_matvec_symmetric() && spec.kind != 3;
     std::vector<size_t> order(blocks.size());
     std::iota(order.begin(), order.end(), size_t{0});
     size_t split = blocks.size();  // order[0, split): blocks the matvec keeps
@@ -841,11 +962,34 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
             at += align_up(static_cast<size_t>(bl.m) * bl.n * D);
             (bl.near ? stats.near_blocks : stats.interaction_blocks) += 1;
         }
-        const size_t off_evals = meta.append(evals);
-        char* md = meta.upload(meta_device, stream);
-        stats.bytes_up += static_cast<double>(meta.size());
-        launch_eval(reinterpret_cast<const EvalItemT<S>*>(md + off_evals), static_cast<int>(evals.size()), max_m, max_n,
-                    md, spec, points.table(), stream);
+        if (spec.kind == 3) {  // by triangle pairs, into the chunk (out(r, c) = out[r + c * m])
+            if constexpr (std::is_same_v<S, dcomplex>) {
+                auto edges = [&](int slot, const std::vector<int64_t>* skeleton, int count) {
+                    std::vector<int> e(static_cast<size_t>(count));
+                    for (int i = 0; i < count; ++i) {
+                        const int at = skeleton != nullptr ? static_cast<int>((*skeleton)[static_cast<size_t>(i)]) : i;
+                        e[static_cast<size_t>(i)] = static_cast<int>(points.host_id(slot + at));
+                    }
+                    return e;
+                };
+                EfieBlockSet& set = efie_block_sets().compression;
+                set.clear();
+                for (size_t o = c0; o < c1; ++o) {
+                    const Block& bl = blocks[order[o]];
+                    set.add(edges(bl.row_slot, bl.row_skeleton, bl.m), edges(bl.col_slot, bl.col_skeleton, bl.n),
+                            reinterpret_cast<dcomplex*>(evals[o - c0].out), 1, bl.m);
+                }
+                set.plan(kernel->gpu_spec.table_int, compression_detail::chunk_budget());
+                set.launch_all(spec, stream);
+                set.release();  // later launches are ordered after these
+            }
+        } else {
+            const size_t off_evals = meta.append(evals);
+            char* md = meta.upload(meta_device, stream);
+            stats.bytes_up += static_cast<double>(meta.size());
+            launch_eval(reinterpret_cast<const EvalItemT<S>*>(md + off_evals), static_cast<int>(evals.size()), max_m,
+                        max_n, md, spec, points.table(), stream);
+        }
         check_cuda(cudaEventCreateWithFlags(&job.ready, cudaEventDisableTiming), "cudaEventCreate");
         check_cuda(cudaEventRecord(job.ready, stream), "cudaEventRecord");
         job.finalize = [shapes] {

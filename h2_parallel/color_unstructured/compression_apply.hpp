@@ -121,6 +121,34 @@ void compressed_multiply(
     const int rank = tree->mpi_rank;
     const int leaf_level = tree->num_levels - 1;
     const int first_h2_level = std::min(2, leaf_level);
+
+#ifdef H2_HAVE_GPU
+    // the whole matvec on the device (color_gpu/h2_matvec.hpp) when the
+    // compression kept the blocks there on every rank
+    if (gpu::run_device_h2_mul(tree, input, output, nrhs)) {
+        if (gpu::device_matvec_check()) {  // H2_GPU_MATVEC_CHECK=1: the host matvec as the reference
+            std::vector<DataType> host_output;
+            gpu::device_matvec_suspended() = true;
+            compressed_multiply(tree, input, host_output, nrhs, false);
+            gpu::device_matvec_suspended() = false;
+            double sums[2] = {0.0, 0.0};
+            for (size_t i = 0; i < output.size(); ++i) {
+                sums[0] += std::norm(output[i] - host_output[i]);
+                sums[1] += std::norm(host_output[i]);
+            }
+            MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+            if (rank == 0) {
+                std::printf("GPU matvec check: |y_gpu - y_host| / |y_host| = %.3e\n",
+                            sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
+                std::fflush(stdout);
+            }
+        }
+        if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
+            std::cout << "Unstructured H2 compression-only multiply complete" << std::endl;
+        }
+        return;
+    }
+#endif
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> source_data(
         static_cast<size_t>(tree->num_levels));
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> target_data(

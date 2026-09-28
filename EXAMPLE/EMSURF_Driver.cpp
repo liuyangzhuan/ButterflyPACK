@@ -33,6 +33,7 @@ struct EMSurfOptions {
   int rcs_static = 2;
   int rcs_nsample = 1000;
   int mesh_normal = 1;
+  int solve = 1;  // 0: stop after the factorization or compression and its check
 };
 
 double real_part(_Complex double value) { return __real__ value; }
@@ -88,6 +89,8 @@ EMSurfOptions parse_emsurf_options(int argc, char** argv) {
       options.mesh_normal = parse_int(name.c_str(), next());
     } else if (name == "--scaling") {
       options.scaling = parse_double(name.c_str(), next());
+    } else if (name == "--solve") {
+      options.solve = parse_int(name.c_str(), next());
     }
   }
   if (options.rcs_nsample <= 0) throw std::runtime_error("--rcs_nsample must be positive");
@@ -336,43 +339,47 @@ int main(int argc, char** argv) {
                                         &context);
     z_c_bpack_factor(&matrix, &option, &statistics, &process_tree, &mesh);
 
-    const int nrhs = em_options.rcs_static == 1 ? em_options.rcs_nsample + 1 : 2;
-    std::vector<_Complex double> right_hand_side(
-        static_cast<std::size_t>(local_size) * nrhs);
-    std::vector<_Complex double> solution(
-        static_cast<std::size_t>(local_size) * nrhs, 0.0);
-    const double theta = 90.0;
+    // --solve 0: only the factorization (or compression) and its quick
+    // check, e.g. for the compression-only mode on an ill-conditioned EFIE
+    if (em_options.solve != 0) {
+      const int nrhs = em_options.rcs_static == 1 ? em_options.rcs_nsample + 1 : 2;
+      std::vector<_Complex double> right_hand_side(
+          static_cast<std::size_t>(local_size) * nrhs);
+      std::vector<_Complex double> solution(
+          static_cast<std::size_t>(local_size) * nrhs, 0.0);
+      const double theta = 90.0;
 
-    for (int rhs = 0; rhs < nrhs; ++rhs) {
-      const int polarization = em_options.rcs_static == 1 ? 1 : rhs;
-      const double phi = em_options.rcs_static == 1
-                             ? rhs * (180.0 / em_options.rcs_nsample)
-                             : 0.0;
-#ifdef _OPENMP
-#pragma omp parallel for
-#endif
-      for (int local_index = 0; local_index < local_size; ++local_index) {
-        int new_index = local_index + 1;
-        int old_index = 0;
-        z_c_bpack_new2old(&mesh, &new_index, &old_index);
-        emsurf_incident_c(old_index, polarization, theta, phi,
-                          &right_hand_side[local_index + rhs * local_size]);
+      for (int rhs = 0; rhs < nrhs; ++rhs) {
+        const int polarization = em_options.rcs_static == 1 ? 1 : rhs;
+        const double phi = em_options.rcs_static == 1
+                               ? rhs * (180.0 / em_options.rcs_nsample)
+                               : 0.0;
+  #ifdef _OPENMP
+  #pragma omp parallel for
+  #endif
+        for (int local_index = 0; local_index < local_size; ++local_index) {
+          int new_index = local_index + 1;
+          int old_index = 0;
+          z_c_bpack_new2old(&mesh, &new_index, &old_index);
+          emsurf_incident_c(old_index, polarization, theta, phi,
+                            &right_hand_side[local_index + rhs * local_size]);
+        }
       }
-    }
 
-    int mutable_nrhs = nrhs;
-    z_c_bpack_solve(solution.data(), right_hand_side.data(), &local_size, &mutable_nrhs,
-                    &matrix, &option, &statistics, &process_tree);
-    print_solution_checksums(rank, local_size, nrhs, solution);
+      int mutable_nrhs = nrhs;
+      z_c_bpack_solve(solution.data(), right_hand_side.data(), &local_size, &mutable_nrhs,
+                      &matrix, &option, &statistics, &process_tree);
+      print_solution_checksums(rank, local_size, nrhs, solution);
 
-    double wavenumber = 0.0;
-    emsurf_get_wavenumber_c(&wavenumber);
-    if (em_options.rcs_static == 1) {
-      write_monostatic_rcs(rank, local_size, &mesh, em_options.rcs_nsample,
+      double wavenumber = 0.0;
+      emsurf_get_wavenumber_c(&wavenumber);
+      if (em_options.rcs_static == 1) {
+        write_monostatic_rcs(rank, local_size, &mesh, em_options.rcs_nsample,
+                             wavenumber, solution);
+      } else {
+        write_bistatic_rcs(rank, local_size, &mesh, em_options.rcs_nsample,
                            wavenumber, solution);
-    } else {
-      write_bistatic_rcs(rank, local_size, &mesh, em_options.rcs_nsample,
-                         wavenumber, solution);
+      }
     }
 
     if (rank == 0) std::cout << "Printing EMSURF ButterflyPACK statistics\n";

@@ -67,7 +67,8 @@ if [[ -n "${job_id}" ]]; then
   srun_args=(--jobid="${job_id}" "${srun_args[@]}")
 fi
 
-# Each rank sees only its node-local GPU.  Cray MPICH sets up its GPU
+# Each rank sees only its node-local GPU (shared round-robin when a node
+# runs more ranks than GPUs).  Cray MPICH sets up its GPU
 # transport on the current device in MPI_Init: with all four GPUs visible that
 # is device 0 for every rank, the H2 backend then moves ranks 1-3 to their own
 # GPUs, and MPICH disables CUDA IPC between the GPUs of a node ("This process
@@ -75,7 +76,7 @@ fi
 # the factorization time at 8 and 64 ranks.  --H2_XRR_factor 1 (LU of X_RR)
 # is required by the GPU box path; without it only the owner pass runs on the
 # GPU.
-srun "${srun_args[@]}" bash -c 'export CUDA_VISIBLE_DEVICES=${SLURM_LOCALID}; exec "$@"' h2 \
+srun "${srun_args[@]}" bash -c 'export CUDA_VISIBLE_DEVICES=$((SLURM_LOCALID % ${SLURM_GPUS_ON_NODE:-4})); exec "$@"' h2 \
   "${exe}" \
   --grid-size "${grid_size}" --tol-comp 1e-3 --Nmin_leaf 216 --reduction_threshold 8 --sym 1 \
   --CA_level 10000 --elem_extract 2 --verbosity 1 --distributed64 1 \

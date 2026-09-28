@@ -33,6 +33,11 @@ void compress(H2<CoordType, DataType>* solver,
             solver->tree.get(), solver->options.verbosity);
         solver->kernel.entryeval_time_per_thread.assign(
             omp_get_max_threads(), 0.0);
+        configure_color_gpu(solver->options.use_gpu != 0);
+#ifdef H2_HAVE_GPU
+        fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+        if (solver->options.use_gpu != 0) fmm::gpu::invalidate_device_solve();
+#endif
 
         const double start = MPI_Wtime();
         hierarchical_compression_unstructured(

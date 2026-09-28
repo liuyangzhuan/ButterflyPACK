@@ -284,6 +284,28 @@ void hierarchical_compression_unstructured(
                   << "========================================" << std::endl;
     }
 
+    // H2_use_gpu: the IDs and blocks of every level on the device
+    // (color_gpu/compression_gpu.hpp, empty boxes have neither); the
+    // conditions are the same on every rank.
+    bool gpu_blocks = false, gpu_ids = false;
+#ifdef H2_HAVE_GPU
+    if (color_gpu_enabled()) {
+        std::string reason;
+        gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
+        gpu_ids = gpu_blocks && use_sketch &&
+                  gpu::device_sketch_supported(tree, gpu::device_kernel_spec(kernel->gpu_spec).kind);
+        if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
+        if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
+            std::cout << "  GPU compression: "
+                      << (gpu_blocks ? (gpu_ids ? "IDs and blocks on the device"
+                                                : "blocks on the device, IDs on the host")
+                                     : "off (" + reason + ")")
+                      << std::endl;
+        }
+    }
+#endif
+    (void)gpu_ids;
+
     if (leaf_level < 2) {
         exchange_h2_point_metadata_unstructured(
             tree, leaf_level, false, false, true, occupied_topology);
@@ -313,14 +335,25 @@ void hierarchical_compression_unstructured(
                 std::atomic<bool> id_failed{false};
 
                 const auto occupied_indices = occupied_local_indices(level);
-                #pragma omp parallel for schedule(dynamic) if (occupied_indices.size() > 1)
-                for (int64_t occupied_slot = 0;
-                     occupied_slot < static_cast<int64_t>(occupied_indices.size());
-                     ++occupied_slot) {
+                // boxes whose ID runs here: the occupied ones, or those the device left
+                std::vector<int64_t> host_boxes;
+#ifdef H2_HAVE_GPU
+                if (gpu_ids) {
+                    gpu::compression_stats() = gpu::CompressionStats{};
+                    host_boxes = gpu::compress_level_ids(tree, level_number, kernel, tolerance);
+                } else
+#endif
+                {
+                    host_boxes = occupied_indices;
+                }
+                #pragma omp parallel for schedule(dynamic) if (host_boxes.size() > 1)
+                for (int64_t host_slot = 0;
+                     host_slot < static_cast<int64_t>(host_boxes.size());
+                     ++host_slot) {
                     if (id_failed.load(std::memory_order_relaxed)) continue;
                     try {
                         const int64_t box_index =
-                            occupied_indices[static_cast<size_t>(occupied_slot)];
+                            host_boxes[static_cast<size_t>(host_slot)];
                         auto& box = level.local_boxes[static_cast<size_t>(box_index)];
                         h2_skeletonize_box(
                             tree,
@@ -361,6 +394,19 @@ void hierarchical_compression_unstructured(
                 occupied_topology);
             level.eliminated_boxes.clear();
             kernel->register_level_coordinates(level);
+#ifdef H2_HAVE_GPU
+            if (gpu_blocks) {
+                if (!gpu_ids) gpu::compression_stats() = gpu::CompressionStats{};
+                std::vector<std::vector<int64_t>> sources(level.local_boxes.size());
+                if (level.is_process_active) {
+                    for (int64_t local_index : occupied_local_indices(level)) {
+                        sources[static_cast<size_t>(local_index)] = h2_interaction_list_unstructured(
+                            tree, level.local_boxes[static_cast<size_t>(local_index)], occupied_topology);
+                    }
+                }
+                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level);
+            } else
+#endif
             build_h2_blocks_for_level_unstructured(
                 tree, level_number, kernel, true,
                 level_number == leaf_level, occupied_topology);
@@ -407,10 +453,30 @@ void hierarchical_compression_unstructured(
                               << ": compression ratio=" << ratio
                               << ", time=" << max_level_elapsed << " s"
                               << std::endl;
+#ifdef H2_HAVE_GPU
+                    if (gpu_blocks) {
+                        const auto& g = gpu::compression_stats();
+                        std::printf("  [gpu] level %d compression (rank %d): IDs %.2f s (plan %.2f, device %.2f, store %.2f; "
+                                    "%lld boxes, %lld on the host), blocks %.2f s (plan %.2f, device and copies %.2f, "
+                                    "of which waiting for copies %.2f; %lld coupling, %lld near) | up %.2f GB, down %.2f GB, "
+                                    "heap peak %.2f GB\n",
+                                    level_number, rank, g.ids, g.id_plan, g.id_device, g.id_store,
+                                    static_cast<long long>(g.id_boxes), static_cast<long long>(g.host_id_boxes), g.blocks,
+                                    g.blocks_plan, g.blocks_device, g.blocks_wait,
+                                    static_cast<long long>(g.interaction_blocks), static_cast<long long>(g.near_blocks),
+                                    g.bytes_up / 1e9, g.bytes_down / 1e9, g.heap_peak / 1e9);
+                        std::fflush(stdout);
+                    }
+#endif
                 }
             }
         }
     }
+
+#ifdef H2_HAVE_GPU
+    // the device matvec needs every rank's blocks on its device
+    if (gpu_blocks) gpu::commit_device_matvec(tree, verbose);
+#endif
 
     size_t local_memory = 0;
     for (int level_number = 0; level_number <= leaf_level; ++level_number) {

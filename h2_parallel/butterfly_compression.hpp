@@ -511,9 +511,8 @@ void hierarchical_compression_parallel(
     if (color_gpu_enabled()) {
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
-        const char* sketch_env = std::getenv("H2_GPU_SKETCH");
-        const bool sketch_on = sketch_env == nullptr || std::atoi(sketch_env) != 0;
-        gpu_ids = gpu_blocks && use_sketch && sketch_on;
+        gpu_ids = gpu_blocks && use_sketch &&
+                  gpu::device_sketch_supported(tree, gpu::device_kernel_spec(kernel->gpu_spec).kind);
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
         if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
             std::cout << "  GPU compression: "
