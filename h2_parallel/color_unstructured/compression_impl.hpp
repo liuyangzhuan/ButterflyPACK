@@ -94,7 +94,7 @@ void exchange_h2_point_metadata_unstructured(
     const std::vector<int> neighbor_ranks =
         compute_one_hop_neighbor_ranks(tree, level, level_number);
     exchange_assisting_for_mortons_onehop(
-        tree, level, level_number, neighbor_ranks, needed);
+        tree, level, level_number, neighbor_ranks, needed, {}, false, true);
 }
 
 template<typename CoordType, typename DataType, typename KernelType>

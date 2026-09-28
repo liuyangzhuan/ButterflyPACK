@@ -2893,7 +2893,9 @@ std::vector<int> compute_one_hop_neighbor_ranks(
  *
  * Contents returned per assisting box:
  *  - full point coordinates (BoxData::point_coords)
- *  - skeleton indices (BoxData::skeleton_indices), enabling skeleton-sized kernel evaluation
+ *  - skeleton indices (BoxData::skeleton_indices), enabling skeleton-sized kernel evaluation;
+ *    only for boxes already eliminated on this level, unless publish_uneliminated_skeletons
+ *    is set (compression-only H2, which never eliminates boxes)
  *  - on_boundary flag
  *
  * Error handling:
@@ -2911,7 +2913,8 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     const std::vector<int>& neighbor_ranks,
     const std::vector<int64_t>& needed_remote_mortons,
     const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {},
-    bool track_lazy_generator_requesters = false)
+    bool track_lazy_generator_requesters = false,
+    bool publish_uneliminated_skeletons = false)
 {
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
@@ -3066,8 +3069,10 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             // reader only after this owner has eliminated the box. Parent
             // construction may leave a nonempty current-point mapping before
             // that elimination; publishing it would falsely advance the
-            // remote lazy-Schur state.
-            if (lvl.eliminated_boxes.count(morton_idx) != 0) {
+            // remote lazy-Schur state. Compression-only H2 never eliminates
+            // boxes and publishes its skeletons explicitly.
+            if (publish_uneliminated_skeletons ||
+                lvl.eliminated_boxes.count(morton_idx) != 0) {
                 p.skel_indices = b->skeleton_indices;
             } else {
                 p.skel_indices.clear();
@@ -3091,8 +3096,10 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
             // reader only after this owner has eliminated the box. Parent
             // construction may leave a nonempty current-point mapping before
             // that elimination; publishing it would falsely advance the
-            // remote lazy-Schur state.
-            if (lvl.eliminated_boxes.count(morton_idx) != 0) {
+            // remote lazy-Schur state. Compression-only H2 never eliminates
+            // boxes and publishes its skeletons explicitly.
+            if (publish_uneliminated_skeletons ||
+                lvl.eliminated_boxes.count(morton_idx) != 0) {
                 p.skel_indices = b->skeleton_indices;
             } else {
                 p.skel_indices.clear();
