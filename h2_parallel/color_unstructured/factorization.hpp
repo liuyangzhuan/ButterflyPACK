@@ -30,6 +30,10 @@ void factorize(H2<CoordType, DataType>* solver,
                   std::is_same_v<DataType, std::complex<double>>) {
     const auto factorization_method =
         butterfly::h2_xrr_factorization_method(solver->options);
+    configure_color_gpu(solver->options.use_gpu != 0);
+#ifdef H2_HAVE_GPU
+    fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+#endif
     fmm::HierarchicalFactorization<
         CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
             solver->options.N,

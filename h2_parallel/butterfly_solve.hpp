@@ -329,33 +329,9 @@ void hierarchical_solve_parallel(
     // Device solve (color_gpu/device_solve.hpp): decided collectively, with
     // the factors on the device from the first solve after a factorization.
     if constexpr (gpu::gpu_data_type<DataType>) {
-        if (!gpu::device_solve_suspended() && gpu::device_solve_enabled() &&
-            gpu::prepare_device_solve(tree, verbosity)) {
-            gpu::device_solve_sweeps(tree, solve_data, nrhs, verbosity);
-            if (gpu::device_solve_check()) {
-                std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> host_data(
-                    static_cast<size_t>(num_levels));
-                gpu::device_solve_suspended() = true;
+        if (gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
                 hierarchical_solve_parallel(tree, rhs, host_data, nrhs, -1);
-                gpu::device_solve_suspended() = false;
-                double sums[2] = {0.0, 0.0};
-                if (tree->levels[leaf_level].is_process_active) {
-                    for (size_t b = 0; b < solve_data[leaf_level].size(); ++b) {
-                        const auto& x = solve_data[leaf_level][b].left_side;
-                        const auto& y = host_data[leaf_level][b].left_side;
-                        for (size_t i = 0; i < x.size(); ++i) {
-                            sums[0] += std::norm(x[i] - y[i]);
-                            sums[1] += std::norm(y[i]);
-                        }
-                    }
-                }
-                MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
-                if (rank == 0) {
-                    std::printf("GPU solve check: |x_gpu - x_host| / |x_host| = %.3e\n",
-                                sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
-                    std::fflush(stdout);
-                }
-            }
+            })) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);
@@ -1190,33 +1166,9 @@ void hierarchical_mul_parallel(
 #ifdef H2_HAVE_GPU
     // Device multiply (color_gpu/device_solve.hpp), with the solve's factors.
     if constexpr (gpu::gpu_data_type<DataType>) {
-        if (!gpu::device_solve_suspended() && gpu::device_solve_enabled() &&
-            gpu::prepare_device_solve(tree, verbose ? 1 : -1)) {
-            gpu::device_mul_sweeps(tree, solve_data, nrhs, verbose);
-            if (gpu::device_solve_check()) {
-                std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> host_data(
-                    static_cast<size_t>(num_levels));
-                gpu::device_solve_suspended() = true;
+        if (gpu::run_device_solve(tree, solve_data, nrhs, true, verbose ? 1 : -1, [&](auto& host_data) {
                 hierarchical_mul_parallel(tree, input_vec, host_data, nrhs, false);
-                gpu::device_solve_suspended() = false;
-                double sums[2] = {0.0, 0.0};
-                if (tree->levels[leaf_level].is_process_active) {
-                    for (size_t b = 0; b < solve_data[leaf_level].size(); ++b) {
-                        const auto& x = solve_data[leaf_level][b].left_side;
-                        const auto& y = host_data[leaf_level][b].left_side;
-                        for (size_t i = 0; i < x.size(); ++i) {
-                            sums[0] += std::norm(x[i] - y[i]);
-                            sums[1] += std::norm(y[i]);
-                        }
-                    }
-                }
-                MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
-                if (rank == 0) {
-                    std::printf("GPU multiply check: |y_gpu - y_host| / |y_host| = %.3e\n",
-                                sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
-                    std::fflush(stdout);
-                }
-            }
+            })) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);

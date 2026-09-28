@@ -35,6 +35,31 @@
 
 namespace fmm {
 
+// X := (X + X^T) / 2 (symmetric), or (X + X^H) / 2 (Hermitian), n x n.
+template<typename DataType>
+void symmetrize_in_place(MatrixStorage<DataType>& X, int64_t n, bool hermitian) {
+    auto conj_if = [&](const DataType& v) -> DataType {
+        if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+            return hermitian ? std::conj(v) : v;
+        } else {
+            return v;
+        }
+    };
+    for (int64_t j = 0; j < n; ++j) {
+        for (int64_t i = 0; i < j; ++i) {
+            DataType& a = X.data[static_cast<size_t>(i + j * X.lda)];
+            DataType& b = X.data[static_cast<size_t>(j + i * X.lda)];
+            const DataType upper = (a + conj_if(b)) * 0.5;  // (as the device's launch_symmetrize)
+            a = upper;
+            b = conj_if(upper);
+        }
+        if (hermitian) {
+            DataType& d = X.data[static_cast<size_t>(j + j * X.lda)];
+            d = (d + conj_if(d)) * 0.5;
+        }
+    }
+}
+
 // Debug trace of the ID target of every compressed box: set H2_ID_TRACE to a
 // file prefix; each rank appends one line per box to <prefix>.rank<r>.
 inline bool h2_id_trace_enabled() {
@@ -4841,6 +4866,91 @@ std::vector<IDAdaptiveFrame> make_initial_id_far_frames(
     return far_frames;
 }
 
+// The point nearest to `proxy` that lies more than id_neighborhood_radius
+// hops from the box and is not in `selected` (the smallest index among equal
+// distances), or -1: the point a scan of all points in index order finds.
+// The leaf boxes (id_source_leaf_offsets) are visited in shells around the
+// proxy's leaf box until no unvisited box can hold a point as near: a box s
+// + 1 shells out lies at least s leaf widths away (less a slack for points
+// on box faces).
+template<typename CoordType, typename DataType>
+int64_t nearest_id_proxy_source(
+    const ParallelTree<CoordType, DataType>* tree,
+    const BoxData<CoordType, DataType>* box,
+    const CoordType proxy[3],
+    const std::unordered_set<int64_t>& selected) {
+
+    const int dimension = tree->dimension;
+    const int leaf_level = tree->num_levels - 1;
+    const int64_t cells = int64_t{1} << leaf_level;
+    const CoordType* bounds = tree->global_bounds;
+    CoordType max_range = bounds[1] - bounds[0];
+    for (int d = 1; d < dimension; ++d) {
+        max_range = std::max(max_range, bounds[2 * d + 1] - bounds[2 * d]);
+    }
+    const CoordType width = max_range / static_cast<CoordType>(static_cast<uint32_t>(cells));
+    int64_t center[3] = {0, 0, 0};
+    for (int d = 0; d < dimension; ++d) {
+        const auto raw = static_cast<int64_t>(std::floor((proxy[d] - bounds[2 * d]) / width));
+        center[d] = std::max<int64_t>(0, std::min<int64_t>(raw, cells - 1));
+    }
+
+    long double best = std::numeric_limits<long double>::infinity();
+    int64_t best_index = -1;
+    auto visit = [&](int64_t x, int64_t y, int64_t z) {
+        const int64_t morton = static_cast<int64_t>(morton::encode_nd(
+            dimension, static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint32_t>(z)));
+        const int64_t begin = tree->id_source_leaf_offsets[static_cast<size_t>(morton)];
+        const int64_t end = tree->id_source_leaf_offsets[static_cast<size_t>(morton) + 1];
+        for (int64_t k = begin; k < end; ++k) {
+            const int64_t point_index = tree->id_source_point_order[static_cast<size_t>(k)];
+            if (id_point_hop_distance(tree, box, point_index) <= tree->id_neighborhood_radius ||
+                selected.count(point_index) != 0) {
+                continue;
+            }
+            const CoordType* point = tree->id_source_point_coords.data() + point_index * dimension;
+            long double distance_sq = 0.0L;
+            for (int d = 0; d < dimension; ++d) {
+                const long double delta =
+                    static_cast<long double>(point[d]) - static_cast<long double>(proxy[d]);
+                distance_sq += delta * delta;
+            }
+            if (distance_sq < best || (distance_sq == best && point_index < best_index)) {
+                best = distance_sq;
+                best_index = point_index;
+            }
+        }
+    };
+    const long double slack = 1e-6L * static_cast<long double>(width);
+    for (int64_t shell = 0; shell < cells; ++shell) {
+        // the boxes at Chebyshev distance `shell` from the center box
+        int64_t lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0};
+        for (int d = 0; d < dimension; ++d) {
+            lo[d] = std::max<int64_t>(0, center[d] - shell);
+            hi[d] = std::min<int64_t>(cells - 1, center[d] + shell);
+        }
+        for (int64_t x = lo[0]; x <= hi[0]; ++x) {
+            for (int64_t y = lo[1]; y <= hi[1]; ++y) {
+                const bool face = std::abs(x - center[0]) == shell ||
+                                  (dimension >= 2 && std::abs(y - center[1]) == shell);
+                if (dimension < 3) {
+                    if (face) visit(x, y, 0);
+                } else if (face) {
+                    for (int64_t z = lo[2]; z <= hi[2]; ++z) visit(x, y, z);
+                } else {
+                    if (center[2] - shell >= 0) visit(x, y, center[2] - shell);
+                    if (shell > 0 && center[2] + shell <= cells - 1) visit(x, y, center[2] + shell);
+                }
+            }
+        }
+        if (best_index >= 0) {
+            const long double reach = static_cast<long double>(shell) * static_cast<long double>(width) - slack;
+            if (reach > 0.0L && reach * reach > best) break;
+        }
+    }
+    return best_index;
+}
+
 template<typename CoordType, typename DataType>
 std::vector<int64_t> select_static_id_training_indices(
     const ParallelTree<CoordType, DataType>* tree,
@@ -4856,7 +4966,6 @@ std::vector<int64_t> select_static_id_training_indices(
     validate_id_source_index(tree);
 
     const int dimension = tree->dimension;
-    const int64_t num_points = tree->num_points;
     const int radius = tree->id_neighborhood_radius;
     const int64_t grid_size = int64_t{1} << box->level;
     int64_t grid_lo[3] = {0, 0, 0};
@@ -4933,27 +5042,8 @@ std::vector<int64_t> select_static_id_training_indices(
             proxy_point[d] = box->center[d] + proxy_radius * unit_point[d];
         }
 
-        int64_t nearest_index = -1;
-        long double nearest_distance =
-            std::numeric_limits<long double>::infinity();
-        for (int64_t point_index = 0; point_index < num_points; ++point_index) {
-            if (id_point_hop_distance(tree, box, point_index) <= radius ||
-                selected.count(point_index) != 0) {
-                continue;
-            }
-            const CoordType* point = tree->id_source_point_coords.data() +
-                point_index * dimension;
-            long double distance_sq = 0.0L;
-            for (int d = 0; d < dimension; ++d) {
-                const long double delta = static_cast<long double>(point[d]) -
-                    static_cast<long double>(proxy_point[d]);
-                distance_sq += delta * delta;
-            }
-            if (distance_sq < nearest_distance) {
-                nearest_distance = distance_sq;
-                nearest_index = point_index;
-            }
-        }
+        const int64_t nearest_index =
+            nearest_id_proxy_source(tree, box, proxy_point, selected);
         if (nearest_index >= 0) {
             selected_indices.push_back(nearest_index);
             selected.insert(nearest_index);
@@ -9376,6 +9466,19 @@ void compute_and_modify(
                &alpha, T.data.data(), &K,
                A_SS.data(), &K,
                &beta, box->X_RS.data.data(), &M);
+    }
+
+    // The symmetric path takes X_RS = X_SR^T and applies X_RR^{-1} on both
+    // sides as if X_RR^{-T} = X_RR^{-1}.  Cholesky and Bunch-Kaufman read
+    // one triangle of X_RR; LU and the explicit inverse read both, so the
+    // asymmetric part X_RR picks up from rounding in earlier Schur updates
+    // would enter the factors and, amplified by cond(X_RR) through the
+    // neighbors' Schur updates, grow level by level until an ill-conditioned
+    // kernel (EFIE on a fine mesh) breaks down.  Factor the symmetric part.
+    if ((is_symmetric || is_hermitian) &&
+        (factorization_method == FactorizationMethod::LU ||
+         factorization_method == FactorizationMethod::NONE)) {
+        symmetrize_in_place(box->X_RR, r, is_hermitian && !is_symmetric);
     }
 
     if (lazy_far_field_mode() == LazyFarFieldMode::LAZY && r > 0) {

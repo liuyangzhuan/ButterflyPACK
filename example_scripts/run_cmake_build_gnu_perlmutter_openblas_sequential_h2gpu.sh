@@ -42,4 +42,4 @@ cmake .. \
 	-DTPL_H2_MAGMA_INCLUDE_DIRS="$MAGMA_DIR/include" \
 	-DTPL_H2_MAGMA_LIBRARIES="$MAGMA_DIR/lib/libmagma.so"
 
-make -j 32 claplace3d_h2 cmatern1d_h2 cmatern2d_h2 cvie3d_h2
+make -j 32 claplace3d_h2 cmatern1d_h2 cmatern2d_h2 cvie3d_h2 cie3d

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../color_gpu/device_solve.hpp"
+
 namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
@@ -106,6 +108,22 @@ void hierarchical_solve_unstructured(
     if (print_detail && rank == solve_header_rank) {
         std::cout << "Initialized solve data structures" << std::endl;
     }
+
+#ifdef H2_HAVE_GPU
+    // Device solve (color_gpu/device_solve.hpp): decided collectively, with
+    // the factors on the device from the first solve after a factorization.
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
+                hierarchical_solve_unstructured(tree, rhs, host_data, nrhs, -1);
+            })) {
+            restore_base_process_affinity();
+            clear_runtime_fmm_thread_count();
+            destroy_solve_communicators(solve_comms);
+            destroy_dynamic_threading_context(dynamic_threading);
+            return;
+        }
+    }
+#endif
 
     // ===== Phase 1: Forward Sweep (V^{-1}) with level transitions =====
 
@@ -949,6 +967,21 @@ void hierarchical_mul_unstructured(
     if (verbose && rank == mul_header_rank) {
         std::cout << "Initialized multiply data structures" << std::endl;
     }
+
+#ifdef H2_HAVE_GPU
+    // Device multiply (color_gpu/device_solve.hpp), with the solve's factors.
+    if constexpr (gpu::gpu_data_type<DataType>) {
+        if (gpu::run_device_solve(tree, solve_data, nrhs, true, verbose ? 1 : -1, [&](auto& host_data) {
+                hierarchical_mul_unstructured(tree, input_vec, host_data, nrhs, false);
+            })) {
+            restore_base_process_affinity();
+            clear_runtime_fmm_thread_count();
+            destroy_solve_communicators(solve_comms);
+            destroy_dynamic_threading_context(dynamic_threading);
+            return;
+        }
+    }
+#endif
 
     // ===== Phase 1: Forward Sweep (W) =====
     if (verbose && rank == mul_header_rank) {

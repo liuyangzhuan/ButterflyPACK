@@ -1632,7 +1632,9 @@ if(myrank==master_rank){
 
     z_c_bpack_getoption(&option_bf, "precon", &opt_d);
     int precon=round(opt_d);
-    if(precon!=2)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
+    // format 7 (H2) builds its compression-only representation in
+    // c_bpack_factor when precon=2
+    if(precon!=2 || format_s2s==7)z_c_bpack_factor(&bmat_bf_s2s,&option_bf,&stats_bf_s2s,&ptree_bf,&msh_bf_s2s);
 
 
     if(myrank==master_rank)std::cout<<"\n\nSolving the volume IE: "<<std::endl;

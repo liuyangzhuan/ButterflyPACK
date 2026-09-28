@@ -224,7 +224,7 @@ constexpr int kRowsPerWarp = kTileRows / kSketchOwners;
 // Values of this thread's rows of the chunk starting at r0 (rows
 // r0 + warp + q * kSketchOwners, its column c): the row indices first, then
 // the values, so the loads of a thread are independent.
-template<typename T, bool kKernelRows>
+template<typename T, bool kKernelRows, int Kind>
 __device__ __forceinline__ void chunk_values(const OrderedSketchItemT<T>& item, const KernelSpec& spec,
                                              const PointTable& points, const double col_xyz[3], int64_t col_id,
                                              bool column, int c, int warp, int r0, T (&v)[kRowsPerWarp]) {
@@ -232,14 +232,15 @@ __device__ __forceinline__ void chunk_values(const OrderedSketchItemT<T>& item, 
 #pragma unroll
     for (int q = 0; q < kRowsPerWarp; ++q) {
         const int row = r0 + warp + q * kSketchOwners;
-        src_row[q] = row < item.rows ? (kKernelRows ? item.row_slots[row] : item.row_index[row]) : -1;
+        src_row[q] = row < item.rows ? (kKernelRows ? item.row_slots[row] : (item.row_index ? item.row_index[row] : row))
+                                     : -1;
     }
 #pragma unroll
     for (int q = 0; q < kRowsPerWarp; ++q) {
         v[q] = T(0.0);
         if (src_row[q] >= 0 && column) {
             if (kKernelRows) {
-                v[q] = kernel_value<T>(spec, col_xyz, col_id, points.xyz + 3 * static_cast<int64_t>(src_row[q]),
+                v[q] = kernel_value<T, Kind>(spec, col_xyz, col_id, points.xyz + 3 * static_cast<int64_t>(src_row[q]),
                                        points.ids[src_row[q]]);
             } else {
                 v[q] = item.src[c + static_cast<int64_t>(src_row[q]) * item.row_stride];
@@ -255,7 +256,7 @@ __device__ __forceinline__ dcomplex sketch_fma(double s, dcomplex v, dcomplex y)
     return dcomplex(fma(s, v.re, y.re), fma(s, v.im, y.im));
 }
 
-template<typename T, bool kKernelRows>
+template<typename T, bool kKernelRows, int Kind>
 __global__ void __launch_bounds__(32 * kSketchOwners)
 ordered_sketch_kernel(const OrderedSketchItemT<T>* items, KernelSpec spec, PointTable points, int dest_block) {
     extern __shared__ __align__(16) unsigned char shared_bytes[];
@@ -290,7 +291,7 @@ ordered_sketch_kernel(const OrderedSketchItemT<T>* items, KernelSpec spec, Point
     const bool all_dests = i0 == 0 && i1 == item.d;  // no range test
     int batch = 0, batch_count = 0, batch_pos = 0;
     T next[kRowsPerWarp];
-    chunk_values<T, kKernelRows>(item, spec, points, col_xyz, col_id, column, c, warp, 0, next);
+    chunk_values<T, kKernelRows, Kind>(item, spec, points, col_xyz, col_id, column, c, warp, 0, next);
     for (int r0 = 0; r0 < item.rows; r0 += kTileRows) {
         __syncthreads();  // the value tile is free
 #pragma unroll
@@ -298,7 +299,7 @@ ordered_sketch_kernel(const OrderedSketchItemT<T>* items, KernelSpec spec, Point
         __syncthreads();
         // the next chunk's loads are in flight while this one is applied
         if (r0 + kTileRows < item.rows) {
-            chunk_values<T, kKernelRows>(item, spec, points, col_xyz, col_id, column, c, warp, r0 + kTileRows, next);
+            chunk_values<T, kKernelRows, Kind>(item, spec, points, col_xyz, col_id, column, c, warp, r0 + kTileRows, next);
         }
         const int r1 = r0 + kTileRows;
         const T* vrow = values + lane;
@@ -388,17 +389,18 @@ void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int ma
     const size_t shared = static_cast<size_t>(dest_block + kTileRows) * kPitch * sizeof(T);
     const dim3 grid(static_cast<unsigned>(count), static_cast<unsigned>((max_cols + kTileCols - 1) / kTileCols),
                     static_cast<unsigned>((max_d + dest_block - 1) / dest_block));
-    if (kernel_rows) {
-        if (spec.kind != (is_complex_scalar<T> ? 2 : 1)) {
-            throw std::runtime_error("launch_ordered_sketch: device kernel kind does not match the data type");
-        }
-        cudaFuncSetAttribute(ordered_sketch_kernel<T, true>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(shared));
-        ordered_sketch_kernel<T, true><<<grid, 32 * kSketchOwners, shared, stream>>>(items, spec, points, dest_block);
+    // (rows read from stored values do not evaluate the kernel)
+    constexpr int kPlain = is_complex_scalar<T> ? 2 : 1;
+    auto launch = [&](auto kernel) {
+        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(shared));
+        kernel<<<grid, 32 * kSketchOwners, shared, stream>>>(items, spec, points, dest_block);
+    };
+    if (!kernel_rows) {
+        launch(ordered_sketch_kernel<T, false, kPlain>);
+    } else if (kernel_kind_of<T>(spec, "launch_ordered_sketch") == 3) {
+        if constexpr (is_complex_scalar<T>) launch(ordered_sketch_kernel<T, true, 3>);
     } else {
-        cudaFuncSetAttribute(ordered_sketch_kernel<T, false>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                             static_cast<int>(shared));
-        ordered_sketch_kernel<T, false><<<grid, 32 * kSketchOwners, shared, stream>>>(items, spec, points, dest_block);
+        launch(ordered_sketch_kernel<T, true, kPlain>);
     }
     check_launch("ordered_sketch_kernel");
 }

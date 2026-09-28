@@ -159,10 +159,6 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
     if (options.unstructured < 0 || options.unstructured > 1) {
         throw std::invalid_argument("H2_unstructured must be 0 or 1");
     }
-    if (options.unstructured == 1 && options.use_gpu != 0) {
-        throw std::invalid_argument(
-            "H2_use_gpu is supported only by the structured Color backend (H2_unstructured=0)");
-    }
     if (options.unstructured == 0) return;
 
     if (options.lazy_schur != 0 && options.lazy_schur != 2) {
@@ -224,9 +220,15 @@ struct H2Kernel {
     //     ids match, else (params[1] + i params[2]) e^{i params[0] r} /
     //     (params[5] r)
     // with r = |x - y|.
+    //   kind 3 (complex, symmetric): the EFIE entry of the RWG edges given by
+    //     the global ids, from the mesh tables (c_bpack_h2_set_gpu_kernel_tables;
+    //     layout in color_gpu/emsurf_kernel.cuh)
     struct GpuSpec {
         int kind = 0;
         double params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        std::vector<double> table_real;
+        std::vector<int> table_int;
+        uint64_t table_version = 0;  // changes with every registration of tables
     } gpu_spec;
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>

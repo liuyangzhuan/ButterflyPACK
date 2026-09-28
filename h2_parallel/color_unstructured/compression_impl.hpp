@@ -345,9 +345,21 @@ void hierarchical_compression_unstructured(
             }
 
             // Refresh remote records after all owners have selected skeletons.
+            // The exchange publishes a box's skeleton only once its owner has
+            // marked the box eliminated (the factorization's rule); here every
+            // occupied local skeleton is final, so the boxes are marked for
+            // the exchange (without it, coupling blocks with remote sources
+            // would be dropped as empty).
+            if (level.is_process_active) {
+                for (int64_t local_index : occupied_local_indices(level)) {
+                    level.eliminated_boxes.insert(
+                        level.local_boxes[static_cast<size_t>(local_index)].morton_index);
+                }
+            }
             exchange_h2_point_metadata_unstructured(
                 tree, level_number, true, true, level_number == leaf_level,
                 occupied_topology);
+            level.eliminated_boxes.clear();
             kernel->register_level_coordinates(level);
             build_h2_blocks_for_level_unstructured(
                 tree, level_number, kernel, true,

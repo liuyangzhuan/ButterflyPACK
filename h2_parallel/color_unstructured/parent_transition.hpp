@@ -6,14 +6,14 @@ namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
 
-template<typename CoordType, typename DataType, typename KernelType>
-std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstructured(
-    TreeLevel<CoordType, DataType>& child_level,
+// Steps 1-3 of the transition: the parent boxes of this rank's children,
+// their occupied neighbor lists, boundary flags and skeleton points, without
+// their blocks.
+template<typename CoordType, typename DataType>
+std::vector<BoxData<CoordType, DataType>> build_parent_level_structure_unstructured(
+    const TreeLevel<CoordType, DataType>& child_level,
     TreeLevel<CoordType, DataType>& parent_level,
     int dimension,
-    bool is_symmetric,
-    bool is_hermitian,
-    KernelType* kernel,
     const CoordType global_bounds[6],
     const OccupiedTopology& occupied_topology) {
 
@@ -37,7 +37,6 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
 
     // Calculate parent Morton range for this process
     int64_t local_morton_start = child_level.local_boxes[0].morton_index / num_children;
-    int64_t local_morton_end = child_level.local_boxes.back().morton_index / num_children;
 
     // ===== Step 1: Initialize parent boxes =====
 
@@ -86,7 +85,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
 
         int64_t total_skeleton_points = 0;
         for (int c = 0; c < num_children; ++c) {
-            auto& child = child_level.local_boxes[first_child_idx + c];
+            const auto& child = child_level.local_boxes[first_child_idx + c];
             total_skeleton_points += child.skeleton_indices.size();
         }
 
@@ -94,7 +93,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
         parent_box.point_coords.reserve(total_skeleton_points * dimension);
 
         for (int c = 0; c < num_children; ++c) {
-            auto& child = child_level.local_boxes[first_child_idx + c];
+            const auto& child = child_level.local_boxes[first_child_idx + c];
 
 
             for (int64_t skel_idx : child.skeleton_indices) {
@@ -117,6 +116,33 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
             parent_box.children_morton[c] = -1;
         }
     }
+    return parent_boxes;
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstructured(
+    TreeLevel<CoordType, DataType>& child_level,
+    TreeLevel<CoordType, DataType>& parent_level,
+    int dimension,
+    bool is_symmetric,
+    bool is_hermitian,
+    KernelType* kernel,
+    const CoordType global_bounds[6],
+    const OccupiedTopology& occupied_topology) {
+
+    const int num_children = morton::children_per_box(dimension);
+
+    // ===== Steps 1-3: parent boxes, neighbors, boundary flags, points =====
+    std::vector<BoxData<CoordType, DataType>> parent_boxes =
+        build_parent_level_structure_unstructured(
+            child_level, parent_level, dimension, global_bounds,
+            occupied_topology);
+    int32_t parent_level_num = child_level.level - 1;
+    uint32_t grid_size = 1 << parent_level_num;
+    int64_t local_morton_start = child_level.local_boxes[0].morton_index / num_children;
+    int64_t local_morton_end = child_level.local_boxes.back().morton_index / num_children;
+    const auto occupied_parent_indices = occupied_box_indices_from_topology(
+        parent_boxes, parent_level_num, occupied_topology);
 
     // ===== Step 4: Build parent-level modified interactions =====
 

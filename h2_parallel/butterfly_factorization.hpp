@@ -5,7 +5,7 @@
 #include "butterfly_verification.hpp"
 #include "memory_diagnostics.hpp"
 #include "color_gpu/owner_pass_gpu.hpp"
-#include "color_gpu/level_eliminator.hpp"
+#include "color_gpu/factorization_driver.hpp"
 
 namespace butterfly {
 using namespace fmm;
@@ -932,40 +932,20 @@ void hierarchical_factorization_parallel(
     memory_diagnostics.record(tree, leaf_level, "setup", "factor_start");
 
 #ifdef H2_HAVE_GPU
-    // Blocks of the next level, assembled on the device by the transition of
-    // the level below (H2_use_gpu=1), and whether the device box path runs a
-    // given level (the test made where the level starts).
-    std::unique_ptr<gpu::DeviceLevelBlocks<DataType>> gpu_blocks;
-    auto gpu_box_path_runs = [&](int lvl) {
-        if (!color_gpu_enabled() || lvl <= 1 || tree->level_uses_CA(lvl)) return false;
-        if (!tree->levels[static_cast<size_t>(lvl)].is_process_active) return false;
-        const bool streamed = use_sketch == 2 && is_symmetric && !is_hermitian && tree->id_proxy_mode != 2;
-        if (!streamed || lazy_schur == 0) return false;
-        return gpu::level_eliminator_would_run(tree, lvl, kernel, factorization_method);
-    };
-    // Level 1 is not eliminated: its transition builds the root, which is
-    // factored on the device when level 1 runs on one rank.
-    auto gpu_root_path_runs = [&]() {
-        if (!color_gpu_enabled() || tree->num_levels < 2) return false;
-        const auto& l1 = tree->levels[1];
-        const auto& l0 = tree->levels[0];
-        if (!l1.is_process_active || l1.num_active_processes != 1) return false;
-        if (!l0.is_process_active || l0.num_active_processes != 1) return false;
-        if (factorization_method != FactorizationMethod::LU) return false;
-        return gpu::level_eliminator_would_run(tree, 1, kernel, factorization_method);
-    };
-    // where the blocks of level `lvl` are used next
-    auto gpu_keeps_blocks_of = [&](int lvl) {
-        return lvl == 0 ? true : (lvl == 1 ? gpu_root_path_runs() : gpu_box_path_runs(lvl));
-    };
+    // H2_use_gpu: the device box path of each level, and the blocks the
+    // device transition keeps for the next one (color_gpu/factorization_driver.hpp)
+    typename gpu::ColorGpuDriver<CoordType, DataType, KernelType>::Options gpu_options;
+    gpu_options.tolerance = tolerance;
+    gpu_options.method = factorization_method;
+    gpu_options.use_sketch = use_sketch;
+    gpu_options.lazy_schur = lazy_schur;
+    gpu_options.is_symmetric = is_symmetric;
+    gpu_options.is_hermitian = is_hermitian;
+    gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
 #endif
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
-#ifdef H2_HAVE_GPU
-        // the device box path of this level (kept until the transition)
-        std::unique_ptr<gpu::LevelEliminatorBase<CoordType, DataType>> gpu_level;
-#endif
         clock::duration level_data_exchange{};
         clock::duration level_reduction{};
         
@@ -1241,22 +1221,9 @@ void hierarchical_factorization_parallel(
             // H2_use_gpu=1: the device box path takes the whole level when it
             // covers it (see color_gpu/level_eliminator.hpp); otherwise the
             // host box region runs and only the owner pass uses the GPU.
-            if (color_gpu_enabled() && use_streamed_level &&
-                lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
-                is_symmetric && !is_hermitian) {
-                std::string gpu_reason;
-                gpu_level = gpu::make_level_eliminator(
-                    tree, current_level, kernel, tolerance,
-                    factorization_method, &gpu_reason, std::move(gpu_blocks));
-                if (print_detail && rank == level_print_rank) {
-                    std::cout << "  GPU box path: "
-                              << (gpu_level ? std::string(gpu::tensor_core_gemm()
-                                                              ? "on (FP64 tensor-core GEMMs)" : "on")
-                                            : "off (" + gpu_reason + ")")
-                              << std::endl;
-                }
-            }
-            const bool gpu_level_local = gpu_level && level.num_active_processes == 1;
+            gpu_driver.start_level(current_level, use_streamed_level, level_comm,
+                                   print_detail && rank == level_print_rank);
+            const bool gpu_level_local = gpu_driver.local();
 #else
             const bool gpu_level_local = false;
 #endif
@@ -1294,23 +1261,14 @@ void hierarchical_factorization_parallel(
                     }
                     std::chrono::high_resolution_clock::duration comm_duration_raw{};
 #ifdef H2_HAVE_GPU
-                    if (gpu_level && gpu_level->device_exchange()) {
-                        // device level on several ranks, CUDA-aware MPI
-                        comm_duration_raw = gpu_level->exchange();
-                    } else if (gpu_level) {
-                        // device level on several ranks: generators only
-                        const auto t_emit = std::chrono::steady_clock::now();
-                        gpu_level->emit_generators(pending_updates);
-                        const auto t_exchange = std::chrono::steady_clock::now();
-                        std::vector<int64_t> installed;
-                        comm_duration_raw =
-                            transport_and_apply_factor_updates_symmetric_onehop(
-                                tree, current_level, kernel, pending_updates, false,
-                                transport_memory_diagnostic, false, &installed);
-                        gpu::eliminator_stats().emit += std::chrono::duration<double>(t_exchange - t_emit).count();
-                        gpu::eliminator_stats().exchange +=
-                            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
-                        gpu_level->receive_remote(installed);
+                    if (gpu_driver.on()) {
+                        // device level on several ranks
+                        comm_duration_raw = gpu_driver.transport(
+                            pending_updates, [&](std::vector<int64_t>* installed) {
+                                return transport_and_apply_factor_updates_symmetric_onehop(
+                                    tree, current_level, kernel, pending_updates, false,
+                                    transport_memory_diagnostic, false, installed);
+                            });
                     } else
 #endif
                     {
@@ -1385,11 +1343,11 @@ void hierarchical_factorization_parallel(
                 }
 
 #ifdef H2_HAVE_GPU
-                if (gpu_level) {
+                if (gpu_driver.on()) {
                     // Box region, owner pass, mirror and finalize on the
                     // device.  One active rank: nothing is pending for other
                     // ranks and there are no assisting boxes to mark.
-                    boundary_count += gpu_level->eliminate_wave(color_list, counter);
+                    boundary_count += gpu_driver.eliminate_wave(color_list, counter);
                     for (int64_t morton_idx : color_list) {
                         level.eliminated_boxes.insert(morton_idx);
                         level.elimination_wave[morton_idx] =
@@ -1814,21 +1772,13 @@ void hierarchical_factorization_parallel(
             if (!gpu_level_local) {
                 std::chrono::high_resolution_clock::duration final_comm_duration{};
 #ifdef H2_HAVE_GPU
-                if (gpu_level && gpu_level->device_exchange()) {
-                    final_comm_duration = gpu_level->exchange();
-                } else if (gpu_level) {
-                    const auto t_emit = std::chrono::steady_clock::now();
-                    gpu_level->emit_generators(pending_updates);
-                    const auto t_exchange = std::chrono::steady_clock::now();
-                    std::vector<int64_t> installed;
-                    final_comm_duration =
-                        transport_and_apply_factor_updates_symmetric_onehop(
-                            tree, current_level, kernel, pending_updates, false,
-                            final_transport_memory_diagnostic, false, &installed);
-                    gpu::eliminator_stats().emit += std::chrono::duration<double>(t_exchange - t_emit).count();
-                    gpu::eliminator_stats().exchange +=
-                        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
-                    gpu_level->receive_remote(installed);
+                if (gpu_driver.on()) {
+                    final_comm_duration = gpu_driver.transport(
+                        pending_updates, [&](std::vector<int64_t>* installed) {
+                            return transport_and_apply_factor_updates_symmetric_onehop(
+                                tree, current_level, kernel, pending_updates, false,
+                                final_transport_memory_diagnostic, false, installed);
+                        });
                 } else
 #endif
                 {
@@ -1846,27 +1796,9 @@ void hierarchical_factorization_parallel(
                     h2_diag_pending_bytes(pending_updates));
             }
 #ifdef H2_HAVE_GPU
-            if (gpu_level) {
-                // after the final transport: its generators' host copies
-                gpu_level->finish();  // factors on the host; blocks stay for the transition
-                if (gpu_level_local && (!pending_updates.replace_blocks.empty() ||
-                                        !pending_updates.accumulated_deltas.empty() ||
-                                        !pending_updates.generators.empty())) {
-                    throw std::runtime_error("device level left updates for other ranks");
-                }
-            }
-            // The solve's factors stay on the device only if every rank of
-            // the level still holds all of its own.
-            if (gpu::device_solve_enabled() && gpu::device_solve_keep()) {
-                int kept = gpu_level && gpu_level->solve_factors_kept() ? 1 : 0;
-                MPI_Allreduce(MPI_IN_PLACE, &kept, 1, MPI_INT, MPI_MIN, level_comm);
-                if (gpu_level) gpu_level->commit_solve_factors(kept != 0);
-                if (print_detail && rank == level_print_rank) {
-                    std::printf("  [gpu] level %d solve factors: %s\n", current_level,
-                                kept ? "kept on the device" : "to be uploaded at the first solve");
-                    std::fflush(stdout);
-                }
-            }
+            // after the final transport: its generators' host copies
+            gpu_driver.finish_level(current_level, pending_updates, level_comm,
+                                    print_detail && rank == level_print_rank);
 #endif
             
             for (const auto& box : level.local_boxes) {
@@ -1947,47 +1879,8 @@ void hierarchical_factorization_parallel(
                                  omp_get_max_threads(), print_detail);
 #ifdef H2_HAVE_GPU
                 if (color_gpu_enabled() && print_detail && level_rank == 0 &&
-                    gpu::eliminator_stats().boxes > 0) {
-                    const auto& e = gpu::eliminator_stats();
-                    std::printf(
-                        "  [gpu] level %d box path (rank 0): begin %.2f s, sketch %.2f s, ID %.2f s, plan %.2f s, "
-                        "device %.2f s, download %.2f s, store %.2f s, finish %.2f s | up %.2f GB, "
-                        "down %.2f GB | owner %lld gemms in %lld batches, %lld new targets | heap peak %.2f GB, %lld reclaims\n",
-                        current_level, e.begin, e.sketch, e.id, e.plan, e.device, e.download, e.store, e.finish,
-                        e.bytes_up / 1e9, e.bytes_down / 1e9, static_cast<long long>(e.owner_gemms),
-                        static_cast<long long>(e.owner_batches), static_cast<long long>(e.new_targets),
-                        static_cast<double>(e.heap_peak) / 1e9, static_cast<long long>(e.heap_reclaims));
-                    std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
-                                "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
-                                "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",
-                                current_level, e.sketch_plan, e.sketch_gpu, e.sk_meta, e.sk_upload, e.sk_rows,
-                                e.sk_stored, e.sk_p, e.sk_fill, e.sk_id, e.sk_download, e.finish_store, e.finish_sources);
-                    std::printf("  [gpu] level %d background copier: busy %.2f s, of which waiting for device data "
-                                "%.2f s\n", current_level, e.finish_store, e.copier_wait);
-                    std::printf("  [gpu] level %d elimination device: fills %.2f, X_RR/X_SR %.2f, LU %.2f, X_NR %.2f, "
-                                "solves %.2f, Schur+near %.2f, owner targets %.2f, owner GEMMs %.2f s\n",
-                                current_level, e.el[0], e.el[1], e.el[2], e.el[3], e.el[4], e.el[5], e.el[6], e.el[7]);
-                    std::printf("  [gpu] level %d host: plan boxes %.2f s, owner pass %.2f s (overlapped), launch %.2f s, "
-                                "sketch wait %.2f s, heap-reclaim wait %.2f s, exchange-buffer wait %.2f s | "
-                                "GF/s: owner %.0f, solves %.0f\n",
-                                current_level, e.plan_boxes, e.plan_owner, e.launch, e.sk_wait, e.reclaim_wait,
-                                e.exchange_wait,
-                                e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
-                                e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
-                    if (e.remote_generators > 0 || e.exchange > 0.0) {
-                        const auto& tt = transport_timers();
-                        std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, payload %.2f "
-                                    "(serialize %.2f), deserialize %.2f, assisting %.2f, install %.2f; sent %.2f GB, "
-                                    "received %.2f GB], receive %.2f s (%lld remote generators, %lld buffers "
-                                    "outside the exchange arena)\n",
-                                    current_level, e.device_exchange ? "device" : "host", e.emit, e.exchange,
-                                    tt.sizes, tt.payload, tt.serialize,
-                                    tt.deserialize, tt.assisting, tt.install, tt.bytes_sent / 1e9,
-                                    tt.bytes_received / 1e9, e.remote, static_cast<long long>(e.remote_generators),
-                                    static_cast<long long>(e.exchange_fallbacks));
-                    }
-                    std::fflush(stdout);
-                } else if (color_gpu_enabled() && print_detail && level_rank == 0) {
+                    !gpu_driver.report_level(current_level)) {
+                    // a host level: the GPU owner pass
                     const auto& g = gpu::owner_pass_stats();
                     std::printf(
                         "  [gpu] level %d owner pass (rank 0): record %.2f s, pack %.2f s, "
@@ -2098,14 +1991,10 @@ void hierarchical_factorization_parallel(
         }
         
 #ifdef H2_HAVE_GPU
-        if (current_level == 1 && level.is_process_active && gpu_blocks) {
+        if (current_level == 1 && level.is_process_active) {
             // level 1 adopts the blocks of the level-2 transition; its own
             // transition builds the root on the device
-            std::string gpu_reason;
-            gpu_level = gpu::make_level_eliminator(
-                tree, current_level, kernel, tolerance,
-                factorization_method, &gpu_reason, std::move(gpu_blocks));
-            gpu_level->adopt_without_elimination();
+            gpu_driver.adopt_level(current_level);
         }
 #endif
         auto transition_start = std::chrono::high_resolution_clock::now();
@@ -2126,39 +2015,15 @@ void hierarchical_factorization_parallel(
         std::vector<BoxData<CoordType, DataType>> parent_boxes;
         bool transition_on_device = false;
 #ifdef H2_HAVE_GPU
-        // Device transition: this level's blocks never leave the device, and
-        // the parent's go to the next level's eliminator (or to the host when
-        // that level runs there).  Each rank builds the parents of its own
-        // boxes, with its copies of the blocks shared with other ranks; at a
-        // process reduction they then go to the host, for their new owner.
-        const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
-        transition_on_device =
-            gpu_level && gpu_level->can_build_parent() &&
-            (reduction_ahead || parent_level.is_process_active) && is_symmetric && !is_hermitian;
-        if (level.is_process_active && transition_on_device) {
-            parent_boxes = build_parent_level_structure(
-                level, tree->levels[current_level - 1], dimension, tree->global_bounds);
-            gpu_blocks = gpu_level->build_parent(parent_boxes);
-            gpu_level.reset();
-            if (reduction_ahead || !gpu_keeps_blocks_of(current_level - 1)) {
-                gpu::download_level_blocks(*gpu_blocks, parent_boxes);
-                gpu_blocks.reset();
-            }
-            if (print_detail && rank == level_print_rank) {
-                const auto& e = gpu::eliminator_stats();
-                std::printf("  [gpu] level %d device transition: %.2f s (%lld chunks: plan %.2f [restore %.2f, %.2f GB], blocks %.2f, P %.2f, fill %.2f), "
-                            "%lld fill GEMMs (%.1f GFLOP), blocks %s\n",
-                            current_level, e.transition, static_cast<long long>(e.tr_chunks), e.tr_plan, e.tr_restore,
-                            e.tr_restore_bytes / 1e9, e.tr_blocks, e.tr_p, e.tr_fill,
-                            static_cast<long long>(e.transition_fill_gemms), e.transition_flops / 1e9,
-                            gpu_blocks ? "kept on the device" : "copied to the host");
-                std::fflush(stdout);
-            }
-        }
-        if (gpu_level) {
-            gpu_level->download_blocks();  // host transition
-            gpu_level.reset();
-        }
+        // Device transition (see ColorGpuDriver::transition), or this
+        // level's blocks back in the host BoxData for the host transition.
+        transition_on_device = gpu_driver.transition(
+            level, parent_level, parent_boxes,
+            [&] {
+                return build_parent_level_structure(
+                    level, tree->levels[current_level - 1], dimension, tree->global_bounds);
+            },
+            print_detail && rank == level_print_rank);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes = build_parent_level_interactions<CoordType, DataType, KernelType>(
@@ -2435,26 +2300,9 @@ void hierarchical_factorization_parallel(
         int64_t n = root_box.num_points;
         bool root_on_device = false;
 #ifdef H2_HAVE_GPU
-        if (gpu_blocks) {
-            // root block assembled on the device by the level-1 transition
-            if (print_detail && rank == root_print_rank) {
-                std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
-            }
-            gpu::factor_root_on_device(*gpu_blocks, root_box);
-            gpu_blocks.reset();
-            root_on_device = true;
-            if (print_detail && rank == root_print_rank) {
-                std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
-            }
-        } else if (color_gpu_enabled() && factorization_method == FactorizationMethod::LU &&
-                   gpu::factor_host_root_on_device(root_box)) {
-            // root block assembled on the host (multi-rank runs)
-            root_on_device = true;
-            if (print_detail && rank == root_print_rank) {
-                std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
-                std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
-            }
-        }
+        // root block assembled on the device by the level-1 transition, or
+        // on the host (multi-rank runs)
+        root_on_device = gpu_driver.factor_root(root_box, print_detail && rank == root_print_rank);
 #endif
         if (!root_on_device) {
             // At level 0, the assembled matrix is just the schur complement
@@ -2503,6 +2351,11 @@ void hierarchical_factorization_parallel(
             } else if (factorization_method == FactorizationMethod::LU) {
                 root_box.X_RR.data = root_box.schur_complement.data;
                 root_box.X_RR_pivots.resize(static_cast<size_t>(n));
+                // LU reads both triangles: a symmetric problem factors the root's
+                // symmetric part, as its boxes' X_RR (see compute_and_modify)
+                if (is_symmetric || is_hermitian) {
+                    symmetrize_in_place(root_box.X_RR, n, is_hermitian && !is_symmetric);
+                }
 
                 int nn = n;
                 int info = 0;

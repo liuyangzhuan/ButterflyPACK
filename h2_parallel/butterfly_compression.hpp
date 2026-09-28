@@ -2,16 +2,25 @@
 
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
+#ifdef H2_HAVE_GPU
+#include "color_gpu/compression_gpu.hpp"
+#include "color_gpu/h2_matvec.hpp"
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -188,6 +197,12 @@ void h2_skeletonize_box(
         return;
     }
     if (scratch.workspace_rows == 0) {
+        if (h2_id_trace_enabled()) {
+            h2_id_trace_write("L" + std::to_string(box->level) + " m=" + std::to_string(box->morton_index) +
+                              " local=1 ob=" + std::to_string(box->on_boundary) +
+                              " n=" + std::to_string(box->num_points) + " k=" + std::to_string(box->num_points) +
+                              " wave=-1 | rows=0 d=0 sketch_norm=0");
+        }
         box->skeleton_indices.resize(static_cast<size_t>(box->num_points));
         std::iota(box->skeleton_indices.begin(), box->skeleton_indices.end(), int64_t{0});
         box->redundant_indices.clear();
@@ -197,6 +212,27 @@ void h2_skeletonize_box(
 
     constexpr double sketch_factor = 1.0;
     constexpr int sketch_nonzeros = 4;
+    std::string trace_tail;
+    if (h2_id_trace_enabled()) {
+        // the norm of the ID input (the sketch, as compute_id_sparse_sketch
+        // forms it), for box-by-box comparisons with the device path
+        const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
+        int64_t d = m;
+        double ssq = 0.0;
+        if (use_sketch) {
+            d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
+            std::vector<DataType> sketch(static_cast<size_t>(d * n));
+            sketch_sparse_random(scratch.workspace.data(), m, n, m, sketch.data(), d, d,
+                                 std::min<int>(sketch_nonzeros, static_cast<int>(d)),
+                                 static_cast<uint64_t>(box->morton_index + 1));
+            for (const DataType& v : sketch) ssq += std::norm(v);
+        } else {
+            for (const DataType& v : scratch.workspace) ssq += std::norm(v);
+        }
+        std::ostringstream tail;
+        tail << std::setprecision(10) << " | rows=" << m << " d=" << d << " sketch_norm=" << std::sqrt(ssq);
+        trace_tail = tail.str();
+    }
     IDResult<DataType> id;
     if (use_sketch) {
         id = compute_id_sparse_sketch(
@@ -211,6 +247,12 @@ void h2_skeletonize_box(
             tolerance, 0);
     }
     ensure_nonempty_box_id_rank(id, scratch.workspace_cols);
+    if (h2_id_trace_enabled()) {
+        h2_id_trace_write("L" + std::to_string(box->level) + " m=" + std::to_string(box->morton_index) +
+                          " local=1 ob=" + std::to_string(box->on_boundary) +
+                          " n=" + std::to_string(box->num_points) +
+                          " k=" + std::to_string(id.skeleton_indices.size()) + " wave=-1" + trace_tail);
+    }
 
     box->skeleton_indices = std::move(id.skeleton_indices);
     box->redundant_indices = std::move(id.redundant_indices);
@@ -462,6 +504,28 @@ void hierarchical_compression_parallel(
                   << "========================================" << std::endl;
     }
 
+    // H2_use_gpu: the IDs and blocks of every level on the device
+    // (color_gpu/compression_gpu.hpp); the conditions are the same on every rank.
+    bool gpu_blocks = false, gpu_ids = false;
+#ifdef H2_HAVE_GPU
+    if (color_gpu_enabled()) {
+        std::string reason;
+        gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
+        const char* sketch_env = std::getenv("H2_GPU_SKETCH");
+        const bool sketch_on = sketch_env == nullptr || std::atoi(sketch_env) != 0;
+        gpu_ids = gpu_blocks && use_sketch && sketch_on;
+        if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
+        if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
+            std::cout << "  GPU compression: "
+                      << (gpu_blocks ? (gpu_ids ? "IDs and blocks on the device"
+                                                : "blocks on the device, IDs on the host")
+                                     : "off (" + reason + ")")
+                      << std::endl;
+        }
+    }
+#endif
+    (void)gpu_ids;
+
     if (leaf_level < 2) {
         exchange_h2_point_metadata(tree, leaf_level, false, false, true);
         kernel->register_level_coordinates(tree->levels[leaf_level]);
@@ -486,12 +550,26 @@ void hierarchical_compression_parallel(
                 std::mutex id_exception_mutex;
                 std::atomic<bool> id_failed{false};
 
-                #pragma omp parallel for schedule(dynamic) if (level.local_boxes.size() > 1)
-                for (int64_t box_index = 0;
-                     box_index < static_cast<int64_t>(level.local_boxes.size());
-                     ++box_index) {
+                // boxes whose ID runs here: all of them, or those the device left
+                std::vector<int64_t> host_boxes;
+#ifdef H2_HAVE_GPU
+                if (gpu_ids) {
+                    gpu::compression_stats() = gpu::CompressionStats{};
+                    host_boxes = gpu::compress_level_ids(tree, level_number, kernel, tolerance);
+                } else
+#endif
+                {
+                    host_boxes.resize(level.local_boxes.size());
+                    std::iota(host_boxes.begin(), host_boxes.end(), int64_t{0});
+                }
+
+                #pragma omp parallel for schedule(dynamic) if (host_boxes.size() > 1)
+                for (int64_t host_index = 0;
+                     host_index < static_cast<int64_t>(host_boxes.size());
+                     ++host_index) {
                     if (id_failed.load(std::memory_order_relaxed)) continue;
                     try {
+                        const int64_t box_index = host_boxes[static_cast<size_t>(host_index)];
                         h2_skeletonize_box(
                             tree,
                             &level.local_boxes[static_cast<size_t>(box_index)],
@@ -512,9 +590,32 @@ void hierarchical_compression_parallel(
             }
 
             // Refresh remote records after all owners have selected skeletons.
+            // The exchange publishes a box's skeleton only once its owner has
+            // marked the box eliminated (the factorization's rule); here every
+            // local skeleton is final, so the boxes are marked for the
+            // exchange (without it, coupling blocks with remote sources would
+            // be dropped as empty).
+            if (level.is_process_active) {
+                for (const auto& box : level.local_boxes) {
+                    level.eliminated_boxes.insert(box.morton_index);
+                }
+            }
             exchange_h2_point_metadata(
                 tree, level_number, true, true, level_number == leaf_level);
+            level.eliminated_boxes.clear();
             kernel->register_level_coordinates(level);
+#ifdef H2_HAVE_GPU
+            if (gpu_blocks) {
+                if (!gpu_ids) gpu::compression_stats() = gpu::CompressionStats{};
+                std::vector<std::vector<int64_t>> sources(level.local_boxes.size());
+                if (level.is_process_active) {
+                    for (size_t b = 0; b < level.local_boxes.size(); ++b) {
+                        sources[b] = h2_interaction_list(tree, level.local_boxes[b]);
+                    }
+                }
+                gpu::build_level_blocks(tree, level_number, kernel, sources, level_number == leaf_level);
+            } else
+#endif
             build_h2_blocks_for_level(
                 tree, level_number, kernel, true, level_number == leaf_level);
 
@@ -556,10 +657,30 @@ void hierarchical_compression_parallel(
                               << ": compression ratio=" << ratio
                               << ", time=" << max_level_elapsed << " s"
                               << std::endl;
+#ifdef H2_HAVE_GPU
+                    if (gpu_blocks) {
+                        const auto& g = gpu::compression_stats();
+                        std::printf("  [gpu] level %d compression (rank %d): IDs %.2f s (plan %.2f, device %.2f, store %.2f; "
+                                    "%lld boxes, %lld on the host), blocks %.2f s (plan %.2f, device and copies %.2f, "
+                                    "of which waiting for copies %.2f; %lld coupling, %lld near) | up %.2f GB, down %.2f GB, "
+                                    "heap peak %.2f GB\n",
+                                    level_number, rank, g.ids, g.id_plan, g.id_device, g.id_store,
+                                    static_cast<long long>(g.id_boxes), static_cast<long long>(g.host_id_boxes), g.blocks,
+                                    g.blocks_plan, g.blocks_device, g.blocks_wait,
+                                    static_cast<long long>(g.interaction_blocks), static_cast<long long>(g.near_blocks),
+                                    g.bytes_up / 1e9, g.bytes_down / 1e9, g.heap_peak / 1e9);
+                        std::fflush(stdout);
+                    }
+#endif
                 }
             }
         }
     }
+
+#ifdef H2_HAVE_GPU
+    // the device matvec needs every rank's blocks on its device
+    if (gpu_blocks) gpu::commit_device_matvec(tree, verbose);
+#endif
 
     size_t local_memory = 0;
     for (int level_number = 0; level_number <= leaf_level; ++level_number) {
@@ -1043,6 +1164,34 @@ void hierarchical_h2_mul_parallel(
     const int rank = tree->mpi_rank;
     const int leaf_level = tree->num_levels - 1;
     const int first_h2_level = std::min(2, leaf_level);
+
+#ifdef H2_HAVE_GPU
+    // the whole matvec on the device (color_gpu/h2_matvec.hpp) when the
+    // compression kept the blocks there on every rank
+    if (gpu::run_device_h2_mul(tree, input, output, nrhs)) {
+        if (gpu::device_matvec_check()) {  // H2_GPU_MATVEC_CHECK=1: the host matvec as the reference
+            std::vector<DataType> host_output;
+            gpu::device_matvec_suspended() = true;
+            hierarchical_h2_mul_parallel(tree, input, host_output, nrhs, false);
+            gpu::device_matvec_suspended() = false;
+            double sums[2] = {0.0, 0.0};
+            for (size_t i = 0; i < output.size(); ++i) {
+                sums[0] += std::norm(output[i] - host_output[i]);
+                sums[1] += std::norm(host_output[i]);
+            }
+            MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+            if (rank == 0) {
+                std::printf("GPU matvec check: |y_gpu - y_host| / |y_host| = %.3e\n",
+                            sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
+                std::fflush(stdout);
+            }
+        }
+        if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
+            std::cout << "H2 compression-only multiply complete" << std::endl;
+        }
+        return;
+    }
+#endif
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> source_data(
         static_cast<size_t>(tree->num_levels));
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> target_data(
@@ -1491,6 +1640,17 @@ void hierarchical_h2_bicgstab_parallel(
                   << " iterations, maximum relative residual="
                   << max_relative_residual
                   << std::endl;
+#ifdef H2_HAVE_GPU
+        if (gpu::device_matvec_usable(tree)) {
+            const auto& m = gpu::matvec_stats();
+            std::printf("  GPU matvec (rank %d, %lld calls since the compression): %.2f s (upward %.2f, interactions and "
+                        "downward %.2f, near %.2f; of these, messages %.2f and host hand-offs %.2f; input/output "
+                        "transfers %.2f)\n",
+                        tree->mpi_rank, static_cast<long long>(m.calls), m.total, m.upward, m.coupling, m.near, m.mpi,
+                        m.host_handoff, m.transfer);
+            std::fflush(stdout);
+        }
+#endif
     }
 }
 
@@ -1516,6 +1676,11 @@ void butterfly_compression_parallel(
         }
 
         solver->kernel.entryeval_time_per_thread.assign(omp_get_max_threads(), 0.0);
+        configure_color_gpu(solver->options.use_gpu != 0);
+#ifdef H2_HAVE_GPU
+        fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+        if (solver->options.use_gpu != 0) fmm::gpu::invalidate_device_solve();
+#endif
         const double start = MPI_Wtime();
         hierarchical_compression_parallel(
             solver->tree.get(), &solver->kernel, solver->options.tolerance,

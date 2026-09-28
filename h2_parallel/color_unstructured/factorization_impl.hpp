@@ -4,6 +4,7 @@
 #include "parent_transition.hpp"
 #include "owner_deferred.hpp"
 #include "verification.hpp"
+#include "../color_gpu/factorization_driver.hpp"
 
 namespace butterfly {
 namespace color_unstructured {
@@ -40,6 +41,9 @@ void hierarchical_factorization_unstructured(
     const bool print_detail = verbosity >= 1;
     const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
+#ifdef H2_HAVE_GPU
+    gpu::invalidate_device_solve();  // the device copies of the previous factors
+#endif
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
     FactorizationCommunicatorSet factorization_comms =
@@ -169,8 +173,27 @@ void hierarchical_factorization_unstructured(
 
     memory_diagnostics.record(tree, leaf_level, "setup", "factor_start");
 
+#ifdef H2_HAVE_GPU
+    // H2_use_gpu: the device box path of each level (the Color levels on
+    // the device, color_gpu/factorization_driver.hpp); the waves, transport
+    // schedule and remote-state refresh stay those of this loop.
+    typename gpu::ColorGpuDriver<CoordType, DataType, KernelType>::Options gpu_options;
+    gpu_options.tolerance = tolerance;
+    gpu_options.method = factorization_method;
+    gpu_options.use_sketch = use_sketch;
+    gpu_options.lazy_schur = lazy_schur;
+    gpu_options.is_symmetric = is_symmetric;
+    gpu_options.is_hermitian = is_hermitian;
+    gpu_options.occupancy = true;
+    gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
+#endif
+
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
         auto level_start = std::chrono::high_resolution_clock::now();
+#ifdef H2_HAVE_GPU
+        gpu::eliminator_stats() = gpu::EliminatorStats{};
+        transport_timers() = TransportTimers{};
+#endif
         clock::duration level_data_exchange{};
         clock::duration level_reduction{};
         std::array<double, DEEP_PHASE_COUNT> deep_phase_ms{};
@@ -496,6 +519,18 @@ void hierarchical_factorization_unstructured(
             };
             auto transport_color_updates =
                 [&](const FactorizationMemoryDiagnosticCallback& diagnostic) {
+#ifdef H2_HAVE_GPU
+                    if (gpu_driver.on()) {
+                        // generators of the device waves; the host transport
+                        // installs the remote ones for the device
+                        return gpu_driver.transport(
+                            pending_updates, [&](std::vector<int64_t>* installed) {
+                                return transport_and_apply_factor_updates_symmetric_onehop(
+                                    tree, current_level, kernel, pending_updates,
+                                    false, diagnostic, true, installed);
+                            });
+                    }
+#endif
                     return transport_and_apply_factor_updates_symmetric_onehop(
                         tree, current_level, kernel, pending_updates,
                         false, diagnostic, true);
@@ -545,6 +580,16 @@ void hierarchical_factorization_unstructured(
             bool to_store = true;
             const bool store_interior_wave = true;
 
+#ifdef H2_HAVE_GPU
+            // H2_use_gpu=1: the device box path takes the whole level when it
+            // covers it; one active rank then has nothing to transport.
+            gpu_driver.start_level(current_level, use_streamed_level, level_comm,
+                                   print_detail && rank == level_print_rank);
+            const bool gpu_level_local = gpu_driver.local();
+#else
+            const bool gpu_level_local = false;
+#endif
+
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
 
                 const int  color_id_mod    = counter % num_colors;
@@ -579,7 +624,7 @@ void hierarchical_factorization_unstructured(
                             "lazy interior transport schedule missed pending updates");
                     }
                 }
-                if (transport_required) {
+                if (transport_required && !gpu_level_local) {
                     if (memory_diagnostics.enabled()) {
                         memory_diagnostics.record(
                             tree, current_level, "color",
@@ -709,6 +754,24 @@ void hierarchical_factorization_unstructured(
                     }
                 }
 
+#ifdef H2_HAVE_GPU
+                if (gpu_driver.on()) {
+                    // Box region, owner pass, mirror, generators and
+                    // finalize on the device.  Remote boxes advance only in
+                    // refresh_installed_lazy_remote_state, after transports.
+                    record_deep_phase(DEEP_WAVE_SETUP, wave_setup_start);
+                    const auto device_start = clock::now();
+                    boundary_count += gpu_driver.eliminate_wave(color_list, counter);
+                    for (int64_t morton_idx : color_list) {
+                        level.eliminated_boxes.insert(morton_idx);
+                        level.elimination_wave[morton_idx] =
+                            static_cast<int32_t>(counter);
+                    }
+                    mark_assisting_boxes_eliminated();
+                    record_deep_phase(DEEP_PRIMARY, device_start);
+                    continue;
+                }
+#endif
                 const int max_threads = std::max(1, omp_get_max_threads());
                 std::vector<PendingFactorUpdates<DataType>> thread_pending(
                     static_cast<size_t>(max_threads));
@@ -1162,6 +1225,7 @@ void hierarchical_factorization_unstructured(
                             0, 0, communication);
                     };
             }
+            if (!gpu_level_local) {
             const auto final_transport_wall_start = clock::now();
             const auto final_comm_duration =
                 transport_color_updates(final_transport_memory_diagnostic);
@@ -1178,11 +1242,19 @@ void hierarchical_factorization_unstructured(
             update_neighbor_slicing_for_level(level, is_symmetric);
             record_deep_phase(
                 DEEP_POST_TRANSPORT, final_post_transport_start);
+            }
             if (memory_diagnostics.enabled()) {
                 memory_diagnostics.record(
                     tree, current_level, "color", "final_post_transport",
                     h2_diag_pending_bytes(pending_updates));
             }
+
+#ifdef H2_HAVE_GPU
+            // after the final transport: the factors on the host, the blocks
+            // on the device until the transition
+            gpu_driver.finish_level(current_level, pending_updates, level_comm,
+                                    print_detail && rank == level_print_rank);
+#endif
 
             const auto occupied_indices = occupied_local_indices(level);
             for (int64_t local_index : occupied_indices) {
@@ -1262,6 +1334,11 @@ void hierarchical_factorization_unstructured(
                         << " transport wall.)" << std::endl;
                 }
             }
+#ifdef H2_HAVE_GPU
+            if (color_gpu_enabled() && print_detail && rank == level_print_rank) {
+                gpu_driver.report_level(current_level);
+            }
+#endif
 
             double min_elim_ms = 0.0;
             double max_elim_ms = 0.0;
@@ -1437,8 +1514,27 @@ void hierarchical_factorization_unstructured(
         // }
         // MPI_Barrier(tree->comm);
         // exit(0);
+#ifdef H2_HAVE_GPU
+        if (current_level == 1 && level.is_process_active) {
+            // level 1 adopts the blocks of a device transition of level 2
+            gpu_driver.adopt_level(current_level);
+        }
+#endif
         std::vector<BoxData<CoordType, DataType>> parent_boxes;
-        if (level.is_process_active) {
+        bool transition_on_device = false;
+#ifdef H2_HAVE_GPU
+        // Device transition, or this level's blocks back in the host BoxData
+        // for the host transition.
+        transition_on_device = gpu_driver.transition(
+            level, parent_level, parent_boxes,
+            [&] {
+                return build_parent_level_structure_unstructured(
+                    level, tree->levels[current_level - 1], dimension,
+                    tree->global_bounds, occupied_topology);
+            },
+            print_detail && rank == level_print_rank);
+#endif
+        if (level.is_process_active && !transition_on_device) {
             parent_boxes =
                 build_parent_level_interactions_unstructured<
                     CoordType, DataType, KernelType>(
@@ -1678,18 +1774,37 @@ void hierarchical_factorization_unstructured(
             std::cout << "  Root box points: " << root_box.num_points << std::endl;
         }
 
+        bool root_on_device = false;
+        int64_t n = root_box.num_points;
+#ifdef H2_HAVE_GPU
+        if (gpu_driver.holds_root_block()) {
+            // root block assembled on the device by the level-1 transition
+            root_on_device = gpu_driver.factor_root(
+                root_box, print_detail && rank == root_print_rank);
+        }
+#endif
+        if (!root_on_device) {
         // At level 0, the assembled matrix is just the schur complement
         if (!root_box.schur_complement.is_allocated()) {
             throw std::runtime_error(
                 "hierarchical_factorization_parallel: Root box schur complement not allocated");
         }
 
-        int64_t n = root_box.schur_complement.rows;
+        n = root_box.schur_complement.rows;
 
         if (print_detail && rank == root_print_rank) {
             std::cout << "  Schur complement size: " << n << " × " << n << std::endl;
         }
 
+#ifdef H2_HAVE_GPU
+        // LU of the host-assembled root on the device when the heap has room
+        root_on_device = gpu_driver.factor_root(root_box, false);
+        if (root_on_device && print_detail && rank == root_print_rank) {
+            std::cout << "  ✓ Root LU factorization complete (GPU)" << std::endl;
+        }
+#endif
+        }
+        if (!root_on_device) {
         // Factorize the root schur complement for diagonal solve
         root_box.X_RR.allocate(n, n, MatrixStorage<DataType>::FULL);
 
@@ -1724,6 +1839,11 @@ void hierarchical_factorization_unstructured(
         } else if (factorization_method == FactorizationMethod::LU) {
             root_box.X_RR.data = root_box.schur_complement.data;
             root_box.X_RR_pivots.resize(static_cast<size_t>(n));
+            // LU reads both triangles: a symmetric problem factors the root's
+            // symmetric part, as its boxes' X_RR (see compute_and_modify)
+            if (is_symmetric || is_hermitian) {
+                symmetrize_in_place(root_box.X_RR, n, is_hermitian && !is_symmetric);
+            }
 
             int nn = n;
             int info = 0;
@@ -1790,6 +1910,7 @@ void hierarchical_factorization_unstructured(
             if (print_detail && rank == root_print_rank) {
                 std::cout << "  ✓ Root matrix copied (no factorization)" << std::endl;
             }
+        }
         }
 
         // Mark root as skeleton only (no redundant DOFs at this level)

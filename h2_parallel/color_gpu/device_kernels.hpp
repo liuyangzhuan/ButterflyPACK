@@ -24,10 +24,15 @@ namespace gpu {
 //   kind 2 (complex): K = (p[3], p[4]) if the global ids match, else
 //                     (p[1], p[2]) e^{i p[0] r} / (p[5] r), r = |x - y|  (3D;
 //                     symmetric Helmholtz, p[5] = 4 pi as the host forms it)
+//   kind 3 (complex): the EFIE entry of the RWG edges with 0-based indices
+//                     given by the global ids (emsurf_kernel.cuh), from the
+//                     mesh tables treal / tint (kernel_tables.hpp)
 constexpr int kKernelParams = 8;
 struct KernelSpec {
     int kind = 0;
     double p[kKernelParams] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const double* treal = nullptr;  // device tables of a kind with tables
+    const int* tint = nullptr;
 };
 
 // Coordinates (xyz per slot) and global ids of the points of one level.
@@ -195,7 +200,7 @@ struct OrderedSketchItemT {
     int col_base;
     const T* src;
     int row_stride;
-    const int* row_index;
+    const int* row_index;  // null: row i is stored row i
 };
 using OrderedSketchItem = OrderedSketchItemT<double>;
 
@@ -264,6 +269,12 @@ void launch_add_store(const AddStoreItemT<T>* items, int count, int max_m, int m
                       cudaStream_t stream);
 template<typename T>
 void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStream_t stream);
+// a := (a + a^T) / 2 of each item's n x n matrix (the symmetric part)
+template<typename T>
+void launch_symmetrize(const IdentityItemT<T>* items, int count, int max_n, cudaStream_t stream);
+// ... of one n x n matrix (leading dimension ld)
+template<typename T>
+void launch_symmetrize(T* a, int ld, int n, cudaStream_t stream);
 
 // target(i, j) += ((part_0(i, j) + part_1(i, j)) + ...) + part_{n-1}(i, j):
 // parts summed in order first (as the host sums transported deltas), each

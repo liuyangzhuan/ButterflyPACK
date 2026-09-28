@@ -71,6 +71,17 @@ void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* 
  * Without a registered kernel the GPU runs only the Schur-update pass.
  */
 void c_bpack_h2_set_gpu_kernel(F2Cptr* bmat, const int* kind, const double* params, const int* nparams);
+/*
+ * Tables of a kernel kind that has them, registered after its kind (which
+ * clears them).  kind 3 (complex, symmetric): the EFIE entry of RWG edges of
+ * a triangle mesh, from the edges' 0-based indices (the one-based global IDs
+ * minus one); params = {wavenumber, frequency, eps0, pi, Gauss points per
+ * triangle (at most 7), vertices, edges}; reals = vertex xyz (3 per vertex)
+ * then the Gauss rule (ng1, ng2, ng3, weight per point); ints = per edge its
+ * two vertices, its two triangles and their vertices opposite the edge (6),
+ * then per triangle its vertices (3), all 0-based.
+ */
+void c_bpack_h2_set_gpu_kernel_tables(F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);

@@ -28,6 +28,7 @@
 
 #include "device_heap.hpp"
 #include "gpu_runtime.hpp"
+#include "h2_matvec_store.hpp"
 #include "solve_kernels.hpp"
 
 #include <mpi.h>
@@ -195,8 +196,12 @@ inline DeviceSolveStore& device_solve_store() {
     return store;
 }
 
-// A factorization replaces the factors: drop the device copies.
-inline void invalidate_device_solve() { device_solve_store().release(); }
+// A factorization or compression replaces the factors: drop the device
+// copies (the solve's factors, and the blocks of a compression-only H2).
+inline void invalidate_device_solve() {
+    device_solve_store().release();
+    device_matvec_store().release();
+}
 
 // ---------------------------------------------------------------------------
 // Messages with the one-hop neighbor ranks: a header of int64 and a payload
@@ -688,6 +693,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 std::vector<PeerMessage> out(L.peers.size()), in;
                 std::map<int64_t, int> wanted;
                 for (const auto& box : lvl.local_boxes) {
+                    // (an empty box of an unstructured tree keeps unfiltered neighbor lists)
+                    if (box.num_points == 0) continue;
                     for (int64_t m : box.one_hop) {
                         if (!is_local(m)) wanted.emplace(m, solve_detail::owner_of(tree, lvl, level, m));
                     }
@@ -1349,6 +1356,53 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
                     t.transfer, host_seconds);
         std::fflush(stdout);
     }
+}
+
+// The solve (multiply = false) or the multiply F x of the host solvers
+// (full-grid and unstructured) on the device, when the device solve runs
+// (decided collectively): solve_data initialized as the host path does, the
+// result left in its leaf left_side.  With H2_GPU_SOLVE_CHECK=1 the host
+// path runs too (host(host_data), with the device path suspended), and rank
+// 0 prints their difference.  Returns false when the host path must run.
+template<typename CoordType, typename DataType, typename HostRun>
+bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
+                      std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
+                      bool multiply, int verbosity, HostRun&& host) {
+    if (device_solve_suspended() || !device_solve_enabled() || !prepare_device_solve(tree, verbosity)) return false;
+    if (multiply) {
+        device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1);
+    } else {
+        device_solve_sweeps(tree, solve_data, nrhs, verbosity);
+    }
+    if (device_solve_check()) {
+        const int leaf = tree->num_levels - 1;
+        std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> host_data(
+            static_cast<size_t>(tree->num_levels));
+        device_solve_suspended() = true;
+        host(host_data);
+        device_solve_suspended() = false;
+        double sums[2] = {0.0, 0.0};
+        if (tree->levels[static_cast<size_t>(leaf)].is_process_active) {
+            for (size_t b = 0; b < solve_data[static_cast<size_t>(leaf)].size(); ++b) {
+                const auto& x = solve_data[static_cast<size_t>(leaf)][b].left_side;
+                const auto& y = host_data[static_cast<size_t>(leaf)][b].left_side;
+                for (size_t i = 0; i < x.size(); ++i) {
+                    sums[0] += std::norm(x[i] - y[i]);
+                    sums[1] += std::norm(y[i]);
+                }
+            }
+        }
+        MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+        int rank = 0;
+        MPI_Comm_rank(tree->comm, &rank);
+        if (rank == 0) {
+            std::printf(multiply ? "GPU multiply check: |y_gpu - y_host| / |y_host| = %.3e\n"
+                                 : "GPU solve check: |x_gpu - x_host| / |x_host| = %.3e\n",
+                        sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
+            std::fflush(stdout);
+        }
+    }
+    return true;
 }
 
 }  // namespace gpu

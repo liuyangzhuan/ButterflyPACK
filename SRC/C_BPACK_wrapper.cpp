@@ -1560,15 +1560,17 @@ void c_bpack_h2_set_gpu_kernel(
     throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: null argument");
   }
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
-  // kind 1 is a real kernel, kind 2 a complex one (see H2Kernel::GpuSpec)
-  constexpr int data_kind = std::is_same_v<H2Data, double> ? 1 : 2;
-  if (*kind != 0 && *kind != data_kind) {
+  // kind 1 is a real kernel, kinds 2 and 3 complex ones (see H2Kernel::GpuSpec)
+  constexpr bool real_data = std::is_same_v<H2Data, double>;
+  if (*kind != 0 && (real_data ? *kind != 1 : (*kind != 2 && *kind != 3))) {
     throw std::invalid_argument(std::string("c_bpack_h2_set_gpu_kernel: kind must be 0 or ") +
-                                std::to_string(data_kind) + " for this data type");
+                                (real_data ? "1" : "2 or 3") + " for this data type");
   }
   auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel");
   auto& spec = solver->kernel.gpu_spec;
+  const uint64_t table_version = spec.table_version;
   spec = {};
+  spec.table_version = table_version + 1;  // (the tables are gone)
   spec.kind = *kind;
   constexpr int max_params = static_cast<int>(sizeof(spec.params) / sizeof(spec.params[0]));
   const int count = std::min(*nparams, max_params);
@@ -1579,6 +1581,29 @@ void c_bpack_h2_set_gpu_kernel(
   (void)params;
   (void)nparams;
   format7_requires_mpi("c_bpack_h2_set_gpu_kernel");
+#endif
+}
+
+void c_bpack_h2_set_gpu_kernel_tables(
+    F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints) {
+#ifdef HAVE_MPI
+  if (nreals == nullptr || nints == nullptr || *nreals < 0 || *nints < 0 ||
+      (*nreals > 0 && reals == nullptr) || (*nints > 0 && ints == nullptr)) {
+    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel_tables: invalid argument");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel_tables");
+  auto& spec = solver->kernel.gpu_spec;
+  spec.table_real.assign(reals, reals + *nreals);
+  spec.table_int.assign(ints, ints + *nints);
+  ++spec.table_version;
+#else
+  (void)bmat;
+  (void)reals;
+  (void)nreals;
+  (void)ints;
+  (void)nints;
+  format7_requires_mpi("c_bpack_h2_set_gpu_kernel_tables");
 #endif
 }
 

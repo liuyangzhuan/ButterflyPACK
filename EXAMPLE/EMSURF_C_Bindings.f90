@@ -80,6 +80,56 @@ contains
       wavenumber = quant_c%wavenum
    end subroutine emsurf_get_wavenumber_c
 
+   ! Sizes of the mesh tables of the EFIE entry for the GPU backend of the H2
+   ! solver (c_bpack_h2_set_gpu_kernel_tables, kind 3)
+   subroutine emsurf_get_gpu_kernel_sizes_c(nreals, nints) bind(C)
+      integer(c_int64_t), intent(out) :: nreals, nints
+      nreals = 3_c_int64_t*quant_c%maxnode + 4_c_int64_t*quant_c%integral_points
+      nints = 6_c_int64_t*quant_c%Nunk + 3_c_int64_t*quant_c%maxpatch
+   end subroutine emsurf_get_gpu_kernel_sizes_c
+
+   ! The kind-3 parameters (7) and mesh tables (layout in BPACK_wrapper.h):
+   ! vertex coordinates and the Gauss rule; per edge its vertices, triangles
+   ! and opposite vertices (info_unk(1:6)), then the triangles' vertices
+   ! (node_of_patch(1:3)), all 0-based (-1: no triangle)
+   subroutine emsurf_get_gpu_kernel_c(params, reals, ints) bind(C)
+      real(c_double), intent(out) :: params(7), reals(*)
+      integer(c_int), intent(out) :: ints(*)
+      integer :: node, edge, patch, q, k
+      integer(c_int64_t) :: off
+
+      params(1) = quant_c%wavenum
+      params(2) = quant_c%freq
+      params(3) = BPACK_eps0
+      params(4) = BPACK_pi
+      params(5) = quant_c%integral_points
+      params(6) = quant_c%maxnode
+      params(7) = quant_c%Nunk
+      do node = 1, quant_c%maxnode
+         do k = 1, 3
+            reals(3*(node - 1) + k) = quant_c%xyz(k, node)
+         end do
+      end do
+      off = 3_c_int64_t*quant_c%maxnode
+      do q = 1, quant_c%integral_points
+         reals(off + 4*(q - 1) + 1) = quant_c%ng1(q)
+         reals(off + 4*(q - 1) + 2) = quant_c%ng2(q)
+         reals(off + 4*(q - 1) + 3) = quant_c%ng3(q)
+         reals(off + 4*(q - 1) + 4) = quant_c%gauss_w(q)
+      end do
+      do edge = 1, quant_c%Nunk
+         do k = 1, 6
+            ints(6_c_int64_t*(edge - 1) + k) = max(quant_c%info_unk(k, edge), 0) - 1
+         end do
+      end do
+      off = 6_c_int64_t*quant_c%Nunk
+      do patch = 1, quant_c%maxpatch
+         do k = 1, 3
+            ints(off + 3_c_int64_t*(patch - 1) + k) = quant_c%node_of_patch(k, patch) - 1
+         end do
+      end do
+   end subroutine emsurf_get_gpu_kernel_c
+
    subroutine emsurf_entry_c(m, n, value, context) bind(C)
       integer(c_int), intent(in) :: m, n
       complex(c_double_complex), intent(out) :: value

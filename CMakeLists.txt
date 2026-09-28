@@ -555,7 +555,9 @@ if (enable_h2_gpu)
                                     h2_parallel/color_gpu/device_id.cu
                                     h2_parallel/color_gpu/device_gemm.cu
                                     h2_parallel/color_gpu/device_sketch.cu
-                                    h2_parallel/color_gpu/solve_kernels.cu)
+                                    h2_parallel/color_gpu/solve_kernels.cu
+                                    h2_parallel/color_gpu/h2_matvec_kernels.cu
+                                    h2_parallel/color_gpu/emsurf_blocks.cu)
   set_target_properties(h2_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(h2_gpu_kernels PRIVATE H2_HAVE_GPU)
   set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels>)

@@ -29,7 +29,7 @@ __device__ __forceinline__ int index_at(const char* meta, const IndexList& list,
     return list.base + (list.offset < 0 ? i : reinterpret_cast<const int*>(meta + list.offset)[i]);
 }
 
-template<typename T>
+template<typename T, int Kind>
 __global__ void eval_kernel(const EvalItemT<T>* items, const char* meta, KernelSpec spec, PointTable points) {
     const EvalItemT<T> item = items[blockIdx.x];
     const int i = blockIdx.y * kTile + threadIdx.x;
@@ -43,7 +43,7 @@ __global__ void eval_kernel(const EvalItemT<T>* items, const char* meta, KernelS
         if (j >= item.n) break;
         const int sj = index_at(meta, item.cols, j);
         item.out[i + static_cast<int64_t>(j) * item.ld] =
-            kernel_value<T>(spec, x, x_id, points.xyz + 3 * static_cast<int64_t>(sj), points.ids[sj]);
+            kernel_value<T, Kind>(spec, x, x_id, points.xyz + 3 * static_cast<int64_t>(sj), points.ids[sj]);
     }
 }
 
@@ -89,6 +89,33 @@ __global__ void sym_add_kernel(const SymAddItemT<T>* items) {
         T& x = item.x[i + static_cast<int64_t>(j) * item.ldx];
         x += item.t[i + static_cast<int64_t>(j) * item.ldt] + item.t[j + static_cast<int64_t>(i) * item.ldt];
     }
+}
+
+template<typename T>
+__device__ void symmetrize_tile(const IdentityItemT<T>& item) {
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    const int j0 = blockIdx.z * kTile;
+    if (i >= item.n || j0 >= item.n) return;
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = j0 + jj;
+        if (j >= item.n) break;
+        if (i >= j) continue;  // each pair once, from its upper entry
+        T& upper = item.a[i + static_cast<int64_t>(j) * item.ld];
+        T& lower = item.a[j + static_cast<int64_t>(i) * item.ld];
+        const T mean = (upper + lower) * 0.5;
+        upper = mean;
+        lower = mean;
+    }
+}
+
+template<typename T>
+__global__ void symmetrize_kernel(const IdentityItemT<T>* items) {
+    symmetrize_tile(items[blockIdx.x]);
+}
+
+template<typename T>
+__global__ void symmetrize_one_kernel(IdentityItemT<T> item) {
+    symmetrize_tile(item);
 }
 
 template<typename T>
@@ -168,10 +195,17 @@ template<typename T>
 void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
                  const char* meta, KernelSpec spec, PointTable points, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    if (spec.kind != (is_complex_scalar<T> ? 2 : 1)) {
-        throw std::runtime_error("launch_eval: device kernel kind does not match the data type");
+    const dim3 grid = tile_grid(count, max_m, max_n), block(kTile, kTileRows);
+    if constexpr (is_complex_scalar<T>) {
+        if (kernel_kind_of<T>(spec, "launch_eval") == 3) {
+            eval_kernel<T, 3><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        } else {
+            eval_kernel<T, 2><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        }
+    } else {
+        kernel_kind_of<T>(spec, "launch_eval");
+        eval_kernel<T, 1><<<grid, block, 0, stream>>>(items, meta, spec, points);
     }
-    eval_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items, meta, spec, points);
     check_launch("eval_kernel");
 }
 
@@ -196,6 +230,20 @@ void launch_sym_add(const SymAddItemT<T>* items, int count, int max_n, cudaStrea
     if (count <= 0 || max_n <= 0) return;
     sym_add_kernel<T><<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
     check_launch("sym_add_kernel");
+}
+
+template<typename T>
+void launch_symmetrize(const IdentityItemT<T>* items, int count, int max_n, cudaStream_t stream) {
+    if (count <= 0 || max_n <= 0) return;
+    symmetrize_kernel<T><<<tile_grid(count, max_n, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
+    check_launch("symmetrize_kernel");
+}
+
+template<typename T>
+void launch_symmetrize(T* a, int ld, int n, cudaStream_t stream) {
+    if (n <= 0) return;
+    symmetrize_one_kernel<T><<<tile_grid(1, n, n), dim3(kTile, kTileRows), 0, stream>>>(IdentityItemT<T>{a, ld, n});
+    check_launch("symmetrize_one_kernel");
 }
 
 template<typename T>
@@ -233,6 +281,8 @@ void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
     template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \
+    template void launch_symmetrize<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                          \
+    template void launch_symmetrize<T>(T*, int, int, cudaStream_t);                                               \
     template void launch_sum_add<T>(const SumAddItemT<T>*, int, int, int, const char*, cudaStream_t);              \
     template void launch_identity<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                             \
     template void launch_transpose<T>(const TransposeItemT<T>*, int, int, int, cudaStream_t);                      \
