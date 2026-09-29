@@ -104,6 +104,7 @@ module Bplus_deterministic
       integer :: myv = -1
       integer :: comm = 0
       integer :: pgno = 0
+      real(kind=8) :: scale = 0d0 !< truncation scale of the swaps (BF_TruncRank)
       type(bfd_layout) :: Ulay, Vlay
       type(butterflymatrix), allocatable :: U(:), V(:)
       type(bfd_dfac), allocatable :: f(:)
@@ -115,6 +116,12 @@ module Bplus_deterministic
    real(kind=8) :: BFD_time(BFD_NT) = 0d0
    integer :: BFD_count(BFD_NT) = 0
    integer :: BFD_rankgrow(2) = 0
+   !> floor of every truncation of the deterministic algebra (BFD_floor): 0, or, in a build with -DBFD_ABS_TRUNC,
+   !> BFD_absfac() times the root-mean-square singular value of the diagonal leaf blocks of the H-matrix (BFD_set_absscale,
+   !> called by BFD_Hmat_normest before the H-LU). With the floor s a node is truncated at tol*max(sigma_1, s) instead of
+   !> tol*sigma_1: an absolute threshold on the scale of the self-interactions, as a fixed RRQR threshold applied after
+   !> block-diagonal preconditioning (Heldring et al., IEEE TAP 2026, Sec. V)
+   real(kind=8) :: BFD_abs_scale = 0d0
    !> recursion statistics of BFD_HxBF (1) and BFD_Lsolve (2) per nesting depth d (depth of the combined HxBF/Lsolve
    !> recursion below the calling H-LU operation): calls, stored entries and largest block dimension of the butterfly
    !> argument, and inclusive flops and time (H-BF factorization, printed by BFD_recstats)
@@ -140,6 +147,20 @@ module Bplus_deterministic
    real(kind=8) :: BFD_mul_cmax(0:BFD_RD - 1) = 0d0, BFD_mul_cmin(0:BFD_RD - 1) = 1d300
    !> time of BFD_Hmat_normest
    real(kind=8) :: BFD_norm_time = 0d0
+   !> HODBF statistics of the distributed BMults (BFD_bmult_dist) per HODBF level BFD_ho_level (set by BFD_Sblock and
+   !> BFD_inverse_schur_partitionedinverse) and kind of product: 1 Sblock (B12'*X2, C'*X1, B21'*X1 of BFD_apply_factor),
+   !> 2 Schur product C12*C21, 3 two-hop products B*T1 and Y21*T1 of BFD_IplusInverse, 4 its other products (D'*C, B*D',
+   !> A'*T, ...): calls, largest block dimension of the BMult chain after the swaps (max, sum) and rank of the product
+   !> (max, sum); at verbosity >= 2 the ratio ||P||/||W|| of the norms of the product and of the block W it is
+   !> added to (sum of log10, max, min; W = identity for kind 2) and the norm of W (sum of log10). Printed by BFD_hostats.
+   !> Kinds 1, 3 and 4 are truncated relative to BFD_scalefac()*||W|| in the swaps of their BMult.
+   integer, parameter :: BFD_HC = 4
+   integer :: BFD_ho_level = 0
+   integer(kind=8) :: BFD_ho_cnt(0:BFD_RD - 1, BFD_HC) = 0, BFD_ho_ncnt(0:BFD_RD - 1, BFD_HC) = 0
+   integer :: BFD_ho_dmax(0:BFD_RD - 1, BFD_HC) = 0, BFD_ho_rmax(0:BFD_RD - 1, BFD_HC) = 0
+   real(kind=8) :: BFD_ho_dsum(0:BFD_RD - 1, BFD_HC) = 0d0, BFD_ho_rsum(0:BFD_RD - 1, BFD_HC) = 0d0
+   real(kind=8) :: BFD_ho_nlog(0:BFD_RD - 1, BFD_HC) = 0d0, BFD_ho_nmax(0:BFD_RD - 1, BFD_HC) = 0d0
+   real(kind=8) :: BFD_ho_nmin(0:BFD_RD - 1, BFD_HC) = 1d300, BFD_ho_wlog(0:BFD_RD - 1, BFD_HC) = 0d0
 
 contains
 
@@ -348,8 +369,23 @@ contains
       call gesvd_robust(A, S, W, Z, m, n, mn, flop=flop)
       !$omp atomic
       stats%Flop_Tmp = stats%Flop_Tmp + flop
-      if (trunc) r = BF_TruncRank(S, mn, tol, scale)
+      if (trunc) r = BF_TruncRank(S, mn, tol, BFD_floor(scale))
    end subroutine BFD_svd
+
+   !>**** truncation scale of BF_TruncRank including the absolute floor BFD_abs_scale (the same as scale, or as no scale,
+   !> when the floor is 0)
+   real(kind=8) function BFD_floor(scale)
+      implicit none
+      real(kind=8), optional::scale
+      BFD_floor = BFD_abs_scale
+      if (present(scale)) BFD_floor = max(BFD_floor, scale)
+   end function BFD_floor
+
+   !>**** factor of the absolute truncation floor of a -DBFD_ABS_TRUNC build (BFD_set_absscale)
+   real(kind=8) function BFD_absfac()
+      implicit none
+      BFD_absfac = 1d0
+   end function BFD_absfac
 
    !>**** thin QR A = Q*R (A is not modified), Q: m x k, R: k x n, k = min(m,n)
    subroutine BFD_qr(A, Q, R, stats)
@@ -394,7 +430,9 @@ contains
       BFD_tolfac = 0.1d0
    end function BFD_tolfac
 
-   !>**** scale of the truncation of a product P added to an H-block C (BFD_Multiply, BFD_SubHH): P is truncated relative to
+   !>**** scale of the truncation of a product P added to a block C (H-BF: BFD_Multiply, BFD_SubHH; HODBF: the products of
+   !> BFD_apply_factor and BFD_IplusInverse, where it applies to the swaps of the BMult since the sums are recompressed
+   !> right away): P is truncated relative to
    !> max(largest singular value of the truncated block, BFD_scalefac()*||C||) (BF_TruncRank), not relative to P itself.
    !> The two-hop products of the Schur updates have butterfly ranks that grow with N at a truncation relative to P, but
    !> the growing part lies far below ||C||. The stored blocks are truncated relative to the largest singular value of
@@ -599,6 +637,126 @@ contains
          enddo
       enddo
    end function BFD_ch_maxdim
+
+   !>**** largest block dimension of the local interior factors of a distributed BMult chain
+   integer function BFD_dch_maxdim(dc)
+      implicit none
+      type(bfd_dchain)::dc
+      integer q, i, j
+      BFD_dch_maxdim = 0
+      if (.not. allocated(dc%f)) return
+      do q = 1, dc%nf
+         if (.not. allocated(dc%f(q)%blk)) cycle
+         do j = 1, size(dc%f(q)%blk, 2)
+            do i = 1, size(dc%f(q)%blk, 1)
+               if (.not. associated(dc%f(q)%blk(i, j)%matrix)) cycle
+               BFD_dch_maxdim = max(BFD_dch_maxdim, size(dc%f(q)%blk(i, j)%matrix, 1), size(dc%f(q)%blk(i, j)%matrix, 2))
+            enddo
+         enddo
+      enddo
+   end function BFD_dch_maxdim
+
+   !>**** add one distributed BMult of kind cat (largest chain block dimension dmax on this process, product rank prank)
+   !> to the HODBF statistics at level BFD_ho_level; calls and sums are counted on the head of the process group pgno
+   subroutine BFD_hostat(cat, pgno, dmax, prank, ptree)
+      implicit none
+      integer cat, pgno, dmax, prank, l, d, ierr
+      type(proctree)::ptree
+      l = min(max(BFD_ho_level, 0), BFD_RD - 1)
+      d = dmax
+      if (ptree%pgrp(pgno)%nproc > 1) call MPI_ALLREDUCE(dmax, d, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(pgno)%Comm, ierr)
+      !$omp atomic
+      BFD_ho_dmax(l, cat) = max(BFD_ho_dmax(l, cat), d)
+      !$omp atomic
+      BFD_ho_rmax(l, cat) = max(BFD_ho_rmax(l, cat), prank)
+      if (ptree%MyID == ptree%pgrp(pgno)%head) then
+         !$omp atomic
+         BFD_ho_cnt(l, cat) = BFD_ho_cnt(l, cat) + 1
+         !$omp atomic
+         BFD_ho_dsum(l, cat) = BFD_ho_dsum(l, cat) + d
+         !$omp atomic
+         BFD_ho_rsum(l, cat) = BFD_ho_rsum(l, cat) + prank
+      endif
+   end subroutine BFD_hostat
+
+   !>**** verbosity >= 2: add ||P||/||W|| of a product P of kind cat added to a block W of norm wn (absent: the identity) to
+   !> the HODBF statistics (||P|| by BFD_normest_bf; its flops are counted, as those of the other verbosity >= 2 checks)
+   subroutine BFD_horatio(cat, P, option, stats, ptree, wn_in)
+      implicit none
+      integer cat, l
+      type(matrixblock)::P
+      real(kind=8), optional::wn_in
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+      real(kind=8)::pn, wn
+      if (option%verbosity < 2) return
+      l = min(max(BFD_ho_level, 0), BFD_RD - 1)
+      pn = BFD_normest_bf(P, ptree, stats)
+      wn = 1d0
+      if (present(wn_in)) wn = wn_in
+      if (ptree%MyID /= ptree%pgrp(P%pgno)%head .or. pn <= 0d0 .or. wn <= 0d0) return
+      !$omp critical (bfd_horatio)
+      BFD_ho_ncnt(l, cat) = BFD_ho_ncnt(l, cat) + 1
+      BFD_ho_nlog(l, cat) = BFD_ho_nlog(l, cat) + log10(pn/wn)
+      BFD_ho_nmax(l, cat) = max(BFD_ho_nmax(l, cat), pn/wn)
+      BFD_ho_nmin(l, cat) = min(BFD_ho_nmin(l, cat), pn/wn)
+      BFD_ho_wlog(l, cat) = BFD_ho_wlog(l, cat) + log10(wn)
+      !$omp end critical (bfd_horatio)
+   end subroutine BFD_horatio
+
+   !>**** mode 0: reset the HODBF statistics of the distributed BMults; mode 1: print them per HODBF level together with
+   !> the largest rank of the factor at that level (frank = stats%rankmax_of_level_global_factor, reduced)
+   subroutine BFD_hostats(ptree, option, mode, frank)
+      implicit none
+      type(proctree)::ptree
+      type(Hoption)::option
+      integer mode, l, c, ierr
+      integer, optional::frank(0:)
+      character(len=34), parameter :: names(BFD_HC) = [character(len=34) :: 'Sblock (B''X, C''X)', &
+         'Schur product C12*C21', '(I+C)^-1 two-hop (B*T1, Y21*T1)', '(I+C)^-1 other (D''C, BD'', A''T)']
+      if (mode == 0) then
+         BFD_ho_level = 0
+         BFD_ho_cnt = 0
+         BFD_ho_ncnt = 0
+         BFD_ho_dmax = 0
+         BFD_ho_rmax = 0
+         BFD_ho_dsum = 0
+         BFD_ho_rsum = 0
+         BFD_ho_nlog = 0
+         BFD_ho_nmax = 0
+         BFD_ho_nmin = 1d300
+         BFD_ho_wlog = 0
+         return
+      endif
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_cnt, BFD_RD*BFD_HC, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_ncnt, BFD_RD*BFD_HC, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_dmax, BFD_RD*BFD_HC, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_rmax, BFD_RD*BFD_HC, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_dsum, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_rsum, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_nlog, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_nmax, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_nmin, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, BFD_ho_wlog, BFD_RD*BFD_HC, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID /= Main_ID .or. sum(BFD_ho_cnt) == 0) return
+      write (*, *) 'HODBF distributed BMults per level: calls, largest block dimension of the chain after the swaps (max, mean),'
+      write (*, *) ' rank of the product (max, mean); verbosity >= 2: ||P||/||W|| (geometric mean, max, min), ||W|| (geometric mean)'
+      do l = 0, BFD_RD - 1
+         if (sum(BFD_ho_cnt(l, :)) == 0) cycle
+         if (present(frank)) then
+            if (l <= ubound(frank, 1)) write (*, '(A,I3,A,I6)') ' level', l, '   largest rank of the factor:', frank(l)
+         endif
+         do c = 1, BFD_HC
+            if (BFD_ho_cnt(l, c) == 0) cycle
+            write (*, '(A36,I9,A,I6,F8.1,A,I6,F8.1)') names(c), BFD_ho_cnt(l, c), '   chain', BFD_ho_dmax(l, c), &
+               BFD_ho_dsum(l, c)/BFD_ho_cnt(l, c), '   rank', BFD_ho_rmax(l, c), BFD_ho_rsum(l, c)/BFD_ho_cnt(l, c)
+            if (option%verbosity >= 2 .and. BFD_ho_ncnt(l, c) > 0) write (*, '(A36,3Es10.2,A,Es10.2)') '||P||/||W||:', &
+               10d0**(BFD_ho_nlog(l, c)/BFD_ho_ncnt(l, c)), BFD_ho_nmax(l, c), BFD_ho_nmin(l, c), '   ||W||', &
+               10d0**(BFD_ho_wlog(l, c)/BFD_ho_ncnt(l, c))
+         enddo
+      enddo
+   end subroutine BFD_hostats
 
    !>**** mode 0: reset the BFD_Multiply breakdown; mode 1: print it per H-level of the target (calls and flops summed
    !> over processes, time max over processes)
@@ -991,7 +1149,7 @@ contains
          call gesvd_robust(Cc, S, UU, VV, ru, rv, mn, flop=flop)
          !$omp atomic
          stats%Flop_Tmp = stats%Flop_Tmp + flop
-         dims(1) = BF_TruncRank(S, mn, tol, scale)
+         dims(1) = BF_TruncRank(S, mn, tol, BFD_floor(scale))
       endif
       call MPI_Bcast(dims, 1, MPI_INTEGER, 0, comm, ierr)
       r = dims(1)
@@ -1053,7 +1211,7 @@ contains
       call BF_ChangePattern(blk, 1, 2, stats, ptree)
       call BFD_tadd(13, t1)
       t1 = MPI_Wtime()
-      call BF_MoveSingular_Ker(blk, 'T', K + 1, 0, ptree, stats, tol, truncate=.true., scale=scale)
+      call BF_MoveSingular_Ker(blk, 'T', K + 1, 0, ptree, stats, tol, truncate=.true., scale=BFD_floor(scale))
       call BFD_tadd(15, t1)
       t1 = MPI_Wtime()
       call BF_ChangePattern(blk, 2, pat0, stats, ptree)
@@ -2766,7 +2924,7 @@ contains
             allocate (TT(h1 + h2, size(Bf%blk(d, l1)%matrix, 2)))
             TT(1:h1, :) = Bf%blk(d, l1)%matrix
             TT(h1 + 1:, :) = Bf%blk(d, l2)%matrix
-            call BFD_svd(TT, W, S, Z, r, tol, .true., stats)
+            call BFD_svd(TT, W, S, Z, r, tol, .true., stats, dc%scale)
             do j = 1, r
                W(:, j) = W(:, j)*S(j)
             enddo
@@ -2909,10 +3067,12 @@ contains
    !> version of BFD_bmult (the chain lives on 2^min(p, K-2) ranks of the 2^p ranks of the group). Truncations use tol,
    !> the result is recompressed with tol unless norecomp (the caller sums and recompresses it right away).
    !> K = 0: Z = U^X (V^X^T U^Y) V^Y^T with an allreduced core.
-   subroutine BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh, norecomp)
+   subroutine BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh, norecomp, cat, scale)
       implicit none
       type(matrixblock)::X, Y, Z
       logical, optional::norecomp
+      integer, optional::cat !< kind of product for the HODBF statistics (BFD_hostat)
+      real(kind=8), optional::scale !< truncation scale (BF_TruncRank) of the swaps and of the recompression
       real(kind=8)::tol
       type(Hoption)::option
       type(Hstat)::stats
@@ -2921,10 +3081,11 @@ contains
       type(bfd_dchain)::dc
       type(matrixblock)::tmpl
       DT, allocatable::core(:, :)
-      integer K, m, it, lo, ierr, rx, ry
+      integer K, m, it, lo, ierr, rx, ry, dmax
       real(kind=8)::t0
       logical skip
       skip = .false.
+      dmax = 0
       if (present(norecomp)) skip = norecomp
       K = X%level_butterfly
       call assert(Y%level_butterfly == K .and. Y%pgno == X%pgno, 'BFD_bmult_dist: X and Y must have the same levels and process group')
@@ -2951,11 +3112,13 @@ contains
          call BFD_matset(Z%ButterflyV%blocks(1), Y%ButterflyV%blocks(1)%matrix)
          deallocate (core)
          call BF_get_rank(Z, ptree)
-         if (.not. skip) call BFD_recompress(Z, tol, option, stats, ptree)
+         if (present(cat)) call BFD_hostat(cat, X%pgno, 0, Z%rankmax, ptree)
+         if (.not. skip) call BFD_recompress(Z, tol, option, stats, ptree, scale)
          return
       endif
       t0 = MPI_Wtime()
       call BFD_dch_build(X, Y, dc, ptree, stats)
+      if (present(scale)) dc%scale = scale
       call BFD_tadd(6, t0)
       t0 = MPI_Wtime()
       call BFD_dch_lsweep(dc, K + 1, 2*K, stats)
@@ -2971,6 +3134,7 @@ contains
             call BFD_dch_swap(dc, K + 1 - it, tol, stats)
             call BFD_tadd(8, t0)
          enddo
+         if (present(cat)) dmax = max(dmax, BFD_dch_maxdim(dc))
          t0 = MPI_Wtime()
          call BFD_dch_merge(dc, K - m, stats)
          call BFD_tadd(9, t0)
@@ -2979,7 +3143,8 @@ contains
       call BFD_dch_extract(dc, X, Y, Z, option, ptree, msh)
       call BFD_dch_free(dc)
       call BFD_tadd(10, t0)
-      if (.not. skip) call BFD_recompress(Z, tol, option, stats, ptree)
+      if (present(cat)) call BFD_hostat(cat, X%pgno, dmax, Z%rankmax, ptree)
+      if (.not. skip) call BFD_recompress(Z, tol, option, stats, ptree, scale)
    end subroutine BFD_bmult_dist
 
 !======================================================================================== products and solves with H-blocks
@@ -3235,6 +3400,54 @@ contains
       deallocate (X, Y)
    end function BFD_normest
 
+   !>**** estimate of the spectral norm of a (possibly distributed) butterfly with the standard layout: BFD_normest with
+   !> BF_block_MVP_dat on the local rows and columns (collective over the process group of A)
+   real(kind=8) function BFD_normest_bf(A, ptree, stats)
+      implicit none
+      type(matrixblock)::A
+      type(proctree)::ptree
+      type(Hstat)::stats
+      integer, parameter :: nv = 2, nit = 2
+      DT, allocatable::X(:, :), Y(:, :)
+      real(kind=8), allocatable::xr(:, :)
+      real(kind=8)::nrm(nv)
+      integer m, n, j, it, ierr
+      m = A%M_loc
+      n = A%N_loc
+      allocate (X(max(n, 1), nv), Y(max(m, 1), nv), xr(max(n, 1), nv))
+      call random_number(xr)
+      X = xr - 0.5d0
+      BFD_normest_bf = 0d0
+      do it = 1, nit
+         nrm = 0
+         do j = 1, nv
+            if (n > 0) nrm(j) = sum(abs(X(1:n, j))**2)
+         enddo
+         if (ptree%pgrp(A%pgno)%nproc > 1) call MPI_ALLREDUCE(MPI_IN_PLACE, nrm, nv, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(A%pgno)%Comm, ierr)
+         do j = 1, nv
+            if (nrm(j) > 0d0) X(:, j) = X(:, j)/sqrt(nrm(j))
+         enddo
+         Y = 0
+         call BF_block_MVP_dat(A, 'N', m, n, nv, X, max(n, 1), Y, max(m, 1), BPACK_cone, BPACK_czero, ptree, stats)
+         nrm = 0
+         do j = 1, nv
+            if (m > 0) nrm(j) = sum(abs(Y(1:m, j))**2)
+         enddo
+         if (ptree%pgrp(A%pgno)%nproc > 1) call MPI_ALLREDUCE(MPI_IN_PLACE, nrm, nv, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%pgrp(A%pgno)%Comm, ierr)
+         BFD_normest_bf = max(BFD_normest_bf, sqrt(maxval(nrm)))
+         if (it == nit) exit
+#if DAT==0 || DAT==2
+         Y = conjg(Y)
+#endif
+         X = 0
+         call BF_block_MVP_dat(A, 'T', m, n, nv, Y, max(m, 1), X, max(n, 1), BPACK_cone, BPACK_czero, ptree, stats)
+#if DAT==0 || DAT==2
+         X = conjg(X)
+#endif
+      enddo
+      deallocate (X, Y, xr)
+   end function BFD_normest_bf
+
    !>**** the norm estimate of the H-block C stored by BFD_Hmat_normest, estimated and stored now if it is missing
    real(kind=8) function BFD_blknorm(C, ptree, stats)
       implicit none
@@ -3301,11 +3514,39 @@ contains
             !$omp end parallel do
          enddo
       endif
+      call BFD_set_absscale(blks, n, ptree)
       deallocate (blks)
       stats%Flop_Factor = stats%Flop_Factor + stats%Flop_Tmp - f0
       stats%Flop_Tmp = f0
       BFD_norm_time = MPI_Wtime() - t0
    end subroutine BFD_Hmat_normest
+
+   !>**** BFD_abs_scale: 0, or with -DBFD_ABS_TRUNC BFD_absfac() times the root-mean-square singular value
+   !> sqrt(sum ||Z_ii||_F^2 / N) of the diagonal leaf blocks Z_ii among the n collected H-blocks (all processes call it)
+   subroutine BFD_set_absscale(blks, n, ptree)
+      implicit none
+      type(block_ptr)::blks(:)
+      integer n
+      type(proctree)::ptree
+      integer k, ierr
+      real(kind=8)::loc(2), glo(2)
+      BFD_abs_scale = 0d0
+#ifdef BFD_ABS_TRUNC
+      loc = 0d0
+      do k = 1, n
+         if (blks(k)%ptr%style == 1 .and. blks(k)%ptr%row_group == blks(k)%ptr%col_group) then
+            if (associated(blks(k)%ptr%fullmat)) then
+               loc(1) = loc(1) + sum(abs(blks(k)%ptr%fullmat)**2)
+               loc(2) = loc(2) + blks(k)%ptr%M
+            endif
+         endif
+      enddo
+      call MPI_ALLREDUCE(loc, glo, 2, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (glo(2) > 0d0) BFD_abs_scale = BFD_absfac()*sqrt(glo(1)/glo(2))
+      if (ptree%MyID == Main_ID) write (*, '(A,Es12.4,A,I10,A)') ' BFD absolute truncation floor:', BFD_abs_scale, &
+         ' (RMS singular value of the diagonal leaf blocks,', nint(glo(2)), ' rows)'
+#endif
+   end subroutine BFD_set_absscale
 
    !>**** P = A*B for two H-blocks, at least one of them a butterfly, or two dense leaves (then P is low rank). With scale
    !> (the norm of the block P is added to), all truncations are relative to max(largest singular value, scale)
@@ -3845,22 +4086,27 @@ contains
       op%iplus(1:op%n) = iplus
    end subroutine BFD_chainset
 
-   !>**** Z = X*Y (+ W if present) by the distributed deterministic BMult (and a sum), truncated with tol
-   subroutine BFD_mul(X, Y, Z, tol, option, stats, ptree, msh, W)
+   !>**** Z = X*Y (+ W if present) by the distributed deterministic BMult (and a sum), truncated with tol; with W the swaps
+   !> of the BMult are truncated relative to BFD_scalefac()*||W|| (BFD_scalefac) and the sum relative to itself; cat: kind
+   !> of product for the HODBF statistics (BFD_hostat, BFD_horatio)
+   subroutine BFD_mul(X, Y, Z, tol, option, stats, ptree, msh, W, cat)
       implicit none
       type(matrixblock)::X, Y, Z
       type(matrixblock), optional::W
-      real(kind=8)::tol
+      integer, optional::cat
+      real(kind=8)::tol, wn
       type(Hoption)::option
       type(Hstat)::stats
       type(proctree)::ptree
       type(mesh)::msh
       if (present(W)) then
-         call BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh, norecomp=.true.)
+         wn = BFD_normest_bf(W, ptree, stats)
+         call BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh, norecomp=.true., cat=cat, scale=BFD_scalefac()*wn)
+         if (present(cat)) call BFD_horatio(cat, Z, option, stats, ptree, wn)
          call BFD_sumdist(Z, W, BPACK_cone, stats, ptree)
          call BFD_recompress(Z, tol, option, stats, ptree)
       else
-         call BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh)
+         call BFD_bmult_dist(X, Y, Z, tol, option, stats, ptree, msh, cat=cat)
       endif
    end subroutine BFD_mul
 
@@ -3954,8 +4200,8 @@ contains
       type(Hstat)::stats
       type(proctree)::ptree
       type(mesh)::msh
-      call BFD_mul(X, P, T, tol, option, stats, ptree, msh, X)
-      call BFD_mul(Q, T, Y, tol, option, stats, ptree, msh, T)
+      call BFD_mul(X, P, T, tol, option, stats, ptree, msh, X, cat=4)
+      call BFD_mul(Q, T, Y, tol, option, stats, ptree, msh, T, cat=4)
       call BFD_scale(Y, -BPACK_cone)
       if (freeT) call BF_delete(T, 1)
    end subroutine BFD_offdiag_chain
@@ -3979,7 +4225,7 @@ contains
       type(matrixblock), pointer::blocks_A, blocks_B, blocks_C, blocks_D
       type(bfd_chainop)::op
       logical dbg, conc
-      real(kind=8)::Memory, error, n1, n2, tol, tolin
+      real(kind=8)::Memory, error, n1, n2, tol, tolin, wn
       integer ii, jj, ierr, K, Kc, pgno_agg, nth, lvl
       DT::phaseA, phaseD
       DTR::ldA, ldD
@@ -4033,8 +4279,10 @@ contains
             call LR_A_minusBDinvC(partitioned_block, ptree, option, stats)
          else
             !>**** A = A - B(C + D'C)
-            call BFD_mul(blocks_D, blocks_C, T1, tolin, option, stats, ptree, msh, blocks_C)
-            call BFD_bmult_dist(blocks_B, T1, Z, tolin, option, stats, ptree, msh, norecomp=.true.)
+            call BFD_mul(blocks_D, blocks_C, T1, tolin, option, stats, ptree, msh, blocks_C, cat=4)
+            wn = BFD_normest_bf(blocks_A, ptree, stats)
+            call BFD_bmult_dist(blocks_B, T1, Z, tolin, option, stats, ptree, msh, norecomp=.true., cat=3, scale=BFD_scalefac()*wn)
+            call BFD_horatio(3, Z, option, stats, ptree, wn)
             call BF_delete(T1, 1)
             call BFD_sumdist(blocks_A, Z, -BPACK_cone, stats, ptree)
             call BF_delete(Z, 1)
@@ -4075,7 +4323,9 @@ contains
             call BFD_offdiag_chain(blocks_B, blocks_D, blocks_A, T1, Y12, .false., tolin, option, stats, ptree, msh)
             call BFD_offdiag_chain(blocks_C, blocks_A, blocks_D, T2, Y21, .true., tolin, option, stats, ptree, msh)
          endif
-         call BFD_bmult_dist(Y21, T1, Y22, tolin, option, stats, ptree, msh, norecomp=.true.)
+         wn = BFD_normest_bf(blocks_D, ptree, stats)
+         call BFD_bmult_dist(Y21, T1, Y22, tolin, option, stats, ptree, msh, norecomp=.true., cat=3, scale=BFD_scalefac()*wn)
+         call BFD_horatio(3, Y22, option, stats, ptree, wn)
          call BF_delete(T1, 1)
          call BFD_scale(Y22, -BPACK_cone)
          call BFD_sumdist(Y22, blocks_D, BPACK_cone, stats, ptree)
@@ -4178,13 +4428,15 @@ contains
       block_off2 => ho_bf1%levels(level_c)%BP_inverse_update(rowblock*2)%LL(1)%matrices_block(1)
       block_o => ho_bf1%levels(level_c)%BP_inverse_schur(rowblock)%LL(1)%matrices_block(1)
       block_o%level_butterfly = block_off1%level_butterfly
+      BFD_ho_level = level_c
 
       if (block_off1%level_butterfly == 0 .or. block_off2%level_butterfly == 0) then
          call BFD_flops_flush(stats)
          call LR_minusBC(ho_bf1, level_c, rowblock, ptree, stats)
          stats%Flop_Tmp = 0 ! LR_minusBC already added its flops to stats%Flop_Factor
       else
-         call BFD_bmult_dist(block_off1, block_off2, Zd, option%tol_rand, option, stats, ptree, msh)
+         call BFD_bmult_dist(block_off1, block_off2, Zd, option%tol_rand, option, stats, ptree, msh, cat=2)
+         call BFD_horatio(2, Zd, option, stats, ptree)
          call BFD_scale(Zd, -BPACK_cone)
          call BFD_install_dist(Zd, block_o, ptree)
       endif
@@ -4343,7 +4595,7 @@ contains
       DT, allocatable::Xv(:, :), Yv(:, :)
       integer pgno, KP, Kh, pg(2), grp(2), a, k, j, jf, e, r, n, ierr, rr(2), mm, nv, off, m, t, jj, pgno_sub, dst, nc
       integer, allocatable::rsz(:, :)
-      real(kind=8)::tolin, err, t0
+      real(kind=8)::tolin, err, t0, wn
       logical dbg
 
       B12 => ho_bf1%levels(level)%BP_inverse_update(2*ii - 1)%LL(1)%matrices_block(1)
@@ -4450,14 +4702,18 @@ contains
          enddo
          call BFD_tadd(4, t0)
          !>**** 4. Z = X1 - B12'*X2, Y1 = Z + C'*Z, Y2 = X2 - B21'*Y1
-         call BFD_bmult_dist(B12, X(2), Tm, tolin, option, stats, ptree, msh, norecomp=.true.)
+         wn = BFD_normest_bf(X(1), ptree, stats)
+         call BFD_bmult_dist(B12, X(2), Tm, tolin, option, stats, ptree, msh, norecomp=.true., cat=1, scale=BFD_scalefac()*wn)
+         call BFD_horatio(1, Tm, option, stats, ptree, wn)
          call BFD_sumdist(X(1), Tm, -BPACK_cone, stats, ptree)
          call BF_delete(Tm, 1)
          call BFD_recompress(X(1), tolin, option, stats, ptree)
-         call BFD_mul(Cs, X(1), Y1, tolin, option, stats, ptree, msh, X(1))
+         call BFD_mul(Cs, X(1), Y1, tolin, option, stats, ptree, msh, X(1), cat=1)
          call BF_delete(X(1), 1)
          call BF_copy_delete(Y1, X(1))
-         call BFD_bmult_dist(B21, X(1), Tm, tolin, option, stats, ptree, msh, norecomp=.true.)
+         wn = BFD_normest_bf(X(2), ptree, stats)
+         call BFD_bmult_dist(B21, X(1), Tm, tolin, option, stats, ptree, msh, norecomp=.true., cat=1, scale=BFD_scalefac()*wn)
+         call BFD_horatio(1, Tm, option, stats, ptree, wn)
          call BFD_sumdist(X(2), Tm, -BPACK_cone, stats, ptree)
          call BF_delete(Tm, 1)
          call BFD_recompress(X(2), tolin, option, stats, ptree)
@@ -4603,6 +4859,7 @@ contains
       real(kind=8)::t0, t1
 
       t0 = MPI_Wtime()
+      BFD_ho_level = level_c
       call Bplus_copy(ho_bf1%levels(level_c)%BP(rowblock), ho_bf1%levels(level_c)%BP_inverse_update(rowblock))
       block_o => ho_bf1%levels(level_c)%BP_inverse_update(rowblock)%LL(1)%matrices_block(1)
       K = block_o%level_butterfly

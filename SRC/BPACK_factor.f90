@@ -101,6 +101,7 @@ contains
 
         nn1 = MPI_Wtime()
         if (option%bf_algebra == 1) call BFD_timers(ptree, option, 0)
+        if (option%bf_algebra == 1) call BFD_hostats(ptree, option, 0)
 
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) ''
 
@@ -262,6 +263,7 @@ endif
         call MPI_ALLREDUCE(stats%Time_Inv, rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'computing inverse block time:', rtemp, 'Seconds'
         if (option%bf_algebra == 1) call BFD_timers(ptree, option, 1)
+        if (option%bf_algebra == 1) call BFD_hostats(ptree, option, 1, stats%rankmax_of_level_global_factor)
         call MPI_ALLREDUCE(stats%Time_random(1), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) '     Time_Init:', rtemp
         call MPI_ALLREDUCE(stats%Time_random(2), rtemp, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
