@@ -1743,7 +1743,7 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "User-supplied kernel:"
 
       if(option%ntree>1)then ! a forest of option%ntree trees, each with 2**nlevel leaves, see Forest_to_pretree
-         call assert(nlevel >= 0, 'option%ntree>1 requires nlevel>=0 (the depth of each tree) and tree holding ntree*2**nlevel leaf sizes')
+         if (nlevel < 0) call forest_input_error('option%ntree>1 requires nlevel>=0 (the depth of each tree) and tree holding ntree*2**nlevel leaf sizes')
          call Forest_to_pretree(msh, option, tree, option%ntree*2**nlevel)
       else if(nlevel>0)then
          Maxlevel = nlevel

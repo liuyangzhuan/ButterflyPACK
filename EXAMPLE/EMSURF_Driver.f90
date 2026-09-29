@@ -53,6 +53,7 @@ PROGRAM ButterflyPACK_IE_3D
 	character(len=6)  :: info_env
 	integer :: length,edge
 	integer :: ierr
+	integer :: printstruct=0 ! 1: write every block's rank before (fort.100000+rank) and after (fort.200000+rank) the factorization, and the cluster geometry (clusters.txt)
 	integer*8 oldmode,newmode
 	type(z_Hoption)::option
 	type(z_Hstat)::stats
@@ -148,6 +149,8 @@ PROGRAM ButterflyPACK_IE_3D
 							quant%wavelength=1/quant%freq/sqrt(BPACK_mu0*BPACK_eps0)
 						else if (trim(strings)=='--CFIE_alpha')then
 							read(strings1,*)quant%CFIE_alpha
+						else if (trim(strings)=='--printstruct')then
+							read(strings1,*)printstruct
 						else
 							if(ptree%MyID==Main_ID)write(*,*)'ignoring unknown quant: ', trim(strings)
 						endif
@@ -210,8 +213,23 @@ PROGRAM ButterflyPACK_IE_3D
 
 
 
+	!**** optional block-structure dump: cluster geometry, and the rank of every block before and after the factorization
+	if(printstruct==1)then
+		if(ptree%MyID==Main_ID)then
+			open(unit=77,file='clusters.txt',status='replace',action='write')
+			write(77,'(A)')'# group head tail radius center(1:3)'
+			do ii=1,msh%Maxgroup
+				if(msh%basis_group(ii)%tail>=msh%basis_group(ii)%head .and. allocated(msh%basis_group(ii)%center)) &
+					& write(77,'(3I12,4Es16.7)')ii,msh%basis_group(ii)%head,msh%basis_group(ii)%tail,msh%basis_group(ii)%radius,msh%basis_group(ii)%center(1:3)
+			enddo
+			close(77)
+		endif
+		call z_BPACK_PrintStructure(bmat,0,option,stats,ptree)
+	endif
+
 	!**** factorization phase
 	call z_BPACK_Factorization(bmat,option,stats,ptree,msh)
+	if(printstruct==1)call z_BPACK_PrintStructure(bmat,1,option,stats,ptree)
 
 
 	!**** solve phase

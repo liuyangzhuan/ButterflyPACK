@@ -1829,6 +1829,8 @@ contains
       stats%rankmax_of_level_global = 0
 
       scale_factor = 0
+#if 0
+      ! the largest diagonal entry is only needed by the (disabled) scaling of element_Zmn below; skipping it avoids one serial entry evaluation per row
       ! compute the largest diagonal entry as the scaling factor
       level=h_mat%Maxlevel
       cur => h_mat%lstblks(level)%head
@@ -1864,6 +1866,7 @@ contains
          cur => cur%next
       enddo
       if (scale_factor < BPACK_SafeUnderflow) scale_factor = 1d0
+#endif
 
       passflag = 0
       do while (passflag == 0)

@@ -51,7 +51,10 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 	type(z_proctree)::ptree
 	integer, allocatable:: groupmembers(:)
 	integer nmpi, provided
-	integer, allocatable::Permutation(:)
+	integer, allocatable::Permutation(:), leafsizes(:)
+	real(kind=8), parameter:: FOREST_NEAR_PARA = 2.2d0 ! default admissibility parameter of the forest: with 2.01 some patches touching at a corner become admissible (sphere split 8, cube split 4), with 2.1 still some at split 16
+	integer(kind=8) nweights, ncat(3)
+	integer kk, nshow
 	integer Nunk_loc
 	integer nargs, flag
 	integer v_major, v_minor, v_bugfix
@@ -82,7 +85,7 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 	option%tol_comp = 1d-6
 	option%tol_rand = option%tol_comp
 	option%tol_Rdetect = option%tol_comp*1d-1
-	option%near_para = 2.01d0
+	option%near_para = -1d0 ! set after the arguments are read: 2.01 by default, larger for the forest (see below)
 	option%sample_para = 4d0
 	option%verbosity = 1
 
@@ -150,6 +153,14 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 							read (strings1, *) quant%naive_chord
 						else if (trim(strings) == '--gmres_restart') then
 							read (strings1, *) quant%gmres_restart
+						else if (trim(strings) == '--forest') then
+							read (strings1, *) quant%forest
+						else if (trim(strings) == '--onthefly') then
+							read (strings1, *) quant%onthefly
+						else if (trim(strings) == '--faceorder') then
+							read (strings1, *) quant%faceorder
+						else if (trim(strings) == '--printstruct') then
+							read (strings1, *) quant%printstruct
 						else
 							if (ptree%MyID == Main_ID) write (*, *) 'ignoring unknown quant: ', trim(strings)
 						endif
@@ -167,6 +178,16 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 			ii = ii + 1
 		endif
 	enddo
+
+	if (option%near_para < 0) then
+		if (quant%forest == 1) then
+			! the forest leaves are whole patches: with a slightly stricter admissibility than 2.01, patches touching at a corner
+			! stay inadmissible, so every self/near pair lies in a dense leaf block and its weights are needed only there
+			option%near_para = FOREST_NEAR_PARA
+		else
+			option%near_para = 2.01d0
+		endif
+	endif
 
 	quant%dinc = (/sin(quant%inc_theta*BPACK_pi/180d0)*cos(quant%inc_phi*BPACK_pi/180d0), &
 		&	sin(quant%inc_theta*BPACK_pi/180d0)*sin(quant%inc_phi*BPACK_pi/180d0), cos(quant%inc_theta*BPACK_pi/180d0)/)
@@ -186,24 +207,77 @@ PROGRAM ButterflyPACK_Acoustic_SURF_CHEB
 	t2 = MPI_Wtime()
 	if (ptree%MyID == Main_ID) write (*, *) 'geometry and near-field precomputation:', t2 - t1, 'Seconds'
 
-	!**** register the user-defined function and type in ker
+	!**** register the user-defined functions and type in ker
 	ker%QuantApp => quant
 	ker%FuncZmn => Zelem_Acoustic_CHEB
+	ker%FuncZmnBlock => Zelem_Acoustic_CHEB_block
+	if (quant%onthefly == 1 .and. option%elem_extract == 0) then
+		option%elem_extract = 2 ! submatrix extraction lets each near-field weight row be computed once per submatrix
+		if (ptree%MyID == Main_ID) write (*, *) 'on-the-fly near field: using option%elem_extract=2'
+	endif
 
 	!**** initialization of the construction phase
 	allocate (Permutation(quant%Nunk))
-	call z_PrintOptions(option, ptree)
-	call z_BPACK_construction_Init(quant%Nunk, Permutation, Nunk_loc, bmat, option, stats, msh, ker, ptree, Coordinates=quant%xyz)
+	if (quant%forest == 1) then ! the patch hierarchy as a forest of nbase trees, one leaf (N*N nodes) per patch
+		option%ntree = quant%nbase
+		option%Nmin_leaf = quant%N*quant%N
+		allocate (leafsizes(quant%npatch))
+		leafsizes = quant%N*quant%N
+		call z_PrintOptions(option, ptree)
+		call z_BPACK_construction_Init(quant%Nunk, Permutation, Nunk_loc, bmat, option, stats, msh, ker, ptree, Coordinates=quant%xyz, tree=leafsizes)
+		deallocate (leafsizes)
+	else
+		call z_PrintOptions(option, ptree)
+		call z_BPACK_construction_Init(quant%Nunk, Permutation, Nunk_loc, bmat, option, stats, msh, ker, ptree, Coordinates=quant%xyz)
+	endif
 	deallocate (Permutation) ! caller can use this permutation vector if needed
 
+	nshow = 0
 	!**** computation of the construction phase
 	call z_BPACK_construction_Element(bmat, option, stats, msh, ker, ptree)
+	if (quant%onthefly == 1) then
+		call MPI_ALLREDUCE(quant%nweights_computed, nweights, 1, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+		call MPI_ALLREDUCE(quant%nweights_cat, ncat, 3, MPI_INTEGER8, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) write (*, '(A,I12,A,F10.3,A)') ' near-field weight rows computed during construction:', nweights, &
+			&	' (', dble(nweights)/quant%npair, ' per near pair)'
+		if (ptree%MyID == Main_ID) write (*, '(A,3I12)') '   requested by leaf-patch blocks / other submatrices / single entries:', ncat
+		call MPI_ALLREDUCE(MPI_IN_PLACE, quant%paircount, quant%npair, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+		if (ptree%MyID == Main_ID) then
+			write (*, '(A,4I10)') '   near pairs computed 0/1/2/>2 times in leaf-patch blocks:', count(quant%paircount == 0), count(quant%paircount == 1), &
+				&	count(quant%paircount == 2), count(quant%paircount > 2)
+			if (quant%forest == 1 .and. count(quant%paircount /= 1) > 0) write (*, '(A,I10,A)') ' WARNING:', count(quant%paircount /= 1), &
+				&	' near pairs are not in exactly one dense leaf block (some lie in admissible blocks); increase -option --near_para'
+			do ii = 1, quant%Nunk
+				do kk = quant%near_ptr(ii), quant%near_ptr(ii + 1) - 1
+					if (quant%paircount(kk) > 1 .and. nshow < 5) then
+						nshow = nshow + 1
+						write (*, '(A,I8,A,I6,A,I6,A,I3)') '     e.g. target', ii, ' (patch', (ii - 1)/quant%N**2 + 1, ') and patch', quant%near_q(kk), ': computed', quant%paircount(kk)
+					endif
+				enddo
+			enddo
+		endif
+	endif
 
 	!**** forward-map test (sphere only), before the factorization overwrites the forward operator
 	call forward_map_test_CHEB(bmat, option, msh, quant, ptree, stats)
 
+	!**** optional block-structure dump: cluster geometry, and the rank of every block before and after the factorization
+	if (quant%printstruct == 1) then
+		if (ptree%MyID == Main_ID) then
+			open (unit=77, file='clusters.txt', status='replace', action='write')
+			write (77, '(A)') '# group head tail radius center(1:3)'
+			do ii = 1, msh%Maxgroup
+				if (msh%basis_group(ii)%tail >= msh%basis_group(ii)%head .and. allocated(msh%basis_group(ii)%center)) &
+					&	write (77, '(3I12,4Es16.7)') ii, msh%basis_group(ii)%head, msh%basis_group(ii)%tail, msh%basis_group(ii)%radius, msh%basis_group(ii)%center(1:3)
+			enddo
+			close (77)
+		endif
+		call z_BPACK_PrintStructure(bmat, 0, option, stats, ptree)
+	endif
+
 	!**** factorization phase
 	call z_BPACK_Factorization(bmat, option, stats, ptree, msh)
+	if (quant%printstruct == 1) call z_BPACK_PrintStructure(bmat, 1, option, stats, ptree)
 
 	!**** solve phase
 	call solve_scattering_CHEB(bmat, option, msh, quant, ptree, stats)

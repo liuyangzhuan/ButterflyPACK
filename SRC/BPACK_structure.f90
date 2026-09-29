@@ -504,16 +504,17 @@ end function distance_geo
       integer nleaf, tree(nleaf)
       integer d, D0, nl
 
-      call assert(option%format == HMAT .or. option%format == BLR, 'option%ntree>1 (a forest of cluster trees) is only supported by the HMAT and BLR formats')
-      call assert(mod(nleaf, option%ntree) == 0, 'option%ntree must divide the number of leaves in tree')
+      ! user input: checked in all builds (assert is compiled out with NDEBUG)
+      if (option%format /= HMAT .and. option%format /= BLR) call forest_input_error('option%ntree>1 (a forest of cluster trees) is only supported by the HMAT and BLR formats')
+      if (mod(nleaf, option%ntree) /= 0) call forest_input_error('option%ntree must divide the number of leaves in tree')
       nl = nleaf/option%ntree
       d = 0
       do while (2**d < nl)
          d = d + 1
       enddo
-      call assert(2**d == nl, 'each tree of the forest must be a complete binary tree: the number of leaves per tree must be a power of two')
-      call assert(minval(tree(1:nleaf)) > 0, 'zero leaf sizes are not allowed in a forest')
-      call assert(sum(tree(1:nleaf)) == msh%Nunk, 'the leaf sizes of the forest must add up to the matrix size')
+      if (2**d /= nl) call forest_input_error('each tree of the forest must be a complete binary tree: the number of leaves per tree must be a power of two')
+      if (minval(tree(1:nleaf)) <= 0) call forest_input_error('zero leaf sizes are not allowed in a forest')
+      if (sum(tree(1:nleaf)) /= msh%Nunk) call forest_input_error('the leaf sizes of the forest must add up to the matrix size')
       D0 = 0
       do while (2**D0 < option%ntree)
          D0 = D0 + 1
@@ -525,6 +526,14 @@ end function distance_geo
       msh%pretree = 0
       msh%pretree(1:nleaf) = tree(1:nleaf)
    end subroutine Forest_to_pretree
+
+   subroutine forest_input_error(msg)
+      implicit none
+      character(*)::msg
+      integer ierr
+      write (*, *) 'ButterflyPACK error: ', msg
+      call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+   end subroutine forest_input_error
 
    subroutine Cluster_partition(bmat, option, msh, ker, stats, ptree)
 
@@ -3842,7 +3851,7 @@ end function distance_geo
                exit
             endif
          enddo
-         call assert(mypgno > 0, 'no single-process group found for this rank')
+         if (mypgno == 0) call forest_input_error('no single-process group found for this rank')
          h_mat%idxs = msh%idxs
          h_mat%idxe = msh%idxe
       else
