@@ -24,6 +24,9 @@
 module Acoustic_SURF_MODULE_CHEB
 use z_BPACK_DEFS
 use z_MISC_Utilities
+#ifdef HAVE_OPENMP
+use omp_lib
+#endif
 implicit none
 
 	!**** analytic geometries
@@ -32,6 +35,13 @@ implicit none
 	integer, parameter:: PATCH_AFFINE = 1, PATCH_CUBEDSPHERE = 2, PATCH_DISKSIDE = 3
 	!**** unknowns: physical density phi, or edge-resolved density psi = eta_s'(u)*eta_t'(v)*phi
 	integer, parameter:: UNK_PHI = 0, UNK_PSI = 1
+
+	!**** per-thread cache of one weight row for single-entry requests in the on-the-fly mode
+	integer, save:: cache_m = -1, cache_kk = -1
+	complex(kind=8), allocatable, save:: cache_W(:)
+#ifdef HAVE_OPENMP
+	!$omp threadprivate(cache_m, cache_kk, cache_W)
+#endif
 
 	!**** one logically-quadrilateral patch r(s,t), (s,t) in [-1,1]^2
 	type patch_CHEB
@@ -64,6 +74,10 @@ implicit none
 		real(kind=8):: pedge = 2d0 ! exponent p of the edge change of variables eta
 		real(kind=8):: delta = -1d0 ! proximity distance; <0: half the typical patch size
 		integer:: naive_chord = 0 ! 1: form self-patch chords by subtracting coordinates (for testing only)
+		integer:: forest = 0 ! 1: order the patches by the patch hierarchy (each base patch split 2x2 recursively, Morton order) and pass it to ButterflyPACK as a forest of cluster trees (option%ntree=nbase)
+		integer:: myid = 0 ! MPI rank of this process
+		integer:: nbase = 1 ! number of base patches (sphere/cube 6, disk 5, plate 1), i.e. the roots of the forest
+		integer:: onthefly = 0 ! 1: compute each self/near-singular weight row when its matrix entries are requested (no replicated weights); 0: precompute and replicate all of them
 
 		integer:: npatch = 0
 		type(patch_CHEB), allocatable:: patches(:)
@@ -80,12 +94,18 @@ implicit none
 
 		integer, allocatable:: near_ptr(:) ! near pairs of target m are near_ptr(m):near_ptr(m+1)-1
 		integer, allocatable:: near_q(:) ! patch of each near pair
-		complex(kind=8), allocatable:: near_W(:) ! N*N weights of each near pair
+		complex(kind=8), allocatable:: near_W(:) ! N*N weights of each near pair (precomputed mode)
+		real(kind=8), allocatable:: near_ub(:), near_vb(:) ! (u,v) of the target's closest point on the patch of each near pair (on-the-fly mode)
 		integer:: npair = 0
+		integer(kind=8):: nweights_computed = 0 ! number of weight rows computed on the fly (diagnostic)
+		integer(kind=8):: nweights_cat(3) = 0 ! ... requested by: 1 whole leaf-patch blocks, 2 other submatrices, 3 single entries
+		integer, allocatable:: paircount(:) ! diagnostic: number of on-the-fly computations of each near pair within whole leaf-patch blocks
 
 		integer:: eigtest = 5 ! degree of the spherical-harmonic forward-map test (sphere only), 0: skip
 		integer:: nfar = 181 ! number of far-field directions
 		integer:: gmres_restart = 0 ! >0: GMRES restart length when precon/=DIRECT (0: ButterflyPACK's default solve path, GMRES(30))
+		integer:: faceorder = 0 ! order of the six faces of the sphere/cube (the forest's base patches): 0: +x,-x,+y,-y,+z,-z; 1: sweep +z,+x,+y,-x,-y,-z
+		integer:: printstruct = 0 ! 1: write every block's rank before (fort.100000+rank) and after (fort.200000+rank) the factorization, and the cluster geometry (clusters.txt)
 	end type quant_ACOUSTIC_CHEB
 
 contains
@@ -107,6 +127,8 @@ contains
 		if (allocated(quant%near_ptr)) deallocate (quant%near_ptr)
 		if (allocated(quant%near_q)) deallocate (quant%near_q)
 		if (allocated(quant%near_W)) deallocate (quant%near_W)
+		if (allocated(quant%near_ub)) deallocate (quant%near_ub)
+		if (allocated(quant%near_vb)) deallocate (quant%near_vb)
 	end subroutine delete_quant_Acoustic_CHEB
 
 	!**** user-defined subroutine to sample Z_mn
@@ -130,26 +152,67 @@ contains
 		implicit none
 		type(quant_ACOUSTIC_CHEB):: quant
 		integer m, n, q, ij, N2, kk
-		real(kind=8) d(3), R, dn
-		complex(kind=8) value
+		complex(kind=8) base
 
 		N2 = quant%N*quant%N
 		q = (n - 1)/N2 + 1
 		ij = n - (q - 1)*N2
-		value = 0d0
-		kk = quant%near_ptr(m)
-		do while (kk < quant%near_ptr(m + 1))
-			if (quant%near_q(kk) == q) exit
-			kk = kk + 1
-		enddo
-		if (kk < quant%near_ptr(m + 1)) then ! self or near-singular: precomputed rectangular-polar weights
-			value = quant%near_W(int(kk - 1, 8)*N2 + ij)
+		kk = near_pair_CHEB(quant, m, q)
+		if (kk > 0) then ! self or near-singular: rectangular-polar weights
+			if (quant%onthefly == 1) then ! a one-row cache per thread serves consecutive columns of the same patch
+				if (cache_m /= m .or. cache_kk /= kk) then
+					if (.not. allocated(cache_W)) allocate (cache_W(N2))
+					if (size(cache_W) /= N2) then
+						deallocate (cache_W)
+						allocate (cache_W(N2))
+					endif
+					call near_weights_row_CHEB(quant, m, kk, cache_W, 3)
+					cache_m = m
+					cache_kk = kk
+				endif
+				base = cache_W(ij)
+			else
+				base = quant%near_W(int(kk - 1, 8)*N2 + ij)
+			endif
 		else ! far: Fejer's rule
-			d = quant%xyz(:, m) - quant%xyz(:, n)
-			R = sqrt(sum(d**2))
-			dn = dot_product(d, quant%nrm(:, n))
-			value = kernel_H(quant%wavenum, R, dn, quant%closed)*quant%Jw(n)
+			base = Zfar_CHEB(quant, m, n)
 		endif
+		Zentry_CHEB = Zscale_CHEB(quant, m, n, base)
+	end function Zentry_CHEB
+
+	!**** index of the near pair (m, patch q) in near_q, or 0 if patch q is far from target m
+	integer function near_pair_CHEB(quant, m, q)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer m, q, kk
+		near_pair_CHEB = 0
+		do kk = quant%near_ptr(m), quant%near_ptr(m + 1) - 1
+			if (quant%near_q(kk) == q) then
+				near_pair_CHEB = kk
+				exit
+			endif
+		enddo
+	end function near_pair_CHEB
+
+	!**** far interaction: kernel times the Fejer weight of source node n
+	complex(kind=8) function Zfar_CHEB(quant, m, n)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer m, n
+		real(kind=8) d(3), R, dn
+		d = quant%xyz(:, m) - quant%xyz(:, n)
+		R = sqrt(sum(d**2))
+		dn = dot_product(d, quant%nrm(:, n))
+		Zfar_CHEB = kernel_H(quant%wavenum, R, dn, quant%closed)*quant%Jw(n)
+	end function Zfar_CHEB
+
+	!**** apply the edge factor of the chosen unknown and the 1/2 identity term (closed surfaces)
+	complex(kind=8) function Zscale_CHEB(quant, m, n, base)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer m, n
+		complex(kind=8) base, value
+		value = base
 		if (quant%unknown == UNK_PHI) value = value*quant%e(n)
 		if (quant%closed .and. m == n) then
 			if (quant%unknown == UNK_PHI) then
@@ -158,8 +221,172 @@ contains
 				value = value + 0.5d0/quant%e(n)
 			endif
 		endif
-		Zentry_CHEB = value
-	end function Zentry_CHEB
+		Zscale_CHEB = value
+	end function Zscale_CHEB
+
+	!**** on-the-fly mode: the N*N rectangular-polar weights of near pair kk (target m)
+	subroutine near_weights_row_CHEB(quant, m, kk, W, cat)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer m, kk, q, own, cat
+		complex(kind=8) W(quant%N*quant%N)
+		q = quant%near_q(kk)
+		own = merge(1, 0, q == (m - 1)/(quant%N*quant%N) + 1)
+		call pair_weights_CHEB(quant, m, q, quant%near_ub(kk), quant%near_vb(kk), own, W)
+#ifdef HAVE_OPENMP
+		!$omp atomic
+#endif
+		quant%nweights_computed = quant%nweights_computed + 1
+#ifdef HAVE_OPENMP
+		!$omp atomic
+#endif
+		quant%nweights_cat(cat) = quant%nweights_cat(cat) + 1
+		if (cat == 1 .and. allocated(quant%paircount)) then
+#ifdef HAVE_OPENMP
+			!$omp atomic
+#endif
+			quant%paircount(kk) = quant%paircount(kk) + 1
+		endif
+	end subroutine near_weights_row_CHEB
+
+	!**** user-defined subroutine to sample a list of submatrices (ButterflyPACK's FuncZmnBlock interface, used with option%elem_extract>=1).
+	! allrows, allcols hold the (natural-order) row and column indices of all Ninter submatrices; alldat_loc receives the owned submatrices, each column major.
+	subroutine Zelem_Acoustic_CHEB_block(Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps, quant)
+		implicit none
+		class(*), pointer :: quant
+		integer:: Ninter
+		integer:: allrows(:), allcols(:)
+		complex(kind=8), target:: alldat_loc(:)
+		integer:: colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
+		integer:: Npmap, pmaps(Npmap, 3)
+		integer nn, nn1, nloc, pp, nr, nc, nthreads
+		integer(kind=8) idx_row, idx_col, idx_val
+		integer(kind=8), allocatable:: roff(:), coff(:), voff(:)
+		integer, allocatable:: inter_map(:)
+
+		select TYPE (quant)
+		type is (quant_ACOUSTIC_CHEB)
+			allocate (roff(Ninter), coff(Ninter), voff(Ninter), inter_map(Ninter))
+			nloc = 0
+			idx_row = 0
+			idx_col = 0
+			idx_val = 0
+			do nn = 1, Ninter
+				pp = pgidx(nn)
+				if (pmaps(pp, 1)*pmaps(pp, 2) /= 1) then
+					write (*, *) 'Zelem_Acoustic_CHEB_block: submatrices shared by several processes are not supported'
+					stop
+				endif
+				if (pmaps(pp, 3) == quant%myid) then
+					nloc = nloc + 1
+					inter_map(nloc) = nn
+					roff(nloc) = idx_row
+					coff(nloc) = idx_col
+					voff(nloc) = idx_val
+					idx_val = idx_val + int(rowidx(nn), 8)*colidx(nn)
+				endif
+				idx_row = idx_row + rowidx(nn)
+				idx_col = idx_col + colidx(nn)
+			enddo
+			nthreads = 1
+#ifdef HAVE_OPENMP
+			nthreads = omp_get_max_threads()
+#endif
+			if (nloc >= nthreads) then ! many submatrices: one thread per submatrix
+#ifdef HAVE_OPENMP
+			!$omp parallel do default(shared) private(nn1, nr, nc) schedule(dynamic,1)
+#endif
+			do nn1 = 1, nloc
+				nr = rowidx(inter_map(nn1))
+				nc = colidx(inter_map(nn1))
+				call Zsubmatrix_CHEB(quant, nr, nc, allrows(roff(nn1) + 1:roff(nn1) + nr), allcols(coff(nn1) + 1:coff(nn1) + nc), &
+					&	alldat_loc(voff(nn1) + 1:voff(nn1) + int(nr, 8)*nc), 0)
+			enddo
+#ifdef HAVE_OPENMP
+			!$omp end parallel do
+#endif
+			else ! few submatrices (ButterflyPACK's H construction passes one block at a time): threads share the rows of each
+			do nn1 = 1, nloc
+				nr = rowidx(inter_map(nn1))
+				nc = colidx(inter_map(nn1))
+				call Zsubmatrix_CHEB(quant, nr, nc, allrows(roff(nn1) + 1:roff(nn1) + nr), allcols(coff(nn1) + 1:coff(nn1) + nc), &
+					&	alldat_loc(voff(nn1) + 1:voff(nn1) + int(nr, 8)*nc), 1)
+			enddo
+			endif
+			deallocate (roff, coff, voff, inter_map)
+		class default
+			write (*, *) "unexpected type"
+			stop
+		end select
+	end subroutine Zelem_Acoustic_CHEB_block
+
+	!**** one submatrix Z(rows, cols): each needed weight row (target, near patch) is computed once
+	subroutine Zsubmatrix_CHEB(quant, nr, nc, rows, cols, dat, par)
+		implicit none
+		type(quant_ACOUSTIC_CHEB):: quant
+		integer nr, nc, rows(nr), cols(nc), par
+		complex(kind=8) dat(nr, nc)
+		integer i, j, m, n, q, k, kk, k0, nk, N2, cat
+		complex(kind=8) base
+		complex(kind=8), allocatable:: Wrows(:, :)
+		integer, allocatable:: have(:)
+
+		N2 = quant%N*quant%N
+		cat = 2 ! a whole leaf-patch block: all N*N rows of one patch against all N*N columns of one patch
+		if (nr == N2 .and. nc == N2) then
+			if (minval(rows) == maxval(rows) - N2 + 1 .and. mod(minval(rows) - 1, N2) == 0 .and. &
+				&	minval(cols) == maxval(cols) - N2 + 1 .and. mod(minval(cols) - 1, N2) == 0) cat = 1
+		endif
+#ifdef HAVE_OPENMP
+		!$omp parallel if(par == 1) default(shared) private(i, j, m, n, q, k, kk, k0, nk, base, Wrows, have) firstprivate(cat)
+#endif
+		allocate (Wrows(merge(N2, 1, quant%onthefly == 1), 8), have(8))
+#ifdef HAVE_OPENMP
+		!$omp do schedule(dynamic,1)
+#endif
+		do i = 1, nr
+			m = rows(i)
+			k0 = quant%near_ptr(m)
+			nk = quant%near_ptr(m + 1) - k0
+			if (nk > size(have)) then
+				deallocate (Wrows, have)
+				allocate (Wrows(merge(N2, 1, quant%onthefly == 1), nk), have(nk))
+			endif
+			have(1:nk) = 0
+			do j = 1, nc
+				n = cols(j)
+				q = (n - 1)/N2 + 1
+				kk = 0
+				do k = 1, nk
+					if (quant%near_q(k0 + k - 1) == q) then
+						kk = k
+						exit
+					endif
+				enddo
+				if (kk > 0) then
+					if (quant%onthefly == 1) then
+						if (have(kk) == 0) then
+							call near_weights_row_CHEB(quant, m, k0 + kk - 1, Wrows(:, kk), cat)
+							have(kk) = 1
+						endif
+						base = Wrows(n - (q - 1)*N2, kk)
+					else
+						base = quant%near_W(int(k0 + kk - 2, 8)*N2 + n - (q - 1)*N2)
+					endif
+				else
+					base = Zfar_CHEB(quant, m, n)
+				endif
+				dat(i, j) = Zscale_CHEB(quant, m, n, base)
+			enddo
+		enddo
+#ifdef HAVE_OPENMP
+		!$omp end do
+#endif
+		deallocate (Wrows, have)
+#ifdef HAVE_OPENMP
+		!$omp end parallel
+#endif
+	end subroutine Zsubmatrix_CHEB
 
 	!**** kernel H(x,y): dG/dn_y - ik G (closed) or G (open); dn = (x-y).n_y
 	complex(kind=8) function kernel_H(k, R, dn, closed)
@@ -461,13 +688,30 @@ contains
 		dist = sqrt(sum((r - x)**2))
 	end subroutine patch_project
 
+	!**** position (1..S*S) of sub-patch (is,js) within its base patch: row-major, or for the forest the Morton order of the
+	! 2x2 patch hierarchy written as a binary tree that splits s first and then t at each level (so every tree node is a contiguous range)
+	integer function subpatch_pos(is, js, S, forest)
+		implicit none
+		integer is, js, S, forest, b
+		if (forest == 0) then
+			subpatch_pos = (js - 1)*S + is
+		else
+			subpatch_pos = 1
+			b = 0
+			do while (2**b < S)
+				subpatch_pos = subpatch_pos + ibits(is - 1, b, 1)*2**(2*b + 1) + ibits(js - 1, b, 1)*2**(2*b)
+				b = b + 1
+			enddo
+		endif
+	end function subpatch_pos
+
 	!**** build the patches of an analytic geometry
 	subroutine geo_modeling_CHEB(quant, ptree)
 		implicit none
 		type(quant_ACOUSTIC_CHEB):: quant
 		type(z_proctree):: ptree
 		real(kind=8) fc(3, 6), fa1(3, 6), fa2(3, 6), h, s, t, r(3), rs(3), rt(3), rot(2, 4)
-		integer f, is, js, q, ii, jj, k
+		integer f, fpos, forder(6), is, js, q, ii, jj, k
 		type(patch_CHEB):: P
 
 		! face axes c, a1, a2 with a1 x a2 = c (outward normals)
@@ -475,18 +719,26 @@ contains
 		fa1 = reshape((/0, 1, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0/), (/3, 6/))
 		fa2 = reshape((/0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0/), (/3, 6/))
 		rot = reshape((/1, 0, 0, 1, -1, 0, 0, -1/), (/2, 4/))
+		forder = (/1, 2, 3, 4, 5, 6/)
+		if (quant%faceorder == 1) forder = (/5, 1, 3, 2, 4, 6/)
 		h = 1d0/quant%split
+		if (quant%forest == 1 .and. iand(quant%split, quant%split - 1) /= 0) then
+			if (ptree%MyID == Main_ID) write (*, *) 'the forest ordering requires split to be a power of two'
+			stop
+		endif
 
 		select case (quant%geo)
 		case (CHEB_SPHERE)
 			quant%closed = .true.
 			quant%npatch = 6*quant%split**2
+			quant%nbase = 6
 			allocate (quant%patches(quant%npatch))
 			q = 0
-			do f = 1, 6
+			do fpos = 1, 6
+			f = forder(fpos)
 			do js = 1, quant%split
 			do is = 1, quant%split
-				q = q + 1
+				q = (fpos - 1)*quant%split**2 + subpatch_pos(is, js, quant%split, quant%forest)
 				P = patch_CHEB()
 				P%kind = PATCH_CUBEDSPHERE
 				P%planar = .false.
@@ -505,12 +757,14 @@ contains
 		case (CHEB_CUBE)
 			quant%closed = .true.
 			quant%npatch = 6*quant%split**2
+			quant%nbase = 6
 			allocate (quant%patches(quant%npatch))
 			q = 0
-			do f = 1, 6
+			do fpos = 1, 6
+			f = forder(fpos)
 			do js = 1, quant%split
 			do is = 1, quant%split
-				q = q + 1
+				q = (fpos - 1)*quant%split**2 + subpatch_pos(is, js, quant%split, quant%forest)
 				P = patch_CHEB()
 				P%kind = PATCH_AFFINE
 				P%c = quant%radius*fc(:, f) + quant%radius*(-1d0 + (2*is - 1)*h)*fa1(:, f) + quant%radius*(-1d0 + (2*js - 1)*h)*fa2(:, f)
@@ -524,11 +778,12 @@ contains
 		case (CHEB_PLATE)
 			quant%closed = .false.
 			quant%npatch = quant%split**2
+			quant%nbase = 1
 			allocate (quant%patches(quant%npatch))
 			q = 0
 			do js = 1, quant%split
 			do is = 1, quant%split
-				q = q + 1
+				q = subpatch_pos(is, js, quant%split, quant%forest)
 				P = patch_CHEB()
 				P%kind = PATCH_AFFINE
 				P%c = (/quant%radius*(-1d0 + (2*is - 1)*h), quant%radius*(-1d0 + (2*js - 1)*h), 0d0/)
@@ -541,11 +796,12 @@ contains
 		case (CHEB_DISK) ! central square of half width radius/2 plus four blended side patches; the circle is the only edge
 			quant%closed = .false.
 			quant%npatch = 5*quant%split**2
+			quant%nbase = 5
 			allocate (quant%patches(quant%npatch))
 			q = 0
 			do js = 1, quant%split
 			do is = 1, quant%split
-				q = q + 1
+				q = subpatch_pos(is, js, quant%split, quant%forest)
 				P = patch_CHEB()
 				P%kind = PATCH_AFFINE
 				P%c = (/0.5d0*quant%radius*(-1d0 + (2*is - 1)*h), 0.5d0*quant%radius*(-1d0 + (2*js - 1)*h), 0d0/)
@@ -557,7 +813,7 @@ contains
 			do k = 1, 4
 			do js = 1, quant%split
 			do is = 1, quant%split
-				q = q + 1
+				q = k*quant%split**2 + subpatch_pos(is, js, quant%split, quant%forest)
 				P = patch_CHEB()
 				P%kind = PATCH_DISKSIDE
 				P%a1 = (/rot(1, k), rot(2, k), 0d0/)
@@ -614,6 +870,7 @@ contains
 
 		N = quant%N
 		N2 = N*N
+		quant%myid = ptree%MyID
 		allocate (quant%u(N), quant%wu(N))
 		call fejer_rule(N, quant%u, quant%wu)
 		allocate (quant%tb(quant%Nbeta), quant%wb(quant%Nbeta))
@@ -762,7 +1019,8 @@ contains
 			enddo
 		enddo
 
-		!**** pass 2: rectangular-polar weights of the local pairs
+		!**** pass 2: rectangular-polar weights of the local pairs (precomputed mode only)
+		if (quant%onthefly == 0) then
 		allocate (Wloc(N2, max(1, npl)))
 #ifdef HAVE_OPENMP
 		!$omp parallel do default(shared) private(k) schedule(dynamic,4)
@@ -773,6 +1031,7 @@ contains
 #ifdef HAVE_OPENMP
 		!$omp end parallel do
 #endif
+		endif
 
 		!**** replicate on all ranks: pair counts per target, pair patches, and weights
 		allocate (tcounts(nproc), tdispls(nproc), pcounts(nproc), pdispls(nproc), wcounts(nproc), wdispls(nproc))
@@ -788,7 +1047,7 @@ contains
 			pdispls(r) = pdispls(r - 1) + pcounts(r - 1)
 		enddo
 		quant%npair = pdispls(nproc) + pcounts(nproc)
-		if (dble(quant%npair)*N2 > dble(huge(0))) then
+		if (quant%onthefly == 0 .and. dble(quant%npair)*N2 > dble(huge(0))) then
 			if (myid == Main_ID) write (*, *) 'near-field weights exceed the 32-bit MPI count limit; use fewer nodes per patch'
 			stop
 		endif
@@ -799,17 +1058,31 @@ contains
 		enddo
 		allocate (quant%near_q(quant%npair))
 		call MPI_ALLGATHERV(pq, npl, MPI_INTEGER, quant%near_q, pcounts, pdispls, MPI_INTEGER, ptree%Comm, ierr)
-		wcounts = pcounts*N2
-		wdispls = pdispls*N2
-		allocate (quant%near_W(int(quant%npair, 8)*N2))
-		call MPI_ALLGATHERV(Wloc, npl*N2, MPI_DOUBLE_COMPLEX, quant%near_W, wcounts, wdispls, MPI_DOUBLE_COMPLEX, ptree%Comm, ierr)
+		if (quant%onthefly == 0) then
+			wcounts = pcounts*N2
+			wdispls = pdispls*N2
+			allocate (quant%near_W(int(quant%npair, 8)*N2))
+			call MPI_ALLGATHERV(Wloc, npl*N2, MPI_DOUBLE_COMPLEX, quant%near_W, wcounts, wdispls, MPI_DOUBLE_COMPLEX, ptree%Comm, ierr)
+			deallocate (Wloc)
+		else ! keep only the closest points; the weights are computed when their entries are requested
+			allocate (quant%near_ub(quant%npair), quant%near_vb(quant%npair))
+			allocate (quant%paircount(quant%npair))
+			quant%paircount = 0
+			call MPI_ALLGATHERV(pub, npl, MPI_DOUBLE_PRECISION, quant%near_ub, pcounts, pdispls, MPI_DOUBLE_PRECISION, ptree%Comm, ierr)
+			call MPI_ALLGATHERV(pvb, npl, MPI_DOUBLE_PRECISION, quant%near_vb, pcounts, pdispls, MPI_DOUBLE_PRECISION, ptree%Comm, ierr)
+		endif
 
-		deallocate (pl, pq, pown, pub, pvb, cnt_loc, Wloc, tcounts, tdispls, pcounts, pdispls, wcounts, wdispls, nnear)
+		deallocate (pl, pq, pown, pub, pvb, cnt_loc, tcounts, tdispls, pcounts, pdispls, wcounts, wdispls, nnear)
 		t2 = MPI_Wtime()
-		bytes = dble(quant%npair)*N2*16d0
 		if (myid == Main_ID) then
 			write (*, *) 'near-field pairs:', quant%npair, ' (', dble(quant%npair)/quant%Nunk, ' per target)'
-			write (*, '(A,F10.3,A,F10.3,A)') ' near-field weights: ', bytes/1024d0**2, ' MB per rank, precomputed in ', t2 - t1, ' seconds'
+			if (quant%onthefly == 0) then
+				bytes = dble(quant%npair)*N2*16d0
+				write (*, '(A,F10.3,A,F10.3,A)') ' near-field weights: ', bytes/1024d0**2, ' MB per rank, precomputed in ', t2 - t1, ' seconds'
+			else
+				bytes = dble(quant%npair)*20d0
+				write (*, '(A,F10.3,A,F10.3,A)') ' near-field pairs (weights computed on the fly): ', bytes/1024d0**2, ' MB per rank, found in ', t2 - t1, ' seconds'
+			endif
 		endif
 	end subroutine precompute_nearfield_CHEB
 
