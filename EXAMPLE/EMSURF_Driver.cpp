@@ -319,20 +319,21 @@ int main(int argc, char** argv) {
         &nunk, &dimension, coordinates.data(), &dummy_nearest_neighbor, &nlevel, tree,
         permutation.data(), &local_size, &matrix, &option, &statistics, &mesh, &kernel,
         &process_tree, distance_callback, near_far_callback, &context);
-    if (matrix_format == 7 && em_options.cfie_alpha == 1.0) {
-      // Device form of the EFIE entry for the H2 GPU backend (kind 3: the
-      // mesh tables of Zelem_EMSURF; the CFIE is not symmetric)
+    if (em_options.cfie_alpha == 1.0 || matrix_format == 1) {
+      // Device form of the entries for the GPU backends: kind 3, the EFIE
+      // (mesh tables of Zelem_EMSURF), or kind 5, the CFIE (not symmetric:
+      // HODLR only)
       int64_t nreals = 0;
       int64_t nints = 0;
       emsurf_get_gpu_kernel_sizes_c(&nreals, &nints);
-      std::vector<double> params(7);
+      std::vector<double> params(8);
       std::vector<double> reals(static_cast<std::size_t>(nreals));
       std::vector<int> ints(static_cast<std::size_t>(nints));
       emsurf_get_gpu_kernel_c(params.data(), reals.data(), ints.data());
-      const int gpu_kernel_kind = 3;
-      const int gpu_kernel_params = 7;
-      z_c_bpack_h2_set_gpu_kernel(&matrix, &gpu_kernel_kind, params.data(), &gpu_kernel_params);
-      z_c_bpack_h2_set_gpu_kernel_tables(&matrix, reals.data(), &nreals, ints.data(), &nints);
+      const int gpu_kernel_kind = em_options.cfie_alpha == 1.0 ? 3 : 5;
+      const int gpu_kernel_params = em_options.cfie_alpha == 1.0 ? 7 : 8;
+      z_c_bpack_set_gpu_kernel(&matrix, &gpu_kernel_kind, params.data(), &gpu_kernel_params);
+      z_c_bpack_set_gpu_kernel_tables(&matrix, reals.data(), &nreals, ints.data(), &nints);
     }
     z_c_bpack_construct_element_compute(&matrix, &option, &statistics, &mesh, &kernel,
                                         &process_tree, emsurf_entry_c, emsurf_block_c,

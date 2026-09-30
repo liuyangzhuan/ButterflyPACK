@@ -48,9 +48,12 @@ bool device_kernel_registered(const GpuSpecT& g, const char** why) {
         if (g.kind == 1) return true;
         *why = "no real device kernel registered (c_bpack_h2_set_gpu_kernel, kind 1)";
     } else {
-        if (g.kind == 2 || (g.kind == 3 && !g.table_real.empty() && !g.table_int.empty())) return true;
-        *why = g.kind == 3 ? "kind 3 device kernel without its tables (c_bpack_h2_set_gpu_kernel_tables)"
-                           : "no complex device kernel registered (c_bpack_h2_set_gpu_kernel, kind 2 or 3)";
+        if (g.kind == 2 || ((g.kind == 3 || g.kind == 5) && !g.table_real.empty() && !g.table_int.empty()) ||
+            (g.kind == 4 && !g.table_real.empty())) {
+            return true;
+        }
+        *why = g.kind >= 3 && g.kind <= 5 ? "device kernel without its tables (c_bpack_set_gpu_kernel_tables)"
+                                          : "no complex device kernel registered (c_bpack_set_gpu_kernel, kind 2 to 5)";
     }
     return false;
 }

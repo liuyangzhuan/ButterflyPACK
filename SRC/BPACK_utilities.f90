@@ -18,6 +18,7 @@
 module BPACK_Utilities
    use MISC_Utilities
    use Bplus_Utilities
+   use BPACK_GPU
 
 contains
 
@@ -534,6 +535,7 @@ contains
 
       implicit none
       type(Bmatrix)::bmat
+      call BPACK_gpu_delete(bmat)
       if (allocated(bmat%xtrue)) then
          deallocate(bmat%xtrue)
       endif
@@ -1319,6 +1321,8 @@ contains
       option%H2_GEMM_split=16
       option%H2_XRR_factor=0
       option%H2_use_gpu=0
+      option%HODLR_use_gpu=0
+      option%HODLR_gpu_pieces=4
       option%H2_CA_staged_halo=0
       option%H2_CA_owner_component=0
       option%H2_CA_owner_serial=0
@@ -1383,6 +1387,10 @@ contains
                   read (strings1, *) option%H2_XRR_factor
                else if (trim(strings) == '--h2_use_gpu' .or. trim(strings) == '--H2_use_gpu') then
                   read (strings1, *) option%H2_use_gpu
+               else if (trim(strings) == '--hodlr_use_gpu' .or. trim(strings) == '--HODLR_use_gpu') then
+                  read (strings1, *) option%HODLR_use_gpu
+               else if (trim(strings) == '--hodlr_gpu_pieces' .or. trim(strings) == '--HODLR_gpu_pieces') then
+                  read (strings1, *) option%HODLR_gpu_pieces
                else if (trim(strings) == '--h2_ca_staged_halo' .or. trim(strings) == '--H2_CA_staged_halo') then
                   read (strings1, *) option%H2_CA_staged_halo
                else if (trim(strings) == '--h2_ca_owner_component' .or. trim(strings) == '--H2_CA_owner_component') then
@@ -1522,6 +1530,8 @@ contains
       option1%H2_GEMM_split = option%H2_GEMM_split
       option1%H2_XRR_factor = option%H2_XRR_factor
       option1%H2_use_gpu = option%H2_use_gpu
+      option1%HODLR_use_gpu = option%HODLR_use_gpu
+      option1%HODLR_gpu_pieces = option%HODLR_gpu_pieces
       option1%H2_CA_staged_halo = option%H2_CA_staged_halo
       option1%H2_CA_owner_component = option%H2_CA_owner_component
       option1%H2_CA_owner_serial = option%H2_CA_owner_serial
@@ -1761,6 +1771,8 @@ contains
                write (*, '(A18,I8)') 'use_fft_circulant', option%use_fft_circulant
                write (*, '(A18,I8)') 'fftw_plan_mode', option%fftw_plan_mode
                write (*, '(A18,I8)') 'use_parsec', option%use_parsec
+               write (*, '(A18,I8)') 'hodlr_use_gpu', option%HODLR_use_gpu
+               write (*, '(A18,I8)') 'hodlr_gpu_pieces', option%HODLR_gpu_pieces
                write (*, '(A18,I8)') 'iter_solver', option%iter_solver
 
                write (*, '(A18,Es14.7)') 'tol_comp', option%tol_comp

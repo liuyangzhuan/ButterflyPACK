@@ -3,7 +3,9 @@
 // the edges m and n of a triangle mesh -- EMSURF's Zelem_EMSURF
 // (EXAMPLE/EMSURF_Module.f90) with CFIE_alpha = 1, e^{-jkr} convention --
 // in the host's order of operations (Gauss points, singular self terms by
-// ianalytic / ianalytic2).
+// ianalytic / ianalytic2).  Kind 5: the CFIE entry of Zelem_EMSURF,
+// alpha Z_EFIE + (1 - alpha) eta0 Z_MFIE, with alpha = p[7] and, after the
+// Gauss rule in treal, eta0 and the unit normal of each triangle (3 each).
 //   p[0] wavenumber k, p[1] frequency, p[2] eps0, p[3] pi, p[4] Gauss points
 //   per triangle (at most kEmsurfMaxGauss), p[5] vertices, p[6] edges
 //   treal: vertex xyz (3 per vertex), then the Gauss rule (ng1, ng2, ng3, w
@@ -225,6 +227,95 @@ static __device__ __noinline__ dcomplex efie_entry(const KernelSpec& spec, int64
     re = re / 8. / pi2 / spec.p[1] / spec.p[2];
     im = im / 8. / pi2 / spec.p[1] / spec.p[2];
     return dcomplex(re, im);
+}
+
+// The MFIE part value_m of Zelem_EMSURF (times lm ln), kind 5: the
+// identity term 0.5 (am . an) / (2 area) on the triangles the two edges
+// share, and n_m x (an x grad G) . am on the others, grad G =
+// (xm - xn) (1 + j k d) e^{-jkd} / (4 pi d^3)
+static __device__ __noinline__ dcomplex mfie_entry(const KernelSpec& spec, int64_t em, int64_t en) {
+    const Mesh m = mesh_of(spec);
+    const double k = spec.p[0];
+    const double* normals = m.gauss + 4 * static_cast<int64_t>(m.nq) + 1;
+    const int* Em = m.edge + 6 * em;
+    const int* En = m.edge + 6 * en;
+    const double lm = dist(vertex(m, Em[0]), vertex(m, Em[1]));
+    const double ln = dist(vertex(m, En[0]), vertex(m, En[1]));
+    double pn[2][3][kEmsurfMaxGauss];
+    for (int jj = 0; jj < 2; ++jj) {
+        if (En[2 + jj] >= 0) gauss_points(m, En[2 + jj], pn[jj]);
+    }
+    double pm[3][kEmsurfMaxGauss];
+    dcomplex value(0.0, 0.0);
+    for (int ii = 0; ii < 2; ++ii) {
+        const int tm = Em[2 + ii];
+        if (tm < 0) continue;
+        const int sm = ii == 0 ? 1 : -1;
+        gauss_points(m, tm, pm);
+        const double* om = vertex(m, Em[4 + ii]);
+        const double* nr = normals + 3 * static_cast<int64_t>(tm);
+        for (int i = 0; i < m.nq; ++i) {
+            const double xm[3] = {pm[0][i], pm[1][i], pm[2][i]};
+            const double am[3] = {xm[0] - om[0], xm[1] - om[1], xm[2] - om[2]};
+            const double wi = m.gauss[4 * i + 3];
+            for (int jj = 0; jj < 2; ++jj) {
+                const int tn = En[2 + jj];
+                if (tn < 0) continue;
+                const int s = sm * (jj == 0 ? 1 : -1);
+                const double* on = vertex(m, En[4 + jj]);
+                if (tm == tn) {
+                    const int* tv = m.tri + 3 * static_cast<int64_t>(tn);
+                    const double* v1 = vertex(m, tv[0]);
+                    const double* v2 = vertex(m, tv[1]);
+                    const double* v3 = vertex(m, tv[2]);
+                    double a[3], b[3], c[3];
+                    for (int d = 0; d < 3; ++d) {
+                        a[d] = v2[d] - v1[d];
+                        b[d] = v3[d] - v1[d];
+                    }
+                    cross(a, b, c);
+                    const double area = 0.5 * sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+                    const double an[3] = {xm[0] - on[0], xm[1] - on[1], xm[2] - on[2]};
+                    const double temp = dot(am, an);
+                    value.re += s * 0.5 * temp / (2. * area) * wi;
+                } else {
+                    for (int j = 0; j < m.nq; ++j) {
+                        const double xn[3] = {pn[jj][0][j], pn[jj][1][j], pn[jj][2][j]};
+                        const double d = dist(xm, xn);
+                        const double an[3] = {xn[0] - on[0], xn[1] - on[1], xn[2] - on[2]};
+                        double sn_kd, cs_kd;
+                        sincos(k * d, &sn_kd, &cs_kd);
+                        const double kd = k * d;
+                        const double den = 4 * spec.p[3] * (d * d * d);
+                        dcomplex dg[3];
+                        for (int q = 0; q < 3; ++q) {
+                            // (x (1 + j k d)) e^{-jkd} / (4 pi d^3), x = xm - xn
+                            const dcomplex f(xm[q] - xn[q], (xm[q] - xn[q]) * kd);
+                            const dcomplex g = f * dcomplex(cs_kd, -sn_kd);
+                            dg[q] = dcomplex(g.re / den, g.im / den);
+                        }
+                        // dg1 = an x dg, dg2 = nr x dg1 (rccurl), ctemp = dg2 . am (cscalar)
+                        const dcomplex dg1[3] = {an[1] * dg[2] - dg[1] * an[2], -an[0] * dg[2] + dg[0] * an[2],
+                                                 an[0] * dg[1] - dg[0] * an[1]};
+                        const dcomplex dg2[3] = {nr[1] * dg1[2] - dg1[1] * nr[2], -nr[0] * dg1[2] + dg1[0] * nr[2],
+                                                 nr[0] * dg1[1] - dg1[0] * nr[1]};
+                        const dcomplex ctemp = dg2[0] * am[0] + dg2[1] * am[1] + dg2[2] * am[2];
+                        value -= ((static_cast<double>(s) * ctemp) * wi) * m.gauss[4 * j + 3];
+                    }
+                }
+            }
+        }
+    }
+    return (value * lm) * ln;
+}
+
+// Z(em, en) of the CFIE (Zelem_EMSURF, value), kind 5
+static __device__ __noinline__ dcomplex cfie_entry(const KernelSpec& spec, int64_t em, int64_t en) {
+    const double alpha = spec.p[7];
+    const double eta0 = spec.treal[3 * static_cast<int64_t>(spec.p[5]) + 4 * static_cast<int64_t>(spec.p[4])];
+    const dcomplex ze = efie_entry(spec, em, en);
+    const dcomplex zm = mfie_entry(spec, em, en);
+    return alpha * ze + ((1. - alpha) * eta0) * zm;
 }
 
 }  // namespace emsurf

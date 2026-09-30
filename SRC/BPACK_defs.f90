@@ -484,6 +484,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer row_group !< row group number
         integer style !< 1: full block 2: compressed block 4: hierarchical block
         integer:: is_transpose_view = 0 !< 1 when U/V alias a transposed sibling block
+        integer, allocatable :: gpu_urow(:), gpu_vrow(:) !< HODLR GPU entry extraction (HODLR_gpu_fill_rows): the row of gpu_u, gpu_v holding each local row of U, V it reads (0: none)
+        DT, allocatable :: gpu_u(:, :), gpu_v(:, :) !< HODLR GPU entry extraction: those rows of U, V, taken from the GPUs (the host copies stay unfilled)
         integer level_butterfly !< butterfly levels
         integer:: level_half = 0 !< the butterfly level where the row-wise and column-wise orderings meet
         integer:: rankmax=0 !< maximum butterfly ranks
@@ -712,6 +714,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         DT:: phase=1 !< store the sign of logdet
         type(cascadingfactors), allocatable::levels(:) !
         DT,allocatable::fullmat2D(:,:) !< store the full matrix in 2D block-cyclic fashions
+        type(c_ptr) :: gpu = c_null_ptr !< GPU state of the owning Bmatrix (HODLR_use_gpu > 0), borrowed from Bmatrix%gpu
+        logical :: gpu_host_stale = .false. !< the host copies of the low-rank factors built on the GPU are unfilled (HODLR_gpu_fetch_host)
     end type hobf
 
 
@@ -768,6 +772,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type Bmatrix
         integer Maxlevel
         type(c_ptr) :: h2 = c_null_ptr
+        type(c_ptr) :: gpu = c_null_ptr !< GPU state (registered device kernel, HODLR device data), owned here
         DT, allocatable::xtrue(:,:), b_true(:,:) !< sparse verification vector and exact product retained for solve-error checks
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()
@@ -837,6 +842,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
         integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
+        integer:: HODLR_use_gpu !< HODLR (format 1, LRlevel 0): 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
+        integer:: HODLR_gpu_pieces !< HODLR GPU construction (HODLR_use_gpu > 0): pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces, each on its rank)
         integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
         integer:: H2_CA_owner_component !< H2 CA component ownership: 0 replicated, 3 asynchronous owner schedule
         integer:: H2_CA_owner_serial !< 1: serialize the CA component-owner schedule as a correctness oracle

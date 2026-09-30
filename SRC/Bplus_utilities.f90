@@ -15913,7 +15913,12 @@ end subroutine BF_block_MVP_dat_batch_magma
          if (blocks%inters(nn)%nr_loc > 0) then
             do ii = 1, blocks%inters(nn)%nr_loc
                ri = inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))) - headm + 1 - blocks%M_p(pp, 1) + 1
-               matU(ii, :) = blocks%ButterflyU%blocks(1)%matrix(ri, :)
+               if (allocated(blocks%gpu_urow)) then  ! (a HODLR on the GPU: the rows from the GPUs, HODLR_gpu_fill_rows)
+                  call assert(blocks%gpu_urow(ri) > 0, 'LR_block_extraction: a row of U not taken from the GPUs')
+                  matU(ii, :) = blocks%gpu_u(blocks%gpu_urow(ri), :)
+               else
+                  matU(ii, :) = blocks%ButterflyU%blocks(1)%matrix(ri, :)
+               endif
             enddo
             if (blocks%inters(nn)%nc > 0) then
                call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, BPACK_czero, mat_loc(1,1), nr_loc)
@@ -16120,7 +16125,13 @@ end subroutine BF_block_MVP_dat_batch_magma
                ci = inters(nng)%cols(blocks%inters(nn)%cols(col_idx_loc(jj))) - headn + 1
                sendquant(pp)%dat(sendquant(pp)%size + 1, 1) = iidx + col_idx_loc(jj)
                sendquant(pp)%size = sendquant(pp)%size + 1
-               sendquant(pp)%dat(sendquant(pp)%size + 1:sendquant(pp)%size + rank, 1) = blocks%ButterflyV%blocks(1)%matrix(ci - head + 1, :)
+               if (allocated(blocks%gpu_vrow)) then  ! (a HODLR on the GPU: the rows from the GPUs, HODLR_gpu_fill_rows)
+                  call assert(blocks%gpu_vrow(ci - head + 1) > 0, 'LR_all2all_extraction: a row of V not taken from the GPUs')
+                  sendquant(pp)%dat(sendquant(pp)%size + 1:sendquant(pp)%size + rank, 1) = &
+                     blocks%gpu_v(blocks%gpu_vrow(ci - head + 1), :)
+               else
+                  sendquant(pp)%dat(sendquant(pp)%size + 1:sendquant(pp)%size + rank, 1) = blocks%ButterflyV%blocks(1)%matrix(ci - head + 1, :)
+               endif
                sendquant(pp)%size = sendquant(pp)%size + rank
             enddo
             endif

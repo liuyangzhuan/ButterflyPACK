@@ -20,6 +20,7 @@
 #include "ButterflyPACK_config.fi"
 module BPACK_Solve_Mul
    use BPACK_DEFS
+   use BPACK_GPU
    use Bplus_compress
 
 contains
@@ -3417,11 +3418,13 @@ contains
    end subroutine BPACK_MD_Mult
 
 
-   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead)
+   subroutine HODLR_Sym_Leaf_Apply(block, X, xhead, flop)
       implicit none
       type(matrixblock)::block
       DT::X(:, :)
       integer xhead, lo, hi, xoff, nrow, info
+      real(kind=8), optional :: flop  ! (inout: plus this apply's flops)
+      real(kind=8) :: fl
 
       lo = max(xhead, block%headm)
       hi = min(xhead + size(X, 1) - 1, block%headm + block%M - 1)
@@ -3429,21 +3432,28 @@ contains
       nrow = hi - lo + 1
       call assert(nrow == block%M, 'a symmetric HODLR leaf was split across block-row owners')
       xoff = lo - xhead + 1
-      call sytrsf90(block%fullmat, block%ipiv, X(xoff:xoff + nrow - 1, :), 'L', info)
+      fl = 0
+      call sytrsf90(block%fullmat, block%ipiv, X(xoff:xoff + nrow - 1, :), 'L', info, fl)
       call assert(info == 0, 'symmetric HODLR dense-leaf solve failed')
+      if (present(flop)) flop = flop + fl
    end subroutine HODLR_Sym_Leaf_Apply
 
-   subroutine HODLR_Sym_Node_Apply(fac, X, xhead, ptree)
+   !> Apply the correction of the node factor fac to the rows of X (ldx x
+   !> nrhs, first row xhead) that it covers
+   subroutine HODLR_Sym_Node_Apply(fac, X, ldx, nrhs, xhead, ptree, flop)
       implicit none
       type(hodlr_symfactor)::fac
       type(proctree)::ptree
-      DT::X(:, :)
-      integer xhead, nrhs, rank, lo, hi, qoff, xoff, nrow, ierr, info
+      integer ldx, nrhs
+      DT::X(ldx, *)
+      real(kind=8), optional :: flop  ! (inout: plus this rank's flops of the apply)
+      real(kind=8) :: fl, fsum
+      integer xhead, rank, lo, hi, qoff, xoff, nrow, ierr, info
       DT, allocatable::c0(:, :), c1(:, :), delta(:, :), gamma(:, :), y(:, :)
 
+      fsum = 0
       rank = fac%rank
       if (rank == 0) return
-      nrhs = size(X, 2)
       allocate(c0(rank, nrhs), c1(rank, nrhs), delta(rank, nrhs), gamma(rank, nrhs))
       allocate(y(2*rank, nrhs))
       c0 = 0
@@ -3451,24 +3461,26 @@ contains
 
       if (allocated(fac%Q0)) then
          lo = max(xhead, fac%head0)
-         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         hi = min(xhead + ldx - 1, fac%head0 + fac%nloc0 - 1)
          if (hi >= lo) then
             qoff = lo - fac%head0 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            c0 = matmul(transpose(fac%Z0(qoff:qoff + nrow - 1, :)), &
-               X(xoff:xoff + nrow - 1, :))
+            call gemmf90(fac%Z0(qoff, 1), size(fac%Z0, 1), X(xoff, 1), ldx, c0, rank, 'T', 'N', &
+               rank, nrhs, nrow, BPACK_cone, BPACK_czero, flop=fl)
+            fsum = fsum + fl
          endif
       endif
       if (allocated(fac%Q1)) then
          lo = max(xhead, fac%head1)
-         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         hi = min(xhead + ldx - 1, fac%head1 + fac%nloc1 - 1)
          if (hi >= lo) then
             qoff = lo - fac%head1 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            c1 = matmul(transpose(fac%Z1(qoff:qoff + nrow - 1, :)), &
-               X(xoff:xoff + nrow - 1, :))
+            call gemmf90(fac%Z1(qoff, 1), size(fac%Z1, 1), X(xoff, 1), ldx, c1, rank, 'T', 'N', &
+               rank, nrhs, nrow, BPACK_cone, BPACK_czero, flop=fl)
+            fsum = fsum + fl
          endif
       endif
       call MPI_ALLREDUCE(MPI_IN_PLACE, c0, rank*nrhs, MPI_DT, MPI_SUM, &
@@ -3478,11 +3490,18 @@ contains
 
       info = 0
       if (ptree%MyID == ptree%pgrp(fac%pgno)%head) then
-         delta = matmul(fac%G0, c1 - matmul(fac%G1, c0))
-         call getrsf90_info(fac%S, fac%ipiv, delta, 'N', info)
+         gamma = c1  ! (workspace: c1 - G1 c0)
+         call gemmf90(fac%G1, rank, c0, rank, gamma, rank, 'N', 'N', rank, nrhs, rank, -BPACK_cone, BPACK_cone, flop=fl)
+         fsum = fsum + fl
+         call gemmf90(fac%G0, rank, gamma, rank, delta, rank, 'N', 'N', rank, nrhs, rank, BPACK_cone, BPACK_czero, flop=fl)
+         fsum = fsum + fl
+         call getrsf90_info(fac%S, fac%ipiv, delta, 'N', info, fl)
+         fsum = fsum + fl
          if (info == 0) then
             delta = delta - c0
-            gamma = c1 + matmul(fac%G1, delta)
+            gamma = c1
+            call gemmf90(fac%G1, rank, delta, rank, gamma, rank, 'N', 'N', rank, nrhs, rank, BPACK_cone, BPACK_cone, flop=fl)
+            fsum = fsum + fl
             y(1:rank, :) = delta
             y(rank + 1:2*rank, :) = gamma
          endif
@@ -3492,36 +3511,83 @@ contains
       call MPI_BCAST(y, 2*rank*nrhs, MPI_DT, Main_ID, ptree%pgrp(fac%pgno)%Comm, ierr)
       if (allocated(fac%Q0)) then
          lo = max(xhead, fac%head0)
-         hi = min(xhead + size(X, 1) - 1, fac%head0 + fac%nloc0 - 1)
+         hi = min(xhead + ldx - 1, fac%head0 + fac%nloc0 - 1)
          if (hi >= lo) then
             qoff = lo - fac%head0 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) - &
-               matmul(fac%Q0(qoff:qoff + nrow - 1, :), y(rank + 1:2*rank, :))
+            call gemmf90(fac%Q0(qoff, 1), size(fac%Q0, 1), y(rank + 1, 1), 2*rank, X(xoff, 1), ldx, &
+               'N', 'N', nrow, nrhs, rank, -BPACK_cone, BPACK_cone, flop=fl)
+            fsum = fsum + fl
          endif
       endif
       if (allocated(fac%Q1)) then
          lo = max(xhead, fac%head1)
-         hi = min(xhead + size(X, 1) - 1, fac%head1 + fac%nloc1 - 1)
+         hi = min(xhead + ldx - 1, fac%head1 + fac%nloc1 - 1)
          if (hi >= lo) then
             qoff = lo - fac%head1 + 1
             xoff = lo - xhead + 1
             nrow = hi - lo + 1
-            X(xoff:xoff + nrow - 1, :) = X(xoff:xoff + nrow - 1, :) + &
-               matmul(fac%Q1(qoff:qoff + nrow - 1, :), y(1:rank, :))
+            call gemmf90(fac%Q1(qoff, 1), size(fac%Q1, 1), y(1, 1), 2*rank, X(xoff, 1), ldx, &
+               'N', 'N', nrow, nrhs, rank, BPACK_cone, BPACK_cone, flop=fl)
+            fsum = fsum + fl
          endif
       endif
       deallocate(c0, c1, delta, gamma, y)
+      if (present(flop)) flop = flop + fsum
    end subroutine HODLR_Sym_Node_Apply
 
-   subroutine HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+   !> Vout = A^{-1} Vin with the symmetric factors, on the GPU when they are
+   !> there; HODLR_GPU_CHECK then compares with the CPU factors (which the
+   !> check keeps on the host)
+   subroutine HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, mode)
+      implicit none
+      integer Ns, num_vectors, mode
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hstat)::stats
+      DT, allocatable::Vref(:, :), Vgpu(:, :)
+      integer icheck, ncheck
+      character trans_check
+      character, parameter::check_trans(3) = ['N', 'T', 'C']
+      real(kind=8) :: flops, flops_check
+
+      if (mode > 0 .and. HODLR_gpu_sym_ready(ho_bf1)) then
+         call HODLR_gpu_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, mode, flops)
+         if (HODLR_gpu_check_level() > 0) then
+            allocate (Vref(Ns, num_vectors), Vgpu(Ns, num_vectors))
+            ncheck = 1
+            if (HODLR_gpu_check_level() >= 2 .and. trans == 'N') ncheck = 3
+            do icheck = 1, ncheck
+               trans_check = trans
+               if (icheck > 1) then
+                  trans_check = check_trans(icheck)
+                  call HODLR_gpu_Sym_Inv_Apply(trans_check, Ns, num_vectors, Vin, Vgpu, ho_bf1, mode, flops_check)
+               else
+                  Vgpu = Vout
+               endif
+               call HODLR_Sym_Inv_Apply_host(trans_check, Ns, num_vectors, Vin, Vref, ho_bf1, ptree, flops_check)
+               call HODLR_gpu_report('sym solve', trans_check, Ns, num_vectors, Vgpu, Vref, ptree)
+            enddo
+            deallocate (Vref, Vgpu)
+         endif
+         stats%Flop_Tmp = flops  ! (this rank's, as the unsymmetric HODLR_Inv_Apply_host counts them)
+         return
+      endif
+      call HODLR_Sym_Inv_Apply_host(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, flops)
+      stats%Flop_Tmp = flops
+   end subroutine HODLR_Sym_Inv_Apply
+
+   subroutine HODLR_Sym_Inv_Apply_host(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, flop)
       implicit none
       integer Ns, num_vectors, level, ii, pp, xhead
       DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
       character trans
       type(hobf)::ho_bf1
       type(proctree)::ptree
+      real(kind=8) :: flop  ! (out: this rank's flops)
       type(matrixblock), pointer::rootblock, leafblock
 
       rootblock => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
@@ -3537,15 +3603,16 @@ contains
       Vout = Vin
 #endif
 
+      flop = 0
       level = ho_bf1%Maxlevel + 1
       do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
          leafblock => ho_bf1%levels(level)%BP_inverse(ii)%LL(1)%matrices_block(1)
-         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead)
+         call HODLR_Sym_Leaf_Apply(leafblock, Vout, xhead, flop)
       enddo
       do level = ho_bf1%Maxlevel, 1, -1
          do ii = ho_bf1%levels(level)%Bidxs, ho_bf1%levels(level)%Bidxe
             if (IOwnPgrp(ptree, ho_bf1%levels(level)%SymFactor(ii)%pgno)) then
-               call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(ii), Vout, xhead, ptree)
+               call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(ii), Vout, Ns, num_vectors, xhead, ptree, flop)
             endif
          enddo
       enddo
@@ -3553,7 +3620,7 @@ contains
 #if DAT==0 || DAT==2
       if (trans == 'C') Vout = conjg(Vout)
 #endif
-   end subroutine HODLR_Sym_Inv_Apply
+   end subroutine HODLR_Sym_Inv_Apply_host
 
 
    subroutine HODLR_Sym_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
@@ -3569,7 +3636,7 @@ contains
       type(Hoption)::option
       type(Hstat)::stats
 
-      call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree)
+      call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, option%HODLR_use_gpu)
       Vout = Vout*option%scale_factor
       if (option%IR_HODLR <= 0) return
 
@@ -3591,14 +3658,56 @@ contains
             if (residual_rel <= refine_tol) exit
             if (residual_rel >= previous_residual) exit
             previous_residual = residual_rel
-            call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree)
+            call HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree, stats, option%HODLR_use_gpu)
             Vout = Vout + correction*option%scale_factor
          enddo
       endif
       deallocate(rhs, product, correction)
    end subroutine HODLR_Sym_Inv_Mult
 
-   subroutine HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
+   !> Vout = op(A)^{-1} Vin with the unsymmetric factors, on the GPU when they
+   !> are there; HODLR_GPU_CHECK then compares with the CPU factors (which the
+   !> check keeps on the host)
+   subroutine HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, mode)
+      implicit none
+      integer Ns, num_vectors, mode
+      DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
+      character trans
+      type(hobf)::ho_bf1
+      type(proctree)::ptree
+      type(Hstat)::stats
+      DT, allocatable::Vref(:, :), Vgpu(:, :)
+      integer icheck, ncheck
+      character trans_check
+      character, parameter::check_trans(3) = ['N', 'T', 'C']
+      real(kind=8) :: flops, flops_check
+
+      if (mode > 0 .and. HODLR_gpu_unsym_ready(ho_bf1)) then
+         call HODLR_gpu_Inv_Apply_unsym(trans, Ns, num_vectors, Vin, Vout, ho_bf1, mode, flops)
+         if (HODLR_gpu_check_level() > 0) then
+            allocate (Vref(Ns, num_vectors), Vgpu(Ns, num_vectors))
+            ncheck = 1
+            if (HODLR_gpu_check_level() >= 2 .and. trans == 'N') ncheck = 3
+            do icheck = 1, ncheck
+               trans_check = trans
+               if (icheck > 1) then
+                  trans_check = check_trans(icheck)
+                  call HODLR_gpu_Inv_Apply_unsym(trans_check, Ns, num_vectors, Vin, Vgpu, ho_bf1, mode, flops_check)
+               else
+                  Vgpu = Vout
+               endif
+               call HODLR_Inv_Apply_host(trans_check, Ns, num_vectors, Vin, Vref, ho_bf1, ptree, stats)
+               call HODLR_gpu_report('unsym solve', trans_check, Ns, num_vectors, Vgpu, Vref, ptree)
+            enddo
+            deallocate (Vref, Vgpu)
+         endif
+         stats%Flop_Tmp = flops  ! (this rank's, as HODLR_Inv_Apply_host counts them)
+         return
+      endif
+      call HODLR_Inv_Apply_host(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
+   end subroutine HODLR_Inv_Apply
+
+   subroutine HODLR_Inv_Apply_host(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
 
 
 
@@ -3688,7 +3797,7 @@ contains
 
       return
 
-   end subroutine HODLR_Inv_Apply
+   end subroutine HODLR_Inv_Apply_host
 
 
    subroutine HODLR_Inv_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
@@ -3709,7 +3818,7 @@ contains
          return
       endif
 
-      call HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats)
+      call HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, option%HODLR_use_gpu)
       Vout = Vout*option%scale_factor
       if (option%IR_HODLR <= 0) return
 
@@ -3731,7 +3840,7 @@ contains
             if (residual_rel <= refine_tol) exit
             if (residual_rel >= previous_residual) exit
             previous_residual = residual_rel
-            call HODLR_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree, stats)
+            call HODLR_Inv_Apply(trans, Ns, num_vectors, rhs, correction, ho_bf1, ptree, stats, option%HODLR_use_gpu)
             Vout = Vout + correction*option%scale_factor
          enddo
       endif
@@ -3786,7 +3895,7 @@ contains
 
    end subroutine HSS_Inv_Mult
 
-   subroutine HODLR_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, ho_bf1, ptree, option, stats)
+   recursive subroutine HODLR_Mult(trans, Ns, num_vectors, level_start, level_end, Vin, Vout, ho_bf1, ptree, option, stats)
 
       implicit none
 
@@ -3811,6 +3920,43 @@ contains
       ! complex(kind=8)::Vin(:,:),Vout(:,:)
       DT::Vin(Ns, num_vectors), Vout(Ns, num_vectors)
       type(hobf)::ho_bf1
+      DT, allocatable::Vref(:, :), Vgpu(:, :)
+      integer use_gpu, icheck, ncheck, ierr
+      logical cpu_blocks
+      character trans_check
+      character, parameter::check_trans(3) = ['N', 'T', 'C']
+
+      ! the whole HODLR on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK=1
+      ! compares it with this routine on the CPU, 2 also the transposed products
+      if (option%HODLR_use_gpu > 0 .and. level_start == 1 .and. level_end == ho_bf1%Maxlevel + 1 &
+          .and. c_associated(ho_bf1%gpu)) then
+         call HODLR_gpu_Mult(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, option, stats)
+         ! (the CPU product needs the forward blocks on every rank: a collective decision)
+         cpu_blocks = associated(ho_bf1%levels(1)%BP(1)%LL)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, cpu_blocks, 1, MPI_LOGICAL, MPI_LAND, ptree%Comm, ierr)
+         if (HODLR_gpu_check_level() > 0 .and. cpu_blocks) then
+            allocate (Vref(Ns, num_vectors), Vgpu(Ns, num_vectors))
+            ncheck = 1
+            if (HODLR_gpu_check_level() >= 2 .and. trans == 'N') ncheck = 3
+            do icheck = 1, ncheck
+               trans_check = trans
+               if (icheck > 1) then
+                  trans_check = check_trans(icheck)
+                  call HODLR_gpu_Mult(trans_check, Ns, num_vectors, Vin, Vgpu, ho_bf1, ptree, option, stats)
+               else
+                  Vgpu = Vout
+               endif
+               use_gpu = option%HODLR_use_gpu
+               option%HODLR_use_gpu = 0
+               call HODLR_Mult(trans_check, Ns, num_vectors, level_start, level_end, Vin, Vref, ho_bf1, ptree, option, stats)
+               option%HODLR_use_gpu = use_gpu
+               call HODLR_gpu_report('mult', trans_check, Ns, num_vectors, Vgpu, Vref, ptree)
+            enddo
+            deallocate (Vref, Vgpu)
+         endif
+         return
+      endif
+      call HODLR_gpu_require_host(ho_bf1, 'HODLR_Mult on the CPU')
 
       idx_start_glo = ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)%N_p(ptree%MyID - ptree%pgrp(1)%head + 1, 1)
 

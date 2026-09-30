@@ -35,6 +35,10 @@ struct DriverOptions {
   int h2_gemm_split = 16;
   int h2_xrr_factor = 0;
   int h2_use_gpu = 0;
+  int hodlr_use_gpu = 0;
+  int reclr_leaf = -1;  // -1: the library default
+  int hodlr_gpu_pieces = -1;  // -1: the library default
+  int baca_batch = -1;
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
   int h2_ca_owner_serial = 0;
@@ -44,6 +48,7 @@ struct DriverOptions {
   int elem_extract = 2;
   int lrlevel = 0;
   int format = 7;
+  int sym = 1;
   int distributed64 = 0;
   bool show_help = false;
 };
@@ -188,6 +193,14 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_xrr_factor = parse_int(value, "H2_XRR_factor");
     } else if (name == "h2_use_gpu") {
       options.h2_use_gpu = parse_int(value, "H2_use_gpu");
+    } else if (name == "hodlr_use_gpu") {
+      options.hodlr_use_gpu = parse_int(value, "HODLR_use_gpu");
+    } else if (name == "reclr_leaf") {
+      options.reclr_leaf = parse_int(value, "RecLR_leaf");
+    } else if (name == "hodlr_gpu_pieces") {
+      options.hodlr_gpu_pieces = parse_int(value, "HODLR_gpu_pieces");
+    } else if (name == "baca_batch") {
+      options.baca_batch = parse_int(value, "BACA_Batch");
     } else if (name == "h2_ca_staged_halo") {
       options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
     } else if (name == "h2_ca_owner_component") {
@@ -227,9 +240,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     } else if (name == "format") {
       options.format = parse_int(value, "format");
     } else if (name == "sym") {
-      if (parse_int(value, "sym") != 1) {
-        throw std::invalid_argument("this driver requires --sym 1");
-      }
+      options.sym = parse_int(value, "sym");
     } else {
       throw std::invalid_argument("unknown option: --" + name);
     }
@@ -278,6 +289,12 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_use_gpu < 0 || options.h2_use_gpu > 2) {
     throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
   }
+  if (options.hodlr_use_gpu < 0 || options.hodlr_use_gpu > 2) {
+    throw std::invalid_argument("HODLR_use_gpu must be 0, 1 or 2");
+  }
+  if (options.hodlr_gpu_pieces != -1 && options.hodlr_gpu_pieces < 1) {
+    throw std::invalid_argument("HODLR_gpu_pieces must be at least 1");
+  }
   if (options.h2_ca_staged_halo != 0 && options.h2_ca_staged_halo != 2) {
     throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
   }
@@ -290,6 +307,12 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   }
   if (options.format != 1 && options.format != 7) {
     throw std::invalid_argument("format must be 1 (HODLR) or 7 (H2)");
+  }
+  if (options.sym != 0 && options.sym != 1) {
+    throw std::invalid_argument("sym must be 0 or 1");
+  }
+  if (options.format == 7 && options.sym != 1) {
+    throw std::invalid_argument("format=7 (H2) requires --sym 1");
   }
   if (options.distributed64 != 0 && options.distributed64 != 1) {
     throw std::invalid_argument("distributed64 must be 0 or 1");
@@ -344,12 +367,17 @@ void print_usage(const char* executable) {
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
       << "  --H2_use_gpu <0|1|2>\n"
+      << "  --HODLR_use_gpu <0|1|2>\n"
+      << "  --HODLR_gpu_pieces <n>   (pieces per rank of a shared HODLR block on the GPU; default 4)\n"
+      << "  --RecLR_leaf <n>   (low-rank compression of HODLR blocks; 5: BACA without overlap)\n"
+      << "  --BACA_Batch <n>\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_owner_serial <0|1>\n"
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
       << "  --format <1|7>\n"
+      << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
       << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|2>\n"
       << "  --verbosity <-1|0|1>\n";
@@ -611,6 +639,7 @@ int main(int argc, char** argv) {
                 << driver_options.grid_size << "\n"
                 << "Total points: " << point_count_64 << "\n"
                 << "Format: " << driver_options.format << "\n"
+                << "sym: " << driver_options.sym << "\n"
                 << "C API: "
                 << (driver_options.distributed64 == 1
                         ? "distributed 64-bit"
@@ -628,6 +657,7 @@ int main(int argc, char** argv) {
                 << "H2_GEMM_split: " << driver_options.h2_gemm_split << "\n"
                 << "H2_XRR_factor: " << driver_options.h2_xrr_factor << "\n"
                 << "H2_use_gpu: " << driver_options.h2_use_gpu << "\n"
+                << "HODLR_use_gpu: " << driver_options.hodlr_use_gpu << "\n"
                 << "H2_CA_staged_halo: "
                 << driver_options.h2_ca_staged_halo << "\n"
                 << "H2_CA_owner_component: "
@@ -655,7 +685,13 @@ int main(int argc, char** argv) {
         &resources.option, "tol_comp", driver_options.tolerance);
     d_c_bpack_set_I_option(
         &resources.option, "format", driver_options.format);
-    d_c_bpack_set_I_option(&resources.option, "sym", 1);
+    d_c_bpack_set_I_option(&resources.option, "sym", driver_options.sym);
+    if (driver_options.format == 1) {
+      // Keep the forward HODLR blocks after factorization (the unsymmetric
+      // factorization frees them otherwise) for the solution check below,
+      // and run the library's solve-error test.
+      d_c_bpack_set_I_option(&resources.option, "ErrSol", 1);
+    }
     d_c_bpack_set_I_option(
         &resources.option, "Nmin_leaf", static_cast<int>(driver_options.nmin_leaf));
     d_c_bpack_set_I_option(
@@ -676,6 +712,20 @@ int main(int argc, char** argv) {
         &resources.option, "H2_XRR_factor", driver_options.h2_xrr_factor);
     d_c_bpack_set_I_option(
         &resources.option, "H2_use_gpu", driver_options.h2_use_gpu);
+    d_c_bpack_set_I_option(
+        &resources.option, "HODLR_use_gpu", driver_options.hodlr_use_gpu);
+    if (driver_options.hodlr_gpu_pieces >= 1) {
+      d_c_bpack_set_I_option(
+          &resources.option, "HODLR_gpu_pieces", driver_options.hodlr_gpu_pieces);
+    }
+    if (driver_options.reclr_leaf >= 0) {
+      d_c_bpack_set_I_option(
+          &resources.option, "RecLR_leaf", driver_options.reclr_leaf);
+    }
+    if (driver_options.baca_batch > 0) {
+      d_c_bpack_set_I_option(
+          &resources.option, "BACA_Batch", driver_options.baca_batch);
+    }
     d_c_bpack_set_I_option(
         &resources.option, "H2_CA_staged_halo",
         driver_options.h2_ca_staged_halo);
@@ -731,13 +781,14 @@ int main(int argc, char** argv) {
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
     {
-      // Device form of the kernel for H2_use_gpu=1 (1 / (4 pi N r), with the
-      // self-cell integral on the diagonal).
+      // Device form of the kernel for H2_use_gpu / HODLR_use_gpu (1 / (4 pi N
+      // r), with the self-cell integral on the diagonal).  Ignored by a build
+      // without GPU backend.
       const int gpu_kernel_kind = 1;
       const int gpu_kernel_params = 2;
       const double gpu_params[2] = {application.inverse_4pi_n(),
                                     application.diagonal()};
-      d_c_bpack_h2_set_gpu_kernel(&resources.matrix, &gpu_kernel_kind,
+      d_c_bpack_set_gpu_kernel(&resources.matrix, &gpu_kernel_kind,
                                   gpu_params, &gpu_kernel_params);
     }
     if (driver_options.distributed64 == 1) {
@@ -785,7 +836,7 @@ int main(int argc, char** argv) {
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree);
 
-    if (driver_options.format == 7) {
+    {
       std::vector<double> product(value_count, 0.0);
       int output_local_points = local_points;
       const char trans = 'N';
@@ -830,7 +881,8 @@ int main(int argc, char** argv) {
           const double relative_residual = std::sqrt(
               residual_norm2[index] / rhs_norm2[index]);
           std::cout << std::setprecision(17)
-                    << "H2 solution check RHS " << column
+                    << (driver_options.format == 7 ? "H2" : "HODLR")
+                    << " solution check RHS " << column
                     << ": sum=" << solution_sum[index]
                     << ", norm=" << std::sqrt(solution_norm2[index])
                     << ", relative residual=" << relative_residual

@@ -805,17 +805,19 @@ contains
 
 
       !!!  rskip means that the first rskip columns/rows of matU/matV are not accounted for in normUV
+      !!!  inner_UV = 2 Re <U_old V_old, U_new V_new>_F = 2 Re sum_jk (u_j^H u_k) (v_j^H v_k), with UU = U_old^H U_new
+      !!!  and VV = V_old V_new^H = conj(v_j^H v_k)
       inner_UV = 0
       if (ruv-rskip > 0) then
          allocate (UU(ruv-rskip, rup))
          UU = 0
-         call gemmf77('T', 'N', ruv-rskip, rup, M, BPACK_cone, matU(1, rskip + 1), M, matU(1, ruv + 1), M, BPACK_czero, UU, ruv-rskip)
+         call gemmf77('C', 'N', ruv-rskip, rup, M, BPACK_cone, matU(1, rskip + 1), M, matU(1, ruv + 1), M, BPACK_czero, UU, ruv-rskip)
          allocate (VV(ruv-rskip, rup))
          VV = 0
-         call gemmf77('N', 'T', ruv-rskip, rup, N, BPACK_cone, matV(rskip+1,1), ldV, matV(ruv + 1, 1), ldV, BPACK_czero, VV, ruv-rskip)
+         call gemmf77('N', 'C', ruv-rskip, rup, N, BPACK_cone, matV(rskip+1,1), ldV, matV(ruv + 1, 1), ldV, BPACK_czero, VV, ruv-rskip)
          do j = 1, ruv-rskip
             do k = 1, rup
-               inner_UV = inner_UV + 2*dble(UU(j, k)*VV(j, k))
+               inner_UV = inner_UV + 2*dble(UU(j, k)*conjg(cmplx(VV(j, k), kind=8)))
             enddo
          enddo
          deallocate (UU)

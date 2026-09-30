@@ -305,6 +305,9 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
 		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
+		{"jitter",          "relative size of the pivots and diagonal shifts that keep dense and small factorizations nonsingular"},
 		{"h2_ca_staged_halo", "format-7 H2 CA halo mode: 0 legacy, 2 staged/overlapped"},
 		{"h2_ca_owner_component", "format-7 H2 CA ownership mode: 0 replicated, 3 asynchronous components"},
 		{"h2_ca_owner_serial", "serialize format-7 H2 CA component-owner events (0 or 1)"},
@@ -430,6 +433,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_XRR_factor", required_argument, 0, 58},
 		{"h2_use_gpu", required_argument, 0, 59},
 		{"H2_use_gpu", required_argument, 0, 59},
+		{"hodlr_use_gpu", required_argument, 0, 60},
+		{"HODLR_use_gpu", required_argument, 0, 60},
+		{"hodlr_gpu_pieces", required_argument, 0, 62},
+		{"HODLR_gpu_pieces", required_argument, 0, 62},
+		{"jitter", required_argument, 0, 61},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -718,6 +726,21 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "H2_use_gpu", opt_i);
+		} break;
+		case 60: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "HODLR_use_gpu", opt_i);
+		} break;
+		case 62: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "HODLR_gpu_pieces", opt_i);
+		} break;
+		case 61: {
+		std::istringstream iss(optarg);
+		iss >> opt_d;
+		c_bpack_set_D_option(&option0, "jitter", opt_d);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -1553,8 +1576,54 @@ void c_bpack_get_distributed_layout64(
 #endif
 }
 
+/* The GPU state of a non-H2 matrix, created on first use. */
+static void* bpack_gpu_state(F2Cptr* bmat, const char* caller) {
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument(std::string(caller) + ": null matrix handle");
+  }
+  void* gpu = nullptr;
+  c_bpack_get_gpu(*bmat, &gpu);
+  if (gpu == nullptr) {
+    c_bpack_gpu_create(&gpu);
+    if (gpu != nullptr) c_bpack_set_gpu(*bmat, gpu);
+  }
+  return gpu;  // nullptr: this library has no GPU backend
+}
+
+void c_bpack_set_gpu_kernel(
+    F2Cptr* bmat, const int* kind, const double* params, const int* nparams) {
+  void* h2 = nullptr;
+  if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
+  if (h2 != nullptr) {
+    c_bpack_h2_set_gpu_kernel(bmat, kind, params, nparams);
+    return;
+  }
+  void* gpu = bpack_gpu_state(bmat, "c_bpack_set_gpu_kernel");
+  if (gpu != nullptr) c_bpack_gpu_set_kernel(gpu, kind, params, nparams);
+}
+
+void c_bpack_set_gpu_kernel_tables(
+    F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints) {
+  void* h2 = nullptr;
+  if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
+  if (h2 != nullptr) {
+    c_bpack_h2_set_gpu_kernel_tables(bmat, reals, nreals, ints, nints);
+    return;
+  }
+  void* gpu = bpack_gpu_state(bmat, "c_bpack_set_gpu_kernel_tables");
+  if (gpu != nullptr) c_bpack_gpu_set_kernel_tables(gpu, reals, nreals, ints, nints);
+}
+
 void c_bpack_h2_set_gpu_kernel(
     F2Cptr* bmat, const int* kind, const double* params, const int* nparams) {
+  {
+    void* h2 = nullptr;
+    if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
+    if (h2 == nullptr) {  // not H2: the format-agnostic registration
+      c_bpack_set_gpu_kernel(bmat, kind, params, nparams);
+      return;
+    }
+  }
 #ifdef HAVE_MPI
   if (kind == nullptr || nparams == nullptr || (*nparams > 0 && params == nullptr)) {
     throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: null argument");
@@ -1586,6 +1655,14 @@ void c_bpack_h2_set_gpu_kernel(
 
 void c_bpack_h2_set_gpu_kernel_tables(
     F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints) {
+  {
+    void* h2 = nullptr;
+    if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
+    if (h2 == nullptr) {  // not H2: the format-agnostic registration
+      c_bpack_set_gpu_kernel_tables(bmat, reals, nreals, ints, nints);
+      return;
+    }
+  }
 #ifdef HAVE_MPI
   if (nreals == nullptr || nints == nullptr || *nreals < 0 || *nints < 0 ||
       (*nreals > 0 && reals == nullptr) || (*nints > 0 && ints == nullptr)) {

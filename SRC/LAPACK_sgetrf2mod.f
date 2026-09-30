@@ -171,9 +171,17 @@
       IF ( m.EQ.1 ) THEN
 *
 *        Use unblocked code for one row case
-*        Just need to handle IPIV and INFO
+*        Just need to handle IPIV and INFO, and the tiny pivot
+*        replacement of the N = 1 case (the last pivot of the matrix)
 *
          ipiv( 1 ) = 1
+         if(abs(a( 1, 1 ))<THRESH)then
+            IF( a( 1, 1 ).EQ.zero ) THEN
+               a( 1, 1 )= THRESH
+            ELSE
+               a( 1, 1 ) = a( 1, 1 )/abs(a( 1, 1 )) * THRESH
+            ENDIF
+         end if
          IF ( a(1,1).EQ.zero )
      $      info = 1
 *

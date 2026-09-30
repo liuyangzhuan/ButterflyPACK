@@ -12,7 +12,7 @@ cd build_gpu
 export CRAYPE_LINK_TYPE=dynamic
 
 LIBDIR=/global/cfs/cdirs/m2957/lib/lib/PrgEnv-gnu
-MAGMA_DIR=/global/cfs/cdirs/m2957/lib/magma_master
+MAGMA_DIR=/global/cfs/cdirs/m2957/lib/magma_v2.10.0
 ZFP_INSTALL_DIR=/global/cfs/cdirs/m2957/liuyangz/my_research/zfp-1.0.0_gcc_perlmutter/install
 
 rm -rf CMakeCache.txt CMakeFiles
