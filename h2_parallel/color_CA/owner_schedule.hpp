@@ -2059,7 +2059,7 @@ bool owner_schedule_batch_wave(OwnerScheduleState<CoordType, DataType>& st, Tree
                         if (use_sketch == 2) {
                             gather_id_target_streamed(
                                 st.tree, &box, level, kernel,
-                                scratch, box.on_boundary);
+                                scratch, box.on_boundary, tolerance);
                         } else {
                             scratch.streamed_sketch_valid = false;
                             gather_id_workspace(
@@ -2069,7 +2069,8 @@ bool owner_schedule_batch_wave(OwnerScheduleState<CoordType, DataType>& st, Tree
                                 scratch.workspace, scratch.workspace_rows,
                                 scratch.workspace_cols, 0,
                                 box.on_boundary,
-                                /*use_CA_boundary_semantics=*/true);
+                                /*use_CA_boundary_semantics=*/true,
+                                &scratch.id_adaptive);
                         }
                         FMM_PHASE_LAP(box_lap, BOX_SKETCH);
                         compute_and_modify(

@@ -953,7 +953,9 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
       }
   }
 
-  if (options.id_proxy_mode == 1) {
+  // (mode 2: the device evaluates the far rows it samples from coordinates)
+  if (options.id_proxy_mode == 1 ||
+      (options.id_proxy_mode == 2 && options.use_gpu != 0)) {
       const size_t coordinate_count =
           static_cast<size_t>(options.N) * static_cast<size_t>(options.dimension);
       H2_solver->tree->id_source_point_coords.assign(

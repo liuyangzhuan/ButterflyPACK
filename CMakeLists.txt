@@ -553,6 +553,7 @@ if (enable_h2_gpu)
   # CUDA kernels of the H2 Color GPU backend (the rest is header-only C++)
   add_library(h2_gpu_kernels OBJECT h2_parallel/color_gpu/device_kernels.cu
                                     h2_parallel/color_gpu/device_id.cu
+                                    h2_parallel/color_gpu/device_adaptive.cu
                                     h2_parallel/color_gpu/device_gemm.cu
                                     h2_parallel/color_gpu/device_sketch.cu
                                     h2_parallel/color_gpu/solve_kernels.cu
@@ -571,7 +572,10 @@ if (enable_h2_gpu)
   # they give the same bits.  The flag applies to the whole file, so the
   # device ID of Color levels also runs without FMA (a small cost, no
   # accuracy effect); other GPU kernels and CPU code are not affected.
-  set_source_files_properties(h2_parallel/color_gpu/device_id.cu PROPERTIES
+  # The kernels of the adaptive ID rows (device_adaptive.cu, H2_ID_proxy 2)
+  # feed the same decisions, so they are compiled the same way.
+  set_source_files_properties(h2_parallel/color_gpu/device_id.cu
+                              h2_parallel/color_gpu/device_adaptive.cu PROPERTIES
                               COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
   # CUDA kernels of the HODLR GPU backend (hodlr_gpu/; the rest is header-only
   # C++ used by SRC/BPACK_gpu_wrapper.cpp)

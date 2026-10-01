@@ -459,7 +459,7 @@ void factorize_CA_level(
                         if (stream_sketch_enabled()) {
                             gather_id_target_streamed(
                                 tree, box, level, kernel,
-                                scratch, box->on_boundary);
+                                scratch, box->on_boundary, tolerance);
                         } else {
                             scratch.streamed_sketch_valid = false;
                             gather_id_workspace(
@@ -469,7 +469,8 @@ void factorize_CA_level(
                                 proxy_radius, is_symmetric,
                                 scratch.workspace, scratch.workspace_rows,
                                 scratch.workspace_cols, 0, box->on_boundary,
-                                /*use_CA_boundary_semantics=*/true);
+                                /*use_CA_boundary_semantics=*/true,
+                                &scratch.id_adaptive);
                         }
                         compute_and_modify(
                             dimension, box, level, kernel, scratch,
@@ -1084,7 +1085,7 @@ void hierarchical_factorization_parallel(
         const bool use_CA_level = tree->level_uses_CA(current_level);
         const bool use_streamed_level =
             current_level > 1 && use_sketch == 2 &&
-            is_symmetric && !is_hermitian && tree->id_proxy_mode != 2;
+            is_symmetric && !is_hermitian;
         const int level_lazy_schur = use_streamed_level
             ? (use_CA_level ? std::min(lazy_schur, 1) : lazy_schur)
             : 0;
@@ -1546,7 +1547,7 @@ void hierarchical_factorization_parallel(
                             if (use_streamed_level) {
                                 gather_id_target_streamed(
                                     tree, &box, level, kernel, scratch,
-                                    box.on_boundary);
+                                    box.on_boundary, tolerance);
                             } else {
                                 scratch.streamed_sketch_valid = false;
                                 gather_id_workspace(
@@ -1556,7 +1557,8 @@ void hierarchical_factorization_parallel(
                                     proxy_radius, is_symmetric,
                                     scratch.workspace, scratch.workspace_rows,
                                     scratch.workspace_cols, 0,
-                                    box.on_boundary);
+                                    box.on_boundary, false,
+                                    &scratch.id_adaptive);
                             }
 
                             thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;

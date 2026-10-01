@@ -187,8 +187,7 @@ public:
     bool box_path_runs(int lvl) const {
         if (!color_gpu_enabled() || lvl <= 1 || tree_->level_uses_CA(lvl)) return false;
         if (!tree_->levels[static_cast<size_t>(lvl)].is_process_active) return false;
-        const bool streamed =
-            opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian && tree_->id_proxy_mode != 2;
+        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
         if (!streamed || opt_.lazy_schur == 0) return false;
         // (with the level's own lazy mode: after a CA level the runtime still
         // has that level's, capped at 1)
@@ -249,8 +248,7 @@ public:
     // sketches, lazy far fill, a symmetric kernel, the LU of X_RR.
     bool ca_level_runs(int lvl, int owner_component) const {
         if (!color_gpu_enabled() || lvl <= 1 || !tree_->level_uses_CA(lvl) || owner_component != 0) return false;
-        const bool streamed =
-            opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian && tree_->id_proxy_mode != 2;
+        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
         return streamed && opt_.lazy_schur > 0 && opt_.method == FactorizationMethod::LU && !opt_.occupancy;
     }
     bool ca_level_runs(int lvl) const { return ca_level_runs(lvl, opt_.ca_owner_component); }
@@ -683,6 +681,12 @@ public:
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",
                     lvl, e.sketch_plan, e.sketch_gpu, e.sk_meta, e.sk_upload, e.sk_rows,
                     e.sk_stored, e.sk_p, e.sk_fill, e.sk_id, e.sk_download, e.finish_store, e.finish_sources);
+        if (e.adaptive_rounds > 0) {
+            std::printf("  [gpu] level %d adaptive ID rows: %lld rounds over the waves, later rounds %.2f s, "
+                        "%lld boxes sampled more than one node\n",
+                        lvl, static_cast<long long>(e.adaptive_rounds), e.sk_adaptive,
+                        static_cast<long long>(e.adaptive_multi));
+        }
         std::printf("  [gpu] level %d background copier: busy %.2f s, of which waiting for device data "
                     "%.2f s\n", lvl, e.finish_store, e.copier_wait);
         std::printf("  [gpu] level %d elimination device: fills %.2f, X_RR/X_SR %.2f, LU %.2f, X_NR %.2f, "

@@ -194,6 +194,7 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
     extern __shared__ double smem[];
     const QrcpItemT<T> item = items[blockIdx.x];
     const int m = item.m, n = item.n, lda = item.lda;
+    if (item.tol >= 0.0) tol = item.tol;
     T* A = item.a;
     double* vn1 = smem;
     double* vn2 = smem + n;
@@ -404,6 +405,7 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
     const int box = blockIdx.x / cpb, part = blockIdx.x % cpb;
     const QrcpItemT<T> item = items[box];
     const int m = item.m, n = item.n, lda = item.lda;
+    if (item.tol >= 0.0) tol = item.tol;
     T* A = item.a;
     int* jpvt = item.jpvt;  // the working permutation
     double* vn1 = dwork + static_cast<size_t>(box) * coop_box_doubles(max_n, cpb);

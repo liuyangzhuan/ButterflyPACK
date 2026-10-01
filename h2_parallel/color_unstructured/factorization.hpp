@@ -50,6 +50,8 @@ void factorize(H2<CoordType, DataType>* solver,
     auto& entry_times = solver->kernel.entryeval_time_per_thread;
 
     const double start = MPI_Wtime();
+    butterfly::h2_verification_seconds() = 0.0;
+    butterfly::h2_warmup_seconds() = 0.0;
     hierarchical_factorization_unstructured(
         solver->tree.get(),
         &solver->kernel,
@@ -71,10 +73,20 @@ void factorize(H2<CoordType, DataType>* solver,
         solver->options.verbosity,
         occupied);
 
-    double elapsed = MPI_Wtime() - start;
+    // the logdet and quick verification that end the call, and the GPU
+    // warm-up before its first level, are not factorization
+    double elapsed = MPI_Wtime() - start - butterfly::h2_verification_seconds() -
+                     butterfly::h2_warmup_seconds();
     MPI_Allreduce(
         MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
     if (factorization_time) *factorization_time = elapsed;
+    double verification = butterfly::h2_verification_seconds();
+    MPI_Allreduce(
+        MPI_IN_PLACE, &verification, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
+    if (solver->tree->mpi_rank == 0 && solver->options.verbosity >= 0) {
+        std::printf("  logdet and quick verification: %.2f s (not in the factor time)\n", verification);
+        std::fflush(stdout);
+    }
 
     double entry_elapsed = 0.0;
     if (!entry_times.empty()) {

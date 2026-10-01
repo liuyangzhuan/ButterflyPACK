@@ -187,6 +187,19 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
+    {
+        // as the full-grid loop: before the first level of the process's
+        // first factorization, and not in the factor time
+        const double kernels = gpu_driver.warm_up();
+        const double exchanges = gpu_driver.warm_up_exchange();
+        h2_warmup_seconds() = kernels + exchanges;
+        if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
+            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, before the levels (not in the factor "
+                        "time)\n",
+                        kernels, exchanges);
+            std::fflush(stdout);
+        }
+    }
 #endif
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
@@ -233,7 +246,7 @@ void hierarchical_factorization_unstructured(
         const bool use_CA_level = tree->level_uses_CA(current_level);
         const bool use_streamed_level =
             current_level > 1 && use_sketch == 2 &&
-            is_symmetric && !is_hermitian && tree->id_proxy_mode != 2;
+            is_symmetric && !is_hermitian;
         const int level_lazy_schur = use_streamed_level
             ? (use_CA_level ? std::min(lazy_schur, 1) : lazy_schur)
             : 0;
@@ -836,7 +849,7 @@ void hierarchical_factorization_unstructured(
                             if (use_streamed_level) {
                                 gather_id_target_streamed(
                                     tree, &box, level, kernel, scratch,
-                                    box.on_boundary);
+                                    box.on_boundary, tolerance);
                             } else {
                                 scratch.streamed_sketch_valid = false;
                                 gather_id_workspace(
@@ -846,7 +859,8 @@ void hierarchical_factorization_unstructured(
                                     proxy_radius, is_symmetric,
                                     scratch.workspace, scratch.workspace_rows,
                                     scratch.workspace_cols, 0,
-                                    box.on_boundary);
+                                    box.on_boundary, false,
+                                    &scratch.id_adaptive);
                             }
 
                             thread_boundary_counts[static_cast<size_t>(tid)] += box.on_boundary;
@@ -1984,6 +1998,7 @@ void hierarchical_factorization_unstructured(
 
     memory_diagnostics.record(tree, 0, "retained", "factorization_complete");
 
+    const auto verification_start = clock::now();
     if (print_summary) {
         double logabsdet;
         DataType phase;
@@ -1995,6 +2010,8 @@ void hierarchical_factorization_unstructured(
 
         (void)h2_quick_verification_unstructured(tree, kernel);
     }
+    // (reported apart from the factor time, as the full-grid loop does)
+    h2_verification_seconds() = std::chrono::duration<double>(clock::now() - verification_start).count();
 
     memory_diagnostics.record(tree, 0, "verification", "post_quick_verification");
     memory_diagnostics.print(tree->comm, rank, size);

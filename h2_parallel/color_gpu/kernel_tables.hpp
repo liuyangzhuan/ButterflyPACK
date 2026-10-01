@@ -89,14 +89,14 @@ KernelSpec device_kernel_spec(const GpuSpecT& g) {
 }
 
 // The device sketch covers a level's ID targets (factorization and compression).  Static training rows
-// (H2_ID_radius > 2, H2_ID_proxy 1: points anywhere in the tree) join the
-// level's point table: a kernel of coordinates needs their global
-// coordinates (kept for H2_ID_proxy 1), kind 3 only their ids.  Adaptive rows
-// (H2_ID_proxy 2) are not streamed.
+// (H2_ID_radius > 2, H2_ID_proxy 1: points anywhere in the tree) and the
+// far rows the adaptive selection samples (H2_ID_proxy 2, adaptive_rows.hpp)
+// join the level's point table: a kernel of coordinates needs their global
+// coordinates (kept for H2_ID_proxy 1, and for 2 with H2_use_gpu), kind 3
+// only their ids.
 template<typename Tree>
 bool device_sketch_supported(const Tree* tree, int kernel_kind) {
-    if (tree->id_proxy_mode == 2) return false;
-    if (tree->id_neighborhood_radius <= 2 && tree->id_proxy_mode != 1) return true;
+    if (tree->id_neighborhood_radius <= 2 && tree->id_proxy_mode == 0) return true;
     const size_t coordinates = static_cast<size_t>(tree->num_points) * static_cast<size_t>(tree->dimension);
     return kernel_kind == 3 || tree->id_source_point_coords.size() == coordinates;
 }
