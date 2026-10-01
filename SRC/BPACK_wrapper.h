@@ -68,6 +68,8 @@ void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* 
  * Register a device-evaluable form of the matrix kernel for the GPU backend
  * of the format-7 H2 factorization (H2_use_gpu=1 or 2).  kind 1: entry params[1]
  * when the two one-based global IDs match, else params[0] / |x - y| (3D).
+ * kind 4 (real): Gaussian-process squared exponential kernel and its derivatives,
+ * params = {constant, diagonal, three inverse metrics, mode} (color_gpu/kernel_eval.cuh).
  * Without a registered kernel the GPU runs only the Schur-update pass.
  */
 void c_bpack_h2_set_gpu_kernel(F2Cptr* bmat, const int* kind, const double* params, const int* nparams);

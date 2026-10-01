@@ -713,9 +713,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         DeviceHeap::exchange_arena().initialize_fixed(mb << 20);
     }
     heap_.ensure_initialized();
-    // a fresh factorization (unless earlier levels' solve factors are kept);
-    // otherwise the parent blocks live on
-    if (!adopt_ && device_solve_store().empty()) heap_.reset();
+    // a fresh factorization (unless earlier levels' solve factors are kept, or
+    // other operators keep their data: keep_operators()); otherwise the parent
+    // blocks live on
+    if (!adopt_ && device_solve_store().empty() && !other_operators_hold_data()) heap_.reset();
     // (a replicated CA level: its ghosts' factors too, which the device CA
     // solve eliminates again; keyed by Morton index like the local ones)
     keep_solve_ = device_solve_enabled() && device_solve_keep() && gpu_sketch_;

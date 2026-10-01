@@ -31,6 +31,13 @@ def py_bpack_setup(sp):
     sp.py_bpack_logdet.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes_dt), ctypes.POINTER(ctypes_rdt)]
     sp.py_bpack_free.restype = None
     sp.py_bpack_free.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    sp.py_bpack_set_gpu_kernel.restype = None
+    sp.py_bpack_set_gpu_kernel.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.c_int
+    ]
     sp.py_bpack_terminate.restype = None
     sp.py_bpack_terminate.argtypes = None
 

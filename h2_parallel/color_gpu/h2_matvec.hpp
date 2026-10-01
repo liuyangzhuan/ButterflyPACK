@@ -584,6 +584,7 @@ template<typename CoordType, typename DataType>
 bool run_device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<DataType>& input,
                        std::vector<DataType>& output, int nrhs) {
     if constexpr (gpu_data_type<DataType>) {
+        activate_operator(tree);
         if (!device_matvec_usable(tree)) return false;
         device_h2_mul(tree, input, output, nrhs);
         return true;
