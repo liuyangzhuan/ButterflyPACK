@@ -26,6 +26,12 @@ parser.add_argument(
     "--Ndim", "--ndim", dest="ndim", type=positive_int, default=3,
     help="coordinate dimension (default: 3)",
 )
+parser.add_argument(
+    "--gpu", choices=["none", "entry", "list"], default="none",
+    help="GPU evaluator of the george kernel for H2_use_gpu / HODLR_use_gpu "
+         "(user_block_funcs_george_gpu.py): CUDA source text compiled with NVRTC "
+         "(entry) or a CuPy entry-list function (list); default none",
+)
 args = parser.parse_args()
 
 
@@ -65,7 +71,10 @@ err=np.sqrt(intialguess[0])
 meta = {
     "coordinates": coordinates,
     "kernel": K,
-    "yerr": np.repeat(err, Npo).astype(np.float64)
+    "yerr": np.repeat(err, Npo).astype(np.float64),
+    # the kernel's parameters, for its GPU evaluators
+    "amplitude": amplitude,
+    "metric": np.array(intialguess[2:], dtype=np.float64)
 }
 payload = {
     "block_func_filepath": os.path.abspath(__file__),
@@ -73,6 +82,12 @@ payload = {
     "block_func_name": "compute_block",
     "meta": meta
 }
+if args.gpu == "entry":
+    from user_block_funcs_george_gpu import gpu_entry
+    payload["gpu_entry"] = gpu_entry(meta)
+elif args.gpu == "list":
+    payload["block_func_module"] = "user_block_funcs_george_gpu"
+    payload["gpu_list"] = {"func_name": "compute_entries_gpu", "flags": 1}  # BPACK_GPU_SYMMETRIC
 
 
 

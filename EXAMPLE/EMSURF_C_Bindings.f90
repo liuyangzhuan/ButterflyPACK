@@ -80,23 +80,22 @@ contains
       wavenumber = quant_c%wavenum
    end subroutine emsurf_get_wavenumber_c
 
-   ! Sizes of the mesh tables of the EFIE entry for the GPU backends
-   ! (c_bpack_set_gpu_kernel_tables, kind 3), and of the CFIE entry (kind 5,
-   ! CFIE_alpha /= 1: also eta0 and the triangle normals)
-   subroutine emsurf_get_gpu_kernel_sizes_c(nreals, nints) bind(C)
+   ! Sizes of the mesh tables of the EFIE entry for the GPU evaluators
+   ! (gpu/emsurf_gpu.cu), and of the CFIE entry (CFIE_alpha /= 1: also eta0
+   ! and the triangle normals)
+   subroutine emsurf_get_gpu_table_sizes_c(nreals, nints) bind(C)
       integer(c_int64_t), intent(out) :: nreals, nints
       nreals = 3_c_int64_t*quant_c%maxnode + 4_c_int64_t*quant_c%integral_points
       if (quant_c%CFIE_alpha /= 1d0) nreals = nreals + 1_c_int64_t + 3_c_int64_t*quant_c%maxpatch
       nints = 6_c_int64_t*quant_c%Nunk + 3_c_int64_t*quant_c%maxpatch
-   end subroutine emsurf_get_gpu_kernel_sizes_c
+   end subroutine emsurf_get_gpu_table_sizes_c
 
-   ! The kind-3/5 parameters (8; the 8th, CFIE_alpha, used by kind 5) and mesh
-   ! tables (layout in BPACK_wrapper.h): vertex coordinates and the Gauss
-   ! rule (for the CFIE then eta0 and the unit normal of each triangle); per
-   ! edge its vertices, triangles and opposite vertices (info_unk(1:6)), then
-   ! the triangles' vertices (node_of_patch(1:3)), all 0-based (-1: no
-   ! triangle)
-   subroutine emsurf_get_gpu_kernel_c(params, reals, ints) bind(C)
+   ! The parameters (8) and mesh tables of the GPU evaluators (layout in
+   ! gpu/emsurf_gpu.cu): vertex coordinates and the Gauss rule (for the CFIE
+   ! then eta0 and the unit normal of each triangle); per edge its vertices,
+   ! triangles and opposite vertices (info_unk(1:6)), then the triangles'
+   ! vertices (node_of_patch(1:3)), all 0-based (-1: no triangle)
+   subroutine emsurf_get_gpu_tables_c(params, reals, ints) bind(C)
       real(c_double), intent(out) :: params(8), reals(*)
       integer(c_int), intent(out) :: ints(*)
       integer :: node, edge, patch, q, k
@@ -142,7 +141,7 @@ contains
             ints(off + 3_c_int64_t*(patch - 1) + k) = quant_c%node_of_patch(k, patch) - 1
          end do
       end do
-   end subroutine emsurf_get_gpu_kernel_c
+   end subroutine emsurf_get_gpu_tables_c
 
    subroutine emsurf_entry_c(m, n, value, context) bind(C)
       integer(c_int), intent(in) :: m, n

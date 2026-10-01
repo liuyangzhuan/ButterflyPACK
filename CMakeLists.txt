@@ -318,7 +318,7 @@ if(enable_h2_gpu)
   message("-- Using H2 GPU backend: MAGMA '${TPL_H2_MAGMA_LIBRARIES}', CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES}")
   set(CMAKE_CXX_FLAGS "-DH2_HAVE_GPU -DADD_ ${CMAKE_CXX_FLAGS}")
   include_directories(${TPL_H2_MAGMA_INCLUDE_DIRS} ${CUDAToolkit_INCLUDE_DIRS})
-  set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart CUDA::cusolver)
+  set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart CUDA::cusolver CUDA::nvrtc CUDA::cuda_driver)
 endif()
 
 #--------------------- ARPACK ---------------------
@@ -458,6 +458,8 @@ if(enable_mpi)
 include_directories(${MPI_Fortran_INCLUDE_PATH})
 endif()
 include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
+# bpack_gpu.h, included by the C wrapper headers (BPACK_wrapper.h)
+include_directories(${CMAKE_SOURCE_DIR}/GPU_INTERFACE)
 
 ######################################################################
 #
@@ -551,15 +553,24 @@ include(GNUInstallDirs)
 set(H2_GPU_OBJECTS "")
 if (enable_h2_gpu)
   # CUDA kernels of the H2 Color GPU backend (the rest is header-only C++)
+  # The text of the entry kernels (GPU_INTERFACE/bpack_gpu_kernels.cuh), which
+  # evaluator.cu compiles with NVRTC for entry evaluators given as source
+  # text; regenerated when the header changes.
+  file(READ ${CMAKE_SOURCE_DIR}/GPU_INTERFACE/bpack_gpu_kernels.cuh BPACK_GPU_KERNELS_TEXT)
+  configure_file(${CMAKE_SOURCE_DIR}/GPU_INTERFACE/bpack_gpu_kernels_source.h.in
+                 ${CMAKE_BINARY_DIR}/GPU_INTERFACE/bpack_gpu_kernels_source.h @ONLY)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+               ${CMAKE_SOURCE_DIR}/GPU_INTERFACE/bpack_gpu_kernels.cuh)
   add_library(h2_gpu_kernels OBJECT h2_parallel/color_gpu/device_kernels.cu
                                     h2_parallel/color_gpu/device_id.cu
                                     h2_parallel/color_gpu/device_gemm.cu
                                     h2_parallel/color_gpu/device_sketch.cu
                                     h2_parallel/color_gpu/solve_kernels.cu
                                     h2_parallel/color_gpu/h2_matvec_kernels.cu
-                                    h2_parallel/color_gpu/emsurf_blocks.cu)
+                                    h2_parallel/color_gpu/evaluator.cu)
   set_target_properties(h2_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(h2_gpu_kernels PRIVATE H2_HAVE_GPU)
+  target_include_directories(h2_gpu_kernels PRIVATE ${CMAKE_BINARY_DIR}/GPU_INTERFACE)
   # --fmad=false (no fused multiply-add contraction) for the device ID only
   # (device_id.cu), needed only by GPU H2 CA0 (replicated CA levels,
   # H2_CA_owner_component 0): a ghost box is eliminated again on each rank
@@ -621,6 +632,7 @@ set_target_properties(butterflypack PROPERTIES
   SOVERSION ${VERSION_MAJOR})
 
 target_include_directories(butterflypack PUBLIC
+  $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/GPU_INTERFACE>
   $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/CPP_INTERFACE>
   $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLE>
   $<BUILD_INTERFACE:${ButterflyPACK_SOURCE_DIR}/SRC_DOUBLECOMPLEX>
@@ -637,6 +649,9 @@ install(TARGETS butterflypack EXPORT MYBPACKTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# the interface of the GPU evaluators (doc/gpu_kernels.md)
+install(FILES GPU_INTERFACE/bpack_gpu.h GPU_INTERFACE/bpack_gpu_entry.cuh GPU_INTERFACE/bpack_gpu_kernels.cuh
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 add_subdirectory(EXAMPLE)
 

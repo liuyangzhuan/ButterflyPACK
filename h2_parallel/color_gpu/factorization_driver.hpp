@@ -130,6 +130,24 @@ public:
         }
     }
 
+    // Before the first level: the application's evaluator, when a level may
+    // take the device box path, which calls it (Evaluator::warm_up, once per
+    // evaluator: an NVRTC compile, CuPy compiling its kernels, ...).  Returns
+    // its time (0 when there is nothing to warm), which the factor time
+    // leaves out.
+    double warm_up_evaluator() {
+        if constexpr (!gpu_data_type<DataType>) {
+            return 0.0;
+        } else {
+            if (!color_gpu_enabled() || opt_.use_sketch != 2 || !opt_.is_symmetric || opt_.is_hermitian ||
+                opt_.method != FactorizationMethod::LU ||
+                tree_->id_proxy_mode == 2) {
+                return 0.0;
+            }
+            return warm_up_registered_evaluator<DataType>(tree_, kernel_->gpu_evaluator);
+        }
+    }
+
     // Before the first level of the process's first factorization: a 64 KB
     // message with every rank this one exchanges with on a level (each
     // level's one-hop neighbour ranks), sent and received the way the levels
@@ -263,7 +281,7 @@ public:
         if (!level_eliminator_supported(level, kernel_, tree_->dimension, opt_.method, reason, true, lazy)) {
             return false;
         }
-        if (!device_sketch_supported(tree_, device_kernel_spec(kernel_->gpu_spec).kind)) {
+        if (!device_sketch_supported(tree_, *evaluator_of(kernel_->gpu_evaluator))) {
             if (reason) *reason = "CA levels need the device sketch";
             return false;
         }

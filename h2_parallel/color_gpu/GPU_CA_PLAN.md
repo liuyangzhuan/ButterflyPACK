@@ -882,6 +882,58 @@ Unchanged bitwise (8-rank Laplace 192: logdet, replica check 0 differ,
 solve check 3.988e-15 / 2.7e-14). With the leaf's factors kept (320^3), CA0
 now beats Color by 5%.
 
+**GPU evaluators in place of the kernel kinds (2026-10-01,
+build/gpu_prep/eval).** The library no longer has kernels of its own: the
+application registers a GPU evaluator of its entries (doc/gpu_kernels.md;
+GPU_INTERFACE/, color_gpu/evaluator.hpp), an entry evaluator (C++, inlined
+in the eval and fused sketch kernels, or CUDA source compiled with NVRTC), a
+block evaluator, or an entry-list evaluator. The former kinds are examples in
+EXAMPLE/gpu/ (Laplace, VIE, EMSURF's triangle pairs as a block evaluator,
+CFIE as an entry evaluator) and EXAMPLE/user_block_funcs_george_gpu.py (the GP
+kernel, NVRTC and CuPy). Against HEAD built apart, 40 GB nodes: 8-rank
+Laplace 192 bitwise as above; 64 ranks, factor time old / new (two runs
+each): 192^3 CA0 3.61, 3.51 / 3.75, 3.57, Color 3.18, 3.13 / 3.22, 3.17;
+320^3 CA0 7.14, 7.16 / 7.24, 7.18, Color 7.48, 7.41 / 7.47, 7.52 (320^3
+logdets bitwise; 192^3 within one ulp, as the old build varies from run to
+run). EMSURF EFIE H2, 8 ranks: sphere 12K 1.17, 1.13 / 1.07, 1.06 s; 49K
+1.88, 1.85 / 1.80, 1.85 s (accuracy the same to 7 digits). HODLR
+construction: EFIE (now a block evaluator, one host-id synchronization per
+batch) 1.91, 1.58 / 1.62, 1.63 s; CFIE 2.01, 1.92 / 1.91, 1.90 s.
+BPACK_CHECK=kernel: 0 (Laplace), 1e-16 (VIE), 1e-15 self to 1e-13 far
+(EFIE triangle pairs); HODLR has the check too now.
+
+**Evaluator and HODLR warm-ups (2026-10-01, build/gpu_prep/eval, warm).**
+An evaluator's first call carried its first-use costs into the first level
+(Python GP, 100K points, 8 ranks: the CuPy route's leaf 4.3 s against 0.6 s
+with NVRTC, all of it CuPy compiling its kernels and starting up; the NVRTC
+compile too, less). Evaluator::warm_up now calls each evaluator once (a
+block of up to 32 of the rank's points, and its sketch) before its first use,
+outside the reported times: H2 factorization (structured and unstructured;
+the unstructured path now also warms the batched kernels), H2 compression,
+and HODLR, whose new warm-up (GpuState::warm_up) also runs the
+factorization's batched LU, solves and GEMM forms per size range and the
+construction's QRs, SVDs and cuSOLVER handles. Python GP: evaluator warm-up
+NVRTC 0.70 s, CuPy 4.10 s with a cold kernel cache and 0.23 s with a warm
+one; the levels then sum to 0.75 s (NVRTC) and 0.80 s (CuPy, warm cache).
+HODLR construction old / new (two runs each): Laplace 48^3 4.62, 4.22 /
+4.11, 4.14 s; EFIE 1.70, 1.57 / 1.48, 1.49; CFIE 2.03, 1.90 / 1.80, 1.79;
+VIE 1.12, 1.15 / 1.01, 1.03 (warm-up 0.15-0.20 s apart). EMSURF H2 factor
+1.32, 1.12 / 1.00, 1.04 s. Laplace H2 bitwise as before. Not done: a
+first-message warm-up for HODLR's exchanges (not measured).
+
+**Python: split initialization, warm-up at registration (2026-10-01,
+build/gpu_prep/eval, p3_*).** The worker now runs py_bpack_init, registers
+the evaluator, warms it up with c_bpack_gpu_warm_up (H2: on the GPU the
+factorization will use, after begin_operator_build so ranks sharing a GPU
+split it first), then py_bpack_compute: the evaluator serves HODLR too, and
+its first-use cost counts in the initialization. GP, 100K points, 8 ranks on
+one node, three alternating runs of each H2 route: NVRTC compile 0.52-0.62
+s, CuPy warm-up 3.25 s (cold kernel cache) / 0.17-0.25 s (warm); levels
+NVRTC 497+109+16, 497+122+15, 490+109+15 ms, CuPy 574+109+15, 580+115+30,
+576+111+15 ms: the upper levels equal, the leaf about 80 ms (16%) slower with
+CuPy. HODLR from Python: GPU construction 0.82-0.96 s (CPU 1.97-2.01 s),
+kernel check 1e-16 self / 3e-16 far, accuracy as the CPU's.
+
 ### M5. CA3 (component-owner) on the GPU
 Evaluate after M1-M3 numbers. Unique owner per boundary component, the
 corner -> edge -> face DAG, FULL/COMPACT/SKELETON routing, deterministic

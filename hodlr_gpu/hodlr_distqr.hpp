@@ -422,6 +422,41 @@ public:
         sw_.clear();
     }
 
+    // Before the first merges (GpuState::warm_up): the cuSOLVER handle, a
+    // small QR and the application of its Q, the root's SVD, MAGMA's laset,
+    // lacpy and GEMM, so that no level pays their first use.  The flop count
+    // stays as it was.
+    void warm_up() {
+        constexpr int m = 16, n = 8;
+        const double flops = flops_;
+        fmm::gpu::Context& ctx = fmm::gpu::Context::instance();
+        ctx.activate();
+        fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
+        Factor f;
+        f.m = m;
+        f.n = n;
+        f.a = heap_identity<T>(m, n);
+        f.tau = heap.alloc<T>(n * sizeof(T));
+        geqrf(f);  // (synchronizes)
+        T* b = heap_identity<T>(n, n);
+        T* c = apply_q_device(f, n, b, n);  // (synchronizes)
+        laset(n, n, b, n);
+        lacpy_upper(n, n, f.a, m, b, n);
+        if constexpr (std::is_same_v<T, double>) {
+            magma_dgemm(MagmaNoTrans, MagmaTrans, m, n, n, 1.0, c, m, b, n, 0.0, f.a, m, ctx.queue());
+        } else {
+            magma_zgemm(MagmaNoTrans, MagmaTrans, m, n, n, MAGMA_Z_MAKE(1.0, 0.0), reinterpret_cast<magmaDoubleComplex*>(c),
+                        m, reinterpret_cast<magmaDoubleComplex*>(b), n, MAGMA_Z_MAKE(0.0, 0.0),
+                        reinterpret_cast<magmaDoubleComplex*>(f.a), m, ctx.queue());
+        }
+        fmm::gpu::check_cuda(cudaStreamSynchronize(ctx.stream()), "warm-up");
+        heap.free(c);
+        heap.free(b);
+        release(f);
+        svd_.warm_up();
+        flops_ = flops;
+    }
+
     // the flops since the last call (TSQR and dm_gemm_nt, counted as the CPU
     // counts them: 8 m n k for a complex gemm)
     double take_flops() {

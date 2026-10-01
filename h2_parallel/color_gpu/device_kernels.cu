@@ -1,7 +1,6 @@
 // Batched element kernels of the H2 Color GPU backend.  See device_kernels.hpp.
 
 #include "device_kernels.hpp"
-#include "kernel_eval.cuh"
 
 #include <algorithm>
 #include <cstdint>
@@ -24,28 +23,6 @@ void check_launch(const char* what) {
     }
 }
 
-__device__ __forceinline__ int index_at(const char* meta, const IndexList& list, int i) {
-    if (list.ptr != nullptr) return list.base + list.ptr[i];
-    return list.base + (list.offset < 0 ? i : reinterpret_cast<const int*>(meta + list.offset)[i]);
-}
-
-template<typename T, int Kind>
-__global__ void eval_kernel(const EvalItemT<T>* items, const char* meta, KernelSpec spec, PointTable points) {
-    const EvalItemT<T> item = items[blockIdx.x];
-    const int i = blockIdx.y * kTile + threadIdx.x;
-    const int j0 = blockIdx.z * kTile;
-    if (i >= item.m || j0 >= item.n) return;
-    const int si = index_at(meta, item.rows, i);
-    const double* x = points.xyz + 3 * static_cast<int64_t>(si);
-    const int64_t x_id = points.ids[si];
-    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
-        const int j = j0 + jj;
-        if (j >= item.n) break;
-        const int sj = index_at(meta, item.cols, j);
-        item.out[i + static_cast<int64_t>(j) * item.ld] =
-            kernel_value<T, Kind>(spec, x, x_id, points.xyz + 3 * static_cast<int64_t>(sj), points.ids[sj]);
-    }
-}
 
 template<typename T>
 __global__ void gather_kernel(const GatherItemT<T>* items, const char* meta) {
@@ -192,28 +169,6 @@ dim3 tile_grid(int count, int max_m, int max_n) {
 }  // namespace
 
 template<typename T>
-void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
-                 const char* meta, KernelSpec spec, PointTable points, cudaStream_t stream) {
-    if (count <= 0 || max_m <= 0 || max_n <= 0) return;
-    const dim3 grid = tile_grid(count, max_m, max_n), block(kTile, kTileRows);
-    if constexpr (is_complex_scalar<T>) {
-        switch (kernel_kind_of<T>(spec, "launch_eval")) {
-            case 3: eval_kernel<T, 3><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
-            case 4: eval_kernel<T, 4><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
-            case 5: eval_kernel<T, 5><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
-            default: eval_kernel<T, 2><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
-        }
-    } else {
-        if (kernel_kind_of<T>(spec, "launch_eval") == 4) {
-            eval_kernel<T, 4><<<grid, block, 0, stream>>>(items, meta, spec, points);
-        } else {
-            eval_kernel<T, 1><<<grid, block, 0, stream>>>(items, meta, spec, points);
-        }
-    }
-    check_launch("eval_kernel");
-}
-
-template<typename T>
 void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
                    const char* meta, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
@@ -280,8 +235,6 @@ void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_
 }
 
 #define H2_ELEMENT_LAUNCHES(T)                                                                                     \
-    template void launch_eval<T>(const EvalItemT<T>*, int, int, int, const char*, KernelSpec, PointTable,          \
-                                 cudaStream_t);                                                                    \
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
     template void launch_sym_add<T>(const SymAddItemT<T>*, int, int, cudaStream_t);                               \

@@ -7,6 +7,7 @@
 #ifdef H2_HAVE_GPU
 
 #include <cuda_runtime.h>
+#include "../../GPU_INTERFACE/bpack_gpu_kernels.cuh"
 
 #include <cmath>
 #include <complex>
@@ -15,41 +16,8 @@
 namespace fmm {
 namespace gpu {
 
-struct __align__(16) dcomplex {
-    double re;
-    double im;
-    dcomplex() = default;
-    __host__ __device__ constexpr dcomplex(double r, double i = 0.0) : re(r), im(i) {}
-};
+// (dcomplex and its arithmetic: GPU_INTERFACE/bpack_gpu_kernels.cuh)
 static_assert(sizeof(dcomplex) == sizeof(std::complex<double>), "dcomplex must match std::complex<double>");
-
-__host__ __device__ inline dcomplex operator+(dcomplex a, dcomplex b) { return {a.re + b.re, a.im + b.im}; }
-__host__ __device__ inline dcomplex operator-(dcomplex a, dcomplex b) { return {a.re - b.re, a.im - b.im}; }
-__host__ __device__ inline dcomplex operator-(dcomplex a) { return {-a.re, -a.im}; }
-__host__ __device__ inline dcomplex operator*(dcomplex a, dcomplex b) {
-    return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
-}
-__host__ __device__ inline dcomplex operator*(double a, dcomplex b) { return {a * b.re, a * b.im}; }
-__host__ __device__ inline dcomplex operator*(dcomplex a, double b) { return {a.re * b, a.im * b}; }
-__host__ __device__ inline dcomplex operator/(dcomplex a, double b) { return {a.re / b, a.im / b}; }
-// Smith's algorithm (no overflow in |b|^2)
-__host__ __device__ inline dcomplex operator/(dcomplex a, dcomplex b) {
-    if (fabs(b.re) >= fabs(b.im)) {
-        const double r = b.im / b.re, d = b.re + b.im * r;
-        return {(a.re + a.im * r) / d, (a.im - a.re * r) / d};
-    }
-    const double r = b.re / b.im, d = b.re * r + b.im;
-    return {(a.re * r + a.im) / d, (a.im * r - a.re) / d};
-}
-__host__ __device__ inline dcomplex& operator+=(dcomplex& a, dcomplex b) { a.re += b.re; a.im += b.im; return a; }
-__host__ __device__ inline dcomplex& operator-=(dcomplex& a, dcomplex b) { a.re -= b.re; a.im -= b.im; return a; }
-__host__ __device__ inline dcomplex& operator*=(dcomplex& a, dcomplex b) { a = a * b; return a; }
-__host__ __device__ inline dcomplex& operator/=(dcomplex& a, double b) { a.re /= b; a.im /= b; return a; }
-__host__ __device__ inline bool operator==(dcomplex a, dcomplex b) { return a.re == b.re && a.im == b.im; }
-__host__ __device__ inline bool operator!=(dcomplex a, dcomplex b) { return !(a == b); }
-
-__host__ __device__ inline dcomplex conj(dcomplex a) { return {a.re, -a.im}; }
-__host__ __device__ inline double conj(double a) { return a; }
 __host__ __device__ inline double real_part(dcomplex a) { return a.re; }
 __host__ __device__ inline double real_part(double a) { return a; }
 __host__ __device__ inline double imag_part(dcomplex a) { return a.im; }

@@ -513,14 +513,28 @@ void hierarchical_compression_parallel(
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
         gpu_ids = gpu_blocks && use_sketch &&
-                  gpu::device_sketch_supported(tree, gpu::device_kernel_spec(kernel->gpu_spec).kind);
+                  gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
+        // the application's evaluator before its first use (not in the
+        // compression time, butterfly_compression_parallel)
+        double evaluator_warm_up = 0.0;
+        if constexpr (gpu::gpu_data_type<DataType>) {
+            if (gpu_blocks) {
+                evaluator_warm_up = gpu::warm_up_registered_evaluator<DataType>(tree, kernel->gpu_evaluator);
+            }
+        }
+        h2_warmup_seconds() = evaluator_warm_up;
         if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
             std::cout << "  GPU compression: "
                       << (gpu_blocks ? (gpu_ids ? "IDs and blocks on the device"
                                                 : "blocks on the device, IDs on the host")
                                      : "off (" + reason + ")")
                       << std::endl;
+            if (evaluator_warm_up > 0.0) {
+                std::printf("  [gpu] warm-up: evaluator %.2f s, before the levels (not in the compression time)\n",
+                            evaluator_warm_up);
+                std::fflush(stdout);
+            }
         }
     }
 #endif
@@ -1685,13 +1699,14 @@ void butterfly_compression_parallel(
             fmm::gpu::invalidate_device_solve();
         }
 #endif
+        h2_warmup_seconds() = 0.0;
         const double start = MPI_Wtime();
         hierarchical_compression_parallel(
             solver->tree.get(), &solver->kernel, solver->options.tolerance,
             &solver->last_factor_rankmax, &solver->factorization_memory,
             solver->options.use_sketch,
             solver->options.verbosity >= 1);
-        double elapsed = MPI_Wtime() - start;
+        double elapsed = MPI_Wtime() - start - h2_warmup_seconds();  // (the GPU warm-up is not compression)
         MPI_Allreduce(MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
         if (compression_time) *compression_time = elapsed;
 

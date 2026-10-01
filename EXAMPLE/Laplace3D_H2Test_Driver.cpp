@@ -15,6 +15,9 @@
 #include <mpi.h>
 
 #include "dBPACK_wrapper.h"
+#ifdef BPACK_EXAMPLE_GPU
+#include "gpu/gpu_evaluators.h"
+#endif
 
 namespace {
 
@@ -780,17 +783,20 @@ int main(int argc, char** argv) {
     }
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
+#ifdef BPACK_EXAMPLE_GPU
     {
-      // Device form of the kernel for H2_use_gpu / HODLR_use_gpu (1 / (4 pi N
-      // r), with the self-cell integral on the diagonal).  Ignored by a build
-      // without GPU backend.
-      const int gpu_kernel_kind = 1;
-      const int gpu_kernel_params = 2;
-      const double gpu_params[2] = {application.inverse_4pi_n(),
-                                    application.diagonal()};
-      d_c_bpack_set_gpu_kernel(&resources.matrix, &gpu_kernel_kind,
-                                  gpu_params, &gpu_kernel_params);
+      // GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
+      // (gpu/laplace3d_gpu.cu): 1 / (4 pi N r), with the self-cell integral
+      // on the diagonal
+      double h2_use_gpu = 0.0, hodlr_use_gpu = 0.0;
+      d_c_bpack_getoption(&resources.option, "H2_use_gpu", &h2_use_gpu);
+      d_c_bpack_getoption(&resources.option, "HODLR_use_gpu", &hodlr_use_gpu);
+      if (h2_use_gpu > 0 || hodlr_use_gpu > 0) {
+        laplace3d_gpu_register(&resources.matrix, application.inverse_4pi_n(),
+                               application.diagonal());
+      }
     }
+#endif
     if (driver_options.distributed64 == 1) {
       d_c_bpack_construct_element_compute_distributed64(
           &resources.matrix, &resources.option, &resources.stats,

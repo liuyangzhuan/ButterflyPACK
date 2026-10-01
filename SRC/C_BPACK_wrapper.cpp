@@ -1576,111 +1576,136 @@ void c_bpack_get_distributed_layout64(
 #endif
 }
 
+/*
+ * The application's GPU evaluator of the entries (GPU_INTERFACE/bpack_gpu.h,
+ * doc/gpu_kernels.md): kept on the H2 solver of a format 7 matrix, else on
+ * the matrix's GPU state (HODLR).  Only the double and double complex
+ * libraries of a GPU build have a GPU backend; elsewhere it is ignored.
+ */
+#if defined(HAVE_MPI) && defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+#define BPACK_GPU_EVALUATORS 1
+#endif
+
+#ifdef BPACK_GPU_EVALUATORS
 /* The GPU state of a non-H2 matrix, created on first use. */
 static void* bpack_gpu_state(F2Cptr* bmat, const char* caller) {
-  if (bmat == nullptr || *bmat == nullptr) {
-    throw std::invalid_argument(std::string(caller) + ": null matrix handle");
-  }
   void* gpu = nullptr;
   c_bpack_get_gpu(*bmat, &gpu);
   if (gpu == nullptr) {
     c_bpack_gpu_create(&gpu);
-    if (gpu != nullptr) c_bpack_set_gpu(*bmat, gpu);
+    if (gpu == nullptr) throw std::runtime_error(std::string(caller) + ": no GPU state");
+    c_bpack_set_gpu(*bmat, gpu);
   }
-  return gpu;  // nullptr: this library has no GPU backend
+  return gpu;
 }
 
-void c_bpack_set_gpu_kernel(
-    F2Cptr* bmat, const int* kind, const double* params, const int* nparams) {
-  void* h2 = nullptr;
-  if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
-  if (h2 != nullptr) {
-    c_bpack_h2_set_gpu_kernel(bmat, kind, params, nparams);
-    return;
-  }
-  void* gpu = bpack_gpu_state(bmat, "c_bpack_set_gpu_kernel");
-  if (gpu != nullptr) c_bpack_gpu_set_kernel(gpu, kind, params, nparams);
-}
-
-void c_bpack_set_gpu_kernel_tables(
-    F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints) {
-  void* h2 = nullptr;
-  if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
-  if (h2 != nullptr) {
-    c_bpack_h2_set_gpu_kernel_tables(bmat, reals, nreals, ints, nints);
-    return;
-  }
-  void* gpu = bpack_gpu_state(bmat, "c_bpack_set_gpu_kernel_tables");
-  if (gpu != nullptr) c_bpack_gpu_set_kernel_tables(gpu, reals, nreals, ints, nints);
-}
-
-void c_bpack_h2_set_gpu_kernel(
-    F2Cptr* bmat, const int* kind, const double* params, const int* nparams) {
-  {
-    void* h2 = nullptr;
-    if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
-    if (h2 == nullptr) {  // not H2: the format-agnostic registration
-      c_bpack_set_gpu_kernel(bmat, kind, params, nparams);
-      return;
-    }
-  }
-#ifdef HAVE_MPI
-  if (kind == nullptr || nparams == nullptr || (*nparams > 0 && params == nullptr)) {
-    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel: null argument");
-  }
+template<typename Make>
+static void bpack_set_gpu_evaluator(F2Cptr* bmat, const char* caller, Make make) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
-  // kinds 1 and 4 are real kernels, kinds 2 and 3 complex ones (see H2Kernel::GpuSpec)
-  constexpr bool real_data = std::is_same_v<H2Data, double>;
-  if (*kind != 0 && (real_data ? (*kind != 1 && *kind != 4) : (*kind != 2 && *kind != 3))) {
-    throw std::invalid_argument(std::string("c_bpack_h2_set_gpu_kernel: kind must be 0 or ") +
-                                (real_data ? "1 or 4" : "2 or 3") + " for this data type");
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument(std::string(caller) + ": null matrix handle");
   }
-  auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel");
-  auto& spec = solver->kernel.gpu_spec;
-  const uint64_t table_version = spec.table_version;
-  spec = {};
-  spec.table_version = table_version + 1;  // (the tables are gone)
-  spec.kind = *kind;
-  constexpr int max_params = static_cast<int>(sizeof(spec.params) / sizeof(spec.params[0]));
-  const int count = std::min(*nparams, max_params);
-  for (int i = 0; i < count; ++i) spec.params[i] = params[i];
+  const std::shared_ptr<fmm::gpu::Evaluator> evaluator = make(static_cast<int>(sizeof(H2Data)));
+  void* h2 = nullptr;
+  c_bpack_get_h2(*bmat, &h2);
+  if (h2 != nullptr) {
+    get_h2_solver<H2Data>(bmat, caller)->kernel.gpu_evaluator = evaluator;
+  } else {
+    c_bpack_gpu_set_evaluator(bpack_gpu_state(bmat, caller), &evaluator);
+  }
+}
+#endif
+
+void c_bpack_set_gpu_entry_launchers(F2Cptr* bmat, const bpack_gpu_entry_launchers* launchers) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (launchers == nullptr) throw std::invalid_argument("c_bpack_set_gpu_entry_launchers: null argument");
+  bpack_set_gpu_evaluator(bmat, "c_bpack_set_gpu_entry_launchers", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_launchers(*launchers, scalar_bytes);
+  });
 #else
   (void)bmat;
-  (void)kind;
-  (void)params;
-  (void)nparams;
-  format7_requires_mpi("c_bpack_h2_set_gpu_kernel");
+  (void)launchers;
 #endif
 }
 
-void c_bpack_h2_set_gpu_kernel_tables(
-    F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints) {
-  {
-    void* h2 = nullptr;
-    if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
-    if (h2 == nullptr) {  // not H2: the format-agnostic registration
-      c_bpack_set_gpu_kernel_tables(bmat, reals, nreals, ints, nints);
-      return;
-    }
+void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double* params, const int* nparams,
+                                  const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (source == nullptr || flags == nullptr || (nparams != nullptr && *nparams > 0 && params == nullptr)) {
+    throw std::invalid_argument("c_bpack_set_gpu_entry_source: null argument");
   }
-#ifdef HAVE_MPI
-  if (nreals == nullptr || nints == nullptr || *nreals < 0 || *nints < 0 ||
-      (*nreals > 0 && reals == nullptr) || (*nints > 0 && ints == nullptr)) {
-    throw std::invalid_argument("c_bpack_h2_set_gpu_kernel_tables: invalid argument");
-  }
-  using H2Data = typename butterfly::fmm_data<C_DT>::type;
-  auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_h2_set_gpu_kernel_tables");
-  auto& spec = solver->kernel.gpu_spec;
-  spec.table_real.assign(reals, reals + *nreals);
-  spec.table_int.assign(ints, ints + *nints);
-  ++spec.table_version;
+  const int count = nparams != nullptr ? std::max(*nparams, 0) : 0;
+  bpack_set_gpu_evaluator(bmat, "c_bpack_set_gpu_entry_source", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_source(source, params, count, *flags, scalar_bytes);
+  });
 #else
   (void)bmat;
-  (void)reals;
-  (void)nreals;
-  (void)ints;
-  (void)nints;
-  format7_requires_mpi("c_bpack_h2_set_gpu_kernel_tables");
+  (void)source;
+  (void)params;
+  (void)nparams;
+  (void)flags;
+#endif
+}
+
+void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user,
+                                     const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bpack_set_gpu_block_evaluator: null argument");
+  }
+  bpack_set_gpu_evaluator(bmat, "c_bpack_set_gpu_block_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_block(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bmat;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user,
+                                    const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bpack_set_gpu_list_evaluator: null argument");
+  }
+  bpack_set_gpu_evaluator(bmat, "c_bpack_set_gpu_list_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_list(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bmat;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+/*
+ * The warm-up of the registered GPU evaluator now, on the GPU the matrix will
+ * use, rather than before its first level (fmm::gpu::Evaluator::warm_up):
+ * for H2 with H2_use_gpu, after the registration.  seconds[0]: its time on
+ * this rank, seconds[1]: of which the NVRTC compile of an entry evaluator
+ * given as source.  Collective over the matrix's ranks.  HODLR needs none:
+ * its construction warms up first.
+ */
+void c_bpack_gpu_warm_up(F2Cptr* bmat, double* seconds) {
+  if (seconds == nullptr) throw std::invalid_argument("c_bpack_gpu_warm_up: null argument");
+  seconds[0] = seconds[1] = 0.0;
+#ifdef BPACK_GPU_EVALUATORS
+  void* h2 = nullptr;
+  if (bmat != nullptr && *bmat != nullptr) c_bpack_get_h2(*bmat, &h2);
+  if (h2 == nullptr) return;
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* solver = get_h2_solver<H2Data>(bmat, "c_bpack_gpu_warm_up");
+  if (solver->options.use_gpu == 0 || !solver->kernel.gpu_evaluator) return;
+  // (the device share of the ranks and the operator, as a compression or
+  // factorization starts, before the evaluator takes device memory)
+  fmm::gpu::begin_operator_build(solver->tree.get(), solver->tree->comm);
+  seconds[0] = fmm::gpu::warm_up_registered_evaluator<H2Data>(solver->tree.get(), solver->kernel.gpu_evaluator);
+  seconds[1] = fmm::gpu::evaluator_of(solver->kernel.gpu_evaluator)->compile_seconds();
+#else
+  (void)bmat;
 #endif
 }
 

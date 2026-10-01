@@ -187,6 +187,19 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
+    {
+        // the batched kernels and the application's evaluator, before the
+        // levels (not in the factor time, factorization.hpp)
+        const double kernels = gpu_driver.warm_up();
+        const double evaluator = gpu_driver.warm_up_evaluator();
+        h2_warmup_seconds() = kernels + evaluator;
+        if (h2_warmup_seconds() > 0.0 && print_summary && rank == factorization_header_rank) {
+            std::printf("  [gpu] warm-up: kernels %.2f s, evaluator %.2f s, before the levels (not in the factor "
+                        "time)\n",
+                        kernels, evaluator);
+            std::fflush(stdout);
+        }
+    }
 #endif
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {

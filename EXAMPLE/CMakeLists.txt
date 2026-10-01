@@ -26,6 +26,23 @@ set(all_link_libs_c butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB
 set(all_link_libs_s butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 set(all_link_libs_cpp butterflypack mpi_dummy ${ZFP_LIB} ${MAGMA_LIB} ${LAPACK_LIB} ${BLAS_LIB} m)
 endif()
+
+# GPU evaluators of the examples' matrices (gpu/gpu_evaluators.h,
+# doc/gpu_kernels.md), compiled with the drivers that register them
+# (BPACK_EXAMPLE_GPU) when ButterflyPACK has its GPU backends.  The
+# drivers use the shared CUDA runtime, as the library does.
+if (enable_h2_gpu)
+  add_library(bpack_example_gpu OBJECT gpu/laplace3d_gpu.cu gpu/vie3d_gpu.cu gpu/emsurf_gpu.cu)
+  set_target_properties(bpack_example_gpu PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+endif()
+function(bpack_example_gpu_evaluators target)
+  if (enable_h2_gpu)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:bpack_example_gpu>)
+    target_compile_definitions(${target} PRIVATE BPACK_EXAMPLE_GPU)
+    set_target_properties(${target} PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+  endif()
+endfunction()
+
 ########################################### single complex Fortran drivers
 
 set(FCEXM1 EMSURF_Driver_sp.f90 EMSURF_Module_sp.f90)
@@ -58,6 +75,7 @@ add_dependencies(ie3d ie2deigen)
 set(CZEXM3 EMSURF_Driver.cpp EMSURF_Module.f90 EMSURF_C_Bindings.f90)
 add_executable(cie3d ${CZEXM3})
 target_link_libraries(cie3d ${all_link_libs_z})
+bpack_example_gpu_evaluators(cie3d)
 set_target_properties(cie3d PROPERTIES
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cie3d_modules")
 install(TARGETS cie3d RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
@@ -271,12 +289,14 @@ add_executable(cvie3d_h2 ${CVIE3DH2})
 target_link_libraries(cvie3d_h2 ${all_link_libs_d})
 target_link_libraries(cvie3d_h2 ${all_link_libs_z})
 add_dependencies(cvie3d_h2 cvie3d)
+bpack_example_gpu_evaluators(cvie3d_h2)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CLAPLACE3DH2 Laplace3D_H2Test_Driver.cpp)
 add_executable(claplace3d_h2 ${CLAPLACE3DH2})
 target_link_libraries(claplace3d_h2 ${all_link_libs_d})
+bpack_example_gpu_evaluators(claplace3d_h2)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))

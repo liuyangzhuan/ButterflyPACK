@@ -18,6 +18,9 @@
 #include <vector>
 
 #include "zBPACK_wrapper.h"
+#ifdef BPACK_EXAMPLE_GPU
+#include "gpu/gpu_evaluators.h"
+#endif
 
 namespace {
 
@@ -110,8 +113,8 @@ void emsurf_get_problem_size_c(int*);
 void emsurf_get_coordinates_c(double*);
 void emsurf_get_minedgelength_c(double*);
 void emsurf_get_wavenumber_c(double*);
-void emsurf_get_gpu_kernel_sizes_c(int64_t*, int64_t*);
-void emsurf_get_gpu_kernel_c(double*, double*, int*);
+void emsurf_get_gpu_table_sizes_c(int64_t*, int64_t*);
+void emsurf_get_gpu_tables_c(double*, double*, int*);
 void emsurf_entry_c(int*, int*, _Complex double*, C2Fptr);
 void emsurf_block_c(int*, int*, int*, int64_t*, int*, int*, _Complex double*, int*,
                     int*, int*, int*, int*, C2Fptr);
@@ -319,22 +322,26 @@ int main(int argc, char** argv) {
         &nunk, &dimension, coordinates.data(), &dummy_nearest_neighbor, &nlevel, tree,
         permutation.data(), &local_size, &matrix, &option, &statistics, &mesh, &kernel,
         &process_tree, distance_callback, near_far_callback, &context);
-    if (em_options.cfie_alpha == 1.0 || matrix_format == 1) {
-      // Device form of the entries for the GPU backends: kind 3, the EFIE
-      // (mesh tables of Zelem_EMSURF), or kind 5, the CFIE (not symmetric:
-      // HODLR only)
+#ifdef BPACK_EXAMPLE_GPU
+    double h2_use_gpu = 0.0, hodlr_use_gpu = 0.0;
+    z_c_bpack_getoption(&option, "H2_use_gpu", &h2_use_gpu);
+    z_c_bpack_getoption(&option, "HODLR_use_gpu", &hodlr_use_gpu);
+    if ((h2_use_gpu > 0 || hodlr_use_gpu > 0) && (em_options.cfie_alpha == 1.0 || matrix_format == 1)) {
+      // GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
+      // (gpu/emsurf_gpu.cu): the EFIE by triangle pairs (a block
+      // evaluator), or the CFIE (an entry evaluator, not symmetric: HODLR
+      // only), from the mesh tables of Zelem_EMSURF
       int64_t nreals = 0;
       int64_t nints = 0;
-      emsurf_get_gpu_kernel_sizes_c(&nreals, &nints);
+      emsurf_get_gpu_table_sizes_c(&nreals, &nints);
       std::vector<double> params(8);
       std::vector<double> reals(static_cast<std::size_t>(nreals));
       std::vector<int> ints(static_cast<std::size_t>(nints));
-      emsurf_get_gpu_kernel_c(params.data(), reals.data(), ints.data());
-      const int gpu_kernel_kind = em_options.cfie_alpha == 1.0 ? 3 : 5;
-      const int gpu_kernel_params = em_options.cfie_alpha == 1.0 ? 7 : 8;
-      z_c_bpack_set_gpu_kernel(&matrix, &gpu_kernel_kind, params.data(), &gpu_kernel_params);
-      z_c_bpack_set_gpu_kernel_tables(&matrix, reals.data(), &nreals, ints.data(), &nints);
+      emsurf_get_gpu_tables_c(params.data(), reals.data(), ints.data());
+      emsurf_gpu_register(&matrix, params.data(), static_cast<int>(params.size()), reals.data(), nreals,
+                          ints.data(), nints, em_options.cfie_alpha);
     }
+#endif
     z_c_bpack_construct_element_compute(&matrix, &option, &statistics, &mesh, &kernel,
                                         &process_tree, emsurf_entry_c, emsurf_block_c,
                                         &context);
@@ -390,6 +397,9 @@ int main(int argc, char** argv) {
     z_c_bpack_deletemesh(&mesh);
     if (matrix_format != 7 && kernel != nullptr) z_c_bpack_deletekernelquant(&kernel);
     z_c_bpack_delete(&matrix);
+#ifdef BPACK_EXAMPLE_GPU
+    emsurf_gpu_release();
+#endif
     z_c_bpack_deleteoption(&option);
     z_c_bpack_deleteproctree(&process_tree);
     emsurf_finalize_c();

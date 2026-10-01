@@ -43,9 +43,7 @@
 #include "solve_kernels.hpp"
 #include "gpu_runtime.hpp"
 #include "host_copier.hpp"
-#include "kernel_tables.hpp"
-#include "emsurf_blocks.hpp"
-#include "emsurf_plan.hpp"
+#include "evaluator.hpp"
 
 #include <omp.h>
 
@@ -218,9 +216,9 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
     };
     static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, std::complex<double>>,
                   "the GPU box path supports double and complex<double>");
-    if (dimension != 3) return fail("the device kernels are 3D");
+    (void)dimension;
     const char* why = nullptr;
-    if (!device_kernel_registered<DataType>(kernel->gpu_spec, &why)) return fail(why);
+    if (registered_evaluator<DataType>(kernel->gpu_evaluator, &why) == nullptr) return fail(why);
     if (method != FactorizationMethod::LU) return fail("X_RR is factored by LU on the GPU (use H2_XRR_factor=1)");
     const bool lazy_far = lazy_schur < 0 ? lazy_far_field_mode() == LazyFarFieldMode::LAZY : lazy_schur > 0;
     const bool generator_near = lazy_schur < 0 ? generator_near_enabled() : lazy_schur > 1;
@@ -275,8 +273,8 @@ public:
         : tree_(tree), level_(tree->levels[static_cast<size_t>(level_index)]), kernel_(kernel),
           tolerance_(tolerance), heap_(DeviceHeap::instance()), adopt_(std::move(adopt)), occupancy_(occupancy),
           ca_(ca) {
-        spec_ = device_kernel_spec(kernel->gpu_spec);
-        gpu_sketch_ = device_sketch && device_sketch_supported(tree, spec_.kind);
+        evaluator_ = evaluator_of(kernel->gpu_evaluator);
+        gpu_sketch_ = device_sketch && device_sketch_supported(tree, *evaluator_);
         if (ca_ && !gpu_sketch_) throw std::runtime_error("LevelEliminator: CA levels need the device sketch");
         early_free_sources_ = level_.num_active_processes > 1;
         level_index_ = level_index;
@@ -376,7 +374,6 @@ private:
         // static ID training rows of the box: slots after training_slot0_
         const int* d_training = nullptr;
         int ntraining = 0;
-        std::vector<int64_t> training_ids;  // their global ids (kind 3 sketch)
     };
 
     struct WaveBox {
@@ -614,9 +611,9 @@ private:
     void release_level_data();
     void check_device_kernel();
     // Kernel entries of `items` (in the metadata image `meta`, on the device
-    // at md + offset): launch_eval, or for kind 3 the triangle-pair
-    // evaluator (emsurf_blocks.hpp), whose scratch comes from the heap and is
-    // written at once: no block freed ahead of a pending read may be live.
+    // at md + offset): the application's evaluator (evaluator.hpp), whose
+    // scratch comes from the heap: no block freed ahead of a pending read may
+    // be live.
     void eval_blocks(const std::vector<EvalItem>& items, MetaBuilder& meta, const char* md, size_t offset, int max_m,
                      int max_n, cudaStream_t stream);
 
@@ -625,7 +622,7 @@ private:
     KernelType* kernel_;
     double tolerance_;
     DeviceHeap& heap_;
-    KernelSpec spec_;
+    const Evaluator* evaluator_ = nullptr;  // the application's (H2Kernel::gpu_evaluator)
     bool heap_initialized_ = false;
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
@@ -699,13 +696,6 @@ private:
     MetaBuilder& meta_ = pinned_pool().meta;
     DeviceBuffer meta_device_;
     MetaBuilder& owner_meta_ = pinned_pool().owner_meta;  // a wave's owner pass
-    // kind 3 blocks of eval_blocks: the host ids of the point slots and the
-    // host copies of the device skeleton lists; the evaluator's blocks of the
-    // sketch rows and of eval_blocks
-    std::vector<int64_t> host_ids_;
-    std::unordered_map<const int*, const std::vector<int>*> host_lists_;
-    EfieBlockSet& efie_rows_ = efie_block_sets().rows;
-    EfieBlockSet& efie_eval_ = efie_block_sets().eval;
     DeviceBuffer owner_meta_device_;
     std::unique_ptr<StreamMarks> elim_marks_;  // of the last wave, read at the next synchronization
     DeviceBuffer getrf_work_;
@@ -843,27 +833,30 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     training_slot0_ = static_cast<int>(num_slots);
     num_slots += static_cast<int64_t>(training_points.size());
     if (num_slots >= std::numeric_limits<int>::max()) throw std::runtime_error("LevelEliminator: too many points per rank");
-    std::vector<double> xyz(static_cast<size_t>(3 * num_slots));
+    const size_t dim = static_cast<size_t>(tree_->dimension);
+    std::vector<double> xyz(dim * static_cast<size_t>(num_slots));
     std::vector<int64_t> ids(static_cast<size_t>(num_slots));
     for (size_t b = 0; b < num_sketching; ++b) {
         const Box& box = sketching_box(b);
         const size_t slot = static_cast<size_t>(sketching_state(b).slot);
         for (int64_t i = 0; i < box.num_points; ++i) {
-            for (int d = 0; d < 3; ++d) xyz[3 * (slot + i) + d] = static_cast<double>(box.point_coords[3 * i + d]);
+            for (size_t d = 0; d < dim; ++d) {
+                xyz[dim * (slot + static_cast<size_t>(i)) + d] = static_cast<double>(box.point_coords[dim * i + d]);
+            }
             ids[slot + i] = box.point_indices[static_cast<size_t>(i)];
         }
     }
     {
-        // (kind 3 reads only the ids; the global coordinates exist for H2_ID_proxy 1)
+        // (an evaluator that reads only the ids needs no coordinates; the
+        // global ones exist for H2_ID_proxy 1)
         const auto& coords = tree_->id_source_point_coords;
-        const bool have_coords = coords.size() == static_cast<size_t>(tree_->num_points) * tree_->dimension;
+        const bool have_coords = coords.size() == static_cast<size_t>(tree_->num_points) * dim;
         for (size_t t = 0; t < training_points.size(); ++t) {
             const size_t slot = static_cast<size_t>(training_slot0_) + t;
             const int64_t index = training_points[t];
             ids[slot] = index;
-            for (int d = 0; d < 3; ++d) {
-                xyz[3 * slot + d] = have_coords && d < tree_->dimension
-                    ? static_cast<double>(coords[static_cast<size_t>(index * tree_->dimension + d)]) : 0.0;
+            for (size_t d = 0; d < dim; ++d) {
+                xyz[dim * slot + d] = have_coords ? static_cast<double>(coords[static_cast<size_t>(index) * dim + d]) : 0.0;
             }
         }
     }
@@ -873,10 +866,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     check_cuda(cudaMemcpyAsync(d_ids, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice, stream), "upload ids");
     points_.xyz = d_xyz;
     points_.ids = d_ids;
+    points_.dim = tree_->dimension;
     d_xyz_ = d_xyz;  // the table grows when remote boxes arrive (sync_remote_boxes)
     d_ids_ = d_ids;
     num_slots_ = num_slots;
-    if (spec_.kind == 3) host_ids_ = ids;
     stats.bytes_up += static_cast<double>(xyz.size() * sizeof(double) + ids.size() * sizeof(int64_t));
     if (!training_lists.empty()) {
         int* d_lists = heap_.alloc_resident<int>(training_lists.size() * sizeof(int));
@@ -887,7 +880,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             BoxState& st = sketching_state(b);
             st.d_training = d_lists + training_at[b];
             st.ntraining = static_cast<int>(training[b].size());
-            if (spec_.kind == 3) st.training_ids = training[b];
         }
         stats.bytes_up += static_cast<double>(training_lists.size() * sizeof(int));
     }
@@ -896,7 +888,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     // their skeletons arrive after the level, refresh_remote_skeletons)
     if (ca_) sync_remote_boxes(false);
 
-    // BPACK_CHECK=kernel: the device kernel against the host's entries
+    // BPACK_CHECK=kernel: the GPU evaluator against the host's entries
     if (env::check("kernel")) check_device_kernel();
 
     // ---- Schur and near-field blocks: adopted from the device transition,
@@ -1039,61 +1031,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::eval_blocks(const std::vector<EvalItem>& items, MetaBuilder& meta,
+void LevelEliminator<CoordType, DataType, KernelType>::eval_blocks(const std::vector<EvalItem>& items, MetaBuilder&,
                                                                     const char* md, size_t offset, int max_m, int max_n,
                                                                     cudaStream_t stream) {
-    if (items.empty()) return;
-    if (spec_.kind != 3) {
-        launch_eval(reinterpret_cast<const EvalItem*>(md + offset), static_cast<int>(items.size()), max_m, max_n, md,
-                    spec_, points_, stream);
-        return;
-    }
-    if constexpr (std::is_same_v<S, dcomplex>) {
-        // the point ids of an index list (as index_at on the device)
-        auto ids_of = [&](const IndexList& list, int count, std::vector<int>& out) {
-            out.resize(static_cast<size_t>(count));
-            const int* host_list = nullptr;
-            if (list.ptr != nullptr) {
-                auto it = host_lists_.find(list.ptr);
-                if (it == host_lists_.end()) throw std::runtime_error("LevelEliminator: device list without a host copy");
-                host_list = it->second->data();
-            } else if (list.offset >= 0) {
-                host_list = reinterpret_cast<const int*>(meta.host(static_cast<size_t>(list.offset)));
-            }
-            for (int i = 0; i < count; ++i) {
-                const int slot = list.base + (host_list != nullptr ? host_list[i] : i);
-                out[static_cast<size_t>(i)] = static_cast<int>(host_ids_[static_cast<size_t>(slot)]);
-            }
-        };
-        // the blocks' edges (in parallel), then the evaluator in groups within a budget
-        std::vector<std::vector<int>> rows(items.size()), cols(items.size());
-        #pragma omp parallel for schedule(dynamic)
-        for (int64_t b = 0; b < static_cast<int64_t>(items.size()); ++b) {
-            const EvalItem& it = items[static_cast<size_t>(b)];
-            if (it.m <= 0 || it.n <= 0) continue;
-            ids_of(it.rows, it.m, rows[static_cast<size_t>(b)]);
-            ids_of(it.cols, it.n, cols[static_cast<size_t>(b)]);
-        }
-        efie_eval_.clear();
-        for (size_t b = 0; b < items.size(); ++b) {
-            const EvalItem& it = items[b];
-            if (it.m <= 0 || it.n <= 0) continue;
-            // out(r, c) = out[r + c * ld]
-            efie_eval_.add(std::move(rows[b]), std::move(cols[b]), reinterpret_cast<dcomplex*>(it.out), 1, it.ld);
-        }
-        efie_eval_.plan(kernel_->gpu_spec.table_int,
-                        std::max<size_t>(size_t{256} << 20, std::min<size_t>(size_t{2} << 30, heap_.largest_free() / 4)));
-        efie_eval_.launch_all(spec_, stream);
-        efie_eval_.release();
-    } else {
-        (void)meta;
-    }
+    evaluator_->eval<S>(items, reinterpret_cast<const EvalItem*>(md + offset), max_m, max_n, md, points_, stream);
 }
 
-// Entries of the device kernel against the host kernel's (the application's
-// callback), up to 32 x 32 of each of three blocks: a box with itself (the
-// singular self terms), with a local neighbor, and with the last local box.
-// Prints the largest difference relative to the block's largest entry.
+// Entries of the application's device evaluator against its host callback's,
+// up to 32 x 32 of each of three blocks: a box with itself (the singular
+// self terms), with a local neighbor, and with the last local box.  Prints
+// the largest difference relative to the block's largest entry.
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::check_device_kernel() {
     cudaStream_t stream = Context::instance().stream();
@@ -1134,55 +1081,31 @@ void LevelEliminator<CoordType, DataType, KernelType>::check_device_kernel() {
     meta_.clear();
     const size_t off = meta_.append(evals);
     char* md = meta_.upload(meta_device_, stream);
-    launch_eval(reinterpret_cast<const EvalItem*>(md + off), 3, max_m, max_n, md, spec_, points_, stream);
+    evaluator_->eval<S>(evals, reinterpret_cast<const EvalItem*>(md + off), max_m, max_n, md, points_, stream);
     std::vector<DataType> dev(offset[3]);
     check_cuda(cudaMemcpyAsync(dev.data(), d_out, offset[3] * sizeof(S), cudaMemcpyDeviceToHost, stream), "kernel check");
     check_cuda(cudaStreamSynchronize(stream), "kernel check");
-    // kind 3: the same blocks by the triangle-pair evaluator of the sketch
-    std::vector<DataType> dev_pairs;
-    if constexpr (std::is_same_v<S, dcomplex>) {
-        if (spec_.kind == 3) {  // into d_out again (its entries are on the host)
-            efie_eval_.clear();
-            for (int p = 0; p < 3; ++p) {
-                const Box& a = level_.local_boxes[static_cast<size_t>(pairs[p][0])];
-                const Box& c = level_.local_boxes[static_cast<size_t>(pairs[p][1])];
-                const int m = std::min(static_cast<int>(a.num_points), 32), n = std::min(static_cast<int>(c.num_points), 32);
-                efie_eval_.add(std::vector<int>(a.point_indices.begin(), a.point_indices.begin() + m),
-                               std::vector<int>(c.point_indices.begin(), c.point_indices.begin() + n),
-                               reinterpret_cast<dcomplex*>(d_out + offset[static_cast<size_t>(p)]), 1, m);
-            }
-            efie_eval_.plan(kernel_->gpu_spec.table_int, size_t{256} << 20);
-            efie_eval_.launch_all(spec_, stream);
-            efie_eval_.release();
-            dev_pairs.resize(offset[3]);
-            check_cuda(cudaMemcpyAsync(dev_pairs.data(), d_out, offset[3] * sizeof(S), cudaMemcpyDeviceToHost, stream),
-                       "kernel check");
-            check_cuda(cudaStreamSynchronize(stream), "kernel check");
-        }
-    }
     heap_.free(d_out);
     std::ostringstream oss;
-    oss << "  [gpu] level " << level_index_ << " kernel check (rank " << tree_->mpi_rank << ", kind " << spec_.kind
-        << "): max |K_gpu - K_host| / max |K_host|";
+    oss << "  [gpu] level " << level_index_ << " kernel check (rank " << tree_->mpi_rank << ", "
+        << evaluator_->origin() << "): max |K_gpu - K_host| / max |K_host|";
     for (int p = 0; p < 3; ++p) {
         const Box& a = level_.local_boxes[static_cast<size_t>(pairs[p][0])];
         const Box& c = level_.local_boxes[static_cast<size_t>(pairs[p][1])];
         const int m = std::min(static_cast<int>(a.num_points), 32), n = std::min(static_cast<int>(c.num_points), 32);
         std::vector<DataType> host(static_cast<size_t>(m) * n);
         kernel_->evaluate_block_by_index(a.point_indices.data(), m, c.point_indices.data(), n, host.data(), m);
-        double diff = 0.0, diff_pairs = 0.0, scale = 0.0;
+        double diff = 0.0, scale = 0.0;
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < m; ++i) {
                 const DataType h = host[static_cast<size_t>(i + j * m)];
                 const size_t at = offset[static_cast<size_t>(p)] + static_cast<size_t>(i + j * m);
                 diff = std::max(diff, static_cast<double>(std::abs(dev[at] - h)));
-                if (!dev_pairs.empty()) diff_pairs = std::max(diff_pairs, static_cast<double>(std::abs(dev_pairs[at] - h)));
                 scale = std::max(scale, static_cast<double>(std::abs(h)));
             }
         }
         oss << (p == 0 ? " " : ", ") << names[p] << " " << std::scientific << std::setprecision(2)
             << (scale > 0.0 ? diff / scale : diff);
-        if (!dev_pairs.empty()) oss << " (triangle pairs " << (scale > 0.0 ? diff_pairs / scale : diff_pairs) << ")";
         oss << " (" << m << "x" << n << ")";
     }
     std::printf("%s\n", oss.str().c_str());
@@ -1296,9 +1219,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         int* hist = nullptr;
         char* lists_block = nullptr;
         std::string trace;
-        // kind 3: the kernel rows as a block of the triangle-pair evaluator
-        // (emsurf_plan.hpp): test edges = the box's points, source edges = the rows
-        std::vector<int> efie_test, efie_src;
         S* Y = nullptr;        // d x n
         size_t off_y = 0;
         int fill_rank = 0;          // sum of the sources' r
@@ -1307,8 +1227,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     };
     std::vector<Plan> plans(wave.size());
     const bool trace = h2_id_trace_enabled();
-    // kind 3: the rows' kernel values by triangle pairs (efie_* of the plans)
-    const bool efie = spec_.kind == 3;
 
     // ---- host plans (index lists only)
     {
@@ -1361,17 +1279,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                     p.blocks.push_back(RowBlockDesc{row_base, blk.a, rs.slot,
                                                     blk.skeleton_rows && !rs.skeleton_identity ? rs.d_skeleton : nullptr});
                     row_base += blk.a;
-                    if (efie) {  // the block's edges, in the device's row order
-                        const Box* nb = writable_box(rm);
-                        const std::vector<int64_t>& pts = nb != nullptr
-                            ? nb->point_indices
-                            : level_.assisting_boxes[static_cast<size_t>(
-                                  level_.assisting_box_points_for_kernel_evaluation.at(rm))].indices;
-                        for (int i = 0; i < blk.a; ++i) {
-                            p.efie_src.push_back(static_cast<int>(
-                                pts[static_cast<size_t>(blk.skeleton_rows ? (*ri.skeleton)[static_cast<size_t>(i)] : i)]));
-                        }
-                    }
                     if (trace) {
                         char policy = ri.remote ? (blk.skeleton_rows ? 's' : 'a')
                                                 : (blk.skeleton_rows ? 'S' : ((both_on_boundary && pair_sources.empty()) ? 'B' : 'F'));
@@ -1384,17 +1291,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 if (const BoxState& bs = state_of(box->morton_index); bs.ntraining > 0) {
                     p.blocks.push_back(RowBlockDesc{row_base, bs.ntraining, training_slot0_, bs.d_training});
                     row_base += bs.ntraining;
-                    if (efie) {
-                        for (int64_t id : bs.training_ids) p.efie_src.push_back(static_cast<int>(id));
-                    }
                 }
                 p.total_rows = row_base;
-                if (efie) {
-                    if (static_cast<int64_t>(p.efie_src.size()) != p.total_rows) {
-                        throw std::runtime_error("LevelEliminator: kind 3 rows do not match the sketch rows");
-                    }
-                    p.efie_test.assign(box->point_indices.begin(), box->point_indices.end());
-                }
 
                 // sketch parameters (compute_id_sparse_sketch's); the draws
                 // themselves are generated on the device
@@ -1572,10 +1470,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             item.scale = p.scale;
             item.row_slots = p.rows;
             item.col_base = state_of(wave[static_cast<size_t>(&p - plans.data())]).slot;
-            if (efie) {  // the rows are stored by the evaluator (row-major, set below)
-                item.row_stride = p.n;
-                item.row_index = nullptr;
-            }
             row_items.push_back(item);
             max_d = std::max(max_d, p.d);
             max_n = std::max(max_n, p.n);
@@ -1633,16 +1527,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                                 reinterpret_cast<int*>(d_id + id_rank) + bi, reinterpret_cast<double*>(d_id + id_norm) + bi,
                                 reinterpret_cast<int*>(d_id + id_flag) + bi};
     }
-    // kind 3: the rows of groups of boxes, one group at a time in one
-    // scratch buffer (triangle-pair sums, then the rows) within a memory
-    // budget; each group's rows are sketched before the next group runs
-    if (efie) {  // one block per box, its rows in the scratch: row c (source edge), column r (test edge) at out[c * n + r]
-        efie_rows_.clear();
-        for (Plan& p : plans) efie_rows_.add(std::move(p.efie_test), std::move(p.efie_src), nullptr, 1, p.n);
-        efie_rows_.plan(kernel_->gpu_spec.table_int,
-                        std::max<size_t>(size_t{256} << 20, std::min<size_t>(size_t{4} << 30, heap_.largest_free() / 4)));
-        for (size_t bi = 0; bi < plans.size(); ++bi) row_items[bi].src = reinterpret_cast<const S*>(efie_rows_.out(bi));
-    }
     const size_t off_list_items = meta_.append(list_items);
     const size_t off_source_list_items = meta_.append(source_list_items);
     const size_t off_rows = meta_.append(row_items);
@@ -1662,23 +1546,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                         reinterpret_cast<const SourceListsItem*>(md + off_source_list_items),
                         static_cast<int>(source_list_items.size()), md, stream);
     marks.mark(stream);
-    if (efie) {
-        if constexpr (std::is_same_v<S, dcomplex>) {
-            for (size_t g = 0; g < efie_rows_.groups(); ++g) {
-                const size_t b0 = efie_rows_.group_begin(g), count = efie_rows_.group_end(g) - b0;
-                efie_rows_.launch(g, spec_, stream);
-                launch_ordered_sketch(reinterpret_cast<const OrderedSketchItem*>(md + off_rows) + b0,
-                                      static_cast<int>(count), max_d, max_n, false, spec_, points_, stream);
-            }
-        }
-        efie_rows_.release();  // later launches are ordered after the sketch
-    } else {
-        launch_ordered_sketch(reinterpret_cast<const OrderedSketchItem*>(md + off_rows),
-                              static_cast<int>(row_items.size()), max_d, max_n, true, spec_, points_, stream);
-    }
+    // (the row slots are the sketch lists' output: read on the device)
+    evaluator_->sketch_rows<S>(row_items, reinterpret_cast<const OrderedSketchItem*>(md + off_rows), max_d, max_n,
+                               points_, stream);
     marks.mark(stream);
-    launch_ordered_sketch(reinterpret_cast<const OrderedSketchItem*>(md + off_stored),
-                          static_cast<int>(stored_items.size()), max_d, max_r, false, spec_, points_, stream);
+    launch_ordered_sketch_stored(reinterpret_cast<const OrderedSketchItem*>(md + off_stored),
+                                 static_cast<int>(stored_items.size()), max_d, max_r, stream);
     marks.mark(stream);
     p_batch.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
     marks.mark(stream);
@@ -1773,10 +1646,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     }
     if (failure) std::rethrow_exception(failure);
     stats.id_loop += std::chrono::duration<double>(clock::now() - t0).count();
-    // after the parallel loop: the map is not thread safe
-    for (const WaveBox& wb : boxes) {
-        if (wb.state->d_skeleton != nullptr) host_lists_[wb.state->d_skeleton] = &wb.state->skeleton;
-    }
     stats.id += std::chrono::duration<double>(clock::now() - t0).count();
 }
 
@@ -2836,7 +2705,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::set_remote_skeletons(
                "upload remote skeletons");
     for (const auto& [st, start] : listed) {
         st->d_skeleton = d_lists + start;
-        host_lists_[st->d_skeleton] = &st->skeleton;
     }
 }
 
@@ -2853,7 +2721,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         int64_t extra = 0;
         for (const auto& [morton, index] : fresh) {
             const auto& assist = level_.assisting_boxes[static_cast<size_t>(index)];
-            if (assist.indices.empty() || assist.coords.size() != 3 * assist.indices.size()) {
+            if (assist.indices.empty() ||
+                assist.coords.size() != static_cast<size_t>(tree_->dimension) * assist.indices.size()) {
                 throw std::runtime_error("LevelEliminator: assisting box " + std::to_string(morton) +
                                          " has no point data");
             }
@@ -2862,7 +2731,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         if (num_slots_ + extra >= std::numeric_limits<int>::max()) {
             throw std::runtime_error("LevelEliminator: too many points per rank");
         }
-        std::vector<double> xyz(static_cast<size_t>(3 * extra));
+        const int64_t dim = tree_->dimension;
+        std::vector<double> xyz(static_cast<size_t>(dim * extra));
         std::vector<int64_t> ids(static_cast<size_t>(extra));
         int64_t at = 0;
         for (const auto& [morton, index] : fresh) {
@@ -2873,9 +2743,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
             st.n = static_cast<int>(assist.indices.size());
             st.on_boundary = assist.on_boundary;
             for (size_t i = 0; i < assist.indices.size(); ++i) {
-                for (int d = 0; d < 3; ++d) {
-                    xyz[static_cast<size_t>(3 * (at + static_cast<int64_t>(i)) + d)] =
-                        static_cast<double>(assist.coords[3 * i + static_cast<size_t>(d)]);
+                for (int64_t d = 0; d < dim; ++d) {
+                    xyz[static_cast<size_t>(dim * (at + static_cast<int64_t>(i)) + d)] =
+                        static_cast<double>(assist.coords[static_cast<size_t>(dim) * i + static_cast<size_t>(d)]);
                 }
                 ids[static_cast<size_t>(at) + i] = assist.indices[i];
             }
@@ -2885,13 +2755,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         }
         // a larger table: the local slots and earlier remote ones keep their places
         const int64_t total = num_slots_ + extra;
-        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(3 * total) * sizeof(double));
+        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double));
         int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
-        check_cuda(cudaMemcpyAsync(xyz_new, d_xyz_, static_cast<size_t>(3 * num_slots_) * sizeof(double),
+        check_cuda(cudaMemcpyAsync(xyz_new, d_xyz_, static_cast<size_t>(dim * num_slots_) * sizeof(double),
                                    cudaMemcpyDeviceToDevice, stream), "point table");
         check_cuda(cudaMemcpyAsync(ids_new, d_ids_, static_cast<size_t>(num_slots_) * sizeof(int64_t),
                                    cudaMemcpyDeviceToDevice, stream), "point table");
-        check_cuda(cudaMemcpyAsync(xyz_new + 3 * num_slots_, xyz.data(), xyz.size() * sizeof(double),
+        check_cuda(cudaMemcpyAsync(xyz_new + dim * num_slots_, xyz.data(), xyz.size() * sizeof(double),
                                    cudaMemcpyHostToDevice, stream), "remote points");
         check_cuda(cudaMemcpyAsync(ids_new + num_slots_, ids.data(), ids.size() * sizeof(int64_t),
                                    cudaMemcpyHostToDevice, stream), "remote ids");
@@ -2902,7 +2772,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         points_.xyz = xyz_new;
         points_.ids = ids_new;
         num_slots_ = total;
-        if (spec_.kind == 3) host_ids_.insert(host_ids_.end(), ids.begin(), ids.end());
         stats.bytes_up += static_cast<double>(xyz.size() * sizeof(double) + ids.size() * sizeof(int64_t));
     }
     // boxes eliminated since the last transport (their skeleton came with it)

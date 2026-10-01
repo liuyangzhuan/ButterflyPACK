@@ -26,6 +26,7 @@
 #ifdef H2_HAVE_GPU
 
 #include "color_gpu/device_kernels.hpp"
+#include "color_gpu/evaluator.hpp"
 #include "hodlr_batch.hpp"
 #include "hodlr_device.hpp"
 #include "hodlr_kernels.hpp"
@@ -74,29 +75,35 @@ public:
     const Stats& stats() const { return stats_; }
     void reset_stats() { stats_ = Stats{}; }
 
-    // The points of the matrix in tree order: coordinates (3 per point) and
-    // the 0-based original indices (the global ids of the device kernels).
-    void set_points(int64_t n, const double* xyz, const int64_t* ids) {
+    // The points of the matrix in tree order: coordinates (dim per point; dim
+    // 0: none) and the 0-based original indices (the global ids the
+    // application's evaluator receives).
+    void set_points(int64_t n, int dim, const double* xyz, const int64_t* ids) {
         Context::instance().activate();
         release_points();
         DeviceHeap& heap = DeviceHeap::instance();
         const size_t count = static_cast<size_t>(std::max<int64_t>(n, 1));
-        xyz_ = heap.alloc_resident<double>(3 * count * sizeof(double));
+        dim_ = std::max(dim, 0);
+        xyz_ = heap.alloc_resident<double>(std::max<size_t>(static_cast<size_t>(dim_) * count, 1) * sizeof(double));
         ids_ = heap.alloc_resident<int64_t>(count * sizeof(int64_t));
         if (n > 0) {
-            check_cuda(cudaMemcpy(xyz_, xyz, 3 * static_cast<size_t>(n) * sizeof(double), cudaMemcpyHostToDevice),
-                       "HODLR GPU points");
+            if (dim_ > 0) {
+                check_cuda(cudaMemcpy(xyz_, xyz, static_cast<size_t>(dim_) * static_cast<size_t>(n) * sizeof(double),
+                                      cudaMemcpyHostToDevice),
+                           "HODLR GPU points");
+            }
             check_cuda(cudaMemcpy(ids_, ids, static_cast<size_t>(n) * sizeof(int64_t), cudaMemcpyHostToDevice),
                        "HODLR GPU point ids");
         }
         n_points_ = n;
     }
-    bool has_points() const { return xyz_ != nullptr; }
+    bool has_points() const { return ids_ != nullptr; }
+    int dim() const { return dim_; }
     int64_t n_points() const { return n_points_; }
 
     // out[b] (m[b] x n[b], leading dimension m[b], host) = scale * A(rows
     // r0[b] .., columns c0[b] ..), for the dense leaves
-    void eval_dense(const fmm::gpu::KernelSpec& spec, double scale, int count, const int64_t* r0, const int* m,
+    void eval_dense(const fmm::gpu::Evaluator& evaluator, double scale, int count, const int64_t* r0, const int* m,
                     const int64_t* c0, const int* n, T* const* out) {
         auto t0 = std::chrono::steady_clock::now();
         Context& ctx = Context::instance();
@@ -132,8 +139,7 @@ public:
             evals.stage(meta_);
             scales.stage(meta_);
             char* md = meta_.upload(meta_device_, stream);
-            fmm::gpu::launch_eval(evals.device(md), evals.count(), evals.max_m, evals.max_n, md, spec, points(),
-                                  stream);
+            evaluator.eval<T>(evals.items, evals.device(md), evals.max_m, evals.max_n, md, points(), stream);
             launch_axpby(scales.device(md), scales.count(), scales.max_m, scales.max_n, stream);
             check_cuda(cudaStreamSynchronize(stream), "HODLR GPU dense leaves");
             for (int b = i; b < j; ++b) {
@@ -149,12 +155,12 @@ public:
 
     // Blocks b = 0 .. nb-1: rows r0[b] .. r0[b]+m[b]-1, columns c0[b] ..
     // c0[b]+n[b]-1 (point slots), panel width r_est[b] (min(BACA_Batch, m, n))
-    void begin(const fmm::gpu::KernelSpec& spec, double scale, int variant, int nb, const int64_t* r0, const int* m,
+    void begin(const fmm::gpu::Evaluator& evaluator, double scale, int variant, int nb, const int64_t* r0, const int* m,
                const int64_t* c0, const int* n, const int* r_est) {
         end();
         Context::instance().activate();
         if (variant != 4 && variant != 5) throw std::invalid_argument("HODLR GPU BACA: variant must be 4 or 5");
-        spec_ = spec;
+        evaluator_ = &evaluator;
         scale_ = scale;
         variant_ = variant;
         blocks_.assign(static_cast<size_t>(nb), Block{});
@@ -311,14 +317,14 @@ public:
         char* md = meta_.upload(meta_device_, stream);
         const fmm::gpu::PointTable pts = points();
         entry_begin(stream);
-        fmm::gpu::launch_eval(evc.device(md), evc.count(), evc.max_m, evc.max_n, md, spec_, pts, stream);
+        evaluator_->eval<T>(evc.items, evc.device(md), evc.max_m, evc.max_n, md, pts, stream);
         launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
         entry_end(stream);
         fmm::gpu::launch_gather(gc.device(md), gc.count(), gc.max_m, gc.max_n, md, stream);
         bc.gemm(md, MagmaNoTrans, MagmaTrans, T(-1.0), T(1.0), queue);
         piv.launch(md, stream);
         entry_begin(stream);
-        fmm::gpu::launch_eval(evr.device(md), evr.count(), evr.max_m, evr.max_n, md, spec_, pts, stream);
+        evaluator_->eval<T>(evr.items, evr.device(md), evr.max_m, evr.max_n, md, pts, stream);
         launch_axpby(scr.device(md), scr.count(), scr.max_m, scr.max_n, stream);
         entry_end(stream);
         fmm::gpu::launch_gather(gr.device(md), gr.count(), gr.max_m, gr.max_n, md, stream);
@@ -326,7 +332,7 @@ public:
         if (baca) {
             piv_j2.launch(md, stream);
             entry_begin(stream);
-            fmm::gpu::launch_eval(evc2.device(md), evc2.count(), evc2.max_m, evc2.max_n, md, spec_, pts, stream);
+            evaluator_->eval<T>(evc2.items, evc2.device(md), evc2.max_m, evc2.max_n, md, pts, stream);
             launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
             entry_end(stream);
             fmm::gpu::launch_gather(gc2.device(md), gc2.count(), gc2.max_m, gc2.max_n, md, stream);
@@ -416,7 +422,7 @@ public:
         gcore.stage(meta_);
         char* md = meta_.upload(meta_device_, stream);
         entry_begin(stream);
-        fmm::gpu::launch_eval(ev.device(md), ev.count(), ev.max_m, ev.max_n, md, spec_, points(), stream);
+        evaluator_->eval<T>(ev.items, ev.device(md), ev.max_m, ev.max_n, md, points(), stream);
         launch_axpby(sc.device(md), sc.count(), sc.max_m, sc.max_n, stream);
         entry_end(stream);
         fmm::gpu::launch_gather(gcore.device(md), gcore.count(), gcore.max_m, gcore.max_n, md, stream);
@@ -1140,6 +1146,60 @@ public:
         sel_rows_d_ = sel_cols_d_ = sel_j2_d_ = nullptr;
     }
 
+    // Before the first GPU construction (GpuState::warm_up): BACA's QRs
+    // (cuSOLVER's, with its handle, and MAGMA's batched one) and the batched
+    // Jacobi SVD of the recompression on small matrices of a few sizes (MAGMA
+    // picks its kernels by size), so that no level pays their first use.  The
+    // statistics stay as they were.
+    void warm_up() {
+        Context& ctx = Context::instance();
+        ctx.activate();
+        const cudaStream_t stream = ctx.stream();
+        const magma_queue_t queue = ctx.queue();
+        DeviceHeap& heap = DeviceHeap::instance();
+        const Stats saved = stats_;
+        magma_int_t* info = heap.alloc<magma_int_t>(sizeof(magma_int_t));
+        void** ptrs = heap.alloc<void*>(4 * sizeof(void*));
+        for (const int qr : {0, 1}) {
+            const int m = qr == 0 ? 64 : 1024, n = qr == 0 ? 8 : 64;
+            T* a = heap_identity<T>(m, n);
+            T* tau = heap.alloc<T>(static_cast<size_t>(n) * sizeof(T));
+            geqrf_one(m, n, a, m, tau);
+            const void* host[2] = {a, tau};
+            check_cuda(cudaMemcpyAsync(ptrs, host, sizeof(host), cudaMemcpyHostToDevice, stream), "warm-up");
+            geqrf_batched(m, n, reinterpret_cast<T**>(ptrs), m, reinterpret_cast<T**>(ptrs + 1), info, 1, queue);
+            check_cuda(cudaStreamSynchronize(stream), "warm-up");
+            heap.free(tau);
+            heap.free(a);
+        }
+        for (const int k : {8, 32, 128}) {
+            T* a = heap_identity<T>(k, k);
+            double* s = heap.alloc<double>(static_cast<size_t>(k) * sizeof(double));
+            T* u = heap.alloc<T>(static_cast<size_t>(k) * k * sizeof(T));
+            T* v = heap.alloc<T>(static_cast<size_t>(k) * k * sizeof(T));
+            const void* host[4] = {a, s, u, v};
+            check_cuda(cudaMemcpyAsync(ptrs, host, sizeof(host), cudaMemcpyHostToDevice, stream), "warm-up");
+            gesvj_batched(k, reinterpret_cast<T**>(ptrs), reinterpret_cast<double**>(ptrs + 1),
+                          reinterpret_cast<T**>(ptrs + 2), reinterpret_cast<T**>(ptrs + 3), info, 1, queue);
+            check_cuda(cudaStreamSynchronize(stream), "warm-up");
+            for (void* p : {static_cast<void*>(v), static_cast<void*>(u), static_cast<void*>(s), static_cast<void*>(a)}) {
+                heap.free(p);
+            }
+        }
+        heap.free(ptrs);
+        heap.free(info);
+        stats_ = saved;
+    }
+
+    // ... and the application's evaluator on up to 32 of the points
+    // (fmm::gpu::Evaluator::warm_up, once per evaluator); its seconds
+    double warm_up_evaluator(const fmm::gpu::Evaluator& evaluator) {
+        if (ids_ == nullptr || n_points_ <= 0) return 0.0;
+        Context& ctx = Context::instance();
+        ctx.activate();
+        return evaluator.warm_up<T>(points(), static_cast<int>(std::min<int64_t>(n_points_, 32)), ctx.stream());
+    }
+
 private:
     struct Block {
         int64_t r0 = 0, c0 = 0;  // first point slots of the rows and the columns
@@ -1407,7 +1467,7 @@ private:
     }
 
     void check_point_range(int64_t first, int count) const {
-        if (xyz_ == nullptr) throw std::logic_error("HODLR GPU construction: no points (c_bpack_hodlr_gpu_set_points)");
+        if (ids_ == nullptr) throw std::logic_error("HODLR GPU construction: no points (c_bpack_hodlr_gpu_set_points)");
         if (first < 0 || first + count > n_points_ || n_points_ > std::numeric_limits<int>::max()) {
             throw std::out_of_range("HODLR GPU construction: point range outside the point table");
         }
@@ -1415,8 +1475,9 @@ private:
 
     fmm::gpu::PointTable points() const {
         fmm::gpu::PointTable p;
-        p.xyz = xyz_;
+        p.xyz = dim_ > 0 ? xyz_ : nullptr;
         p.ids = ids_;
+        p.dim = dim_;
         return p;
     }
 
@@ -1518,7 +1579,7 @@ private:
     }
 
     void release_points() {
-        if (xyz_ == nullptr) return;
+        if (ids_ == nullptr) return;
         Context::instance().activate();
         DeviceHeap& heap = DeviceHeap::instance();
         heap.free(xyz_);
@@ -1531,7 +1592,8 @@ private:
     double* xyz_ = nullptr;
     int64_t* ids_ = nullptr;
     int64_t n_points_ = 0;
-    fmm::gpu::KernelSpec spec_;
+    int dim_ = 0;
+    const fmm::gpu::Evaluator* evaluator_ = nullptr;  // the application's (GpuState::evaluator)
     double scale_ = 1.0;
     std::vector<Block> blocks_;
     int* sel_rows_d_ = nullptr;

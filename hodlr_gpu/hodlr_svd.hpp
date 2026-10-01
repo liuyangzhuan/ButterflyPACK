@@ -20,6 +20,17 @@
 namespace bpack {
 namespace gpu {
 
+// An m x n identity (ones on the diagonal, leading dimension m) from the
+// heap: the operand of the warm-ups
+template<typename T>
+T* heap_identity(int m, int n) {
+    std::vector<T> host(static_cast<size_t>(m) * n, T(0.0));
+    for (int i = 0; i < std::min(m, n); ++i) host[static_cast<size_t>(i) * m + i] = T(1.0);
+    T* d = fmm::gpu::DeviceHeap::instance().alloc<T>(host.size() * sizeof(T));
+    fmm::gpu::check_cuda(cudaMemcpy(d, host.data(), host.size() * sizeof(T), cudaMemcpyHostToDevice), "warm-up");
+    return d;
+}
+
 template<typename T>
 class DeviceSvd {
 public:
@@ -65,6 +76,21 @@ public:
         heap.free(dinfo);
         if (info != 0) throw std::runtime_error("cusolverDnXgesvdp failed, info " + std::to_string(info));
         return err_sigma;
+    }
+
+    // Before the first SVD (GpuState::warm_up): the cuSOLVER handle and one
+    // small SVD, so that no level pays their first use
+    void warm_up() {
+        constexpr int n = 8;
+        fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
+        T* a = heap_identity<T>(n, n);
+        double* s = heap.alloc<double>(n * sizeof(double));
+        T* u = heap.alloc<T>(n * n * sizeof(T));
+        T* v = heap.alloc<T>(n * n * sizeof(T));
+        svd_device(n, n, a, s, u, v);  // (synchronizes)
+        for (void* p : {static_cast<void*>(v), static_cast<void*>(u), static_cast<void*>(s), static_cast<void*>(a)}) {
+            heap.free(p);
+        }
     }
 
 private:

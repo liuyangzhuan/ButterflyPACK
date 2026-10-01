@@ -49,6 +49,7 @@ void factorize(H2<CoordType, DataType>* solver,
         omp_get_max_threads(), 0.0);
     auto& entry_times = solver->kernel.entryeval_time_per_thread;
 
+    h2_warmup_seconds() = 0.0;
     const double start = MPI_Wtime();
     hierarchical_factorization_unstructured(
         solver->tree.get(),
@@ -71,7 +72,7 @@ void factorize(H2<CoordType, DataType>* solver,
         solver->options.verbosity,
         occupied);
 
-    double elapsed = MPI_Wtime() - start;
+    double elapsed = MPI_Wtime() - start - h2_warmup_seconds();  // (the GPU warm-up is not factorization)
     MPI_Allreduce(
         MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
     if (factorization_time) *factorization_time = elapsed;

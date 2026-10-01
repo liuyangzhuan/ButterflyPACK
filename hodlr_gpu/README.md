@@ -25,7 +25,7 @@ MPI rank or several ranks sharing one GPU.
   CPU's split, for comparisons).
 - The run stops unless `format=1`, `LRlevel=0` and ZFP is off (`use_zfp` not 1).
 - The construction of a level runs on the GPU when all of these hold:
-  - the matrix has a device kernel (`c_bpack_h2_set_gpu_kernel`);
+  - the matrix has a GPU evaluator of its entries (`doc/gpu_kernels.md`);
   - `RecLR_leaf` is 4 (BACA) or 5 (BACA without overlap);
   - `LR_BLK_NUM=1` and `forwardN15flag=0`;
   - the level is not `level_check`.

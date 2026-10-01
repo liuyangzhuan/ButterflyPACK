@@ -293,14 +293,28 @@ void hierarchical_compression_unstructured(
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
         gpu_ids = gpu_blocks && use_sketch &&
-                  gpu::device_sketch_supported(tree, gpu::device_kernel_spec(kernel->gpu_spec).kind);
+                  gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
+        // the application's evaluator before its first use (not in the
+        // compression time, compression.hpp)
+        double evaluator_warm_up = 0.0;
+        if constexpr (gpu::gpu_data_type<DataType>) {
+            if (gpu_blocks) {
+                evaluator_warm_up = gpu::warm_up_registered_evaluator<DataType>(tree, kernel->gpu_evaluator);
+            }
+        }
+        h2_warmup_seconds() = evaluator_warm_up;
         if (verbose && rank == smallest_active_rank(tree->levels[leaf_level])) {
             std::cout << "  GPU compression: "
                       << (gpu_blocks ? (gpu_ids ? "IDs and blocks on the device"
                                                 : "blocks on the device, IDs on the host")
                                      : "off (" + reason + ")")
                       << std::endl;
+            if (evaluator_warm_up > 0.0) {
+                std::printf("  [gpu] warm-up: evaluator %.2f s, before the levels (not in the compression time)\n",
+                            evaluator_warm_up);
+                std::fflush(stdout);
+            }
         }
     }
 #endif

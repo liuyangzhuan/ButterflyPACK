@@ -10,7 +10,7 @@
 // input), so entries of a destination keep the host's accumulation order.
 
 #include "device_kernels.hpp"
-#include "kernel_eval.cuh"
+#include "evaluator_device.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -209,160 +209,6 @@ __global__ void sketch_source_lists_kernel(const SourceListsItem* items, const S
                        });
 }
 
-// out(i, c) = sum over the draws (row, b) with destination i, in (row, b)
-// order, of sign * value(row, c).  A block owns 32 columns and the
-// destinations [i0, i0 + dest_block); the output tile lives in shared memory
-// and 32 rows of values at a time are formed once (kernel entries, or source
-// rows read once) and applied by the warps, warp w owning the destinations
-// i = w mod kSketchOwners.  Every destination sums in the draw order, so the
-// result matches the per-destination lists exactly.
-constexpr int kTileCols = 32;
-constexpr int kTileRows = 64;
-constexpr int kPitch = kTileCols + 1;  // padded rows of the shared tiles
-constexpr int kRowsPerWarp = kTileRows / kSketchOwners;
-
-// Values of this thread's rows of the chunk starting at r0 (rows
-// r0 + warp + q * kSketchOwners, its column c): the row indices first, then
-// the values, so the loads of a thread are independent.
-template<typename T, bool kKernelRows, int Kind>
-__device__ __forceinline__ void chunk_values(const OrderedSketchItemT<T>& item, const KernelSpec& spec,
-                                             const PointTable& points, const double col_xyz[3], int64_t col_id,
-                                             bool column, int c, int warp, int r0, T (&v)[kRowsPerWarp]) {
-    int src_row[kRowsPerWarp];
-#pragma unroll
-    for (int q = 0; q < kRowsPerWarp; ++q) {
-        const int row = r0 + warp + q * kSketchOwners;
-        src_row[q] = row < item.rows ? (kKernelRows ? item.row_slots[row] : (item.row_index ? item.row_index[row] : row))
-                                     : -1;
-    }
-#pragma unroll
-    for (int q = 0; q < kRowsPerWarp; ++q) {
-        v[q] = T(0.0);
-        if (src_row[q] >= 0 && column) {
-            if (kKernelRows) {
-                v[q] = kernel_value<T, Kind>(spec, col_xyz, col_id, points.xyz + 3 * static_cast<int64_t>(src_row[q]),
-                                       points.ids[src_row[q]]);
-            } else {
-                v[q] = item.src[c + static_cast<int64_t>(src_row[q]) * item.row_stride];
-            }
-        }
-    }
-}
-
-// y + s v for a real s: y + s v componentwise for complex values (the host's
-// axpy with a real coefficient)
-__device__ __forceinline__ double sketch_fma(double s, double v, double y) { return fma(s, v, y); }
-__device__ __forceinline__ dcomplex sketch_fma(double s, dcomplex v, dcomplex y) {
-    return dcomplex(fma(s, v.re, y.re), fma(s, v.im, y.im));
-}
-
-template<typename T, bool kKernelRows, int Kind>
-__global__ void __launch_bounds__(32 * kSketchOwners)
-ordered_sketch_kernel(const OrderedSketchItemT<T>* items, KernelSpec spec, PointTable points, int dest_block) {
-    extern __shared__ __align__(16) unsigned char shared_bytes[];
-    T* shared = reinterpret_cast<T*>(shared_bytes);
-    const OrderedSketchItemT<T> item = items[blockIdx.x];
-    const int c0 = blockIdx.y * kTileCols;
-    const int i0 = blockIdx.z * dest_block;
-    if (c0 >= item.ncols || i0 >= item.d) return;
-    const int i1 = min(item.d, i0 + dest_block);
-    T* tile = shared;                                               // (i1 - i0) x kPitch
-    T* values = shared + static_cast<size_t>(dest_block) * kPitch;  // kTileRows x kPitch
-    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
-    for (int e = threadIdx.x; e < (i1 - i0) * kPitch; e += blockDim.x) tile[e] = T(0.0);
-    const int c = c0 + lane;
-    const bool column = c < item.ncols;
-    double col_xyz[3] = {0.0, 0.0, 0.0};
-    int64_t col_id = 0;
-    if (kKernelRows && column) {
-        const int sc = item.col_base + c;
-        for (int k = 0; k < 3; ++k) col_xyz[k] = points.xyz[3 * static_cast<int64_t>(sc) + k];
-        col_id = points.ids[sc];
-    }
-    // this warp's entries, 32 at a time: one coalesced load, then broadcasts
-    const int* list = item.entries + item.ptr[warp];
-    const int* end = item.entries + item.ptr[warp + 1];
-    // +-scale by the entry's sign bit (the same fma as with a branch)
-    const unsigned long long scale_bits = static_cast<unsigned long long>(__double_as_longlong(item.scale));
-    auto signed_scale = [&](int e) {
-        return __longlong_as_double(static_cast<long long>(
-            scale_bits ^ (static_cast<unsigned long long>(static_cast<unsigned>(e) & 0x80000000u) << 32)));
-    };
-    const bool all_dests = i0 == 0 && i1 == item.d;  // no range test
-    int batch = 0, batch_count = 0, batch_pos = 0;
-    T next[kRowsPerWarp];
-    chunk_values<T, kKernelRows, Kind>(item, spec, points, col_xyz, col_id, column, c, warp, 0, next);
-    for (int r0 = 0; r0 < item.rows; r0 += kTileRows) {
-        __syncthreads();  // the value tile is free
-#pragma unroll
-        for (int q = 0; q < kRowsPerWarp; ++q) values[(warp + q * kSketchOwners) * kPitch + lane] = next[q];
-        __syncthreads();
-        // the next chunk's loads are in flight while this one is applied
-        if (r0 + kTileRows < item.rows) {
-            chunk_values<T, kKernelRows, Kind>(item, spec, points, col_xyz, col_id, column, c, warp, r0 + kTileRows, next);
-        }
-        const int r1 = r0 + kTileRows;
-        const T* vrow = values + lane;
-        T* ycol = tile + lane;
-        while (true) {
-            if (batch_pos == batch_count) {
-                if (list >= end) break;
-                batch_count = end - list < 32 ? static_cast<int>(end - list) : 32;
-                batch = lane < batch_count ? list[lane] : 0;
-                list += batch_count;
-                batch_pos = 0;
-            }
-            // entries are in row order: those of this chunk are a run from batch_pos
-            const unsigned here = __ballot_sync(0xffffffffu, lane >= batch_pos && lane < batch_count &&
-                                                                 (batch & kEntryRowMask) < r1);
-            const int stop = batch_pos + __popc(here);
-            int j = batch_pos;
-            if (all_dests) {
-                // two entries at a time: different destinations update independently
-                for (; j + 1 < stop; j += 2) {
-                    const int e1 = __shfl_sync(0xffffffffu, batch, j);
-                    const int e2 = __shfl_sync(0xffffffffu, batch, j + 1);
-                    const int a1 = ((e1 >> kEntryRowBits) & kEntryDestMask) * kPitch;
-                    const int a2 = ((e2 >> kEntryRowBits) & kEntryDestMask) * kPitch;
-                    const T v1 = vrow[((e1 & kEntryRowMask) - r0) * kPitch];
-                    const T v2 = vrow[((e2 & kEntryRowMask) - r0) * kPitch];
-                    if (a1 != a2) {
-                        const T y1 = ycol[a1], y2 = ycol[a2];
-                        ycol[a1] = sketch_fma(signed_scale(e1), v1, y1);
-                        ycol[a2] = sketch_fma(signed_scale(e2), v2, y2);
-                    } else {
-                        ycol[a1] = sketch_fma(signed_scale(e2), v2, sketch_fma(signed_scale(e1), v1, ycol[a1]));
-                    }
-                }
-                if (j < stop) {
-                    const int e = __shfl_sync(0xffffffffu, batch, j);
-                    const int a = ((e >> kEntryRowBits) & kEntryDestMask) * kPitch;
-                    ycol[a] = sketch_fma(signed_scale(e), vrow[((e & kEntryRowMask) - r0) * kPitch], ycol[a]);
-                    ++j;
-                }
-            } else {
-                for (; j < stop; ++j) {
-                    const int e = __shfl_sync(0xffffffffu, batch, j);
-                    const int i = (e >> kEntryRowBits) & kEntryDestMask;
-                    if (i >= i0 && i < i1) {
-                        T& y = ycol[(i - i0) * kPitch];
-                        y = sketch_fma(signed_scale(e), vrow[((e & kEntryRowMask) - r0) * kPitch], y);
-                    }
-                }
-            }
-            batch_pos = stop;
-            if (batch_pos < batch_count) break;  // the rest belongs to later chunks
-        }
-    }
-    __syncthreads();
-    for (int col = warp; col < kTileCols; col += kSketchOwners) {
-        if (c0 + col >= item.ncols) break;
-        for (int i = lane; i < i1 - i0; i += 32) {
-            item.out[(i0 + i) + static_cast<int64_t>(c0 + col) * item.ldo] = tile[i * kPitch + col];
-        }
-    }
-}
-
 void check_launch(const char* what) {
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -372,51 +218,20 @@ void check_launch(const char* what) {
 
 }  // namespace
 
+// The sketch of stored rows (the kernel itself, shared with the sketch of
+// kernel rows: bpack_gpu_kernels.cuh).
 template<typename T>
-void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int max_d, int max_cols, bool kernel_rows,
-                           KernelSpec spec, PointTable points, cudaStream_t stream) {
+void launch_ordered_sketch_stored(const OrderedSketchItemT<T>* items, int count, int max_d, int max_cols,
+                                  cudaStream_t stream) {
     if (count <= 0 || max_d <= 0 || max_cols <= 0) return;
-    // All destinations in one block when the tile fits the shared memory of
-    // a block: a split recomputes every value and rescans every list per part.
-    static const int max_block = [] {
-        int device = 0, optin = 0;
-        cudaGetDevice(&device);
-        cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
-        return optin / static_cast<int>(kPitch * sizeof(T)) - kTileRows;
-    }();
-    const int parts = (max_d + max_block - 1) / max_block;
-    const int dest_block = (max_d + parts - 1) / parts;
-    const size_t shared = static_cast<size_t>(dest_block + kTileRows) * kPitch * sizeof(T);
-    const dim3 grid(static_cast<unsigned>(count), static_cast<unsigned>((max_cols + kTileCols - 1) / kTileCols),
-                    static_cast<unsigned>((max_d + dest_block - 1) / dest_block));
-    // (rows read from stored values do not evaluate the kernel)
-    constexpr int kPlain = is_complex_scalar<T> ? 2 : 1;
-    auto launch = [&](auto kernel) {
-        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(shared));
-        kernel<<<grid, 32 * kSketchOwners, shared, stream>>>(items, spec, points, dest_block);
-    };
-    // (kernel rows: the H2 kinds, real 1 and 4, complex 2 and 3; complex 4
-    // and 5 are HODLR only)
-    const int kind = kernel_rows ? kernel_kind_of<T>(spec, "launch_ordered_sketch") : kPlain;
-    if (!kernel_rows) {
-        launch(ordered_sketch_kernel<T, false, kPlain>);
-    } else if (kind == kPlain) {
-        launch(ordered_sketch_kernel<T, true, kPlain>);
-    } else if constexpr (is_complex_scalar<T>) {
-        if (kind != 3) {
-            throw std::runtime_error("launch_ordered_sketch: device kernel kind " + std::to_string(kind) +
-                                     " is not an H2 kind");
-        }
-        launch(ordered_sketch_kernel<T, true, 3>);
-    } else {
-        launch(ordered_sketch_kernel<T, true, 4>);
-    }
+    const SketchGeometry g = sketch_geometry(count, max_d, max_cols, sizeof(T));
+    auto kernel = ordered_sketch_kernel<T, false, NoEntry<T>>;
+    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(g.shared));
+    kernel<<<g.grid, g.block, g.shared, stream>>>(items, NoEntry<T>{}, PointTable{}, g.dest_block);
     check_launch("ordered_sketch_kernel");
 }
-template void launch_ordered_sketch<double>(const OrderedSketchItemT<double>*, int, int, int, bool, KernelSpec,
-                                            PointTable, cudaStream_t);
-template void launch_ordered_sketch<dcomplex>(const OrderedSketchItemT<dcomplex>*, int, int, int, bool, KernelSpec,
-                                              PointTable, cudaStream_t);
+template void launch_ordered_sketch_stored<double>(const OrderedSketchItemT<double>*, int, int, int, cudaStream_t);
+template void launch_ordered_sketch_stored<dcomplex>(const OrderedSketchItemT<dcomplex>*, int, int, int, cudaStream_t);
 
 void launch_sketch_lists(const SketchListsItem* boxes, int num_boxes, int max_blocks,
                          const SourceListsItem* sources, int num_sources, const char* meta, cudaStream_t stream) {

@@ -884,13 +884,6 @@ inline double& h2_verification_seconds() {
     static double seconds = 0.0;
     return seconds;
 }
-// Wall time of the GPU kernel warm-up before its first level (the process's
-// first factorization; reported apart from the factorization too).
-inline double& h2_warmup_seconds() {
-    static double seconds = 0.0;
-    return seconds;
-}
-
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_parallel(
     fmm::ParallelTree<CoordType, DataType>* tree,
@@ -1037,11 +1030,12 @@ void hierarchical_factorization_parallel(
     {
         const double kernels = gpu_driver.warm_up();
         const double exchanges = gpu_driver.warm_up_exchange();
-        h2_warmup_seconds() = kernels + exchanges;
+        const double evaluator = gpu_driver.warm_up_evaluator();
+        h2_warmup_seconds() = kernels + exchanges + evaluator;
         if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
-            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, before the levels (not in the factor "
-                        "time)\n",
-                        kernels, exchanges);
+            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, evaluator %.2f s, before the levels (not "
+                        "in the factor time)\n",
+                        kernels, exchanges, evaluator);
             std::fflush(stdout);
         }
     }

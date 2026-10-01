@@ -12,13 +12,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <memory>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "bpack_env.hpp"
 
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 #define BPACK_GPU_ENABLED 1
-#include "color_gpu/kernel_tables.hpp"
 #include "hodlr_gpu/gpu_state.hpp"
 #endif
 
@@ -34,10 +36,8 @@ namespace {
 #ifdef BPACK_GPU_ENABLED
 #if DAT == 1
 using Scalar = double;
-constexpr bool kRealData = true;
 #else
 using Scalar = fmm::gpu::dcomplex;
-constexpr bool kRealData = false;
 #endif
 using State = bpack::gpu::GpuState<Scalar>;
 
@@ -96,49 +96,17 @@ void c_bpack_gpu_delete(void* gpu) {
 #endif
 }
 
-// Register the device form of the matrix kernel (see fmm::gpu::KernelSpec):
-// kind 1 for real data, 2 or 3 for complex data, 0 to clear it.
-void c_bpack_gpu_set_kernel(void* gpu, const int* kind, const double* params, const int* nparams) {
+// The application's evaluator of the entries (color_gpu/evaluator.hpp):
+// `evaluator` points to a std::shared_ptr<fmm::gpu::Evaluator> (an empty one
+// clears it), made by the registrations of C_BPACK_wrapper.cpp.
+void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator) {
 #ifdef BPACK_GPU_ENABLED
-  if (kind == nullptr || nparams == nullptr || (*nparams > 0 && params == nullptr)) {
-    gpu_fail("c_bpack_set_gpu_kernel", "null argument");
-  }
-  if (*kind != 0 && (kRealData ? *kind != 1 : (*kind < 2 || *kind > 5))) {
-    gpu_fail("c_bpack_set_gpu_kernel", kRealData ? "kind must be 0 or 1 for real data"
-                                                 : "kind must be 0 or 2 to 5 for complex data");
-  }
-  auto& reg = state_of(gpu, "c_bpack_set_gpu_kernel")->kernel;
-  const uint64_t version = reg.table_version;
-  reg = {};
-  reg.table_version = version + 1;  // (the tables are gone)
-  reg.kind = *kind;
-  const int count = std::min(*nparams, static_cast<int>(sizeof(reg.params) / sizeof(reg.params[0])));
-  for (int i = 0; i < count; ++i) reg.params[i] = params[i];
+  if (evaluator == nullptr) gpu_fail("c_bpack_gpu_set_evaluator", "null argument");
+  state_of(gpu, "c_bpack_gpu_set_evaluator")->evaluator =
+      *static_cast<const std::shared_ptr<fmm::gpu::Evaluator>*>(evaluator);
 #else
   (void)gpu;
-  (void)kind;
-  (void)params;
-  (void)nparams;
-#endif
-}
-
-void c_bpack_gpu_set_kernel_tables(void* gpu, const double* reals, const int64_t* nreals, const int* ints,
-                                   const int64_t* nints) {
-#ifdef BPACK_GPU_ENABLED
-  if (nreals == nullptr || nints == nullptr || *nreals < 0 || *nints < 0 || (*nreals > 0 && reals == nullptr) ||
-      (*nints > 0 && ints == nullptr)) {
-    gpu_fail("c_bpack_set_gpu_kernel_tables", "invalid argument");
-  }
-  auto& reg = state_of(gpu, "c_bpack_set_gpu_kernel_tables")->kernel;
-  reg.table_real.assign(reals, reals + *nreals);
-  reg.table_int.assign(ints, ints + *nints);
-  ++reg.table_version;
-#else
-  (void)gpu;
-  (void)reals;
-  (void)nreals;
-  (void)ints;
-  (void)nints;
+  (void)evaluator;
 #endif
 }
 
@@ -588,22 +556,44 @@ int c_bpack_env_trace(const char* value) { return fmm::env::trace(value) ? 1 : 0
 // ---- HODLR construction (hodlr_gpu/hodlr_construct.hpp); point slots are
 // tree indices - 1, block indices and rows / columns 1-based ----
 
-// 1 if the matrix has a device kernel for this precision and its points
+// Before the matrix's first GPU work, not in the construction time
+// (GpuState::warm_up): the factorization's kernels, with *construct the GPU
+// construction's routines and handles, with *evaluate the evaluator;
+// seconds[0] the first two, seconds[1] the evaluator
+void c_bpack_hodlr_gpu_warm_up(void* gpu, const int* construct, const int* evaluate, double* seconds) {
+  seconds[0] = seconds[1] = 0.0;
+#ifdef BPACK_GPU_ENABLED
+  try {
+    const std::pair<double, double> s =
+        state_of(gpu, "c_bpack_hodlr_gpu_warm_up")->warm_up(*construct != 0, *evaluate != 0);
+    seconds[0] = s.first;
+    seconds[1] = s.second;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_warm_up", e.what());
+  }
+#else
+  (void)gpu;
+  (void)construct;
+  (void)evaluate;
+#endif
+}
+
+// 1 if the matrix has a GPU evaluator of the entries and its points
 void c_bpack_hodlr_gpu_construct_ready(void* gpu, int* ready) {
   *ready = 0;
 #ifdef BPACK_GPU_ENABLED
   if (gpu == nullptr) return;
   try {
     State* st = state_of(gpu, "c_bpack_hodlr_gpu_construct_ready");
-    const char* why = nullptr;
-    if (st->construct && st->construct->has_points() &&
-        fmm::gpu::device_kernel_registered<Scalar>(st->kernel, &why)) {
-      *ready = 1;
-      // kind 4 reads its table at the global ids of the points
-      if (st->kernel.kind == 4 &&
-          static_cast<int64_t>(st->kernel.table_real.size()) < st->construct->n_points()) {
-        gpu_fail("c_bpack_hodlr_gpu_construct_ready", "kind 4 device kernel with fewer coefficients than points");
+    if (st->evaluator && st->construct && st->construct->has_points()) {
+      if (st->evaluator->scalar_bytes() != static_cast<int>(sizeof(Scalar))) {
+        gpu_fail("c_bpack_hodlr_gpu_construct_ready", "the GPU evaluator's value type does not match the matrix");
       }
+      if (st->evaluator->needs_coordinates() && st->construct->dim() == 0) {
+        gpu_fail("c_bpack_hodlr_gpu_construct_ready",
+                 "the GPU evaluator reads coordinates (BPACK_GPU_COORDINATES) but the matrix has none");
+      }
+      *ready = 1;
     }
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_construct_ready", e.what());
@@ -613,17 +603,20 @@ void c_bpack_hodlr_gpu_construct_ready(void* gpu, int* ready) {
 #endif
 }
 
-// The points in tree order: xyz (3 x n) and the 0-based original indices
-void c_bpack_hodlr_gpu_set_points(void* gpu, const int64_t* n, const double* xyz, const int64_t* ids) {
+// The points in tree order: xyz (dim x n; dim 0: none) and the 0-based
+// original indices
+void c_bpack_hodlr_gpu_set_points(void* gpu, const int64_t* n, const int* dim, const double* xyz,
+                                  const int64_t* ids) {
 #ifdef BPACK_GPU_ENABLED
   try {
-    construct_of(gpu, "c_bpack_hodlr_gpu_set_points").set_points(*n, xyz, ids);
+    construct_of(gpu, "c_bpack_hodlr_gpu_set_points").set_points(*n, *dim, xyz, ids);
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_set_points", e.what());
   }
 #else
   (void)gpu;
   (void)n;
+  (void)dim;
   (void)xyz;
   (void)ids;
 #endif
@@ -635,7 +628,8 @@ void c_bpack_hodlr_gpu_eval_dense(void* gpu, const double* scale, const int* cou
 #ifdef BPACK_GPU_ENABLED
   try {
     State* st = state_of(gpu, "c_bpack_hodlr_gpu_eval_dense");
-    st->hodlr_construct().eval_dense(fmm::gpu::device_kernel_spec(st->kernel), *scale, *count, r0, m, c0, n,
+    if (!st->evaluator) throw std::logic_error("no GPU evaluator registered");
+    st->hodlr_construct().eval_dense(*st->evaluator, *scale, *count, r0, m, c0, n,
                                      reinterpret_cast<Scalar* const*>(out));
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_eval_dense", e.what());
@@ -660,8 +654,9 @@ void c_bpack_hodlr_gpu_baca_begin(void* gpu, const double* scale, const int* mod
 #ifdef BPACK_GPU_ENABLED
   try {
     State* st = state_of(gpu, "c_bpack_hodlr_gpu_baca_begin");
+    if (!st->evaluator) throw std::logic_error("no GPU evaluator registered");
     fmm::gpu::tensor_core_gemm() = (*mode == 2);
-    st->hodlr_construct().begin(fmm::gpu::device_kernel_spec(st->kernel), *scale, *variant, *nb, r0, m, c0, n,
+    st->hodlr_construct().begin(*st->evaluator, *scale, *variant, *nb, r0, m, c0, n,
                                 r_est);
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_baca_begin", e.what());

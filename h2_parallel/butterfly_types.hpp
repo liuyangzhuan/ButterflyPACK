@@ -211,29 +211,12 @@ struct H2Kernel {
     void* quant = nullptr;
     int block_callback_pid = 0;
     int dimension = 0;
-    // Device-evaluable form of the kernel for the GPU box path (H2_use_gpu=1),
-    // registered by the application with c_bpack_h2_set_gpu_kernel (3D).
-    //   kind 0: none
-    //   kind 1 (real): params[1] when the global ids match, else
-    //     params[0] / r
-    //   kind 2 (complex, symmetric): params[3] + i params[4] when the global
-    //     ids match, else (params[1] + i params[2]) e^{i params[0] r} /
-    //     (params[5] r)
-    // with r = |x - y|.
-    //   kind 3 (complex, symmetric): the EFIE entry of the RWG edges given by
-    //     the global ids, from the mesh tables (c_bpack_h2_set_gpu_kernel_tables;
-    //     layout in color_gpu/emsurf_kernel.cuh)
-    //   kind 4 (real, symmetric): Gaussian-process squared exponential kernel
-    //     params[0] exp(-sum_d params[2+d] (x_d - y_d)^2 / 2), with params[1] added
-    //     on the diagonal, or one of its hyperparameter derivatives selected by
-    //     params[5] (color_gpu/kernel_eval.cuh)
-    struct GpuSpec {
-        int kind = 0;
-        double params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-        std::vector<double> table_real;
-        std::vector<int> table_int;
-        uint64_t table_version = 0;  // changes with every registration of tables
-    } gpu_spec;
+    // The application's evaluator of the entries on the device for the GPU
+    // backend (H2_use_gpu), registered with c_bpack_set_gpu_*_evaluator or
+    // bpack::gpu::set_entry_evaluator (GPU_INTERFACE/bpack_gpu.h,
+    // doc/gpu_kernels.md): a fmm::gpu::Evaluator (color_gpu/evaluator.hpp),
+    // opaque here; null: none, and the GPU runs only the Schur-update pass.
+    std::shared_ptr<void> gpu_evaluator;
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>
         coordinate_cache;
@@ -535,5 +518,13 @@ struct SparseTestVector {
     std::vector<DataType> weight;   // value of x at each support index
 };
 
+// Wall time of the GPU warm-up of the current compression or factorization
+// (its kernels before the first level of the process's first factorization,
+// the application's evaluator before its first use), which their reported
+// times leave out.
+inline double& h2_warmup_seconds() {
+    static double seconds = 0.0;
+    return seconds;
+}
 
 } // namespace butterfly

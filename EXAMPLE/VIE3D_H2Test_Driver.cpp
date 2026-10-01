@@ -30,6 +30,9 @@
 
 #include "G2D/bessel.h"
 #include "zBPACK_wrapper.h"
+#ifdef BPACK_EXAMPLE_GPU
+#include "gpu/gpu_evaluators.h"
+#endif
 
 #define IVELO9_CONST 1
 
@@ -1599,24 +1602,24 @@ if(myrank==master_rank){
     }
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
-    if (scaleGreen == 1) {
-      // Device form of the S2S kernel for H2_use_gpu / HODLR_use_gpu (complex symmetric,
-      // as assemble_fromD1D2Tau_s2s_with_coef): -e^{i 2 w r} / (4 pi r), and
-      // -SampleSelf on the diagonal.  The column-scaled scaleGreen=0 kernel
-      // is not symmetric and has no device form.
+#ifdef BPACK_EXAMPLE_GPU
+    double h2_use_gpu = 0.0, hodlr_use_gpu = 0.0;
+    z_c_bpack_getoption(&option_bf, "H2_use_gpu", &h2_use_gpu);
+    z_c_bpack_getoption(&option_bf, "HODLR_use_gpu", &hodlr_use_gpu);
+    if ((h2_use_gpu > 0 || hodlr_use_gpu > 0) && scaleGreen == 1) {
+      // GPU evaluator of the S2S kernel for H2_use_gpu / HODLR_use_gpu
+      // (gpu/vie3d_gpu.cu; complex symmetric, as
+      // assemble_fromD1D2Tau_s2s_with_coef): -e^{i 2 w r} / (4 pi r), and
+      // -SampleSelf on the diagonal
       _Complex double self_value = 0.0;
       quant_ptr_bf_s2s->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
-      const int gpu_kernel_kind = 2;
-      const int gpu_kernel_params = 6;
-      const double gpu_params[6] = {2.0 * w, -1.0, 0.0, -__real__ self_value,
-                                    -__imag__ self_value, 4.0 * pi};
-      z_c_bpack_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
-                                  &gpu_kernel_params);
-    } else if (format_s2s == 1) {
+      vie3d_gpu_register_helmholtz(&bmat_bf_s2s, 2.0 * w, -1.0, 0.0, -__real__ self_value,
+                                   -__imag__ self_value, 4.0 * pi);
+    } else if ((h2_use_gpu > 0 || hodlr_use_gpu > 0) && format_s2s == 1) {
       // scaleGreen=0: the column-scaled kernel (not symmetric, HODLR only),
-      // kind 4 = kind 2 times coef(column point), as
-      // assemble_fromD1D2Tau_s2s_with_coef: -coef e^{i 2 w r} / (4 pi r),
-      // -SampleSelf coef + 1 / h^3 on the diagonal
+      // as assemble_fromD1D2Tau_s2s_with_coef: -coef e^{i 2 w r} / (4 pi r),
+      // -SampleSelf coef + 1 / h^3 on the diagonal, with coef a table of
+      // the points on the device
       C_QuantApp_BF* Q = quant_ptr_bf_s2s;
       _Complex double self_value = 0.0;
       Q->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
@@ -1633,16 +1636,11 @@ if(myrank==master_rank){
             Q->_slowness_array.data(), Q->_h, nx, ny, nz);
         coef[n] = k0_squared * (pow(s1 / s0, 2.0) - 1);
       }
-      const int gpu_kernel_kind = 4;
-      const int gpu_kernel_params = 8;
-      const double gpu_params[8] = {2.0 * Q->_w, -1.0, 0.0, -__real__ self_value,
-                                    -__imag__ self_value, 4.0 * pi,
-                                    1.0 / pow(Q->_h, 3.0), 0.0};
-      z_c_bpack_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
-                                  &gpu_kernel_params);
-      const int64_t ncoef = Q->_n, nints = 0;
-      z_c_bpack_set_gpu_kernel_tables(&bmat_bf_s2s, coef.data(), &ncoef, nullptr, &nints);
+      vie3d_gpu_register_coefficient(&bmat_bf_s2s, 2.0 * Q->_w, -1.0, 0.0, -__real__ self_value,
+                                     -__imag__ self_value, 4.0 * pi, 1.0 / pow(Q->_h, 3.0), 0.0,
+                                     coef.data(), Q->_n);
     }
+#endif
     if (distributed64 == 1) {
       z_c_bpack_construct_element_compute_distributed64(
           &bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s,
@@ -1823,6 +1821,9 @@ if(myrank==master_rank){
     z_c_bpack_deletemesh(&msh_bf_s2s);
     if(format_s2s!=7) z_c_bpack_deletekernelquant(&kerquant_bf_s2s);
     z_c_bpack_delete(&bmat_bf_s2s);
+#ifdef BPACK_EXAMPLE_GPU
+    vie3d_gpu_release();
+#endif
     delete[] nns_ptr_s2s;        // also allocated at 1298, currently leaked
 
 

@@ -11,6 +11,7 @@
 #ifdef H2_HAVE_GPU
 
 #include "device_scalar.hpp"
+#include "../../GPU_INTERFACE/bpack_gpu_kernels.cuh"  // PointTable, IndexList, EvalItemT, OrderedSketchItemT
 
 #include <cuda_runtime.h>
 
@@ -19,53 +20,10 @@
 namespace fmm {
 namespace gpu {
 
-// Device-evaluable kernel K(x, y) registered by the application.
-//   kind 1 (real):    K = p[1] if the global ids match, else p[0] / |x - y|  (3D)
-//   kind 2 (complex): K = (p[3], p[4]) if the global ids match, else
-//                     (p[1], p[2]) e^{i p[0] r} / (p[5] r), r = |x - y|  (3D;
-//                     symmetric Helmholtz, p[5] = 4 pi as the host forms it)
-//   kind 3 (complex): the EFIE entry of the RWG edges with 0-based indices
-//                     given by the global ids (emsurf_kernel.cuh), from the
-//                     mesh tables treal / tint (kernel_tables.hpp)
-//   kind 4 (real):    Gaussian-process squared exponential kernel or one of
-//                     its hyperparameter derivatives (kernel_eval.cuh; H2 only)
-//   kind 4 (complex): kind 2 times treal[global id of y], plus (p[6], p[7])
-//                     on the diagonal (not symmetric; HODLR only)
-//   kind 5 (complex): the CFIE entry of kind 3's edges, p[7] = alpha, eta0
-//                     and the triangle normals in treal (not symmetric; HODLR
-//                     only)
-constexpr int kKernelParams = 8;
-struct KernelSpec {
-    int kind = 0;
-    double p[kKernelParams] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    const double* treal = nullptr;  // device tables of a kind with tables
-    const int* tint = nullptr;
-};
-
-// Coordinates (xyz per slot) and global ids of the points of one level.
-struct PointTable {
-    const double* xyz = nullptr;
-    const int64_t* ids = nullptr;
-};
-
-// Index i of a list: base plus i, the int32 entry i of the list at
-// meta + offset (offset >= 0), or entry i of the device array ptr.
-struct IndexList {
-    int64_t offset = -1;
-    int base = 0;
-    const int* ptr = nullptr;
-};
-
-// out(i, j) = K(point rows[i], point cols[j])
-template<typename T>
-struct EvalItemT {
-    T* out;
-    int ld;
-    int m;
-    int n;
-    IndexList rows;
-    IndexList cols;
-};
+// The entries of the matrix come from the application's evaluator
+// (evaluator.hpp); its kernels, and the items they read (PointTable,
+// IndexList, EvalItemT, OrderedSketchItemT), are in
+// GPU_INTERFACE/bpack_gpu_kernels.cuh.
 using EvalItem = EvalItemT<double>;
 
 // out(i, j) = src[rows[i] * rs + cols[j] * cs]
@@ -152,14 +110,8 @@ struct RunDesc {
 
 constexpr int kMaxSourceRuns = 128;  // ring blocks listing one fill source
 
-// Sketch list entries pack (row, destination, sign): row in the low
-// kEntryRowBits bits, destination above, sign in bit 31 (set = negative).
-// The draws of a box are partitioned by owner warp: destination mod
-// kSketchOwners.
-constexpr int kEntryRowBits = 20;
-constexpr int kEntryRowMask = (1 << kEntryRowBits) - 1;
-constexpr int kEntryDestMask = (1 << (31 - kEntryRowBits)) - 1;
-constexpr int kSketchOwners = 16;
+// (the packing of the sketch list entries, kEntryRowBits etc., and the
+// owner warps: bpack_gpu_kernels.cuh)
 
 // One box: draws of its rows (std::mt19937_64 from seed, sk per row), point
 // slots of its rows, and the destination lists of its kernel rows.
@@ -188,32 +140,9 @@ struct SourceListsItem {
     int* row_index;         // sum of the run counts: source row of each sketched row
 };
 
-// out (d x ncols, leading dimension ldo) = sparse-sign sketch of `rows` rows:
-// out(i, c) = sum over entries (row, i, sign), in list order, of
-// sign * scale * value(row, c), where value is K(point row_slots[row],
-// point col_base + c) for kernel rows, else src[c + row_index[row] *
-// row_stride].  ptr / entries: the lists of the owner warps.
-template<typename T>
-struct OrderedSketchItemT {
-    T* out;
-    int ldo;
-    int d;
-    int ncols;
-    int rows;
-    const int* ptr;
-    const int* entries;
-    double scale;
-    const int* row_slots;
-    int col_base;
-    const T* src;
-    int row_stride;
-    const int* row_index;  // null: row i is stored row i
-};
 using OrderedSketchItem = OrderedSketchItemT<double>;
-
-template<typename T>
-void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int max_d, int max_cols, bool kernel_rows,
-                           KernelSpec spec, PointTable points, cudaStream_t stream);
+// (the sketch of kernel rows: Evaluator::sketch_rows; of stored rows:
+// launch_ordered_sketch_stored, evaluator_device.hpp)
 
 void launch_sketch_lists(const SketchListsItem* boxes, int num_boxes, int max_blocks,
                          const SourceListsItem* sources, int num_sources, const char* meta, cudaStream_t stream);
@@ -268,9 +197,6 @@ void launch_dgemm_vbatched_tc(bool trans_a, bool trans_b, const int* m, const in
                               double beta, double* const* c, const int* ldc, const int2* blocks, int num_blocks,
                               int tile, cudaStream_t stream);
 
-template<typename T>
-void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
-                 const char* meta, KernelSpec spec, PointTable points, cudaStream_t stream);
 template<typename T>
 void launch_gather(const GatherItemT<T>* items, int count, int max_m, int max_n,
                    const char* meta, cudaStream_t stream);
