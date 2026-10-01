@@ -191,9 +191,30 @@ struct DeviceSolveStore {
     }
 };
 
+// The store of the active operator (one per operator with keep_operators(),
+// device_heap.hpp; else one for all).
 inline DeviceSolveStore& device_solve_store() {
-    static DeviceSolveStore store;
-    return store;
+    static DeviceSolveStore single;
+    if (!keep_operators()) return single;
+    static std::unordered_map<const void*, DeviceSolveStore>* const stores = [] {
+        auto* s = new std::unordered_map<const void*, DeviceSolveStore>;  // (never freed: see DeviceHeap)
+        OperatorContext& c = operator_context();
+        c.releasers.push_back([s](const void* tree) {
+            auto it = s->find(tree);
+            if (it == s->end()) return;
+            it->second.release();
+            s->erase(it);
+        });
+        c.holders.push_back([s](const void* tree) -> size_t {
+            auto it = s->find(tree);
+            if (it == s->end()) return 0;
+            double bytes = it->second.bytes;
+            for (const auto& [level, kl] : it->second.kept) bytes += kl.bytes;
+            return static_cast<size_t>(bytes);
+        });
+        return s;
+    }();
+    return (*stores)[operator_context().active];
 }
 
 // A factorization or compression replaces the factors: drop the device
@@ -1368,6 +1389,7 @@ template<typename CoordType, typename DataType, typename HostRun>
 bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
                       bool multiply, int verbosity, HostRun&& host) {
+    activate_operator(tree);
     if (device_solve_suspended() || !device_solve_enabled() || !prepare_device_solve(tree, verbosity)) return false;
     if (multiply) {
         device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1);

@@ -165,6 +165,17 @@ while True:
         )
         if(rank==0):
             print("maxrank from py_bpack_init_compute:", maxrank.value)
+        # device form of the kernel for the GPU backend of the H2 format (H2_use_gpu), if the
+        # payload has one: {"kind": int, "params": list of floats} (c_bpack_h2_set_gpu_kernel)
+        gpu_kernel = meta.get("gpu_kernel") if isinstance(meta, dict) else None
+        if gpu_kernel is not None and format_by_fid[fid] == 7:
+            gpu_params = np.ascontiguousarray(gpu_kernel["params"], dtype=np.float64)
+            sp.py_bpack_set_gpu_kernel(
+                ctypes.byref(pyobjs[fid]),
+                int(gpu_kernel["kind"]),
+                gpu_params.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                len(gpu_params)
+            )
 
     elif(flag=="factor"):
         ####################### factor

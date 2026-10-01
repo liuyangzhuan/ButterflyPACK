@@ -87,15 +87,16 @@ bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const 
 }
 
 // A new compression: device data of earlier factorizations or compressions
-// is gone (the caller has released their stores).  The blocks are kept for
-// the device matvec unless H2_GPU_MATVEC=0.
+// of this operator is gone (the caller has released its stores; other
+// operators' data stays with keep_operators()).  The blocks are kept for the
+// device matvec unless H2_GPU_MATVEC=0.
 inline void begin_device_compression(int num_levels) {
     Context::instance().activate();
     DeviceMatvecStore& store = device_matvec_store();
     store.release();
     DeviceHeap& heap = DeviceHeap::instance();
     heap.ensure_initialized();
-    heap.reset();
+    if (!other_operators_hold_data()) heap.reset();
     heap.reset_peak();
     compression_stats() = CompressionStats{};
     store.building = device_matvec_enabled();

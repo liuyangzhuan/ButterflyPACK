@@ -203,8 +203,11 @@ void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
             eval_kernel<T, 2><<<grid, block, 0, stream>>>(items, meta, spec, points);
         }
     } else {
-        kernel_kind_of<T>(spec, "launch_eval");
-        eval_kernel<T, 1><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        if (kernel_kind_of<T>(spec, "launch_eval") == 4) {
+            eval_kernel<T, 4><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        } else {
+            eval_kernel<T, 1><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        }
     }
     check_launch("eval_kernel");
 }

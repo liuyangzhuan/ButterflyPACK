@@ -129,9 +129,27 @@ struct DeviceMatvecStore {
     }
 };
 
+// The store of the active operator (one per operator with keep_operators(),
+// device_heap.hpp; else one for all).
 inline DeviceMatvecStore& device_matvec_store() {
-    static DeviceMatvecStore store;
-    return store;
+    static DeviceMatvecStore single;
+    if (!keep_operators()) return single;
+    static std::unordered_map<const void*, DeviceMatvecStore>* const stores = [] {
+        auto* s = new std::unordered_map<const void*, DeviceMatvecStore>;  // (never freed: see DeviceHeap)
+        OperatorContext& c = operator_context();
+        c.releasers.push_back([s](const void* tree) {
+            auto it = s->find(tree);
+            if (it == s->end()) return;
+            it->second.release();
+            s->erase(it);
+        });
+        c.holders.push_back([s](const void* tree) -> size_t {
+            auto it = s->find(tree);
+            return it == s->end() ? 0 : static_cast<size_t>(it->second.bytes);
+        });
+        return s;
+    }();
+    return (*stores)[operator_context().active];
 }
 
 }  // namespace gpu

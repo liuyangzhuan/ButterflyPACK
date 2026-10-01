@@ -832,6 +832,7 @@ void hierarchical_factorization_parallel(
     const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
+    if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
     gpu::invalidate_device_solve();  // the device copies of the previous factors
 #endif
     DynamicThreadingContext dynamic_threading =

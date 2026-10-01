@@ -408,6 +408,17 @@ void py_bpack_mult(void ** pyobj, int nrhs, char const *trans, C_DT   *xy_global
 
 
 
+// Register the device form of the kernel for the GPU backend of the format-7 H2
+// (c_bpack_h2_set_gpu_kernel); call it after py_bpack_init_compute and before py_bpack_factor.
+void py_bpack_set_gpu_kernel(void ** pyobj, int kind, double* params, int nparams)
+{
+	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
+	c_bpack_h2_set_gpu_kernel(&(bpack_obj->bmat), &kind, params, &nparams);
+	*pyobj = (void*)bpack_obj;
+}
+
+
+
 void py_bpack_free(void ** pyobj)
 {
 	py::gil_scoped_acquire gil;

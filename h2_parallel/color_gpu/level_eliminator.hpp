@@ -601,9 +601,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         DeviceHeap::exchange_arena().initialize_fixed(mb << 20);
     }
     heap_.ensure_initialized();
-    // a fresh factorization (unless earlier levels' solve factors are kept);
-    // otherwise the parent blocks live on
-    if (!adopt_ && device_solve_store().empty()) heap_.reset();
+    // a fresh factorization (unless earlier levels' solve factors are kept, or
+    // other operators keep their data: keep_operators()); otherwise the parent
+    // blocks live on
+    if (!adopt_ && device_solve_store().empty() && !other_operators_hold_data()) heap_.reset();
     keep_solve_ = device_solve_enabled() && device_solve_keep() && gpu_sketch_;
     if (keep_solve_) solve_meta_device_.reserve(size_t{1} << 20);  // span lists of the waves
     heap_.reset_peak();

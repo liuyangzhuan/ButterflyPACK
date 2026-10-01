@@ -399,6 +399,8 @@ void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int ma
         launch(ordered_sketch_kernel<T, false, kPlain>);
     } else if (kernel_kind_of<T>(spec, "launch_ordered_sketch") == 3) {
         if constexpr (is_complex_scalar<T>) launch(ordered_sketch_kernel<T, true, 3>);
+    } else if (spec.kind == 4) {
+        if constexpr (!is_complex_scalar<T>) launch(ordered_sketch_kernel<T, true, 4>);
     } else {
         launch(ordered_sketch_kernel<T, true, kPlain>);
     }

@@ -223,6 +223,10 @@ struct H2Kernel {
     //   kind 3 (complex, symmetric): the EFIE entry of the RWG edges given by
     //     the global ids, from the mesh tables (c_bpack_h2_set_gpu_kernel_tables;
     //     layout in color_gpu/emsurf_kernel.cuh)
+    //   kind 4 (real, symmetric): Gaussian-process squared exponential kernel
+    //     params[0] exp(-sum_d params[2+d] (x_d - y_d)^2 / 2), with params[1] added
+    //     on the diagonal, or one of its hyperparameter derivatives selected by
+    //     params[5] (color_gpu/kernel_eval.cuh)
     struct GpuSpec {
         int kind = 0;
         double params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
