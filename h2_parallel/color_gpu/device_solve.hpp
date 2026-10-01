@@ -30,8 +30,6 @@
 // ghosts' and assisting boxes' vectors come from their owners through the
 // host gather (gather_CA_boxes_solve): once before the forward sweep, after
 // each backward group but the last.  No per-wave messages.
-//
-// H2_GPU_SOLVE=0 keeps the host solve.
 
 #ifdef H2_HAVE_GPU
 
@@ -58,57 +56,20 @@
 namespace fmm {
 namespace gpu {
 
-// H2_GPU_SOLVE_KEEP=0: never keep factors on the device during the
-// factorization (all are uploaded at the first solve).
-inline bool device_solve_keep() {
-    static const bool keep = [] {
-        const char* v = std::getenv("H2_GPU_SOLVE_KEEP");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return keep;
-}
-// A level keeps its factors when an upper bound of their bytes fits under
-// this fraction of the heap on every rank (H2_GPU_SOLVE_KEEP_FRACTION,
-// default 0.8), decided before its waves (solve_keep_bound); the rest of the
-// heap is the level's working memory.
-inline double device_solve_keep_fraction() {
-    static const double fraction = [] {
-        const char* v = std::getenv("H2_GPU_SOLVE_KEEP_FRACTION");
-        const double f = v != nullptr ? std::atof(v) : 0.8;
-        return f > 0.0 && f <= 1.0 ? f : 0.8;
-    }();
-    return fraction;
-}
+// A level keeps its factors on the device during the factorization when an
+// estimate of their bytes fits under this fraction of the heap on every
+// rank, decided before its waves (factorization_driver.hpp
+// decide_solve_keep); the rest of the heap is the level's working memory.
+// The others are uploaded at the first solve.
+constexpr double kSolveKeepFraction = 0.8;
 
-// H2_GPU_SOLVE_CHECK=1: also run the host solve and print the difference.
-inline bool device_solve_check() {
-    static const bool check = [] {
-        const char* v = std::getenv("H2_GPU_SOLVE_CHECK");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
-    return check;
-}
-// H2_GPU_CA_SOLVE_HALO=0: a replicated CA level's solve gathers through the
-// host (gather_CA_boxes_solve) instead of in device memory (build_ca_halo).
-inline bool ca_solve_device_halo() {
-    static const bool on = [] {
-        const char* v = std::getenv("H2_GPU_CA_SOLVE_HALO");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return on;
-}
+// BPACK_CHECK=solve: also run the host solve (and multiply) and print the
+// difference.
+inline bool device_solve_check() { return env::check("solve"); }
 // The host solve of a check runs with the device solve suspended.
 inline bool& device_solve_suspended() {
     static bool suspended = false;
     return suspended;
-}
-
-inline bool device_solve_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_GPU_SOLVE");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return enabled && color_gpu_enabled();
 }
 
 // One level of the device solve (on this rank): factors, and the launch
@@ -240,11 +201,8 @@ struct DeviceSolveStore {
     }
 };
 
-// The store of the active operator (one per operator with keep_operators(),
-// device_heap.hpp; else one for all).
+// The store of the active operator (one per operator, device_heap.hpp).
 inline DeviceSolveStore& device_solve_store() {
-    static DeviceSolveStore single;
-    if (!keep_operators()) return single;
     static std::unordered_map<const void*, DeviceSolveStore>* const stores = [] {
         auto* s = new std::unordered_map<const void*, DeviceSolveStore>;  // (never freed: see DeviceHeap)
         OperatorContext& c = operator_context();
@@ -805,9 +763,12 @@ size_t build_ca_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<
 // An upper bound of the bytes a level's kept solve factors take (T, X_SR,
 // X_NR, the LU of X_RR, pivots; kept_solve_factors): per box of n points with
 // r redundant, k = n - r skeleton ones and neighbors of ntot points,
-// 2 k r <= n^2 / 2, r^2 <= n^2, ntot r <= ntot n.  The boxes the level
+// 2 k r + r^2 = r (2 n - r) <= n^2 and ntot r <= ntot n.  The boxes the level
 // eliminates: the local ones, and a replicated CA level's ghosts.  A
 // neighbor of unknown size (another rank's) counts as the box's own size.
+// The factors usually take about half of it (r about n / 2, and neighbors
+// eliminated before the box have shrunk to their skeletons): the keep
+// decision scales it (factorization_driver.hpp decide_solve_keep).
 template<typename CoordType, typename DataType>
 double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
     const double D = static_cast<double>(sizeof(DataType)), I = sizeof(int);
@@ -825,7 +786,7 @@ double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
             const auto it = size.find(m);
             ntot += it != size.end() ? static_cast<double>(it->second) : n;
         }
-        bytes += (1.5 * n * n + ntot * n) * D + n * I + 5.0 * 256.0;
+        bytes += (n * n + ntot * n) * D + n * I + 5.0 * 256.0;
     };
     for (const auto& box : lvl.local_boxes) add(box);
     if (ca) {
@@ -1435,12 +1396,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             if (e != nullptr) cudaEventDestroy(e);
         }
         // the replicated CA levels' halos in device memory (all ranks)
-        if (ca_solve_device_halo()) {
-            for (int level = 2; level <= leaf; ++level) {
-                if (!tree->level_uses_CA(level) || host_levels.count(level) != 0) continue;
-                store.bytes += static_cast<double>(
-                    build_ca_halo(tree, level, store.levels[static_cast<size_t>(level)], register_seconds));
-            }
+        for (int level = 2; level <= leaf; ++level) {
+            if (!tree->level_uses_CA(level) || host_levels.count(level) != 0) continue;
+            store.bytes += static_cast<double>(
+                build_ca_halo(tree, level, store.levels[static_cast<size_t>(level)], register_seconds));
         }
         store.usable = true;
         double seconds = std::chrono::duration<double>(clock::now() - t0).count();
@@ -1880,11 +1839,7 @@ private:
     S* alloc_message(int64_t points) {
         if (points <= 0) return nullptr;
         const size_t bytes = static_cast<size_t>(points) * nrhs_ * sizeof(S);
-        static const bool direct = [] {  // H2_GPU_SOLVE_DIRECT=0: stage through the host
-            const char* v = std::getenv("H2_GPU_SOLVE_DIRECT");
-            return v == nullptr || std::atoi(v) != 0;
-        }();
-        if (direct && device_exchange_enabled()) {
+        if (device_exchange_enabled()) {
             if (char* p = DeviceHeap::exchange_arena().try_alloc(bytes)) return reinterpret_cast<S*>(p);
         }
         return heap_.alloc<S>(bytes);
@@ -2164,7 +2119,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
 // The solve (multiply = false) or the multiply F x of the host solvers
 // (full-grid and unstructured) on the device, when the device solve runs
 // (decided collectively): solve_data initialized as the host path does, the
-// result left in its leaf left_side.  With H2_GPU_SOLVE_CHECK=1 the host
+// result left in its leaf left_side.  With BPACK_CHECK=solve the host
 // path runs too (host(host_data), with the device path suspended), and rank
 // 0 prints their difference.  Returns false when the host path must run.
 // `level_comms`: the solve's per-level communicators (the host CA solve's
@@ -2176,8 +2131,8 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
                       bool multiply, int verbosity, HostRun&& host, const std::vector<MPI_Comm>* level_comms = nullptr,
                       const HostLevelStep* host_level = nullptr) {
-    activate_operator(tree);  // (before the store is read: per operator with keep_operators())
-    if (device_solve_suspended() || !device_solve_enabled()) {
+    activate_operator(tree);  // (before the store is read: one per operator)
+    if (device_solve_suspended() || !color_gpu_enabled()) {
         materialize_host_factors(tree);  // (the host path reads them)
         return false;
     }

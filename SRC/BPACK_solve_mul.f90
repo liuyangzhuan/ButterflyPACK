@@ -3538,7 +3538,7 @@ contains
    end subroutine HODLR_Sym_Node_Apply
 
    !> Vout = A^{-1} Vin with the symmetric factors, on the GPU when they are
-   !> there; HODLR_GPU_CHECK then compares with the CPU factors (which the
+   !> there; BPACK_CHECK=hodlr then compares with the CPU factors (which the
    !> check keeps on the host)
    subroutine HODLR_Sym_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, mode)
       implicit none
@@ -3666,7 +3666,7 @@ contains
    end subroutine HODLR_Sym_Inv_Mult
 
    !> Vout = op(A)^{-1} Vin with the unsymmetric factors, on the GPU when they
-   !> are there; HODLR_GPU_CHECK then compares with the CPU factors (which the
+   !> are there; BPACK_CHECK=hodlr then compares with the CPU factors (which the
    !> check keeps on the host)
    subroutine HODLR_Inv_Apply(trans, Ns, num_vectors, Vin, Vout, ho_bf1, ptree, stats, mode)
       implicit none
@@ -3926,7 +3926,7 @@ contains
       character trans_check
       character, parameter::check_trans(3) = ['N', 'T', 'C']
 
-      ! the whole HODLR on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK=1
+      ! the whole HODLR on the GPU (HODLR_use_gpu > 0); BPACK_CHECK=hodlr
       ! compares it with this routine on the CPU, 2 also the transposed products
       if (option%HODLR_use_gpu > 0 .and. level_start == 1 .and. level_end == ho_bf1%Maxlevel + 1 &
           .and. c_associated(ho_bf1%gpu)) then

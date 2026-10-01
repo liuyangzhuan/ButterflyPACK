@@ -183,9 +183,20 @@ public:
     virtual bool solve_factors_kept() const = 0;
     virtual void commit_solve_factors(bool keep) = 0;
     // Before the waves, the level's keep verdict (all ranks alike, from an
-    // upper bound of the factors' bytes; device_solve.hpp solve_keep_bound):
-    // a level that keeps them skips the host copies of their X_NR.
-    virtual void set_solve_keep(bool keep) { (void)keep; }
+    // estimate of the factors' bytes; factorization_driver.hpp
+    // decide_solve_keep) and its budget: a level that keeps them skips the
+    // host copies of their X_NR, and its waves keep factors while they stay
+    // within `budget` bytes (else the level's keep fails).
+    virtual void set_solve_keep(bool keep, double budget) {
+        (void)keep;
+        (void)budget;
+    }
+    // The bytes this level's solve factors take (kept or not: the next
+    // level's keep estimate), and why its keep failed during the waves (0:
+    // it did not; 1: the factors outgrew the budget; 2: no free range of the
+    // heap held a wave's factors).
+    virtual double level_factor_bytes() const { return 0.0; }
+    virtual int solve_keep_failure() const { return 0; }
     // The host copies of the X_NR whose download was skipped, before a host
     // transition reads them.
     virtual void restore_host_copies() {}
@@ -319,18 +330,21 @@ public:
             drop_kept();
         }
     }
-    void set_solve_keep(bool keep) override {
+    void set_solve_keep(bool keep, double budget) override {
         if (!keep) {
             drop_kept();
             keep_solve_ = false;
         }
         keep_budgeted_ = keep_solve_;
+        keep_budget_ = budget;
         // (the host copies stay where the host reads X_NR during the level:
         // generators sent through the host, the replica check)
         skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
                     (device_exchange_ || ca_ || level_.num_active_processes == 1);
     }
     void restore_host_copies() override { rescue_skipped_xnr(); }
+    double level_factor_bytes() const override { return factor_bytes_; }
+    int solve_keep_failure() const override { return keep_failure_; }
 
 private:
     struct BoxState {
@@ -673,6 +687,9 @@ private:
     bool keep_solve_ = false;
     bool keep_failed_ = false;
     bool keep_budgeted_ = false;  // decided before the waves (set_solve_keep)
+    double keep_budget_ = 0.0;    // then: the bytes its kept factors may take
+    double factor_bytes_ = 0.0;   // the eliminated boxes' factors, as keep_solve_factors lays them out
+    int keep_failure_ = 0;        // solve_keep_failure
     bool skip_xnr_ = false;       // kept boxes' X_NR not downloaded
     std::vector<Box*> skipped_xnr_;
     KeptSolveLevel kept_;
@@ -704,22 +721,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     const auto t0 = clock::now();
     Context& ctx = Context::instance();
     ctx.activate();
-    if (device_exchange_ || (ca_ && level_.num_active_processes > 1)) {
-        // before the main arena takes its share of the free memory (MPI
-        // from device memory: the Color transports, a CA level's device
-        // halo, color_gpu/ca_halo.hpp)
-        size_t mb = 2560;
-        if (const char* env = std::getenv("H2_GPU_EXCHANGE_MB")) mb = static_cast<size_t>(std::atoll(env));
-        DeviceHeap::exchange_arena().initialize_fixed(mb << 20);
-    }
+    // (the exchange arena, for MPI from device memory, came first:
+    // begin_operator_build)
     heap_.ensure_initialized();
     // a fresh factorization (unless earlier levels' solve factors are kept, or
-    // other operators keep their data: keep_operators()); otherwise the parent
+    // other operators keep their data, device_heap.hpp); otherwise the parent
     // blocks live on
     if (!adopt_ && device_solve_store().empty() && !other_operators_hold_data()) heap_.reset();
     // (a replicated CA level: its ghosts' factors too, which the device CA
     // solve eliminates again; keyed by Morton index like the local ones)
-    keep_solve_ = device_solve_enabled() && device_solve_keep() && gpu_sketch_;
+    keep_solve_ = gpu_sketch_;
     if (keep_solve_) solve_meta_device_.reserve(size_t{1} << 20);  // span lists of the waves
     heap_.reset_peak();
     heap_initialized_ = true;
@@ -885,12 +896,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     // their skeletons arrive after the level, refresh_remote_skeletons)
     if (ca_) sync_remote_boxes(false);
 
-    // H2_GPU_KERNEL_CHECK=1: the device kernel against the host's entries
-    static const bool kernel_check = [] {
-        const char* v = std::getenv("H2_GPU_KERNEL_CHECK");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
-    if (kernel_check) check_device_kernel();
+    // BPACK_CHECK=kernel: the device kernel against the host's entries
+    if (env::check("kernel")) check_device_kernel();
 
     // ---- Schur and near-field blocks: adopted from the device transition,
     //      or packed on the host (in parallel), uploaded once, and scattered
@@ -1805,7 +1812,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     last_wave_index_ = wave_index;
     since_transport_.insert(since_transport_.end(), wave.begin(), wave.end());
 
-    // ---- 1. sketch and ID (device, or host with H2_GPU_SKETCH=0)
+    // ---- 1. sketch and ID (device, or host where the device sketch is not supported)
     auto t0 = clock::now();
     std::vector<WaveBox> boxes(wave.size());
     int boundary_count = 0;
@@ -2462,6 +2469,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         pack_generators(boxes, d_sources, d_xnr, d_result, stream);
         heap_.free(d_xnr);  // read by the pack only; later launches are ordered after it
     }
+    for (const WaveBox& wb : boxes) {
+        if (wb.k == 0 || wb.r == 0) continue;
+        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+        factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
+                                             align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
+    }
     if (keep_solve_ && !keep_failed_) keep_solve_factors(boxes, d_result, d_sources, stream);
     // ---- 4. factors to the host, in the background: the result block (LU,
     // pivots, temp1, X_RS, T; LU status checked on arrival) and the source
@@ -3020,15 +3033,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     // uploads (unless received into device memory): [temp2 | original X_NR
     // | X_RS] for this pass, and [temp2^T | X_RR_full], kept as a fill
     // source of later sketches
+    // (one sub-buffer per generator, in pieces: PiecedBuffer)
     size_t tmp_bytes = 0;
-    std::vector<size_t> tmp_off(gens.size());
+    std::vector<size_t> tmp_off(gens.size()), tmp_starts;
     for (size_t i = 0; i < gens.size(); ++i) {
         if (gens[i].bulk != nullptr) continue;
         const size_t nr = static_cast<size_t>(gens[i].ntot) * gens[i].r * D;
         tmp_off[i] = tmp_bytes;
+        tmp_starts.push_back(tmp_bytes);
         tmp_bytes = align_up(align_up(tmp_bytes + nr) + nr) + align_up(static_cast<size_t>(gens[i].r) * gens[i].k * D);
     }
-    char* d_tmp = tmp_bytes > 0 ? heap_.alloc(tmp_bytes) : nullptr;
+    PiecedBuffer tmp;
+    tmp.allocate(heap_, tmp_starts, tmp_bytes);
     std::vector<TransposeItem> transposes;
     int max_tr_m = 0, max_tr_n = 0;
     for (size_t i = 0; i < gens.size(); ++i) {
@@ -3044,7 +3060,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             g.xrs = reinterpret_cast<const S*>(g.bulk + lay.xrs);
             xrr_device = g.bulk + lay.xrr;
         } else {
-            char* base = d_tmp + tmp_off[i];
+            char* base = tmp.at(tmp_off[i]);
             g.temp2 = reinterpret_cast<const S*>(base);
             g.xnr = reinterpret_cast<const S*>(base + align_up(nr));
             g.xrs = reinterpret_cast<const S*>(base + align_up(align_up(nr) + nr));
@@ -3208,16 +3224,20 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         }
     }
 
-    char* d_work = heap_.alloc(std::max<size_t>(work_bytes, 1));
+    // (one sub-buffer per product, in pieces: PiecedBuffer)
+    std::vector<size_t> work_starts;
+    for (const Product& p : products) work_starts.push_back(p.off);
+    PiecedBuffer work;
+    work.allocate(heap_, work_starts, work_bytes);
     VBatch<S> prod;
     for (const Product& p : products) {
-        prod.entries.push_back({p.a, p.b, reinterpret_cast<S*>(d_work + p.off), p.m, p.n, p.k, p.lda, p.ldb, p.m});
+        prod.entries.push_back({p.a, p.b, reinterpret_cast<S*>(work.at(p.off)), p.m, p.n, p.k, p.lda, p.ldb, p.m});
     }
     std::vector<const S*> part_ptrs;
     std::vector<size_t> part_start(accums.size());
     for (size_t a = 0; a < accums.size(); ++a) {
         part_start[a] = part_ptrs.size();
-        for (size_t off : accums[a].parts) part_ptrs.push_back(reinterpret_cast<const S*>(d_work + off));
+        for (size_t off : accums[a].parts) part_ptrs.push_back(reinterpret_cast<const S*>(work.at(off)));
     }
     const size_t off_parts = meta_.append(part_ptrs);
     std::vector<SumAddItem> sums;
@@ -3250,8 +3270,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     launch_sum_add(reinterpret_cast<const SumAddItem*>(md + off_sums), static_cast<int>(sums.size()), max_sum_m,
                    max_sum_n, md, stream);
     // later launches are ordered after these reads
-    heap_.free(d_work);
-    heap_.free(d_tmp);
+    work.release();
+    tmp.release();
     for (char* p : retired) heap_.free(p);
     stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
 }
@@ -3301,7 +3321,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // ---------------------------------------------------------------------------
 // The solve's factors of a wave (T, X_SR, X_NR, the LU of X_RR and its
 // pivots, as the host keeps them) copied into a device block of their own,
-// while the heap stays under device_solve_keep_fraction() of its capacity;
+// while the heap stays under kSolveKeepFraction of its capacity;
 // past that, this rank drops the level's copies.  Launched before the
 // wave's result and source blocks can be released.
 // ---------------------------------------------------------------------------
@@ -3328,13 +3348,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         made.push_back(m);
     }
     if (total == 0) return;
-    // (a level kept by the up-front bound needs only the room; otherwise the
-    // budget too)
-    const double limit = (keep_budgeted_ ? 1.0 : device_solve_keep_fraction()) * static_cast<double>(heap_.capacity());
-    if (static_cast<double>(heap_.used() + total) > limit || heap_.largest_free() < total) {
+    // (a level kept by the up-front decision: within its budget; otherwise
+    // under the keep fraction of the heap)
+    const bool over = keep_budgeted_ ? kept_.bytes + static_cast<double>(total) > keep_budget_
+                                     : static_cast<double>(heap_.used() + total) >
+                                           kSolveKeepFraction * static_cast<double>(heap_.capacity());
+    if (over || heap_.largest_free() < total) {
         rescue_skipped_xnr();
         drop_kept();
         keep_failed_ = true;
+        keep_failure_ = over ? 1 : 2;
         return;
     }
     char* block = heap_.alloc_resident(total);
@@ -3572,10 +3595,7 @@ std::chrono::high_resolution_clock::duration LevelEliminator<CoordType, DataType
     constexpr int kTagSizes = 720, kTagHead = 721, kTagBulk = 722;
     std::vector<MPI_Request> reqs;
     // round 1: sizes
-    static const bool trace = [] {
-        const char* v = std::getenv("H2_GPU_EXCHANGE_TRACE");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
+    static const bool trace = env::trace("exchange");
     const int64_t fallbacks0 = stats.exchange_fallbacks;
     const bool outbox_in_arena = outbox_ == nullptr || DeviceHeap::exchange_arena().owns(outbox_);
     auto t_comm = hclock::now();

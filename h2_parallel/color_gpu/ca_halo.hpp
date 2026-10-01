@@ -248,7 +248,7 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
     MPI_Allreduce(MPI_IN_PLACE, &chunk_all, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, level_comm);
     const size_t chunk = static_cast<size_t>(chunk_all);
     if (chunk < (size_t{1} << 20)) {
-        throw std::runtime_error("CA device halo: the exchange arena has no room (H2_GPU_EXCHANGE_MB)");
+        throw std::runtime_error("CA device halo: the exchange arena has no room (BPACK_GPU_EXCHANGE_MB)");
     }
     const size_t chunk_elems = chunk / D;
     int rounds = 0;

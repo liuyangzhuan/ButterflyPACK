@@ -14,6 +14,8 @@
 #include <exception>
 #include <vector>
 
+#include "bpack_env.hpp"
+
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 #define BPACK_GPU_ENABLED 1
 #include "color_gpu/kernel_tables.hpp"
@@ -544,76 +546,31 @@ void c_bpack_hodlr_gpu_add_shared_level(void* gpu, const int* level, const MPI_F
 }
 
 // Collective over the Fortran communicator comm (once per run): the ranks
-// of a node that use the same GPU (by device UUID) split its memory, each
-// reserving an equal part of the device heap; *share: how many ranks use
-// this rank's GPU
+// of a node that use the same GPU split its memory (fmm::gpu::share_device);
+// *share: how many ranks use this rank's GPU.  Also the report of the
+// environment variables (h2_parallel/bpack_env.hpp).
 void c_bpack_gpu_share_device(const MPI_Fint* comm_f, int* share) {
+  MPI_Comm comm = MPI_Comm_f2c(*comm_f);
+  fmm::env::report_environment(comm);
 #ifdef BPACK_GPU_ENABLED
-  static int done_share = 0;
-  if (done_share > 0) {
-    *share = done_share;
-    return;
-  }
   try {
-    MPI_Comm comm = MPI_Comm_f2c(*comm_f);
-    int rank = 0;
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm node = MPI_COMM_NULL;
-    MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node);
-    int nrank = 0, nsize = 1;
-    MPI_Comm_rank(node, &nrank);
-    MPI_Comm_size(node, &nsize);
-    fmm::gpu::Context::instance().activate();
-    int dev = 0;
-    fmm::gpu::check_cuda(cudaGetDevice(&dev), "cudaGetDevice");
-    cudaDeviceProp prop;
-    fmm::gpu::check_cuda(cudaGetDeviceProperties(&prop, dev), "cudaGetDeviceProperties");
-    std::vector<char> uuids(16 * static_cast<size_t>(nsize));
-    MPI_Allgather(prop.uuid.bytes, 16, MPI_CHAR, uuids.data(), 16, MPI_CHAR, node);
-    int color = -1, count = 0;
-    for (int r = 0; r < nsize; ++r) {
-      if (std::memcmp(uuids.data() + 16 * r, prop.uuid.bytes, 16) != 0) continue;
-      if (color < 0) color = r;
-      ++count;
-    }
-    MPI_Comm dev_comm = MPI_COMM_NULL;
-    MPI_Comm_split(node, color, nrank, &dev_comm);
-    MPI_Barrier(dev_comm);  // (every context on the device exists)
-    size_t free_bytes = 0, total_bytes = 0;
-    fmm::gpu::check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
-    unsigned long long f = free_bytes, fmin = free_bytes;
-    MPI_Allreduce(&f, &fmin, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, dev_comm);
-    if (count > 1) fmm::gpu::DeviceHeap::instance().set_device_share(count, static_cast<size_t>(fmin));
-    MPI_Comm_free(&dev_comm);
-    MPI_Comm_free(&node);
-    done_share = count;
-    *share = count;
+    *share = fmm::gpu::share_device(comm);
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_gpu_share_device", e.what());
   }
 #else
-  (void)comm_f;
   *share = 1;
 #endif
 }
 
-// Multi-rank runs with CUDA-aware MPI: the device buffers MPI reads and
-// writes come from an arena of their own, reserved before the main device
-// heap: HODLR_GPU_EXCHANGE_MB, default 2048 (the merges of the HODLR
-// construction move up to a few hundred MB per message; 256 left them
-// mostly staged through the host) and at most 1/16 of the GPU, split among
-// the share ranks on the GPU (c_bpack_gpu_share_device)
+// Multi-rank runs with GPU-aware MPI: the device buffers MPI reads and
+// writes come from the exchange arena, reserved before the main device heap
+// (fmm::gpu::reserve_exchange_arena: BPACK_GPU_EXCHANGE_MB; the merges of
+// the HODLR construction move up to a few hundred MB per message)
 void c_bpack_gpu_init_exchange(const int* nproc, const int* share) {
 #ifdef BPACK_GPU_ENABLED
   try {
-    if (*nproc > 1 && fmm::gpu::device_exchange_enabled()) {
-      fmm::gpu::Context::instance().activate();
-      size_t free_bytes = 0, total_bytes = 0;
-      fmm::gpu::check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
-      size_t mb = std::min<size_t>(2048, (total_bytes >> 20) / 16) / static_cast<size_t>(std::max(*share, 1));
-      if (const char* env = std::getenv("HODLR_GPU_EXCHANGE_MB")) mb = static_cast<size_t>(std::atoll(env));
-      fmm::gpu::DeviceHeap::exchange_arena().initialize_fixed(mb << 20);
-    }
+    fmm::gpu::reserve_exchange_arena(*nproc, *share);
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_gpu_init_exchange", e.what());
   }
@@ -622,6 +579,11 @@ void c_bpack_gpu_init_exchange(const int* nproc, const int* share) {
   (void)share;
 #endif
 }
+
+// BPACK_CHECK and BPACK_TRACE for the Fortran code: 1 if the list names
+// `value` (a null-terminated string; doc/environment_variables.md)
+int c_bpack_env_check(const char* value) { return fmm::env::check(value) ? 1 : 0; }
+int c_bpack_env_trace(const char* value) { return fmm::env::trace(value) ? 1 : 0; }
 
 // ---- HODLR construction (hodlr_gpu/hodlr_construct.hpp); point slots are
 // tree indices - 1, block indices and rows / columns 1-based ----

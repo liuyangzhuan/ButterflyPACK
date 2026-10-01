@@ -21,9 +21,9 @@ export TCMALLOC_RELEASE_RATE=1
 
 # ── thread settings ──────────────────────────────────────────────
 ##########################################
-# setting FMM_MAX_CPUS_PER_NODE will turn on dynamic threading in H2
+# setting BPACK_MAX_CPUS_PER_NODE will turn on dynamic threading in H2
 ##########################################
-# export FMM_MAX_CPUS_PER_NODE=128
+# export BPACK_MAX_CPUS_PER_NODE=128
 ##########################################
 ##########################################
 

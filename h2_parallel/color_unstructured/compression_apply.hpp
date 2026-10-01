@@ -126,7 +126,7 @@ void compressed_multiply(
     // the whole matvec on the device (color_gpu/h2_matvec.hpp) when the
     // compression kept the blocks there on every rank
     if (gpu::run_device_h2_mul(tree, input, output, nrhs)) {
-        if (gpu::device_matvec_check()) {  // H2_GPU_MATVEC_CHECK=1: the host matvec as the reference
+        if (gpu::device_matvec_check()) {  // BPACK_CHECK=matvec: the host matvec as the reference
             std::vector<DataType> host_output;
             gpu::device_matvec_suspended() = true;
             compressed_multiply(tree, input, host_output, nrhs, false);

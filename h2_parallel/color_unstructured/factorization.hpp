@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../bpack_env.hpp"
 #include "options.hpp"
 #include "occupied_topology.hpp"
 #include "factorization_impl.hpp"
@@ -31,6 +32,7 @@ void factorize(H2<CoordType, DataType>* solver,
     const auto factorization_method =
         butterfly::h2_xrr_factorization_method(solver->options);
     configure_color_gpu(solver->options.use_gpu != 0);
+    fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
     fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
 #endif

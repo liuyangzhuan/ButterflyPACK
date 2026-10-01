@@ -88,8 +88,7 @@ bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const 
 
 // A new compression: device data of earlier factorizations or compressions
 // of this operator is gone (the caller has released its stores; other
-// operators' data stays with keep_operators()).  The blocks are kept for the
-// device matvec unless H2_GPU_MATVEC=0.
+// operators' data stays).  The blocks are kept for the device matvec.
 inline void begin_device_compression(int num_levels) {
     Context::instance().activate();
     DeviceMatvecStore& store = device_matvec_store();
@@ -99,7 +98,7 @@ inline void begin_device_compression(int num_levels) {
     if (!other_operators_hold_data()) heap.reset();
     heap.reset_peak();
     compression_stats() = CompressionStats{};
-    store.building = device_matvec_enabled();
+    store.building = true;
     store.levels.assign(static_cast<size_t>(std::max(num_levels, 0)), H2MatvecLevel{});
 }
 
@@ -886,7 +885,7 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
             lv = H2MatvecLevel{};
         }
     };
-    const double keep_limit = device_matvec_keep_fraction() * static_cast<double>(heap.capacity());
+    const double keep_limit = kMatvecKeepFraction * static_cast<double>(heap.capacity());
     // With a symmetric kernel, the near block of local boxes t < s is not
     // kept (the block of s, t serves both): such blocks go in chunks of
     // their own after the others, and those chunks only go to the host.
@@ -894,7 +893,7 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
     // about 1e-6 (a self-triangle pair integrates the test side by Gauss
     // points and the source side analytically), and the host matvec applies
     // each block as evaluated.
-    const bool symmetric = keep && near && device_matvec_symmetric() && spec.kind != 3;
+    const bool symmetric = keep && near && spec.kind != 3;
     std::vector<size_t> order(blocks.size());
     std::iota(order.begin(), order.end(), size_t{0});
     size_t split = blocks.size();  // order[0, split): blocks the matvec keeps

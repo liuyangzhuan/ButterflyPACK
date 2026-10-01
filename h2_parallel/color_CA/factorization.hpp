@@ -1,6 +1,7 @@
 #ifndef FACTORIZATION_HPP
 #define FACTORIZATION_HPP
 
+#include "../bpack_env.hpp"
 #include "tree_impl.hpp"
 //#include "kernel.hpp"
 #include "morton.hpp"
@@ -60,13 +61,10 @@ void symmetrize_in_place(MatrixStorage<DataType>& X, int64_t n, bool hermitian) 
     }
 }
 
-// Debug trace of the ID target of every compressed box: set H2_ID_TRACE to a
-// file prefix; each rank appends one line per box to <prefix>.rank<r>.
+// Debug trace of the ID target of every compressed box (BPACK_TRACE=id:<file
+// prefix>): each rank appends one line per box to <prefix>.rank<r>.
 inline bool h2_id_trace_enabled() {
-    static const bool enabled = [] {
-        const char* prefix = std::getenv("H2_ID_TRACE");
-        return prefix != nullptr && prefix[0] != '\0';
-    }();
+    static const bool enabled = !fmm::env::trace_argument("id").empty();
     return enabled;
 }
 
@@ -77,7 +75,7 @@ inline void h2_id_trace_write(const std::string& line) {
     if (!trace_file.is_open()) {
         int rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        trace_file.open(std::string(std::getenv("H2_ID_TRACE")) + ".rank" +
+        trace_file.open(fmm::env::trace_argument("id") + ".rank" +
                         std::to_string(rank));
     }
     trace_file << line << '\n';
@@ -1623,13 +1621,8 @@ static void print_symmetry_report(
     os << "  has NaN/Inf: " << (r.has_nan_or_inf ? "YES" : "NO") << "\n";
 }
 
-inline bool bunch_kaufman_diagnostics_enabled() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("H2_BK_DIAGNOSTICS");
-        return value != nullptr && std::string(value) != "0";
-    }();
-    return enabled;
-}
+// BPACK_TRACE=bk
+inline bool bunch_kaufman_diagnostics_enabled() { return fmm::env::trace("bk"); }
 
 template <typename DataType>
 void write_colmajor_matrix(
@@ -9749,7 +9742,7 @@ void compute_and_modify(
             if (capture_diagnostics) {
                 oss << ", diagnostics=" << diagnostic_file;
             } else {
-                oss << ", set H2_BK_DIAGNOSTICS=1 for a matrix dump";
+                oss << ", set BPACK_TRACE=bk for a matrix dump";
             }
             oss << ')';
             throw std::runtime_error(oss.str());

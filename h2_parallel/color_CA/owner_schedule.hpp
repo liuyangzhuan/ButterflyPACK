@@ -90,6 +90,8 @@
 //     preempts it after the current wave (batches are resumable).
 // ---------------------------------------------------------------------------
 
+#include "../bpack_env.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -979,11 +981,10 @@ inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow:
     // (2); the greedy variants can do better on irregular strips (purple).
     // A plain greedy alone can need 13 classes on a blue clump, so the parity
     // candidate is the safety net that keeps every colour at <= 8 waves.
-    // Debug (H2_OWNER_PARITY_WAVES=1): wave = raw Morton parity, the order
-    // the replicated code uses, so mode 3 can be diffed box by box against
-    // mode 0.  Must be set identically on every rank.
-    const char* parity_env = std::getenv("H2_OWNER_PARITY_WAVES");
-    if (parity_env != nullptr && std::atoi(parity_env) != 0) {
+    // BPACK_CHECK=parity: wave = raw Morton parity, the order the replicated
+    // code uses, so mode 3 can be diffed box by box against mode 0.  Must be
+    // set identically on every rank.
+    if (fmm::env::check("parity")) {
         for (const auto& k : graph.comps)
             for (int64_t m : k.boxes) wave.emplace(m, static_cast<int32_t>(m % parity_classes));
         num_waves = parity_classes;

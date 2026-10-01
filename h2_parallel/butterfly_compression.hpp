@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bpack_env.hpp"
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #ifdef H2_HAVE_GPU
@@ -1168,7 +1169,7 @@ void hierarchical_h2_mul_parallel(
     // the whole matvec on the device (color_gpu/h2_matvec.hpp) when the
     // compression kept the blocks there on every rank
     if (gpu::run_device_h2_mul(tree, input, output, nrhs)) {
-        if (gpu::device_matvec_check()) {  // H2_GPU_MATVEC_CHECK=1: the host matvec as the reference
+        if (gpu::device_matvec_check()) {  // BPACK_CHECK=matvec: the host matvec as the reference
             std::vector<DataType> host_output;
             gpu::device_matvec_suspended() = true;
             hierarchical_h2_mul_parallel(tree, input, host_output, nrhs, false);
@@ -1676,6 +1677,7 @@ void butterfly_compression_parallel(
 
         solver->kernel.entryeval_time_per_thread.assign(omp_get_max_threads(), 0.0);
         configure_color_gpu(solver->options.use_gpu != 0);
+        fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
         fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
         if (solver->options.use_gpu != 0) {

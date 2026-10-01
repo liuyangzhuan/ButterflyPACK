@@ -62,10 +62,9 @@ public:
     // rank's OpenMP threads, so the copies leave its cores to the host work
     // of the waves (4 ranks per node: 16 OpenMP threads, 8 copy threads; 16
     // spun the waves' OpenMP loops for up to 13 ms each and made the
-    // elimination 8-12% slower); H2_GPU_COPY_THREADS overrides.
+    // elimination 8-12% slower).
     explicit HostCopier(int device, int ring = 0, int threads = 16) : device_(device), ring_(ring) {
         threads_ = std::max(1, std::min(threads, omp_get_max_threads() / 2));
-        if (const char* env = std::getenv("H2_GPU_COPY_THREADS")) threads_ = std::max(1, std::atoi(env));
         worker_ = std::thread([this] { run(); });
     }
     HostCopier(const HostCopier&) = delete;

@@ -118,6 +118,11 @@ module BPACK_GPU
          integer(c_int) :: nproc, share
       end subroutine c_bpack_gpu_init_exchange
 
+      integer(c_int) function c_bpack_env_check(value) bind(c, name="c_bpack_env_check")
+         import :: c_int, c_char
+         character(kind=c_char), dimension(*) :: value
+      end function c_bpack_env_check
+
       subroutine c_bpack_hodlr_gpu_add_leaf(gpu, row0, m, d, ldd) bind(c, name="c_bpack_hodlr_gpu_add_leaf")
          import :: c_ptr, c_int, c_int64_t
          type(c_ptr), value :: gpu, d
@@ -445,8 +450,6 @@ contains
       logical shared, devv, check
       integer(c_int) :: src_id, dst_id, rows_c, cols_c
       type(c_ptr) :: pvd
-      character(len=16) :: value
-      integer :: status
       integer(c_int) :: level_c, m, n, k, ldu, ldv, sym, maxlevel_c
       integer(c_int64_t) :: n_loc, row0, col0
       type(c_ptr) :: pu, pv
@@ -472,9 +475,7 @@ contains
 
       sym = 0
       if (option%sym > 0) sym = 1
-      value = ''
-      call get_environment_variable('HODLR_GPU_CHECK', value, status=status)
-      check = status == 0 .and. len_trim(value) > 0 .and. trim(value) /= '0'
+      check = HODLR_gpu_check_level() > 0
       allocate (vstore(2*max(1, ho_bf1%Maxlevel)))
       nv = 0
       dummy = 0
@@ -528,10 +529,10 @@ contains
                pv = c_loc(dummy(1, 1))
                pvd = c_null_ptr
                ! a shared block's V moves on the device when all ranks of the node have its device copy
-               ! (the construction's, HODLR_GPU_KEEP_FACTORS) and the block's columns are the column child's rows
+               ! (the construction's, kept for the upload) and the block's columns are the column child's rows
                devv = .false.
                if (shared .and. k > 0) then
-                  devv = HODLR_gpu_keep_factors() .and. blk%headn == colchild%headm
+                  devv = blk%headn == colchild%headm
                   src_id = 0
                   if (devv .and. IOwnPgrp(ptree, blk%pgno)) then
                      if (blk%N_loc > 0) then
@@ -571,7 +572,7 @@ contains
                      n = colchild%M_loc
                      ldv = max(1, colchild%M_loc)
                   endif
-               elseif (k > 0) then  ! (on the host; with HODLR_GPU_CHECK also next to the device's, compared at the upload)
+               elseif (k > 0) then  ! (on the host; with BPACK_CHECK=hodlr also next to the device's, compared at the upload)
                   nsrc = 0
                   if (IOwnPgrp(ptree, blk%pgno)) nsrc = blk%N_loc
                   allocate (vsrc(max(1, nsrc), k))
@@ -608,7 +609,7 @@ contains
          write (*, '(A,F10.1,A,F10.1,A,F8.3,A)') ' HODLR GPU: forward blocks on the device, ', mbytes, ' MB (', &
             mirrored, ' MB kept from the construction) in ', t2 - t1, ' s'
       endif
-      ! (HODLR_GPU_CHECK: the way back to the host, compared with the host copies; then taken, the host
+      ! (BPACK_CHECK=hodlr: the way back to the host, compared with the host copies; then taken, the host
       ! copies overwritten by the device's, which the CPU comparisons that follow use)
       if (check .and. .not. ho_bf1%gpu_host_stale) then
          call HODLR_gpu_fetch_host(ho_bf1, option, ptree, compare=.true.)
@@ -622,7 +623,7 @@ contains
    !> the blocks in the order of HODLR_gpu_upload_forward, a shared block's V
    !> moved back from its column child's layout to the block's (collective
    !> over the ranks of ptree).  compare: into temporaries, compared with the
-   !> host copies (which must be filled).  For HODLR_GPU_CHECK
+   !> host copies (which must be filled).  For BPACK_CHECK=hodlr
    subroutine HODLR_gpu_fetch_host(ho_bf1, option, ptree, compare)
       type(hobf), target::ho_bf1
       type(Hoption)::option
@@ -865,7 +866,7 @@ contains
    end subroutine HODLR_gpu_Sym_Inv_Apply
 
    !> Compare the symmetric factors on the GPU with those the CPU left in
-   !> ho_bf1%levels(:)%SymFactor (HODLR_GPU_CHECK): the largest relative
+   !> ho_bf1%levels(:)%SymFactor (BPACK_CHECK=hodlr): the largest relative
    !> differences of Q, G and the LU of S on each level
    subroutine HODLR_gpu_compare_symfactor(ho_bf1, option, ptree)
       type(hobf)::ho_bf1
@@ -1081,7 +1082,7 @@ contains
    end subroutine HODLR_gpu_Inv_Apply_unsym
 
    !> Compare the unsymmetric factors on the GPU with those the CPU left in
-   !> ho_bf1 (HODLR_GPU_CHECK): per level, the largest relative differences
+   !> ho_bf1 (BPACK_CHECK=hodlr): per level, the largest relative differences
    !> of the updated blocks (BP_inverse_update) and of the Schur corrections
    !> (BP_inverse_schur); the leaf inverses (BP_inverse)
    subroutine HODLR_gpu_compare_unsymfactor(ho_bf1, option, ptree)
@@ -1169,7 +1170,7 @@ contains
       enddo
    end subroutine HODLR_gpu_compare_unsymfactor
 
-   !> Print the relative difference of a GPU result to the CPU one (HODLR_GPU_CHECK)
+   !> Print the relative difference of a GPU result to the CPU one (BPACK_CHECK=hodlr)
    subroutine HODLR_gpu_report(what, trans, Ns, num_vectors, Vgpu, Vref, ptree)
       character(len=*) what
       character trans
@@ -1307,7 +1308,7 @@ contains
    end subroutine HODLR_gpu_block_table
 
    !> The rows of the factors that BPACK_ExtractElement reads, for a HODLR
-   !> built on the GPU whose host copies are unfilled (HODLR_GPU_DEFER_HOST):
+   !> built on the GPU whose host copies are unfilled (HODLR_gpu_defer_host):
    !> for each low-rank block of lstblk (this rank's blocks of the
    !> intersections), the rows of U of its requested rows and the rows of V
    !> of its requested columns in this rank's parts (M_p, N_p), into the
@@ -1567,7 +1568,7 @@ contains
       deallocate (svcount, rvcount, svdisp, rvdisp, vsend, vrecv, tab)
    end subroutine HODLR_gpu_fill_rows
 
-   !> HODLR_GPU_CHECK: the host factors of the low-rank blocks of this rank
+   !> BPACK_CHECK=hodlr: the host factors of the low-rank blocks of this rank
    !> overwritten by a sentinel and marked unfilled, so that an extraction
    !> must take every row it reads from the GPUs (HODLR_gpu_fill_rows);
    !> HODLR_gpu_fetch_host restores them
@@ -1594,59 +1595,26 @@ contains
    end subroutine HODLR_gpu_poison_host
 
    !> Stop when a CPU routine needs the host copies of the factors of a HODLR
-   !> built on the GPU, which stay on the GPU (HODLR_GPU_DEFER_HOST)
+   !> built on the GPU, which stay on the GPU (HODLR_gpu_defer_host)
    subroutine HODLR_gpu_require_host(ho_bf1, what)
       type(hobf)::ho_bf1
       character(len=*) :: what
 
       if (.not. ho_bf1%gpu_host_stale) return
-      call assert(.false., 'HODLR GPU: '//what//' reads the host copies of the factors, which stay on the GPU '// &
-                  '(HODLR_GPU_DEFER_HOST=1). TODO: not supported yet; run with HODLR_GPU_DEFER_HOST=0')
+      call assert(.false., 'HODLR GPU: '//what//' reads the host copies of the factors, which stay on the GPU. '// &
+                  'TODO: not supported yet; BPACK_CHECK=hodlr or ErrFillFull=1 keep the host copies')
    end subroutine HODLR_gpu_require_host
 
-   !> HODLR_GPU_KEEP_FACTORS (environment): 1 (default) keeps the device
-   !> copies of the low-rank factors built on the GPU until the forward
-   !> blocks go to the device (HODLR_gpu_upload_forward), which then copies
-   !> them on the device instead of uploading the host arrays; 0 frees them
-   !> (less device memory during the construction)
-   logical function HODLR_gpu_keep_factors()
-      integer, save :: mode = -1
-      character(len=16) :: value
-      integer :: status
-
-      if (mode < 0) then
-         value = ''
-         call get_environment_variable('HODLR_GPU_KEEP_FACTORS', value, status=status)
-         mode = 1
-         if (status == 0 .and. len_trim(value) > 0) read (value, *, iostat=status) mode
-         if (status /= 0 .or. mode < 0) mode = 1
-      endif
-      HODLR_gpu_keep_factors = mode > 0
-   end function HODLR_gpu_keep_factors
-
-   !> HODLR_GPU_DEFER_HOST (environment): 1 (default) leaves the host copies
-   !> of the low-rank factors built on the GPU unfilled: the device keeps
-   !> the only copy (HODLR_gpu_upload_forward moves it into the forward
-   !> blocks), BPACK_ExtractElement takes the rows it reads from the GPUs
-   !> (HODLR_gpu_fill_rows), and the CPU multiply and factorization stop
-   !> (HODLR_gpu_require_host); 0 downloads them during the construction, as
-   !> always with HODLR_GPU_CHECK (the CPU comparisons read them),
-   !> ErrFillFull=1 or HODLR_GPU_KEEP_FACTORS=0
+   !> The host copies of the low-rank factors built on the GPU are left
+   !> unfilled: the device keeps the only copy (HODLR_gpu_upload_forward
+   !> moves it into the forward blocks), BPACK_ExtractElement takes the rows it
+   !> reads from the GPUs (HODLR_gpu_fill_rows), and the CPU multiply and
+   !> factorization stop (HODLR_gpu_require_host).  Not with BPACK_CHECK=hodlr
+   !> (the CPU comparisons read them) or ErrFillFull=1, which download them
+   !> during the construction.
    logical function HODLR_gpu_defer_host(option)
       type(Hoption)::option
-      integer, save :: mode = -1
-      character(len=16) :: value
-      integer :: status
-
-      if (mode < 0) then
-         value = ''
-         call get_environment_variable('HODLR_GPU_DEFER_HOST', value, status=status)
-         mode = 1
-         if (status == 0 .and. len_trim(value) > 0) read (value, *, iostat=status) mode
-         if (status /= 0 .or. mode < 0) mode = 1
-      endif
-      HODLR_gpu_defer_host = mode > 0 .and. HODLR_gpu_keep_factors() .and. HODLR_gpu_check_level() <= 0 &
-                             .and. option%ErrFillFull /= 1
+      HODLR_gpu_defer_host = HODLR_gpu_check_level() <= 0 .and. option%ErrFillFull /= 1
    end function HODLR_gpu_defer_host
 
    !> The OpenMP threads of the host loops over the small blocks of the GPU
@@ -1662,42 +1630,31 @@ contains
 #endif
    end function HODLR_gpu_host_threads
 
-   !> HODLR_GPU_SPLIT (environment): how the GPU construction splits a block
-   !> compressed by several ranks into pieces.  0: as the CPU
-   !> (LR_HBACA_Leaflevel over the block's group, with the same random
-   !> numbers, for comparisons).  1 (default): a block of the symmetric HODLR
-   !> over its node's group (both children's ranks, the other half idle
-   !> otherwise); with the option HODLR_gpu_pieces > 1 each rank's part split
-   !> further and the pieces spread over the group by their estimated cost
+   !> How the GPU construction splits a block compressed by several ranks
+   !> into pieces.  1 (default): a block of the symmetric HODLR over its
+   !> node's group (both children's ranks, the other half idle otherwise);
+   !> with the option HODLR_gpu_pieces > 1 each rank's part split further and
+   !> the pieces spread over the group by their estimated cost.  0
+   !> (BPACK_CHECK=hodlr-exact): as the CPU (LR_HBACA_Leaflevel over the
+   !> block's group, with the same random numbers, for comparisons).
    integer function HODLR_gpu_split_mode()
       integer, save :: mode = -1
-      character(len=16) :: value
-      integer :: status
-
       if (mode < 0) then
-         value = ''
-         call get_environment_variable('HODLR_GPU_SPLIT', value, status=status)
          mode = 1
-         if (status == 0 .and. len_trim(value) > 0) read (value, *, iostat=status) mode
-         if (status /= 0 .or. mode < 0) mode = 1
+         if (c_bpack_env_check('hodlr-exact'//c_null_char) /= 0) mode = 0
       endif
       HODLR_gpu_split_mode = mode
    end function HODLR_gpu_split_mode
 
-   !> HODLR_GPU_CHECK (environment): 1 compares each GPU result with the CPU
-   !> routine it replaces and prints the relative difference; 2 also checks
-   !> the transposed products of each multiply
+   !> BPACK_CHECK=hodlr (1): compare each GPU result with the CPU routine it
+   !> replaces and print the relative difference; hodlr-transpose (2): also
+   !> the transposed products of each multiply (doc/environment_variables.md)
    integer function HODLR_gpu_check_level()
       integer, save :: mode = -1
-      character(len=16) :: value
-      integer :: status
-
       if (mode < 0) then
-         value = ''
-         call get_environment_variable('HODLR_GPU_CHECK', value, status=status)
          mode = 0
-         if (status == 0 .and. len_trim(value) > 0) read (value, *, iostat=status) mode
-         if (status /= 0) mode = 0
+         if (c_bpack_env_check('hodlr'//c_null_char) /= 0) mode = 1
+         if (c_bpack_env_check('hodlr-transpose'//c_null_char) /= 0) mode = 2
       endif
       HODLR_gpu_check_level = mode
    end function HODLR_gpu_check_level

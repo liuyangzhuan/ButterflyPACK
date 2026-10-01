@@ -20,8 +20,9 @@
 #
 # Overrides: NODES, RANKS_PER_NODE, CASE (laplace, vie, efie, cfie), SYM (0 or
 # 1; default 1 for laplace, 0 otherwise), USE_GPU (1: FP64 GEMMs, 2: FP64 tensor-core GEMMs), PIECES (the option
-# HODLR_gpu_pieces, default 4), CHECK (HODLR_GPU_CHECK: 1 compares every GPU
-# step with the CPU, 2 also the transposed products; slow), GRID_SIZE, VIE_H,
+# HODLR_gpu_pieces, default 4), CHECK (1: BPACK_CHECK=hodlr, compares every
+# GPU step with the CPU; 2: hodlr-transpose, also the transposed products;
+# slow; doc/environment_variables.md), GRID_SIZE, VIE_H,
 # SCALE_GREEN, MESH (sphere mesh stem), WAVELENGTH, JOB_ID (run inside an
 # existing allocation), REPO.
 #
@@ -69,7 +70,8 @@ export GOTO_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export MPICH_GPU_SUPPORT_ENABLED=1  # (CUDA-aware MPI: the backend's messages go between the GPUs)
-if [[ -n "${CHECK:-}" ]]; then export HODLR_GPU_CHECK=${CHECK}; fi
+if [[ "${CHECK:-0}" == 1 ]]; then export BPACK_CHECK=hodlr; fi
+if [[ "${CHECK:-0}" == 2 ]]; then export BPACK_CHECK=hodlr-transpose; fi
 
 gpu_opts=(--HODLR_use_gpu "${use_gpu}")
 if [[ -n "${PIECES:-}" ]]; then gpu_opts+=(--HODLR_gpu_pieces "${PIECES}"); fi

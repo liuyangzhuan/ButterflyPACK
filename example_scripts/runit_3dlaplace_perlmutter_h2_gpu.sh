@@ -34,9 +34,8 @@
 # Memory.  --constraint=gpu can give 40 GB or 80 GB A100 nodes; for comparable
 # timings use --constraint="gpu&hbm40g" or "gpu&hbm80g".  With Nmin_leaf 216,
 # 884K unknowns per rank (e.g. 384^3 on 64 ranks) needs the 80 GB nodes;
-# ~600K or less fits in 40 GB.  If a CA0 run fails with "H2 GPU heap
-# exhausted" after its CA leaf (the leaf's solve factors kept on the device
-# fragment the heap), run it with H2_GPU_SOLVE_KEEP=0.
+# ~600K or less fits in 40 GB.  Environment variables:
+# doc/environment_variables.md.
 
 set -uo pipefail
 
@@ -93,9 +92,6 @@ export BLIS_NUM_THREADS=1
 export MPICH_ASYNC_PROGRESS=1
 # CUDA-aware MPI: the GPU backend sends its messages from device memory
 export MPICH_GPU_SUPPORT_ENABLED=1
-# load the batched GPU kernels before the first level, so first-use module
-# loading does not land inside a level's time
-export H2_GPU_WARMUP=1
 
 if [[ ! -x "${exe}" ]]; then
   echo "Missing executable: ${exe}" >&2

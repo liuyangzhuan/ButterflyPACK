@@ -18,52 +18,11 @@
 namespace fmm {
 namespace gpu {
 
-// H2_GPU_MATVEC=0: keep no blocks on the device (host matvec).
-inline bool device_matvec_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_GPU_MATVEC");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return enabled;
-}
-// The blocks are kept while the heap stays under this fraction of its
-// capacity (H2_GPU_MATVEC_KEEP_FRACTION, default 0.9).
-inline double device_matvec_keep_fraction() {
-    static const double fraction = [] {
-        const char* v = std::getenv("H2_GPU_MATVEC_KEEP_FRACTION");
-        const double f = v != nullptr ? std::atof(v) : 0.9;
-        return f > 0.0 && f <= 1.0 ? f : 0.9;
-    }();
-    return fraction;
-}
-// H2_GPU_MATVEC_DIRECT=1: messages of the device matvec straight from
-// device memory when MPI is CUDA-aware (default: through pinned host
-// buffers; the messages are small, and registering device memory with MPI
-// costs seconds on the first use).
-inline bool device_matvec_direct() {
-    static const bool direct = [] {
-        const char* v = std::getenv("H2_GPU_MATVEC_DIRECT");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
-    return direct;
-}
-// H2_GPU_MATVEC_SYMMETRIC=0: keep both near blocks of a pair of local boxes
-// (default: the device kernels are symmetric, so one block serves both).
-inline bool device_matvec_symmetric() {
-    static const bool symmetric = [] {
-        const char* v = std::getenv("H2_GPU_MATVEC_SYMMETRIC");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return symmetric;
-}
-// H2_GPU_MATVEC_CHECK=1: also run the host matvec and print the difference.
-inline bool device_matvec_check() {
-    static const bool check = [] {
-        const char* v = std::getenv("H2_GPU_MATVEC_CHECK");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
-    return check;
-}
+// The compression keeps the blocks while the heap stays under this
+// fraction of its capacity.
+constexpr double kMatvecKeepFraction = 0.9;
+// BPACK_CHECK=matvec: also run the host matvec and print the difference.
+inline bool device_matvec_check() { return env::check("matvec"); }
 
 // Messages of one step with the neighbor ranks, fixed by the compression:
 // per peer, a send and a receive segment (points; a message is
@@ -129,11 +88,8 @@ struct DeviceMatvecStore {
     }
 };
 
-// The store of the active operator (one per operator with keep_operators(),
-// device_heap.hpp; else one for all).
+// The store of the active operator (one per operator, device_heap.hpp).
 inline DeviceMatvecStore& device_matvec_store() {
-    static DeviceMatvecStore single;
-    if (!keep_operators()) return single;
     static std::unordered_map<const void*, DeviceMatvecStore>* const stores = [] {
         auto* s = new std::unordered_map<const void*, DeviceMatvecStore>;  // (never freed: see DeviceHeap)
         OperatorContext& c = operator_context();

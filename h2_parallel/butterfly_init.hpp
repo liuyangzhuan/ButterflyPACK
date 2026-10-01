@@ -841,7 +841,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
               << number_kind_to_string(options.number_kind) << ") ===" << std::endl;
   
     if (const int dynamic_cpu_cap =
-            fmm::parse_positive_thread_count(std::getenv("FMM_MAX_CPUS_PER_NODE"));
+            fmm::parse_positive_thread_count(std::getenv("BPACK_MAX_CPUS_PER_NODE"));
         dynamic_cpu_cap > 0) {
         std::cout << "Dynamic thread cpu cap per node: " << dynamic_cpu_cap << std::endl;
     }

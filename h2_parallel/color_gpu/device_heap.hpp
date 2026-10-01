@@ -19,6 +19,7 @@
 #include "gpu_runtime.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -49,37 +50,27 @@ public:
     DeviceHeap(const DeviceHeap&) = delete;
     DeviceHeap& operator=(const DeviceHeap&) = delete;
 
-    // Reserve the arena on first use: H2_GPU_HEAP_GB GiB if set, else a
-    // fraction (H2_GPU_HEAP_FRACTION, default 0.85) of the device memory free
-    // at that point, or, when several ranks share the device
-    // (set_device_share), an equal part of that fraction of the memory they
-    // found free together.  MAGMA's workspaces and the pinned staging
-    // buffers stay outside the arena.
+    // Reserve the arena on first use: a fraction (BPACK_GPU_HEAP_FRACTION,
+    // default 0.85) of the device memory free at that point, or, when
+    // several ranks share the device (share_device), an equal part of that
+    // fraction of the memory they found free together.  MAGMA's workspaces
+    // and the pinned staging buffers stay outside the arena.
     void ensure_initialized() {
         if (base_ != nullptr) return;
         Context::instance().activate();
         size_t free_bytes = 0, total_bytes = 0;
         check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
-        if (const char* env = std::getenv("H2_GPU_HEAP_GB")) {
-            const double bytes = std::atof(env) * static_cast<double>(size_t{1} << 30);
-            if (!(bytes > 0.0) || bytes > static_cast<double>(free_bytes)) {
-                throw std::invalid_argument("H2_GPU_HEAP_GB must be positive and at most the free device memory (" +
-                                            std::to_string(static_cast<double>(free_bytes) / (size_t{1} << 30)) + " GiB)");
-            }
-            capacity_ = static_cast<size_t>(bytes) / kAlign * kAlign;
+        double fraction = 0.85;
+        if (const char* env = std::getenv("BPACK_GPU_HEAP_FRACTION")) fraction = std::atof(env);
+        if (!(fraction > 0.0 && fraction < 1.0)) {
+            throw std::invalid_argument("BPACK_GPU_HEAP_FRACTION must lie in (0, 1)");
+        }
+        if (share_ranks_ > 1) {
+            free_bytes = std::min(free_bytes, share_free_);
+            capacity_ = static_cast<size_t>(fraction * static_cast<double>(share_free_) / share_ranks_) / kAlign * kAlign;
+            capacity_ = std::min(capacity_, static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign);
         } else {
-            double fraction = 0.85;
-            if (const char* frac = std::getenv("H2_GPU_HEAP_FRACTION")) fraction = std::atof(frac);
-            if (!(fraction > 0.0 && fraction < 1.0)) {
-                throw std::invalid_argument("H2_GPU_HEAP_FRACTION must lie in (0, 1)");
-            }
-            if (share_ranks_ > 1) {
-                free_bytes = std::min(free_bytes, share_free_);
-                capacity_ = static_cast<size_t>(fraction * static_cast<double>(share_free_) / share_ranks_) / kAlign * kAlign;
-                capacity_ = std::min(capacity_, static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign);
-            } else {
-                capacity_ = static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign;
-            }
+            capacity_ = static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign;
         }
         void* ptr = nullptr;
         check_cuda(cudaMalloc(&ptr, capacity_), "cudaMalloc (H2 GPU heap)");
@@ -254,16 +245,126 @@ private:
     int64_t reclaims_ = 0;
 };
 
+// The sub-buffers of a pass laid out back to back in one logical range
+// (their offsets 256-aligned, in increasing order), placed in pieces of at
+// most kPieceBytes, each its own transient heap block (a larger sub-buffer
+// gets a piece of its own), instead of one block for the whole range: after
+// a level the heap's free memory is in pieces (between the kept solve
+// factors and the parent level's blocks), and one block of the pass's total
+// may not fit although the total does.
+class PiecedBuffer {
+public:
+    static constexpr size_t kPieceBytes = size_t{256} << 20;
+
+    PiecedBuffer() = default;
+    PiecedBuffer(const PiecedBuffer&) = delete;
+    PiecedBuffer& operator=(const PiecedBuffer&) = delete;
+    ~PiecedBuffer() { release(); }
+
+    // `starts`: the sub-buffers' offsets; `end`: the end of the last one.
+    void allocate(DeviceHeap& heap, const std::vector<size_t>& starts, size_t end) {
+        release();
+        heap_ = &heap;
+        for (size_t j = 0; j < starts.size(); ++j) {
+            const size_t stop = j + 1 < starts.size() ? starts[j + 1] : end;
+            if (start_.empty() || (stop - start_.back() > kPieceBytes && starts[j] > start_.back())) {
+                start_.push_back(starts[j]);
+            }
+        }
+        for (size_t p = 0; p < start_.size(); ++p) {
+            const size_t stop = p + 1 < start_.size() ? start_[p + 1] : end;
+            base_.push_back(stop > start_[p] ? heap.alloc(stop - start_[p]) : nullptr);
+        }
+    }
+    // Device address of a logical offset (inside a sub-buffer).
+    char* at(size_t offset) const {
+        const size_t p = static_cast<size_t>(std::upper_bound(start_.begin(), start_.end(), offset) - start_.begin()) - 1;
+        return base_[p] + (offset - start_[p]);
+    }
+    // (later launches are ordered after the pass's reads: one stream)
+    void release() {
+        for (char* b : base_) {
+            if (b != nullptr) heap_->free(b);
+        }
+        base_.clear();
+        start_.clear();
+    }
+
+private:
+    DeviceHeap* heap_ = nullptr;
+    std::vector<size_t> start_;  // logical offset of each piece
+    std::vector<char*> base_;    // its block
+};
+
 // ---------------------------------------------------------------------------
-// Several H2 operators in one process.  With H2_GPU_KEEP_OPERATORS=1 (the
-// default), the device data a factorization or compression leaves for the
-// solve and the matvec (device_solve_store(), device_matvec_store()) is kept
-// per operator (its tree), so a process that alternates between operators (a
-// Gaussian process with its covariance matrix and the derivative matrices of
-// its gradient) finds their device data again instead of falling back to the
-// host.  With a single operator nothing changes: a new factorization or
-// compression of an operator replaces its own data.  0: one set of device
-// data, replaced by every factorization or compression.
+// Ranks sharing a GPU.  Collective over comm, once per process: the ranks of
+// a node that use the same GPU (by device UUID) split its memory, the
+// device pool of each taking an equal part (DeviceHeap::set_device_share,
+// before the pool is reserved).  Returns how many ranks use this rank's GPU.
+inline int share_device(MPI_Comm comm) {
+    static int share = 0;
+    if (share > 0) return share;
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm node = MPI_COMM_NULL;
+    MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &node);
+    int nrank = 0, nsize = 1;
+    MPI_Comm_rank(node, &nrank);
+    MPI_Comm_size(node, &nsize);
+    Context::instance().activate();
+    int dev = 0;
+    check_cuda(cudaGetDevice(&dev), "cudaGetDevice");
+    cudaDeviceProp prop;
+    check_cuda(cudaGetDeviceProperties(&prop, dev), "cudaGetDeviceProperties");
+    std::vector<char> uuids(16 * static_cast<size_t>(nsize));
+    MPI_Allgather(prop.uuid.bytes, 16, MPI_CHAR, uuids.data(), 16, MPI_CHAR, node);
+    int color = -1, count = 0;
+    for (int r = 0; r < nsize; ++r) {
+        if (std::memcmp(uuids.data() + 16 * r, prop.uuid.bytes, 16) != 0) continue;
+        if (color < 0) color = r;
+        ++count;
+    }
+    MPI_Comm dev_comm = MPI_COMM_NULL;
+    MPI_Comm_split(node, color, nrank, &dev_comm);
+    MPI_Barrier(dev_comm);  // (every context on the device exists)
+    size_t free_bytes = 0, total_bytes = 0;
+    check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
+    unsigned long long f = free_bytes, fmin = free_bytes;
+    MPI_Allreduce(&f, &fmin, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, dev_comm);
+    if (count > 1) DeviceHeap::instance().set_device_share(count, static_cast<size_t>(fmin));
+    MPI_Comm_free(&dev_comm);
+    MPI_Comm_free(&node);
+    share = count;
+    return share;
+}
+
+// The exchange arena (DeviceHeap::exchange_arena()) of a run of nproc ranks
+// with GPU-aware MPI, before the device pool takes its fraction of the free
+// memory: BPACK_GPU_EXCHANGE_MB MB, default min(2560 MB, a sixteenth of the
+// GPU) divided among the `share` ranks that use the GPU (share_device).  MPI
+// sends from and receives into it (registered once for MPI; buffers of the
+// main pool made the transfers ~30x slower); a message that does not fit
+// goes through the host.  No-op once reserved.
+inline void reserve_exchange_arena(int nproc, int share) {
+    DeviceHeap& arena = DeviceHeap::exchange_arena();
+    if (nproc <= 1 || !device_exchange_enabled() || arena.initialized()) return;
+    Context::instance().activate();
+    size_t free_bytes = 0, total_bytes = 0;
+    check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
+    size_t mb = std::min<size_t>(2560, (total_bytes >> 20) / 16) / static_cast<size_t>(std::max(share, 1));
+    if (const char* env = std::getenv("BPACK_GPU_EXCHANGE_MB")) mb = static_cast<size_t>(std::atoll(env));
+    arena.initialize_fixed(mb << 20);
+}
+
+// ---------------------------------------------------------------------------
+// Several H2 operators in one process.  The device data a factorization or
+// compression leaves for the solve and the matvec (device_solve_store(),
+// device_matvec_store()) is kept per operator (its tree), so a process that
+// alternates between operators (a Gaussian process with its covariance
+// matrix and the derivative matrices of its gradient) finds their device
+// data again instead of falling back to the host.  With a single operator
+// nothing changes: a new factorization or compression of an operator
+// replaces its own data.
 //
 // The operators of a process are assumed to share its ranks, which call
 // their H2 operations in the same order: the use order below is then the
@@ -271,19 +372,11 @@ private:
 // operators' data is released collectively at the start of a build while the
 // other operators hold more than half of some rank's heap (an eviction on
 // one rank only would split the ranks between the device and host paths of
-// that operator); an allocation that still does not fit fails as with 0.
-inline bool keep_operators() {
-    static const bool keep = [] {
-        const char* v = std::getenv("H2_GPU_KEEP_OPERATORS");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return keep;
-}
-
+// that operator); an allocation that still does not fit fails.
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
     uint64_t clock = 0;
-    std::unordered_map<const void*, uint64_t> last_use;   // keep_operators(): operator -> last use
+    std::unordered_map<const void*, uint64_t> last_use;   // operator -> last use
     // per kind of store (solve, matvec): release an operator's data; bytes it holds
     std::vector<std::function<void(const void*)>> releasers;
     std::vector<std::function<size_t(const void*)>> holders;
@@ -298,7 +391,7 @@ inline OperatorContext& operator_context() {
 inline void activate_operator(const void* tree) {
     OperatorContext& c = operator_context();
     c.active = tree;
-    if (keep_operators()) c.last_use[tree] = ++c.clock;
+    c.last_use[tree] = ++c.clock;
 }
 
 // Device bytes the stores hold for operator `tree`.
@@ -310,7 +403,6 @@ inline size_t operator_bytes(const void* tree) {
 
 // Whether operators other than the active one hold device data.
 inline bool other_operators_hold_data() {
-    if (!keep_operators()) return false;
     const OperatorContext& c = operator_context();
     for (const auto& entry : c.last_use) {
         if (entry.first != c.active && operator_bytes(entry.first) > 0) return true;
@@ -321,18 +413,20 @@ inline bool other_operators_hold_data() {
 // The device data of operator `tree` is released (its destruction, on every rank).
 inline void release_operator(const void* tree) {
     OperatorContext& c = operator_context();
-    if (keep_operators()) {
-        for (const auto& release : c.releasers) release(tree);
-        c.last_use.erase(tree);
-    }
+    for (const auto& release : c.releasers) release(tree);
+    c.last_use.erase(tree);
     if (c.active == tree) c.active = nullptr;
 }
 
 // Start of a factorization or compression of operator `tree` (collective
-// over comm): activates it and makes room from the other operators' data.
+// over comm): the GPU sharing and the exchange arena (the first time, before
+// the device pool), then activates the operator and makes room from the
+// other operators' data.
 inline void begin_operator_build(const void* tree, MPI_Comm comm) {
+    int nproc = 1;
+    MPI_Comm_size(comm, &nproc);
+    reserve_exchange_arena(nproc, share_device(comm));
     activate_operator(tree);
-    if (!keep_operators()) return;
     OperatorContext& c = operator_context();
     const DeviceHeap& heap = DeviceHeap::instance();
     for (;;) {

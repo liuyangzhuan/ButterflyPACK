@@ -97,7 +97,7 @@ contains
             return
         endif
 
-        ! on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK first runs this
+        ! on the GPU (HODLR_use_gpu > 0); BPACK_CHECK=hodlr first runs this
         ! routine on the CPU and compares the two factorizations
         if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) then
             if (HODLR_gpu_check_level() > 0) then
@@ -429,7 +429,7 @@ endif
         DTR logdet_cpu
         real(kind=8)::time_cpu, flop_cpu, flop_gpu
 
-        ! on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK first runs this
+        ! on the GPU (HODLR_use_gpu > 0); BPACK_CHECK=hodlr first runs this
         ! routine on the CPU and compares the two factorizations
         if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) then
             if (HODLR_gpu_check_level() > 0) then

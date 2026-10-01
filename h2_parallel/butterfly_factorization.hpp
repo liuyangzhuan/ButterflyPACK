@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bpack_env.hpp"
 #include "butterfly_types.hpp"
 #include "butterfly_solve.hpp"
 #include "butterfly_verification.hpp"
@@ -883,6 +884,12 @@ inline double& h2_verification_seconds() {
     static double seconds = 0.0;
     return seconds;
 }
+// Wall time of the GPU kernel warm-up before its first level (the process's
+// first factorization; reported apart from the factorization too).
+inline double& h2_warmup_seconds() {
+    static double seconds = 0.0;
+    return seconds;
+}
 
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_parallel(
@@ -1027,9 +1034,16 @@ void hierarchical_factorization_parallel(
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.ca_owner_component = ca_owner_component;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
-    if (const double warm = gpu_driver.warm_up(); warm > 0.0 && print_summary && rank == 0) {
-        std::printf("  [gpu] kernel warm-up (H2_GPU_WARMUP=1): %.2f s, before the levels\n", warm);
-        std::fflush(stdout);
+    {
+        const double kernels = gpu_driver.warm_up();
+        const double exchanges = gpu_driver.warm_up_exchange();
+        h2_warmup_seconds() = kernels + exchanges;
+        if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
+            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, before the levels (not in the factor "
+                        "time)\n",
+                        kernels, exchanges);
+            std::fflush(stdout);
+        }
     }
 #endif
 
@@ -1042,11 +1056,8 @@ void hierarchical_factorization_parallel(
         auto& parent_level = tree->levels[current_level - 1];
         const bool participates_in_transition =
             level.is_process_active || parent_level.is_process_active;
-        // H2_PHASE_REPORT=1: per-level elimination phase breakdown
-        static const bool phase_report = [] {
-            const char* v = std::getenv("H2_PHASE_REPORT");
-            return v != nullptr && std::atoi(v) != 0;
-        }();
+        // BPACK_TRACE=phase: per-level elimination phase breakdown
+        static const bool phase_report = fmm::env::trace("phase");
         if (phase_report) {
             FMM_PHASE_RESET();
 #ifdef H2_HAVE_GPU
@@ -2724,6 +2735,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   const auto factorization_method =
     h2_xrr_factorization_method(solver->options);
   configure_color_gpu(solver->options.use_gpu != 0);
+  fmm::env::report_environment(solver->comm);
 #ifdef H2_HAVE_GPU
   fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
 #endif
@@ -2747,6 +2759,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
 //   auto total_start = std::chrono::high_resolution_clock::now();
   double t0 = MPI_Wtime();
   butterfly::h2_verification_seconds() = 0.0;
+  butterfly::h2_warmup_seconds() = 0.0;
   butterfly::hierarchical_factorization_parallel_if_supported(
     solver->tree.get(),
     &solver->kernel,
@@ -2766,8 +2779,9 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
     solver->options.verbosity);
-  // the logdet and quick verification that end the call are not factorization
-  double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds();
+  // the logdet and quick verification that end the call, and the GPU
+  // kernel warm-up before its first level, are not factorization
+  double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds() - butterfly::h2_warmup_seconds();
   MPI_Allreduce(MPI_IN_PLACE, &tf, 1, MPI_DOUBLE, MPI_MAX, solver->comm);
   *factorization_time = tf;
   double tv = butterfly::h2_verification_seconds();

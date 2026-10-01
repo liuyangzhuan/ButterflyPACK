@@ -157,8 +157,7 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
     if (!all_ok) {
         store.release();
         if (verbose && rank == 0) {
-            std::printf("  GPU matvec: off (%s); host matvec\n",
-                        !device_matvec_enabled() ? "H2_GPU_MATVEC=0" : "the blocks do not fit on every rank's device");
+            std::printf("  GPU matvec: off (the blocks do not fit on every rank's device); host matvec\n");
             std::fflush(stdout);
         }
         return;
@@ -317,7 +316,8 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
         std::printf("  GPU matvec: on (blocks kept on the device: up to %.2f GB per rank; messages %s; "
                     "planned with %.3f s of messages on rank 0)\n",
                     max_bytes / 1e9,
-                    device_matvec_direct() && device_exchange_enabled() ? "in device memory" : "through the host",
+                    device_exchange_enabled() && DeviceHeap::exchange_arena().initialized() ? "in device memory"
+                                                                                            : "through the host",
                     comm_seconds);
         std::fflush(stdout);
     }
@@ -364,15 +364,30 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
     };
     auto lv_of = [&](int level) -> H2MatvecLevel& { return store.levels[static_cast<size_t>(level)]; };
     auto active = [&](int level) { return tree->levels[static_cast<size_t>(level)].is_process_active; };
+    // Message buffers: in the exchange arena with GPU-aware MPI (registered
+    // once for MPI; sent and received in device memory), else from the heap
+    // and staged through pinned host buffers.
+    DeviceHeap& arena = DeviceHeap::exchange_arena();
+    std::vector<S*> owned_messages;
+    auto alloc_message = [&](int64_t points) -> S* {
+        if (points <= 0) return nullptr;
+        if (device_exchange_enabled()) {
+            if (char* p = arena.try_alloc(static_cast<size_t>(points) * nrhs * sizeof(S))) {
+                owned_messages.push_back(reinterpret_cast<S*>(p));
+                return reinterpret_cast<S*>(p);
+            }
+        }
+        return alloc(points);
+    };
     // one round of messages with the level's peers; returns the ghost area
     auto exchange = [&](const H2Exchange& ex, const S* from, int tag) -> S* {
         if (ex.peers.empty()) return nullptr;
-        S* send = alloc(ex.send_points);
-        S* recv = alloc(ex.recv_points);
+        S* send = alloc_message(ex.send_points);
+        S* recv = alloc_message(ex.recv_points);
         launch_h2_pack<S>(ex.d_spans, ex.nspans, from, send, nrhs, ex.max_len, stream);
         check_cuda(cudaStreamSynchronize(stream), "matvec messages");
         const auto t0 = clock::now();
-        const bool direct = device_matvec_direct() && device_exchange_enabled();
+        const bool direct = (send == nullptr || arena.owns(send)) && (recv == nullptr || arena.owns(recv));
         S* sbuf = send;
         S* rbuf = recv;
         if (!direct) {
@@ -574,6 +589,7 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
                               cudaMemcpyDeviceToHost), "matvec output");
     }
     for (S* p : owned) heap.free(p);
+    for (S* p : owned_messages) arena.free(p);
     stats.transfer += seconds_since(t0);
     stats.total += seconds_since(t_start);
 }

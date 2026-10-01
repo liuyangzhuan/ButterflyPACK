@@ -21,7 +21,8 @@ MPI rank or several ranks sharing one GPU.
   handed out over the block's ranks, largest estimated cost first, then
   merged back. This balances the top levels when some pieces cost far more
   than others (3D Laplace, 885k points, 8 GPUs, tol 1e-3: construction 22 s
-  with `1`, 14 s with `4`). It needs `HODLR_GPU_SPLIT=1`, the default.
+  with `1`, 14 s with `4`). `BPACK_CHECK=hodlr-exact` sets it aside (the
+  CPU's split, for comparisons).
 - The run stops unless `format=1`, `LRlevel=0` and ZFP is off (`use_zfp` not 1).
 - The construction of a level runs on the GPU when all of these hold:
   - the matrix has a device kernel (`c_bpack_h2_set_gpu_kernel`);
@@ -44,30 +45,36 @@ MPI rank or several ranks sharing one GPU.
   `USE_LOCKING`, more threads making small LAPACK calls mostly wait for its
   lock.
 
-## Environment switches
+- The low-rank factors built on the GPU stay there: the device copies from
+  the construction become the forward blocks of the factorization (copied on
+  the device, never uploaded from the host), and their host copies are left
+  unfilled (3D Laplace, 262k points, 16 GPUs: 0.4 s of 7.1 s of downloads
+  saved, and host memory per rank 2.5–3.4 → 1.7 GB). Entry extraction takes
+  the rows it needs from the GPUs (see above). A CPU multiply or CPU
+  factorization of such a matrix stops with an error (TODO; with
+  `HODLR_use_gpu > 0` both run on the GPU, so this only happens if a caller
+  switches `HODLR_use_gpu` off after the construction). `BPACK_CHECK=hodlr`
+  and `ErrFillFull=1` download the host copies during the construction.
 
-Each process reads each variable once, at first use, and the value then
-applies to every matrix in that process.
+## Environment variables
 
-### Performance and memory
+[`doc/environment_variables.md`](../doc/environment_variables.md) describes
+all of them; those that concern this backend:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `HODLR_GPU_SPLIT` | `1` | How a block compressed by several ranks is split into pieces. `0` matches the CPU exactly (the block's own group, the same random numbers, and one piece per rank whatever `HODLR_gpu_pieces`), for comparisons. `1`, in the symmetric HODLR, builds each A21 over its node's group (both children's ranks), so the ranks of A12's rows, which the symmetric format never builds, are not idle, and applies `HODLR_gpu_pieces`. |
-| `HODLR_GPU_KEEP_FACTORS` | `1` | `1` keeps the device copies of the low-rank factors from the construction until the forward blocks are assembled on the device, which then copies them device-to-device and never uploads the host arrays. `0` frees them after each level: less device memory during the construction, but the factors go down to the host and back up. `0` also turns off `HODLR_GPU_DEFER_HOST`. |
-| `HODLR_GPU_DEFER_HOST` | `1` | `1` never fills the host copies of the factors built on the GPU; the device holds the only copy. Entry extraction takes the rows it needs from the GPUs (see above). A CPU multiply or CPU factorization of such a matrix stops with an error (TODO; with `HODLR_use_gpu > 0` both run on the GPU, so this only happens if a caller switches `HODLR_use_gpu` off after the construction). Saves the download time and host memory (3D Laplace, 262k points, 16 GPUs: 0.4 s of 7.1 s, and host memory per rank 2.5–3.4 → 1.7 GB). `0` downloads them during the construction. The download is always done with `HODLR_GPU_CHECK`, `ErrFillFull=1` or `HODLR_GPU_KEEP_FACTORS=0`. |
-| `HODLR_GPU_EXCHANGE_MB` | min(2048, GPU memory / 16), divided by the ranks sharing the GPU | Size in MB of the device arena for MPI messages. It is reserved before the main device heap, and only when there is more than one rank and MPI is CUDA-aware. It holds the merges of the construction and the exchanges of the factorization, multiply and solve; a message that doesn't fit goes through pinned host buffers. |
-
-### Validation and debugging
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HODLR_GPU_CHECK` | `0` | `1` runs the CPU routine next to each GPU step and prints the difference: each construction level (drawing the same random numbers) and the dense leaves; the upload; the round trip of the factors back to the host (compared, then taken, so the CPU checks that follow use the fetched copies); the entries of the construction check, extracted again with the host factors overwritten by a sentinel so that every row the extraction reads must come from the GPUs; every multiply; the factorization (logdet); and the solves. `2` also checks the transposed products of each multiply. It runs the CPU construction and factorization as well, so the timings are not meaningful. |
-| `HODLR_GPU_DEBUG` | `0` | `1` prints each block and chunk of the recompression QR. `2` also synchronizes after each step, so that an asynchronous device fault is reported by the kernel that caused it. |
-
-### Shared GPU runtime (also used by the H2 GPU backend)
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `H2_GPU_HEAP_FRACTION` | `0.85` | Fraction of the free device memory the backend reserves as its heap at first use, split equally among ranks sharing a GPU. MAGMA's workspaces, the exchange arena and pinned buffers stay outside it. `H2 GPU heap exhausted` errors refer to this heap. |
-| `H2_GPU_DEVICE_EXCHANGE` | on when MPI is CUDA-aware | `0` sends all MPI messages through host buffers. Otherwise device buffers go straight to MPI when `MPICH_GPU_SUPPORT_ENABLED=1` (Cray MPICH) or `H2_GPU_AWARE_MPI=1`. |
+- `BPACK_GPU_HEAP_FRACTION` (default `0.85`): the device memory pool, shared
+  with the H2 GPU backend and split equally among ranks sharing a GPU. `H2
+  GPU heap exhausted` errors refer to it.
+- `BPACK_GPU_EXCHANGE_MB` (default min(2560, GPU memory / 16), divided by the
+  ranks sharing the GPU): the device arena for MPI messages (the merges of
+  the construction and the exchanges of the factorization, multiply and
+  solve), with GPU-aware MPI.
+- `BPACK_GPU_AWARE_MPI` (default: `MPICH_GPU_SUPPORT_ENABLED`): `0` sends all
+  MPI messages through host buffers.
+- `BPACK_CHECK=hodlr` runs the CPU routine next to each GPU step and prints
+  the difference; `hodlr-transpose` also checks the transposed products;
+  `hodlr-exact` builds the shared blocks as the CPU does (the same random
+  numbers), so the construction levels compare at round-off. The timings of
+  such runs are not meaningful.
+- `BPACK_TRACE=hodlr-qr` prints each block and chunk of the recompression
+  QR; `sync` synchronizes after each step, so that an asynchronous device
+  fault is reported by the kernel that caused it.

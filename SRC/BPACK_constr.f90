@@ -2202,7 +2202,7 @@ contains
       HODLR_gpu_construct_ok = .true.
    end function HODLR_gpu_construct_ok
 
-   !> The low-rank blocks of level level_c on the GPU, with HODLR_GPU_CHECK
+   !> The low-rank blocks of level level_c on the GPU, with BPACK_CHECK=hodlr
    !> compared with the CPU construction of the same blocks from the same
    !> random numbers
    subroutine HODLR_gpu_construct_level_checked(ho_bf1, level_c, option, stats, msh, ker, ptree)
@@ -2370,7 +2370,7 @@ contains
    !> tree as LR_HMerge does with the truncated SVDs by TSQR on the GPUs, and
    !> moved into the block's 1D layout.
    !> The group of ranks that builds block ii of level level_c on the GPU:
-   !> its own group, or with HODLR_GPU_SPLIT=1 in the symmetric HODLR (which
+   !> its own group, or with HODLR_gpu_split_mode 1 in the symmetric HODLR (which
    !> builds A21 only, on half of its node's ranks) its node's group
    integer function HODLR_gpu_cgroup(ho_bf1, level_c, ii, option)
       implicit none
@@ -2385,7 +2385,7 @@ contains
    !> Block ii of level level_c, built by the ranks of group cgno (its own
    !> group or its node's, HODLR_gpu_cgroup): split into pieces as in
    !> LR_HBACA_Leaflevel (HODLR_gpu_split), the pieces compressed by BACA on
-   !> the GPUs (with HODLR_GPU_SPLIT=1 spread over the group by their
+   !> the GPUs (with HODLR_gpu_split_mode 1 spread over the group by their
    !> estimated cost, HODLR_gpu_balanced_pieces), merged up the split tree
    !> (HODLR_gpu_hmerge), and moved into the block's layout over its group
    subroutine HODLR_gpu_construct_shared(ho_bf1, level_c, ii, cgno, option, stats, msh, ker, ptree)
@@ -2482,12 +2482,12 @@ contains
             if (blk%N_loc > 0) call c_bpack_gpu_dm_download(ho_bf1%gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)))
          endif
          ! (U and V stay on the device for HODLR_gpu_upload_forward, which moves V to its column child's layout)
-         if (HODLR_gpu_keep_factors() .and. blk%M_loc > 0) then
+         if (blk%M_loc > 0) then
             call c_bpack_gpu_dm_keep(ho_bf1%gpu, bu, c_loc(blk%ButterflyU%blocks(1)%matrix(1, 1)), stale_c)
          else
             call c_bpack_gpu_dm_free(ho_bf1%gpu, bu)
          endif
-         if (HODLR_gpu_keep_factors() .and. blk%N_loc > 0) then
+         if (blk%N_loc > 0) then
             call c_bpack_gpu_dm_keep(ho_bf1%gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)), stale_c)
          else
             call c_bpack_gpu_dm_free(ho_bf1%gpu, bv)
@@ -3445,7 +3445,7 @@ contains
             trec = trec + MPI_Wtime() - t0
             keep_c = 0
             if (present(keep)) then
-               if (keep .and. HODLR_gpu_keep_factors()) keep_c = 1
+               if (keep) keep_c = 1
                if (keep .and. HODLR_gpu_defer_host(option)) keep_c = 2  ! (kept, the host arrays left unfilled)
             endif
             call c_bpack_hodlr_gpu_baca_download(gpu, nac, bl, rnl, uptr, vptr, keep_c)
@@ -3531,7 +3531,7 @@ contains
 
    !> The dense leaves (level Maxlevel+1) evaluated on the GPU, as
    !> Full_construction does on the CPU (symmetrized when option%sym > 0, as
-   !> HODLR_construction does); with HODLR_GPU_CHECK compared with the CPU
+   !> HODLR_construction does); with BPACK_CHECK=hodlr compared with the CPU
    subroutine HODLR_gpu_construct_leaves(ho_bf1, option, stats, msh, ker, ptree)
       implicit none
       real(kind=8) :: tev
@@ -3622,7 +3622,7 @@ contains
       deallocate (mm, nn, r0, c0, ptrs)
    end subroutine HODLR_gpu_construct_leaves
 
-   !> HODLR_GPU_CHECK: rebuild the blocks of level level_c on the CPU
+   !> BPACK_CHECK=hodlr: rebuild the blocks of level level_c on the CPU
    !> (BP_compress_entry, from the random numbers the GPU run drew) and print
    !> the largest relative difference of U V^T and the rank differences;
    !> the GPU blocks stay.
@@ -6076,7 +6076,7 @@ contains
       enddo
 
       call MergeSort(lstblk%head, node_score_block_ptr_row)
-      ! (a HODLR built on the GPU whose host copies of the factors are unfilled, HODLR_GPU_DEFER_HOST: the rows
+      ! (a HODLR built on the GPU whose host copies of the factors are unfilled, HODLR_gpu_defer_host: the rows
       ! read below, from the GPUs, into each block's gpu_u and gpu_v)
       if (option%format == HODLR) then
          if (bmat%ho_bf%gpu_host_stale) call HODLR_gpu_fill_rows(bmat%ho_bf, lstblk, inters, option, ptree)
@@ -6410,7 +6410,7 @@ contains
       n1 = MPI_Wtime()
       call BPACK_ExtractElement(bmat, option, msh, stats, ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
       n2 = MPI_Wtime()
-      ! (HODLR_GPU_CHECK: the same entries with the host factors overwritten by a sentinel and marked unfilled, so
+      ! (BPACK_CHECK=hodlr: the same entries with the host factors overwritten by a sentinel and marked unfilled, so
       ! that the extraction takes the rows it reads from the GPUs; then the host factors restored from the GPUs)
       if (option%format == HODLR .and. option%HODLR_use_gpu > 0 .and. HODLR_gpu_check_level() > 0) then
          if (c_associated(bmat%ho_bf%gpu) .and. .not. bmat%ho_bf%gpu_host_stale) then

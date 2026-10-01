@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../bpack_env.hpp"
 #include "options.hpp"
 #include "occupied_topology.hpp"
 #include "compression_impl.hpp"
@@ -34,6 +35,7 @@ void compress(H2<CoordType, DataType>* solver,
         solver->kernel.entryeval_time_per_thread.assign(
             omp_get_max_threads(), 0.0);
         configure_color_gpu(solver->options.use_gpu != 0);
+        fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
         fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
         if (solver->options.use_gpu != 0) {

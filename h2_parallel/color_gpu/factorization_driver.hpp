@@ -31,6 +31,7 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -61,16 +62,16 @@ public:
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
         : tree_(tree), kernel_(kernel), opt_(options) {}
 
-    // H2_GPU_WARMUP=1, before the first level: the batched LU, the two
-    // solves of X_RR^{-1} and the three GEMM forms once per size range, so no
-    // level pays the first-use loading of their kernels (lazy module loading;
-    // up to ~0.3 s inside a level).  Returns its time (0 when off).
+    // Before the first level of the process's first factorization (of this
+    // data type): the batched LU, the two solves of X_RR^{-1} and the three
+    // GEMM forms once per size range, so no level pays the first-use loading
+    // of their kernels (lazy module loading; up to ~0.3 s inside a level).
+    // Returns its time (0 when it already ran), which the factor time leaves
+    // out (butterfly_factorization.hpp).
     double warm_up() {
-        static const bool enabled = [] {
-            const char* v = std::getenv("H2_GPU_WARMUP");
-            return v != nullptr && std::atoi(v) != 0;
-        }();
-        if (!enabled || !color_gpu_enabled()) return 0.0;
+        static bool done = false;
+        if (done || !color_gpu_enabled()) return 0.0;
+        done = true;
         if constexpr (!gpu_data_type<DataType>) {
             return 0.0;
         } else {
@@ -127,6 +128,57 @@ public:
             meta.clear();
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         }
+    }
+
+    // Before the first level of the process's first factorization: a 64 KB
+    // message with every rank this one exchanges with on a level (each
+    // level's one-hop neighbour ranks), sent and received the way the levels
+    // will (from and into the exchange arena with GPU-aware MPI).  A pair's
+    // first device exchanges are slow (Laplace 192^3 on 64 ranks: the first
+    // waves of the first exchanging level at 3-4 GB/s, ~12 GB/s from the
+    // fourth on; ~0.1-0.2 s per factorization, more at larger sizes); this
+    // takes that first contact out of the levels.  Returns its time (0 when
+    // it already ran); collective over the tree's ranks.
+    double warm_up_exchange() {
+        static bool done = false;
+        if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
+        done = true;
+        const auto t0 = std::chrono::steady_clock::now();
+        std::set<int> peer_set;
+        for (int l = 2; l < tree_->num_levels; ++l) {
+            for (int r : compute_one_hop_neighbor_ranks(tree_, tree_->levels[static_cast<size_t>(l)], l)) {
+                if (r != tree_->mpi_rank) peer_set.insert(r);
+            }
+        }
+        const std::vector<int> peers(peer_set.begin(), peer_set.end());
+        constexpr size_t kBytes = size_t{64} << 10;
+        DeviceHeap& arena = DeviceHeap::exchange_arena();
+        const size_t total = kBytes * std::max<size_t>(peers.size(), 1);
+        char* send = device_exchange_enabled() ? arena.try_alloc(total) : nullptr;
+        char* recv = send != nullptr ? arena.try_alloc(total) : nullptr;
+        std::vector<char> host_send, host_recv;
+        if (recv == nullptr) {  // (host messages: MPI is not GPU-aware, or no room)
+            if (send != nullptr) arena.free(send);
+            host_send.resize(total);
+            host_recv.resize(total);
+            send = host_send.data();
+            recv = host_recv.data();
+        }
+        std::vector<MPI_Request> reqs;
+        for (size_t i = 0; i < peers.size(); ++i) {
+            reqs.emplace_back();
+            MPI_Irecv(recv + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 790, tree_->comm, &reqs.back());
+        }
+        for (size_t i = 0; i < peers.size(); ++i) {
+            reqs.emplace_back();
+            MPI_Isend(send + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 790, tree_->comm, &reqs.back());
+        }
+        MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+        if (host_send.empty()) {
+            arena.free(send);
+            arena.free(recv);
+        }
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
 
     // ---- where the blocks of a level go next (tested where levels start)
@@ -268,28 +320,35 @@ public:
     }
     // Whether the level keeps its solve factors on the device (and skips
     // the host copies of their X_NR), before its waves and alike on every
-    // rank of `level_comm`: an upper bound of their bytes (solve_keep_bound)
-    // within the keep budget on every rank.  Collective over level_comm.
+    // rank of `level_comm`: their estimated bytes within the keep budget
+    // (kSolveKeepFraction of the heap less what it holds now) on every rank.
+    // The estimate is the upper bound (solve_keep_bound) times keep_ratio_:
+    // the largest ratio of the factors' bytes to bound on the level below,
+    // with a margin (kKeepMargin; the bound itself for the first level).  Too low an
+    // estimate is caught by the waves, which keep factors only within the
+    // budget: the level's keep then fails (its factors go to the host, as
+    // without keeping) and later levels use the bound itself.  Collective
+    // over level_comm.
     void decide_solve_keep(int lvl, MPI_Comm level_comm, bool ca) {
-        if (!(device_solve_enabled() && device_solve_keep())) return;
+        if (!color_gpu_enabled()) return;
         int ok = 1;
+        double budget = 0.0;
+        keep_bound_ = 0.0;
         if (level_) {
             const DeviceHeap& heap = DeviceHeap::instance();
-            const double bound = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca);
-            ok = static_cast<double>(heap.used()) + bound <=
-                         device_solve_keep_fraction() * static_cast<double>(heap.capacity())
-                     ? 1
-                     : 0;
+            keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca);
+            budget = kSolveKeepFraction * static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
+            ok = keep_ratio_ * keep_bound_ <= budget ? 1 : 0;
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
-        if (level_) level_->set_solve_keep(ok != 0);
+        if (level_) level_->set_solve_keep(ok != 0, budget);
     }
     // After the host's post-elimination assisting gather: the assisting
     // boxes' skeletons, for the device transition.
     void refresh_remote_skeletons() {
         if (level_) level_->refresh_remote_skeletons();
     }
-    // H2_CA_REPLICA_CHECK=1, after finish_level of a device CA level (all
+    // BPACK_CHECK=replica, after finish_level of a device CA level (all
     // ranks of level_comm): every ghost copy of a box against its owner's,
     // bitwise, by hashes of its factors.  Prints the copies checked and, per
     // rank, the first copies that differ and in which factors.
@@ -442,19 +501,39 @@ public:
                 throw std::runtime_error("device level left updates for other ranks");
             }
         }
-        if (device_solve_enabled() && device_solve_keep()) {
+        if (color_gpu_enabled()) {
             int kept = level_ && level_->solve_factors_kept() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &kept, 1, MPI_INT, MPI_MIN, level_comm);
+            // the next level's estimate (decide_solve_keep): the largest
+            // ratio of the factors' bytes to bound, kept or not; the bound
+            // itself after a failed keep
+            const double bytes = level_ ? level_->level_factor_bytes() : 0.0;
+            const int failure = level_ ? level_->solve_keep_failure() : 0;
+            double v[4] = {keep_bound_ > 0.0 ? bytes / keep_bound_ : 0.0, bytes, failure == 1 ? 1.0 : 0.0,
+                           failure == 2 ? 1.0 : 0.0};
+            MPI_Allreduce(MPI_IN_PLACE, v, 4, MPI_DOUBLE, MPI_MAX, level_comm);
+            if (v[2] > 0.0 || v[3] > 0.0) {
+                keep_ratio_ = 1.0;
+            } else if (v[0] > 0.0) {
+                keep_ratio_ = std::min(1.0, kKeepMargin * v[0]);
+            }
             if (level_) level_->commit_solve_factors(kept != 0);
             if (announce) {
-                std::printf("  [gpu] level %d solve factors: %s\n", lvl,
-                            kept ? "kept on the device" : "to be uploaded at the first solve");
+                if (kept != 0) {
+                    std::printf("  [gpu] level %d solve factors: kept on the device (up to %.2f GB per rank, at most "
+                                "%.0f%% of their bound)\n",
+                                lvl, v[1] / 1e9, 100.0 * v[0]);
+                } else {
+                    std::printf("  [gpu] level %d solve factors: to be uploaded at the first solve%s%s\n", lvl,
+                                v[2] > 0.0 ? " (the keep budget ran out during the level)" : "",
+                                v[3] > 0.0 ? " (no free range of the heap held a wave's factors)" : "");
+                }
                 std::fflush(stdout);
             }
         }
     }
 
-    // H2_GPU_WAVE_TRACE=1 (all ranks of level_comm): the spread of the
+    // BPACK_TRACE=wave (all ranks of level_comm): the spread of the
     // ranks' wave totals, and the wave tables of rank 0 and of the rank whose
     // waves took longest (a replicated CA level: the rank with most ghosts).
     void print_wave_trace(int lvl, MPI_Comm level_comm, bool announce) const {
@@ -522,8 +601,7 @@ public:
             level_.reset();
             const int parent_lvl = level_index_ - 1;
             bool keep = !reduction_ahead && keeps_blocks_of(parent_lvl);
-            if (!keep && !reduction_ahead && level_comm != MPI_COMM_NULL && ca_device_halo_enabled() &&
-                ca_level_runs(parent_lvl) && ca_level_supported(parent_lvl, nullptr)) {
+            if (!keep && !reduction_ahead && level_comm != MPI_COMM_NULL && ca_level_runs(parent_lvl) && ca_level_supported(parent_lvl, nullptr)) {
                 int fits = 1;
                 for (const Box& p : parents) {
                     if (p.num_points > kEntryDestMask) fits = 0;
@@ -587,7 +665,7 @@ public:
     }
 
     // Statistics of the level's device box path on this rank, if a wave ran
-    // there (H2_PHASE_REPORT=1 resets them per level); returns whether it
+    // there (BPACK_TRACE=phase resets them per level); returns whether it
     // printed.
     static bool report_level(int lvl) {
         const auto& e = eliminator_stats();
@@ -641,7 +719,14 @@ private:
     int level_index_ = -1;
     std::unique_ptr<LevelEliminatorBase<CoordType, DataType>> level_;  // this level's device box path
     std::unique_ptr<DeviceLevelBlocks<DataType>> blocks_;              // the next level's blocks
-    WaveTrace trace_;                                                  // H2_GPU_WAVE_TRACE=1
+    WaveTrace trace_;                                                  // BPACK_TRACE=wave
+    // the keep estimate's scale of the bound (decide_solve_keep): the bound
+    // itself for the first level (the leaf, whose large working set the
+    // bound's slack leaves room for: its factors take about half of it),
+    // then the level below's largest factors/bound times the margin
+    static constexpr double kFirstKeepRatio = 1.0, kKeepMargin = 1.25;
+    double keep_ratio_ = kFirstKeepRatio;
+    double keep_bound_ = 0.0;                                          // this level's (decide_solve_keep)
 };
 
 }  // namespace gpu

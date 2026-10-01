@@ -2190,7 +2190,7 @@ extern "C" void c_bpack_h2_delete(C2Fptr h2_ptr) {
 	using H2Data = typename butterfly::fmm_data<C_DT>::type;
     auto* H2_solver = static_cast<butterfly::H2<double,H2Data>*>(h2_ptr);
 #ifdef H2_HAVE_GPU
-    // its device data (kept per operator: H2_GPU_KEEP_OPERATORS)
+    // its device data (kept per operator, color_gpu/device_heap.hpp)
     if (H2_solver != nullptr) fmm::gpu::release_operator(H2_solver->tree.get());
 #endif
     delete H2_solver;

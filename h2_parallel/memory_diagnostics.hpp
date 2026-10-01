@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bpack_env.hpp"
 #include "color_CA/tree.hpp"
 
 #include <algorithm>
@@ -340,11 +341,8 @@ inline size_t h2_diag_high_water_rss_bytes() {
 
 class H2FactorizationMemoryDiagnostics {
 public:
-    H2FactorizationMemoryDiagnostics() {
-        const char* value = std::getenv("FMM_MEMORY_DIAGNOSTICS");
-        enabled_ = value != nullptr && std::string(value) != "0" &&
-                   std::string(value) != "false" && std::string(value) != "FALSE";
-    }
+    // BPACK_TRACE=memory
+    H2FactorizationMemoryDiagnostics() : enabled_(fmm::env::trace("memory")) {}
 
     bool enabled() const { return enabled_; }
 

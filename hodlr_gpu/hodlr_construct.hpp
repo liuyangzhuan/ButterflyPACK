@@ -589,19 +589,17 @@ public:
         const magma_queue_t queue = ctx.queue();
         DeviceHeap& heap = DeviceHeap::instance();
         size_t tops = 0, taus = 0;
-        // HODLR_GPU_DEBUG: 1 prints the blocks and chunks, 2 also synchronizes
-        // after each step (to name the kernel of an asynchronous fault)
-        static const int debug = [] {
-            const char* v = std::getenv("HODLR_GPU_DEBUG");
-            return v != nullptr ? std::atoi(v) : 0;
-        }();
+        // BPACK_TRACE=hodlr-qr prints the blocks and chunks; BPACK_TRACE=sync
+        // synchronizes after each step (to name the kernel of an asynchronous fault)
+        static const bool debug = fmm::env::trace("hodlr-qr");
+        static const bool sync = fmm::env::trace("sync");
         auto step = [&](const char* what) {
-            if (debug >= 2) check_cuda(cudaStreamSynchronize(stream), what);
+            if (sync) check_cuda(cudaStreamSynchronize(stream), what);
         };
         step("HODLR GPU BACA QR: before (a fault of an earlier step)");
         for (int a = 0; a < na; ++a) {
             const Block& B = block(bl[a]);
-            if (debug > 0) {
+            if (debug) {
                 std::printf(" HODLR GPU BACA qr: block %d of %d: m %d n %d rank %d cap %d r %d u %p vt %p\n", bl[a], na, B.m,
                             B.n, B.rank, B.cap, B.r, static_cast<const void*>(B.u), static_cast<const void*>(B.vt));
                 std::fflush(stdout);
@@ -691,7 +689,7 @@ public:
             const size_t off_a = meta_.append(aptr);
             const size_t off_t = meta_.append(tptr);
             char* md = meta_.upload(meta_device_, stream);
-            if (debug > 0) {
+            if (debug) {
                 std::printf(" HODLR GPU BACA qr chunk: %d matrices of %d x %d (lda %d), %zu bytes padded:", count, mp, rp,
                             mp, each * count * sizeof(T));
                 for (int q = a0; q < a1; ++q) {

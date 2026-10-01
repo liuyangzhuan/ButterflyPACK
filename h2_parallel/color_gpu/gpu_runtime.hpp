@@ -10,6 +10,8 @@
 #include "device_kernels.hpp"
 #include <mpi.h>
 
+#include "../bpack_env.hpp"
+
 #include <algorithm>
 #include <complex>
 #include <cstring>
@@ -401,43 +403,22 @@ private:
     bool pending_ = false;
 };
 
-// Generators travel between the ranks' device memories when MPI is
-// CUDA-aware (Cray MPICH with MPICH_GPU_SUPPORT_ENABLED=1, or declared with
-// H2_GPU_AWARE_MPI=1); H2_GPU_DEVICE_EXCHANGE=0 keeps the host exchange.
+// MPI messages go between the ranks' device memories when MPI is GPU-aware
+// (BPACK_GPU_AWARE_MPI: 1 yes, 0 no; unset: Cray MPICH's
+// MPICH_GPU_SUPPORT_ENABLED=1); otherwise they are staged through the host.
+// The H2 and HODLR GPU backends both ask here.
 inline bool device_exchange_enabled() {
     static const bool enabled = [] {
-        auto set = [](const char* name) {
-            const char* v = std::getenv(name);
-            return v != nullptr && std::atoi(v) != 0;
-        };
-        const char* off = std::getenv("H2_GPU_DEVICE_EXCHANGE");
-        if (off != nullptr && std::atoi(off) == 0) return false;
-        return set("MPICH_GPU_SUPPORT_ENABLED") || set("H2_GPU_AWARE_MPI");
-    }();
-    return enabled;
-}
-
-// H2_GPU_CA_DEVICE_HALO=0: a device CA level after another device level
-// gets its blocks through the host (the transition downloads them, the host
-// halo gather moves them); by default they stay on the device and the
-// ghosts' blocks move between the devices (color_gpu/ca_halo.hpp).
-inline bool ca_device_halo_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_GPU_CA_DEVICE_HALO");
-        return v == nullptr || std::atoi(v) != 0;
-    }();
-    return enabled;
-}
-
-// H2_CA_REPLICA_CHECK=1: on a replicated CA level, every ghost copy of a box
-// is compared (by a hash of its factors) with its owner's.
-inline bool ca_replica_check_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_CA_REPLICA_CHECK");
+        const char* v = std::getenv("BPACK_GPU_AWARE_MPI");
+        if (v == nullptr) v = std::getenv("MPICH_GPU_SUPPORT_ENABLED");
         return v != nullptr && std::atoi(v) != 0;
     }();
     return enabled;
 }
+
+// BPACK_CHECK=replica: on a replicated CA level, every ghost copy of a box is
+// compared (by a hash of its factors) with its owner's.
+inline bool ca_replica_check_enabled() { return env::check("replica"); }
 
 // Pinned staging buffers of the backend, kept for the whole run (never
 // freed: releasing from a static destructor would race the CUDA runtime's

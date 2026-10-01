@@ -105,7 +105,7 @@ Strong scaling of the same 885k problem, tol 1e-3: 22.5 s on 8 GPUs, 6.1 s on
 
 ## Notes
 
-- **Validation:** `HODLR_GPU_CHECK=1` runs the CPU routine next to every GPU
+- **Validation:** `BPACK_CHECK=hodlr` runs the CPU routine next to every GPU
   step (construction level by level, upload, entry extraction, multiply,
   factorization, solve) and prints the differences. In the development
   runs the ranks matched the CPU's, the logdet differences were at rounding

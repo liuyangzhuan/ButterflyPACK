@@ -1,5 +1,5 @@
 #pragma once
-// H2_GPU_WAVE_TRACE=1: a host timeline of the waves of each device level
+// BPACK_TRACE=wave: a host timeline of the waves of each device level
 // (Color or CA), built from the eliminator's per-phase totals taken around
 // each wave.  The level's first rank prints it at the level end: the level
 // start, every wave (its host phases and its device times), the time between
@@ -25,13 +25,7 @@
 namespace fmm {
 namespace gpu {
 
-inline bool wave_trace_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("H2_GPU_WAVE_TRACE");
-        return v != nullptr && std::atoi(v) != 0;
-    }();
-    return enabled;
-}
+inline bool wave_trace_enabled() { return env::trace("wave"); }
 
 class WaveTrace {
 public:

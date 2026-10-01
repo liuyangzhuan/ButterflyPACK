@@ -306,8 +306,7 @@ public:
         clear_mirrors();
         if (at != forward_ + bytes) throw std::logic_error("HODLR GPU: forward blocks placed outside their allocation");
         committed_ = true;
-        const char* check = std::getenv("HODLR_GPU_CHECK");
-        if (check != nullptr && std::atoi(check) > 0) verify_upload();
+        if (fmm::env::check("hodlr") || fmm::env::check("hodlr-transpose")) verify_upload();  // BPACK_CHECK
         for (Leaf& l : leaves_) l.host = nullptr;
         for (LowRank& b : blocks_) {
             b.host_u = b.host_v = nullptr;

@@ -230,7 +230,7 @@ inline DynamicThreadingContext make_dynamic_threading_context(MPI_Comm comm) {
     DynamicThreadingContext context;
     context.original_thread_count = std::max(1, omp_get_max_threads());
     const int requested_cpus_per_node =
-        parse_positive_thread_count(std::getenv("FMM_MAX_CPUS_PER_NODE"));
+        parse_positive_thread_count(std::getenv("BPACK_MAX_CPUS_PER_NODE"));
     if (requested_cpus_per_node <= 0) {
         return context;
     }

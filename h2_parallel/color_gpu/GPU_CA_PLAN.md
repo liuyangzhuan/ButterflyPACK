@@ -5,6 +5,12 @@ per-level solve residency and the solve's halo in device memory (results
 under each). Keep this list current as milestones finish, so deferred
 improvements are not lost.
 
+Environment variables: the entries before 2026-10-01 use the names of the
+time (`H2_GPU_SOLVE_KEEP`, `H2_CA_REPLICA_CHECK`, `H2_GPU_WAVE_TRACE`, ...);
+[`doc/environment_variables.md`](../../doc/environment_variables.md) maps
+them to the current ones (`BPACK_CHECK`, `BPACK_TRACE`, ...), and the
+switches they name are gone (keeping solve factors is always on).
+
 ## Scope and decisions
 
 - Structured (full-grid) points only; symmetric matrices, `H2_XRR_factor=1`.
@@ -764,6 +770,118 @@ launches, ~1.0 s of the 8-rank CA0 leaf while the device waits) was left:
 parallel box items (~0.1-0.2 s) or a chunked box region (~0.3-0.4 s) were
 judged not worth it now. P2 (sketch lists on a side stream) skipped.
 
+**In-between sizes (2026-09-30, 40 GB nodes, Nmin_leaf 64, CA on the leaf
+only; build/gpu_prep/ca0/mid).** 16^3-box leaf bricks with leaf boxes of
+4-5.3 points per edge, between the 110K and 884K per rank of before.
+Factor time (warm-up included), Color / CA0, and the leaf, s:
+
+| | factor | leaf | level above |
+|---|---|---|---|
+| 288^3, 64 ranks (373K/rank) | 6.32 / 6.35 | 2.04 / 2.04 | 1.46 / 1.52 |
+| 320^3, 64 ranks (512K) | 7.63 / failed | 2.33 / - | 1.69 / - |
+| 320^3, 64 ranks, nothing kept | 8.69 / 8.27 | 2.88 / 3.05 | 2.03 / 1.96 |
+| 336^3, 64 ranks (593K) | 8.23 / 8.97 | 2.69 / 3.67 | 2.23 / 1.95 |
+| 640^3, 512 ranks (512K), nothing kept | 12.0 / 11.7 | 3.09 / 3.35 | 2.09 / 2.10 |
+| 672^3, 512 ranks (593K), nothing kept | 12.3 / 12.8 | 3.44 / 3.89 | 2.36 / 2.44 |
+
+CA0's 320^3 run kept its leaf's factors on the device and then ran out of
+heap at level 5 (see the fragmentation entry below); at 336^3 its leaf was
+not kept (the keep bound did not fit) and it lost. Ties at best: the CA0
+leaf only wins where it keeps its factors (X_NR not downloaded).
+
+**80 GB nodes: 384^3 on 64 ranks and 768^3 on 512 (2026-09-30/10-01,
+884K per rank, Nmin 216, CA on the leaf only; build/gpu_prep/ca0/g384_80,
+g768_80, a binary frozen before the environment changes).** Factor time,
+Color keeping its solve factors / Color not keeping / CA0 not keeping (CA0
+cannot keep its leaf there: with its ghosts the factors come to ~48 GB per
+rank, the size its first solve uploads): 384^3/64 12.0 / 12.8 / 13.5 s;
+768^3/512 16.0 / 17.3 / 19.6 s
+(Color keeping's first run carried a 0.60 s cold warm-up). Leaf (rank 0
+total; elimination shortest/longest over ranks):
+
+| | Color keep | Color no keep | CA0 no keep |
+|---|---|---|---|
+| 384^3/64 leaf | 5.42 (4.86/4.97) | 6.38 (5.76/5.92) | 6.27 (3.91/5.32) |
+| 768^3/512 leaf | 5.75 (4.98/5.12) | 7.05 (5.82/6.54) | 7.20 (3.96/5.93) |
+| level above the leaf, 384^3 / 768^3 | 2.36 / 2.55 | 2.69 / 3.20 | 3.42 / 4.82 |
+
+CA0's leaf eliminates 0.6 s faster than Color's without keeping but its
+ghost imbalance grows with the rank count (2 s between ranks at 512: more
+interior ranks with ghosts on all sides), and the level above it looked
+0.7-1.6 s slower: that is mostly the first device exchanges' cost, which
+Color pays in its leaf (entry below). Color weak-scales well (leaf 5.42 ->
+5.75 s). Same accuracy (acc_forward 9.05e-3 / 9.06e-3).
+
+**Kept factors and heap fragmentation; the remote generators' buffers in
+pieces (2026-10-01, build/gpu_prep/ca0/frag, pieces).** A temporary heap
+map at each level start (removed) on the 320^3 CA0 run that failed: on its
+most-ghosted ranks level 5 started with 15.5 GB free in 619 ranges, the
+largest 0.99 GB, between the leaf's kept factors (11.9 GB in 32 blocks, one
+per wave) and the parent blocks the device transition left (6.0 GB in 8756
+blocks of at most 1 MB); Color's kept blocks sat together (largest free
+9.7 GB). The failing request, 2.07 GB, was `apply_remote_generators`' one
+buffer for all generators of the first exchange that came through the host
+(their uploaded temp2, X_NR, X_RS, ~10 MB each), and the same pass's
+product buffer is built the same way. Moving only the kept blocks would
+have left 3.4-4.2 GB; reserving the keep bound up front would have cost the
+leaf ~12 GB of its working memory (see the next entry). Instead both
+buffers now come in pieces of at most 256 MB (`PiecedBuffer`,
+device_heap.hpp: the sub-buffers laid out as before, consecutive ones
+grouped into separate heap blocks). The 320^3 CA0 run then completes with
+its leaf kept: replica check 0 of 124704 differ, solve check 1.0e-14,
+logdet as before; factor time 7.35 s against Color's 7.58 s (leaf 2.22 vs
+2.46 s). Compaction of kept blocks stays in reserve for a heap that runs
+out with most of its free memory in small ranges.
+
+**The keep decision from an estimate (2026-10-01, build/gpu_prep/ca0/bound,
+bound2).** The same diagnostic measured `solve_keep_bound` against the
+bytes the levels kept: 0.44-0.55 of it at the leaves and level 5, up to 0.69
+higher up (r about n / 2, and neighbours eliminated earlier have shrunk to
+their skeletons). The bound's T/X_SR/LU term is now n^2 (was 1.5 n^2; still
+a bound), and the decision uses bound x ratio: 1 for the first level, then
+1.25 x the largest factors/bound measured on the level below (factor sizes
+counted per wave whether kept or not); each level's kept factors stay within
+0.8 of the heap less what it held at the decision, else the level's keep
+fails (reason printed: budget or no free range) and later levels go back to
+the bound. A first version with 0.75 for the leaf admitted 336^3's CA0 leaf,
+whose ghosts' working set then left no room: its keep failed during the
+level and the fallback (each kept box's X_NR copied back to the host) made
+the factorization 19.4 s; hence the bound for the first level. 64 ranks, 40
+GB nodes, factor time, CA0 / Color:
+
+| | factor | leaf (elimination) | levels kept |
+|---|---|---|---|
+| 320^3 | 7.33 / 7.58 | 2.24 (1.65) / 2.42 (1.96) | all / all |
+| 336^3 | 8.89 / 8.14 | 3.67 (2.93) / 2.83 (2.40) | all but the leaf / all |
+
+320^3's CA0 level 5 is now kept too (solve setup 0.95 -> 0.17 s). Whether
+the CA0 leaf keeps its factors decides CA0 against Color at these sizes.
+
+**The first device exchanges, and an exchange warm-up (2026-10-01,
+build/gpu_prep/ca0/bound, mpiwarm, warm).** The Color level above a CA0
+leaf looked slower than Color's (192^3/64, Nmin 216: 0.80 vs 0.58 s;
+384^3/64 3.42 vs 2.69; 768^3/512 4.82 vs 3.20 s) with the same device work
+and the same bytes: its exchanges' payloads were slow in the first waves
+(wave 0 at 2.8 GB/s, 12 GB/s from wave 4). Color's leaf shows the same ramp
+(4.1 -> 14 GB/s): a pair of ranks' first device-memory exchanges are slow,
+and whichever level exchanges first pays it, Color's leaf or the level above
+a CA leaf (whose waves exchange nothing). A 64 KB message with each one-hop
+peer before the first level removes it, as well as sending through the
+whole arena does (so it is the first contact, not the arena's registration):
+`warm_up_exchange` (factorization_driver.hpp), always on, once per process,
+every level's peers, from and into the arena (host buffers without
+GPU-aware MPI), timed with the kernel warm-up apart from the factor time
+(0.1 s at 64 ranks). 64 ranks, 40 GB nodes, factor time CA0 / Color:
+
+| | before | with the exchange warm-up |
+|---|---|---|
+| 192^3, Nmin 216, CA on the leaf only | 3.67 / 3.27 | 3.49 / 3.31 (level above the CA leaf 0.83 -> 0.65 s) |
+| 320^3, Nmin 64 | 7.33 / 7.58 | 7.04 / 7.39 (level above the CA leaf 1.94 -> 1.73 s; Color's 1.69) |
+
+Unchanged bitwise (8-rank Laplace 192: logdet, replica check 0 differ,
+solve check 3.988e-15 / 2.7e-14). With the leaf's factors kept (320^3), CA0
+now beats Color by 5%.
+
 ### M5. CA3 (component-owner) on the GPU
 Evaluate after M1-M3 numbers. Unique owner per boundary component, the
 corner -> edge -> face DAG, FULL/COMPACT/SKELETON routing, deterministic
@@ -815,7 +933,8 @@ the fixed `CA_level` / 343-box rule.
 
 - B1. Level-start wait: the first transport of each leaf level (0.4-0.7 s at
   64 ranks) waits for the slowest rank's level setup; trim the setup it
-  waits on.
+  waits on. (2026-10-01: part of it was the first device exchanges between
+  each pair of ranks, now taken out by the exchange warm-up; see M4.)
 - B2. Sphere load balance at 64 ranks: per-rank elimination 0 to 0.46 s at
   512K (surface meshes split unevenly across rank bricks).
 - B3. CPU CA levels keep their ghosts' data to the end of the factorization
