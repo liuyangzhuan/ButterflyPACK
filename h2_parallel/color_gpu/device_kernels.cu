@@ -197,10 +197,11 @@ void launch_eval(const EvalItemT<T>* items, int count, int max_m, int max_n,
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
     const dim3 grid = tile_grid(count, max_m, max_n), block(kTile, kTileRows);
     if constexpr (is_complex_scalar<T>) {
-        if (kernel_kind_of<T>(spec, "launch_eval") == 3) {
-            eval_kernel<T, 3><<<grid, block, 0, stream>>>(items, meta, spec, points);
-        } else {
-            eval_kernel<T, 2><<<grid, block, 0, stream>>>(items, meta, spec, points);
+        switch (kernel_kind_of<T>(spec, "launch_eval")) {
+            case 3: eval_kernel<T, 3><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
+            case 4: eval_kernel<T, 4><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
+            case 5: eval_kernel<T, 5><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
+            default: eval_kernel<T, 2><<<grid, block, 0, stream>>>(items, meta, spec, points); break;
         }
     } else {
         if (kernel_kind_of<T>(spec, "launch_eval") == 4) {

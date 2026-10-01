@@ -1041,6 +1041,14 @@ contains
          val_d = option%H2_use_gpu
          valid_opt = 1
       endif
+      if (trim(str) == 'HODLR_use_gpu' .or. trim(str) == 'hodlr_use_gpu') then
+         val_d = option%HODLR_use_gpu
+         valid_opt = 1
+      endif
+      if (trim(str) == 'HODLR_gpu_pieces' .or. trim(str) == 'hodlr_gpu_pieces') then
+         val_d = option%HODLR_gpu_pieces
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then
          val_d = option%H2_CA_staged_halo
          valid_opt = 1
@@ -1372,6 +1380,16 @@ contains
       if (trim(str) == 'H2_use_gpu' .or. trim(str) == 'h2_use_gpu') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_use_gpu = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'HODLR_use_gpu' .or. trim(str) == 'hodlr_use_gpu') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%HODLR_use_gpu = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'HODLR_gpu_pieces' .or. trim(str) == 'hodlr_gpu_pieces') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%HODLR_gpu_pieces = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_CA_staged_halo' .or. trim(str) == 'h2_ca_staged_halo') then
@@ -1915,6 +1933,30 @@ contains
       call c_f_pointer(bmat_Cptr, bmat)
       h2_ptr = bmat%h2
    end subroutine C_BPACK_Get_H2
+
+!>**** C interface of reading the GPU state of a non-H2 matrix (null if none)
+   subroutine C_BPACK_Get_Gpu(bmat_Cptr, gpu_ptr) bind(c, name="c_bpack_get_gpu")
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: bmat_Cptr
+      type(c_ptr)        :: gpu_ptr
+      type(Bmatrix), pointer :: bmat
+      call c_f_pointer(bmat_Cptr, bmat)
+      gpu_ptr = bmat%gpu
+   end subroutine C_BPACK_Get_Gpu
+
+!>**** C interface of attaching a GPU state to a non-H2 matrix (which then owns it)
+   subroutine C_BPACK_Set_Gpu(bmat_Cptr, gpu_ptr) bind(c, name="c_bpack_set_gpu")
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: bmat_Cptr
+      type(c_ptr), value :: gpu_ptr
+      type(Bmatrix), pointer :: bmat
+      call c_f_pointer(bmat_Cptr, bmat)
+      call assert(.not. c_associated(bmat%gpu), 'c_bpack_set_gpu: the matrix already has a GPU state')
+      bmat%gpu = gpu_ptr
+      if (associated(bmat%ho_bf)) bmat%ho_bf%gpu = gpu_ptr
+   end subroutine C_BPACK_Set_Gpu
 
 
    subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe,msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")

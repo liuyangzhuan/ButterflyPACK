@@ -49,11 +49,12 @@ public:
     DeviceHeap(const DeviceHeap&) = delete;
     DeviceHeap& operator=(const DeviceHeap&) = delete;
 
-    // Reserve the arena on first use: H2_GPU_HEAP_GB GiB if set (e.g. an even
-    // share of a GPU that several ranks use), else a fraction
-    // (H2_GPU_HEAP_FRACTION, default 0.85) of the device memory free at that
-    // point.  MAGMA's workspaces and the pinned staging buffers stay outside
-    // the arena.
+    // Reserve the arena on first use: H2_GPU_HEAP_GB GiB if set, else a
+    // fraction (H2_GPU_HEAP_FRACTION, default 0.85) of the device memory free
+    // at that point, or, when several ranks share the device
+    // (set_device_share), an equal part of that fraction of the memory they
+    // found free together.  MAGMA's workspaces and the pinned staging
+    // buffers stay outside the arena.
     void ensure_initialized() {
         if (base_ != nullptr) return;
         Context::instance().activate();
@@ -72,7 +73,13 @@ public:
             if (!(fraction > 0.0 && fraction < 1.0)) {
                 throw std::invalid_argument("H2_GPU_HEAP_FRACTION must lie in (0, 1)");
             }
-            capacity_ = static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign;
+            if (share_ranks_ > 1) {
+                free_bytes = std::min(free_bytes, share_free_);
+                capacity_ = static_cast<size_t>(fraction * static_cast<double>(share_free_) / share_ranks_) / kAlign * kAlign;
+                capacity_ = std::min(capacity_, static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign);
+            } else {
+                capacity_ = static_cast<size_t>(fraction * static_cast<double>(free_bytes)) / kAlign * kAlign;
+            }
         }
         void* ptr = nullptr;
         check_cuda(cudaMalloc(&ptr, capacity_), "cudaMalloc (H2 GPU heap)");
@@ -97,6 +104,13 @@ public:
         return true;
     }
     bool initialized() const { return base_ != nullptr; }
+    // `ranks` ranks (this one included) use this device and found
+    // free_bytes free once all their contexts existed: the arena reserved
+    // later takes an equal part (before ensure_initialized; no effect after)
+    void set_device_share(int ranks, size_t free_bytes) {
+        share_ranks_ = std::max(ranks, 1);
+        share_free_ = free_bytes;
+    }
     bool owns(const void* ptr) const {
         const char* p = static_cast<const char*>(ptr);
         return base_ != nullptr && p >= base_ && p < base_ + capacity_;
@@ -227,6 +241,8 @@ private:
         return false;
     }
 
+    int share_ranks_ = 1;
+    size_t share_free_ = 0;
     char* base_ = nullptr;
     size_t capacity_ = 0;
     size_t used_ = 0;

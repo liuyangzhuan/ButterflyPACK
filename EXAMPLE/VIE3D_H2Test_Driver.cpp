@@ -1600,7 +1600,7 @@ if(myrank==master_rank){
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     if (scaleGreen == 1) {
-      // Device form of the S2S kernel for H2_use_gpu=1 (complex symmetric,
+      // Device form of the S2S kernel for H2_use_gpu / HODLR_use_gpu (complex symmetric,
       // as assemble_fromD1D2Tau_s2s_with_coef): -e^{i 2 w r} / (4 pi r), and
       // -SampleSelf on the diagonal.  The column-scaled scaleGreen=0 kernel
       // is not symmetric and has no device form.
@@ -1610,8 +1610,38 @@ if(myrank==master_rank){
       const int gpu_kernel_params = 6;
       const double gpu_params[6] = {2.0 * w, -1.0, 0.0, -__real__ self_value,
                                     -__imag__ self_value, 4.0 * pi};
-      z_c_bpack_h2_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
+      z_c_bpack_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
                                   &gpu_kernel_params);
+    } else if (format_s2s == 1) {
+      // scaleGreen=0: the column-scaled kernel (not symmetric, HODLR only),
+      // kind 4 = kind 2 times coef(column point), as
+      // assemble_fromD1D2Tau_s2s_with_coef: -coef e^{i 2 w r} / (4 pi r),
+      // -SampleSelf coef + 1 / h^3 on the diagonal
+      C_QuantApp_BF* Q = quant_ptr_bf_s2s;
+      _Complex double self_value = 0.0;
+      Q->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
+      const double s0 = 2.0;
+      const double k0_squared = pow(s0 * Q->_w, 2.0);
+      const int nx = round(Q->_x0max / Q->_h);
+      const int ny = round(Q->_y0max / Q->_h);
+      const int nz = round(Q->_z0max / Q->_h);
+      std::vector<double> coef(Q->_n);
+      for (int n = 0; n < Q->_n; ++n) {
+        const double s1 = slowness(
+            Q->_data[n * Q->_d], Q->_data[n * Q->_d + 1], Q->_data[n * Q->_d + 2],
+            Q->_slow_x0, Q->_slow_y0, Q->_slow_z0, Q->_ivelo,
+            Q->_slowness_array.data(), Q->_h, nx, ny, nz);
+        coef[n] = k0_squared * (pow(s1 / s0, 2.0) - 1);
+      }
+      const int gpu_kernel_kind = 4;
+      const int gpu_kernel_params = 8;
+      const double gpu_params[8] = {2.0 * Q->_w, -1.0, 0.0, -__real__ self_value,
+                                    -__imag__ self_value, 4.0 * pi,
+                                    1.0 / pow(Q->_h, 3.0), 0.0};
+      z_c_bpack_set_gpu_kernel(&bmat_bf_s2s, &gpu_kernel_kind, gpu_params,
+                                  &gpu_kernel_params);
+      const int64_t ncoef = Q->_n, nints = 0;
+      z_c_bpack_set_gpu_kernel_tables(&bmat_bf_s2s, coef.data(), &ncoef, nullptr, &nints);
     }
     if (distributed64 == 1) {
       z_c_bpack_construct_element_compute_distributed64(

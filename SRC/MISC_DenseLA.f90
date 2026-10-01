@@ -3465,12 +3465,16 @@ contains
                phase_loc = phase_loc * (uii / absuii)
             endif
          enddo
-         myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
-
-         do myi = 1, myArows
-            call l2g(myi, myrow, m, nprow, nbslpk, ii)
-            if (ipiv(myi) .ne. ii) nswap = nswap + 1
-         end do
+         ! ScaLAPACK replicates IPIV in every process column: count each
+         ! row's interchange once, in process column 0, so that the
+         ! product of phase_loc over the grid has the sign of det(P)
+         if (mycol == 0) then
+            myArows = numroc_wp(m, nbslpk, myrow, 0, nprow)
+            do myi = 1, myArows
+               call l2g(myi, myrow, m, nprow, nbslpk, ii)
+               if (ipiv(myi) .ne. ii) nswap = nswap + 1
+            end do
+         endif
          ! Apply permutation sign: det(P)^(-1) = (-1)^{nswap}
          if (mod(nswap, 2) == 1) phase_loc = -phase_loc
       endif

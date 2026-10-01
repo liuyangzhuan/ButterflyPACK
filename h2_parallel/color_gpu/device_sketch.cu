@@ -395,14 +395,21 @@ void launch_ordered_sketch(const OrderedSketchItemT<T>* items, int count, int ma
         cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(shared));
         kernel<<<grid, 32 * kSketchOwners, shared, stream>>>(items, spec, points, dest_block);
     };
+    // (kernel rows: the H2 kinds, real 1 and 4, complex 2 and 3; complex 4
+    // and 5 are HODLR only)
+    const int kind = kernel_rows ? kernel_kind_of<T>(spec, "launch_ordered_sketch") : kPlain;
     if (!kernel_rows) {
         launch(ordered_sketch_kernel<T, false, kPlain>);
-    } else if (kernel_kind_of<T>(spec, "launch_ordered_sketch") == 3) {
-        if constexpr (is_complex_scalar<T>) launch(ordered_sketch_kernel<T, true, 3>);
-    } else if (spec.kind == 4) {
-        if constexpr (!is_complex_scalar<T>) launch(ordered_sketch_kernel<T, true, 4>);
-    } else {
+    } else if (kind == kPlain) {
         launch(ordered_sketch_kernel<T, true, kPlain>);
+    } else if constexpr (is_complex_scalar<T>) {
+        if (kind != 3) {
+            throw std::runtime_error("launch_ordered_sketch: device kernel kind " + std::to_string(kind) +
+                                     " is not an H2 kind");
+        }
+        launch(ordered_sketch_kernel<T, true, 3>);
+    } else {
+        launch(ordered_sketch_kernel<T, true, 4>);
     }
     check_launch("ordered_sketch_kernel");
 }

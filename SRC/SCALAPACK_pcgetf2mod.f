@@ -148,6 +148,7 @@
       CHARACTER          ROWBTOP
       INTEGER            I, IACOL, IAROW, ICOFF, ICTXT, IIA, IROFF, J,
      $                   JJA, MN, MYCOL, MYROW, NPCOL, NPROW
+      LOGICAL            RAISED
       COMPLEX            GMAX
 *     ..
 *     .. External Subroutines ..
@@ -213,19 +214,14 @@
      $                   desca, 1 )
 
 *           Tiny pivot replacement (preserve sign)
+            raised = .false.
             IF ( ABS( gmax ) .LT. THRESH ) THEN
                IF ( gmax .EQ. ZERO ) THEN
                   gmax = THRESH
                ELSE
                   gmax = gmax/abs(gmax) * THRESH
                END IF
-
-*              Make sure the distributed matrix pivot entry matches gmax
-*              Pivot entry is at global (I,J) after the row swap step logic.
-               CALL pcelset( a, i, j, desca, gmax )
-
-*              (optional) count tiny pivots
-*              ntiny = ntiny + 1
+               raised = .true.
             END IF
 
             IF( gmax.NE.zero ) THEN
@@ -234,6 +230,13 @@
 *
                CALL pcswap( n, a, i, ja, desca, desca( m_ ), a,
      $                      ipiv( iia+j-ja ), ja, desca, desca( m_ ) )
+*
+*              The raised pivot goes to global (I,J), where the swap
+*              has just brought the pivot row (setting it before the
+*              swap would move it to the pivot row's old position)
+*
+               IF( raised )
+     $            CALL pcelset( a, i, j, desca, gmax )
 *
 *              Compute elements I+1:IA+M-1 of J-th column.
 *

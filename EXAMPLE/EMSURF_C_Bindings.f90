@@ -1,7 +1,7 @@
 module EMSURF_C_BINDINGS
    use, intrinsic :: iso_c_binding
    use EMSURF_MODULE
-   use z_BPACK_DEFS, only: BPACK_eps0, BPACK_mu0, BPACK_pi
+   use z_BPACK_DEFS, only: BPACK_eps0, BPACK_mu0, BPACK_pi, BPACK_impedence0
    implicit none
 
    type(quant_EMSURF), target, save :: quant_c
@@ -80,20 +80,24 @@ contains
       wavenumber = quant_c%wavenum
    end subroutine emsurf_get_wavenumber_c
 
-   ! Sizes of the mesh tables of the EFIE entry for the GPU backend of the H2
-   ! solver (c_bpack_h2_set_gpu_kernel_tables, kind 3)
+   ! Sizes of the mesh tables of the EFIE entry for the GPU backends
+   ! (c_bpack_set_gpu_kernel_tables, kind 3), and of the CFIE entry (kind 5,
+   ! CFIE_alpha /= 1: also eta0 and the triangle normals)
    subroutine emsurf_get_gpu_kernel_sizes_c(nreals, nints) bind(C)
       integer(c_int64_t), intent(out) :: nreals, nints
       nreals = 3_c_int64_t*quant_c%maxnode + 4_c_int64_t*quant_c%integral_points
+      if (quant_c%CFIE_alpha /= 1d0) nreals = nreals + 1_c_int64_t + 3_c_int64_t*quant_c%maxpatch
       nints = 6_c_int64_t*quant_c%Nunk + 3_c_int64_t*quant_c%maxpatch
    end subroutine emsurf_get_gpu_kernel_sizes_c
 
-   ! The kind-3 parameters (7) and mesh tables (layout in BPACK_wrapper.h):
-   ! vertex coordinates and the Gauss rule; per edge its vertices, triangles
-   ! and opposite vertices (info_unk(1:6)), then the triangles' vertices
-   ! (node_of_patch(1:3)), all 0-based (-1: no triangle)
+   ! The kind-3/5 parameters (8; the 8th, CFIE_alpha, used by kind 5) and mesh
+   ! tables (layout in BPACK_wrapper.h): vertex coordinates and the Gauss
+   ! rule (for the CFIE then eta0 and the unit normal of each triangle); per
+   ! edge its vertices, triangles and opposite vertices (info_unk(1:6)), then
+   ! the triangles' vertices (node_of_patch(1:3)), all 0-based (-1: no
+   ! triangle)
    subroutine emsurf_get_gpu_kernel_c(params, reals, ints) bind(C)
-      real(c_double), intent(out) :: params(7), reals(*)
+      real(c_double), intent(out) :: params(8), reals(*)
       integer(c_int), intent(out) :: ints(*)
       integer :: node, edge, patch, q, k
       integer(c_int64_t) :: off
@@ -105,6 +109,7 @@ contains
       params(5) = quant_c%integral_points
       params(6) = quant_c%maxnode
       params(7) = quant_c%Nunk
+      params(8) = quant_c%CFIE_alpha
       do node = 1, quant_c%maxnode
          do k = 1, 3
             reals(3*(node - 1) + k) = quant_c%xyz(k, node)
@@ -117,6 +122,15 @@ contains
          reals(off + 4*(q - 1) + 3) = quant_c%ng3(q)
          reals(off + 4*(q - 1) + 4) = quant_c%gauss_w(q)
       end do
+      if (quant_c%CFIE_alpha /= 1d0) then
+         off = off + 4_c_int64_t*quant_c%integral_points
+         reals(off + 1) = BPACK_impedence0
+         do patch = 1, quant_c%maxpatch
+            do k = 1, 3
+               reals(off + 1 + 3*(patch - 1) + k) = quant_c%normal_of_patch(k, patch)
+            end do
+         end do
+      end if
       do edge = 1, quant_c%Nunk
          do k = 1, 6
             ints(6_c_int64_t*(edge - 1) + k) = max(quant_c%info_unk(k, edge), 0) - 1

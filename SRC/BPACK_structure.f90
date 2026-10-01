@@ -3177,6 +3177,7 @@ end function distance_geo
          call assert(option%LRlevel == 0, 'option%sym>0 requires option%LRlevel=0')
          call assert(option%use_zfp /= 1, 'option%sym>0 does not support ZFP-compressed dense leaves')
       endif
+      call HODLR_gpu_check_options(option, ptree)
 
       ho_bf1%N = msh%Nunk
       allocate (ho_bf1%levels(ho_bf1%Maxlevel + 1))

@@ -53,8 +53,8 @@ __device__ __forceinline__ dcomplex kernel_value<dcomplex, 3>(const KernelSpec& 
     return emsurf::efie_entry(spec, x_id, y_id);
 }
 
-// kind 4: Gaussian-process squared exponential kernel (a constant times an axis-aligned
-// squared exponential) of the point coordinates: with t_d = p[2+d] (x_d - y_d)^2,
+// kind 4 with real data: Gaussian-process squared exponential kernel (a constant times an
+// axis-aligned squared exponential) of the point coordinates: with t_d = p[2+d] (x_d - y_d)^2,
 // q = t_0 + t_1 + t_2 and e = p[0] exp(-q/2), the mode p[5] selects
 //   0: e, plus p[1] when the global ids match (the diagonal: noise and jitter)
 //   1: e (derivative in the log of the constant p[0])
@@ -82,10 +82,29 @@ __device__ __forceinline__ double kernel_value<double, 4>(const KernelSpec& spec
     }
 }
 
+// kind 4 with complex data: kind 2 scaled by a coefficient of the column point, c = treal
+// indexed by y_id: c[y] (p[1], p[2]) e^{i p[0] r} / (p[5] r), and c[y] (p[3],
+// p[4]) + (p[6], p[7]) on the diagonal (VIE3D's S2S kernel with
+// scaleGreen = 0, assemble_fromD1D2Tau_s2s_with_coef)
+template<>
+__device__ __forceinline__ dcomplex kernel_value<dcomplex, 4>(const KernelSpec& spec, const double* x, int64_t x_id,
+                                                              const double* y, int64_t y_id) {
+    const double c = spec.treal[y_id];
+    if (x_id == y_id) return c * dcomplex(spec.p[3], spec.p[4]) + dcomplex(spec.p[6], spec.p[7]);
+    return c * kernel_value<dcomplex, 2>(spec, x, x_id, y, y_id);
+}
+
+// kind 5: CFIE entry of the RWG edges x_id, y_id (emsurf_kernel.cuh)
+template<>
+__device__ __forceinline__ dcomplex kernel_value<dcomplex, 5>(const KernelSpec& spec, const double*, int64_t x_id,
+                                                              const double*, int64_t y_id) {
+    return emsurf::cfie_entry(spec, x_id, y_id);
+}
+
 // The kind of a launch's spec, checked against the element type.
 template<typename T>
 inline int kernel_kind_of(const KernelSpec& spec, const char* what) {
-    const bool ok = is_complex_scalar<T> ? (spec.kind == 2 || spec.kind == 3) : (spec.kind == 1 || spec.kind == 4);
+    const bool ok = is_complex_scalar<T> ? (spec.kind >= 2 && spec.kind <= 5) : (spec.kind == 1 || spec.kind == 4);
     if (!ok) {
         throw std::runtime_error(std::string(what) + ": device kernel kind " + std::to_string(spec.kind) +
                                  " does not match the data type");

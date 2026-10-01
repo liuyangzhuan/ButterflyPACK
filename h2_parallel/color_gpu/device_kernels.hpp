@@ -27,6 +27,13 @@ namespace gpu {
 //   kind 3 (complex): the EFIE entry of the RWG edges with 0-based indices
 //                     given by the global ids (emsurf_kernel.cuh), from the
 //                     mesh tables treal / tint (kernel_tables.hpp)
+//   kind 4 (real):    Gaussian-process squared exponential kernel or one of
+//                     its hyperparameter derivatives (kernel_eval.cuh; H2 only)
+//   kind 4 (complex): kind 2 times treal[global id of y], plus (p[6], p[7])
+//                     on the diagonal (not symmetric; HODLR only)
+//   kind 5 (complex): the CFIE entry of kind 3's edges, p[7] = alpha, eta0
+//                     and the triangle normals in treal (not symmetric; HODLR
+//                     only)
 constexpr int kKernelParams = 8;
 struct KernelSpec {
     int kind = 0;

@@ -60,7 +60,7 @@ contains
 
     end subroutine BPACK_Factorization
 
-    subroutine HODLR_factorization(ho_bf1, option, stats, ptree, msh)
+    recursive subroutine HODLR_factorization(ho_bf1, option, stats, ptree, msh)
 
         implicit none
 
@@ -87,11 +87,50 @@ contains
         DTR,allocatable::Singular(:)
         DT::phase
         DTR::logabsdet
+        integer use_gpu
+        DT phase_cpu
+        DTR logdet_cpu
+        real(kind=8)::time_cpu, flop_cpu, flop_gpu
 
         if (option%sym > 0) then
             call HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
             return
         endif
+
+        ! on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK first runs this
+        ! routine on the CPU and compares the two factorizations
+        if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) then
+            if (HODLR_gpu_check_level() > 0) then
+                use_gpu = option%HODLR_use_gpu
+                option%HODLR_use_gpu = 0
+                flop_cpu = stats%Flop_Factor
+                call HODLR_factorization(ho_bf1, option, stats, ptree, msh)
+                option%HODLR_use_gpu = use_gpu
+                phase_cpu = ho_bf1%phase
+                logdet_cpu = ho_bf1%logabsdet
+                time_cpu = stats%Time_Factor
+                ! (the GPU's count alone in stats%Flop_Factor, the CPU's printed next to it)
+                flop_gpu = stats%Flop_Factor
+                stats%Flop_Factor = flop_cpu
+                flop_cpu = flop_gpu - flop_cpu
+            endif
+            flop_gpu = stats%Flop_Factor
+            call HODLR_gpu_factor_unsym(ho_bf1, option, stats, ptree)
+            if (HODLR_gpu_check_level() > 0) then
+                flop_gpu = stats%Flop_Factor - flop_gpu
+                call MPI_ALLREDUCE(MPI_IN_PLACE, flop_cpu, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+                call MPI_ALLREDUCE(MPI_IN_PLACE, flop_gpu, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+                if (ptree%MyID == Main_ID) then
+                    write (*, *) 'HODLR GPU check (unsym factor): CPU logdet', phase_cpu, logdet_cpu, ' time', time_cpu
+                    write (*, '(A,Es11.3,A,Es11.3)') ' HODLR GPU check (unsym factor): flops CPU', flop_cpu, ', GPU', flop_gpu
+                    write (*, '(A,Es11.3,A,Es11.3)') ' HODLR GPU check (unsym factor): logdet difference', &
+                        abs(ho_bf1%logabsdet - logdet_cpu), ', phase difference', abs(ho_bf1%phase - phase_cpu)
+                endif
+                call HODLR_gpu_compare_unsymfactor(ho_bf1, option, ptree)
+            endif
+            return
+        endif
+        call HODLR_gpu_require_host(ho_bf1, 'the CPU factorization')
 
         ho_bf1%phase=1
         ho_bf1%logabsdet=0
@@ -317,12 +356,13 @@ endif
 
     end subroutine HODLR_factorization
 
-    subroutine HODLR_Sym_Propagate_Leaf(ho_bf1, leafidx, leafblock, ptree)
+    subroutine HODLR_Sym_Propagate_Leaf(ho_bf1, leafidx, leafblock, ptree, flop)
         implicit none
         type(hobf)::ho_bf1
         type(matrixblock)::leafblock
         type(proctree)::ptree
         integer leafidx, level, ancestor, side, divisor
+        real(kind=8) :: flop  ! (inout: plus the flops of the applications)
 
         do level = 1, ho_bf1%Maxlevel
             divisor = 2**(ho_bf1%Maxlevel - level + 1)
@@ -332,41 +372,44 @@ endif
                 if (allocated(ho_bf1%levels(level)%SymFactor(ancestor)%Q0)) then
                     call HODLR_Sym_Leaf_Apply(leafblock, &
                         ho_bf1%levels(level)%SymFactor(ancestor)%Q0, &
-                        ho_bf1%levels(level)%SymFactor(ancestor)%head0)
+                        ho_bf1%levels(level)%SymFactor(ancestor)%head0, flop)
                 endif
             else
                 if (allocated(ho_bf1%levels(level)%SymFactor(ancestor)%Q1)) then
                     call HODLR_Sym_Leaf_Apply(leafblock, &
                         ho_bf1%levels(level)%SymFactor(ancestor)%Q1, &
-                        ho_bf1%levels(level)%SymFactor(ancestor)%head1)
+                        ho_bf1%levels(level)%SymFactor(ancestor)%head1, flop)
                 endif
             endif
         enddo
     end subroutine HODLR_Sym_Propagate_Leaf
 
-    subroutine HODLR_Sym_Propagate_Node(ho_bf1, level, node, ptree)
+    subroutine HODLR_Sym_Propagate_Node(ho_bf1, level, node, ptree, flop)
         implicit none
         type(hobf)::ho_bf1
         type(proctree)::ptree
         integer level, node, ancestor_level, ancestor, side, divisor
+        real(kind=8) :: flop  ! (inout: plus this rank's flops of the applications)
 
         do ancestor_level = 1, level - 1
             divisor = 2**(level - ancestor_level)
             ancestor = (node - 1)/divisor + 1
             side = mod((node - 1)/2**(level - ancestor_level - 1), 2)
             if (side == 0) then
-                call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), &
-                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q0, &
-                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head0, ptree)
+                associate (q => ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q0)
+                    call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), q, size(q, 1), size(q, 2), &
+                        ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head0, ptree, flop)
+                end associate
             else
-                call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), &
-                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q1, &
-                    ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head1, ptree)
+                associate (q => ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%Q1)
+                    call HODLR_Sym_Node_Apply(ho_bf1%levels(level)%SymFactor(node), q, size(q, 1), size(q, 2), &
+                        ho_bf1%levels(ancestor_level)%SymFactor(ancestor)%head1, ptree, flop)
+                end associate
             endif
         enddo
     end subroutine HODLR_Sym_Propagate_Node
 
-    subroutine HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
+    recursive subroutine HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
         implicit none
         type(hobf)::ho_bf1
         type(Hoption)::option
@@ -381,6 +424,45 @@ endif
         DT phase_node, local_phase
         DTR logdet_node, local_logdet, normA, jitter, jitter_base
         real(kind=8)::t0, t1, flop
+        integer use_gpu
+        DT phase_cpu
+        DTR logdet_cpu
+        real(kind=8)::time_cpu, flop_cpu, flop_gpu
+
+        ! on the GPU (HODLR_use_gpu > 0); HODLR_GPU_CHECK first runs this
+        ! routine on the CPU and compares the two factorizations
+        if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) then
+            if (HODLR_gpu_check_level() > 0) then
+                use_gpu = option%HODLR_use_gpu
+                option%HODLR_use_gpu = 0
+                flop_cpu = stats%Flop_Factor
+                call HODLR_factorization_sym(ho_bf1, option, stats, ptree, msh)
+                option%HODLR_use_gpu = use_gpu
+                phase_cpu = ho_bf1%phase
+                logdet_cpu = ho_bf1%logabsdet
+                time_cpu = stats%Time_Factor
+                ! (the GPU's count alone in stats%Flop_Factor, the CPU's printed next to it)
+                flop_gpu = stats%Flop_Factor
+                stats%Flop_Factor = flop_cpu
+                flop_cpu = flop_gpu - flop_cpu
+            endif
+            flop_gpu = stats%Flop_Factor
+            call HODLR_gpu_factor_sym(ho_bf1, option, stats, ptree)
+            if (HODLR_gpu_check_level() > 0) then
+                flop_gpu = stats%Flop_Factor - flop_gpu
+                call MPI_ALLREDUCE(MPI_IN_PLACE, flop_cpu, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+                call MPI_ALLREDUCE(MPI_IN_PLACE, flop_gpu, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+                if (ptree%MyID == Main_ID) then
+                    write (*, *) 'HODLR GPU check (sym factor): CPU logdet', phase_cpu, logdet_cpu, ' time', time_cpu
+                    write (*, '(A,Es11.3,A,Es11.3)') ' HODLR GPU check (sym factor): flops CPU', flop_cpu, ', GPU', flop_gpu
+                    write (*, '(A,Es11.3,A,Es11.3)') ' HODLR GPU check (sym factor): logdet difference', &
+                        abs(ho_bf1%logabsdet - logdet_cpu), ', phase difference', abs(ho_bf1%phase - phase_cpu)
+                endif
+                call HODLR_gpu_compare_symfactor(ho_bf1, option, ptree)
+            endif
+            return
+        endif
+        call HODLR_gpu_require_host(ho_bf1, 'the CPU factorization')
 
         t0 = MPI_Wtime()
         ho_bf1%phase = 1
@@ -498,7 +580,9 @@ endif
             if (jitter > 0 .and. option%verbosity >= 0) then
                 write(*,*) 'symmetric HODLR leaf jitter:', ii, jitter
             endif
-            call HODLR_Sym_Propagate_Leaf(ho_bf1, ii, leaf, ptree)
+            flop = 0
+            call HODLR_Sym_Propagate_Leaf(ho_bf1, ii, leaf, ptree, flop)
+            stats%Flop_Factor = stats%Flop_Factor + flop
             deallocate(A0)
         enddo
 
@@ -512,8 +596,16 @@ endif
                     allocate(G0(rank, rank), G1(rank, rank))
                     G0 = 0
                     G1 = 0
-                    if (allocated(fac%Z0) .and. rank > 0) G0 = matmul(transpose(fac%Z0), fac%Q0)
-                    if (allocated(fac%Z1) .and. rank > 0) G1 = matmul(transpose(fac%Z1), fac%Q1)
+                    if (allocated(fac%Z0) .and. rank > 0 .and. fac%nloc0 > 0) then
+                        call gemmf90(fac%Z0, fac%nloc0, fac%Q0, fac%nloc0, G0, rank, 'T', 'N', rank, rank, fac%nloc0, &
+                            BPACK_cone, BPACK_czero, flop=flop)
+                        stats%Flop_Factor = stats%Flop_Factor + flop
+                    endif
+                    if (allocated(fac%Z1) .and. rank > 0 .and. fac%nloc1 > 0) then
+                        call gemmf90(fac%Z1, fac%nloc1, fac%Q1, fac%nloc1, G1, rank, 'T', 'N', rank, rank, fac%nloc1, &
+                            BPACK_cone, BPACK_czero, flop=flop)
+                        stats%Flop_Factor = stats%Flop_Factor + flop
+                    endif
                     if (rank > 0) then
                         call MPI_ALLREDUCE(MPI_IN_PLACE, G0, rank*rank, MPI_DT, MPI_SUM, &
                             ptree%pgrp(fac%pgno)%Comm, ierr)
@@ -532,7 +624,9 @@ endif
                         jitter_base = max(option%jitter, epsilon(1d0))
                         if (rank > 0) then
                             do attempt = 0, 8
-                                fac%S = -matmul(fac%G0, fac%G1)
+                                call gemmf90(fac%G0, rank, fac%G1, rank, fac%S, rank, 'N', 'N', rank, rank, rank, &
+                                    -BPACK_cone, BPACK_czero, flop=flop)
+                                stats%Flop_Factor = stats%Flop_Factor + flop
                                 do jj = 1, rank
                                     fac%S(jj, jj) = fac%S(jj, jj) + BPACK_cone
                                 enddo
@@ -568,7 +662,11 @@ endif
                     endif
                     stats%rankmax_of_level_global_factor(level) = max( &
                         stats%rankmax_of_level_global_factor(level), rank)
-                    if (level > 1) call HODLR_Sym_Propagate_Node(ho_bf1, level, ii, ptree)
+                    if (level > 1) then
+                        flop = 0
+                        call HODLR_Sym_Propagate_Node(ho_bf1, level, ii, ptree, flop)
+                        stats%Flop_Factor = stats%Flop_Factor + flop
+                    endif
                     deallocate(G0, G1)
                 end associate
             enddo

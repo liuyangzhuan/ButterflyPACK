@@ -66,6 +66,7 @@ MISC_linkedlist.f90
 MISC_DenseLA.f90
 BPACK_defs.f90
 MISC_utilities.f90
+BPACK_gpu.f90
 Bplus_utilities.f90
 BPACK_utilities.f90
 Bplus_pack_unpack_for_MPI.f90
@@ -79,6 +80,7 @@ BPACK_randomized.f90
 BPACK_factor.f90
 BPACK_wrapper.f90
 C_BPACK_wrapper.cpp
+BPACK_gpu_wrapper.cpp
 )
 
 if (CMAKE_CURRENT_SOURCE_DIR MATCHES "/SRC$" OR
@@ -98,7 +100,7 @@ endif ()
 
 add_library(butterflypack OBJECT ${sources} ${headers})
 target_include_directories(butterflypack PRIVATE
-  ${CMAKE_SOURCE_DIR}/h2_parallel)
+  ${CMAKE_SOURCE_DIR}/h2_parallel ${CMAKE_SOURCE_DIR})
 
 if (enable_parsec)
   set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)

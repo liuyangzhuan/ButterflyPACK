@@ -318,7 +318,7 @@ if(enable_h2_gpu)
   message("-- Using H2 GPU backend: MAGMA '${TPL_H2_MAGMA_LIBRARIES}', CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES}")
   set(CMAKE_CXX_FLAGS "-DH2_HAVE_GPU -DADD_ ${CMAKE_CXX_FLAGS}")
   include_directories(${TPL_H2_MAGMA_INCLUDE_DIRS} ${CUDAToolkit_INCLUDE_DIRS})
-  set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart)
+  set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart CUDA::cusolver)
 endif()
 
 #--------------------- ARPACK ---------------------
@@ -573,7 +573,13 @@ if (enable_h2_gpu)
   # accuracy effect); other GPU kernels and CPU code are not affected.
   set_source_files_properties(h2_parallel/color_gpu/device_id.cu PROPERTIES
                               COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
-  set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels>)
+  # CUDA kernels of the HODLR GPU backend (hodlr_gpu/; the rest is header-only
+  # C++ used by SRC/BPACK_gpu_wrapper.cpp)
+  add_library(hodlr_gpu_kernels OBJECT hodlr_gpu/hodlr_kernels.cu)
+  set_target_properties(hodlr_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  target_compile_definitions(hodlr_gpu_kernels PRIVATE H2_HAVE_GPU)
+  target_include_directories(hodlr_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel)
+  set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>)
 endif()
 
 add_library(butterflypack

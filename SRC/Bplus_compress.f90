@@ -8609,7 +8609,8 @@ time_tmp = time_tmp + n2 - n1
             rank = rank + rankup
 
             !>**** update fnorm of UV and matUmatV
-            call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
+            ! (the norm of the appended update U_new V_new, U_new = column_R(:, jpvt(1:rankup)))
+            call LR_Fnorm(SVD_Q%matU(:, rank - rankup + 1:rank), row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             ! if(rankup<8)then ! update fnorm seems more efficienct than recompute fnorm when block size is small
             call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, 0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
@@ -9055,7 +9056,8 @@ time_tmp = time_tmp + n2 - n1
             rank = rank + rankup
 
             !>**** update fnorm of UV and matUmatV
-            call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
+            ! (the norm of the appended update U_new V_new, U_new = column_R(:, jpvt(1:rankup)))
+            call LR_Fnorm(SVD_Q%matU(:, rank - rankup + 1:rank), row_Rtmp, M, N, rankup, normUV, tolerance*1e-2, Flops=flop)
             stats%Flop_Fill = stats%Flop_Fill + flop
             call LR_FnormUp(SVD_Q%matU, SVD_Q%matV, M, N, rank0, rank - rankup, rankup, rmax, normA, normUV, tolerance*1e-2, Flops=flop)
 
@@ -9285,7 +9287,8 @@ time_tmp = time_tmp + n2 - n1
 
 
             !>**** update fnorm of UV and matUmatV
-            call LR_Fnorm(column_R, row_Rtmp, M, N, rankup, acaquants%normUV, tolerance*1e-2, Flops=flop)
+            ! (the norm of the appended update U_new V_new, U_new = column_R(:, jpvt(1:rankup)))
+            call LR_Fnorm(acaquants%matU(:, rank - rankup + 1:rank), row_Rtmp, M, N, rankup, acaquants%normUV, tolerance*1e-2, Flops=flop)
             flops = flops + flop
             call LR_FnormUp(acaquants%matU, acaquants%matV, M, N, acaquants%rank0, rank - rankup, rankup, rank, acaquants%normA, acaquants%normUV, tolerance*1e-2, Flops=flop)
 

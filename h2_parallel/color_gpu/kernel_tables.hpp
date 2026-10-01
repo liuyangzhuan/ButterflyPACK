@@ -41,16 +41,19 @@ inline DeviceKernelTables& device_kernel_tables() {
 }
 
 // Whether gpu_spec holds a device kernel for DataType (kind 1 or 4 real; kind 2,
-// or kind 3 with its tables, complex); `why` says what is missing otherwise.
+// or kind 3, 4 or 5 with its tables, complex); `why` says what is missing otherwise.
 template<typename DataType, typename GpuSpecT>
 bool device_kernel_registered(const GpuSpecT& g, const char** why) {
     if constexpr (std::is_same_v<DataType, double>) {
         if (g.kind == 1 || g.kind == 4) return true;
         *why = "no real device kernel registered (c_bpack_h2_set_gpu_kernel, kind 1 or 4)";
     } else {
-        if (g.kind == 2 || (g.kind == 3 && !g.table_real.empty() && !g.table_int.empty())) return true;
-        *why = g.kind == 3 ? "kind 3 device kernel without its tables (c_bpack_h2_set_gpu_kernel_tables)"
-                           : "no complex device kernel registered (c_bpack_h2_set_gpu_kernel, kind 2 or 3)";
+        if (g.kind == 2 || ((g.kind == 3 || g.kind == 5) && !g.table_real.empty() && !g.table_int.empty()) ||
+            (g.kind == 4 && !g.table_real.empty())) {
+            return true;
+        }
+        *why = g.kind >= 3 && g.kind <= 5 ? "device kernel without its tables (c_bpack_set_gpu_kernel_tables)"
+                                          : "no complex device kernel registered (c_bpack_set_gpu_kernel, kind 2 to 5)";
     }
     return false;
 }
