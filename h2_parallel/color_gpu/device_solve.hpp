@@ -22,6 +22,15 @@
 // per sweep.  The arithmetic matches the host solve up to rounding (its
 // sums of neighbor updates follow the host's thread chunks).
 //
+// A replicated CA level (factored by the device's CA mode, GPU_CA_PLAN.md
+// M4b) runs the host CA solve's scheme instead: its level vector holds the
+// local boxes, then the ghosts (eliminated again here, with their factors),
+// and a read-only area holds the assisting boxes; the waves are the CA
+// groups x Morton parities, updates go to local or ghost boxes only, and the
+// ghosts' and assisting boxes' vectors come from their owners through the
+// host gather (gather_CA_boxes_solve): once before the forward sweep, after
+// each backward group but the last.  No per-wave messages.
+//
 // H2_GPU_SOLVE=0 keeps the host solve.
 
 #ifdef H2_HAVE_GPU
@@ -38,7 +47,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -56,14 +67,15 @@ inline bool device_solve_keep() {
     }();
     return keep;
 }
-// A level keeps its factors while the heap stays under this fraction of its
-// capacity (H2_GPU_SOLVE_KEEP_FRACTION, default 0.6), which leaves room for
-// the level's own peak.
+// A level keeps its factors when an upper bound of their bytes fits under
+// this fraction of the heap on every rank (H2_GPU_SOLVE_KEEP_FRACTION,
+// default 0.8), decided before its waves (solve_keep_bound); the rest of the
+// heap is the level's working memory.
 inline double device_solve_keep_fraction() {
     static const double fraction = [] {
         const char* v = std::getenv("H2_GPU_SOLVE_KEEP_FRACTION");
-        const double f = v != nullptr ? std::atof(v) : 0.6;
-        return f > 0.0 && f <= 1.0 ? f : 0.6;
+        const double f = v != nullptr ? std::atof(v) : 0.8;
+        return f > 0.0 && f <= 1.0 ? f : 0.8;
     }();
     return fraction;
 }
@@ -75,6 +87,15 @@ inline bool device_solve_check() {
         return v != nullptr && std::atoi(v) != 0;
     }();
     return check;
+}
+// H2_GPU_CA_SOLVE_HALO=0: a replicated CA level's solve gathers through the
+// host (gather_CA_boxes_solve) instead of in device memory (build_ca_halo).
+inline bool ca_solve_device_halo() {
+    static const bool on = [] {
+        const char* v = std::getenv("H2_GPU_CA_SOLVE_HALO");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    return on;
 }
 // The host solve of a check runs with the device solve suspended.
 inline bool& device_solve_suspended() {
@@ -126,6 +147,27 @@ struct DeviceSolveLevel {
         Refresh ref[2];
     };
     std::vector<Wave> waves;
+    // a replicated CA level: the level vector holds the local boxes (first
+    // local_points), then the ghosts (ghost_box: their Morton indices, in
+    // box order after the local ones); `ghosts` above are the assisting boxes
+    // (read only); group_end[g]: the wave after CA group g
+    bool ca = false;
+    bool host = false;  // a CA level whose factors did not fit: its steps run on the host (host_level)
+    int64_t local_points = 0;
+    std::vector<int64_t> ghost_box;
+    std::vector<int> group_end;
+    // its halo exchanges in device memory (build_ca_halo), with `peers`;
+    // kinds: 0 the ghosts, 1 the ghosts and the assisting boxes, 2 the
+    // assisting boxes; the copies in d_copies
+    struct CaHalo {
+        std::vector<int64_t> out, in;  // points per peer
+        int64_t out_total = 0, in_total = 0;
+        int send0 = 0, nsend = 0, send_max_n = 0;  // level vector -> message
+        int vec0 = 0, nvec = 0, vec_max_n = 0;     // message -> level vector (ghosts)
+        int area0 = 0, narea = 0, area_max_n = 0;  // message -> read-only area (assisting boxes)
+    };
+    bool device_halo = false;
+    CaHalo halo[3];
     int ndiag = 0;
     int64_t out_max = 0, in_max = 0, send_max = 0, recv_max = 0;  // largest messages (points, all peers)
     // device tables
@@ -157,6 +199,11 @@ struct KeptSolveLevel {
 
 struct DeviceSolveStore {
     std::map<int, KeptSolveLevel> kept;  // level -> factors kept during the factorization
+    std::set<int> ca_levels;             // replicated CA levels factored on the device (ghost factors kept or on the host)
+    // their assisting boxes (points, skeleton positions), recorded after the
+    // post-elimination assisting gather (the level clears its own copy)
+    struct AssistingBox { int n = 0; std::vector<int> skeleton; };
+    std::map<int, std::unordered_map<int64_t, AssistingBox>> ca_assisting;
     const void* tree = nullptr;
     bool decided = false;
     bool usable = false;
@@ -184,6 +231,8 @@ struct DeviceSolveStore {
             for (char* b : kl.blocks) heap.free(b);
         }
         kept.clear();
+        ca_levels.clear();
+        ca_assisting.clear();
         tree = nullptr;
         decided = false;
         usable = false;
@@ -296,6 +345,62 @@ struct BoxLayout {
     size_t T = 0, xsr = 0, xnr = 0, lu = 0, ipiv = 0, skel = 0, red = 0, bytes = 0;
     bool has_T = false, has_xsr = false;
 };
+
+}  // namespace solve_detail
+
+namespace solve_detail {
+
+// A level's tables on the device (one block): the other ranks' skeleton
+// lists, slots, boxes, wave orders, diagonal list, accumulations, copies.
+// Returns their bytes.
+inline size_t upload_solve_tables(DeviceSolveLevel& L, const std::vector<int>& remote_lists,
+                                  const std::unordered_map<int64_t, size_t>& remote_list_at,
+                                  const std::vector<int>& order, const std::vector<int>& rorder,
+                                  const std::vector<int>& diag, const std::vector<SolveAccum>& items,
+                                  const std::vector<SolvePart>& parts, const std::vector<SolveCopy>& copies) {
+    const size_t I = sizeof(int);
+    const size_t t_lists = 0;
+    const size_t t_slots = align_up(t_lists + remote_lists.size() * I);
+    const size_t t_boxes = align_up(t_slots + L.slots.size() * sizeof(SolveSlot));
+    const size_t t_order = align_up(t_boxes + L.boxes.size() * sizeof(SolveBox));
+    const size_t t_rorder = align_up(t_order + order.size() * I);
+    const size_t t_diag = align_up(t_rorder + rorder.size() * I);
+    const size_t t_items = align_up(t_diag + diag.size() * I);
+    const size_t t_parts = align_up(t_items + items.size() * sizeof(SolveAccum));
+    const size_t t_copies = align_up(t_parts + parts.size() * sizeof(SolvePart));
+    const size_t t_end = align_up(t_copies + copies.size() * sizeof(SolveCopy));
+    char* tables = DeviceHeap::instance().alloc_resident(std::max<size_t>(t_end, 1));
+    L.blocks.push_back(tables);
+    for (size_t s = 0; s < L.slots.size(); ++s) {
+        SolveSlot& sl = L.slots[s];
+        if (sl.ghost && !sl.full) {
+            sl.skel = reinterpret_cast<const int*>(tables + t_lists) + remote_list_at.at(L.slot_morton[s]);
+        }
+    }
+    std::vector<char> image(t_end, 0);
+    auto put = [&](size_t at, const void* data, size_t bytes) {
+        if (bytes > 0) std::memcpy(image.data() + at, data, bytes);
+    };
+    put(t_lists, remote_lists.data(), remote_lists.size() * I);
+    put(t_slots, L.slots.data(), L.slots.size() * sizeof(SolveSlot));
+    put(t_boxes, L.boxes.data(), L.boxes.size() * sizeof(SolveBox));
+    put(t_order, order.data(), order.size() * I);
+    put(t_rorder, rorder.data(), rorder.size() * I);
+    put(t_diag, diag.data(), diag.size() * I);
+    put(t_items, items.data(), items.size() * sizeof(SolveAccum));
+    put(t_parts, parts.data(), parts.size() * sizeof(SolvePart));
+    put(t_copies, copies.data(), copies.size() * sizeof(SolveCopy));
+    check_cuda(cudaMemcpy(tables, image.data(), t_end, cudaMemcpyHostToDevice), "solve tables");
+    L.d_slots = reinterpret_cast<const SolveSlot*>(tables + t_slots);
+    L.d_boxes = reinterpret_cast<const SolveBox*>(tables + t_boxes);
+    L.d_order = reinterpret_cast<const int*>(tables + t_order);
+    L.d_rorder = reinterpret_cast<const int*>(tables + t_rorder);
+    L.d_diag = reinterpret_cast<const int*>(tables + t_diag);
+    L.d_items = reinterpret_cast<const SolveAccum*>(tables + t_items);
+    L.d_parts = reinterpret_cast<const SolvePart*>(tables + t_parts);
+    L.d_copies = reinterpret_cast<const SolveCopy*>(tables + t_copies);
+    return t_end;
+}
 
 }  // namespace solve_detail
 
@@ -557,52 +662,315 @@ size_t build_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<Coo
         }
     }
 
-    // ---- tables on the device
-    const size_t t_lists = 0;
-    const size_t t_slots = align_up(t_lists + remote_lists.size() * I);
-    const size_t t_boxes = align_up(t_slots + L.slots.size() * sizeof(SolveSlot));
-    const size_t t_order = align_up(t_boxes + nb * sizeof(SolveBox));
-    const size_t t_rorder = align_up(t_order + order.size() * I);
-    const size_t t_diag = align_up(t_rorder + rorder.size() * I);
-    const size_t t_items = align_up(t_diag + diag.size() * I);
-    const size_t t_parts = align_up(t_items + items.size() * sizeof(SolveAccum));
-    const size_t t_copies = align_up(t_parts + parts.size() * sizeof(SolvePart));
-    const size_t t_end = align_up(t_copies + copies.size() * sizeof(SolveCopy));
-    char* tables = DeviceHeap::instance().alloc_resident(std::max<size_t>(t_end, 1));
-    L.blocks.push_back(tables);
-    for (size_t s = 0; s < L.slots.size(); ++s) {
-        SolveSlot& sl = L.slots[s];
-        if (sl.ghost && !sl.full) {
-            sl.skel = reinterpret_cast<const int*>(tables + t_lists) + remote_list_at.at(L.slot_morton[s]);
+    return solve_detail::upload_solve_tables(L, remote_lists, remote_list_at, order, rorder, diag, items, parts, copies);
+}
+
+// The tables of a replicated CA level's sweeps: the CA groups (the host's
+// make_CA_box_groups) x Morton parities over the local boxes and the ghosts
+// (L.boxes: local first, then ghosts; ghost_at: Morton -> box index), with
+// group_end marking where each group's waves end; each wave's updates go to
+// its local or ghost neighbors (assisting boxes are read only), summed in
+// the order of first contribution.  The diagonal solves are the local
+// boxes'.  No messages.
+template<typename CoordType, typename DataType>
+size_t build_ca_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<CoordType, DataType>& lvl,
+                             DeviceSolveLevel& L, size_t nb, const std::unordered_map<int64_t, size_t>& ghost_at,
+                             const std::vector<int>& remote_lists,
+                             const std::unordered_map<int64_t, size_t>& remote_list_at) {
+    const int num_waves = 1 << tree->dimension;
+    auto writable = [&](int64_t m) -> int64_t {
+        const int64_t local = m - lvl.local_morton_start;
+        if (local >= 0 && local < static_cast<int64_t>(nb)) return local;
+        const auto it = ghost_at.find(m);
+        return it == ghost_at.end() ? -1 : static_cast<int64_t>(it->second);
+    };
+    std::vector<int> order, rorder, diag;
+    L.waves.clear();
+    L.group_end.clear();
+    // the CA groups (as butterfly::make_CA_box_groups and the factorization's
+    // factorize_CA_level_gpu): blue/orange, purple (3D), green, interior; on
+    // one rank boundary, interior
+    std::vector<std::vector<int64_t>> groups;
+    {
+        std::vector<int64_t> interior;
+        for (int64_t local_idx : lvl.interior_id) interior.push_back(local_idx + lvl.local_morton_start);
+        if (lvl.num_active_processes == 1) {
+            std::vector<int64_t> boundary;
+            for (int64_t local_idx : lvl.boundary_id) boundary.push_back(local_idx + lvl.local_morton_start);
+            groups.push_back(std::move(boundary));
+        } else {
+            std::vector<int64_t> blue_orange = lvl.blue;
+            blue_orange.insert(blue_orange.end(), lvl.orange.begin(), lvl.orange.end());
+            groups.push_back(std::move(blue_orange));
+            if (tree->dimension == 3) groups.push_back(lvl.purple);
+            groups.push_back(lvl.green);
+        }
+        groups.push_back(std::move(interior));
+    }
+    for (const auto& group : groups) {
+        std::vector<std::vector<int>> bins(static_cast<size_t>(num_waves));
+        for (int64_t m : group) {
+            const int64_t b = writable(m);
+            if (b < 0) throw std::runtime_error("device solve: CA box " + std::to_string(m) + " neither local nor a ghost");
+            bins[static_cast<size_t>(m & (num_waves - 1))].push_back(static_cast<int>(b));
+        }
+        for (const auto& bin : bins) {
+            DeviceSolveLevel::Wave W;
+            W.order0 = static_cast<int>(order.size());
+            int64_t work = 0;
+            for (int b : bin) {
+                SolveBox& sb = L.boxes[static_cast<size_t>(b)];
+                if (sb.k == 0 || sb.r == 0) continue;
+                sb.work = work;
+                work += sb.ntot;
+                W.max_ntot = std::max(W.max_ntot, sb.ntot);
+                order.push_back(b);
+            }
+            W.count = static_cast<int>(order.size()) - W.order0;
+            rorder.insert(rorder.end(), order.rbegin(), order.rbegin() + W.count);
+            L.work_points = std::max(L.work_points, work);
+            L.waves.push_back(std::move(W));
+        }
+        L.group_end.push_back(static_cast<int>(L.waves.size()));
+    }
+    for (size_t b = 0; b < nb; ++b) {
+        if (L.boxes[b].k > 0 && L.boxes[b].r > 0) diag.push_back(static_cast<int>(b));
+    }
+    L.ndiag = static_cast<int>(diag.size());
+
+    std::vector<SolveAccum> items;
+    std::vector<SolvePart> parts;
+    for (auto& W : L.waves) {
+        struct Target { int64_t morton; int count; int full; std::vector<SolvePart> parts; };
+        std::vector<Target> targets;
+        std::unordered_map<int64_t, size_t> target_of;
+        for (int i = W.order0; i < W.order0 + W.count; ++i) {
+            const SolveBox& sb = L.boxes[static_cast<size_t>(order[static_cast<size_t>(i)])];
+            for (int a = 0; a < sb.nslots; ++a) {
+                const size_t sidx = static_cast<size_t>(sb.slot0 + a);
+                const SolveSlot& sl = L.slots[sidx];
+                if (sl.ghost) continue;  // an assisting box: its owner updates it
+                const int64_t m = L.slot_morton[sidx];
+                auto it = target_of.find(m);
+                if (it == target_of.end()) {
+                    it = target_of.emplace(m, targets.size()).first;
+                    targets.push_back(Target{m, sl.count, sl.full, {}});
+                }
+                Target& t = targets[it->second];
+                if (t.count != sl.count || t.full != sl.full) throw std::runtime_error("device solve: inconsistent updates");
+                t.parts.push_back(SolvePart{sb.work, sl.row0, sb.ntot, 0});
+            }
+        }
+        W.item0 = static_cast<int>(items.size());
+        for (const Target& tg : targets) {
+            const SolveBox& target = L.boxes[static_cast<size_t>(writable(tg.morton))];
+            SolveAccum it{};
+            it.dst = target.vec;
+            it.ld = target.n;
+            it.count = tg.count;
+            it.rows = tg.full ? nullptr : target.skel;
+            it.outbox = 0;
+            it.nparts = static_cast<int>(tg.parts.size());
+            it.part0 = static_cast<int64_t>(parts.size());
+            parts.insert(parts.end(), tg.parts.begin(), tg.parts.end());
+            W.max_count = std::max(W.max_count, tg.count);
+            items.push_back(it);
+        }
+        W.nitems = static_cast<int>(items.size()) - W.item0;
+    }
+    return solve_detail::upload_solve_tables(L, remote_lists, remote_list_at, order, rorder, diag, items, parts, {});
+}
+
+// An upper bound of the bytes a level's kept solve factors take (T, X_SR,
+// X_NR, the LU of X_RR, pivots; kept_solve_factors): per box of n points with
+// r redundant, k = n - r skeleton ones and neighbors of ntot points,
+// 2 k r <= n^2 / 2, r^2 <= n^2, ntot r <= ntot n.  The boxes the level
+// eliminates: the local ones, and a replicated CA level's ghosts.  A
+// neighbor of unknown size (another rank's) counts as the box's own size.
+template<typename CoordType, typename DataType>
+double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
+    const double D = static_cast<double>(sizeof(DataType)), I = sizeof(int);
+    std::unordered_map<int64_t, int64_t> size;
+    for (const auto& box : lvl.local_boxes) size.emplace(box.morton_index, box.num_points);
+    if (ca) {
+        for (const auto& box : lvl.ghost_boxes) size.emplace(box.morton_index, box.num_points);
+    }
+    double bytes = 0.0;
+    auto add = [&](const BoxData<CoordType, DataType>& box) {
+        const double n = static_cast<double>(box.num_points);
+        if (n <= 0.0) return;
+        double ntot = 0.0;
+        for (int64_t m : box.one_hop) {
+            const auto it = size.find(m);
+            ntot += it != size.end() ? static_cast<double>(it->second) : n;
+        }
+        bytes += (1.5 * n * n + ntot * n) * D + n * I + 5.0 * 256.0;
+    };
+    for (const auto& box : lvl.local_boxes) add(box);
+    if (ca) {
+        for (const auto& box : lvl.ghost_boxes) add(box);
+    }
+    return bytes;
+}
+
+// Kept boxes whose X_NR has no host copy (the eliminator skips its download
+// for the boxes it keeps): X_NR copied from the kept factors, before a host
+// solve or multiply reads it, or the kept factors are released.
+template<typename CoordType, typename DataType>
+void materialize_host_factors(ParallelTree<CoordType, DataType>* tree) {
+    DeviceSolveStore& store = device_solve_store();
+    if (store.kept.empty()) return;
+    Context::instance().activate();
+    check_cuda(cudaStreamSynchronize(Context::instance().stream()), "host factors");
+    for (auto& [level, kl] : store.kept) {
+        if (level < 0 || level >= tree->num_levels) continue;
+        auto& lvl = tree->levels[static_cast<size_t>(level)];
+        auto fill = [&](BoxData<CoordType, DataType>& box) {
+            const auto it = kl.boxes.find(box.morton_index);
+            if (it == kl.boxes.end() || it->second.ntot == 0 || box.X_NR.is_allocated()) return;
+            const KeptSolveBox& kb = it->second;
+            std::vector<DataType> xnr(static_cast<size_t>(kb.ntot) * static_cast<size_t>(kb.r));
+            check_cuda(cudaMemcpy(xnr.data(), kb.xnr, xnr.size() * sizeof(DataType), cudaMemcpyDeviceToHost),
+                       "host factors");
+            box.X_NR.set_owned(kb.ntot, kb.r, std::move(xnr), MatrixStorage<DataType>::FULL);
+        };
+        for (auto& box : lvl.local_boxes) fill(box);
+        for (auto& box : lvl.ghost_boxes) fill(box);
+    }
+}
+
+// A replicated CA level's halo exchanges in device memory, in place of the
+// host gather_CA_boxes_solve: the owners' vectors of the ghosts (into the
+// level vector) and of the assisting boxes (into the read-only area), packed
+// from and unpacked into device memory by copies.  Each rank sends the
+// owners its requests (Morton, ghost or assisting, points) once; a message
+// holds the requested boxes in the requester's order.  Collective over the
+// tree's ranks (also those inactive on the level).  Returns the bytes of the
+// copy table on the device.
+template<typename CoordType, typename DataType>
+size_t build_ca_halo(ParallelTree<CoordType, DataType>* tree, int level, DeviceSolveLevel& L, double& comm_seconds) {
+    const auto t0 = std::chrono::steady_clock::now();
+    auto& lvl = tree->levels[static_cast<size_t>(level)];
+    int P = 0, me = 0;
+    MPI_Comm_size(tree->comm, &P);
+    MPI_Comm_rank(tree->comm, &me);
+    const bool on = L.active && !L.host;
+    const size_t nb = L.boxes.size() - L.ghost_box.size();
+    struct Want { int64_t m; int n; bool ghost; int64_t dst; };
+    std::vector<Want> want;
+    if (on) {
+        for (size_t j = 0; j < L.ghost_box.size(); ++j) {
+            want.push_back({L.ghost_box[j], L.boxes[nb + j].n, true, L.boxes[nb + j].vec});
+        }
+        for (const auto& g : L.ghosts) want.push_back({g.morton, g.n, false, g.offset});
+    }
+    std::sort(want.begin(), want.end(), [](const Want& a, const Want& b) { return a.m < b.m; });
+    std::vector<std::vector<size_t>> by_owner(static_cast<size_t>(P));
+    if (!want.empty()) {
+        std::vector<uint64_t> ms;
+        ms.reserve(want.size());
+        for (const Want& w : want) ms.push_back(static_cast<uint64_t>(w.m));
+        const std::vector<uint32_t> region =
+            morton::assign_to_processes_nd(tree->dimension, ms, lvl.num_active_processes, 1u << level);
+        for (size_t i = 0; i < want.size(); ++i) {
+            const int owner = lvl.morton_to_rank.at(static_cast<int>(region[i]));
+            if (owner == me || owner < 0 || owner >= P) throw std::runtime_error("device solve: CA halo box owner");
+            by_owner[static_cast<size_t>(owner)].push_back(i);
         }
     }
-    std::vector<char> image(t_end, 0);
-    auto put = [&](size_t at, const void* data, size_t bytes) {
-        if (bytes > 0) std::memcpy(image.data() + at, data, bytes);
-    };
-    put(t_lists, remote_lists.data(), remote_lists.size() * I);
-    put(t_slots, L.slots.data(), L.slots.size() * sizeof(SolveSlot));
-    put(t_boxes, L.boxes.data(), nb * sizeof(SolveBox));
-    put(t_order, order.data(), order.size() * I);
-    put(t_rorder, rorder.data(), rorder.size() * I);
-    put(t_diag, diag.data(), diag.size() * I);
-    put(t_items, items.data(), items.size() * sizeof(SolveAccum));
-    put(t_parts, parts.data(), parts.size() * sizeof(SolvePart));
-    put(t_copies, copies.data(), copies.size() * sizeof(SolveCopy));
-    check_cuda(cudaMemcpy(tables, image.data(), t_end, cudaMemcpyHostToDevice), "solve tables");
-    L.d_slots = reinterpret_cast<const SolveSlot*>(tables + t_slots);
-    L.d_boxes = reinterpret_cast<const SolveBox*>(tables + t_boxes);
-    L.d_order = reinterpret_cast<const int*>(tables + t_order);
-    L.d_rorder = reinterpret_cast<const int*>(tables + t_rorder);
-    L.d_diag = reinterpret_cast<const int*>(tables + t_diag);
-    L.d_items = reinterpret_cast<const SolveAccum*>(tables + t_items);
-    L.d_parts = reinterpret_cast<const SolvePart*>(tables + t_parts);
-    L.d_copies = reinterpret_cast<const SolveCopy*>(tables + t_copies);
-    return t_end;
+    // requests: (2 m + ghost, n) per box
+    std::vector<int> scount(static_cast<size_t>(P)), rcount(static_cast<size_t>(P)), sdispl(static_cast<size_t>(P)),
+        rdispl(static_cast<size_t>(P));
+    for (int q = 0; q < P; ++q) scount[static_cast<size_t>(q)] = 2 * static_cast<int>(by_owner[static_cast<size_t>(q)].size());
+    MPI_Alltoall(scount.data(), 1, MPI_INT, rcount.data(), 1, MPI_INT, tree->comm);
+    for (int q = 1; q < P; ++q) {
+        sdispl[static_cast<size_t>(q)] = sdispl[static_cast<size_t>(q - 1)] + scount[static_cast<size_t>(q - 1)];
+        rdispl[static_cast<size_t>(q)] = rdispl[static_cast<size_t>(q - 1)] + rcount[static_cast<size_t>(q - 1)];
+    }
+    std::vector<int64_t> sbuf(static_cast<size_t>(sdispl.back() + scount.back()));
+    std::vector<int64_t> rbuf(static_cast<size_t>(std::max(rdispl.back() + rcount.back(), 1)));
+    for (int q = 0; q < P; ++q) {
+        size_t at = static_cast<size_t>(sdispl[static_cast<size_t>(q)]);
+        for (size_t i : by_owner[static_cast<size_t>(q)]) {
+            sbuf[at++] = 2 * want[i].m + (want[i].ghost ? 1 : 0);
+            sbuf[at++] = want[i].n;
+        }
+    }
+    MPI_Alltoallv(sbuf.data(), scount.data(), sdispl.data(), MPI_INT64_T, rbuf.data(), rcount.data(), rdispl.data(),
+                  MPI_INT64_T, tree->comm);
+    comm_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (!on) return 0;
+
+    L.peers.clear();
+    for (int q = 0; q < P; ++q) {
+        if (scount[static_cast<size_t>(q)] > 0 || rcount[static_cast<size_t>(q)] > 0) L.peers.push_back(q);
+    }
+    const size_t np = L.peers.size();
+    std::vector<SolveCopy> copies;
+    L.send_max = L.recv_max = 0;
+    for (int kind = 0; kind < 3; ++kind) {
+        auto wanted = [&](bool ghost) { return kind == 1 || ghost == (kind == 0); };
+        DeviceSolveLevel::CaHalo& H = L.halo[kind];
+        H.out.assign(np, 0);
+        H.in.assign(np, 0);
+        // sends: the requests of each peer, in its order
+        H.send0 = static_cast<int>(copies.size());
+        int64_t at = 0;
+        for (size_t p = 0; p < np; ++p) {
+            const int q = L.peers[p];
+            for (int e = rdispl[static_cast<size_t>(q)]; e < rdispl[static_cast<size_t>(q)] + rcount[static_cast<size_t>(q)];
+                 e += 2) {
+                const int64_t code = rbuf[static_cast<size_t>(e)], n = rbuf[static_cast<size_t>(e + 1)];
+                if (!wanted((code & 1) != 0)) continue;
+                const int64_t b = (code >> 1) - lvl.local_morton_start;
+                if (b < 0 || b >= static_cast<int64_t>(nb) || L.boxes[static_cast<size_t>(b)].n != n) {
+                    throw std::runtime_error("device solve: CA halo request for box " + std::to_string(code >> 1));
+                }
+                copies.push_back(SolveCopy{L.boxes[static_cast<size_t>(b)].vec, at, static_cast<int>(n)});
+                H.send_max_n = std::max(H.send_max_n, static_cast<int>(n));
+                H.out[p] += n;
+                at += n;
+            }
+        }
+        H.nsend = static_cast<int>(copies.size()) - H.send0;
+        H.out_total = at;
+        // receives: the ghosts into the level vector, the assisting boxes into the area
+        std::vector<SolveCopy> to_vec, to_area;
+        at = 0;
+        for (size_t p = 0; p < np; ++p) {
+            for (size_t i : by_owner[static_cast<size_t>(L.peers[p])]) {
+                const Want& w = want[i];
+                if (!wanted(w.ghost)) continue;
+                (w.ghost ? to_vec : to_area).push_back(SolveCopy{at, w.dst, w.n});
+                (w.ghost ? H.vec_max_n : H.area_max_n) = std::max(w.ghost ? H.vec_max_n : H.area_max_n, w.n);
+                H.in[p] += w.n;
+                at += w.n;
+            }
+        }
+        H.in_total = at;
+        H.vec0 = static_cast<int>(copies.size());
+        H.nvec = static_cast<int>(to_vec.size());
+        copies.insert(copies.end(), to_vec.begin(), to_vec.end());
+        H.area0 = static_cast<int>(copies.size());
+        H.narea = static_cast<int>(to_area.size());
+        copies.insert(copies.end(), to_area.begin(), to_area.end());
+        L.send_max = std::max(L.send_max, H.out_total);
+        L.recv_max = std::max(L.recv_max, H.in_total);
+    }
+    const size_t bytes = align_up(std::max<size_t>(copies.size() * sizeof(SolveCopy), 1));
+    char* table = DeviceHeap::instance().alloc_resident(bytes);
+    L.blocks.push_back(table);
+    if (!copies.empty()) {
+        check_cuda(cudaMemcpy(table, copies.data(), copies.size() * sizeof(SolveCopy), cudaMemcpyHostToDevice),
+                   "CA halo table");
+    }
+    L.d_copies = reinterpret_cast<const SolveCopy*>(table);
+    L.device_halo = true;
+    return bytes;
 }
 
 template<typename CoordType, typename DataType>
-bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity) {
+bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity, bool host_levels_allowed) {
     DeviceSolveStore& store = device_solve_store();
     if (store.decided && store.tree == tree) return store.usable;
     store.release_prepared();
@@ -618,44 +986,89 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
 
         // ---- eligibility and size, on every rank
         std::string reason;
-        double need = 0.0;
+        std::vector<double> level_need(static_cast<size_t>(leaf + 1), 0.0);
+        std::vector<int> host_only(static_cast<size_t>(leaf + 1), 0);  // CA levels factored on the host
         for (int level = 2; level <= leaf && reason.empty(); ++level) {
             auto& lvl = tree->levels[static_cast<size_t>(level)];
             if (!lvl.is_process_active) continue;
-            if (tree->level_uses_CA(level)) {
-                reason = "CA levels";
+            double& need = level_need[static_cast<size_t>(level)];
+            const bool ca = tree->level_uses_CA(level);
+            if (ca && store.ca_levels.count(level) == 0) {
+                if (host_levels_allowed) {
+                    host_only[static_cast<size_t>(level)] = 1;
+                    continue;
+                }
+                reason = "CA levels not factored by the device's replicated CA";
                 break;
             }
             const bool kept_level = store.kept.count(level) != 0;
-            for (const auto& box : lvl.local_boxes) {
+            auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
                 const int64_t n = box.num_points, k = static_cast<int64_t>(box.skeleton_indices.size()),
                               r = static_cast<int64_t>(box.redundant_indices.size());
                 if (static_cast<size_t>(n) * D > kSolveSharedLimit) {
                     reason = "boxes too large";
-                    break;
+                    return;
                 }
                 if (r > 0 && k > 0 && box.X_RR.format != MatrixStorage<DataType>::LU_FACTORED) {
                     reason = "X_RR not LU-factored (use H2_XRR_factor=1)";
-                    break;
+                    return;
                 }
                 const int64_t ntot = box.X_NR.is_allocated() ? box.X_NR.rows : 0;
-                need += static_cast<double>((kept_level ? 0 : (2 * k * r + ntot * r + r * r) * D) + (r + k + r) * I + 1024);
+                need += static_cast<double>((kept_box ? 0 : (2 * k * r + ntot * r + r * r) * D) + (r + k + r) * I + 1024);
+            };
+            for (const auto& box : lvl.local_boxes) {
+                if (reason.empty()) check(box, kept_level);
+            }
+            if (ca) {
+                for (const auto& box : lvl.ghost_boxes) {  // (eliminated here again: their factors too)
+                    if (reason.empty()) check(box, kept_level);
+                }
             }
         }
         DeviceHeap& heap = DeviceHeap::instance();
         heap.ensure_initialized();
-        const double room = static_cast<double>(heap.capacity() - heap.used());
-        int ok = reason.empty() && need * 1.05 + (size_t{256} << 20) < room ? 1 : 0;
-        if (reason.empty() && !ok) reason = "not enough device memory";
-        int all_ok = 0;
-        MPI_Allreduce(&ok, &all_ok, 1, MPI_INT, MPI_MIN, tree->comm);
-        double need_max = need;
-        MPI_Allreduce(MPI_IN_PLACE, &need_max, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
+        // Residency, the same on every rank (each level's largest need, the
+        // smallest room): every Color level on the device, then the CA levels
+        // while they fit, leaf first (the most work); a CA level that does
+        // not fit runs its sweeps on the host (run_device_solve's host_level).
+        double room = static_cast<double>(heap.capacity() - heap.used());
+        int bad = reason.empty() ? 0 : 1;
+        MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_INT, MPI_MAX, tree->comm);
+        std::vector<double> need_max = level_need;
+        MPI_Allreduce(MPI_IN_PLACE, need_max.data(), leaf + 1, MPI_DOUBLE, MPI_MAX, tree->comm);
+        MPI_Allreduce(MPI_IN_PLACE, host_only.data(), leaf + 1, MPI_INT, MPI_MAX, tree->comm);
+        MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_DOUBLE, MPI_MIN, tree->comm);
+        const double budget = room - static_cast<double>(size_t{256} << 20);
+        double planned = 0.0;
+        for (int level = 2; level <= leaf; ++level) {
+            if (!tree->level_uses_CA(level)) planned += 1.05 * need_max[static_cast<size_t>(level)];
+        }
+        std::set<int> host_levels;
+        if (!bad && planned > budget) {
+            bad = 1;
+            if (reason.empty()) reason = "not enough device memory";
+        }
+        for (int level = leaf; level >= 2 && !bad; --level) {
+            if (!tree->level_uses_CA(level)) continue;
+            const double n = 1.05 * need_max[static_cast<size_t>(level)];
+            if (host_only[static_cast<size_t>(level)]) {
+                host_levels.insert(level);
+            } else if (planned + n <= budget) {
+                planned += n;
+            } else if (host_levels_allowed) {
+                host_levels.insert(level);
+            } else {
+                bad = 1;
+                if (reason.empty()) reason = "not enough device memory";
+            }
+        }
+        const int all_ok = bad ? 0 : 1;
         if (!all_ok) {
+            materialize_host_factors(tree);  // (the host solve reads them)
             store.release();  // the kept factors too
             store.tree = tree;
             store.decided = true;
-            if (verbosity >= 0 && rank == 0) {
+            if (rank == 0) {  // once per factorization, also for a silent first solve
                 std::printf("GPU solve: off (%s on some rank); host solve\n", reason.empty() ? "another rank" : reason.c_str());
                 std::fflush(stdout);
             }
@@ -677,16 +1090,67 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
             if (!lvl.is_process_active) continue;
             L.active = true;
+            if (host_levels.count(level)) {  // (no factors, no tables)
+                L.ca = true;
+                L.host = true;
+                continue;
+            }
             const size_t nb = lvl.local_boxes.size();
             auto is_local = [&](int64_t m) {
                 return m >= lvl.local_morton_start && m < lvl.local_morton_start + static_cast<int64_t>(nb);
             };
+            // the boxes of the level vector: the local ones, then (a replicated
+            // CA level) the ghosts, in Morton order
+            using Box = BoxData<CoordType, DataType>;
+            L.ca = tree->level_uses_CA(level);
+            std::vector<const Box*> bx;
+            bx.reserve(nb + (L.ca ? lvl.ghost_boxes.size() : 0));
+            for (const Box& box : lvl.local_boxes) bx.push_back(&box);
+            std::unordered_map<int64_t, size_t> ghost_at;  // Morton -> index in bx
+            if (L.ca) {
+                std::vector<std::pair<int64_t, size_t>> ghosts;
+                for (size_t g = 0; g < lvl.ghost_boxes.size(); ++g) ghosts.emplace_back(lvl.ghost_boxes[g].morton_index, g);
+                std::sort(ghosts.begin(), ghosts.end());
+                for (const auto& [m, g] : ghosts) {
+                    ghost_at.emplace(m, bx.size());
+                    L.ghost_box.push_back(m);
+                    bx.push_back(&lvl.ghost_boxes[g]);
+                }
+            }
+            const size_t nw = bx.size();  // boxes the level eliminates (local, ghosts)
+            auto writable = [&](int64_t m) -> int64_t {
+                if (is_local(m)) return m - lvl.local_morton_start;
+                const auto it = ghost_at.find(m);
+                return it == ghost_at.end() ? -1 : static_cast<int64_t>(it->second);
+            };
 
             // ---- other ranks' neighbors: sizes and skeletons, and who reads ours
+            // (a CA level: the assisting boxes, read only, from the
+            // factorization's post-elimination assisting gather)
             const auto tr = clock::now();
             L.readers.assign(nb, {});
             std::map<int64_t, std::vector<int64_t>> remote_skel;  // morton -> skeleton
-            if (lvl.num_active_processes > 1) {
+            if (L.ca) {
+                std::set<int64_t> wanted;
+                for (const Box* box : bx) {
+                    if (box->num_points == 0) continue;
+                    for (int64_t m : box->one_hop) {
+                        if (writable(m) < 0) wanted.insert(m);
+                    }
+                }
+                const auto& assisting = store.ca_assisting[level];
+                for (int64_t m : wanted) {
+                    const auto it = assisting.find(m);
+                    if (it == assisting.end()) {
+                        throw std::runtime_error("device solve: assisting box " + std::to_string(m) + " unknown");
+                    }
+                    const int n = it->second.n;
+                    L.ghost_of.emplace(m, static_cast<int>(L.ghosts.size()));
+                    L.ghosts.push_back({m, -1, n, L.ghost_points});
+                    L.ghost_points += n;
+                    remote_skel[m].assign(it->second.skeleton.begin(), it->second.skeleton.end());
+                }
+            } else if (lvl.num_active_processes > 1) {
                 L.peers = compute_one_hop_neighbor_ranks(tree, lvl, level);
                 std::unordered_map<int, size_t> peer_index;
                 for (size_t i = 0; i < L.peers.size(); ++i) peer_index.emplace(L.peers[i], i);
@@ -738,15 +1202,16 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             // (lists only for a level whose factors stayed on the device)
             const KeptSolveLevel* kept = nullptr;
             if (auto kit = store.kept.find(level); kit != store.kept.end()) kept = &kit->second;
-            std::vector<const KeptSolveBox*> kept_box(nb, nullptr);
-            std::vector<int64_t> base(nb);
-            std::vector<solve_detail::BoxLayout> lay(nb);
-            std::vector<int> ntot(nb, 0);
-            std::vector<size_t> chunk_of(nb), offset_in(nb);
+            std::vector<const KeptSolveBox*> kept_box(nw, nullptr);
+            std::vector<int64_t> base(nw);
+            std::vector<solve_detail::BoxLayout> lay(nw);
+            std::vector<int> ntot(nw, 0);
+            std::vector<size_t> chunk_of(nw), offset_in(nw);
             std::vector<size_t> chunk_bytes;
             constexpr size_t kChunk = size_t{256} << 20;
-            for (size_t b = 0; b < nb; ++b) {
-                const auto& box = lvl.local_boxes[b];
+            for (size_t b = 0; b < nw; ++b) {
+                const Box& box = *bx[b];
+                if (b == nb) L.local_points = L.points;
                 base[b] = L.points;
                 L.points += box.num_points;
                 const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
@@ -757,6 +1222,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 l.has_xsr = eliminated && box.X_SR.is_allocated();
                 if (kept != nullptr && eliminated) {
                     auto it = kept->boxes.find(box.morton_index);
+                    // (a kept box's X_NR may have no host copy: its rows from the kept one)
+                    if (it != kept->boxes.end() && !box.X_NR.is_allocated() && !box.one_hop.empty()) {
+                        ntot[b] = it->second.ntot;
+                    }
                     if (it == kept->boxes.end() || it->second.k != static_cast<int>(k) || it->second.r != static_cast<int>(r) ||
                         it->second.ntot != ntot[b] || (l.has_T && it->second.T == nullptr)) {
                         throw std::runtime_error("device solve: kept factors of box " + std::to_string(box.morton_index) +
@@ -782,8 +1251,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 L.max_n = std::max(L.max_n, static_cast<int>(box.num_points));
                 L.max_r = std::max(L.max_r, static_cast<int>(r));
             }
-            std::vector<size_t> chunk_first(chunk_bytes.size() + 1, nb);  // boxes of chunk c: [first[c], first[c + 1])
-            for (size_t b = nb; b-- > 0;) chunk_first[chunk_of[b]] = b;
+            if (nw == nb) L.local_points = L.points;
+            std::vector<size_t> chunk_first(chunk_bytes.size() + 1, nw);  // boxes of chunk c: [first[c], first[c + 1])
+            for (size_t b = nw; b-- > 0;) chunk_first[chunk_of[b]] = b;
             std::vector<char*> chunks(chunk_bytes.size());
             for (size_t c = 0; c < chunks.size(); ++c) {
                 chunks[c] = heap.alloc_resident(std::max<size_t>(chunk_bytes[c], 1));
@@ -805,7 +1275,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 struct Piece { size_t box; int what; size_t col0, col1; };  // what: 0 T, 1 X_SR, 2 X_NR, 3 LU, 4 lists
                 std::vector<Piece> pieces;
                 for (size_t b = chunk_first[c]; b < chunk_first[c + 1]; ++b) {
-                    const auto& box = lvl.local_boxes[b];
+                    const Box& box = *bx[b];
                     const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
                     pieces.push_back(Piece{b, 4, 0, 0});
                     if (k == 0 || r == 0 || kept_box[b] != nullptr) continue;
@@ -821,7 +1291,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 #pragma omp parallel for schedule(dynamic, 1)
                 for (int64_t pi = 0; pi < static_cast<int64_t>(pieces.size()); ++pi) {
                     const Piece& pc = pieces[static_cast<size_t>(pi)];
-                    const auto& box = lvl.local_boxes[pc.box];
+                    const Box& box = *bx[pc.box];
                     const solve_detail::BoxLayout& l = lay[pc.box];
                     char* p = h + offset_in[pc.box];
                     const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
@@ -855,15 +1325,15 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             upload_seconds += std::chrono::duration<double>(clock::now() - tu).count();
 
             // ---- boxes and slots
-            L.boxes.resize(nb);
+            L.boxes.resize(nw);
             std::vector<int> remote_lists;  // skeletons of other ranks' neighbors
             std::unordered_map<int64_t, size_t> remote_list_at;
             for (const auto& [m, sk] : remote_skel) {
                 remote_list_at.emplace(m, remote_lists.size());
                 for (int64_t x : sk) remote_lists.push_back(static_cast<int>(x));
             }
-            for (size_t b = 0; b < nb; ++b) {
-                const auto& box = lvl.local_boxes[b];
+            for (size_t b = 0; b < nw; ++b) {
+                const Box& box = *bx[b];
                 const solve_detail::BoxLayout& l = lay[b];
                 const char* p = chunks[chunk_of[b]] + offset_in[b];
                 SolveBox& sb = L.boxes[b];
@@ -897,7 +1367,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 }
                 // neighbor counts: checked against those cached at factorization
                 static const std::vector<int64_t> none;
-                const auto& cached = b < lvl.solve_neighbor_size.size() ? lvl.solve_neighbor_size[b] : none;
+                const auto& cached = b < nb && b < lvl.solve_neighbor_size.size() ? lvl.solve_neighbor_size[b] : none;
                 int row = 0;
                 for (size_t a = 0; a < box.one_hop.size(); ++a) {
                     const int64_t m = box.one_hop[a];
@@ -905,9 +1375,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     SolveSlot sl{};
                     sl.full = full ? 1 : 0;
                     sl.row0 = row;
-                    if (is_local(m)) {
-                        const size_t nbx = static_cast<size_t>(m - lvl.local_morton_start);
-                        const auto& nbox = lvl.local_boxes[nbx];
+                    if (const int64_t wi = writable(m); wi >= 0) {  // (a CA level: local or ghost)
+                        const size_t nbx = static_cast<size_t>(wi);
+                        const Box& nbox = *bx[nbx];
                         sl.ghost = 0;
                         sl.vec = base[nbx];
                         sl.n = static_cast<int>(nbox.num_points);
@@ -936,11 +1406,20 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             }
             // ---- the sweeps' tables
             store.bytes += static_cast<double>(
-                build_solve_tables(tree, lvl, level, L, remote_lists, remote_list_at, register_seconds));
+                L.ca ? build_ca_solve_tables(tree, lvl, L, nb, ghost_at, remote_lists, remote_list_at)
+                     : build_solve_tables(tree, lvl, level, L, remote_lists, remote_list_at, register_seconds));
         }
         check_cuda(cudaStreamSynchronize(stream), "solve upload");
         for (cudaEvent_t e : staged) {
             if (e != nullptr) cudaEventDestroy(e);
+        }
+        // the replicated CA levels' halos in device memory (all ranks)
+        if (ca_solve_device_halo()) {
+            for (int level = 2; level <= leaf; ++level) {
+                if (!tree->level_uses_CA(level) || host_levels.count(level) != 0) continue;
+                store.bytes += static_cast<double>(
+                    build_ca_halo(tree, level, store.levels[static_cast<size_t>(level)], register_seconds));
+            }
         }
         store.usable = true;
         double seconds = std::chrono::duration<double>(clock::now() - t0).count();
@@ -948,8 +1427,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         MPI_Allreduce(MPI_IN_PLACE, &seconds, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &kept_bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
-        std::string kept_levels;
+        std::string kept_levels, on_host;
         for (const auto& [level, kl] : store.kept) kept_levels += (kept_levels.empty() ? "" : ",") + std::to_string(level);
+        for (int level : host_levels) on_host += (on_host.empty() ? "" : ",") + std::to_string(level);
         (void)verbosity;
         if (rank == 0) {  // once per factorization, also for a silent first solve
             std::printf("GPU solve: set up in %.2f s; factors kept on the device during the factorization: %s "
@@ -957,6 +1437,18 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         "%.2f, waiting for the copies %.2f], neighbor registration %.2f s on rank 0)\n",
                         seconds, kept_levels.empty() ? "none" : ("levels " + kept_levels).c_str(), kept_bytes / 1e9,
                         bytes / 1e9, upload_seconds, pack_seconds, wait_seconds, register_seconds);
+            if (!host_levels.empty()) {
+                std::string sizes;
+                for (int level : host_levels) {
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%s%d: %.2f GB", sizes.empty() ? "" : ", ", level,
+                                  host_only[static_cast<size_t>(level)] ? 0.0 : need_max[static_cast<size_t>(level)] / 1e9);
+                    sizes += buf;
+                }
+                std::printf("GPU solve: CA levels %s on the host (%s; device room %.2f GB per rank, "
+                            "resident %.2f GB)\n",
+                            on_host.c_str(), sizes.c_str(), room / 1e9, planned / 1e9);
+            }
             std::fflush(stdout);
         }
         return true;
@@ -968,6 +1460,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
 // ---------------------------------------------------------------------------
 struct DeviceSolveTimes {
     double forward = 0.0, diagonal = 0.0, backward = 0.0, transfer = 0.0, comm = 0.0;
+    double halo = 0.0;  // CA halo packing and unpacking (device copies)
     int64_t direct_messages = 0, staged_messages = 0;  // exchanges moving data: in device memory, through the host
 };
 
@@ -1107,6 +1600,248 @@ public:
         times.backward += seconds_since(t0);
     }
 
+    // ---- a replicated CA level (the host CA solve's scheme; the gathers
+    //      are the host's gather_CA_boxes_solve, collective over `comm`)
+
+    // The level vector with the local boxes' vectors (the ghosts' part is
+    // filled by put_ca_halo).
+    S* upload_ca_local(DeviceSolveLevel& L, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const size_t nb = L.boxes.size() - L.ghost_box.size();
+        S* d = heap_.alloc<S>(std::max<size_t>(static_cast<size_t>(L.points) * nrhs_, 1) * sizeof(S));
+        const size_t len = static_cast<size_t>(L.local_points) * nrhs_;
+        S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
+        for (size_t b = 0; b < nb; ++b) {
+            const auto& v = data[b].left_side;
+            if (v.size() != static_cast<size_t>(L.boxes[b].n) * nrhs_) throw std::runtime_error("device solve: vector size");
+            std::memcpy(h + L.boxes[b].vec * nrhs_, v.data(), v.size() * sizeof(DataType));
+        }
+        if (len > 0) check_cuda(cudaMemcpyAsync(d, h, len * sizeof(S), cudaMemcpyHostToDevice, stream_), "solve upload");
+        check_cuda(cudaStreamSynchronize(stream_), "solve upload");
+        times.transfer += seconds_since(t0);
+        return d;
+    }
+    // The local boxes' vectors back into the solve data (the level vector stays).
+    void download_ca_local(DeviceSolveLevel& L, const S* d, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const size_t nb = L.boxes.size() - L.ghost_box.size();
+        const size_t len = static_cast<size_t>(L.local_points) * nrhs_;
+        S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(len, 1) * sizeof(S)));
+        if (len > 0) check_cuda(cudaMemcpyAsync(h, d, len * sizeof(S), cudaMemcpyDeviceToHost, stream_), "solve download");
+        check_cuda(cudaStreamSynchronize(stream_), "solve download");
+        for (size_t b = 0; b < nb; ++b) {
+            auto& v = data[b].left_side;
+            std::memcpy(v.data(), h + L.boxes[b].vec * nrhs_, v.size() * sizeof(DataType));
+        }
+        times.transfer += seconds_since(t0);
+    }
+    // The host gather's copies of the ghosts (into the level vector) and of
+    // the assisting boxes (into the read-only area).
+    void put_ca_halo(DeviceSolveLevel& L, TreeLevel<CoordType, DataType>& lvl, S* vec, S* area, bool ghosts,
+                     bool assisting) {
+        const auto t0 = std::chrono::steady_clock::now();
+        auto vector_of = [&](int64_t m, int n) -> const std::vector<DataType>& {
+            const auto it = lvl.ghost_and_assisting_box_points_for_solve_map.find(m);
+            if (it == lvl.ghost_and_assisting_box_points_for_solve_map.end()) {
+                throw std::runtime_error("device solve: no gathered vector for box " + std::to_string(m));
+            }
+            const auto& v = lvl.ghost_and_assisting_boxes_for_solve[static_cast<size_t>(it->second)].left_side;
+            if (v.size() != static_cast<size_t>(n) * nrhs_) throw std::runtime_error("device solve: gathered vector size");
+            return v;
+        };
+        const size_t nb = L.boxes.size() - L.ghost_box.size();
+        const size_t glen = static_cast<size_t>(L.points - L.local_points) * nrhs_;
+        const size_t alen = static_cast<size_t>(L.ghost_points) * nrhs_;
+        S* h = static_cast<S*>(host_vec_.reserve(std::max<size_t>(glen + alen, 1) * sizeof(S)));
+        if (ghosts && glen > 0) {
+            for (size_t j = 0; j < L.ghost_box.size(); ++j) {
+                const SolveBox& sb = L.boxes[nb + j];
+                const auto& v = vector_of(L.ghost_box[j], sb.n);
+                std::memcpy(h + (sb.vec - L.local_points) * nrhs_, v.data(), v.size() * sizeof(DataType));
+            }
+            check_cuda(cudaMemcpyAsync(vec + static_cast<size_t>(L.local_points) * nrhs_, h, glen * sizeof(S),
+                                       cudaMemcpyHostToDevice, stream_),
+                       "solve halo upload");
+        }
+        if (assisting && alen > 0) {
+            for (const auto& g : L.ghosts) {
+                const auto& v = vector_of(g.morton, g.n);
+                std::memcpy(h + glen + g.offset * nrhs_, v.data(), v.size() * sizeof(DataType));
+            }
+            check_cuda(cudaMemcpyAsync(area, h + glen, alen * sizeof(S), cudaMemcpyHostToDevice, stream_),
+                       "solve halo upload");
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "solve halo upload");
+        times.transfer += seconds_since(t0);
+    }
+    // The halo in device memory (build_ca_halo; kind 0 the ghosts, 1 the
+    // ghosts and the assisting boxes, 2 the assisting boxes): the owners'
+    // vectors into the level vector's ghost part and the read-only area.
+    void ca_halo(DeviceSolveLevel& L, int kind, S* vec, S* area) {
+        if (L.peers.empty()) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        const double comm0 = times.comm;
+        const auto& H = L.halo[kind];
+        S* sendbox = alloc_message(H.out_total);
+        S* inbox = alloc_message(H.in_total);
+        launch_solve_copy(L.d_copies + H.send0, H.nsend, H.send_max_n, nrhs_, static_cast<const S*>(vec), sendbox, stream_);
+        exchange(L, H.out, H.in, sendbox, inbox, 770 + kind);
+        launch_solve_copy(L.d_copies + H.vec0, H.nvec, H.vec_max_n, nrhs_, static_cast<const S*>(inbox), vec, stream_);
+        if (area != nullptr) {
+            launch_solve_copy(L.d_copies + H.area0, H.narea, H.area_max_n, nrhs_, static_cast<const S*>(inbox), area,
+                              stream_);
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "CA halo");
+        free_message(sendbox);
+        free_message(inbox);
+        times.halo += seconds_since(t0) - (times.comm - comm0);
+    }
+    template<typename Gather>
+    void timed_gather(Gather&& gather) {
+        const auto t0 = std::chrono::steady_clock::now();
+        gather();
+        times.comm += seconds_since(t0);
+        ++times.staged_messages;
+    }
+
+    // Solve, forward: the ghosts' and assisting boxes' vectors gathered once,
+    // the CA waves over the local boxes and the ghosts, then the local
+    // boxes' diagonal solves.
+    void ca_forward(DeviceSolveLevel& L, TreeLevel<CoordType, DataType>& lvl, int level,
+                    std::vector<SolveDataRequest<CoordType, DataType>>& data, MPI_Comm comm) {
+        if (!L.device_halo) timed_gather([&] { gather_CA_boxes_solve(tree_, level, data, comm); });
+        S* vec = upload_ca_local(L, data);
+        if (L.device_halo) {
+            ca_halo(L, 0, vec, nullptr);
+        } else {
+            put_ca_halo(L, lvl, vec, nullptr, true, false);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        S* work = alloc_points(L.work_points);
+        for (const auto& W : L.waves) {
+            if (W.count == 0) continue;
+            launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+            launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
+                               static_cast<const S*>(nullptr), stream_);
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "forward sweep");
+        free_points(work);
+        times.forward += seconds_since(t0);
+        const auto t1 = std::chrono::steady_clock::now();
+        launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        check_cuda(cudaStreamSynchronize(stream_), "diagonal solves");
+        times.diagonal += seconds_since(t1);
+        download_ca_local(L, vec, data);
+        heap_.free(vec);
+    }
+    // Solve, backward: the groups in reverse; after each but the last (on
+    // several ranks), the owners' vectors of the ghosts (the first time) and
+    // of the assisting boxes, for the groups still to come.
+    void ca_backward(DeviceSolveLevel& L, TreeLevel<CoordType, DataType>& lvl, int level,
+                     std::vector<SolveDataRequest<CoordType, DataType>>& data, MPI_Comm comm) {
+        S* vec = upload_ca_local(L, data);
+        const auto t0 = std::chrono::steady_clock::now();
+        S* work = alloc_points(L.work_points);
+        S* area = alloc_points(L.ghost_points);
+        const int groups = static_cast<int>(L.group_end.size());
+        for (int g = groups - 1, done = 0; g >= 0; --g) {
+            const int w0 = g == 0 ? 0 : L.group_end[static_cast<size_t>(g - 1)];
+            for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
+                const auto& W = L.waves[static_cast<size_t>(w)];
+                if (W.count == 0) continue;
+                launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0, W.count, vec, area, work, nrhs_,
+                                      L.max_n, W.max_ntot, stream_);
+            }
+            if (lvl.num_active_processes > 1 && ++done < groups) {
+                if (L.device_halo) {
+                    ca_halo(L, done == 1 ? 1 : 2, vec, area);
+                } else {
+                    download_ca_local(L, vec, data);
+                    timed_gather([&] { gather_CA_boxes_solve(tree_, level, data, comm, /*assist_only=*/done > 1); });
+                    put_ca_halo(L, lvl, vec, area, /*ghosts=*/done == 1, /*assisting=*/true);
+                }
+            }
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "backward sweep");
+        free_points(work);
+        free_points(area);
+        times.backward += seconds_since(t0);
+        download_ca_local(L, vec, data);
+        heap_.free(vec);
+    }
+    // Multiply, forward W: everything gathered once, the CA waves in order
+    // (reading neighbors), then the local boxes' diagonal multiplies.
+    void ca_mul_forward(DeviceSolveLevel& L, TreeLevel<CoordType, DataType>& lvl, int level,
+                        std::vector<SolveDataRequest<CoordType, DataType>>& data, MPI_Comm comm) {
+        if (!L.device_halo) timed_gather([&] { gather_CA_boxes_solve(tree_, level, data, comm); });
+        S* vec = upload_ca_local(L, data);
+        S* area = alloc_points(L.ghost_points);
+        if (L.device_halo) {
+            ca_halo(L, 1, vec, area);
+        } else {
+            put_ca_halo(L, lvl, vec, area, true, true);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        S* work = alloc_points(L.work_points);
+        for (const auto& W : L.waves) {
+            if (W.count == 0) continue;
+            launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, area, work, nrhs_, L.max_n,
+                               W.max_ntot, stream_);
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
+        free_points(work);
+        free_points(area);
+        times.forward += seconds_since(t0);
+        const auto t1 = std::chrono::steady_clock::now();
+        launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        check_cuda(cudaStreamSynchronize(stream_), "diagonal multiplies");
+        times.diagonal += seconds_since(t1);
+        download_ca_local(L, vec, data);
+        heap_.free(vec);
+    }
+    // Multiply, backward V: everything gathered, the groups in reverse with
+    // updates to local or ghost boxes, everything gathered again after each
+    // group but the last (on several ranks).
+    void ca_mul_backward(DeviceSolveLevel& L, TreeLevel<CoordType, DataType>& lvl, int level,
+                         std::vector<SolveDataRequest<CoordType, DataType>>& data, MPI_Comm comm) {
+        if (!L.device_halo) timed_gather([&] { gather_CA_boxes_solve(tree_, level, data, comm); });
+        S* vec = upload_ca_local(L, data);
+        S* area = alloc_points(L.ghost_points);
+        if (L.device_halo) {
+            ca_halo(L, 1, vec, area);
+        } else {
+            put_ca_halo(L, lvl, vec, area, true, true);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        S* work = alloc_points(L.work_points);
+        const int groups = static_cast<int>(L.group_end.size());
+        for (int g = groups - 1, done = 0; g >= 0; --g) {
+            const int w0 = g == 0 ? 0 : L.group_end[static_cast<size_t>(g - 1)];
+            for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
+                const auto& W = L.waves[static_cast<size_t>(w)];
+                if (W.count == 0) continue;
+                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+                launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
+                                   static_cast<const S*>(nullptr), stream_);
+            }
+            if (lvl.num_active_processes > 1 && ++done < groups) {
+                if (L.device_halo) {
+                    ca_halo(L, 1, vec, area);
+                } else {
+                    download_ca_local(L, vec, data);
+                    timed_gather([&] { gather_CA_boxes_solve(tree_, level, data, comm); });
+                    put_ca_halo(L, lvl, vec, area, true, true);
+                }
+            }
+        }
+        check_cuda(cudaStreamSynchronize(stream_), "multiply backward");
+        free_points(work);
+        free_points(area);
+        times.backward += seconds_since(t0);
+        download_ca_local(L, vec, data);
+        heap_.free(vec);
+    }
+
     DeviceSolveTimes times;
 
 private:
@@ -1233,12 +1968,26 @@ private:
     PinnedBuffer& host_in_ = device_solve_store().host_in;
 };
 
+// The steps of a CA level run on the host (DeviceSolveLevel::host): the
+// host CA solve's code for that level on its solve data, as the callback
+// `host_level(level, step)` of run_device_solve.
+enum class HostStep { SolveForward, SolveBackward, MulForward, MulBackward };
+using HostLevelStep = std::function<void(int, HostStep)>;
+
+// A replicated CA level's communicator for the host gathers.
+inline MPI_Comm ca_comm(const std::vector<MPI_Comm>* level_comms, int level) {
+    if (level_comms == nullptr || static_cast<size_t>(level) >= level_comms->size()) {
+        throw std::runtime_error("device solve: a CA level without its communicator");
+    }
+    return (*level_comms)[static_cast<size_t>(level)];
+}
+
 // The solve sweeps on the device (solve data initialized as by the host
 // solve).  Collective over the tree's ranks.
 template<typename CoordType, typename DataType>
 void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                          std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
-                         int verbosity) {
+                         int verbosity, const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     Context::instance().activate();
@@ -1253,9 +2002,17 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
         auto& lvl = tree->levels[static_cast<size_t>(level)];
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
-            run.forward(L, vec);
-            run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            if (L.host) {
+                const auto tl = clock::now();
+                (*host_level)(level, HostStep::SolveForward);
+                host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
+            } else if (L.ca) {
+                run.ca_forward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
+            } else {
+                auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+                run.forward(L, vec);
+                run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            }
         }
         const auto th = clock::now();
         gather_skeleton_to_parent(lvl, tree->levels[static_cast<size_t>(level - 1)], solve_data[static_cast<size_t>(level)],
@@ -1278,20 +2035,28 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
         host_seconds += std::chrono::duration<double>(clock::now() - ts).count();
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
-            run.backward(L, vec);
-            run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            if (L.host) {
+                const auto tl = clock::now();
+                (*host_level)(level, HostStep::SolveBackward);
+                host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
+            } else if (L.ca) {
+                run.ca_backward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
+            } else {
+                auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
+                run.backward(L, vec);
+                run.download(L, vec, solve_data[static_cast<size_t>(level)]);
+            }
         }
     }
     const double total = std::chrono::duration<double>(clock::now() - t0).count();
     if (verbosity >= 0 && rank == 0) {
         const auto& t = run.times;
         std::printf("GPU solve: %.3f s (rank 0: forward %.3f, diagonal %.3f, backward %.3f, of which MPI %.3f%s; "
-                    "vector transfers %.3f; host level hand-off and root %.3f)\n",
+                    "vector transfers %.3f; CA halo copies %.3f; host level hand-off and root %.3f)\n",
                     total, t.forward, t.diagonal, t.backward, t.comm,
                     t.direct_messages > 0 ? (t.staged_messages > 0 ? " partly in device memory" : " in device memory")
                                           : (t.staged_messages > 0 ? " through the host" : ""),
-                    t.transfer, host_seconds);
+                    t.transfer, t.halo, host_seconds);
         std::fflush(stdout);
     }
 }
@@ -1300,7 +2065,8 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
 // hierarchical_mul_parallel).  Collective over the tree's ranks.
 template<typename CoordType, typename DataType>
 void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
-                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& data, int nrhs, bool verbose) {
+                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& data, int nrhs, bool verbose,
+                       const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     Context::instance().activate();
@@ -1315,9 +2081,17 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         auto& lvl = tree->levels[static_cast<size_t>(level)];
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
-            run.mul_forward(L, vec);
-            run.download(L, vec, data[static_cast<size_t>(level)]);
+            if (L.host) {
+                const auto tl = clock::now();
+                (*host_level)(level, HostStep::MulForward);
+                host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
+            } else if (L.ca) {
+                run.ca_mul_forward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
+            } else {
+                auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
+                run.mul_forward(L, vec);
+                run.download(L, vec, data[static_cast<size_t>(level)]);
+            }
         }
         const auto th = clock::now();
         gather_skeleton_to_parent(lvl, tree->levels[static_cast<size_t>(level - 1)], data[static_cast<size_t>(level)],
@@ -1340,20 +2114,28 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         host_seconds += std::chrono::duration<double>(clock::now() - ts).count();
         if (level >= 2 && lvl.is_process_active) {
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
-            auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
-            run.mul_backward(L, vec);
-            run.download(L, vec, data[static_cast<size_t>(level)]);
+            if (L.host) {
+                const auto tl = clock::now();
+                (*host_level)(level, HostStep::MulBackward);
+                host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
+            } else if (L.ca) {
+                run.ca_mul_backward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
+            } else {
+                auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
+                run.mul_backward(L, vec);
+                run.download(L, vec, data[static_cast<size_t>(level)]);
+            }
         }
     }
     const double total = std::chrono::duration<double>(clock::now() - t0).count();
     if (verbose && rank == 0) {
         const auto& t = run.times;
         std::printf("GPU multiply: %.3f s (rank 0: forward %.3f, diagonal %.3f, backward %.3f, of which MPI %.3f%s; "
-                    "vector transfers %.3f; host level hand-off and root %.3f)\n",
+                    "vector transfers %.3f; CA halo copies %.3f; host level hand-off and root %.3f)\n",
                     total, t.forward, t.diagonal, t.backward, t.comm,
                     t.direct_messages > 0 ? (t.staged_messages > 0 ? " partly in device memory" : " in device memory")
                                           : (t.staged_messages > 0 ? " through the host" : ""),
-                    t.transfer, host_seconds);
+                    t.transfer, t.halo, host_seconds);
         std::fflush(stdout);
     }
 }
@@ -1364,15 +2146,24 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
 // result left in its leaf left_side.  With H2_GPU_SOLVE_CHECK=1 the host
 // path runs too (host(host_data), with the device path suspended), and rank
 // 0 prints their difference.  Returns false when the host path must run.
+// `level_comms`: the solve's per-level communicators (the host CA solve's
+// gathers on replicated CA levels; null where there are none).
+// `host_level`: a CA level's step on the host, on solve_data (for the CA
+// levels whose factors do not fit in device memory; null: none can run so).
 template<typename CoordType, typename DataType, typename HostRun>
 bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
-                      bool multiply, int verbosity, HostRun&& host) {
-    if (device_solve_suspended() || !device_solve_enabled() || !prepare_device_solve(tree, verbosity)) return false;
+                      bool multiply, int verbosity, HostRun&& host, const std::vector<MPI_Comm>* level_comms = nullptr,
+                      const HostLevelStep* host_level = nullptr) {
+    if (device_solve_suspended() || !device_solve_enabled()) {
+        materialize_host_factors(tree);  // (the host path reads them)
+        return false;
+    }
+    if (!prepare_device_solve(tree, verbosity, host_level != nullptr)) return false;
     if (multiply) {
-        device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1);
+        device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1, level_comms, host_level);
     } else {
-        device_solve_sweeps(tree, solve_data, nrhs, verbosity);
+        device_solve_sweeps(tree, solve_data, nrhs, verbosity, level_comms, host_level);
     }
     if (device_solve_check()) {
         const int leaf = tree->num_levels - 1;

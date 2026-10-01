@@ -222,6 +222,544 @@ void apply_CA_level_schedule(
     }
 }
 
+// A level's diagonal solves (X_RR^{-1} on the local boxes' redundant
+// unknowns).  Returns their number.
+template<typename CoordType, typename DataType>
+int64_t diagonal_solve_level(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    int nrhs) {
+    auto& tree_level = tree->levels[level];
+    int64_t count = 0;
+    if (!tree_level.is_process_active) {
+        return count;
+    }
+
+    std::exception_ptr diagonal_exception;
+    std::mutex diagonal_exception_mutex;
+    std::atomic<bool> diagonal_failed{false};
+
+    #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
+    {
+        int64_t local_diagonal_solves = 0;
+
+        #pragma omp for schedule(static)
+        for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
+            if (diagonal_failed.load(std::memory_order_relaxed)) {
+                continue;
+            }
+
+            try {
+                auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
+                auto& solve_box = level_data[static_cast<size_t>(box_idx)];
+
+                if (box.redundant_indices.empty()) {
+                    continue;
+                }
+
+                int64_t r = static_cast<int64_t>(box.redundant_indices.size());
+                std::vector<DataType> b_R(
+                    static_cast<size_t>(r * nrhs));
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < r; ++i) {
+                        b_R[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) * r)] =
+                            solve_box.left_side[static_cast<size_t>(
+                                box.redundant_indices[static_cast<size_t>(i)] +
+                                static_cast<int64_t>(column) *
+                                    solve_box.num_points)];
+                    }
+                }
+
+                if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
+                    char uplo = 'L';
+                    int n = static_cast<int>(r), rhs_columns = nrhs;
+                    int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
+
+                    if constexpr (std::is_same_v<DataType, double>) {
+                        dpotrs_(&uplo, &n, &rhs_columns,
+                                box.X_RR.data.data(), &lda,
+                                b_R.data(), &ldb, &info);
+                    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                        zsychol_solve_(&uplo, &n, &rhs_columns,
+                                       box.X_RR.data.data(), &lda,
+                                       b_R.data(), &ldb, &info);
+                    }
+
+                    if (info != 0) {
+                        throw std::runtime_error("Diagonal solve failed for X_RR");
+                    }
+                } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+                    if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
+                        throw std::runtime_error("Diagonal solve missing LU pivots for X_RR");
+                    }
+
+                    char trans = 'N';
+                    int n = static_cast<int>(r), rhs_columns = nrhs;
+                    int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
+
+                    if constexpr (std::is_same_v<DataType, double>) {
+                        dgetrs_(&trans, &n, &rhs_columns,
+                                box.X_RR.data.data(), &lda,
+                                box.X_RR_pivots.data(),
+                                b_R.data(), &ldb, &info);
+                    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                        zgetrs_(&trans, &n, &rhs_columns,
+                                box.X_RR.data.data(), &lda,
+                                box.X_RR_pivots.data(),
+                                b_R.data(), &ldb, &info);
+                    }
+
+                    if (info != 0) {
+                        throw std::runtime_error("LU diagonal solve failed for X_RR");
+                    }
+                } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
+                    if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
+                        throw std::runtime_error("Diagonal solve missing Bunch-Kaufman pivots for X_RR");
+                    }
+
+                    char uplo = 'L';
+                    int n = static_cast<int>(r), rhs_columns = nrhs;
+                    int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
+                    std::vector<DataType> work(
+                        static_cast<size_t>(std::max(n, 1)));
+                    sytrs2_(&uplo, &n, &rhs_columns,
+                            box.X_RR.data.data(), &lda,
+                            box.X_RR_pivots.data(),
+                            b_R.data(), &ldb, work.data(), &info);
+                    if (info != 0) {
+                        throw std::runtime_error("Bunch-Kaufman diagonal solve failed for X_RR");
+                    }
+                } else {
+                    throw std::runtime_error("Unsupported X_RR format in diagonal solve");
+                }
+
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < r; ++i) {
+                        solve_box.left_side[static_cast<size_t>(
+                            box.redundant_indices[static_cast<size_t>(i)] +
+                            static_cast<int64_t>(column) *
+                                solve_box.num_points)] =
+                            b_R[static_cast<size_t>(
+                                i + static_cast<int64_t>(column) * r)];
+                    }
+                }
+
+                local_diagonal_solves++;
+            } catch (...) {
+                if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
+                    diagonal_exception = std::current_exception();
+                }
+            }
+        }
+
+        #pragma omp atomic
+        count += local_diagonal_solves;
+    }
+
+    if (diagonal_exception) {
+        std::rethrow_exception(diagonal_exception);
+    }
+    return count;
+}
+
+// A level's diagonal multiplies (X_RR on the local boxes' redundant
+// unknowns).  Returns their number.
+template<typename CoordType, typename DataType>
+int64_t diagonal_mul_level(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    int nrhs) {
+    auto& tree_level = tree->levels[level];
+    int64_t count = 0;
+    if (!tree_level.is_process_active) {
+        return count;
+    }
+
+    std::exception_ptr diagonal_exception;
+    std::mutex diagonal_exception_mutex;
+    std::atomic<bool> diagonal_failed{false};
+
+    #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
+    {
+        int64_t local_diagonal_muls = 0;
+
+        #pragma omp for schedule(static)
+        for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
+            if (diagonal_failed.load(std::memory_order_relaxed)) continue;
+
+            try {
+                auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
+                auto& solve_box = level_data[static_cast<size_t>(box_idx)];
+
+                if (box.redundant_indices.empty()) continue;
+
+                int64_t r = static_cast<int64_t>(box.redundant_indices.size());
+                std::vector<DataType> x_R(
+                    static_cast<size_t>(r * nrhs));
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < r; ++i) {
+                        x_R[static_cast<size_t>(
+                            i + static_cast<int64_t>(column) * r)] =
+                            solve_box.left_side[static_cast<size_t>(
+                                box.redundant_indices[static_cast<size_t>(i)] +
+                                static_cast<int64_t>(column) *
+                                    solve_box.num_points)];
+                    }
+                }
+
+                int n = static_cast<int>(r);
+                int rhs_columns = nrhs;
+                int ldb = n;
+                char side = 'L';
+                DataType one = DataType{1};
+
+                if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
+                    char uplo = 'L', diag_N = 'N';
+                    int lda = static_cast<int>(r);
+
+                    char trans_T = 'T';
+                    trmm_(&side, &uplo, &trans_T, &diag_N,
+                               &n, &rhs_columns, &one,
+                               box.X_RR.data.data(), &lda,
+                               x_R.data(), &ldb);
+                    char trans_N = 'N';
+                    trmm_(&side, &uplo, &trans_N, &diag_N,
+                               &n, &rhs_columns, &one,
+                               box.X_RR.data.data(), &lda,
+                               x_R.data(), &ldb);
+                } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
+                    if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
+                        throw std::runtime_error("Diagonal multiply missing LU pivots");
+                    }
+                    int lda = static_cast<int>(r);
+
+                    char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
+                    trmm_(&side, &uplo_U, &trans_N, &diag_N,
+                               &n, &rhs_columns, &one,
+                               box.X_RR.data.data(), &lda,
+                               x_R.data(), &ldb);
+                    char uplo_L = 'L', diag_U = 'U';
+                    trmm_(&side, &uplo_L, &trans_N, &diag_U,
+                               &n, &rhs_columns, &one,
+                               box.X_RR.data.data(), &lda,
+                               x_R.data(), &ldb);
+                    int k1 = 1, k2 = n, inc_rev = -1;
+                    if constexpr (std::is_same_v<DataType, double>) {
+                        dlaswp_(&rhs_columns, x_R.data(), &n,
+                                &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
+                    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                        zlaswp_(&rhs_columns, x_R.data(), &n,
+                                &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
+                    }
+                } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
+                    if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
+                        throw std::runtime_error("Diagonal multiply missing Bunch-Kaufman pivots");
+                    }
+                    fmm::bunch_kaufman_multiply(
+                        n, box.X_RR.data.data(), n,
+                        box.X_RR_pivots.data(), x_R.data(), n, nrhs);
+                } else {
+                    throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
+                }
+
+                for (int column = 0; column < nrhs; ++column) {
+                    for (int64_t i = 0; i < r; ++i) {
+                        solve_box.left_side[static_cast<size_t>(
+                            box.redundant_indices[static_cast<size_t>(i)] +
+                            static_cast<int64_t>(column) *
+                                solve_box.num_points)] =
+                            x_R[static_cast<size_t>(
+                                i + static_cast<int64_t>(column) * r)];
+                    }
+                }
+
+                local_diagonal_muls++;
+            } catch (...) {
+                if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
+                    diagonal_exception = std::current_exception();
+                }
+            }
+        }
+
+        #pragma omp atomic
+        count += local_diagonal_muls;
+    }
+
+    if (diagonal_exception) {
+        std::rethrow_exception(diagonal_exception);
+    }
+    return count;
+}
+
+// A CA level's step of the host solve or multiply: the forward sweep (V^{-1}).
+// Returns the time of its gathers.
+template<typename CoordType, typename DataType>
+std::chrono::high_resolution_clock::duration CA_level_solve_forward(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    MPI_Comm level_comm,
+    bool print_stats) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& tree_level = tree->levels[level];
+    clock::duration comm{};
+    auto get_data_start = clock::now();
+    const bool owner_engine = owner_solve_engine_level(level);
+    OwnerSolveStats owner_stats;
+    get_data_start = clock::now();
+    gather_CA_boxes_solve(
+        tree, level, level_data,
+        level_comm);
+    comm += (clock::now() - get_data_start);
+
+    if (owner_engine) {
+        owner_solve_forward_boundary(
+            tree_level, level_data,
+            owner_solve_records().at(level), owner_stats,
+            level_comm);
+    }
+
+    apply_CA_level_schedule(
+        tree_level,
+        level_data,
+        tree->dimension,
+        /*reverse_order=*/false,
+        /*writes_neighbors=*/true,
+        [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+            apply_forward_elimination(
+                tree_level,
+                solve_box,
+                level_data,
+                fmm::MatrixProperty::SYMMETRIC,
+                local_pending,
+                is_ghost,
+                /*defer_local_updates=*/true,
+                /*local_or_ghost_targets_only=*/true);
+        },
+        [](size_t, size_t) {},
+        /*include_boundary=*/!owner_engine);
+    if (print_stats && owner_engine) {
+        owner_solve_print_stats(owner_stats, level, "forward");
+    }
+    return comm;
+}
+
+// A CA level's step of the host solve or multiply: the backward sweep (W^{-1}).
+// Returns the time of its gathers.
+template<typename CoordType, typename DataType>
+std::chrono::high_resolution_clock::duration CA_level_solve_backward(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    MPI_Comm level_comm,
+    bool print_stats) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& tree_level = tree->levels[level];
+    clock::duration comm{};
+    auto get_data_start = clock::now();
+    const bool owner_engine = owner_solve_engine_level(level);
+    if (owner_engine) {
+        OwnerSolveStats owner_stats;
+        apply_CA_level_schedule(
+            tree_level,
+            level_data,
+            tree->dimension,
+            /*reverse_order=*/true,
+            /*writes_neighbors=*/false,
+            [&](auto& solve_box, bool is_ghost, auto&) {
+                apply_backward_substitution(
+                    tree_level,
+                    solve_box,
+                    level_data,
+                    fmm::MatrixProperty::SYMMETRIC,
+                    is_ghost);
+            },
+            [](size_t, size_t) {},
+            /*include_boundary=*/false);
+
+        get_data_start = clock::now();
+        gather_CA_boxes_solve(
+            tree, level, level_data, level_comm);
+        comm +=
+            (clock::now() - get_data_start);
+
+        owner_solve_backward_boundary(
+            tree_level, level_data,
+            owner_solve_records().at(level), owner_stats,
+            level_comm);
+        if (print_stats) {
+            owner_solve_print_stats(owner_stats, level, "backward");
+        }
+    } else {
+        apply_CA_level_schedule(
+            tree_level,
+            level_data,
+            tree->dimension,
+            /*reverse_order=*/true,
+            /*writes_neighbors=*/false,
+            [&](auto& solve_box, bool is_ghost, auto&) {
+                apply_backward_substitution(
+                    tree_level,
+                    solve_box,
+                    level_data,
+                    fmm::MatrixProperty::SYMMETRIC,
+                    is_ghost);
+            },
+            [&](size_t group_idx, size_t group_count) {
+                if (tree_level.num_active_processes > 1 &&
+                    group_idx + 1 < group_count) {
+                    get_data_start = clock::now();
+                    gather_CA_boxes_solve(
+                        tree, level, level_data, level_comm,
+                        /*assist_only=*/group_idx > 0);
+                    comm +=
+                        (clock::now() - get_data_start);
+                }
+            });
+    }
+    return comm;
+}
+
+// A CA level's step of the host solve or multiply: the multiply's forward W.
+// Returns the time of its gathers.
+template<typename CoordType, typename DataType>
+std::chrono::high_resolution_clock::duration CA_level_mul_forward(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    MPI_Comm level_comm,
+    bool print_stats) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& tree_level = tree->levels[level];
+    clock::duration comm{};
+    auto get_data_start = clock::now();
+    const bool owner_engine = owner_solve_engine_level(level);
+    OwnerSolveStats owner_stats;
+    get_data_start = clock::now();
+    gather_CA_boxes_solve(
+        tree, level, level_data,
+        level_comm);
+    comm += (clock::now() - get_data_start);
+
+    if (owner_engine) {
+        owner_mul_forward_boundary(
+            tree_level, level_data,
+            owner_solve_records().at(level), owner_stats,
+            level_comm);
+    }
+
+    apply_CA_level_schedule(
+        tree_level,
+        level_data,
+        tree->dimension,
+        /*reverse_order=*/false,
+        /*writes_neighbors=*/false,
+        [&](auto& solve_box, bool is_ghost, auto&) {
+            fmm::apply_mul_forward_W(
+                tree_level,
+                solve_box,
+                level_data,
+                fmm::MatrixProperty::SYMMETRIC,
+                is_ghost);
+        },
+        [](size_t, size_t) {},
+        /*include_boundary=*/!owner_engine);
+    if (print_stats && owner_engine) {
+        owner_solve_print_stats(owner_stats, level, "mul-forward");
+    }
+    return comm;
+}
+
+// A CA level's step of the host solve or multiply: the multiply's backward V.
+// Returns the time of its gathers.
+template<typename CoordType, typename DataType>
+std::chrono::high_resolution_clock::duration CA_level_mul_backward(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    std::vector<SolveDataRequest<CoordType, DataType>>& level_data,
+    MPI_Comm level_comm,
+    bool print_stats) {
+    using clock = std::chrono::high_resolution_clock;
+    auto& tree_level = tree->levels[level];
+    clock::duration comm{};
+    auto get_data_start = clock::now();
+    const bool owner_engine = owner_solve_engine_level(level);
+    get_data_start = clock::now();
+    gather_CA_boxes_solve(
+        tree, level, level_data, level_comm);
+    comm += (clock::now() - get_data_start);
+
+    if (owner_engine) {
+        OwnerSolveStats owner_stats;
+        apply_CA_level_schedule(
+            tree_level,
+            level_data,
+            tree->dimension,
+            /*reverse_order=*/true,
+            /*writes_neighbors=*/true,
+            [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                fmm::apply_mul_backward_V_with_pending(
+                    tree_level,
+                    solve_box,
+                    level_data,
+                    fmm::MatrixProperty::SYMMETRIC,
+                    local_pending,
+                    is_ghost,
+                    /*local_or_ghost_targets_only=*/true);
+            },
+            [](size_t, size_t) {},
+            /*include_boundary=*/false);
+
+        get_data_start = clock::now();
+        gather_CA_boxes_solve(
+            tree, level, level_data, level_comm);
+        comm +=
+            (clock::now() - get_data_start);
+
+        owner_mul_backward_boundary(
+            tree_level, level_data,
+            owner_solve_records().at(level), owner_stats,
+            level_comm);
+        if (print_stats) {
+            owner_solve_print_stats(
+                owner_stats, level, "mul-backward");
+        }
+    } else {
+        apply_CA_level_schedule(
+            tree_level,
+            level_data,
+            tree->dimension,
+            /*reverse_order=*/true,
+            /*writes_neighbors=*/true,
+            [&](auto& solve_box, bool is_ghost, auto& local_pending) {
+                fmm::apply_mul_backward_V_with_pending(
+                    tree_level,
+                    solve_box,
+                    level_data,
+                    fmm::MatrixProperty::SYMMETRIC,
+                    local_pending,
+                    is_ghost,
+                    /*local_or_ghost_targets_only=*/true);
+            },
+            [&](size_t group_idx, size_t group_count) {
+                if (tree_level.num_active_processes > 1 &&
+                    group_idx + 1 < group_count) {
+                    get_data_start = clock::now();
+                    gather_CA_boxes_solve(
+                        tree, level, level_data, level_comm);
+                    comm +=
+                        (clock::now() - get_data_start);
+                }
+            });
+    }
+    return comm;
+}
+
 template<typename CoordType, typename DataType>
 void hierarchical_solve_parallel(
     ParallelTree<CoordType, DataType>* tree,
@@ -329,9 +867,19 @@ void hierarchical_solve_parallel(
     // Device solve (color_gpu/device_solve.hpp): decided collectively, with
     // the factors on the device from the first solve after a factorization.
     if constexpr (gpu::gpu_data_type<DataType>) {
+        // a CA level whose factors do not fit in device memory: its steps here
+        const gpu::HostLevelStep host_level = [&](int level, gpu::HostStep step) {
+            MPI_Comm level_comm = solve_comms.level[static_cast<size_t>(level)];
+            if (step == gpu::HostStep::SolveForward) {  // (the device sweeps: each level's diagonal after its forward)
+                CA_level_solve_forward(tree, level, solve_data[level], level_comm, false);
+                diagonal_solve_level(tree, level, solve_data[level], nrhs);
+            } else {
+                CA_level_solve_backward(tree, level, solve_data[level], level_comm, false);
+            }
+        };
         if (gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
                 hierarchical_solve_parallel(tree, rhs, host_data, nrhs, -1);
-            })) {
+            }, &solve_comms.level, &host_level)) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);
@@ -438,45 +986,10 @@ void hierarchical_solve_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
-            const bool owner_engine = owner_solve_engine_level(level);
-            OwnerSolveStats owner_stats;
-            MPI_Comm level_comm =
-                solve_comms.level[static_cast<size_t>(level)];
-            get_data_start = clock::now();
-            gather_CA_boxes_solve(
+            communication_total_forward += CA_level_solve_forward(
                 tree, level, solve_data[level],
-                level_comm);
-            communication_total_forward += (clock::now() - get_data_start);
-
-            if (owner_engine) {
-                owner_solve_forward_boundary(
-                    tree_level, solve_data[level],
-                    owner_solve_records().at(level), owner_stats,
-                    level_comm);
-            }
-
-            apply_CA_level_schedule(
-                tree_level,
-                solve_data[level],
-                tree->dimension,
-                /*reverse_order=*/false,
-                /*writes_neighbors=*/true,
-                [&](auto& solve_box, bool is_ghost, auto& local_pending) {
-                    apply_forward_elimination(
-                        tree_level,
-                        solve_box,
-                        solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
-                        local_pending,
-                        is_ghost,
-                        /*defer_local_updates=*/true,
-                        /*local_or_ghost_targets_only=*/true);
-                },
-                [](size_t, size_t) {},
-                /*include_boundary=*/!owner_engine);
-            if (print_detail && owner_engine && rank == level_print_rank) {
-                owner_solve_print_stats(owner_stats, level, "forward");
-            }
+                solve_comms.level[static_cast<size_t>(level)],
+                print_detail && rank == level_print_rank);
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
             const int max_forward_threads = std::max(1, omp_get_max_threads());
@@ -609,139 +1122,7 @@ void hierarchical_solve_parallel(
     
     // Solve all X_RR blocks (levels N-1 down to 2)
     for (int level = leaf_level; level >= 2; level--) {
-        auto& tree_level = tree->levels[level];
-        const int level_print_rank = smallest_active_rank(tree_level);
-        // std::cout << "  Diagonal solves before from rank: " << rank << std::endl;
-        if (!tree_level.is_process_active) {
-            continue;
-        }
-
-        std::exception_ptr diagonal_exception;
-        std::mutex diagonal_exception_mutex;
-        std::atomic<bool> diagonal_failed{false};
-
-        #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-        {
-            int64_t local_diagonal_solves = 0;
-
-            #pragma omp for schedule(static)
-            for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
-                if (diagonal_failed.load(std::memory_order_relaxed)) {
-                    continue;
-                }
-
-                try {
-                    auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
-                    auto& solve_box = solve_data[level][static_cast<size_t>(box_idx)];
-
-                    if (box.redundant_indices.empty()) {
-                        continue;
-                    }
-
-                    int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-                    std::vector<DataType> b_R(
-                        static_cast<size_t>(r * nrhs));
-                    for (int column = 0; column < nrhs; ++column) {
-                        for (int64_t i = 0; i < r; ++i) {
-                            b_R[static_cast<size_t>(
-                                i + static_cast<int64_t>(column) * r)] =
-                                solve_box.left_side[static_cast<size_t>(
-                                    box.redundant_indices[static_cast<size_t>(i)] +
-                                    static_cast<int64_t>(column) *
-                                        solve_box.num_points)];
-                        }
-                    }
-
-                    if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
-                        char uplo = 'L';
-                        int n = static_cast<int>(r), rhs_columns = nrhs;
-                        int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-
-                        if constexpr (std::is_same_v<DataType, double>) {
-                            dpotrs_(&uplo, &n, &rhs_columns,
-                                    box.X_RR.data.data(), &lda,
-                                    b_R.data(), &ldb, &info);
-                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zsychol_solve_(&uplo, &n, &rhs_columns,
-                                           box.X_RR.data.data(), &lda,
-                                           b_R.data(), &ldb, &info);
-                        }
-
-                        if (info != 0) {
-                            throw std::runtime_error("Diagonal solve failed for X_RR");
-                        }
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
-                        if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
-                            throw std::runtime_error("Diagonal solve missing LU pivots for X_RR");
-                        }
-
-                        char trans = 'N';
-                        int n = static_cast<int>(r), rhs_columns = nrhs;
-                        int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-
-                        if constexpr (std::is_same_v<DataType, double>) {
-                            dgetrs_(&trans, &n, &rhs_columns,
-                                    box.X_RR.data.data(), &lda,
-                                    box.X_RR_pivots.data(),
-                                    b_R.data(), &ldb, &info);
-                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zgetrs_(&trans, &n, &rhs_columns,
-                                    box.X_RR.data.data(), &lda,
-                                    box.X_RR_pivots.data(),
-                                    b_R.data(), &ldb, &info);
-                        }
-
-                        if (info != 0) {
-                            throw std::runtime_error("LU diagonal solve failed for X_RR");
-                        }
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
-                        if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
-                            throw std::runtime_error("Diagonal solve missing Bunch-Kaufman pivots for X_RR");
-                        }
-
-                        char uplo = 'L';
-                        int n = static_cast<int>(r), rhs_columns = nrhs;
-                        int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
-                        std::vector<DataType> work(
-                            static_cast<size_t>(std::max(n, 1)));
-                        sytrs2_(&uplo, &n, &rhs_columns,
-                                box.X_RR.data.data(), &lda,
-                                box.X_RR_pivots.data(),
-                                b_R.data(), &ldb, work.data(), &info);
-                        if (info != 0) {
-                            throw std::runtime_error("Bunch-Kaufman diagonal solve failed for X_RR");
-                        }
-                    } else {
-                        throw std::runtime_error("Unsupported X_RR format in diagonal solve");
-                    }
-
-                    for (int column = 0; column < nrhs; ++column) {
-                        for (int64_t i = 0; i < r; ++i) {
-                            solve_box.left_side[static_cast<size_t>(
-                                box.redundant_indices[static_cast<size_t>(i)] +
-                                static_cast<int64_t>(column) *
-                                    solve_box.num_points)] =
-                                b_R[static_cast<size_t>(
-                                    i + static_cast<int64_t>(column) * r)];
-                        }
-                    }
-
-                    local_diagonal_solves++;
-                } catch (...) {
-                    if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
-                        diagonal_exception = std::current_exception();
-                    }
-                }
-            }
-
-            #pragma omp atomic
-            num_diagonal_solves += local_diagonal_solves;
-        }
-
-        if (diagonal_exception) {
-            std::rethrow_exception(diagonal_exception);
-        }
+        num_diagonal_solves += diagonal_solve_level(tree, level, solve_data[level], nrhs);
     }
     
     // Solve root X_RR (level 0)
@@ -817,68 +1198,10 @@ void hierarchical_solve_parallel(
         
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
-            const bool owner_engine = owner_solve_engine_level(level);
-            MPI_Comm level_comm =
-                solve_comms.level[static_cast<size_t>(level)];
-            if (owner_engine) {
-                OwnerSolveStats owner_stats;
-                apply_CA_level_schedule(
-                    tree_level,
-                    solve_data[level],
-                    tree->dimension,
-                    /*reverse_order=*/true,
-                    /*writes_neighbors=*/false,
-                    [&](auto& solve_box, bool is_ghost, auto&) {
-                        apply_backward_substitution(
-                            tree_level,
-                            solve_box,
-                            solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
-                            is_ghost);
-                    },
-                    [](size_t, size_t) {},
-                    /*include_boundary=*/false);
-
-                get_data_start = clock::now();
-                gather_CA_boxes_solve(
-                    tree, level, solve_data[level], level_comm);
-                communication_total_backward +=
-                    (clock::now() - get_data_start);
-
-                owner_solve_backward_boundary(
-                    tree_level, solve_data[level],
-                    owner_solve_records().at(level), owner_stats,
-                    level_comm);
-                if (print_detail && rank == level_print_rank) {
-                    owner_solve_print_stats(owner_stats, level, "backward");
-                }
-            } else {
-                apply_CA_level_schedule(
-                    tree_level,
-                    solve_data[level],
-                    tree->dimension,
-                    /*reverse_order=*/true,
-                    /*writes_neighbors=*/false,
-                    [&](auto& solve_box, bool is_ghost, auto&) {
-                        apply_backward_substitution(
-                            tree_level,
-                            solve_box,
-                            solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
-                            is_ghost);
-                    },
-                    [&](size_t group_idx, size_t group_count) {
-                        if (tree_level.num_active_processes > 1 &&
-                            group_idx + 1 < group_count) {
-                            get_data_start = clock::now();
-                            gather_CA_boxes_solve(
-                                tree, level, solve_data[level], level_comm,
-                                /*assist_only=*/group_idx > 0);
-                            communication_total_backward +=
-                                (clock::now() - get_data_start);
-                        }
-                    });
-            }
+            communication_total_backward += CA_level_solve_backward(
+                tree, level, solve_data[level],
+                solve_comms.level[static_cast<size_t>(level)],
+                print_detail && rank == level_print_rank);
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
@@ -1166,9 +1489,19 @@ void hierarchical_mul_parallel(
 #ifdef H2_HAVE_GPU
     // Device multiply (color_gpu/device_solve.hpp), with the solve's factors.
     if constexpr (gpu::gpu_data_type<DataType>) {
+        // a CA level whose factors do not fit in device memory: its steps here
+        const gpu::HostLevelStep host_level = [&](int level, gpu::HostStep step) {
+            MPI_Comm level_comm = solve_comms.level[static_cast<size_t>(level)];
+            if (step == gpu::HostStep::MulForward) {  // (the device sweeps: each level's diagonal after its forward)
+                CA_level_mul_forward(tree, level, solve_data[level], level_comm, false);
+                diagonal_mul_level(tree, level, solve_data[level], nrhs);
+            } else {
+                CA_level_mul_backward(tree, level, solve_data[level], level_comm, false);
+            }
+        };
         if (gpu::run_device_solve(tree, solve_data, nrhs, true, verbose ? 1 : -1, [&](auto& host_data) {
                 hierarchical_mul_parallel(tree, input_vec, host_data, nrhs, false);
-            })) {
+            }, &solve_comms.level, &host_level)) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);
@@ -1196,42 +1529,10 @@ void hierarchical_mul_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
-            const bool owner_engine = owner_solve_engine_level(level);
-            OwnerSolveStats owner_stats;
-            MPI_Comm level_comm =
-                solve_comms.level[static_cast<size_t>(level)];
-            get_data_start = clock::now();
-            gather_CA_boxes_solve(
+            communication_total_forward += CA_level_mul_forward(
                 tree, level, solve_data[level],
-                level_comm);
-            communication_total_forward += (clock::now() - get_data_start);
-
-            if (owner_engine) {
-                owner_mul_forward_boundary(
-                    tree_level, solve_data[level],
-                    owner_solve_records().at(level), owner_stats,
-                    level_comm);
-            }
-
-            apply_CA_level_schedule(
-                tree_level,
-                solve_data[level],
-                tree->dimension,
-                /*reverse_order=*/false,
-                /*writes_neighbors=*/false,
-                [&](auto& solve_box, bool is_ghost, auto&) {
-                    fmm::apply_mul_forward_W(
-                        tree_level,
-                        solve_box,
-                        solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
-                        is_ghost);
-                },
-                [](size_t, size_t) {},
-                /*include_boundary=*/!owner_engine);
-            if (verbose && owner_engine && rank == level_print_rank) {
-                owner_solve_print_stats(owner_stats, level, "mul-forward");
-            }
+                solve_comms.level[static_cast<size_t>(level)],
+                verbose && rank == level_print_rank);
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 
@@ -1331,123 +1632,7 @@ void hierarchical_mul_parallel(
     int64_t num_diagonal_muls = 0;
 
     for (int level = leaf_level; level >= 2; level--) {
-        auto& tree_level = tree->levels[level];
-        if (!tree_level.is_process_active) continue;
-
-        std::exception_ptr diagonal_exception;
-        std::mutex diagonal_exception_mutex;
-        std::atomic<bool> diagonal_failed{false};
-
-        #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-        {
-            int64_t local_diagonal_muls = 0;
-
-            #pragma omp for schedule(static)
-            for (int64_t box_idx = 0; box_idx < tree_level.num_boxes_local; ++box_idx) {
-                if (diagonal_failed.load(std::memory_order_relaxed)) continue;
-
-                try {
-                    auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
-                    auto& solve_box = solve_data[level][static_cast<size_t>(box_idx)];
-
-                    if (box.redundant_indices.empty()) continue;
-
-                    int64_t r = static_cast<int64_t>(box.redundant_indices.size());
-                    std::vector<DataType> x_R(
-                        static_cast<size_t>(r * nrhs));
-                    for (int column = 0; column < nrhs; ++column) {
-                        for (int64_t i = 0; i < r; ++i) {
-                            x_R[static_cast<size_t>(
-                                i + static_cast<int64_t>(column) * r)] =
-                                solve_box.left_side[static_cast<size_t>(
-                                    box.redundant_indices[static_cast<size_t>(i)] +
-                                    static_cast<int64_t>(column) *
-                                        solve_box.num_points)];
-                        }
-                    }
-
-                    int n = static_cast<int>(r);
-                    int rhs_columns = nrhs;
-                    int ldb = n;
-                    char side = 'L';
-                    DataType one = DataType{1};
-
-                    if (box.X_RR.format == MatrixStorage<DataType>::CHOLESKY_L) {
-                        char uplo = 'L', diag_N = 'N';
-                        int lda = static_cast<int>(r);
-
-                        char trans_T = 'T';
-                        trmm_(&side, &uplo, &trans_T, &diag_N,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                        char trans_N = 'N';
-                        trmm_(&side, &uplo, &trans_N, &diag_N,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::LU_FACTORED) {
-                        if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
-                            throw std::runtime_error("Diagonal multiply missing LU pivots");
-                        }
-                        int lda = static_cast<int>(r);
-
-                        char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-                        trmm_(&side, &uplo_U, &trans_N, &diag_N,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                        char uplo_L = 'L', diag_U = 'U';
-                        trmm_(&side, &uplo_L, &trans_N, &diag_U,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                        int k1 = 1, k2 = n, inc_rev = -1;
-                        if constexpr (std::is_same_v<DataType, double>) {
-                            dlaswp_(&rhs_columns, x_R.data(), &n,
-                                    &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
-                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zlaswp_(&rhs_columns, x_R.data(), &n,
-                                    &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
-                        }
-                    } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
-                        if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
-                            throw std::runtime_error("Diagonal multiply missing Bunch-Kaufman pivots");
-                        }
-                        fmm::bunch_kaufman_multiply(
-                            n, box.X_RR.data.data(), n,
-                            box.X_RR_pivots.data(), x_R.data(), n, nrhs);
-                    } else {
-                        throw std::runtime_error("Diagonal multiply: unsupported X_RR format");
-                    }
-
-                    for (int column = 0; column < nrhs; ++column) {
-                        for (int64_t i = 0; i < r; ++i) {
-                            solve_box.left_side[static_cast<size_t>(
-                                box.redundant_indices[static_cast<size_t>(i)] +
-                                static_cast<int64_t>(column) *
-                                    solve_box.num_points)] =
-                                x_R[static_cast<size_t>(
-                                    i + static_cast<int64_t>(column) * r)];
-                        }
-                    }
-
-                    local_diagonal_muls++;
-                } catch (...) {
-                    if (!diagonal_failed.exchange(true, std::memory_order_relaxed)) {
-                        std::lock_guard<std::mutex> lock(diagonal_exception_mutex);
-                        diagonal_exception = std::current_exception();
-                    }
-                }
-            }
-
-            #pragma omp atomic
-            num_diagonal_muls += local_diagonal_muls;
-        }
-
-        if (diagonal_exception) {
-            std::rethrow_exception(diagonal_exception);
-        }
+        num_diagonal_muls += diagonal_mul_level(tree, level, solve_data[level], nrhs);
     }
 
     // Root X_RR multiply
@@ -1501,77 +1686,10 @@ void hierarchical_mul_parallel(
 
         if (level >= 2 && tree_level.is_process_active &&
             tree->level_uses_CA(level)) {
-            const bool owner_engine = owner_solve_engine_level(level);
-            MPI_Comm level_comm =
-                solve_comms.level[static_cast<size_t>(level)];
-            get_data_start = clock::now();
-            gather_CA_boxes_solve(
-                tree, level, solve_data[level], level_comm);
-            communication_total_backward += (clock::now() - get_data_start);
-
-            if (owner_engine) {
-                OwnerSolveStats owner_stats;
-                apply_CA_level_schedule(
-                    tree_level,
-                    solve_data[level],
-                    tree->dimension,
-                    /*reverse_order=*/true,
-                    /*writes_neighbors=*/true,
-                    [&](auto& solve_box, bool is_ghost, auto& local_pending) {
-                        fmm::apply_mul_backward_V_with_pending(
-                            tree_level,
-                            solve_box,
-                            solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
-                            local_pending,
-                            is_ghost,
-                            /*local_or_ghost_targets_only=*/true);
-                    },
-                    [](size_t, size_t) {},
-                    /*include_boundary=*/false);
-
-                get_data_start = clock::now();
-                gather_CA_boxes_solve(
-                    tree, level, solve_data[level], level_comm);
-                communication_total_backward +=
-                    (clock::now() - get_data_start);
-
-                owner_mul_backward_boundary(
-                    tree_level, solve_data[level],
-                    owner_solve_records().at(level), owner_stats,
-                    level_comm);
-                if (verbose && rank == level_print_rank) {
-                    owner_solve_print_stats(
-                        owner_stats, level, "mul-backward");
-                }
-            } else {
-                apply_CA_level_schedule(
-                    tree_level,
-                    solve_data[level],
-                    tree->dimension,
-                    /*reverse_order=*/true,
-                    /*writes_neighbors=*/true,
-                    [&](auto& solve_box, bool is_ghost, auto& local_pending) {
-                        fmm::apply_mul_backward_V_with_pending(
-                            tree_level,
-                            solve_box,
-                            solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
-                            local_pending,
-                            is_ghost,
-                            /*local_or_ghost_targets_only=*/true);
-                    },
-                    [&](size_t group_idx, size_t group_count) {
-                        if (tree_level.num_active_processes > 1 &&
-                            group_idx + 1 < group_count) {
-                            get_data_start = clock::now();
-                            gather_CA_boxes_solve(
-                                tree, level, solve_data[level], level_comm);
-                            communication_total_backward +=
-                                (clock::now() - get_data_start);
-                        }
-                    });
-            }
+            communication_total_backward += CA_level_mul_backward(
+                tree, level, solve_data[level],
+                solve_comms.level[static_cast<size_t>(level)],
+                verbose && rank == level_print_rank);
         } else if (level >= 2 && tree_level.is_process_active) {
             const int num_colors = 1 << tree->dimension;
 

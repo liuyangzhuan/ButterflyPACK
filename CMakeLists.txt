@@ -560,6 +560,19 @@ if (enable_h2_gpu)
                                     h2_parallel/color_gpu/emsurf_blocks.cu)
   set_target_properties(h2_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(h2_gpu_kernels PRIVATE H2_HAVE_GPU)
+  # --fmad=false (no fused multiply-add contraction) for the device ID only
+  # (device_id.cu), needed only by GPU H2 CA0 (replicated CA levels,
+  # H2_CA_owner_component 0): a ghost box is eliminated again on each rank
+  # that holds it and must give bitwise the same skeleton and factors as its
+  # owner's copy, while the device ID picks its launch variant (256 or 1024
+  # threads, cooperative) per batch.  Whether a*b+c is contracted to an FMA
+  # (one rounding instead of two) is the compiler's choice per template
+  # instance, so the variants could round differently; without contraction
+  # they give the same bits.  The flag applies to the whole file, so the
+  # device ID of Color levels also runs without FMA (a small cost, no
+  # accuracy effect); other GPU kernels and CPU code are not affected.
+  set_source_files_properties(h2_parallel/color_gpu/device_id.cu PROPERTIES
+                              COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
   set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels>)
 endif()
 
@@ -589,6 +602,12 @@ endif()
 
 if (enable_h2_gpu)
   target_link_libraries(butterflypack PUBLIC ${H2_GPU_LIB})
+  # Batch-independence test of the GPU kernels (h2_parallel/color_gpu/
+  # GPU_CA_PLAN.md, M1.1); not built by default: make h2_gpu_batch_determinism
+  add_executable(h2_gpu_batch_determinism EXCLUDE_FROM_ALL
+                 h2_parallel/color_gpu/tests/batch_determinism.cpp)
+  target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
+  target_link_libraries(h2_gpu_batch_determinism butterflypack)
 endif()
 
 set_target_properties(butterflypack PROPERTIES

@@ -279,6 +279,17 @@ void getrf_vbatched(magma_int_t max_n, magma_int_t* d_m, magma_int_t* d_n, DataT
     }
 }
 
+// Size class of a batched LU (and of the solves with its factors): the next
+// power of two, at least 32.  Launched per class with max_n = the class, a
+// matrix's factors do not depend on its batch companions (MAGMA's blocking
+// follows max_n; tests/batch_determinism.cpp).  (Classes under 32 would load
+// MAGMA kernels of their own at first use, a one-time ~0.3 s.)
+inline int lu_size_class(int n) {
+    int c = 32;
+    while (c < n) c *= 2;
+    return c;
+}
+
 // Device time between consecutive marks on a stream, read after the stream
 // has been synchronized (no extra synchronization).
 class StreamMarks {
@@ -402,6 +413,28 @@ inline bool device_exchange_enabled() {
         const char* off = std::getenv("H2_GPU_DEVICE_EXCHANGE");
         if (off != nullptr && std::atoi(off) == 0) return false;
         return set("MPICH_GPU_SUPPORT_ENABLED") || set("H2_GPU_AWARE_MPI");
+    }();
+    return enabled;
+}
+
+// H2_GPU_CA_DEVICE_HALO=0: a device CA level after another device level
+// gets its blocks through the host (the transition downloads them, the host
+// halo gather moves them); by default they stay on the device and the
+// ghosts' blocks move between the devices (color_gpu/ca_halo.hpp).
+inline bool ca_device_halo_enabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("H2_GPU_CA_DEVICE_HALO");
+        return v == nullptr || std::atoi(v) != 0;
+    }();
+    return enabled;
+}
+
+// H2_CA_REPLICA_CHECK=1: on a replicated CA level, every ghost copy of a box
+// is compared (by a hash of its factors) with its owner's.
+inline bool ca_replica_check_enabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("H2_CA_REPLICA_CHECK");
+        return v != nullptr && std::atoi(v) != 0;
     }();
     return enabled;
 }

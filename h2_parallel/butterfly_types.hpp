@@ -252,7 +252,16 @@ struct H2Kernel {
             throw std::runtime_error(
                 "H2Kernel::register_points: inconsistent point metadata");
         }
-        coordinate_cache.reserve(coordinate_cache.size() + indices.size());
+        // Grow geometrically, and only when needed: reserve(size() + n) per
+        // call rehashes the whole cache whenever it changes the bucket count,
+        // shrinking included (libstdc++), which made a few registrations per
+        // transport cost seconds once the cache held millions of points.
+        const size_t needed = coordinate_cache.size() + indices.size();
+        if (static_cast<double>(needed) >
+            static_cast<double>(coordinate_cache.bucket_count()) *
+                coordinate_cache.max_load_factor()) {
+            coordinate_cache.reserve(std::max(needed, 2 * coordinate_cache.size()));
+        }
         for (size_t point = 0; point < indices.size(); ++point) {
             std::array<CoordType, 3> coordinate{CoordType(0), CoordType(0),
                                                 CoordType(0)};

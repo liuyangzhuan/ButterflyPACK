@@ -762,6 +762,89 @@ void factorize_CA_level(
     }
 }
 
+#ifdef H2_HAVE_GPU
+// A replicated CA level on the device (color_gpu/GPU_CA_PLAN.md, M1): the
+// schedule of factorize_CA_level (its groups, each in Morton-parity waves,
+// with the same wave numbers), every wave eliminated by the GPU driver.  The
+// ghost boxes are eliminated along with the local ones; nothing is sent
+// during the level.
+template<typename CoordType, typename DataType, typename KernelType>
+void factorize_CA_level_gpu(
+    fmm::ParallelTree<CoordType, DataType>* tree,
+    int current_level,
+    gpu::ColorGpuDriver<CoordType, DataType, KernelType>& gpu_driver,
+    int64_t& total_skeleton,
+    int64_t& total_redundant,
+    int64_t& local_max_skel,
+    bool print_detail,
+    int level_print_rank) {
+    auto& level = tree->levels[current_level];
+    const int dimension = tree->dimension;
+    const int num_waves = 1 << dimension;
+
+    std::vector<std::string> group_names;
+    std::vector<std::vector<int64_t>> groups;
+    std::vector<int64_t> interior;
+    interior.reserve(level.interior_id.size());
+    for (int64_t local_idx : level.interior_id) {
+        interior.push_back(local_idx + level.local_morton_start);
+    }
+    if (level.num_active_processes == 1) {
+        std::vector<int64_t> boundary;
+        for (int64_t local_idx : level.boundary_id) {
+            boundary.push_back(local_idx + level.local_morton_start);
+        }
+        group_names = {"boundary", "interior"};
+        groups = {std::move(boundary), std::move(interior)};
+    } else {
+        std::vector<int64_t> blue_orange = level.blue;
+        blue_orange.insert(blue_orange.end(), level.orange.begin(), level.orange.end());
+        group_names.push_back("blue/orange");
+        groups.push_back(std::move(blue_orange));
+        if (dimension == 3) {
+            group_names.push_back("purple");
+            groups.push_back(level.purple);
+        }
+        group_names.push_back("green");
+        groups.push_back(level.green);
+        group_names.push_back("interior");
+        groups.push_back(std::move(interior));
+    }
+
+    for (size_t group_idx = 0; group_idx < groups.size(); ++group_idx) {
+        const auto& group = groups[group_idx];
+        if (print_detail && tree->mpi_rank == level_print_rank) {
+            std::cout << "  Processing CA " << group_names[group_idx] << " group ("
+                      << group.size() << " boxes, device)..." << std::endl;
+        }
+        std::vector<std::vector<int64_t>> waves(static_cast<size_t>(num_waves));
+        for (int64_t morton : group) {
+            waves[static_cast<size_t>(morton & (num_waves - 1))].push_back(morton);
+        }
+        if (group_names[group_idx] == "interior") {
+            clear_ghosts(level);
+        }
+        for (size_t wave_idx = 0; wave_idx < waves.size(); ++wave_idx) {
+            const auto& wave = waves[wave_idx];
+            if (wave.empty()) continue;
+            const int32_t wave_sequence =
+                static_cast<int32_t>(group_idx) * num_waves + static_cast<int32_t>(wave_idx);
+            gpu_driver.eliminate_wave(wave, wave_sequence);
+            for (int64_t morton : wave) {
+                level.eliminated_boxes.insert(morton);
+                level.elimination_wave[morton] = wave_sequence;
+            }
+        }
+    }
+
+    for (const auto& box : level.local_boxes) {
+        total_skeleton += static_cast<int64_t>(box.skeleton_indices.size());
+        total_redundant += static_cast<int64_t>(box.redundant_indices.size());
+        local_max_skel = std::max<int64_t>(local_max_skel, box.skeleton_indices.size());
+    }
+}
+#endif
+
 /**
  * @brief Hierarchical factorization routine (parallel)
  * 
@@ -941,7 +1024,12 @@ void hierarchical_factorization_parallel(
     gpu_options.lazy_schur = lazy_schur;
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
+    gpu_options.ca_owner_component = ca_owner_component;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
+    if (const double warm = gpu_driver.warm_up(); warm > 0.0 && print_summary && rank == 0) {
+        std::printf("  [gpu] kernel warm-up (H2_GPU_WARMUP=1): %.2f s, before the levels\n", warm);
+        std::fflush(stdout);
+    }
 #endif
 
     for (int current_level = leaf_level; current_level >= 1; current_level--) {
@@ -999,6 +1087,15 @@ void hierarchical_factorization_parallel(
         OwnerScheduleState<CoordType, DataType> owner_schedule;
         StagedHaloState<CoordType, DataType> staged_state;
         bool staged_overlap_scheduling = false;
+        // A replicated CA level the device may run (color_gpu/GPU_CA_PLAN.md,
+        // M1): its halo arrives whole before the elimination (no staged
+        // overlap); start_ca_level confirms it after the gather.
+        bool gpu_ca_candidate = false;
+        bool ca_on_device = false;  // the device eliminates this CA level
+#ifdef H2_HAVE_GPU
+        gpu_ca_candidate = level.is_process_active && current_level > 1 &&
+                           gpu_driver.ca_level_runs(current_level, ca_owner_component);
+#endif
         if (level.is_process_active && use_CA_level &&
             current_level > 1 && level.num_active_processes > 1 &&
             ca_owner_component == 3) {
@@ -1017,6 +1114,7 @@ void hierarchical_factorization_parallel(
 
         if (level.is_process_active && use_CA_level) {
             segment_start = clock::now();
+            CAGatherTimes gather_times;
             FactorizationMemoryDiagnosticCallback gather_memory_diagnostic;
             if (memory_diagnostics.enabled()) {
                 gather_memory_diagnostic =
@@ -1037,7 +1135,8 @@ void hierarchical_factorization_parallel(
 
                 const bool overlap_ok =
                     current_level > 1 &&
-                    lazy_far_field_mode() == LazyFarFieldMode::LAZY;
+                    lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
+                    !gpu_ca_candidate;
                 if (overlap_ok) {
                     build_staged_stage_map(
                         level, level.staged_stage_map);
@@ -1068,7 +1167,7 @@ void hierarchical_factorization_parallel(
                 gather_CA_factorization_data(
                     tree, current_level, level_comm,
                     is_symmetric && !is_hermitian,
-                    gather_memory_diagnostic);
+                    gather_memory_diagnostic, &gather_times);
             }
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
@@ -1076,7 +1175,16 @@ void hierarchical_factorization_parallel(
                 std::cout << "  CA initial ghost/assisting gather time: "
                           << std::chrono::duration_cast<std::chrono::milliseconds>(
                                  gather_duration).count()
-                          << " ms" << std::endl;
+                          << " ms";
+                if (ca_staged_halo != 2) {
+                    auto ms = [](double s) { return static_cast<long long>(s * 1e3 + 0.5); };
+                    std::cout << " (plan " << ms(gather_times.plan) << " [first collective "
+                              << ms(gather_times.first_collective) << "], request sets "
+                              << ms(gather_times.request_sets) << ", payloads " << ms(gather_times.payloads)
+                              << ", symmetric halo " << ms(gather_times.reconstruct) << ", assisting "
+                              << ms(gather_times.assisting) << ")";
+                }
+                std::cout << std::endl;
             }
         }
 
@@ -1157,7 +1265,22 @@ void hierarchical_factorization_parallel(
 
             auto elim_start = std::chrono::high_resolution_clock::now();
 
-            if (use_CA_level) {
+#ifdef H2_HAVE_GPU
+            if (use_CA_level && gpu_ca_candidate &&
+                gpu_driver.start_ca_level(current_level, level_comm, print_detail && rank == level_print_rank)) {
+                factorize_CA_level_gpu(
+                    tree, current_level, gpu_driver,
+                    total_skeleton, total_redundant, local_max_skel,
+                    print_detail, level_print_rank);
+                // the factors' host copies (the solve's, ghosts' too), as a Color level
+                PendingFactorUpdates<DataType> no_updates;
+                gpu_driver.finish_level(current_level, no_updates, level_comm,
+                                        print_detail && rank == level_print_rank);
+                gpu::device_solve_store().ca_levels.insert(current_level);  // the device solve runs it (M4b)
+                ca_on_device = true;
+            }
+#endif
+            if (use_CA_level && !ca_on_device) {
                 factorize_CA_level(
                     tree, current_level, kernel, tolerance,
                     use_sketch,
@@ -1167,7 +1290,7 @@ void hierarchical_factorization_parallel(
                     print_detail, level_print_rank, &memory_diagnostics,
                     &owner_schedule, &staged_state,
                     staged_overlap_scheduling);
-            } else {
+            } else if (!use_CA_level) {
                 const int num_colors = 1 << dimension;
 
             // ----------------------------------------------------------------
@@ -1945,14 +2068,35 @@ void hierarchical_factorization_parallel(
                             pending, 0, 0, communication);
                     };
             }
-            gather_CA_assisting_boxes_factorization(
-                tree, current_level, level_comm, 412,
-                assisting_memory_diagnostic);
+            // (only the skeletons are new: over the assisting gather's plan)
+            if (!refresh_CA_assisting_skeletons(
+                    tree, current_level, level_comm, 412)) {
+                gather_CA_assisting_boxes_factorization(
+                    tree, current_level, level_comm, 412,
+                    assisting_memory_diagnostic);
+            }
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
-            update_neighbor_slicing_for_level(
-                level, is_symmetric,
-                /*use_received_assisting_skeletons=*/true);
+            if (!ca_on_device) {  // (the device transition slices its own blocks)
+                update_neighbor_slicing_for_level(
+                    level, is_symmetric,
+                    /*use_received_assisting_skeletons=*/true);
+            }
+#ifdef H2_HAVE_GPU
+            if (ca_on_device) {
+                // the assisting boxes' skeletons, for the device transition,
+                // and for the device solve (the level clears its copy)
+                gpu_driver.refresh_remote_skeletons();
+                auto& assisting = gpu::device_solve_store().ca_assisting[current_level];
+                for (const auto& a : level.assisting_boxes) {
+                    auto& rec = assisting[a.morton_index];
+                    rec.n = static_cast<int>(a.indices.size());
+                    rec.skeleton.assign(a.skel_indices.begin(), a.skel_indices.end());
+                }
+                gpu_driver.check_ca_replicas(current_level, level_comm,
+                                             print_detail && rank == level_print_rank);
+            }
+#endif
             if (print_detail && rank == level_print_rank) {
                 std::cout << "  CA post-elimination assisting gather time: "
                           << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2023,7 +2167,7 @@ void hierarchical_factorization_parallel(
                 return build_parent_level_structure(
                     level, tree->levels[current_level - 1], dimension, tree->global_bounds);
             },
-            print_detail && rank == level_print_rank);
+            print_detail && rank == level_print_rank, level_comm);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes = build_parent_level_interactions<CoordType, DataType, KernelType>(

@@ -22,6 +22,18 @@
 // fill, owner-deferred X_NN updates, LU of X_RR.  Complex data is symmetric,
 // not Hermitian: every transpose is plain.  The arithmetic matches the CPU
 // path up to rounding (GEMM summation order differs).
+//
+// Replicated CA levels (`ca`, color_gpu/GPU_CA_PLAN.md M1): the ghost boxes
+// the halo brought in are eliminated here as well (writable boxes: point
+// slots, Schur and near blocks on the device; their blocks from the host
+// halo gather, or, after another device level, adopted from the device halo
+// of color_gpu/ca_halo.hpp, M2), in the CA groups' waves; nothing is
+// transported during the level (no generators);
+// a pair of writable boxes is updated once, into its single block.  Every
+// copy of a box, on its owner and on the ranks holding it as a ghost, must
+// come out bitwise identical: the device ID is (every launch variant gives
+// the same bits), and the X_RR LU and its solves run per size class
+// (tests/batch_determinism.cpp).
 
 #ifdef H2_HAVE_GPU
 
@@ -49,6 +61,7 @@
 #include <random>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -73,8 +86,14 @@ struct EliminatorStats {
     double finish_store = 0.0;    // background copier: busy time (overlapped)
     double copier_wait = 0.0;     //   ... of which waiting for device chunks
     double id = 0.0;          // host ID (and host sketch without the device sketch)
+    double id_loop = 0.0;     //   ... device ID: its per-box store loop
     double plan = 0.0;        // host planning and metadata
     double plan_boxes = 0.0, plan_owner = 0.0;  //   ... box region, owner pass
+    // their parts: buffers (layouts and allocations), launch items (of which
+    // the near blocks' allocations); owner candidates, pairs (parallel, with
+    // a CA level's order by source), the join (new targets), batches
+    double pb_buffers = 0.0, pb_items = 0.0, pb_near_alloc = 0.0;
+    double po_candidates = 0.0, po_pairs = 0.0, po_order = 0.0, po_batches = 0.0;
     double reclaim_wait = 0.0;    // full heap: waits for background copies to free blocks
     double exchange_wait = 0.0;   // full exchange arena: waits for receive buffers' host copies
     double launch = 0.0;                        // host time issuing a wave's device work
@@ -157,11 +176,19 @@ public:
     // MPI time.
     virtual bool device_exchange() const = 0;
     virtual std::chrono::high_resolution_clock::duration exchange() = 0;
+    virtual void refresh_remote_skeletons() = 0;
     // The solve's factors copied to a device block as each wave produces
     // them (device_solve.hpp), while the heap has room: whether this rank
     // still holds all of the level's, then the verdict all ranks agreed on.
     virtual bool solve_factors_kept() const = 0;
     virtual void commit_solve_factors(bool keep) = 0;
+    // Before the waves, the level's keep verdict (all ranks alike, from an
+    // upper bound of the factors' bytes; device_solve.hpp solve_keep_bound):
+    // a level that keeps them skips the host copies of their X_NR.
+    virtual void set_solve_keep(bool keep) { (void)keep; }
+    // The host copies of the X_NR whose download was skipped, before a host
+    // transition reads them.
+    virtual void restore_host_copies() {}
     virtual std::unique_ptr<DeviceLevelBlocks<DataType>> build_parent(
         std::vector<BoxData<CoordType, DataType>>& parents) = 0;
 };
@@ -169,8 +196,11 @@ public:
 // The device box path covers this level (the caller has already selected a
 // streamed, lazy, owner-deferred Color level).
 template<typename CoordType, typename DataType, typename KernelType>
+// `lazy_schur` >= 0: the level's H2_lazy_schur mode, for a level ahead (the
+// runtime is still configured for the current one); -1: the runtime's.
 bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, const KernelType* kernel,
-                                int dimension, FactorizationMethod method, std::string* reason) {
+                                int dimension, FactorizationMethod method, std::string* reason, bool ca = false,
+                                int lazy_schur = -1) {
     auto fail = [&](const char* why) {
         if (reason) *reason = why;
         return false;
@@ -181,10 +211,17 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
     const char* why = nullptr;
     if (!device_kernel_registered<DataType>(kernel->gpu_spec, &why)) return fail(why);
     if (method != FactorizationMethod::LU) return fail("X_RR is factored by LU on the GPU (use H2_XRR_factor=1)");
+    const bool lazy_far = lazy_schur < 0 ? lazy_far_field_mode() == LazyFarFieldMode::LAZY : lazy_schur > 0;
+    const bool generator_near = lazy_schur < 0 ? generator_near_enabled() : lazy_schur > 1;
+    if (ca) {
+        // replicated CA: lazy far fill, explicit near updates (lazy mode 1)
+        if (!lazy_far) return fail("CA levels need H2_lazy_schur >= 1");
+        return true;
+    }
     if (level.num_active_processes != 1) {
         // other ranks exchange lazy generators only (generated near blocks)
-        if (!level.ghost_boxes.empty()) return fail("ghost boxes (CA levels) are not ported");
-        if (!(generator_near_enabled() && lazy_far_field_mode() == LazyFarFieldMode::LAZY)) {
+        if (!level.ghost_boxes.empty()) return fail("ghost boxes outside a CA level");
+        if (!(generator_near && lazy_far)) {
             return fail("multi-rank levels need H2_lazy_schur=2");
         }
     }
@@ -220,16 +257,20 @@ public:
     // slabs also hold empty boxes; they are never in a wave nor one hop from
     // a box, and stay eliminated with an empty skeleton.  Its transports
     // follow the unstructured host transport's protocol (exchange()).
+    // ca: a replicated CA level (see the notes at the top).
     LevelEliminator(Tree* tree, int level_index, KernelType* kernel, double tolerance,
-                    std::unique_ptr<Blocks> adopt = nullptr, bool occupancy = false, bool device_sketch = true)
+                    std::unique_ptr<Blocks> adopt = nullptr, bool occupancy = false, bool device_sketch = true,
+                    bool ca = false)
         : tree_(tree), level_(tree->levels[static_cast<size_t>(level_index)]), kernel_(kernel),
-          tolerance_(tolerance), heap_(DeviceHeap::instance()), adopt_(std::move(adopt)), occupancy_(occupancy) {
+          tolerance_(tolerance), heap_(DeviceHeap::instance()), adopt_(std::move(adopt)), occupancy_(occupancy),
+          ca_(ca) {
         spec_ = device_kernel_spec(kernel->gpu_spec);
         gpu_sketch_ = device_sketch && device_sketch_supported(tree, spec_.kind);
+        if (ca_ && !gpu_sketch_) throw std::runtime_error("LevelEliminator: CA levels need the device sketch");
         early_free_sources_ = level_.num_active_processes > 1;
         level_index_ = level_index;
         // (the host sketch would read remote generators' X_NR during the level)
-        device_exchange_ = level_.num_active_processes > 1 && device_exchange_enabled() && gpu_sketch_;
+        device_exchange_ = !ca_ && level_.num_active_processes > 1 && device_exchange_enabled() && gpu_sketch_;
     }
 
     bool device_sketch() const { return gpu_sketch_; }
@@ -264,6 +305,9 @@ public:
     void emit_generators(PendingFactorUpdates<DataType>& pending) override;
     void receive_remote(const std::vector<int64_t>& installed) override;
     bool device_exchange() const override { return device_exchange_; }
+    // CA levels, after the host's post-elimination assisting gather: the
+    // skeletons of the assisting boxes, for the transition.
+    void refresh_remote_skeletons() override { sync_remote_boxes(); }
     std::chrono::high_resolution_clock::duration exchange() override;
     bool solve_factors_kept() const override { return keep_solve_ && !keep_failed_; }
     void commit_solve_factors(bool keep) override {
@@ -271,9 +315,22 @@ public:
             device_solve_store().kept[level_index_] = std::move(kept_);
             kept_ = KeptSolveLevel{};
         } else {
+            rescue_skipped_xnr();  // (another rank did not keep its factors)
             drop_kept();
         }
     }
+    void set_solve_keep(bool keep) override {
+        if (!keep) {
+            drop_kept();
+            keep_solve_ = false;
+        }
+        keep_budgeted_ = keep_solve_;
+        // (the host copies stay where the host reads X_NR during the level:
+        // generators sent through the host, the replica check)
+        skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
+                    (device_exchange_ || ca_ || level_.num_active_processes == 1);
+    }
+    void restore_host_copies() override { rescue_skipped_xnr(); }
 
 private:
     struct BoxState {
@@ -295,6 +352,8 @@ private:
         // boxes of other ranks (assisting boxes): points appended to the
         // table; eliminated once their skeleton has arrived
         bool remote = false;
+        // CA levels: a ghost box (another rank's, eliminated here too)
+        bool ghost = false;
         bool on_boundary = false;
         // multi-rank levels: the fill-source block (temp2^T, X_RR_full) is
         // freed once every local neighbor, its only reader, is eliminated
@@ -349,6 +408,17 @@ private:
         const int64_t idx = morton - level_.local_morton_start;
         return idx >= 0 && idx < static_cast<int64_t>(states_.size());
     }
+    // A box eliminated on this rank: local, or a ghost of a CA level.
+    bool is_writable(int64_t morton) {
+        if (is_local(morton)) return true;
+        if (!ca_) return false;
+        auto it = remote_index_.find(morton);
+        return it != remote_index_.end() && remote_states_[it->second].ghost;
+    }
+    Box* writable_box(int64_t morton) {
+        if (Box* box = level_.find_local_box(morton)) return box;
+        return ca_ ? level_.find_ghost_box(morton) : nullptr;
+    }
     BoxState& state_of(int64_t morton) {
         if (is_local(morton)) return states_[static_cast<size_t>(morton - level_.local_morton_start)];
         auto it = remote_index_.find(morton);
@@ -367,7 +437,7 @@ private:
     };
     RingInfo ring_info(int64_t morton) {
         RingInfo info;
-        if (Box* nb = level_.find_local_box(morton)) {
+        if (Box* nb = writable_box(morton)) {
             info.full = nb->num_points;
             info.skeleton = &nb->skeleton_indices;
             info.on_boundary = nb->on_boundary;
@@ -394,11 +464,11 @@ private:
         st.persist = block;
         st.readers = 0;
         for (int64_t m : hop) {
-            if (is_local(m) && !state_of(m).eliminated) ++st.readers;
+            if (is_writable(m) && !state_of(m).eliminated) ++st.readers;
         }
     }
     void set_remote_skeletons(const std::vector<std::pair<BoxState*, const std::vector<int64_t>*>>& skeletons);
-    void sync_remote_boxes();
+    void sync_remote_boxes(bool skeletons = true);
     // a generator received into device memory (device exchange)
     struct Incoming { int r = 0, k = 0, ntot = 0, nx = 0; const char* bulk = nullptr; };
     void apply_remote_generators(const std::vector<int64_t>& installed,
@@ -450,6 +520,41 @@ private:
     }
     void keep_solve_factors(const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources,
                             cudaStream_t stream);
+    // The X_NR of boxes kept without a host copy, copied back from the kept
+    // factors (the level's own, or committed to the store): before a fill
+    // source leaves the device (the transition restores it from the host
+    // copy), before the kept factors are dropped, and for a host transition.
+    // The level then downloads X_NR again.
+    void rescue_skipped_xnr() {
+        skip_xnr_ = false;
+        if (skipped_xnr_.empty()) return;
+        check_cuda(cudaStreamSynchronize(Context::instance().stream()), "X_NR host copies");
+        const KeptSolveLevel* committed = nullptr;
+        auto& store_kept = device_solve_store().kept;
+        if (auto it = store_kept.find(level_index_); it != store_kept.end()) committed = &it->second;
+        for (Box* box : skipped_xnr_) {
+            if (box->X_NR.is_allocated()) continue;
+            const KeptSolveBox* kb = nullptr;
+            if (auto it = kept_.boxes.find(box->morton_index); it != kept_.boxes.end()) kb = &it->second;
+            if (kb == nullptr && committed != nullptr) {
+                if (auto it = committed->boxes.find(box->morton_index); it != committed->boxes.end()) kb = &it->second;
+            }
+            if (kb == nullptr) {
+                throw std::runtime_error("LevelEliminator: X_NR of box " + std::to_string(box->morton_index) +
+                                         " neither on the host nor kept");
+            }
+            std::vector<DataType> xnr(static_cast<size_t>(kb->ntot) * static_cast<size_t>(kb->r));
+            check_cuda(cudaMemcpy(xnr.data(), kb->xnr, xnr.size() * sizeof(DataType), cudaMemcpyDeviceToHost),
+                       "X_NR host copies");
+            box->X_NR.set_owned(kb->ntot, kb->r, std::move(xnr), MatrixStorage<DataType>::FULL);
+        }
+        skipped_xnr_.clear();
+    }
+    double kept_bytes_total() const {
+        double bytes = kept_.bytes;
+        for (const auto& [lvl, kl] : device_solve_store().kept) bytes += kl.bytes;
+        return bytes;
+    }
     void drop_kept() {
         for (char* b : kept_.blocks) heap_.free(b);
         kept_ = KeptSolveLevel{};
@@ -512,6 +617,7 @@ private:
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
     bool gpu_sketch_ = false;
     bool occupancy_ = false;           // empty boxes in the local slab (see the constructor)
+    bool ca_ = false;                  // a replicated CA level (ghosts eliminated here too)
     bool early_free_sources_ = false;  // multi-rank level: fill sources released once read
     // Fill sources whose local readers have all sketched, oldest first.  They
     // stay on the device for the transition (which otherwise restores them
@@ -522,6 +628,7 @@ private:
             BoxState* es = released_sources_.front();
             released_sources_.pop_front();
             if (es->persist == nullptr || es->readers > 0) continue;  // gone, or kept again with readers
+            rescue_skipped_xnr();  // (a restore reads the host copies)
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
             es->persist = nullptr;
             es->temp2t = nullptr;
@@ -565,6 +672,9 @@ private:
     // the solve's factors kept on the device (device_solve.hpp)
     bool keep_solve_ = false;
     bool keep_failed_ = false;
+    bool keep_budgeted_ = false;  // decided before the waves (set_solve_keep)
+    bool skip_xnr_ = false;       // kept boxes' X_NR not downloaded
+    std::vector<Box*> skipped_xnr_;
     KeptSolveLevel kept_;
     DeviceBuffer solve_meta_device_;
 
@@ -594,8 +704,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     const auto t0 = clock::now();
     Context& ctx = Context::instance();
     ctx.activate();
-    if (device_exchange_) {
-        // before the main arena takes its share of the free memory
+    if (device_exchange_ || (ca_ && level_.num_active_processes > 1)) {
+        // before the main arena takes its share of the free memory (MPI
+        // from device memory: the Color transports, a CA level's device
+        // halo, color_gpu/ca_halo.hpp)
         size_t mb = 2560;
         if (const char* env = std::getenv("H2_GPU_EXCHANGE_MB")) mb = static_cast<size_t>(std::atoll(env));
         DeviceHeap::exchange_arena().initialize_fixed(mb << 20);
@@ -604,6 +716,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     // a fresh factorization (unless earlier levels' solve factors are kept);
     // otherwise the parent blocks live on
     if (!adopt_ && device_solve_store().empty()) heap_.reset();
+    // (a replicated CA level: its ghosts' factors too, which the device CA
+    // solve eliminates again; keyed by Morton index like the local ones)
     keep_solve_ = device_solve_enabled() && device_solve_keep() && gpu_sketch_;
     if (keep_solve_) solve_meta_device_.reserve(size_t{1} << 20);  // span lists of the waves
     heap_.reset_peak();
@@ -652,22 +766,52 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         states_[b].n = static_cast<int>(box.num_points);
         num_slots += box.num_points;
     }
+    // CA levels: the ghost boxes (other ranks', eliminated here too), in
+    // Morton order, as remote states marked ghost with slots after the local
+    // ones.  The boxes that sketch here are the local ones, then the ghosts.
+    std::vector<Box*> ghosts;
+    if (ca_) {
+        std::vector<std::pair<int64_t, size_t>> order;
+        for (size_t g = 0; g < level_.ghost_boxes.size(); ++g) order.emplace_back(level_.ghost_boxes[g].morton_index, g);
+        std::sort(order.begin(), order.end());
+        for (const auto& [morton, g] : order) {
+            Box& box = level_.ghost_boxes[g];
+            if (box.num_points <= 0) throw std::runtime_error("LevelEliminator: empty ghost box " + std::to_string(morton));
+            if (!box.far_field_modified_interactions.empty()) {
+                throw std::runtime_error("LevelEliminator: stored far-field blocks are not supported (lazy mode expected)");
+            }
+            BoxState st;
+            st.ghost = true;
+            st.slot = static_cast<int>(num_slots);
+            st.n = static_cast<int>(box.num_points);
+            st.on_boundary = box.on_boundary;
+            remote_index_[morton] = remote_states_.size();
+            remote_states_.push_back(std::move(st));
+            ghosts.push_back(&box);
+            num_slots += box.num_points;
+        }
+    }
+    const size_t num_sketching = num_boxes + ghosts.size();
+    auto sketching_box = [&](size_t i) -> Box& { return i < num_boxes ? level_.local_boxes[i] : *ghosts[i - num_boxes]; };
+    auto sketching_state = [&](size_t i) -> BoxState& {
+        return i < num_boxes ? states_[i] : state_of(ghosts[i - num_boxes]->morton_index);
+    };
     // static ID training rows of the device sketch (H2_ID_radius > 2,
     // H2_ID_proxy 1), as the host selects them: their points after the local
     // ones, each once, and a list of their slots per box
-    std::vector<std::vector<int64_t>> training(num_boxes);
+    std::vector<std::vector<int64_t>> training(num_sketching);
     std::vector<int64_t> training_points;  // global indices, in slot order
     std::vector<int> training_lists;       // per box, slots relative to training_slot0_
-    std::vector<size_t> training_at(num_boxes, 0);
+    std::vector<size_t> training_at(num_sketching, 0);
     if (gpu_sketch_ && (tree_->id_neighborhood_radius > 2 || tree_->id_proxy_mode == 1)) {
         std::exception_ptr failure;
         std::mutex failure_mutex;
         #pragma omp parallel for schedule(dynamic)
-        for (int64_t b = 0; b < static_cast<int64_t>(num_boxes); ++b) {
-            if (states_[static_cast<size_t>(b)].n == 0) continue;
+        for (int64_t b = 0; b < static_cast<int64_t>(num_sketching); ++b) {
+            if (sketching_state(static_cast<size_t>(b)).n == 0) continue;
             try {
                 training[static_cast<size_t>(b)] =
-                    select_static_id_training_indices(tree_, &level_.local_boxes[static_cast<size_t>(b)]);
+                    select_static_id_training_indices(tree_, &sketching_box(static_cast<size_t>(b)));
             } catch (...) {
                 std::lock_guard<std::mutex> lock(failure_mutex);
                 if (!failure) failure = std::current_exception();
@@ -675,7 +819,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         }
         if (failure) std::rethrow_exception(failure);
         std::unordered_map<int64_t, int> slot_of;
-        for (size_t b = 0; b < num_boxes; ++b) {
+        for (size_t b = 0; b < num_sketching; ++b) {
             training_at[b] = training_lists.size();
             for (int64_t index : training[b]) {
                 auto it = slot_of.emplace(index, static_cast<int>(training_points.size())).first;
@@ -689,9 +833,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     if (num_slots >= std::numeric_limits<int>::max()) throw std::runtime_error("LevelEliminator: too many points per rank");
     std::vector<double> xyz(static_cast<size_t>(3 * num_slots));
     std::vector<int64_t> ids(static_cast<size_t>(num_slots));
-    for (size_t b = 0; b < num_boxes; ++b) {
-        const Box& box = level_.local_boxes[b];
-        const size_t slot = static_cast<size_t>(states_[b].slot);
+    for (size_t b = 0; b < num_sketching; ++b) {
+        const Box& box = sketching_box(b);
+        const size_t slot = static_cast<size_t>(sketching_state(b).slot);
         for (int64_t i = 0; i < box.num_points; ++i) {
             for (int d = 0; d < 3; ++d) xyz[3 * (slot + i) + d] = static_cast<double>(box.point_coords[3 * i + d]);
             ids[slot + i] = box.point_indices[static_cast<size_t>(i)];
@@ -727,13 +871,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         level_allocs_.push_back(reinterpret_cast<char*>(d_lists));
         check_cuda(cudaMemcpyAsync(d_lists, training_lists.data(), training_lists.size() * sizeof(int),
                                    cudaMemcpyHostToDevice, stream), "upload training lists");
-        for (size_t b = 0; b < num_boxes; ++b) {
-            states_[b].d_training = d_lists + training_at[b];
-            states_[b].ntraining = static_cast<int>(training[b].size());
-            if (spec_.kind == 3) states_[b].training_ids = training[b];
+        for (size_t b = 0; b < num_sketching; ++b) {
+            BoxState& st = sketching_state(b);
+            st.d_training = d_lists + training_at[b];
+            st.ntraining = static_cast<int>(training[b].size());
+            if (spec_.kind == 3) st.training_ids = training[b];
         }
         stats.bytes_up += static_cast<double>(training_lists.size() * sizeof(int));
     }
+
+    // CA levels: the assisting boxes the halo gather listed (points only;
+    // their skeletons arrive after the level, refresh_remote_skeletons)
+    if (ca_) sync_remote_boxes(false);
 
     // H2_GPU_KERNEL_CHECK=1: the device kernel against the host's entries
     static const bool kernel_check = [] {
@@ -746,21 +895,24 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     //      or packed on the host (in parallel), uploaded once, and scattered
     //      into their own heap allocations with one batched copy
     if (adopt_) {
-        for (size_t b = 0; b < num_boxes; ++b) {
-            const Box& box = level_.local_boxes[b];
-            if (states_[b].n == 0) continue;  // an empty box (occupancy)
+        // (a CA level: the ghosts' blocks too, received from their owners'
+        // devices, color_gpu/ca_halo.hpp)
+        for (size_t b = 0; b < num_sketching; ++b) {
+            const Box& box = sketching_box(b);
+            BoxState& st = sketching_state(b);
+            if (st.n == 0) continue;  // an empty box (occupancy)
             auto it = adopt_->schur.find(box.morton_index);
-            if (it == adopt_->schur.end() || it->second.rows != states_[b].n || it->second.cols != states_[b].n) {
+            if (it == adopt_->schur.end() || it->second.rows != st.n || it->second.cols != st.n) {
                 throw std::runtime_error("LevelEliminator::begin: adopted Schur block of box " +
                                          std::to_string(box.morton_index) + " is missing or mis-shaped");
             }
-            states_[b].schur = it->second;
+            st.schur = it->second;
         }
         for (const auto& kv : adopt_->edges) {
             const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
             // a box of another rank is known only from its block here
-            if ((is_local(hi) && kv.second.rows != state_of(hi).n) || (is_local(lo) && kv.second.cols != state_of(lo).n) ||
-                (!is_local(lo) && !is_local(hi))) {
+            if ((is_writable(hi) && kv.second.rows != state_of(hi).n) ||
+                (is_writable(lo) && kv.second.cols != state_of(lo).n) || (!is_writable(lo) && !is_writable(hi))) {
                 throw std::runtime_error("LevelEliminator::begin: adopted near block is mis-shaped");
             }
         }
@@ -787,9 +939,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         image_elems += align_up(static_cast<size_t>(rows) * cols, 32);
         placements.push_back(p);
     };
-    for (size_t b = 0; b < num_boxes; ++b) {
-        Box& box = level_.local_boxes[b];
-        BoxState& st = states_[b];
+    for (size_t b = 0; b < num_sketching; ++b) {
+        Box& box = sketching_box(b);
+        BoxState& st = sketching_state(b);
         if (st.n == 0) continue;  // an empty box (occupancy): no blocks
         if (box.schur_complement.is_allocated()) {
             if (box.schur_complement.rows != st.n || box.schur_complement.cols != st.n ||
@@ -810,7 +962,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             if (edges_.count(key)) continue;
             // view A_NS of this box for `other`: rows = other's points, cols =
             // this box's (a remote box's size is known only from its block)
-            const int other_n = is_local(other) ? state_of(other).n : static_cast<int>(block.a_ns_rows());
+            const int other_n = is_writable(other) ? state_of(other).n : static_cast<int>(block.a_ns_rows());
             if (block.a_ns_rows() != other_n || block.a_ns_cols() != st.n) {
                 std::ostringstream oss;
                 oss << "LevelEliminator::begin: near block (" << box.morton_index << ", " << other
@@ -869,7 +1021,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
 
     // The device copies are now authoritative; drop the host ones so a stale
     // read fails loudly instead of using outdated values.
-    for (auto& box : level_.local_boxes) {
+    for (size_t b = 0; b < num_sketching; ++b) {
+        Box& box = sketching_box(b);
         box.schur_complement = MatrixStorage<DataType>{};
         std::vector<ModifiedBlock<DataType>>().swap(box.near_field_modified_interactions);
         box.near_field_interaction_map.clear();
@@ -1046,7 +1199,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
         #pragma omp for schedule(dynamic)
         for (int64_t bi = 0; bi < static_cast<int64_t>(wave.size()); ++bi) {
             try {
-                Box* box = level_.find_local_box(wave[static_cast<size_t>(bi)]);
+                Box* box = writable_box(wave[static_cast<size_t>(bi)]);
                 if (box == nullptr) throw std::runtime_error("LevelEliminator: wave box is not local");
                 gather_id_target_streamed(tree_, box, level_, kernel_, scratch, box->on_boundary);
                 if (!scratch.streamed_sketch_valid) {
@@ -1065,7 +1218,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
                     auto wave_it = level_.elimination_wave.find(box->morton_index);
                     h2_id_trace_write(
                         "L" + std::to_string(level_.level) + " m=" + std::to_string(box->morton_index) +
-                        " local=1 ob=" + std::to_string(box->on_boundary) +
+                        " local=" + std::to_string(is_local(box->morton_index) ? 1 : 0) +
+                        " ob=" + std::to_string(box->on_boundary) +
                         " n=" + std::to_string(box->num_points) +
                         " k=" + std::to_string(box->skeleton_indices.size()) +
                         " wave=" + std::to_string(wave_it == level_.elimination_wave.end() ? -1 : wave_it->second) +
@@ -1156,7 +1310,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         #pragma omp parallel for schedule(dynamic) reduction(+ : boundary)
         for (int64_t bi = 0; bi < static_cast<int64_t>(wave.size()); ++bi) {
             try {
-                Box* box = level_.find_local_box(wave[static_cast<size_t>(bi)]);
+                Box* box = writable_box(wave[static_cast<size_t>(bi)]);
                 if (box == nullptr) throw std::runtime_error("LevelEliminator: wave box is not local");
                 boundary += box->on_boundary ? 1 : 0;
                 Plan& p = plans[static_cast<size_t>(bi)];
@@ -1200,7 +1354,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                                                     blk.skeleton_rows && !rs.skeleton_identity ? rs.d_skeleton : nullptr});
                     row_base += blk.a;
                     if (efie) {  // the block's edges, in the device's row order
-                        const Box* nb = level_.find_local_box(rm);
+                        const Box* nb = writable_box(rm);
                         const std::vector<int64_t>& pts = nb != nullptr
                             ? nb->point_indices
                             : level_.assisting_boxes[static_cast<size_t>(
@@ -1257,7 +1411,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                         if (!sketch_box_eliminated(level_, cm)) continue;
                         if (level_.elimination_wave.find(cm) == level_.elimination_wave.end()) continue;
                         const BoxState& ss = state_of(cm);
-                        Box* src_box = ss.remote ? level_.find_generator_box(cm) : level_.find_local_box(cm);
+                        Box* src_box = ss.remote ? level_.find_generator_box(cm) : writable_box(cm);
                         if (src_box == nullptr) {
                             throw std::runtime_error("LevelEliminator: fill source " + std::to_string(cm) + " not found");
                         }
@@ -1525,7 +1679,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     char* d_qrcp_work = nullptr;
     if (const size_t w = qrcp_work_bytes<S>(static_cast<int>(id_items.size()), max_id_n)) d_qrcp_work = heap_.alloc(w);
     launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
-                tolerance_, d_qrcp_work, stream);
+                tolerance_, d_qrcp_work, stream);  // (every launch variant gives the same bits)
     heap_.free(d_qrcp_work);  // later launches are ordered after the ID
     marks.mark(stream);
     // written by the SMs into mapped pinned memory: a copy-engine transfer
@@ -1565,7 +1719,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     for (int64_t bi = 0; bi < static_cast<int64_t>(wave.size()); ++bi) {
         try {
             const Plan& p = plans[static_cast<size_t>(bi)];
-            Box* box = level_.find_local_box(wave[static_cast<size_t>(bi)]);
+            Box* box = writable_box(wave[static_cast<size_t>(bi)]);
             if (flags[bi] == 1) throw std::runtime_error("ID input contains NaN or Inf (box " + std::to_string(box->morton_index) + ")");
             if (flags[bi] == 2) throw std::runtime_error("Triangular solve produced a non-finite interpolation matrix (box " + std::to_string(box->morton_index) + ")");
             const int n = p.n;
@@ -1600,7 +1754,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 for (const Source& src : p.sources) tail << src.morton << ',';
                 h2_id_trace_write(
                     "L" + std::to_string(level_.level) + " m=" + std::to_string(box->morton_index) +
-                    " local=1 ob=" + std::to_string(box->on_boundary) + " n=" + std::to_string(box->num_points) +
+                    " local=" + std::to_string(is_local(box->morton_index) ? 1 : 0) +
+                    " ob=" + std::to_string(box->on_boundary) + " n=" + std::to_string(box->num_points) +
                     " k=" + std::to_string(wb.k) + " wave=-1 |" + p.trace + tail.str());
             }
         } catch (...) {
@@ -1609,6 +1764,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
     }
     if (failure) std::rethrow_exception(failure);
+    stats.id_loop += std::chrono::duration<double>(clock::now() - t0).count();
     // after the parallel loop: the map is not thread safe
     for (const WaveBox& wb : boxes) {
         if (wb.state->d_skeleton != nullptr) host_lists_[wb.state->d_skeleton] = &wb.state->skeleton;
@@ -1630,7 +1786,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     magma_queue_t queue = ctx.queue();
     eliminated_any_ = true;
     // a transport must have sent the generators of the previous wave's
-    // boxes with remote neighbors (the transport schedule of the loop)
+    // boxes with remote neighbors (the transport schedule of the loop;
+    // CA levels transport nothing)
+    if (ca_) last_wave_.clear();
     for (int64_t m : last_wave_) {
         const Box* box = level_.find_local_box(m);
         if (box == nullptr) continue;
@@ -1704,7 +1862,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.row0[a] = rows;
             wb.counts[a] = current_size(ns);
             rows += current_size(ns);
-            wb.has_remote = wb.has_remote || ns.remote;
+            wb.has_remote = wb.has_remote || (ns.remote && !ca_);  // (CA levels send no generators)
         }
         wb.ntot = rows;
         const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
@@ -1736,6 +1894,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         } else {
             t_bytes = align_up(t_bytes + k * r * D);
         }
+    }
+    // CA levels: the LUs and the solves for X_RR^{-1} by size class (every
+    // copy of a box must factor identically): the active boxes grouped by
+    // class, in wave order within
+    if (ca_) {
+        std::stable_sort(active.begin(), active.end(), [&](int a, int b) {
+            return lu_size_class(boxes[static_cast<size_t>(a)].r) < lu_size_class(boxes[static_cast<size_t>(b)].r);
+        });
     }
     const size_t info_offset = result_bytes;
     result_bytes = align_up(result_bytes + std::max<size_t>(active.size(), 1) * sizeof(int));
@@ -1795,6 +1961,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
     }
 
+    stats.pb_buffers += std::chrono::duration<double>(clock::now() - t0).count();
+    const auto t_items = clock::now();
     // Launch items of the box region.
     std::vector<EvalItem> evals;
     std::vector<GatherItem> fills;
@@ -1940,7 +2108,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const int c = static_cast<int>(wb.counts[a]);
             if (c == 0) continue;
             DeviceMatrix fresh;
+            const auto t_alloc = clock::now();
             fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D);
+            stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
             int64_t ors = 1, ocs = c;
             if (box->morton_index < nm) {
                 fresh.rows = c;  // rows = neighbor (hi)
@@ -1959,6 +2129,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         st.schur = DeviceMatrix{wb.s, k, k};
     }
 
+    stats.pb_items += std::chrono::duration<double>(clock::now() - t_items).count();
     stats.plan_boxes += std::chrono::duration<double>(clock::now() - t0).count();
     // ---- metadata image: item arrays and MAGMA arrays
     const size_t off_evals = meta_.append(evals);
@@ -1972,6 +2143,28 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     const size_t off_stores = meta_.append(stores);
     const size_t off_transposes = meta_.append(transposes);
     for (VBatch<S>* b : {&g1, &g2, &g3, &g4, &g5, &g6, &g7, &trsm, &getrf, &gsolve}) b->stage(meta_);
+    // CA levels: one LU launch, and one launch of each solve for
+    // X_RR^{-1}, per size class (getrf's and trsm's entries are in active
+    // order, grouped by class above)
+    std::vector<VBatch<S>> lu_classes, trsm_classes;
+    std::vector<size_t> lu_first;  // first getrf entry of each class
+    if (ca_) {
+        if (getrf.entries.size() != active.size()) throw std::runtime_error("LevelEliminator: one LU per active box expected");
+        auto split = [](const VBatch<S>& batch, std::vector<VBatch<S>>& classes, std::vector<size_t>* first) {
+            for (size_t e = 0; e < batch.entries.size(); ++e) {
+                const int c = lu_size_class(batch.entries[e].n);
+                if (classes.empty() || lu_size_class(classes.back().entries.front().n) != c) {
+                    classes.emplace_back();
+                    if (first) first->push_back(e);
+                }
+                classes.back().entries.push_back(batch.entries[e]);
+            }
+        };
+        split(getrf, lu_classes, &lu_first);
+        split(trsm, trsm_classes, nullptr);
+        for (VBatch<S>& b : lu_classes) b.stage(meta_);
+        for (VBatch<S>& b : trsm_classes) b.stage(meta_);
+    }
     // getrf pivot pointers: one per matrix, in getrf order
     std::vector<int*> piv_ptrs;
     for (int i : active) piv_ptrs.push_back(boxes[static_cast<size_t>(i)].piv);
@@ -2009,10 +2202,20 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     marks.mark(stream);  // 1: X_RR, X_SR
     launch_gather(reinterpret_cast<const GatherItem*>(items(off_copy_full)), static_cast<int>(copy_full.size()),
                   max_copy_m, max_copy_n, md, stream);
-    getrf_vbatched<S>(getrf.max_n, getrf.size_array(md, 0), getrf.size_array(md, 1),
-                           getrf.template pointer_array<S*>(md, 0), getrf.size_array(md, 3),
-                           reinterpret_cast<magma_int_t**>(md + off_piv_ptrs), d_info,
-                           static_cast<magma_int_t>(getrf.count()), getrf_work_, queue);
+    if (ca_) {
+        for (size_t c = 0; c < lu_classes.size(); ++c) {
+            const VBatch<S>& b = lu_classes[c];
+            getrf_vbatched<S>(lu_size_class(b.max_n), b.size_array(md, 0), b.size_array(md, 1),
+                              b.template pointer_array<S*>(md, 0), b.size_array(md, 3),
+                              reinterpret_cast<magma_int_t**>(md + off_piv_ptrs) + lu_first[c], d_info + lu_first[c],
+                              static_cast<magma_int_t>(b.count()), getrf_work_, queue);
+        }
+    } else {
+        getrf_vbatched<S>(getrf.max_n, getrf.size_array(md, 0), getrf.size_array(md, 1),
+                          getrf.template pointer_array<S*>(md, 0), getrf.size_array(md, 3),
+                          reinterpret_cast<magma_int_t**>(md + off_piv_ptrs), d_info,
+                          static_cast<magma_int_t>(getrf.count()), getrf_work_, queue);
+    }
     marks.mark(stream);  // 2: copies, LU
     g5.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
     launch_gather(reinterpret_cast<const GatherItem*>(items(off_copy_xnr)), static_cast<int>(copy_xnr.size()),
@@ -2020,16 +2223,25 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     marks.mark(stream);  // 3: X_NR
     launch_identity(reinterpret_cast<const IdentityItem*>(items(off_identities)), static_cast<int>(identities.size()),
                     max_r, stream);
-    trsm_vbatched<S>(MagmaRight, MagmaUpper, MagmaNoTrans, MagmaNonUnit, trsm.max_m, trsm.max_n,
-                          trsm.size_array(md, 0), trsm.size_array(md, 1), 1.0,
-                          trsm.template pointer_array<S*>(md, 0), trsm.size_array(md, 3),
-                          trsm.template pointer_array<S*>(md, 2), trsm.size_array(md, 5),
-                          static_cast<magma_int_t>(trsm.count()), queue);
-    trsm_vbatched<S>(MagmaRight, MagmaLower, MagmaNoTrans, MagmaUnit, trsm.max_m, trsm.max_n,
-                          trsm.size_array(md, 0), trsm.size_array(md, 1), 1.0,
-                          trsm.template pointer_array<S*>(md, 0), trsm.size_array(md, 3),
-                          trsm.template pointer_array<S*>(md, 2), trsm.size_array(md, 5),
-                          static_cast<magma_int_t>(trsm.count()), queue);
+    // W = U^{-1} L^{-1}; on CA levels per size class, with max_m = max_n =
+    // the class (the lower solve's blocking follows the batch's largest box)
+    auto solve_w = [&](const VBatch<S>& b, magma_int_t max_m, magma_int_t max_n) {
+        trsm_vbatched<S>(MagmaRight, MagmaUpper, MagmaNoTrans, MagmaNonUnit, max_m, max_n,
+                         b.size_array(md, 0), b.size_array(md, 1), 1.0,
+                         b.template pointer_array<S*>(md, 0), b.size_array(md, 3),
+                         b.template pointer_array<S*>(md, 2), b.size_array(md, 5),
+                         static_cast<magma_int_t>(b.count()), queue);
+        trsm_vbatched<S>(MagmaRight, MagmaLower, MagmaNoTrans, MagmaUnit, max_m, max_n,
+                         b.size_array(md, 0), b.size_array(md, 1), 1.0,
+                         b.template pointer_array<S*>(md, 0), b.size_array(md, 3),
+                         b.template pointer_array<S*>(md, 2), b.size_array(md, 5),
+                         static_cast<magma_int_t>(b.count()), queue);
+    };
+    if (ca_) {
+        for (const VBatch<S>& b : trsm_classes) solve_w(b, lu_size_class(b.max_n), lu_size_class(b.max_n));
+    } else {
+        solve_w(trsm, trsm.max_m, trsm.max_n);
+    }
     gsolve.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 0.0, queue);
     launch_column_swaps(reinterpret_cast<const ColumnSwapItem*>(items(off_swaps)), static_cast<int>(swaps.size()), stream);
     marks.mark(stream);  // 4: temp1, temp2
@@ -2051,9 +2263,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // pair of its neighbors, target(lo, hi) += temp2_E[hi rows] X_NR_E[lo rows]^T,
     // and Schur(C) += temp2_E[C rows] X_NR_E[C rows]^T.  Contributions to a
     // target arrive in the CPU order: sources in the owner's one_hop order.
-    struct Target { DeviceMatrix* block; std::vector<typename VBatch<S>::Entry> tasks; };
-    std::vector<Target> targets;
-    std::unordered_map<uint64_t, size_t> target_index;  // edge key, or ~morton for a Schur block
+    // CA levels: the candidates are the writable boxes (local and ghosts); a
+    // pair of two eliminated ghosts is never read here and is skipped.  A
+    // pair's contributions arrive by source Morton there: its copies on other
+    // ranks may be reached from the other endpoint.
     std::vector<int64_t> candidates;
     {
         std::unordered_set<int64_t> seen;
@@ -2061,78 +2274,161 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             if (wb.ntot == 0) continue;
             for (int64_t c : wb.box->one_hop) {
-                if (is_local(c) && wave_index_of.count(c) == 0 && seen.insert(c).second) candidates.push_back(c);
+                if (is_writable(c) && wave_index_of.count(c) == 0 && seen.insert(c).second) candidates.push_back(c);
             }
         }
         std::sort(candidates.begin(), candidates.end());
     }
+    auto t_phase = clock::now();
+    auto owner_lap = [&](double& phase) {
+        const auto now = clock::now();
+        phase += std::chrono::duration<double>(now - t_phase).count();
+        t_phase = now;
+    };
+    stats.po_candidates += std::chrono::duration<double>(t_phase - t_owner).count();
     std::vector<EvalItem> owner_evals;
     int max_owner_m = 0, max_owner_n = 0;
-    auto target_for = [&](uint64_t key, DeviceMatrix& block, int rows, int cols, BoxState& row_box,
-                          BoxState& col_box) -> Target& {
-        auto found = target_index.find(key);
-        if (found != target_index.end()) return targets[found->second];
-        if (block.ptr == nullptr) {
-            block.ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D);
-            block.rows = rows;
-            block.cols = cols;
-            owner_evals.push_back(EvalItem{block.ptr, rows, rows, cols, current_slots_in(row_box, owner_meta_, owner_stamp),
-                                             current_slots_in(col_box, owner_meta_, owner_stamp)});
-            max_owner_m = std::max(max_owner_m, rows);
-            max_owner_n = std::max(max_owner_n, cols);
-            ++stats.new_targets;
-        } else if (block.rows != rows || block.cols != cols) {
-            std::ostringstream oss;
-            oss << "LevelEliminator: owner target is " << block.rows << " x " << block.cols
-                << ", expected " << rows << " x " << cols;
-            throw std::runtime_error(oss.str());
-        }
-        target_index.emplace(key, targets.size());
-        targets.push_back(Target{&block, {}});
-        return targets.back();
+    // Every target belongs to one candidate (its Schur block; a pair with a
+    // higher box, or with another rank's box): the candidates' targets and
+    // tasks are found in parallel, each in the order of the sequential loop,
+    // then created (blocks, their kernel values, the edge map) and joined in
+    // candidate order, which is the sequential loop's target order.
+    struct CandidateTarget {
+        uint64_t key = 0;
+        DeviceMatrix* block = nullptr;  // the Schur block or an existing near block; else created at the join
+        BoxState* row_box = nullptr;
+        BoxState* col_box = nullptr;
+        int rows = 0, cols = 0;
+        std::vector<typename VBatch<S>::Entry> tasks;  // C set at the join
+        std::vector<int64_t> sources;                 // of the tasks
     };
-    for (int64_t cm : candidates) {
-        Box* cbox = level_.find_local_box(cm);
-        BoxState& cs = state_of(cm);
-        for (int64_t em : cbox->one_hop) {
-            auto wit = wave_index_of.find(em);
-            if (wit == wave_index_of.end()) continue;
-            const WaveBox& src = boxes[wit->second];
-            if (src.r == 0 || src.ntot == 0) continue;
-            const auto& src_hop = src.box->one_hop;
-            const size_t c_pos = static_cast<size_t>(std::find(src_hop.begin(), src_hop.end(), cm) - src_hop.begin());
-            if (c_pos == src_hop.size()) throw std::runtime_error("LevelEliminator: asymmetric one_hop lists");
-            const int n_c = static_cast<int>(src.counts[c_pos]);
-            if (n_c == 0) continue;
-            const S* x_nr_c = src.xnr + src.row0[c_pos];
-            for (size_t a = 0; a < src_hop.size(); ++a) {
-                const int64_t am = src_hop[a];
-                const int n_a = static_cast<int>(src.counts[a]);
-                if (n_a == 0) continue;
-                Target* target = nullptr;
-                if (am == cm) {
-                    target = &target_for(~static_cast<uint64_t>(cm), cs.schur, n_c, n_c, cs, cs);
-                } else if (cm < am && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
-                    BoxState& as = state_of(am);
-                    target = &target_for(edge_key(cm, am), edges_[edge_key(cm, am)], n_a, n_c, as, cs);
-                } else if (!is_local(am) && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
-                    // A pair with a lower box of another rank: this rank's
-                    // copy (the other rank's comes from the generator), rows =
-                    // the candidate, so the product is the transpose,
-                    // X_NR_E[c rows] temp2_E[a rows]^T, with the same terms.
-                    BoxState& as = state_of(am);
-                    target = &target_for(edge_key(cm, am), edges_[edge_key(cm, am)], n_c, n_a, cs, as);
-                    target->tasks.push_back({x_nr_c, src.temp2 + src.row0[a], target->block->ptr,
-                                             n_c, n_a, src.r, src.ntot, src.ntot, n_c});
-                    continue;
-                } else {
-                    continue;  // owned by the other endpoint, or a lazy far pair
+    std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
+    std::exception_ptr owner_failure;
+    std::mutex owner_failure_mutex;
+    #pragma omp parallel for schedule(dynamic, 4)
+    for (int64_t ci = 0; ci < static_cast<int64_t>(candidates.size()); ++ci) {
+        try {
+            const int64_t cm = candidates[static_cast<size_t>(ci)];
+            auto& mine = candidate_targets[static_cast<size_t>(ci)];
+            Box* cbox = writable_box(cm);
+            BoxState& cs = state_of(cm);
+            const bool eliminated_ghost = cs.ghost && cs.eliminated;
+            auto target_for = [&](uint64_t key, DeviceMatrix* block, int rows, int cols, BoxState& row_box,
+                                  BoxState& col_box) -> CandidateTarget& {
+                for (CandidateTarget& t : mine) {
+                    if (t.key == key) return t;
                 }
-                target->tasks.push_back({src.temp2 + src.row0[a], x_nr_c, target->block->ptr,
-                                         n_a, n_c, src.r, src.ntot, src.ntot, n_a});
+                if (block != nullptr && block->ptr != nullptr && (block->rows != rows || block->cols != cols)) {
+                    std::ostringstream oss;
+                    oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
+                        << ", expected " << rows << " x " << cols;
+                    throw std::runtime_error(oss.str());
+                }
+                mine.push_back(CandidateTarget{key, block, &row_box, &col_box, rows, cols, {}, {}});
+                return mine.back();
+            };
+            auto near_block = [&](uint64_t key) -> DeviceMatrix* {
+                auto it = edges_.find(key);
+                return it != edges_.end() ? &it->second : nullptr;
+            };
+            for (int64_t em : cbox->one_hop) {
+                auto wit = wave_index_of.find(em);
+                if (wit == wave_index_of.end()) continue;
+                const WaveBox& src = boxes[wit->second];
+                if (src.r == 0 || src.ntot == 0) continue;
+                const auto& src_hop = src.box->one_hop;
+                const size_t c_pos = static_cast<size_t>(std::find(src_hop.begin(), src_hop.end(), cm) - src_hop.begin());
+                if (c_pos == src_hop.size()) throw std::runtime_error("LevelEliminator: asymmetric one_hop lists");
+                const int n_c = static_cast<int>(src.counts[c_pos]);
+                if (n_c == 0) continue;
+                const S* x_nr_c = src.xnr + src.row0[c_pos];
+                for (size_t a = 0; a < src_hop.size(); ++a) {
+                    const int64_t am = src_hop[a];
+                    const int n_a = static_cast<int>(src.counts[a]);
+                    if (n_a == 0) continue;
+                    if (eliminated_ghost && am != cm) {
+                        const BoxState& as = state_of(am);
+                        if (as.ghost && as.eliminated) continue;
+                    }
+                    CandidateTarget* target = nullptr;
+                    if (am == cm) {
+                        target = &target_for(~static_cast<uint64_t>(cm), &cs.schur, n_c, n_c, cs, cs);
+                    } else if (cm < am && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
+                        BoxState& as = state_of(am);
+                        const uint64_t key = edge_key(cm, am);
+                        target = &target_for(key, near_block(key), n_a, n_c, as, cs);
+                    } else if (!is_writable(am) && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
+                        // A pair with a lower box of another rank: this rank's
+                        // copy (the other rank's comes from the generator), rows =
+                        // the candidate (hi): temp2_E[c rows] X_NR_E[a rows]^T, as
+                        // every pair (the transpose of the lo-rows product would
+                        // round differently: its terms differ)
+                        BoxState& as = state_of(am);
+                        const uint64_t key = edge_key(cm, am);
+                        target = &target_for(key, near_block(key), n_c, n_a, cs, as);
+                        target->tasks.push_back({src.temp2 + src.row0[c_pos], src.xnr + src.row0[a], nullptr,
+                                                 n_c, n_a, src.r, src.ntot, src.ntot, n_c});
+                        target->sources.push_back(em);
+                        continue;
+                    } else {
+                        continue;  // owned by the other endpoint, or a lazy far pair
+                    }
+                    target->tasks.push_back({src.temp2 + src.row0[a], x_nr_c, nullptr,
+                                             n_a, n_c, src.r, src.ntot, src.ntot, n_a});
+                    target->sources.push_back(em);
+                }
             }
+            if (ca_) {  // (a pair's contributions by source Morton)
+                for (CandidateTarget& t : mine) {
+                    if (t.tasks.size() < 2) continue;
+                    std::vector<size_t> order(t.tasks.size());
+                    std::iota(order.begin(), order.end(), size_t{0});
+                    std::stable_sort(order.begin(), order.end(),
+                                     [&](size_t x, size_t y) { return t.sources[x] < t.sources[y]; });
+                    std::vector<typename VBatch<S>::Entry> sorted;
+                    sorted.reserve(order.size());
+                    for (size_t x : order) sorted.push_back(t.tasks[x]);
+                    t.tasks.swap(sorted);
+                }
+            }
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(owner_failure_mutex);
+            if (!owner_failure) owner_failure = std::current_exception();
         }
     }
+    if (owner_failure) std::rethrow_exception(owner_failure);
+    owner_lap(stats.po_pairs);
+    // the join: blocks of new targets (their kernel values first), in the
+    // sequential loop's order
+    struct Target {
+        DeviceMatrix* block;
+        std::vector<typename VBatch<S>::Entry> tasks;
+    };
+    std::vector<Target> targets;
+    for (size_t ci = 0; ci < candidates.size(); ++ci) {
+        for (CandidateTarget& t : candidate_targets[ci]) {
+            DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
+            if (block->ptr == nullptr) {
+                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D);
+                block->rows = t.rows;
+                block->cols = t.cols;
+                owner_evals.push_back(EvalItem{block->ptr, t.rows, t.rows, t.cols,
+                                               current_slots_in(*t.row_box, owner_meta_, owner_stamp),
+                                               current_slots_in(*t.col_box, owner_meta_, owner_stamp)});
+                max_owner_m = std::max(max_owner_m, t.rows);
+                max_owner_n = std::max(max_owner_n, t.cols);
+                ++stats.new_targets;
+            } else if (block->rows != t.rows || block->cols != t.cols) {
+                std::ostringstream oss;
+                oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
+                    << ", expected " << t.rows << " x " << t.cols;
+                throw std::runtime_error(oss.str());
+            }
+            for (auto& e : t.tasks) e.c = block->ptr;
+            targets.push_back(Target{block, std::move(t.tasks)});
+        }
+    }
+    owner_lap(stats.po_order);
     // Sub-batch j holds the j-th contribution of every target, so no launch
     // writes a block twice and each block sees its contributions in order.
     std::vector<VBatch<S>> owner_batches;
@@ -2144,6 +2440,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             for (size_t j = 0; j < t.tasks.size(); ++j) owner_batches[j].entries.push_back(t.tasks[j]);
     }
 
+    owner_lap(stats.po_batches);
     stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
     const size_t off_owner_evals = owner_meta_.append(owner_evals);
     for (auto& b : owner_batches) b.stage(owner_meta_);
@@ -2189,6 +2486,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             Box* box = wb.box;
             const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r);
+            // (ghosts too: the CA solve applies them again)
+            dims->push_back({box, wb.k, wb.r});
             box->X_RR = MatrixStorage<DataType>{};
             box->X_SR = MatrixStorage<DataType>{};
             box->X_RS_entry = MatrixStorage<DataType>{};
@@ -2198,7 +2497,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             result.segments.push_back(Seg{&box->X_SR.data, nullptr, wb.off_temp1, k * r * D});
             result.segments.push_back(Seg{&box->X_RS_entry.data, nullptr, wb.off_xrs, r * k * D});
             if (with_t) result.segments.push_back(Seg{&box->interpolation_matrix.data, nullptr, wb.off_t, k * r * D});
-            dims->push_back({box, wb.k, wb.r});
         }
         result.finalize = [info_host, dims, with_t] {
             for (size_t j = 0; j < dims->size(); ++j) {
@@ -2234,12 +2532,15 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 const size_t nt = static_cast<size_t>(wb.ntot), r = static_cast<size_t>(wb.r);
                 wb.box->X_NR = MatrixStorage<DataType>{};
                 wb.box->X_RR_full = MatrixStorage<DataType>{};
-                if (nt > 0) job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
+                // (a kept box's X_NR stays on the device only: rescue_skipped_xnr)
+                const bool skip = skip_xnr_ && !keep_failed_ && nt > 0 && kept_.boxes.count(wb.box->morton_index) != 0;
+                if (skip) skipped_xnr_.push_back(wb.box);
+                if (nt > 0 && !skip) job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
                 job.segments.push_back(Seg{&wb.box->X_RR_full.data, nullptr, wb.off_xrr_full, r * r * D});
                 if (wb.has_remote && nt > 0 && !device_exchange_) {
                     job.segments.push_back(Seg{&wb.box->lazy_original_x_nr, nullptr, wb.off_xnr_orig, nt * r * D});
                 }
-                shapes->push_back({wb.box, wb.ntot, wb.r});
+                shapes->push_back({wb.box, skip ? 0 : wb.ntot, wb.r});
             }
             job.finalize = [shapes] {
                 for (const Shape& sh : *shapes) {
@@ -2263,7 +2564,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         Box* box = wb.box;
         box->deferred_xnn_neighbor_point_counts = wb.counts;
         std::vector<DataType>().swap(box->deferred_xnn_temp2);
-        level_.solve_neighbor_size[static_cast<size_t>(box->morton_index - level_.local_morton_start)] = wb.counts;
+        if (is_local(box->morton_index)) {  // (a ghost's solve data lives with its owner)
+            level_.solve_neighbor_size[static_cast<size_t>(box->morton_index - level_.local_morton_start)] = wb.counts;
+        }
         if (gpu_sketch_) {
             BoxState& st = *wb.state;
             st.temp2t = wb.persist_temp2t;
@@ -2346,13 +2649,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host()
     for (const BoxState& st : states_) {
         if (st.schur.ptr) { pieces.push_back({&st.schur, total}); total += static_cast<size_t>(st.schur.rows) * st.schur.cols; }
     }
-    std::vector<std::pair<uint64_t, const DeviceMatrix*>> edge_list(edges_.size());
-    {
-        size_t e = 0;
-        for (const auto& kv : edges_) edge_list[e++] = {kv.first, &kv.second};
-        std::sort(edge_list.begin(), edge_list.end(),
-                  [](const auto& a, const auto& b) { return a.first < b.first; });
+    // (CA levels: pairs of two ghosts stay behind, no local box keeps them)
+    std::vector<std::pair<uint64_t, const DeviceMatrix*>> edge_list;
+    edge_list.reserve(edges_.size());
+    for (const auto& kv : edges_) {
+        const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
+        if (ca_ && !is_local(lo) && !is_local(hi)) continue;
+        edge_list.push_back({kv.first, &kv.second});
     }
+    std::sort(edge_list.begin(), edge_list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (const auto& kv : edge_list) {
         if (kv.second->ptr == nullptr) throw std::runtime_error("LevelEliminator: unallocated edge at level end");
         pieces.push_back({kv.second, total});
@@ -2522,7 +2827,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::set_remote_skeletons(
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes() {
+void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool skeletons) {
     cudaStream_t stream = Context::instance().stream();
     auto& stats = eliminator_stats();
     std::vector<std::pair<int64_t, int64_t>> fresh;  // Morton, assisting index
@@ -2587,15 +2892,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes() {
         stats.bytes_up += static_cast<double>(xyz.size() * sizeof(double) + ids.size() * sizeof(int64_t));
     }
     // boxes eliminated since the last transport (their skeleton came with it)
-    std::vector<std::pair<BoxState*, const std::vector<int64_t>*>> skeletons;
+    if (!skeletons) return;
+    std::vector<std::pair<BoxState*, const std::vector<int64_t>*>> fresh_skeletons;
     for (const auto& [morton, index] : remote_index_) {
         BoxState& st = remote_states_[index];
-        if (st.eliminated) continue;
+        if (st.eliminated || st.ghost) continue;
         const auto& assist = level_.assisting_boxes[static_cast<size_t>(
             level_.assisting_box_points_for_kernel_evaluation.at(morton))];
-        if (!assist.skel_indices.empty()) skeletons.emplace_back(&st, &assist.skel_indices);
+        if (!assist.skel_indices.empty()) fresh_skeletons.emplace_back(&st, &assist.skel_indices);
     }
-    set_remote_skeletons(skeletons);
+    set_remote_skeletons(fresh_skeletons);
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -3021,8 +3327,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         made.push_back(m);
     }
     if (total == 0) return;
-    const double limit = device_solve_keep_fraction() * static_cast<double>(heap_.capacity());
+    // (a level kept by the up-front bound needs only the room; otherwise the
+    // budget too)
+    const double limit = (keep_budgeted_ ? 1.0 : device_solve_keep_fraction()) * static_cast<double>(heap_.capacity());
     if (static_cast<double>(heap_.used() + total) > limit || heap_.largest_free() < total) {
+        rescue_skipped_xnr();
         drop_kept();
         keep_failed_ = true;
         return;
@@ -3504,7 +3813,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     // blocks and the chunk buffers (the parents' blocks are at most the size
     // of this level's).  None is reclaimed during the transition: its plan
     // holds their pointers.
-    while (heap_.used() > heap_.capacity() / 2 && reclaim_released_source()) {
+    // (the solve factors kept on the device are not counted)
+    while (static_cast<double>(heap_.used()) - kept_bytes_total() > static_cast<double>(heap_.capacity() / 2) &&
+           reclaim_released_source()) {
     }
     released_sources_.clear();
     const int dim = level_.dimension;
@@ -3683,7 +3994,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const BoxState& es = state_of(em);
             Source& s = source_of[em];
             s.r = es.r;
-            s.box = es.remote ? level_.find_generator_box(em) : level_.find_local_box(em);
+            s.box = es.remote ? level_.find_generator_box(em) : writable_box(em);
             if (s.box == nullptr) throw std::runtime_error("LevelEliminator::build_parent: fill source " + std::to_string(em) + " not found");
             if (es.temp2t != nullptr) {
                 s.t2t = es.temp2t;
@@ -3891,15 +4202,25 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         }
                         eval();
                         if (chebyshev != 2 || !reaches_two) continue;  // beyond two hops: kernel only
-                        // two-hop: lazy fill of C(i, j) from i's eliminated neighbors next to j
+                        // two-hop: lazy fill of C(i, j) from i's eliminated neighbors next to j.
+                        // CA levels: the pair's copy on the other rank must come out
+                        // bitwise alike, so i is the lower child (not the local one)
+                        // and the sources come by Morton (the common eliminated
+                        // neighbors, writable on both ranks).
                         collect_lazy_far_sources(level_, level_.find_local_box(im), jm, dim, sources);
+                        const bool i_first = !ca_ || im < jm;
+                        const int64_t gi = i_first ? im : jm, pj = i_first ? jm : im;
+                        if (ca_) {
+                            std::sort(sources.begin(), sources.end(),
+                                      [](const LazyFarSource& x, const LazyFarSource& y) { return x.morton < y.morton; });
+                        }
                         size_t t = 0;
                         for (const LazyFarSource& src : sources) {
                             const BoxState& es = state_of(src.morton);
                             if (es.r == 0) continue;  // no Schur contribution
                             if (fills.size() <= t) fills.resize(t + 1);
-                            fills[t].push_back(FillTask{g_for(src.morton, im), p_for(src.morton, jm), target, M.rows, kr, ks,
-                                                        es.r, !rows_q});
+                            fills[t].push_back(FillTask{g_for(src.morton, gi), p_for(src.morton, pj), target, M.rows, kr, ks,
+                                                        es.r, Rm == gi});
                             ++t;
                         }
                     }
@@ -4121,9 +4442,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
 }
 
 // Device blocks of a level into its host boxes (for a level that runs on
-// the host, e.g. level 1 before the root): Schur blocks, and each near-field
-// block as the lower box's view (rows = the higher box) with an empty
-// reciprocal for share_symmetric_level_edges.  The device copies are freed.
+// the host, e.g. level 1 before the root, or a CA level's halo gather):
+// Schur blocks, and each near-field block as the lower box's view (rows =
+// the higher box) with an empty reciprocal for share_symmetric_level_edges.
+// The device copies are freed.
+//
+// The blocks stream through two pinned ring slots of the (then idle) level
+// copier: one slot's copies overlap the host unpacking of the other's, in
+// parallel over blocks.  A block over a slot is copied on its own.
 template<typename CoordType, typename DataType>
 void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxData<CoordType, DataType>>& boxes) {
   if constexpr (!gpu_data_type<DataType>) {
@@ -4145,15 +4471,66 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
         }
         return boxes[static_cast<size_t>(idx)];
     };
-    auto fetch = [&](const DeviceMatrixT<S>& m) {
-        std::vector<DataType> data(static_cast<size_t>(m.rows) * m.cols);
-        check_cuda(cudaMemcpy(data.data(), m.ptr, data.size() * sizeof(S), cudaMemcpyDeviceToHost),
-                   "download level blocks");
-        return data;
-    };
     check_cuda(cudaStreamSynchronize(stream), "download level blocks");
+
+    // every block's data on the host: the Schur blocks, then the edges
+    std::vector<const DeviceMatrixT<S>*> pieces;
+    pieces.reserve(blocks.schur.size() + blocks.edges.size());
+    for (auto& kv : blocks.schur) pieces.push_back(&kv.second);
+    for (auto& kv : blocks.edges) pieces.push_back(&kv.second);
+    std::vector<std::vector<DataType>> data(pieces.size());
+    {
+        auto bytes_of = [&](size_t i) { return static_cast<size_t>(pieces[i]->rows) * pieces[i]->cols * sizeof(S); };
+        constexpr size_t slot_bytes = PinnedPool::kRingSlot;
+        char* slot[2] = {static_cast<char*>(pinned_pool().ring[0].reserve(slot_bytes)),
+                         static_cast<char*>(pinned_pool().ring[1].reserve(slot_bytes))};
+        cudaEvent_t copied[2] = {nullptr, nullptr};
+        for (auto& ev : copied) check_cuda(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming), "cudaEventCreate");
+        // the pieces [first, last) in slot s, at consecutive offsets
+        auto unpack = [&](int s, size_t first, size_t last) {
+            check_cuda(cudaEventSynchronize(copied[s]), "download level blocks");
+            std::vector<size_t> offset(last - first + 1, 0);
+            for (size_t i = first; i < last; ++i) offset[i - first + 1] = offset[i - first] + bytes_of(i);
+            #pragma omp parallel for schedule(dynamic, 8)
+            for (int64_t i = static_cast<int64_t>(first); i < static_cast<int64_t>(last); ++i) {
+                const DataType* src = reinterpret_cast<const DataType*>(slot[s] + offset[static_cast<size_t>(i) - first]);
+                data[static_cast<size_t>(i)].assign(src, src + bytes_of(static_cast<size_t>(i)) / sizeof(S));
+            }
+        };
+        int s = 0;
+        bool pending = false;
+        size_t pending_first = 0, pending_last = 0;
+        size_t i = 0;
+        while (i < pieces.size()) {
+            if (bytes_of(i) > slot_bytes) {
+                data[i].resize(bytes_of(i) / sizeof(S));
+                check_cuda(cudaMemcpy(data[i].data(), pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost),
+                           "download level blocks");
+                ++i;
+                continue;
+            }
+            const size_t first = i;
+            size_t used = 0;
+            while (i < pieces.size() && bytes_of(i) <= slot_bytes && used + bytes_of(i) <= slot_bytes) {
+                check_cuda(cudaMemcpyAsync(slot[s] + used, pieces[i]->ptr, bytes_of(i), cudaMemcpyDeviceToHost, stream),
+                           "download level blocks");
+                used += bytes_of(i);
+                ++i;
+            }
+            check_cuda(cudaEventRecord(copied[s], stream), "cudaEventRecord");
+            if (pending) unpack(1 - s, pending_first, pending_last);
+            pending = true;
+            pending_first = first;
+            pending_last = i;
+            s = 1 - s;
+        }
+        if (pending) unpack(1 - s, pending_first, pending_last);
+        for (auto& ev : copied) cudaEventDestroy(ev);
+    }
+
+    size_t piece = 0;
     for (auto& kv : blocks.schur) {
-        box_of(kv.first).schur_complement.set_owned(kv.second.rows, kv.second.cols, fetch(kv.second),
+        box_of(kv.first).schur_complement.set_owned(kv.second.rows, kv.second.cols, std::move(data[piece++]),
                                                     MatrixStorage<DataType>::FULL);
         heap.free(kv.second.ptr);
     }
@@ -4163,21 +4540,21 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
     };
     for (auto& kv : blocks.edges) {
         const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
+        std::vector<DataType> block_data = std::move(data[piece++]);
         if (local_box(lo) == nullptr || local_box(hi) == nullptr) {
             // a pair with a box of another rank: the local box's view
             // (rows = the other box's points)
-            std::vector<DataType> data = fetch(kv.second);
             ModifiedBlock<DataType> view;
             if (auto* lb = local_box(lo)) {
                 view.neighbor_morton = hi;
-                view.set_a_ns_owned(kv.second.rows, kv.second.cols, std::move(data), MatrixStorage<DataType>::FULL);
+                view.set_a_ns_owned(kv.second.rows, kv.second.cols, std::move(block_data), MatrixStorage<DataType>::FULL);
                 lb->near_field_interaction_map[hi] = static_cast<int64_t>(lb->near_field_modified_interactions.size());
                 lb->near_field_modified_interactions.push_back(std::move(view));
             } else if (auto* hb = local_box(hi)) {
-                std::vector<DataType> transposed(data.size());
+                std::vector<DataType> transposed(block_data.size());
                 for (int j = 0; j < kv.second.cols; ++j)
-                    for (int i = 0; i < kv.second.rows; ++i)
-                        transposed[j + static_cast<size_t>(i) * kv.second.cols] = data[i + static_cast<size_t>(j) * kv.second.rows];
+                    for (int r = 0; r < kv.second.rows; ++r)
+                        transposed[j + static_cast<size_t>(r) * kv.second.cols] = block_data[r + static_cast<size_t>(j) * kv.second.rows];
                 view.neighbor_morton = lo;
                 view.set_a_ns_owned(kv.second.cols, kv.second.rows, std::move(transposed), MatrixStorage<DataType>::FULL);
                 hb->near_field_interaction_map[lo] = static_cast<int64_t>(hb->near_field_modified_interactions.size());
@@ -4192,7 +4569,7 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
         auto& hi_box = box_of(hi);
         ModifiedBlock<DataType> lo_block;
         lo_block.neighbor_morton = hi;
-        lo_block.set_a_ns_owned(kv.second.rows, kv.second.cols, fetch(kv.second), MatrixStorage<DataType>::FULL);
+        lo_block.set_a_ns_owned(kv.second.rows, kv.second.cols, std::move(block_data), MatrixStorage<DataType>::FULL);
         lo_box.near_field_interaction_map[hi] = static_cast<int64_t>(lo_box.near_field_modified_interactions.size());
         lo_box.near_field_modified_interactions.push_back(std::move(lo_block));
         ModifiedBlock<DataType> hi_block;
@@ -4303,12 +4680,12 @@ bool factor_host_root_on_device(BoxData<CoordType, DataType>& root, bool symmetr
 // make_level_eliminator), for deciding where the parent blocks go.
 template<typename CoordType, typename DataType, typename KernelType>
 bool level_eliminator_would_run(const ParallelTree<CoordType, DataType>* tree, int level_index, const KernelType* kernel,
-                                FactorizationMethod method) {
+                                FactorizationMethod method, int lazy_schur = -1) {
     if constexpr (gpu_data_type<DataType>) {
         return level_eliminator_supported(tree->levels[static_cast<size_t>(level_index)], kernel, tree->dimension,
-                                          method, nullptr);
+                                          method, nullptr, false, lazy_schur);
     } else {
-        (void)tree; (void)level_index; (void)kernel; (void)method;
+        (void)tree; (void)level_index; (void)kernel; (void)method; (void)lazy_schur;
         return false;
     }
 }
@@ -4319,20 +4696,20 @@ template<typename CoordType, typename DataType, typename KernelType>
 std::unique_ptr<LevelEliminatorBase<CoordType, DataType>> make_level_eliminator(
     ParallelTree<CoordType, DataType>* tree, int level_index, KernelType* kernel, double tolerance,
     FactorizationMethod method, std::string* reason, std::unique_ptr<DeviceLevelBlocks<DataType>> adopt = nullptr,
-    bool occupancy = false, bool device_sketch = true) {
+    bool occupancy = false, bool device_sketch = true, bool ca = false) {
     if constexpr (gpu_data_type<DataType>) {
         const auto& level = tree->levels[static_cast<size_t>(level_index)];
-        if (!level_eliminator_supported(level, kernel, tree->dimension, method, reason)) {
+        if (!level_eliminator_supported(level, kernel, tree->dimension, method, reason, ca)) {
             if (adopt) throw std::runtime_error("make_level_eliminator: device blocks for a level the device cannot run");
             return nullptr;
         }
         auto eliminator = std::make_unique<LevelEliminator<CoordType, DataType, KernelType>>(
-            tree, level_index, kernel, tolerance, std::move(adopt), occupancy, device_sketch);
+            tree, level_index, kernel, tolerance, std::move(adopt), occupancy, device_sketch, ca);
         eliminator->begin();
         return eliminator;
     } else {
         (void)tree; (void)level_index; (void)kernel; (void)tolerance; (void)method; (void)adopt; (void)occupancy;
-        (void)device_sketch;
+        (void)device_sketch; (void)ca;
         if (reason) *reason = "single precision is not run on the GPU";
         return nullptr;
     }

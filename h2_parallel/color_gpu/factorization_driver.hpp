@@ -6,6 +6,10 @@
 // transition, and the root.  The loops keep their host code and their own
 // wave schedules; each call here replaces the host step it names.
 //
+// Replicated CA levels (start_ca_level) run in the same eliminator with their
+// ghost boxes; the loop's CA schedule calls eliminate_wave, and nothing is
+// transported during the level (color_gpu/GPU_CA_PLAN.md, M1).
+//
 // A tree of occupied boxes (`occupancy`, the unstructured backend) keeps
 // empty boxes in the local slabs; the eliminator skips them, and its
 // transports follow the unstructured host transport's protocol (every rank
@@ -15,14 +19,20 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "ca_halo.hpp"
 #include "level_eliminator.hpp"
+#include "wave_trace.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -45,10 +55,79 @@ public:
         bool is_symmetric = true;
         bool is_hermitian = false;
         bool occupancy = false;
+        int ca_owner_component = 0;  // H2_CA_owner_component
     };
 
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
         : tree_(tree), kernel_(kernel), opt_(options) {}
+
+    // H2_GPU_WARMUP=1, before the first level: the batched LU, the two
+    // solves of X_RR^{-1} and the three GEMM forms once per size range, so no
+    // level pays the first-use loading of their kernels (lazy module loading;
+    // up to ~0.3 s inside a level).  Returns its time (0 when off).
+    double warm_up() {
+        static const bool enabled = [] {
+            const char* v = std::getenv("H2_GPU_WARMUP");
+            return v != nullptr && std::atoi(v) != 0;
+        }();
+        if (!enabled || !color_gpu_enabled()) return 0.0;
+        if constexpr (!gpu_data_type<DataType>) {
+            return 0.0;
+        } else {
+            using S = typename DeviceScalar<DataType>::type;
+            const auto t0 = std::chrono::steady_clock::now();
+            Context& ctx = Context::instance();
+            ctx.activate();
+            cudaStream_t stream = ctx.stream();
+            magma_queue_t queue = ctx.queue();
+            MetaBuilder& meta = pinned_pool().meta;
+            DeviceBuffer meta_device, work;
+            for (int n : {8, 16, 32, 64, 128, 256, 512, 1024}) {
+                const size_t bytes = static_cast<size_t>(n) * n * sizeof(S);
+                std::vector<S> identity(static_cast<size_t>(n) * n, S(0.0));
+                for (int i = 0; i < n; ++i) identity[static_cast<size_t>(i) * n + i] = S(1.0);
+                S *d_a = nullptr, *d_b = nullptr, *d_c = nullptr;
+                magma_int_t *d_piv = nullptr, *d_info = nullptr;
+                magma_int_t** d_piv_ptr = nullptr;
+                check_cuda(cudaMalloc(&d_a, bytes), "warm-up");
+                check_cuda(cudaMalloc(&d_b, bytes), "warm-up");
+                check_cuda(cudaMalloc(&d_c, bytes), "warm-up");
+                check_cuda(cudaMalloc(&d_piv, n * sizeof(magma_int_t)), "warm-up");
+                check_cuda(cudaMalloc(&d_info, sizeof(magma_int_t)), "warm-up");
+                check_cuda(cudaMalloc(&d_piv_ptr, sizeof(magma_int_t*)), "warm-up");
+                check_cuda(cudaMemcpy(d_a, identity.data(), bytes, cudaMemcpyHostToDevice), "warm-up");
+                check_cuda(cudaMemcpy(d_b, identity.data(), bytes, cudaMemcpyHostToDevice), "warm-up");
+                check_cuda(cudaMemcpy(d_piv_ptr, &d_piv, sizeof(magma_int_t*), cudaMemcpyHostToDevice), "warm-up");
+                // (a, lda) the LU, (c, ldc) the solves' right side: as the eliminator's batches
+                VBatch<S> lu;
+                lu.entries.push_back({d_a, nullptr, d_b, n, n, 1, n, 1, n});
+                VBatch<S> g;
+                g.entries.push_back({d_a, d_b, d_c, n, n, n, n, n, n});
+                meta.clear();
+                lu.stage(meta);
+                g.stage(meta);
+                char* md = meta.upload(meta_device, stream);
+                getrf_vbatched<S>(n, lu.size_array(md, 0), lu.size_array(md, 1), lu.template pointer_array<S*>(md, 0),
+                                  lu.size_array(md, 3), d_piv_ptr, d_info, 1, work, queue);
+                for (magma_uplo_t uplo : {MagmaUpper, MagmaLower}) {
+                    trsm_vbatched<S>(MagmaRight, uplo, MagmaNoTrans, uplo == MagmaUpper ? MagmaNonUnit : MagmaUnit, n,
+                                     n, lu.size_array(md, 0), lu.size_array(md, 1), S(1.0),
+                                     lu.template pointer_array<S*>(md, 0), lu.size_array(md, 3),
+                                     lu.template pointer_array<S*>(md, 2), lu.size_array(md, 5), 1, queue);
+                }
+                g.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
+                g.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
+                g.gemm(md, MagmaTrans, MagmaNoTrans, 1.0, 1.0, queue);
+                check_cuda(cudaStreamSynchronize(stream), "warm-up");
+                for (void* p : {static_cast<void*>(d_a), static_cast<void*>(d_b), static_cast<void*>(d_c),
+                                static_cast<void*>(d_piv), static_cast<void*>(d_info), static_cast<void*>(d_piv_ptr)}) {
+                    cudaFree(p);
+                }
+            }
+            meta.clear();
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+    }
 
     // ---- where the blocks of a level go next (tested where levels start)
 
@@ -59,7 +138,9 @@ public:
         const bool streamed =
             opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian && tree_->id_proxy_mode != 2;
         if (!streamed || opt_.lazy_schur == 0) return false;
-        return level_eliminator_would_run(tree_, lvl, kernel_, opt_.method);
+        // (with the level's own lazy mode: after a CA level the runtime still
+        // has that level's, capped at 1)
+        return level_eliminator_would_run(tree_, lvl, kernel_, opt_.method, opt_.lazy_schur);
     }
     // Level 1 is not eliminated: its transition builds the root, which is
     // factored on the device when level 1 runs on one rank.
@@ -88,6 +169,7 @@ public:
               opt_.is_symmetric && !opt_.is_hermitian)) {
             return;
         }
+        if (wave_trace_enabled()) trace_.start_begin();
         int fits = 1;
         for (const Box& box : tree_->levels[static_cast<size_t>(lvl)].local_boxes) {
             if (box.num_points > kEntryDestMask) fits = 0;
@@ -97,6 +179,8 @@ public:
         level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
                                        std::move(blocks_), opt_.occupancy, fits != 0);
         level_index_ = lvl;
+        decide_solve_keep(lvl, level_comm, false);
+        if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU box path: "
                       << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
@@ -107,6 +191,202 @@ public:
                       << std::endl;
         }
     }
+    // ---- a replicated CA level (owner component 0) that eliminates
+
+    // The device runs CA level `lvl` (all ranks decide alike): streamed
+    // sketches, lazy far fill, a symmetric kernel, the LU of X_RR.
+    bool ca_level_runs(int lvl, int owner_component) const {
+        if (!color_gpu_enabled() || lvl <= 1 || !tree_->level_uses_CA(lvl) || owner_component != 0) return false;
+        const bool streamed =
+            opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian && tree_->id_proxy_mode != 2;
+        return streamed && opt_.lazy_schur > 0 && opt_.method == FactorizationMethod::LU && !opt_.occupancy;
+    }
+    bool ca_level_runs(int lvl) const { return ca_level_runs(lvl, opt_.ca_owner_component); }
+    // The eliminator's CA mode supports level `lvl` (the same on every rank;
+    // the box sizes are checked apart, collectively).
+    bool ca_level_supported(int lvl, std::string* reason) const {
+        const Level& level = tree_->levels[static_cast<size_t>(lvl)];
+        // (the CA levels' lazy mode: at most 1)
+        const int lazy = std::min(opt_.lazy_schur, 1);
+        if (!level_eliminator_supported(level, kernel_, tree_->dimension, opt_.method, reason, true, lazy)) {
+            return false;
+        }
+        if (!device_sketch_supported(tree_, device_kernel_spec(kernel_->gpu_spec).kind)) {
+            if (reason) *reason = "CA levels need the device sketch";
+            return false;
+        }
+        return true;
+    }
+    // Level start, after the host halo gather (all ranks of level_comm).
+    // Returns whether the device runs the level: every box fits the device
+    // sketch's packed lists on every rank, and the eliminator supports it.
+    bool start_ca_level(int lvl, MPI_Comm level_comm, bool announce) {
+        if (wave_trace_enabled()) trace_.start_begin();
+        const Level& level = tree_->levels[static_cast<size_t>(lvl)];
+        int fits = 1;
+        for (const Box& box : level.local_boxes) {
+            if (box.num_points > kEntryDestMask) fits = 0;
+        }
+        for (const Box& box : level.ghost_boxes) {
+            if (box.num_points > kEntryDestMask) fits = 0;
+        }
+        std::string reason = "boxes over " + std::to_string(kEntryDestMask) + " points";
+        // decided on every rank before any builds its eliminator (which moves
+        // the host blocks to the device)
+        if (fits && !ca_level_supported(lvl, &reason)) fits = 0;
+        MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
+        const bool device_halo = blocks_ != nullptr;  // the transition kept the blocks (M2)
+        if (device_halo && !fits) {
+            throw std::runtime_error("start_ca_level: blocks kept on the device for a level the device declines");
+        }
+        if (fits) {
+            if (device_halo) {
+                const CaHaloStats h = exchange_ca_ghost_blocks(tree_, lvl, *blocks_, level_comm);
+                if (announce) {
+                    std::printf("  [gpu] level %d device halo: %.2f s (plan %.2f, pack %.2f, MPI %.2f, unpack %.2f), "
+                                "sent %.2f GB, received %.2f GB in %lld blocks%s\n",
+                                lvl, h.total, h.plan, h.pack, h.mpi, h.unpack, h.bytes_sent / 1e9,
+                                h.bytes_received / 1e9, static_cast<long long>(h.blocks_received),
+                                h.staged ? " (through the host)" : "");
+                    std::fflush(stdout);
+                }
+            }
+            level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
+                                           device_halo ? std::move(blocks_) : nullptr, opt_.occupancy, true,
+                                           /*ca=*/true);
+        }
+        level_index_ = lvl;
+        decide_solve_keep(lvl, level_comm, true);
+        if (wave_trace_enabled()) trace_.start_end();
+        if (announce) {
+            std::cout << "  GPU CA level: "
+                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                                 : "off (" + reason + ")")
+                      << std::endl;
+        }
+        return level_ != nullptr;
+    }
+    // Whether the level keeps its solve factors on the device (and skips
+    // the host copies of their X_NR), before its waves and alike on every
+    // rank of `level_comm`: an upper bound of their bytes (solve_keep_bound)
+    // within the keep budget on every rank.  Collective over level_comm.
+    void decide_solve_keep(int lvl, MPI_Comm level_comm, bool ca) {
+        if (!(device_solve_enabled() && device_solve_keep())) return;
+        int ok = 1;
+        if (level_) {
+            const DeviceHeap& heap = DeviceHeap::instance();
+            const double bound = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca);
+            ok = static_cast<double>(heap.used()) + bound <=
+                         device_solve_keep_fraction() * static_cast<double>(heap.capacity())
+                     ? 1
+                     : 0;
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
+        if (level_) level_->set_solve_keep(ok != 0);
+    }
+    // After the host's post-elimination assisting gather: the assisting
+    // boxes' skeletons, for the device transition.
+    void refresh_remote_skeletons() {
+        if (level_) level_->refresh_remote_skeletons();
+    }
+    // H2_CA_REPLICA_CHECK=1, after finish_level of a device CA level (all
+    // ranks of level_comm): every ghost copy of a box against its owner's,
+    // bitwise, by hashes of its factors.  Prints the copies checked and, per
+    // rank, the first copies that differ and in which factors.
+    void check_ca_replicas(int lvl, MPI_Comm level_comm, bool announce) const {
+        if (!ca_replica_check_enabled()) return;
+        const Level& level = tree_->levels[static_cast<size_t>(lvl)];
+        constexpr int kParts = 8;
+        static const char* const kPartNames[kParts] = {"skeleton", "T", "LU(X_RR)", "pivots",
+                                                       "X_SR", "X_RS", "X_NR", "X_RR_full"};
+        using Hashes = std::array<uint64_t, kParts>;
+        auto hash_bytes = [](const void* p, size_t bytes) {
+            uint64_t h = 0x9e3779b97f4a7c15ull ^ bytes;
+            const unsigned char* c = static_cast<const unsigned char*>(p);
+            size_t i = 0;
+            for (; i + 8 <= bytes; i += 8) {
+                uint64_t w;
+                std::memcpy(&w, c + i, 8);
+                h = (h ^ w) * 0xff51afd7ed558ccdull;
+                h ^= h >> 32;
+            }
+            for (; i < bytes; ++i) h = (h ^ c[i]) * 0x100000001b3ull;
+            return h;
+        };
+        auto hashes_of = [&](const Box& box) {
+            auto vec = [&](const auto& v) { return hash_bytes(v.data(), v.size() * sizeof(v[0])); };
+            return Hashes{vec(box.skeleton_indices), vec(box.interpolation_matrix.data), vec(box.X_RR.data),
+                          vec(box.X_RR_pivots), vec(box.X_SR.data), vec(box.X_RS_entry.data),
+                          vec(box.X_NR.data), vec(box.X_RR_full.data)};
+        };
+        auto eliminated = [&](const Box& box) {
+            return level.eliminated_boxes.count(box.morton_index) != 0 && box.num_points > 0;
+        };
+        // the owners' hashes, gathered: (morton, hashes) per local box
+        std::vector<uint64_t> mine;
+        {
+            const size_t nb = level.local_boxes.size();
+            std::vector<Hashes> h(nb);
+            #pragma omp parallel for schedule(dynamic, 8)
+            for (int64_t b = 0; b < static_cast<int64_t>(nb); ++b) h[static_cast<size_t>(b)] = hashes_of(level.local_boxes[static_cast<size_t>(b)]);
+            for (size_t b = 0; b < nb; ++b) {
+                if (!eliminated(level.local_boxes[b])) continue;
+                mine.push_back(static_cast<uint64_t>(level.local_boxes[b].morton_index));
+                mine.insert(mine.end(), h[b].begin(), h[b].end());
+                mine.push_back(static_cast<uint64_t>(level.local_boxes[b].X_NR.rows));
+            }
+        }
+        int nranks = 1;
+        MPI_Comm_size(level_comm, &nranks);
+        int count = static_cast<int>(mine.size());
+        std::vector<int> counts(static_cast<size_t>(nranks)), displs(static_cast<size_t>(nranks), 0);
+        MPI_Allgather(&count, 1, MPI_INT, counts.data(), 1, MPI_INT, level_comm);
+        for (int r = 1; r < nranks; ++r) displs[static_cast<size_t>(r)] = displs[static_cast<size_t>(r - 1)] + counts[static_cast<size_t>(r - 1)];
+        std::vector<uint64_t> all(static_cast<size_t>(displs.back() + counts.back()));
+        MPI_Allgatherv(mine.data(), count, MPI_UINT64_T, all.data(), counts.data(), displs.data(), MPI_UINT64_T,
+                       level_comm);
+        std::unordered_map<int64_t, const uint64_t*> owner;
+        for (size_t i = 0; i < all.size(); i += kParts + 2) owner[static_cast<int64_t>(all[i])] = &all[i + 1];
+        // this rank's ghost copies against them
+        const size_t ng = level.ghost_boxes.size();
+        std::vector<Hashes> gh(ng);
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (int64_t g = 0; g < static_cast<int64_t>(ng); ++g) gh[static_cast<size_t>(g)] = hashes_of(level.ghost_boxes[static_cast<size_t>(g)]);
+        long long totals[2] = {0, 0};  // copies checked, copies that differ
+        int rank = 0;
+        MPI_Comm_rank(level_comm, &rank);
+        for (size_t g = 0; g < ng; ++g) {
+            const Box& box = level.ghost_boxes[g];
+            if (!eliminated(box)) continue;
+            auto it = owner.find(box.morton_index);
+            if (it == owner.end()) {
+                throw std::runtime_error("CA replica check: ghost " + std::to_string(box.morton_index) +
+                                         " has no owner copy");
+            }
+            ++totals[0];
+            std::string parts;
+            for (int p = 0; p < kParts; ++p) {
+                if (gh[g][static_cast<size_t>(p)] != it->second[p]) parts += std::string(parts.empty() ? "" : ", ") + kPartNames[p];
+            }
+            if (parts.empty()) continue;
+            if (++totals[1] <= 3) {
+                auto w = level.elimination_wave.find(box.morton_index);
+                std::printf("  [gpu] level %d CA replica check, rank %d: ghost %lld (wave %d) differs from its owner's "
+                            "copy in %s (X_NR rows %lld here, %lld on the owner)\n",
+                            lvl, rank, static_cast<long long>(box.morton_index),
+                            w == level.elimination_wave.end() ? -1 : static_cast<int>(w->second), parts.c_str(),
+                            static_cast<long long>(box.X_NR.rows), static_cast<long long>(it->second[kParts]));
+            }
+        }
+        MPI_Allreduce(MPI_IN_PLACE, totals, 2, MPI_LONG_LONG, MPI_SUM, level_comm);
+        if (announce) {
+            std::printf("  [gpu] level %d CA replica check: %lld ghost copies, %lld differ from their owners' "
+                        "(bitwise)\n",
+                        lvl, totals[0], totals[1]);
+        }
+        std::fflush(stdout);
+    }
+
     bool on() const { return level_ != nullptr; }
     // one active rank: the level has nothing to transport
     bool local() const {
@@ -136,7 +416,11 @@ public:
     // returns its number of boundary boxes.  The loop records the wave's
     // boxes as eliminated.
     int eliminate_wave(const std::vector<int64_t>& wave, int counter) {
-        return level_->eliminate_wave(wave, counter);
+        if (!wave_trace_enabled()) return level_->eliminate_wave(wave, counter);
+        trace_.wave_begin();
+        const int boundary = level_->eliminate_wave(wave, counter);
+        trace_.wave_end(counter, wave.size());
+        return boundary;
     }
 
     // Level end, after the final transport (all ranks of level_comm): the
@@ -145,7 +429,14 @@ public:
     // level still holds all of its own).
     void finish_level(int lvl, const PendingFactorUpdates<DataType>& pending, MPI_Comm level_comm, bool announce) {
         if (level_) {
+            // (every rank of level_comm has a device level here)
+            const bool trace = wave_trace_enabled();
+            if (trace) trace_.finish_begin();
             level_->finish();
+            if (trace) {
+                trace_.finish_end();
+                print_wave_trace(lvl, level_comm, announce);
+            }
             if (local() && (!pending.replace_blocks.empty() || !pending.accumulated_deltas.empty() ||
                             !pending.generators.empty())) {
                 throw std::runtime_error("device level left updates for other ranks");
@@ -161,6 +452,38 @@ public:
                 std::fflush(stdout);
             }
         }
+    }
+
+    // H2_GPU_WAVE_TRACE=1 (all ranks of level_comm): the spread of the
+    // ranks' wave totals, and the wave tables of rank 0 and of the rank whose
+    // waves took longest (a replicated CA level: the rank with most ghosts).
+    void print_wave_trace(int lvl, MPI_Comm level_comm, bool announce) const {
+        int rank = 0, size = 1;
+        MPI_Comm_rank(level_comm, &rank);
+        MPI_Comm_size(level_comm, &size);
+        const auto mine = trace_.summary();
+        constexpr int K = WaveTrace::kSummary;
+        std::vector<double> all(static_cast<size_t>(size) * K);
+        MPI_Gather(mine.data(), K, MPI_DOUBLE, all.data(), K, MPI_DOUBLE, 0, level_comm);
+        struct { double v; int r; } local{mine[0], rank}, slowest{0.0, 0};
+        MPI_Allreduce(&local, &slowest, 1, MPI_DOUBLE_INT, MPI_MAXLOC, level_comm);
+        if (announce) {
+            static const char* const names[K] = {"waves", "boxes", "sketch wait", "ID store", "plan",
+                                                 "device sketch", "device elimination"};
+            std::printf("  [gpu] level %d wave trace over %d ranks (min / median / max; rank of the max):", lvl, size);
+            for (int k = 0; k < K; ++k) {
+                std::vector<std::pair<double, int>> v;
+                for (int r = 0; r < size; ++r) v.emplace_back(all[static_cast<size_t>(r) * K + k], r);
+                std::sort(v.begin(), v.end());
+                const double f = k == 1 ? 1.0 : 1e3;  // boxes, or ms
+                std::printf(" %s %.0f / %.0f / %.0f (%d)%s", names[k], f * v.front().first,
+                            f * v[v.size() / 2].first, f * v.back().first, v.back().second, k + 1 < K ? ";" : "\n");
+            }
+            trace_.print(lvl, rank);
+        }
+        MPI_Barrier(level_comm);
+        if (rank == slowest.r && !announce) trace_.print(lvl, rank);
+        MPI_Barrier(level_comm);
     }
 
     // Level 1 (active, not eliminated) adopts the blocks of the level-2
@@ -184,9 +507,12 @@ public:
     // `build_structure()` returns the parent boxes without their blocks.
     // Returns whether the parents were built here; otherwise the level's
     // blocks are back in the host BoxData for the host transition.
+    // `level_comm` (the level's active ranks, or MPI_COMM_NULL): a device CA
+    // level next keeps the blocks on the device (its halo then moves between
+    // the devices, M2) when every rank's parents fit the device sketch.
     template<typename StructureBuilder>
     bool transition(const Level& level, const Level& parent_level, std::vector<Box>& parents,
-                    StructureBuilder&& build_structure, bool announce) {
+                    StructureBuilder&& build_structure, bool announce, MPI_Comm level_comm = MPI_COMM_NULL) {
         bool on_device = false;
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
         if (level_ && level.is_process_active && level_->can_build_parent() &&
@@ -194,7 +520,18 @@ public:
             parents = build_structure();
             blocks_ = level_->build_parent(parents);
             level_.reset();
-            if (reduction_ahead || !keeps_blocks_of(level_index_ - 1)) {
+            const int parent_lvl = level_index_ - 1;
+            bool keep = !reduction_ahead && keeps_blocks_of(parent_lvl);
+            if (!keep && !reduction_ahead && level_comm != MPI_COMM_NULL && ca_device_halo_enabled() &&
+                ca_level_runs(parent_lvl) && ca_level_supported(parent_lvl, nullptr)) {
+                int fits = 1;
+                for (const Box& p : parents) {
+                    if (p.num_points > kEntryDestMask) fits = 0;
+                }
+                MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
+                keep = fits != 0;
+            }
+            if (!keep) {
                 download_level_blocks(*blocks_, parents);
                 blocks_.reset();
             }
@@ -211,7 +548,8 @@ public:
             }
         }
         if (level_) {
-            level_->download_blocks();  // host transition
+            level_->restore_host_copies();  // (X_NR kept without a host copy)
+            level_->download_blocks();      // host transition
             level_.reset();
         }
         return on_device;
@@ -272,11 +610,12 @@ public:
         std::printf("  [gpu] level %d elimination device: fills %.2f, X_RR/X_SR %.2f, LU %.2f, X_NR %.2f, "
                     "solves %.2f, Schur+near %.2f, owner targets %.2f, owner GEMMs %.2f s\n",
                     lvl, e.el[0], e.el[1], e.el[2], e.el[3], e.el[4], e.el[5], e.el[6], e.el[7]);
-        std::printf("  [gpu] level %d host: plan boxes %.2f s, owner pass %.2f s (overlapped), launch %.2f s, "
-                    "sketch wait %.2f s, heap-reclaim wait %.2f s, exchange-buffer wait %.2f s | "
-                    "GF/s: owner %.0f, solves %.0f\n",
-                    lvl, e.plan_boxes, e.plan_owner, e.launch, e.sk_wait, e.reclaim_wait,
-                    e.exchange_wait,
+        std::printf("  [gpu] level %d host: plan boxes %.2f s [buffers %.2f, items %.2f of which near-block "
+                    "allocations %.2f], owner pass %.2f s (overlapped) [candidates %.2f, pairs %.2f, join %.2f, "
+                    "batches %.2f], launch %.2f s, sketch wait %.2f s, heap-reclaim wait %.2f s, exchange-buffer "
+                    "wait %.2f s | GF/s: owner %.0f, solves %.0f\n",
+                    lvl, e.plan_boxes, e.pb_buffers, e.pb_items, e.pb_near_alloc, e.plan_owner, e.po_candidates,
+                    e.po_pairs, e.po_order, e.po_batches, e.launch, e.sk_wait, e.reclaim_wait, e.exchange_wait,
                     e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
                     e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
         if (e.remote_generators > 0 || e.exchange > 0.0) {
@@ -302,6 +641,7 @@ private:
     int level_index_ = -1;
     std::unique_ptr<LevelEliminatorBase<CoordType, DataType>> level_;  // this level's device box path
     std::unique_ptr<DeviceLevelBlocks<DataType>> blocks_;              // the next level's blocks
+    WaveTrace trace_;                                                  // H2_GPU_WAVE_TRACE=1
 };
 
 }  // namespace gpu

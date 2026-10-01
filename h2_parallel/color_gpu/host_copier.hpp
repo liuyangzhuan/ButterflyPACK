@@ -58,8 +58,13 @@ public:
     };
 
     // `ring` selects the pinned slot pair (one per concurrent copier).
+    // `threads`: at most this many copy threads, and at most half the
+    // rank's OpenMP threads, so the copies leave its cores to the host work
+    // of the waves (4 ranks per node: 16 OpenMP threads, 8 copy threads; 16
+    // spun the waves' OpenMP loops for up to 13 ms each and made the
+    // elimination 8-12% slower); H2_GPU_COPY_THREADS overrides.
     explicit HostCopier(int device, int ring = 0, int threads = 16) : device_(device), ring_(ring) {
-        threads_ = threads;
+        threads_ = std::max(1, std::min(threads, omp_get_max_threads() / 2));
         if (const char* env = std::getenv("H2_GPU_COPY_THREADS")) threads_ = std::max(1, std::atoi(env));
         worker_ = std::thread([this] { run(); });
     }
@@ -203,13 +208,40 @@ private:
                 chunks.push_back({j, begin, end, begin == 0, end == bytes});
             }
         }
+        // A chunk's bytes that some segment reads, at their offsets in the
+        // slot (ranges less than kGap apart copied together): the parts of a
+        // block no segment wants (e.g. the X_NR the eliminator keeps on the
+        // device only) stay there.
+        constexpr size_t kGap = size_t{128} << 10;
         auto issue = [&](size_t c) {
             const Chunk& ch = chunks[c];
             const Job& job = jobs[ch.job];
             if (ch.first && job.ready) check_cuda(cudaStreamWaitEvent(stream, job.ready, 0), "cudaStreamWaitEvent");
-            if (ch.end > ch.begin) {
-                check_cuda(cudaMemcpyAsync(slots[c % 2], job.device + ch.begin, ch.end - ch.begin,
+            auto copy = [&](size_t lo, size_t hi) {
+                check_cuda(cudaMemcpyAsync(slots[c % 2] + (lo - ch.begin), job.device + lo, hi - lo,
                                            cudaMemcpyDeviceToHost, stream), "host copy");
+                bytes_ += static_cast<double>(hi - lo);
+            };
+            if (ch.end > ch.begin) {
+                auto first = std::upper_bound(job.segments.begin(), job.segments.end(), ch.begin,
+                                              [](size_t v, const Segment& seg) { return v < seg.offset + seg.bytes; });
+                auto last = std::lower_bound(job.segments.begin(), job.segments.end(), ch.end,
+                                             [](const Segment& seg, size_t v) { return seg.offset < v; });
+                size_t lo = 0, hi = 0;
+                bool open = false;
+                for (auto it = first; it != last; ++it) {
+                    const size_t a = std::max(ch.begin, it->offset), b = std::min(ch.end, it->offset + it->bytes);
+                    if (a >= b) continue;
+                    if (open && a <= hi + kGap) {
+                        hi = std::max(hi, b);
+                        continue;
+                    }
+                    if (open) copy(lo, hi);
+                    lo = a;
+                    hi = b;
+                    open = true;
+                }
+                if (open) copy(lo, hi);
             }
             check_cuda(cudaEventRecord(copied[c % 2], stream), "cudaEventRecord");
         };
@@ -259,7 +291,6 @@ private:
                     job.ready = nullptr;
                 }
                 if (job.finalize) job.finalize();
-                bytes_ += static_cast<double>(job.bytes);
             }
         }
         busy_ += std::chrono::duration<double>(clock::now() - t0).count();

@@ -1879,16 +1879,21 @@ CARequestPlan make_CA_request_plan(
     ParallelTree<CoordType, DataType>* tree,
     int level,
     const std::vector<int64_t>& requested_mortons,
-    MPI_Comm level_comm) {
+    MPI_Comm level_comm,
+    double* first_collective_seconds = nullptr) {
     auto& lvl = tree->levels[level];
     int comm_size = 0;
     MPI_Comm_size(level_comm, &comm_size);
 
     std::vector<int> global_rank_by_comm(static_cast<size_t>(comm_size));
+    const double t_first = MPI_Wtime();
     MPI_Allgather(
         &tree->mpi_rank, 1, MPI_INT,
         global_rank_by_comm.data(), 1, MPI_INT,
         level_comm);
+    if (first_collective_seconds != nullptr) {
+        *first_collective_seconds += MPI_Wtime() - t_first;
+    }
 
     std::unordered_map<int, int> comm_rank_by_global;
     for (int comm_rank = 0; comm_rank < comm_size; ++comm_rank) {
@@ -2217,6 +2222,9 @@ void gather_CA_assisting_boxes_factorization(
     if (memory_diagnostic) {
         memory_diagnostic("request_plan_ready", 0, plan_bytes);
     }
+    lvl.assisting_plan_outgoing = plan.outgoing;
+    lvl.assisting_plan_incoming = plan.incoming;
+    lvl.assisting_plan_comm = level_comm;
     lvl.assisting_boxes.resize(
         lvl.assisting_box_points_for_kernel_evaluation.size());
 
@@ -2336,16 +2344,130 @@ void reconstruct_CA_symmetric_ghost_halo(
     share_symmetric_level_edges(level);
 }
 
+/**
+ * @brief After a CA level's elimination: the assisting boxes' skeletons from
+ * their owners, over the plan of the level's assisting gather (point to point
+ * with its peers, no collective).  Their points and indices, gathered before
+ * the elimination, do not change.  Returns false, doing nothing, when the
+ * level has no plan over `level_comm` (the caller gathers in full).
+ */
+template<typename CoordType, typename DataType>
+bool refresh_CA_assisting_skeletons(
+    ParallelTree<CoordType, DataType>* tree,
+    int level,
+    MPI_Comm level_comm,
+    int tag) {
+    auto& lvl = tree->levels[level];
+    int comm_size = 0;
+    MPI_Comm_size(level_comm, &comm_size);
+    const auto& asked_of_me = lvl.assisting_plan_incoming;  // I send these
+    const auto& asked_by_me = lvl.assisting_plan_outgoing;  // I receive these
+    if (lvl.assisting_plan_comm != level_comm ||
+        asked_of_me.size() != static_cast<size_t>(comm_size) ||
+        asked_by_me.size() != static_cast<size_t>(comm_size)) {
+        return false;
+    }
+    // round 1: each box's skeleton size; round 2: the skeletons
+    std::vector<std::vector<int64_t>> send_sizes(static_cast<size_t>(comm_size)),
+        send_skel(static_cast<size_t>(comm_size)), recv_sizes(static_cast<size_t>(comm_size)),
+        recv_skel(static_cast<size_t>(comm_size));
+    for (int peer = 0; peer < comm_size; ++peer) {
+        for (int64_t morton : asked_of_me[static_cast<size_t>(peer)]) {
+            const auto* box = lvl.find_local_box(morton);
+            if (box == nullptr) {
+                throw std::runtime_error(
+                    "CA assisting refresh references a nonlocal source box");
+            }
+            send_sizes[static_cast<size_t>(peer)].push_back(
+                static_cast<int64_t>(box->skeleton_indices.size()));
+            send_skel[static_cast<size_t>(peer)].insert(
+                send_skel[static_cast<size_t>(peer)].end(),
+                box->skeleton_indices.begin(), box->skeleton_indices.end());
+        }
+        recv_sizes[static_cast<size_t>(peer)].resize(
+            asked_by_me[static_cast<size_t>(peer)].size());
+    }
+    auto exchange = [&](std::vector<std::vector<int64_t>>& out,
+                        std::vector<std::vector<int64_t>>& in, int round_tag) {
+        std::vector<MPI_Request> requests;
+        for (int peer = 0; peer < comm_size; ++peer) {
+            auto& buf = in[static_cast<size_t>(peer)];
+            if (buf.empty()) continue;
+            if (buf.size() > static_cast<size_t>(INT_MAX)) {
+                throw std::runtime_error("CA assisting refresh: message too large");
+            }
+            requests.emplace_back();
+            MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_INT64_T, peer,
+                      round_tag, level_comm, &requests.back());
+        }
+        for (int peer = 0; peer < comm_size; ++peer) {
+            const auto& buf = out[static_cast<size_t>(peer)];
+            if (buf.empty()) continue;
+            if (buf.size() > static_cast<size_t>(INT_MAX)) {
+                throw std::runtime_error("CA assisting refresh: message too large");
+            }
+            requests.emplace_back();
+            MPI_Isend(buf.data(), static_cast<int>(buf.size()), MPI_INT64_T, peer,
+                      round_tag, level_comm, &requests.back());
+        }
+        MPI_Waitall(static_cast<int>(requests.size()), requests.data(),
+                    MPI_STATUSES_IGNORE);
+    };
+    exchange(send_sizes, recv_sizes, tag);
+    for (int peer = 0; peer < comm_size; ++peer) {
+        int64_t total = 0;
+        for (int64_t k : recv_sizes[static_cast<size_t>(peer)]) total += k;
+        recv_skel[static_cast<size_t>(peer)].resize(static_cast<size_t>(total));
+    }
+    exchange(send_skel, recv_skel, tag + 1);
+    for (int peer = 0; peer < comm_size; ++peer) {
+        const auto& mortons = asked_by_me[static_cast<size_t>(peer)];
+        const auto& sizes = recv_sizes[static_cast<size_t>(peer)];
+        const auto& skel = recv_skel[static_cast<size_t>(peer)];
+        size_t at = 0;
+        for (size_t i = 0; i < mortons.size(); ++i) {
+            const size_t index = static_cast<size_t>(
+                lvl.assisting_box_points_for_kernel_evaluation.at(mortons[i]));
+            auto& target = lvl.assisting_boxes[index].skel_indices;
+            target.assign(skel.begin() + static_cast<int64_t>(at),
+                          skel.begin() + static_cast<int64_t>(at + static_cast<size_t>(sizes[i])));
+            at += static_cast<size_t>(sizes[i]);
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Phases of gather_CA_factorization_data (seconds, this rank): the
+ * ghost request plan (of which its first collective, where ranks that arrive
+ * late are waited for), the symmetric-pruning request sets, the ghost
+ * payloads, the symmetric halo reconstruction, the assisting boxes.
+ */
+struct CAGatherTimes {
+    double plan = 0.0, first_collective = 0.0, request_sets = 0.0, payloads = 0.0, reconstruct = 0.0,
+           assisting = 0.0;
+};
+
 template<typename CoordType, typename DataType>
 void gather_CA_factorization_data(
     ParallelTree<CoordType, DataType>* tree,
     int level,
     MPI_Comm level_comm,
     bool enable_symmetric_pair_pruning,
-    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {}) {
+    const FactorizationMemoryDiagnosticCallback& memory_diagnostic = {},
+    CAGatherTimes* times = nullptr) {
     auto& lvl = tree->levels[level];
+    CAGatherTimes local_times;
+    CAGatherTimes& t = times != nullptr ? *times : local_times;
+    double t0 = MPI_Wtime();
+    auto lap = [&](double& phase) {
+        const double now = MPI_Wtime();
+        phase += now - t0;
+        t0 = now;
+    };
     const CARequestPlan ghost_plan = make_CA_request_plan(
-        tree, level, lvl.ghost_id, level_comm);
+        tree, level, lvl.ghost_id, level_comm, &t.first_collective);
+    lap(t.plan);
     const size_t ghost_plan_bytes = memory_diagnostic
         ? resident_bytes_CA_request_plan(ghost_plan)
         : 0;
@@ -2360,6 +2482,7 @@ void gather_CA_factorization_data(
         peer_full_request_sets = exchange_CA_full_requested_ghost_sets(
             ghost_plan, lvl.ghost_id, level_comm);
     }
+    lap(t.request_sets);
     size_t request_set_bytes = 0;
     if (memory_diagnostic) {
         for (const auto& requests : peer_full_request_sets) {
@@ -2430,6 +2553,7 @@ void gather_CA_factorization_data(
             return end;
         },
         ghost_payload_diagnostic);
+    lap(t.payloads);
 
     if (memory_diagnostic) {
         memory_diagnostic(
@@ -2454,8 +2578,10 @@ void gather_CA_factorization_data(
                     ghost_request_bytes + communication);
             };
     }
+    lap(t.reconstruct);
     gather_CA_assisting_boxes_factorization(
         tree, level, level_comm, 411, assisting_diagnostic);
+    lap(t.assisting);
     if (memory_diagnostic) {
         memory_diagnostic("gather_complete", 0, ghost_request_bytes);
     }

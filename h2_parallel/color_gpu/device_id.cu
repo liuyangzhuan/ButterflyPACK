@@ -1,6 +1,14 @@
 // Batched interpolative decomposition of the H2 Color GPU backend: column-
 // pivoted Householder QR with the host's rank rule, then T = R11^{-1} R12.
 // Real (dgeqp3) or complex (zgeqp3) data.  See QrcpItemT in device_kernels.hpp.
+//
+// Every launch variant (one block of 256 or 1024 threads per box, or several
+// blocks per box) gives a box the same pivots, rank, R, T and traced norm,
+// bit for bit, whatever its batch: each column is worked on by one warp with
+// the same code, block-wide results are exact (maxima) or summed in column
+// order, and this file is compiled without FMA contraction (--fmad=false,
+// CMakeLists.txt), which could otherwise differ between the template
+// instances.  Replicated CA levels rely on it (tests/batch_determinism.cpp).
 
 #include "device_kernels.hpp"
 
@@ -23,18 +31,6 @@ __device__ __forceinline__ double warp_sum(double v) {
     return v;
 }
 __device__ __forceinline__ dcomplex warp_sum(dcomplex v) { return dcomplex(warp_sum(v.re), warp_sum(v.im)); }
-
-// Sum over the block in a fixed order (deterministic); all threads get it.
-template<int kWarps>
-__device__ double block_sum(double v, double* scratch) {
-    v = warp_sum(v);
-    __syncthreads();
-    if ((threadIdx.x & 31) == 0) scratch[threadIdx.x >> 5] = v;
-    __syncthreads();
-    double total = 0.0;
-    for (int w = 0; w < kWarps; ++w) total += scratch[w];
-    return total;
-}
 
 template<int kWarps>
 __device__ double block_max(double v, double* scratch) {
@@ -208,21 +204,27 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
     __shared__ double s_beta;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
 
-    // ---- norm (for traces), finiteness, normalization
-    double amax = 0.0, ssq = 0.0, bad = 0.0;
+    // ---- norm (for traces), finiteness, normalization.  The norm sums the
+    // columns' sums in column order, as the cooperative kernel does: every
+    // launch variant traces the same value.
+    double amax = 0.0, bad = 0.0;
     for (int j = warp; j < n; j += kWarps) {
         const T* col = A + static_cast<int64_t>(j) * lda;
+        double s = 0.0;
         for (int r = lane; r < m; r += 32) {
             const T x = col[r];
             if (!is_finite(x)) bad = 1.0;
             amax = fmax(amax, magnitude(x));
-            ssq += abs2(x);
+            s += abs2(x);
         }
+        s = warp_sum(s);
+        if (lane == 0) vn2[j] = s;
     }
     bad = block_max<kWarps>(bad, scratch);
-    ssq = block_sum<kWarps>(ssq, scratch);
     amax = block_max<kWarps>(amax, scratch);
     if (tid == 0) {
+        double ssq = 0.0;
+        for (int j = 0; j < n; ++j) ssq += vn2[j];
         *item.norm = sqrt(ssq);
         *item.flag = bad != 0.0 ? 1 : 0;
     }
@@ -338,13 +340,13 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
 // `part` owns the column positions part, part + cpb, ...; the matrix stays in
 // global memory and a grid barrier follows each pivot search and each
 // reflector.  Every column is processed by one warp exactly as in
-// qrcp_kernel, so pivots, R and T are the same; only the Frobenius norm
-// (traces) is summed in another order.
+// qrcp_kernel, so pivots, R, T and the traced norm are the same.
 // ---------------------------------------------------------------------------
 constexpr int kCoopThreads = 256;
 
 __host__ __device__ inline size_t coop_box_doubles(int max_n, int cpb) {
-    return 2 * static_cast<size_t>(max_n) + 4 * static_cast<size_t>(cpb) + 4;  // vn1, vn2, cand, partials, tau (2)/beta/r00
+    // vn1, vn2, cand, partials (amax, bad), tau (2)/beta/r00, the columns' sums (traced norm)
+    return 3 * static_cast<size_t>(max_n) + 3 * static_cast<size_t>(cpb) + 4;
 }
 
 // tau in box_d[0] (real) or box_d[0..1] (complex)
@@ -408,9 +410,9 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
     double* vn2 = vn1 + max_n;
     double* cand_v = vn2 + max_n;
     double* part_amax = cand_v + cpb;
-    double* part_ssq = part_amax + cpb;
-    double* part_bad = part_ssq + cpb;
+    double* part_bad = part_amax + cpb;
     double* box_d = part_bad + cpb;  // tau (2), beta, r00
+    double* col_ssq = box_d + 4;     // the columns' sums of squares (traced norm)
     int* cand_i = iwork + static_cast<size_t>(box) * coop_box_ints(cpb);
     int* box_i = cand_i + cpb;       // stopped, rank
     int* stopped_count = iwork + static_cast<size_t>(count) * coop_box_ints(cpb);
@@ -418,24 +420,25 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
     const int stride = cpb;  // between owned positions
 
     // ---- norm, finiteness and largest magnitude of the owned columns
-    double amax = 0.0, ssq = 0.0, bad = 0.0;
+    double amax = 0.0, bad = 0.0;
     for (int t = warp;; t += kWarps) {
         const int j = part + stride * t;
         if (j >= n) break;
         const T* col = A + static_cast<int64_t>(j) * lda;
+        double s = 0.0;
         for (int r = lane; r < m; r += 32) {
             const T x = ldg2(col + r);
             if (!is_finite(x)) bad = 1.0;
             amax = fmax(amax, magnitude(x));
-            ssq += abs2(x);
+            s += abs2(x);
         }
+        s = warp_sum(s);
+        if (lane == 0) col_ssq[j] = s;
     }
     bad = block_max<kWarps>(bad, scratch);
-    ssq = block_sum<kWarps>(ssq, scratch);
     amax = block_max<kWarps>(amax, scratch);
     if (tid == 0) {
         part_amax[part] = amax;
-        part_ssq[part] = ssq;
         part_bad[part] = bad;
         if (part == 0) {
             box_i[0] = 0;
@@ -450,15 +453,15 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
     }
     grid.sync();
     amax = 0.0;
-    ssq = 0.0;
     bad = 0.0;
     for (int c = 0; c < cpb; ++c) {
         amax = fmax(amax, ldg2(part_amax + c));
-        ssq += ldg2(part_ssq + c);
         bad = fmax(bad, ldg2(part_bad + c));
     }
     const bool zero = bad != 0.0 || amax == 0.0;
     if (part == 0 && tid == 0) {
+        double ssq = 0.0;
+        for (int j = 0; j < n; ++j) ssq += ldg2(col_ssq + j);
         *item.norm = sqrt(ssq);
         *item.flag = bad != 0.0 ? 1 : 0;
         if (zero) {
@@ -655,11 +658,14 @@ size_t qrcp_work_bytes(int count, int max_n) {
 
 // Few boxes (at most 2 x multiprocessors / kMinBlocksPerBox): the cooperative
 // path, several blocks per box.  Otherwise one block per box: large blocks for
-// few boxes, small ones (several per multiprocessor) for many.
+// few boxes, small ones (several per multiprocessor) for many.  The variants
+// agree bitwise (see the top of the file); batch_independent always takes one
+// block of 256 threads per box (kept for tests/batch_determinism.cpp).
 template<typename T>
-void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream) {
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream,
+                 bool batch_independent) {
     if (count <= 0) return;
-    int cpb = coop_blocks_per_box<T>(count, max_n);
+    int cpb = batch_independent ? 0 : coop_blocks_per_box<T>(count, max_n);
     if (cpb > 0) {
         if (work == nullptr) throw std::runtime_error("launch_qrcp: the cooperative path needs its work block");
         double* dwork = static_cast<double*>(work);
@@ -675,7 +681,7 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, vo
     }
     const size_t shared = static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
                           static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
-    if (count < 216) {
+    if (count < 216 && !batch_independent) {
         launch_qrcp_with<T, 1024>(items, count, shared, tol, stream);
     } else {
         launch_qrcp_with<T, 256>(items, count, shared, tol, stream);
@@ -688,8 +694,8 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, vo
 
 template size_t qrcp_work_bytes<double>(int, int);
 template size_t qrcp_work_bytes<dcomplex>(int, int);
-template void launch_qrcp<double>(const QrcpItemT<double>*, int, int, double, void*, cudaStream_t);
-template void launch_qrcp<dcomplex>(const QrcpItemT<dcomplex>*, int, int, double, void*, cudaStream_t);
+template void launch_qrcp<double>(const QrcpItemT<double>*, int, int, double, void*, cudaStream_t, bool);
+template void launch_qrcp<dcomplex>(const QrcpItemT<dcomplex>*, int, int, double, void*, cudaStream_t, bool);
 
 }  // namespace gpu
 }  // namespace fmm

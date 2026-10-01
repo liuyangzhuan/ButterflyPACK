@@ -146,6 +146,9 @@ void clear_modified_interaction_matrices(
     }
     std::vector<PointDataRequest<CoordType>>().swap(level.assisting_boxes);
     level.assisting_box_points_for_kernel_evaluation.clear();
+    std::vector<std::vector<int64_t>>().swap(level.assisting_plan_outgoing);
+    std::vector<std::vector<int64_t>>().swap(level.assisting_plan_incoming);
+    level.assisting_plan_comm = MPI_COMM_NULL;
     std::vector<BoxData<CoordType, DataType>>().swap(level.generator_boxes);
     level.generator_id_to_index.clear();
     level.elimination_wave.clear();

@@ -245,8 +245,11 @@ using QrcpItem = QrcpItemT<double>;
 // items of at most max_n columns; 0 when it needs none.
 template<typename T>
 size_t qrcp_work_bytes(int count, int max_n);
+// batch_independent: each box's result independent of its batch (one fixed
+// configuration), for replicated CA levels.
 template<typename T>
-void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream);
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream,
+                 bool batch_independent = false);
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays
