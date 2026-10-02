@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_common/bpack_env.hpp"
+#include "core/butterfly_types.hpp"
 #include "options.hpp"
 #include "occupied_topology.hpp"
 #include "factorization_impl.hpp"

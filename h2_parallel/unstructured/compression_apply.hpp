@@ -1,8 +1,10 @@
 #pragma once
 
 #include "core/butterfly_types.hpp"
-#include "structured/butterfly_compression.hpp"
-#include "structured/butterfly_verification.hpp"
+#include "core/butterfly_matvec.hpp"
+#ifdef H2_HAVE_GPU
+#include "h2_gpu/h2_matvec.hpp"
+#endif
 
 namespace butterfly {
 namespace color_unstructured {

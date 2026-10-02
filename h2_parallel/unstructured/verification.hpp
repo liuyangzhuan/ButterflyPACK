@@ -1,6 +1,6 @@
 #pragma once
 
-#include "structured/butterfly_verification.hpp"
+#include "core/butterfly_matvec.hpp"
 
 #include "solver_impl.hpp"
 

@@ -1,7 +1,8 @@
 #pragma once
 
 #include "core/butterfly_types.hpp"
-#include "structured/butterfly_solve.hpp"
+#include "core/butterfly_ca_level.hpp"
+#include "core/butterfly_communicators.hpp"
 
 #include "h2_gpu/device_solve.hpp"
 

@@ -4,10 +4,27 @@
 
 #include "core/butterfly_types.hpp"
 #include "butterfly_solve.hpp"
+#include "core/butterfly_matvec.hpp"
 
 namespace butterfly {
 using namespace fmm;
 
+/**
+ * @brief Verify solution using direct BLAS matrix-vector product
+ * 
+ * Builds full dense matrix A and computes A*x using BLAS.
+ * WARNING: O(N²) memory and O(N²) time - only for small problems!
+ * 
+ * @tparam CoordType Coordinate data type
+ * @tparam DataType Matrix data type
+ * @tparam KernelType Kernel evaluator type
+ * @param kernel Kernel evaluator
+ * @param rhs Original right-hand side vector
+ * @param solution Computed solution vector
+ * @param N Number of points
+ * @param verbose Print detailed output
+ * @return Relative residual norm
+ */
 template<typename DataType, typename KernelType>
 double verify_solution_direct(
     MPI_Comm comm,
@@ -475,125 +492,6 @@ inline int h2_direct_verification(ParallelTree<CoordType, DataType>* tree,
     }
 
     return 0;
-}
-
-inline uint64_t splitmix64(uint64_t value) {
-    value += 0x9e3779b97f4a7c15ULL;
-    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
-    return value ^ (value >> 31);
-}
-
-template<typename RealType>
-RealType centered_uniform_from_hash(uint64_t key) {
-    constexpr long double scale =
-        1.0L / static_cast<long double>(std::numeric_limits<uint64_t>::max());
-    const long double u =
-        static_cast<long double>(splitmix64(key)) * scale;
-    return static_cast<RealType>(u - 0.5L);
-}
-
-template<typename DataType>
-DataType make_verification_entry(int64_t global_index, uint64_t seed) {
-    const uint64_t base =
-        splitmix64(seed ^ static_cast<uint64_t>(global_index));
-    if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-        return DataType(
-            centered_uniform_from_hash<double>(base),
-            centered_uniform_from_hash<double>(base ^ 0x6a09e667f3bcc909ULL));
-    } else if constexpr (std::is_same_v<DataType, std::complex<float>>) {
-        return DataType(
-            centered_uniform_from_hash<float>(base),
-            centered_uniform_from_hash<float>(base ^ 0x6a09e667f3bcc909ULL));
-    } else {
-        return centered_uniform_from_hash<DataType>(base);
-    }
-}
-
-// Step 1: pick `num_src` distinct random columns in [0, N) and give each a random weight.
-// Fully deterministic in (N, num_src, seed): every rank calls this and gets the identical
-// result, so no MPI_Bcast is needed to agree on x.
-template<typename DataType>
-SparseTestVector<DataType> make_sparse_test_vector(int64_t N, int64_t Npt_src, uint64_t seed) {
-    SparseTestVector<DataType> stv;
-
-    stv.idx.reserve(static_cast<size_t>(Npt_src));
-    stv.weight.reserve(static_cast<size_t>(Npt_src));
-
-    std::unordered_set<int64_t> seen;
-    seen.reserve(static_cast<size_t>(Npt_src) * 2);
-
-    // draw distinct candidate columns via the hash; dedup until we have Npt_src of them
-    for (uint64_t t = 0; static_cast<int64_t>(stv.idx.size()) < Npt_src; ++t) {
-        const int64_t cand = static_cast<int64_t>(
-            splitmix64(seed ^ (0xD1B54A32D192ED03ULL * (t + 1))) % static_cast<uint64_t>(N));
-        if (seen.insert(cand).second) {
-            stv.idx.push_back(cand);
-            stv.weight.push_back(make_verification_entry<DataType>(cand, seed));
-        }
-    }
-    return stv;
-}
-
-template<typename DataType>
-struct SparseMvpVerificationData {
-    std::vector<DataType> input;
-    std::vector<DataType> exact_output;
-};
-
-template<typename CoordType, typename DataType, typename KernelType>
-SparseMvpVerificationData<DataType> make_sparse_mvp_verification_data(
-    ParallelTree<CoordType, DataType>* tree,
-    KernelType* kernel,
-    int num_src,
-    unsigned seed) {
-
-    const int64_t N = tree->num_points;
-    const int64_t Npt_src = std::min<int64_t>(num_src, N);
-    const SparseTestVector<DataType> stv =
-        make_sparse_test_vector<DataType>(N, Npt_src, seed);
-    kernel->ensure_coordinates_collective(stv.idx, tree->comm);
-
-    std::unordered_map<int64_t, DataType> sparse_values;
-    sparse_values.reserve(static_cast<size_t>(Npt_src) * 2);
-    for (int64_t k = 0; k < Npt_src; ++k) {
-        sparse_values.emplace(stv.idx[static_cast<size_t>(k)],
-                              stv.weight[static_cast<size_t>(k)]);
-    }
-
-    const int leaf_level = tree->num_levels - 1;
-    auto& leaf = tree->levels[leaf_level];
-    SparseMvpVerificationData<DataType> verification;
-    std::vector<int64_t> local_rows;
-    for (int64_t b = 0; b < leaf.num_boxes_local; ++b) {
-        const auto& box = leaf.local_boxes[b];
-        for (int64_t i = 0; i < box.num_points; ++i) {
-            const int64_t global_row = box.point_indices[i];
-            local_rows.push_back(global_row);
-            const auto value = sparse_values.find(global_row);
-            verification.input.push_back(
-                value == sparse_values.end() ? DataType{0.0} : value->second);
-        }
-    }
-
-    const int64_t Nloc = static_cast<int64_t>(local_rows.size());
-    std::vector<DataType> block(
-        static_cast<size_t>(Nloc) * static_cast<size_t>(Npt_src));
-    if (Nloc > 0 && Npt_src > 0) {
-        kernel->evaluate_block_by_index(local_rows.data(), Nloc,
-                                        stv.idx.data(), Npt_src,
-                                        block.data(), Nloc);
-    }
-
-    verification.exact_output.assign(static_cast<size_t>(Nloc), DataType{0.0});
-    for (int64_t row = 0; row < Nloc; ++row) {
-        for (int64_t k = 0; k < Npt_src; ++k) {
-            verification.exact_output[static_cast<size_t>(row)] +=
-                stv.weight[static_cast<size_t>(k)] *
-                block[static_cast<size_t>(row + k * Nloc)];
-        }
-    }
-    return verification;
 }
 
 template<typename CoordType, typename DataType, typename KernelType>

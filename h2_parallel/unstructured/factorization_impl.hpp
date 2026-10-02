@@ -1,6 +1,9 @@
 #pragma once
 
-#include "structured/butterfly_factorization.hpp"
+#include "core/butterfly_ca_level.hpp"
+#include "core/butterfly_communicators.hpp"
+#include "core/butterfly_logdet.hpp"
+#include "core/butterfly_types.hpp"
 
 #include "occupied_topology.hpp"
 #include "parent_transition.hpp"

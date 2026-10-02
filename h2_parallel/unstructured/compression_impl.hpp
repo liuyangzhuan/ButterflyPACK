@@ -1,6 +1,10 @@
 #pragma once
 
-#include "structured/butterfly_compression.hpp"
+#include "core/butterfly_matvec.hpp"
+#ifdef H2_HAVE_GPU
+#include "h2_gpu/compression_gpu.hpp"
+#include "h2_gpu/h2_matvec.hpp"
+#endif
 
 #include "occupied_topology.hpp"
 

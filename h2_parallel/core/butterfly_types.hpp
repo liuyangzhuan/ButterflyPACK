@@ -527,4 +527,11 @@ inline double& h2_warmup_seconds() {
     return seconds;
 }
 
+
+// Wall time of the logdet and quick verification that end
+// hierarchical_factorization_parallel (reported apart from the factorization).
+inline double& h2_verification_seconds() {
+    static double seconds = 0.0;
+    return seconds;
+}
 } // namespace butterfly
