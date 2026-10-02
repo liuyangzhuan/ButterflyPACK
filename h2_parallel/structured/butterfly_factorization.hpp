@@ -429,11 +429,18 @@ void hierarchical_factorization_parallel(
                           << " ms";
                 if (ca_staged_halo != 2) {
                     auto ms = [](double s) { return static_cast<long long>(s * 1e3 + 0.5); };
-                    std::cout << " (plan " << ms(gather_times.plan) << " [first collective "
-                              << ms(gather_times.first_collective) << "], request sets "
-                              << ms(gather_times.request_sets) << ", payloads " << ms(gather_times.payloads)
-                              << ", symmetric halo " << ms(gather_times.reconstruct) << ", assisting "
-                              << ms(gather_times.assisting) << ")";
+                    if (gather_times.geometric) {
+                        std::cout << " (geometric plan " << ms(gather_times.plan) << ", serialize "
+                                  << ms(gather_times.serialize) << ", messages " << ms(gather_times.mpi)
+                                  << ", unpack " << ms(gather_times.unpack) << ", symmetric halo "
+                                  << ms(gather_times.reconstruct) << ")";
+                    } else {
+                        std::cout << " (plan " << ms(gather_times.plan) << " [first collective "
+                                  << ms(gather_times.first_collective) << "], request sets "
+                                  << ms(gather_times.request_sets) << ", payloads " << ms(gather_times.payloads)
+                                  << ", symmetric halo " << ms(gather_times.reconstruct) << ", assisting "
+                                  << ms(gather_times.assisting) << ")";
+                    }
                 }
                 std::cout << std::endl;
             }
@@ -1419,7 +1426,7 @@ void hierarchical_factorization_parallel(
                 return build_parent_level_structure(
                     level, tree->levels[current_level - 1], dimension, tree->global_bounds);
             },
-            print_detail && rank == level_print_rank, level_comm);
+            print_detail && rank == level_print_rank, level_comm, transition_comm);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes = build_parent_level_interactions<CoordType, DataType, KernelType>(

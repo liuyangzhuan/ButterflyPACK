@@ -1045,6 +1045,234 @@ components, 294 boxes at the 64-rank leaf), the GPU's weak spot.
 Choose CA vs Color per level from brick size and measured costs instead of
 the fixed `CA_level` / 343-box rule.
 
+### M7. After the 640^3 run: compaction, geometric halo plan, device process reduction
+Three items the 640^3 and 768^3 runs on 512 ranks asked for (2026-10-01),
+all shared by CA0 and Color.
+
+**M7a. Compaction of the kept solve factors (done 2026-10-02).** At the end
+of every level's transition (`ColorGpuDriver::compact_device_memory`, after
+the level's own blocks are freed), the blocks that outlive the level, the
+solve factors every level kept (one block per wave) and the parents' blocks
+of a device transition, slide down the heap (`DeviceHeap::compact`): in
+address order, each to the lowest free range that holds it, else down to the
+start of the free range right below it (an overlapping move, done through a
+256 MB staging block from the top of the heap, or in pieces of its gap).
+The pointers into them (`KeptSolveBox`, the parent `DeviceMatrixT`s) are
+host-side and follow (`DeviceHeap::relocated`). Nothing is reserved or
+estimated: blocks move at their real size after they exist (the alternative,
+reserving the keep bound up front, would have held back ~12 GB at the leaf of
+320^3). Rank-local, no decision shared; the moves run on the stream after the
+level's device work (all device work is on one stream, so no synchronization
+is needed beyond the one that times it). With `--verbosity 1` a level that
+moved blocks prints `[gpu] level L compaction: N blocks moved (X GB) in T s;
+F GB free, largest range R GB`. Validation (2026-10-02, job 59190541,
+build/gpu_prep/compact): the 8-rank Laplace 192 regression, CA0 (CA on
+levels 5 and 4) with the solve and replica checks and Color, gives the same
+logdet and H2_CheckError values as the clean build (../clean: CA0
+-89253589.199881583, acc_mvp 8.6255069e-04; Color -89253588.194065362,
+8.1095537e-04), replica check 0 differ; per level the compaction moved 7099
+/ 861-879 / 111-128 / 23-40 blocks (6.7-7.4 GB) in 33 / 7-16 / 3-11 / 2-18
+ms, after which the free memory is one range (26-32 GB). Factor times
+unchanged (10.29 / 8.39-8.42 s against 10.34 / 8.40 s).
+
+**640^3 on 512 ranks, 40 GB nodes, with the compaction (2026-10-02, job
+59190670, build/gpu_prep/ca0/g640_40c; CA0 twice, Color once, CA0 with the
+checks).** CA0 runs through: the kept factors (13.0-13.7 GB per rank at the
+leaf and the levels above) are moved in 30-40 ms per level, leaving one free
+range of 19.7-20.4 GB, and the level 4 -> 3 reduction allocates without
+trouble. CA0 11.86 s (first run, cold) and 11.32 s; Color 11.63 s in the same
+job (11.3 s the day before); replica check 1217216 ghost copies, 0 differ;
+CA0 logdet -3937186089.4963474, acc_mvp 9.32e-4, acc_forward 6.80e-3; Color
+-3937186064.8561087, 9.43e-4, 6.61e-3. Per level (Color / CA0 second run):
+leaf 2.51 / 2.58 s (elimination 1.89-2.00 / 1.64-1.74, CA0's gather 0.26 and
+transition 0.38 + 0.04 compaction against 0.37 + 0.04), level 6 1.93 / 2.03,
+level 5 1.44 / 1.43, level 4 1.43 / 1.40 (its reduction 0.4 / 0.33 s), level 3
+2.82 / 2.46, level 2 1.20 / 1.08 s. So at 512K per rank on 512 ranks CA0 and
+Color are within noise of each other; what CA0 has over Color at the leaf
+(0.2-0.3 s of elimination) it pays in the gather (0.26 s, M7b) and in the
+level above (0.1 s). The levels after the reductions (3 and 2) vary by 0.3 s
+between runs regardless of the method.
+
+**M7b. Geometric halo plan for the CA level-entry gather (implemented
+2026-10-02; validation below).** The
+host gather `gather_CA_factorization_data` costs 225-264 ms at 512 ranks
+(14 ms at 8): five collectives over the level communicator (an Allgather of
+the rank map, Alltoalls of request counts and sizes, Alltoallvs of request
+lists, twice for the ghosts and the assisting boxes) and two request-reply
+rounds, growing with the rank count rather than the bytes. The ghost set of
+a process is a function of the Morton layout alone (`compute_ghost_boxes_and_colors`:
+the one-hop neighbors of its region's boundary boxes, their two-hop
+neighbors on the faces of their owners, and the orange completions of the
+blue ghosts), and so is its assisting set (one and two hops around its
+ghosts, not local and not ghosts). Plan: factor both into pure functions of
+(dimension, level, active processes, process id), used by the tree
+construction for the process itself and by every sender for its neighbors;
+each rank then computes which of its own boxes each neighboring region (within
+ceil(5 / region width) regions: ghosts lie within 3 box hops of a region,
+assisting boxes within 5) needs as ghosts and as assisting boxes, and pushes
+both in one message per neighbor over `tree->comm` (a sizes round, then the
+payloads; no collective, no request round). The symmetric-pair pruning keeps
+working: the sender has the receiver's full ghost set from the same function.
+The receiver checks that every ghost and assisting box arrived and that every
+owner it expects lies within the candidate radius (a clean error instead of a
+hang if the radius reasoning were wrong). The assisting plan kept for the
+post-elimination skeleton refresh (`refresh_CA_assisting_skeletons`) becomes
+per-peer lists by global rank. The device halo (M2, ca_halo.hpp) takes the
+same lists in place of `make_CA_request_plan` and the Alltoall size check.
+Expected: tens of ms at 512 ranks, about 0.2 s off the CA leaf of 640^3.
+
+Implementation: `h2_parallel/core/halo_geometry.hpp` (the box colors moved
+there from tree_impl.hpp; `RegionLayout`; `ghosts_of_region`,
+`ghosts_of_region_in`, `assisting_of_region_in` as closed forms over the
+layout: the one-hop shell of the region's cube, the second shell's boxes on
+faces of their regions, the orange neighbors of the blue ghosts (blue boxes
+lie next to their region's corners), and the assisting boxes as the boxes
+within three hops of the cube or two of the ghosts beyond the shell; and the
+reference enumerations of the original code). `tests/halo_geometry_test.cpp`
+compares the closed forms with the reference for every region of 3D levels
+of width 2-16 and 2D levels of width 2-8 (all pass), and the tree's
+`compute_ghost_boxes_and_colors` / `compute_assisting_boxes` compare them
+again for the rank's own region at every run (a mismatch throws before the
+factorization). `gather_CA_factorization_data` runs
+`gather_CA_factorization_data_geometric` (one message per neighboring region
+over `tree->comm`: a sizes round, then ghosts and assisting boxes together;
+the receiver checks that every expected box arrived, in order) and falls
+back to the collective form only for non-uniform box distributions; the
+assisting plan is `TreeLevel::assisting_plan` (per peer rank); the device
+halo (ca_halo.hpp) derives its lists from the same functions and checks the
+message sizes point to point; its chunked rounds moved to
+`device_pieces.hpp` (shared with M7c). The `--verbosity 1` gather line now
+reads `(geometric plan P, serialize S, messages M, unpack U, symmetric halo
+R)`. (The unstructured code has no CA levels: `color_unstructured is
+Color-only`, so only the structured code is affected.)
+
+Validation on 8 ranks (2026-10-02, job 59191890, build/gpu_prep/halo):
+Laplace 192 with CA on levels 5 and 4 on the GPU (solve and replica checks:
+9488 + 3536 ghost copies, 0 differ) and on the CPU build, and Color, give
+the clean build's results (GPU CA0 logdet -89253589.199881583, Color
+-89253588.194065362; CPU CA0 -89253589.199881539 as before). Gather times at
+8 ranks: GPU leaf 47 ms (plan 9, serialize 5, messages 29, unpack 4; the old
+form 25-40 ms with its first collective absorbing the ranks' skew, which now
+shows in the messages), level 4 27 ms (old 14-15); the CPU level 4 gather,
+whose ghosts carry their blocks, 3.9 s against 7.0 s. The point is the rank
+count: see the 640^3 run below.
+
+**M7c. Device process reduction for Color and CA0 (implemented 2026-10-02;
+validation below).** At a process
+reduction (512 -> 64 ranks at level 4 -> 3 of 640^3) the transition downloads
+the parents' blocks, the host serializes whole boxes to the new owner, which
+deserializes, merges and re-uploads them at the next level's start: 0.6 s at
+640^3 for the 4 -> 3 reduction (pack 0.03, receive 0.18, unpack 0.23, send
+0.34 s, max over ranks), 0.25 s at 3 -> 2, 0.06 s at 2 -> 1, plus the
+upload. Plan: keep the blocks on the device across the reduction. In
+`transition()`, when the next level has fewer active ranks and the parent
+level would run on the device (`level_eliminator_would_run`, rank-independent;
+for a CA parent level also every rank's parents within the device sketch's
+box limit, all-reduced over the child level's ranks), each sender sends its
+`DeviceLevelBlocks` (the Schur block of each of its parents, the near-field
+blocks among them and its copies of those with other ranks' parents) to
+`level.parent_level_owner`: a host header (kind, key, rows, cols per block),
+then the payloads through the exchange arena in chunked rounds packed
+straight from and unpacked straight into the blocks (the mechanism of
+ca_halo.hpp, factored out), host-staged when MPI is not GPU-aware. A pair
+whose two parents' children live on two senders of the same owner is sent
+once (by the sender holding the lower parent); a pair across two owners goes
+to both, as the parent level's layout has it. The owner allocates the
+incoming blocks (resident), merges them into its own `DeviceLevelBlocks`, and
+the next level's eliminator adopts them as after a non-reducing transition;
+senders free theirs. The host reduction stays for the boxes' metadata (points,
+index and neighbor lists), now without block payloads, so
+`share_symmetric_level_edges` has nothing to pair. Level 1 then adopts the
+blocks on its single rank and the root is assembled on the device. Expected:
+most of the ~0.9 s of reductions at 640^3, and no level-start upload after a
+reduction.
+
+Implementation: `device_reduction.hpp` (`reduce_parent_blocks`: the
+headers over `tree->comm`, tags 4800-4802, the payloads through
+`exchange_device_pieces` of `device_pieces.hpp`, collective over the child
+level's communicator for the chunk and the rounds), the decision
+`ColorGpuDriver::device_reduction_possible` (the parent level would run on
+the device: `level_eliminator_would_run` and the CA tests without this
+rank's own activity there, uniform region layouts, every rank's parents
+within the device sketch's box limit on a CA parent level; all-reduced over
+the child level's ranks) and the call in `transition()`; the unstructured
+loop now passes its level communicator too. The `--verbosity 1` transition
+line says `blocks merged on this device (process reduction)` on an owner and
+`sent to their owner's device` on a sender, followed by a `device reduction`
+line with the times, bytes and blocks.
+
+Validation on 8 ranks (2026-10-02, job 59192055, build/gpu_prep/reduce):
+Laplace 192 Color and CA0 (CA on levels 5 and 4), solve and replica checks,
+and VIE 96 unstructured: the reduction 8 -> 1 into level 1 moves 28 blocks
+(the 8 level-1 Schur blocks and their 21 pairs, 0.06 GB; 0.15 GB on VIE) in
+under 10 ms, the host reduction then carries only metadata ("process
+reduction communication time: 0 ms", 11 ms before) and the root is assembled
+and factored on the device; results as the clean build's (Color
+-89253588.194065362, CA0 -89253589.199881583, 0 replicas differ).
+
+A first 640^3 run (job 59192186) went through the 512 -> 64 reduction on
+the device (0.51 GB in 89 blocks per owner in 0.02 s; level 4 1.40 -> 1.00
+s) and then hung in the 64 -> 8 reduction: once ranks are idle, the tree
+takes the parent level's owners from the idle ranks
+(`compute_active_processes`, `use_inactive_owners`: "Active processes: 8
+from rank: 4"), and such an owner, inactive at the child level, had no
+eliminator and skipped the reduction while its senders waited for it. The
+reduction now runs over the transition communicator (the child level's
+ranks and the parent level's): every rank of it decides (idle owners as
+receivers, with no blocks of their own) and takes part in the piece
+exchange. The 8-rank runs could not show this (8 ranks, no idle rank at
+the 2 -> 1 reduction); rerun with the fix (job 59194080) they give the same
+results as before.
+
+64 ranks, Laplace 256, Nmin 64 (2026-10-02, job 59194081,
+build/gpu_prep/reduce; 16 nodes of 40 GB): the reductions 64 -> 8 at level
+3 -> 2 (group owners: each receives 0.45 GB in 89 blocks, 0.01 s) and 8 ->
+1 (the idle rank 4 as owner: 8 blocks of 0.02 GB per sender) both run on
+the device; against the halo build's host reductions in the same job the
+reduction communication time falls from 125 ms to 1 ms and the factor time
+from 5.66 s to 5.53 / 5.22 s (Color) and 5.76 to 5.50 / 5.48 s (CA0); per
+level (Color, device / host reductions): level 3 (ends with 64 -> 8) 0.68 /
+0.86 s, level 2 (ends with 8 -> 1, and no longer re-uploads its blocks)
+0.54 / 0.70 s, level 1 (adopts the blocks for the root) 1 / 42 ms, the
+levels above alike (1.64 / 1.66, 1.22 / 1.24, 0.86 / 0.89 s); results the
+same (Color logdet -221223299.04514426 in both; CA0
+-221223299.92170054 against ...051 with the host reduction, the lower
+parent's copy of a cross pair in place of the host's choice; H2_CheckError
+values identical); the solve check passes. The CA leaf gather at 64 ranks:
+107-152 ms (plan 17, serialize 3, messages 86-131), the old form 48-108 ms
+at 192^3 on 64 ranks: the point-to-point messages wait for the slowest
+rank like the first collective did; see the 640^3 numbers.
+
+**640^3 on 512 ranks, 40 GB nodes, with all three (2026-10-02, job 59194082,
+build/gpu_prep/ca0/g640_40d; CA0, Color, CA0, Color, CA0 with the checks).**
+
+| | compaction only (job 59190670) | + geometric halo + device reduction |
+|---|---|---|
+| CA0 factor time | 11.86 (cold) / 11.32 s | 10.83 (cold) / 9.85 s |
+| Color factor time | 11.63 s | 10.02 / 9.97 s |
+| CA leaf gather | 259-283 ms (plan 91-102, request sets 31, payloads 41, assisting 97-109) | 94-133 ms (geometric plan 17, serialize 3, messages 70-109, unpack 4) |
+| level 4 (ends with 512 -> 64) CA0 / Color | 1.40 / 1.43 s | 1.02 / 0.97 s |
+| level 3 (ends with 64 -> 8; no upload at its start) | 2.46 / 2.82 s | 1.69 / 1.96 s |
+| level 2 (ends with 8 -> 1) | 1.08 / 1.20 s | 0.92 / 0.88 s |
+| level 1 (adopts the blocks for the root) | 59 ms | 2 ms |
+| process reduction communication | 541-668 ms | 1 ms |
+
+The leaf and levels 6 and 5 are unchanged (CA0 2.50 / 2.04 / 1.39 s, Color
+2.53 / 1.92 / 1.43 s). Results identical to the compaction-only run (CA0
+logdet -3937186089.4963474, acc_mvp 9.32e-4, acc_forward 6.80e-3; Color
+-3937186064.8561087, 9.43e-4, 6.61e-3); replica check 1217216 ghost copies,
+0 differ; the solve check passes. The three reductions on the device move
+0.51 GB in 89 blocks per owner (512 -> 64), 8 blocks of 0.03 GB per sender
+(64 -> 8) and 8 of 0.02 GB (8 -> 1), each in 0.01-0.02 s. With the host
+reductions, their serialization, messages and the re-uploads at the
+following levels cost 0.6 + 0.3 + 0.1 s plus the level-start uploads; the
+levels after the reductions are now 0.4 + 0.8 + 0.2 s faster. The gather's
+remaining 70-109 ms are the messages waiting for the slowest rank (plan 17
+ms, serialization 3 ms), as the first collective did before. CA0 and Color
+are within 1% of each other at this size (9.85 against 9.97 s); CA0's leaf
+elimination advantage (1.64-1.74 against 1.89-2.00 s) is spent on the
+gather and the level above the leaf, as before.
+
 ## Backlog from the GPU Color work (not CA-specific)
 
 - B1. Level-start wait: the first transport of each leaf level (0.4-0.7 s at

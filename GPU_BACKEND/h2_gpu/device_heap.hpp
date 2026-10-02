@@ -18,6 +18,7 @@
 
 #include "gpu_runtime.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -192,6 +193,82 @@ public:
     size_t capacity() const { return capacity_; }
     void reset_peak() { peak_ = used_; }
     int64_t reclaims() const { return reclaims_; }
+
+    // Compaction of long-lived blocks.  Blocks that outlive a level (the
+    // solve factors a level keeps, one block per wave, and the parents'
+    // blocks of a device transition) are placed among the level's own
+    // blocks, and once those are freed they peg the free memory into pieces
+    // (640^3 on 512 ranks: 10 GB free in pieces under 1.3 GB).  The listed
+    // blocks slide towards the start of the arena, in address order: each to
+    // the lowest free range that holds it, or, when the range right below it
+    // is free, down to its start (an overlapping move).  `move(dst, src,
+    // bytes)` copies a block (dst < src; the ranges overlap when dst + bytes
+    // > src).  Unlisted blocks stay where they are, and the free space
+    // between them merges.  `blocks` holds the new addresses on return; the
+    // moves made, by old address, are returned for pointers into the blocks.
+    struct Move {
+        char* from;
+        char* to;
+        size_t bytes;
+    };
+    std::vector<Move> compact(std::vector<char*>& blocks,
+                              const std::function<void(char*, const char*, size_t)>& move) {
+        std::vector<Move> moves;
+        std::vector<size_t> order(blocks.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return blocks[a] < blocks[b]; });
+        for (size_t i : order) {
+            if (blocks[i] == nullptr) continue;
+            const size_t offset = static_cast<size_t>(blocks[i] - base_);
+            auto alloc = allocated_.find(offset);
+            if (alloc == allocated_.end()) throw std::runtime_error("H2 GPU heap: compaction of an unknown block");
+            const size_t size = alloc->second;
+            size_t dest = offset;
+            for (auto it = free_.begin(); it != free_.end() && it->first < offset; ++it) {
+                if (it->second >= size) {
+                    dest = it->first;
+                    break;
+                }
+            }
+            if (dest == offset) {
+                auto next = free_.lower_bound(offset);  // (the block's own range is not free)
+                if (next != free_.begin()) {
+                    auto below = std::prev(next);
+                    if (below->first + below->second == offset) dest = below->first;
+                }
+            }
+            if (dest == offset) continue;
+            move(base_ + dest, base_ + offset, size);
+            free(blocks[i]);  // (merges with the destination range when adjacent)
+            auto range = free_.find(dest);
+            if (range == free_.end() || range->second < size) {
+                throw std::runtime_error("H2 GPU heap: compaction lost its destination range");
+            }
+            const size_t length = range->second;
+            remove_free(range);
+            if (length > size) add_free(dest + size, length - size);
+            allocated_.emplace(dest, size);
+            used_ += size;
+            moves.push_back({blocks[i], base_ + dest, size});
+            blocks[i] = base_ + dest;
+        }
+        std::sort(moves.begin(), moves.end(), [](const Move& a, const Move& b) { return a.from < b.from; });
+        return moves;
+    }
+    // Pointer `p` into a moved block, after the move (unchanged otherwise);
+    // `moves` as compact returns them.
+    template<typename T>
+    static T* relocated(T* p, const std::vector<Move>& moves) {
+        const char* c = reinterpret_cast<const char*>(p);
+        auto it = std::upper_bound(moves.begin(), moves.end(), c,
+                                   [](const char* x, const Move& m) { return x < m.from; });
+        if (it == moves.begin()) return p;
+        --it;
+        if (c < it->from || c >= it->from + it->bytes) return p;
+        return reinterpret_cast<T*>(const_cast<char*>(it->to + (c - it->from)));
+    }
+    // Free bytes in all.
+    size_t available() const { return capacity_ - used_; }
 
 private:
     static constexpr size_t kAlign = 256;

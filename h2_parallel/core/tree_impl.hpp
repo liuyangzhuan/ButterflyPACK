@@ -2,6 +2,7 @@
 #define TREE_IMPL_HPP
 
 #include "tree.hpp"
+#include "halo_geometry.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -146,9 +147,7 @@ void clear_modified_interaction_matrices(
     }
     std::vector<PointDataRequest<CoordType>>().swap(level.assisting_boxes);
     level.assisting_box_points_for_kernel_evaluation.clear();
-    std::vector<std::vector<int64_t>>().swap(level.assisting_plan_outgoing);
-    std::vector<std::vector<int64_t>>().swap(level.assisting_plan_incoming);
-    level.assisting_plan_comm = MPI_COMM_NULL;
+    level.assisting_plan = {};
     std::vector<BoxData<CoordType, DataType>>().swap(level.generator_boxes);
     level.generator_id_to_index.clear();
     level.elimination_wave.clear();
@@ -1077,300 +1076,6 @@ void compute_neighbor_lists(
     }
 }
 
-/**
- * @brief Check if a box is a blue box (corner neighborhood) using LOCAL grid coordinates
- * 
- * 2D: Box is one of the 4 corners of the LOCAL process grid
- * 3D: Box is in a 2×2×2 neighborhood around any LOCAL cube corner, excluding diagonal interior
- * 
- * @param morton_index Morton index of the box (global)
- * @param level Tree level
- * @param dimension 2 or 3
- * @param grid_size Global grid size
- * @param local_grid_size Size of local grid per process
- * @param local_offset Starting global coordinates of this process's region
- * @return true if box is blue
- */
-inline bool is_blue_box(int64_t morton_index, int32_t level, int32_t dimension, uint32_t grid_size,
-                        uint32_t local_grid_size, const uint32_t local_offset[3]) {
-    uint32_t x_global, y_global, z_global = 0;
-    
-    if (dimension == 2) {
-        morton::decode_2d(morton_index, x_global, y_global);
-        
-        // Convert to local coordinates
-        int32_t x = x_global - local_offset[0];
-        int32_t y = y_global - local_offset[1];
-        
-        // Check if within this process's local region
-        if (x < 0 || x >= static_cast<int32_t>(local_grid_size) || 
-            y < 0 || y >= static_cast<int32_t>(local_grid_size)) {
-            return false;
-        }
-        
-        // In 2D, blue boxes are the 4 corners of the LOCAL grid
-        return (x == 0 || x == static_cast<int32_t>(local_grid_size) - 1) && 
-               (y == 0 || y == static_cast<int32_t>(local_grid_size) - 1);
-        
-    } else {
-        morton::decode_3d(morton_index, x_global, y_global, z_global);
-        
-        // Convert to local coordinates
-        int32_t x = x_global - local_offset[0];
-        int32_t y = y_global - local_offset[1];
-        int32_t z = z_global - local_offset[2];
-        
-        // Check if within this process's local region
-        if (x < 0 || x >= static_cast<int32_t>(local_grid_size) || 
-            y < 0 || y >= static_cast<int32_t>(local_grid_size) ||
-            z < 0 || z >= static_cast<int32_t>(local_grid_size)) {
-            return false;
-        }
-        
-        // Local corners: {0, local_grid_size-1} for each dimension
-        uint32_t corners[8][3] = {
-            {0, 0, 0}, {local_grid_size-1, 0, 0},
-            {0, local_grid_size-1, 0}, {local_grid_size-1, local_grid_size-1, 0},
-            {0, 0, local_grid_size-1}, {local_grid_size-1, 0, local_grid_size-1},
-            {0, local_grid_size-1, local_grid_size-1}, {local_grid_size-1, local_grid_size-1, local_grid_size-1}
-        };
-        
-        for (int c = 0; c < 8; ++c) {
-            uint32_t cx = corners[c][0];
-            uint32_t cy = corners[c][1];
-            uint32_t cz = corners[c][2];
-            
-            // Check if box is in 2×2×2 neighborhood (using local coordinates)
-            int32_t dx = std::abs(x - static_cast<int32_t>(cx));
-            int32_t dy = std::abs(y - static_cast<int32_t>(cy));
-            int32_t dz = std::abs(z - static_cast<int32_t>(cz));
-            
-            if (dx <= 1 && dy <= 1 && dz <= 1) {
-                // Exclude diagonal interior box (all distances = 1)
-                if (dx == 1 && dy == 1 && dz == 1) {
-                    continue;
-                }
-                return true;
-            }
-        }
-        
-        return false;
-    }
-}
-
-
-/**
- * @brief Get Manhattan distance-1 neighbors (face-adjacent only)
- * Returns up to 6 neighbors in 3D, up to 4 neighbors in 2D
- */
-inline std::vector<uint64_t> get_manhattan_neighbors_3d(uint64_t morton_index, uint32_t grid_size) {
-    uint32_t x, y, z;
-    morton::decode_3d(morton_index, x, y, z);
-    
-    std::vector<uint64_t> neighbors;
-    neighbors.reserve(6);
-    
-    // Check all 6 face directions
-    if (x > 0) neighbors.push_back(morton::encode_3d(x-1, y, z));
-    if (x < grid_size-1) neighbors.push_back(morton::encode_3d(x+1, y, z));
-    if (y > 0) neighbors.push_back(morton::encode_3d(x, y-1, z));
-    if (y < grid_size-1) neighbors.push_back(morton::encode_3d(x, y+1, z));
-    if (z > 0) neighbors.push_back(morton::encode_3d(x, y, z-1));
-    if (z < grid_size-1) neighbors.push_back(morton::encode_3d(x, y, z+1));
-    
-    return neighbors;
-}
-
-inline std::vector<uint64_t> get_manhattan_neighbors_2d(uint64_t morton_index, uint32_t grid_size) {
-    uint32_t x, y;
-    morton::decode_2d(morton_index, x, y);
-    
-    std::vector<uint64_t> neighbors;
-    neighbors.reserve(4);
-    
-    if (x > 0) neighbors.push_back(morton::encode_2d(x-1, y));
-    if (x < grid_size-1) neighbors.push_back(morton::encode_2d(x+1, y));
-    if (y > 0) neighbors.push_back(morton::encode_2d(x, y-1));
-    if (y < grid_size-1) neighbors.push_back(morton::encode_2d(x, y+1));
-    
-    return neighbors;
-}
-
-/**
- * @brief Check if a box is an orange box (boundary box adjacent to blue) using LOCAL grid
- * 
- * 2D: LOCAL boundary box at Manhattan distance 1 from any LOCAL corner
- * 3D: ANY boundary box (edge or face) adjacent to at least one blue box
- * 
- * @param morton_index Morton index of the box (global)
- * @param level Tree level
- * @param dimension 2 or 3
- * @param grid_size Global grid size
- * @param local_grid_size Size of local grid per process
- * @param local_offset Starting global coordinates of this process's region
- * @return true if box is orange
- */
-inline bool is_orange_box(int64_t morton_index, int32_t level, int32_t dimension, uint32_t grid_size,
-                          uint32_t local_grid_size, const uint32_t local_offset[3]) {
-    uint32_t x_global, y_global, z_global = 0;
-    
-    if (dimension == 2) {
-        morton::decode_2d(morton_index, x_global, y_global);
-        
-        // Convert to local coordinates
-        int32_t x = x_global - local_offset[0];
-        int32_t y = y_global - local_offset[1];
-        
-        // Check if within this process's local region
-        if (x < 0 || x >= static_cast<int32_t>(local_grid_size) || 
-            y < 0 || y >= static_cast<int32_t>(local_grid_size)) {
-            return false;
-        }
-        
-        // Count LOCAL boundary coordinates
-        int boundary_count = 0;
-        if (x == 0 || x == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-        if (y == 0 || y == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-        
-        // Must be on boundary
-        if (boundary_count == 0) return false;
-        
-        // Must not be a corner (blue)
-        if (boundary_count == 2) return false;
-        
-        // Check Manhattan distance to each LOCAL corner
-        uint32_t corners[4][2] = {
-            {0, 0}, {local_grid_size-1, 0}, 
-            {0, local_grid_size-1}, {local_grid_size-1, local_grid_size-1}
-        };
-        
-        for (int c = 0; c < 4; ++c) {
-            int32_t dist = std::abs(x - static_cast<int32_t>(corners[c][0])) +
-                          std::abs(y - static_cast<int32_t>(corners[c][1]));
-            if (dist == 1) return true;
-        }
-        
-        return false;
-        
-    } else {
-        morton::decode_3d(morton_index, x_global, y_global, z_global);
-        
-        // Convert to local coordinates
-        int32_t x = x_global - local_offset[0];
-        int32_t y = y_global - local_offset[1];
-        int32_t z = z_global - local_offset[2];
-        
-        // Check if within this process's local region
-        if (x < 0 || x >= static_cast<int32_t>(local_grid_size) || 
-            y < 0 || y >= static_cast<int32_t>(local_grid_size) ||
-            z < 0 || z >= static_cast<int32_t>(local_grid_size)) {
-            return false;
-        }
-        
-        // Count LOCAL boundary coordinates
-        int boundary_count = 0;
-        if (x == 0 || x == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-        if (y == 0 || y == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-        if (z == 0 || z == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-        
-        // Must be on boundary (edge or face)
-        if (boundary_count == 0) return false;
-        
-        // Must be adjacent (Manhattan distance 1) to at least one blue box
-        // Check only face-adjacent neighbors (Manhattan distance 1)
-        std::vector<uint64_t> neighbors = get_manhattan_neighbors_3d(morton_index, grid_size);
-        
-        for (uint64_t n_u : neighbors) {
-            int64_t n = static_cast<int64_t>(n_u);
-            if (is_blue_box(n, level, dimension, grid_size, local_grid_size, local_offset)) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-}
-
-/**
- * @brief Check if a box is a purple box (3D only: edges + face 2nd layer, not orange) using LOCAL grid
- * 
- * 3D: Edge boxes (b=2) OR face 2nd layer boxes (b=1, min_face_dist=1), 
- *     but NOT adjacent to any blue box
- * 
- * @param morton_index Morton index of the box (global)
- * @param level Tree level
- * @param grid_size Global grid size
- * @param local_grid_size Size of local grid per process
- * @param local_offset Starting global coordinates of this process's region
- * @return true if box is purple
- */
-inline bool is_purple_box(int64_t morton_index, int32_t level, uint32_t grid_size,
-                          uint32_t local_grid_size, const uint32_t local_offset[3]) {
-    uint32_t x_global, y_global, z_global;
-    morton::decode_3d(morton_index, x_global, y_global, z_global);
-    
-    // Convert to local coordinates
-    int32_t x = x_global - local_offset[0];
-    int32_t y = y_global - local_offset[1];
-    int32_t z = z_global - local_offset[2];
-    
-    // Check if within this process's local region
-    if (x < 0 || x >= static_cast<int32_t>(local_grid_size) || 
-        y < 0 || y >= static_cast<int32_t>(local_grid_size) ||
-        z < 0 || z >= static_cast<int32_t>(local_grid_size)) {
-        return false;
-    }
-    
-    // Count LOCAL boundary coordinates
-    int boundary_count = 0;
-    if (x == 0 || x == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-    if (y == 0 || y == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-    if (z == 0 || z == static_cast<int32_t>(local_grid_size) - 1) boundary_count++;
-    
-    bool is_candidate = false;
-    
-    // Case 1: On an edge (boundary_count == 2)
-    if (boundary_count == 2) {
-        is_candidate = true;
-    }
-    // Case 2: On a face in the second-to-last layer (boundary_count == 1)
-    else if (boundary_count == 1) {
-        // Calculate minimum distance to edge within the face (LOCAL coordinates)
-        auto dist_to_boundary = [local_grid_size](int32_t coord) -> uint32_t {
-            return std::min(coord, static_cast<int32_t>(local_grid_size) - 1 - coord);
-        };
-        
-        uint32_t min_face_dist = local_grid_size;
-        if (x != 0 && x != static_cast<int32_t>(local_grid_size) - 1) {
-            min_face_dist = std::min(min_face_dist, dist_to_boundary(x));
-        }
-        if (y != 0 && y != static_cast<int32_t>(local_grid_size) - 1) {
-            min_face_dist = std::min(min_face_dist, dist_to_boundary(y));
-        }
-        if (z != 0 && z != static_cast<int32_t>(local_grid_size) - 1) {
-            min_face_dist = std::min(min_face_dist, dist_to_boundary(z));
-        }
-        
-        // Must be in second-to-last layer
-        if (min_face_dist == 1) {
-            is_candidate = true;
-        }
-    }
-    
-    if (!is_candidate) return false;
-    
-    // Must NOT be adjacent to any blue box (otherwise it would be orange)
-    std::vector<uint64_t> neighbors = get_manhattan_neighbors_3d(morton_index, grid_size);
-    
-    for (uint64_t n_u : neighbors) {
-        int64_t n = static_cast<int64_t>(n_u);
-        if (is_blue_box(n, level, 3, grid_size, local_grid_size, local_offset)) {
-            return false;  // Adjacent to blue means it's orange, not purple
-        }
-    }
-    
-    return true;
-}
 
 
 
@@ -1398,90 +1103,55 @@ void compute_assisting_boxes(
         return;
     }
     
-    uint32_t grid_size = 1 << level;
-    uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
-    
-    // Use set to avoid duplicates and for fast lookup
-    std::unordered_set<int64_t> assisting_set_for_factorize;
-    std::unordered_set<int64_t> assisting_and_ghost_set_for_solve;
     const bool use_CA = tree->level_uses_CA(level);
-    const std::unordered_set<int64_t> ghost_set(
-        lvl.ghost_id.begin(), lvl.ghost_id.end());
-    std::unordered_set<int64_t> solve_assist_set;
-
-    std::vector<int64_t> seed_mortons;
+    const RegionLayout L = RegionLayout::of(tree->dimension, level, lvl.num_active_processes);
+    const uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
+    if (!L.uniform || lvl.local_morton_start != L.first(my_process_id) ||
+        lvl.num_boxes_local != L.boxes_per_region) {
+        throw std::runtime_error("compute_assisting_boxes: level " + std::to_string(level) +
+                                 " has no uniform region layout (" + std::to_string(lvl.num_active_processes) +
+                                 " active processes, " + std::to_string(lvl.num_boxes_local) + " local boxes)");
+    }
+    // the seeds: the ghosts of a CA level, else the boundary boxes
+    std::vector<int64_t> seeds;
     if (use_CA) {
-        seed_mortons = lvl.ghost_id;
+        seeds = lvl.ghost_id;
     } else {
-        seed_mortons.reserve(lvl.boundary_id.size());
-        for (int64_t local_idx : lvl.boundary_id) {
-            seed_mortons.push_back(local_idx + lvl.local_morton_start);
+        for (int64_t local_idx : lvl.boundary_id) seeds.push_back(lvl.local_boxes[local_idx].morton_index);
+        std::sort(seeds.begin(), seeds.end());
+    }
+    const std::vector<int64_t> no_ghosts;
+    const RegionAssisting ra =
+        assisting_of_region_reference(L, my_process_id, seeds, use_CA ? lvl.ghost_id : no_ghosts);
+    if (use_CA) {
+        // the set by region of the boxes, as the level-entry halo gather's
+        // senders compute it for this region (halo_geometry.hpp), must agree
+        std::vector<int64_t> by_region;
+        for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t r) {
+            const std::vector<int64_t> part = assisting_of_region_in(L, my_process_id, r);
+            by_region.insert(by_region.end(), part.begin(), part.end());
+        });
+        std::sort(by_region.begin(), by_region.end());
+        if (by_region != ra.all) {
+            throw std::runtime_error("compute_assisting_boxes: the assisting sets by region and by enumeration "
+                                     "differ (level " + std::to_string(level) + ")");
         }
     }
-
-    for (int64_t ghost_morton : seed_mortons) {
-        // Get 1-hop neighbors
-        const std::vector<uint64_t> neighbors_1hop =
-            morton::neighbors_nd(tree->dimension, ghost_morton, grid_size);
-        
-        // Batch process assignment for 1-hop
-        const std::vector<uint32_t> processes_1hop =
-            morton::assign_to_processes_nd(
-                tree->dimension, neighbors_1hop,
-                lvl.num_active_processes, grid_size);
-        
-        // Add 1-hop neighbors that qualify
-        for (size_t i = 0; i < neighbors_1hop.size(); ++i) {
-            int64_t n = static_cast<int64_t>(neighbors_1hop[i]);
-            
-            if (processes_1hop[i] != my_process_id &&
-                (!use_CA || ghost_set.count(n) == 0)) {
-                assisting_set_for_factorize.insert(n);
-                assisting_and_ghost_set_for_solve.insert(n);
-                if (use_CA) {
-                    solve_assist_set.insert(n);
-                }
-            }
-        }
-        
-        // Get 2-hop neighbors
-        const std::vector<uint64_t> neighbors_2hop =
-            morton::neighbors_2hop_nd(
-                tree->dimension, ghost_morton, grid_size);
-        
-        // Batch process assignment for 2-hop
-        const std::vector<uint32_t> processes_2hop =
-            morton::assign_to_processes_nd(
-                tree->dimension, neighbors_2hop,
-                lvl.num_active_processes, grid_size);
-        
-        // Add 2-hop neighbors that qualify for factorization assistance only.
-        for (size_t i = 0; i < neighbors_2hop.size(); ++i) {
-            int64_t n = static_cast<int64_t>(neighbors_2hop[i]);
-            
-            if (processes_2hop[i] != my_process_id &&
-                (!use_CA || ghost_set.count(n) == 0)) {
-                assisting_set_for_factorize.insert(n);
-            }
-        }
-    }
-    
-    // Convert to sorted vector and create morton_index -> vector_index mapping
-    std::vector<int64_t> assisting_vec_for_factorize(assisting_set_for_factorize.begin(), assisting_set_for_factorize.end());
-    std::sort(assisting_vec_for_factorize.begin(), assisting_vec_for_factorize.end());
     
     lvl.assisting_box_points_for_kernel_evaluation.clear();
-    for (size_t i = 0; i < assisting_vec_for_factorize.size(); ++i) {
-        lvl.assisting_box_points_for_kernel_evaluation[assisting_vec_for_factorize[i]] = i;
+    for (size_t i = 0; i < ra.all.size(); ++i) {
+        lvl.assisting_box_points_for_kernel_evaluation[ra.all[i]] = i;
     }
 
-    // construct the set used during solve phase
+    // the set used during the solve phase: the one-hop part, and the ghosts of a CA level
+    std::set<int64_t> assisting_and_ghost_set_for_solve(ra.one_hop.begin(), ra.one_hop.end());
+    std::set<int64_t> solve_assist_set;
     if (use_CA) {
-        assisting_and_ghost_set_for_solve.insert(
-            ghost_set.begin(), ghost_set.end());
+        solve_assist_set.insert(ra.one_hop.begin(), ra.one_hop.end());
+        assisting_and_ghost_set_for_solve.insert(lvl.ghost_id.begin(), lvl.ghost_id.end());
     }
-    std::vector<int64_t> assisting_and_ghost_vec_for_solve(assisting_and_ghost_set_for_solve.begin(), assisting_and_ghost_set_for_solve.end());
-    std::sort(assisting_and_ghost_vec_for_solve.begin(), assisting_and_ghost_vec_for_solve.end());
+    const std::vector<int64_t> assisting_and_ghost_vec_for_solve(assisting_and_ghost_set_for_solve.begin(),
+                                                                 assisting_and_ghost_set_for_solve.end());
     lvl.ghost_and_assisting_box_points_for_solve_map.clear();
     lvl.is_ghost_solve.clear();
     for (size_t i = 0; i < assisting_and_ghost_vec_for_solve.size(); ++i) {
@@ -1608,182 +1278,58 @@ void compute_ghost_boxes_and_colors(
         return;
     }
     
-    uint32_t grid_size = 1 << level;
-    std::set<int64_t> temp_ghost_set;  // Use set to avoid duplicates
-    
-    // Get this process's Morton ID for comparison
-    uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
-    
-    // ========== Compute local grid parameters ==========
-    
-    // Calculate number of processes per dimension
-    uint32_t num_procs_per_dim;
-    if (tree->dimension == 2) {
-        num_procs_per_dim = 1 << (__builtin_ctz(lvl.num_active_processes) / 2);
-    } else {
-        num_procs_per_dim = 1 << (__builtin_ctz(lvl.num_active_processes) / 3);
+    // The ghost set from the level's region layout (halo_geometry.hpp): the
+    // functions the level-entry halo gather's senders use for this region,
+    // so what they send is what this rank expects.
+    const RegionLayout L = RegionLayout::of(tree->dimension, level, lvl.num_active_processes);
+    const uint32_t my_process_id = static_cast<uint32_t>(lvl.my_morton_id);
+    if (!L.uniform || lvl.local_morton_start != L.first(my_process_id) ||
+        lvl.num_boxes_local != L.boxes_per_region) {
+        throw std::runtime_error("compute_ghost_boxes_and_colors: level " + std::to_string(level) +
+                                 " has no uniform region layout (" + std::to_string(lvl.num_active_processes) +
+                                 " active processes, " + std::to_string(lvl.num_boxes_local) + " local boxes)");
     }
-    
-    // Local grid size per process
-    uint32_t local_grid_size = grid_size / num_procs_per_dim;
-    
-    // Compute this process's offset in the global grid
-    uint32_t local_offset[3] = {0, 0, 0};
-    if (lvl.num_boxes_local > 0) {
-        // Find minimum coordinates among all local boxes
-        local_offset[0] = lvl.local_boxes[0].grid_coords[0];
-        local_offset[1] = lvl.local_boxes[0].grid_coords[1];
-        local_offset[2] = lvl.local_boxes[0].grid_coords[2];
-        
-        for (int64_t i = 1; i < lvl.num_boxes_local; ++i) {
-            local_offset[0] = std::min(local_offset[0], static_cast<uint32_t>(lvl.local_boxes[i].grid_coords[0]));
-            local_offset[1] = std::min(local_offset[1], static_cast<uint32_t>(lvl.local_boxes[i].grid_coords[1]));
-            local_offset[2] = std::min(local_offset[2], static_cast<uint32_t>(lvl.local_boxes[i].grid_coords[2]));
+    // (the region's faces are the boundary boxes populate_interior_boundary found)
+    {
+        std::vector<int64_t> boundary;
+        for (int64_t local_idx : lvl.boundary_id) boundary.push_back(lvl.local_boxes[local_idx].morton_index);
+        std::sort(boundary.begin(), boundary.end());
+        if (boundary != L.boundary(my_process_id)) {
+            throw std::runtime_error("compute_ghost_boxes_and_colors: the boundary boxes are not the region's faces");
         }
     }
+    const uint32_t grid_size = L.grid;
+    const uint32_t local_grid_size = L.width;
+    const std::array<uint32_t, 3> local_offset_array = L.offset(my_process_id);
+    const uint32_t* local_offset = local_offset_array.data();
     
     // Helper lambda to get offset for any box's owning process
     auto get_box_owner_offset = [&](int64_t morton_idx) -> std::array<uint32_t, 3> {
-        uint32_t gx, gy, gz = 0;
-        if (tree->dimension == 2) {
-            morton::decode_2d(morton_idx, gx, gy);
-        } else {
-            morton::decode_3d(morton_idx, gx, gy, gz);
-        }
-        
-        return {
-            (gx / local_grid_size) * local_grid_size,
-            (gy / local_grid_size) * local_grid_size,
-            (gz / local_grid_size) * local_grid_size
-        };
+        return L.offset_of(morton_idx);
     };
     
-    // ========== Step 1: Get 1-hop neighbors ==========
-    
-    for (int64_t local_idx : lvl.boundary_id) {
-        auto& box = lvl.local_boxes[local_idx];
-        
-        // Get 1-hop neighbors
-        std::vector<uint64_t> neighbors_1hop;
-        if (tree->dimension == 2) {
-            neighbors_1hop = morton::neighbors_2d(box.morton_index, grid_size);
-        } else {
-            neighbors_1hop = morton::neighbors_3d(box.morton_index, grid_size);
-        }
-        
-        // Batch process assignment for 1-hop neighbors
-        std::vector<uint32_t> neighbor_processes;
-        if (tree->dimension == 2) {
-            neighbor_processes = morton::assign_to_processes_2d(
-                neighbors_1hop, lvl.num_active_processes, grid_size);
-        } else {
-            neighbor_processes = morton::assign_to_processes_3d(
-                neighbors_1hop, lvl.num_active_processes, grid_size);
-        }
-        
-        // Add 1-hop neighbors that are not on this process
-        for (size_t i = 0; i < neighbors_1hop.size(); ++i) {
-            if (neighbor_processes[i] != my_process_id) {
-                int64_t n = static_cast<int64_t>(neighbors_1hop[i]);
-                temp_ghost_set.insert(n);
-            }
-        }
-    }
-    
-    // ========== Step 2: For 3D, add 2-hop neighbors on boundary of their process ==========
-    
-    if (tree->dimension == 3) {
-        for (int64_t local_idx : lvl.boundary_id) {
-            auto& box = lvl.local_boxes[local_idx];
-            
-            std::vector<uint64_t> neighbors_2hop = morton::neighbors_2hop_3d(box.morton_index, grid_size);
-            
-            // Batch process assignment for 2-hop neighbors
-            std::vector<uint32_t> neighbor_2hop_processes = morton::assign_to_processes_3d(
-                neighbors_2hop, lvl.num_active_processes, grid_size);
-            
-            // For each 2-hop neighbor, check if it's on boundary of its process
-            for (size_t i = 0; i < neighbors_2hop.size(); ++i) {
-                uint64_t n = neighbors_2hop[i];
-                uint32_t n_process = neighbor_2hop_processes[i];
-                
-                // Skip if on this process
-                if (n_process == my_process_id) continue;
-                
-                // Decode global coordinates
-                uint32_t nx, ny, nz;
-                morton::decode_3d(n, nx, ny, nz);
-                
-                // Compute local coordinates within the owning process
-                uint32_t n_local_x = nx % local_grid_size;
-                uint32_t n_local_y = ny % local_grid_size;
-                uint32_t n_local_z = nz % local_grid_size;
-                
-                // Check if on one of the 6 faces of the local cube (boundary of its process)
-                bool is_on_face = (n_local_x == 0 || n_local_x == local_grid_size - 1) ||
-                                  (n_local_y == 0 || n_local_y == local_grid_size - 1) ||
-                                  (n_local_z == 0 || n_local_z == local_grid_size - 1);
-                
-                if (is_on_face) {
-                    temp_ghost_set.insert(static_cast<int64_t>(n));
-                }
-            }
-        }
-    }
-    
-    // ========== Step 3: Find missing orange boxes ==========
-    
-    // Convert to vector temporarily to iterate
-    std::vector<int64_t> temp_ghost_after_step2(temp_ghost_set.begin(), temp_ghost_set.end());
-    
-    // Track blue and orange boxes found in step 3
+    // ========== Steps 1-3: the ghost set, its blue ghosts and orange completions ==========
+    // (the one-hop shell of the region, in 3D the two-hop boxes on faces of
+    // their regions, and the orange neighbors of the blue ghosts), by region
+    // of the ghosts, as the gather's senders compute it for this region;
+    // checked against the region's own form and against the original
+    // enumeration from the boundary boxes
+    std::set<int64_t> temp_ghost_set;
     std::set<int64_t> blue_boxes;
     std::set<int64_t> orange_boxes;
-    
-    // Find blue boxes in temp_ghost (from their owning process's perspective)
-    for (int64_t ghost_morton : temp_ghost_after_step2) {
-        auto ghost_offset = get_box_owner_offset(ghost_morton);
-        
-        if (is_blue_box(ghost_morton, level, tree->dimension, grid_size, local_grid_size, ghost_offset.data())) {
-            blue_boxes.insert(ghost_morton);
+    for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t r) {
+        for (int64_t g : ghosts_of_region_in(L, my_process_id, r)) temp_ghost_set.insert(g);
+    });
+    {
+        const RegionGhosts rg = ghosts_of_region(L, my_process_id);
+        const RegionGhosts ref = ghosts_of_region_reference(L, my_process_id);
+        if (std::vector<int64_t>(temp_ghost_set.begin(), temp_ghost_set.end()) != rg.ghosts ||
+            rg.ghosts != ref.ghosts || rg.blue != ref.blue || rg.orange != ref.orange) {
+            throw std::runtime_error("compute_ghost_boxes_and_colors: the ghost sets by region, of the region and "
+                                     "by enumeration differ (level " + std::to_string(level) + ")");
         }
-    }
-    
-    // For each blue box, find 1-hop neighbors that are orange
-    for (int64_t blue_morton : blue_boxes) {
-        std::vector<uint64_t> neighbors;
-        if (tree->dimension == 2) {
-            neighbors = morton::neighbors_2d(blue_morton, grid_size);
-        } else {
-            neighbors = morton::neighbors_3d(blue_morton, grid_size);
-        }
-        
-        // Batch process assignment for neighbors
-        std::vector<uint32_t> neighbor_processes;
-        if (tree->dimension == 2) {
-            neighbor_processes = morton::assign_to_processes_2d(
-                neighbors, lvl.num_active_processes, grid_size);
-        } else {
-            neighbor_processes = morton::assign_to_processes_3d(
-                neighbors, lvl.num_active_processes, grid_size);
-        }
-        
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            int64_t n = static_cast<int64_t>(neighbors[i]);
-            
-            // Skip if already in temp_ghost
-            if (temp_ghost_set.count(n) > 0) continue;
-            
-            // Skip if on this process
-            if (neighbor_processes[i] == my_process_id) continue;
-            
-            // Check if this neighbor is an orange box (from its owning process's perspective)
-            auto n_offset = get_box_owner_offset(n);
-            if (is_orange_box(n, level, tree->dimension, grid_size, local_grid_size, n_offset.data())) {
-                temp_ghost_set.insert(n);
-                orange_boxes.insert(n);
-            }
-        }
+        blue_boxes.insert(rg.blue.begin(), rg.blue.end());
+        orange_boxes.insert(rg.orange.begin(), rg.orange.end());
     }
     
     // ========== Step 4: Classify remaining ghost boxes (green and purple) ==========

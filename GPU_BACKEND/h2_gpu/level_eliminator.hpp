@@ -105,6 +105,8 @@ struct EliminatorStats {
     double finish = 0.0;      // level end (wait for the background copies)
     double transition = 0.0;  // device transition to the parent level
     double tr_plan = 0.0, tr_blocks = 0.0, tr_p = 0.0, tr_fill = 0.0;  // its parts
+    double compaction = 0.0, compaction_bytes = 0.0;  // level end: kept blocks slid down the heap
+    double reduction = 0.0;   // device process reduction (the parents' blocks to their owner)
     double tr_restore = 0.0, tr_restore_bytes = 0.0;  // restored fill sources (host gather, in plan)
     int64_t tr_chunks = 0;
     int64_t transition_fill_gemms = 0;

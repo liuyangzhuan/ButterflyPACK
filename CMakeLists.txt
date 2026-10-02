@@ -634,6 +634,11 @@ if (enable_h2_gpu)
   target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_batch_determinism butterflypack)
 endif()
+# Self-test of the CA halo geometry (h2_parallel/core/halo_geometry.hpp, the
+# ghost and assisting sets by region against their enumeration; GPU_BACKEND/
+# h2_gpu/GPU_CA_PLAN.md, M7b); not built by default: make h2_halo_geometry_test
+add_executable(h2_halo_geometry_test EXCLUDE_FROM_ALL h2_parallel/tests/halo_geometry_test.cpp)
+target_include_directories(h2_halo_geometry_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
 
 set_target_properties(butterflypack PROPERTIES
   VERSION ${PROJECT_VERSION}

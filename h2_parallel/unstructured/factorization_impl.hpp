@@ -1554,7 +1554,7 @@ void hierarchical_factorization_unstructured(
                     level, tree->levels[current_level - 1], dimension,
                     tree->global_bounds, occupied_topology);
             },
-            print_detail && rank == level_print_rank);
+            print_detail && rank == level_print_rank, level_comm, transition_comm);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes =

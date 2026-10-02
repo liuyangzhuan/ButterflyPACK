@@ -1149,11 +1149,16 @@ struct TreeLevel {
     std::vector<std::vector<int64_t>> solve_neighbor_size; ///< solve neighbor size
     std::vector<BoxData<CoordType, DataType>> ghost_boxes;  ///< Ghost boxes (1-hop neighbors)
     std::vector<PointDataRequest<CoordType>> assisting_boxes;
-    // The request plan of the level's assisting gather (Mortons per peer of
-    // assisting_plan_comm: asked of it, asked by it), kept so that after the
-    // elimination only the skeletons move (refresh_CA_assisting_skeletons).
-    std::vector<std::vector<int64_t>> assisting_plan_outgoing, assisting_plan_incoming;
-    MPI_Comm assisting_plan_comm = MPI_COMM_NULL;
+    // The plan of the level's assisting gather: per peer (a rank of the
+    // tree's communicator) the assisting boxes sent to it and received from
+    // it, kept so that after the elimination only the skeletons move
+    // (refresh_CA_assisting_skeletons).
+    struct CAPeerPlan {
+        bool valid = false;
+        std::vector<int> peers;
+        std::vector<std::vector<int64_t>> to_peer, from_peer;
+    };
+    CAPeerPlan assisting_plan;
 
     // for shared memory sync
     std::unordered_map<int64_t, omp_lock_t*> box_locks;

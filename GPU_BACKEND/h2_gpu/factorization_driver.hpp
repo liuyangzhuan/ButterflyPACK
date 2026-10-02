@@ -20,6 +20,7 @@
 #ifdef H2_HAVE_GPU
 
 #include "ca_halo.hpp"
+#include "device_reduction.hpp"
 #include "level_eliminator.hpp"
 #include "wave_trace.hpp"
 
@@ -223,6 +224,39 @@ public:
     }
     bool keeps_blocks_of(int lvl) const {
         return lvl == 0 ? true : (lvl == 1 ? root_path_runs() : box_path_runs(lvl));
+    }
+    // Whether the parents' blocks can stay on the device across the process
+    // reduction from level `lvl` into level `parent_lvl`: the parent level
+    // would run on the device on its owners (the tests of keeps_blocks_of
+    // without this rank's own activity there, which a sender lacks), the
+    // levels' regions are uniform cubes (device_reduction.hpp), and on a CA
+    // parent level this rank's parents fit the device sketch.
+    // Rank-independent but for the last test; the caller all-reduces it over
+    // the transition's ranks.
+    bool device_reduction_possible(int lvl, int parent_lvl, const std::vector<Box>& parents) const {
+        if (!color_gpu_enabled() || parent_lvl < 1 || lvl < 2) return false;
+        const Level& child = tree_->levels[static_cast<size_t>(lvl)];
+        const Level& parent = tree_->levels[static_cast<size_t>(parent_lvl)];
+        const RegionLayout lc = RegionLayout::of(tree_->dimension, lvl, child.num_active_processes);
+        const RegionLayout lp = RegionLayout::of(tree_->dimension, parent_lvl, parent.num_active_processes);
+        if (!lc.uniform || !lp.uniform) return false;
+        if (parent_lvl == 1) {
+            // level 1 adopts the blocks on its rank; its transition builds the root there
+            const Level& l0 = tree_->levels[0];
+            return parent.num_active_processes == 1 && l0.num_active_processes == 1 &&
+                   opt_.method == FactorizationMethod::LU && level_eliminator_would_run(tree_, 1, kernel_, opt_.method);
+        }
+        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
+        if (!streamed) return false;
+        if (tree_->level_uses_CA(parent_lvl)) {
+            if (!ca_level_runs(parent_lvl) || !ca_level_supported(parent_lvl, nullptr)) return false;
+            for (const Box& p : parents) {
+                if (p.num_points > kEntryDestMask) return false;
+            }
+            return true;
+        }
+        if (opt_.lazy_schur == 0) return false;
+        return level_eliminator_would_run(tree_, parent_lvl, kernel_, opt_.method, opt_.lazy_schur);
     }
 
     // ---- a Color level that eliminates
@@ -597,26 +631,53 @@ public:
     // parent's go to the next level's eliminator (or to the host when that
     // level runs there).  Each rank builds the parents of its own boxes, with
     // its copies of the blocks shared with other ranks; at a process
-    // reduction they then go to the host, for their new owner.
+    // reduction they move to their new owner's device when the parent level
+    // runs there (device_reduction.hpp; every child rank decides alike over
+    // `level_comm`), else to the host for the host reduction.
     // `build_structure()` returns the parent boxes without their blocks.
     // Returns whether the parents were built here; otherwise the level's
     // blocks are back in the host BoxData for the host transition.
     // `level_comm` (the level's active ranks, or MPI_COMM_NULL): a device CA
     // level next keeps the blocks on the device (its halo then moves between
     // the devices, M2) when every rank's parents fit the device sketch.
+    // `transition_comm` (the ranks of the transition: the level's active
+    // ranks and the parent level's, whose owners at a reduction may be ranks
+    // idle at this level): the device reduction runs over it, the idle
+    // owners receiving only.
     template<typename StructureBuilder>
     bool transition(const Level& level, const Level& parent_level, std::vector<Box>& parents,
-                    StructureBuilder&& build_structure, bool announce, MPI_Comm level_comm = MPI_COMM_NULL) {
+                    StructureBuilder&& build_structure, bool announce, MPI_Comm level_comm = MPI_COMM_NULL,
+                    MPI_Comm transition_comm = MPI_COMM_NULL) {
         bool on_device = false;
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
-        if (level_ && level.is_process_active && level_->can_build_parent() &&
-            (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric && !opt_.is_hermitian) {
+        const bool builds = level_ && level.is_process_active && level_->can_build_parent() &&
+                            (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric &&
+                            !opt_.is_hermitian;
+        if (builds) {
             parents = build_structure();
             blocks_ = level_->build_parent(parents);
             level_.reset();
-            const int parent_lvl = level_index_ - 1;
-            bool keep = !reduction_ahead && keeps_blocks_of(parent_lvl);
-            if (!keep && !reduction_ahead && level_comm != MPI_COMM_NULL && ca_level_runs(parent_lvl) && ca_level_supported(parent_lvl, nullptr)) {
+            on_device = true;
+        }
+        const int parent_lvl = level.level - 1;
+        bool keep = false;
+        bool reduced = false;
+        ReductionStats red;
+        if (reduction_ahead && transition_comm != MPI_COMM_NULL) {
+            // every rank of the transition can take part: the builders with
+            // their blocks, the owners as receivers
+            const bool mine = level.is_process_active ? (builds && blocks_ != nullptr) : parent_level.is_process_active;
+            int ok = mine && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
+            MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, transition_comm);
+            if (ok != 0) {
+                red = reduce_parent_blocks(tree_, level, parent_level, blocks_, transition_comm);
+                eliminator_stats().reduction += red.total;
+                reduced = true;
+                keep = true;
+            }
+        } else if (builds && !reduction_ahead) {
+            keep = keeps_blocks_of(parent_lvl);
+            if (!keep && level_comm != MPI_COMM_NULL && ca_level_runs(parent_lvl) && ca_level_supported(parent_lvl, nullptr)) {
                 int fits = 1;
                 for (const Box& p : parents) {
                     if (p.num_points > kEntryDestMask) fits = 0;
@@ -624,28 +685,121 @@ public:
                 MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
                 keep = fits != 0;
             }
-            if (!keep) {
-                download_level_blocks(*blocks_, parents);
-                blocks_.reset();
+        }
+        if (builds && !keep) {
+            download_level_blocks(*blocks_, parents);
+            blocks_.reset();
+        }
+        if (builds && announce) {
+            const auto& e = eliminator_stats();
+            std::printf("  [gpu] level %d device transition: %.2f s (%lld chunks: plan %.2f [restore %.2f, %.2f GB], "
+                        "blocks %.2f, P %.2f, fill %.2f), %lld fill GEMMs (%.1f GFLOP), blocks %s\n",
+                        level.level, e.transition, static_cast<long long>(e.tr_chunks), e.tr_plan,
+                        e.tr_restore, e.tr_restore_bytes / 1e9, e.tr_blocks, e.tr_p, e.tr_fill,
+                        static_cast<long long>(e.transition_fill_gemms), e.transition_flops / 1e9,
+                        reduced ? (blocks_ ? "merged on this device (process reduction)"
+                                           : "sent to their owner's device (process reduction)")
+                                : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (reduced) {
+                std::printf("  [gpu] level %d device reduction: %.2f s (plan %.2f, pack %.2f, MPI %.2f, unpack %.2f; "
+                            "%d rounds%s), sent %.2f GB in %lld blocks, received %.2f GB in %lld blocks, %lld own "
+                            "copies dropped\n",
+                            level.level, red.total, red.plan, red.pack, red.mpi, red.unpack, red.rounds,
+                            red.staged ? ", through the host" : "", red.bytes_sent / 1e9,
+                            static_cast<long long>(red.blocks_sent), red.bytes_received / 1e9,
+                            static_cast<long long>(red.blocks_received), static_cast<long long>(red.blocks_dropped));
             }
-            on_device = true;
-            if (announce) {
-                const auto& e = eliminator_stats();
-                std::printf("  [gpu] level %d device transition: %.2f s (%lld chunks: plan %.2f [restore %.2f, %.2f GB], "
-                            "blocks %.2f, P %.2f, fill %.2f), %lld fill GEMMs (%.1f GFLOP), blocks %s\n",
-                            level_index_, e.transition, static_cast<long long>(e.tr_chunks), e.tr_plan,
-                            e.tr_restore, e.tr_restore_bytes / 1e9, e.tr_blocks, e.tr_p, e.tr_fill,
-                            static_cast<long long>(e.transition_fill_gemms), e.transition_flops / 1e9,
-                            blocks_ ? "kept on the device" : "copied to the host");
-                std::fflush(stdout);
-            }
+            std::fflush(stdout);
         }
         if (level_) {
             level_->restore_host_copies();  // (X_NR kept without a host copy)
             level_->download_blocks();      // host transition
             level_.reset();
         }
+        compact_device_memory(level.level, announce);
         return on_device;
+    }
+
+    // After the transition, the level's own blocks freed: the blocks that
+    // outlive it, the solve factors kept on the device (every level's) and
+    // the parents' blocks of a device transition, slide down the heap
+    // (DeviceHeap::compact), so the free memory is one range again for the
+    // next level instead of the pieces between them.  The pointers into them
+    // (the kept boxes' factors, the parent matrices) follow.  Local to the
+    // rank: no decision is shared.  The moves run on the stream after the
+    // level's device work; an overlapping move goes through a staging block
+    // from the top of the heap in pieces, or in pieces of its gap.
+    void compact_device_memory(int lvl, bool announce) {
+        if (!color_gpu_enabled()) return;
+        DeviceHeap& heap = DeviceHeap::instance();
+        if (!heap.initialized()) return;
+        DeviceSolveStore& store = device_solve_store();
+        std::vector<char*> blocks;
+        for (auto& [level, kl] : store.kept) blocks.insert(blocks.end(), kl.blocks.begin(), kl.blocks.end());
+        if (blocks_) {
+            for (auto& kv : blocks_->schur) blocks.push_back(reinterpret_cast<char*>(kv.second.ptr));
+            for (auto& kv : blocks_->edges) blocks.push_back(reinterpret_cast<char*>(kv.second.ptr));
+        }
+        if (blocks.empty()) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        Context& ctx = Context::instance();
+        ctx.activate();
+        cudaStream_t stream = ctx.stream();
+        constexpr size_t kStaging = size_t{256} << 20;
+        char* staging = heap.try_alloc(kStaging);
+        size_t moved = 0;
+        auto copy = [&](char* dst, const char* src, size_t bytes) {
+            check_cuda(cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, stream), "compaction");
+        };
+        auto move = [&](char* dst, const char* src, size_t bytes) {
+            moved += bytes;
+            if (dst + bytes <= src) {
+                copy(dst, src, bytes);
+                return;
+            }
+            // (pieces in address order: a piece's destination is below what
+            // the later pieces still read)
+            const size_t gap = static_cast<size_t>(src - dst);
+            if (staging != nullptr && gap < kStaging) {
+                for (size_t off = 0; off < bytes; off += kStaging) {
+                    const size_t n = std::min(kStaging, bytes - off);
+                    copy(staging, src + off, n);
+                    copy(dst + off, staging, n);
+                }
+                return;
+            }
+            for (size_t off = 0; off < bytes; off += gap) copy(dst + off, src + off, std::min(gap, bytes - off));
+        };
+        const std::vector<DeviceHeap::Move> moves = heap.compact(blocks, move);
+        if (staging != nullptr) heap.free(staging);
+        if (!moves.empty()) {
+            for (auto& [level, kl] : store.kept) {
+                for (char*& b : kl.blocks) b = DeviceHeap::relocated(b, moves);
+                for (auto& [morton, kb] : kl.boxes) {
+                    kb.T = DeviceHeap::relocated(kb.T, moves);
+                    kb.xsr = DeviceHeap::relocated(kb.xsr, moves);
+                    kb.xnr = DeviceHeap::relocated(kb.xnr, moves);
+                    kb.lu = DeviceHeap::relocated(kb.lu, moves);
+                    kb.ipiv = DeviceHeap::relocated(kb.ipiv, moves);
+                }
+            }
+            if (blocks_) {
+                for (auto& kv : blocks_->schur) kv.second.ptr = DeviceHeap::relocated(kv.second.ptr, moves);
+                for (auto& kv : blocks_->edges) kv.second.ptr = DeviceHeap::relocated(kv.second.ptr, moves);
+            }
+            check_cuda(cudaStreamSynchronize(stream), "compaction");
+        }
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        auto& e = eliminator_stats();
+        e.compaction += seconds;
+        e.compaction_bytes += static_cast<double>(moved);
+        if (announce && !moves.empty()) {
+            std::printf("  [gpu] level %d compaction: %zu blocks moved (%.2f GB) in %.3f s; %.2f GB free, "
+                        "largest range %.2f GB\n",
+                        lvl, moves.size(), static_cast<double>(moved) / 1e9, seconds,
+                        static_cast<double>(heap.available()) / 1e9, static_cast<double>(heap.largest_free()) / 1e9);
+            std::fflush(stdout);
+        }
     }
 
     // ---- the root
