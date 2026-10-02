@@ -882,6 +882,68 @@ Unchanged bitwise (8-rank Laplace 192: logdet, replica check 0 differ,
 solve check 3.988e-15 / 2.7e-14). With the leaf's factors kept (320^3), CA0
 now beats Color by 5%.
 
+**768^3 on 512 ranks again, with the automatic keep, the pieced buffers and
+both warm-ups (2026-10-01, job 59166764, 128 A100 80 GB nodes, commit dc52665
+frozen; build/gpu_prep/ca0/g768_80 of ButterflyPACK_H2_new_id_proxy2_gpu).**
+Color and CA0 (CA on the leaf only), each twice; the first run of each is
+slower (cold nodes for Color: kernel warm-up 0.67 s; the first CA run's leaf
+8.04 s), so the second runs are compared. CA0 still loses, by 8% (it was 22%
+against Color keeping its factors on 2026-09-30):
+
+| second runs | Color | CA0 | 2026-09-30: Color keep / Color no keep / CA0 no keep |
+|---|---|---|---|
+| factor time | 15.6 s (first run 16.9) | 16.9 s (first run 18.3) | 16.0 / 17.3 / 19.6 s |
+| leaf (level 7) total | 5.58 s | 6.66 s | 5.75 / 7.05 / 7.20 s |
+| leaf elimination, shortest / longest rank | 4.98 / 5.07 s | 5.46 / 5.62 s | 4.98 / 5.12, 5.82 / 6.54, 3.96 / 5.93 s |
+| level 6 (above the leaf) | 2.68 s | 3.71 s | 2.55 / 3.20 / 4.82 s |
+| levels 5 / 4 / 3 / 2 | 1.61 / 1.47 / 2.89 / 1.08 s | 1.65 / 1.41 / 2.1 / 1.09 s | |
+| solve factors kept | levels 2-7, 31.2 GB per rank | levels 2-6, 10.5 GB; the leaf (37.7 GB) uploaded at the first solve | |
+| solve setup; logdet and quick verification | 0.18 s; 2.8 s | 6.96 s; 9.8 s | |
+| heap peak at the leaf | 49.6 GB | 40.7 GB | |
+
+Accuracy as before: Color logdet -6968667795.3627348, acc_mvp 5.23e-4,
+acc_forward 9.06e-3; CA0 -6968667834.83634, 5.32e-4, 9.05e-3. No errors.
+What is left of CA0's deficit (1.3 s): (1) its leaf's factors, with the
+ghosts', do not fit the keep budget on 80 GB, so the leaf downloads them
+(rank 0: 27.7 GB down against Color's 7.9 GB, 0.65 s of level-end wait) and
+is 1.1 s slower than Color's kept leaf; (2) the Color level above the CA
+leaf is still 1.0 s slower than Color's own level 6 (exchange 2.65 vs 1.69 s:
+sizes 1.51 vs 1.08, payload 0.95 vs 0.40 s for the same bytes), so the 64 KB
+exchange warm-up does not remove the first-exchange cost at this size (it
+was 1.6-2.3 s before). The leaf elimination's spread over the ranks no
+longer shows in "shortest / longest" (5.46 / 5.62 s against 3.96 / 5.93 s):
+not looked into (the longest is what the level waits for). Level 3 (64 ranks
+after the reduction, 8 boxes each) varies between 2.0 and 2.9 s across runs
+without following the method (here Color 2.89 s, CA0 2.1 s; 2026-09-30:
+2.68 / 2.16 / 2.62 s): not understood.
+
+**640^3 on 512 ranks, 40 GB nodes (2026-10-01, job 59185735, commit dc52665
+frozen; build/gpu_prep/ca0/g640_40): the 512-rank counterpart of 320^3 on 64
+ranks (512K per rank, Nmin 64, 125-point leaf boxes, CA on the leaf only).**
+Color: 11.8 s (first run, cold nodes) and 11.3 s, every level kept (14.4 GB
+per rank), logdet -3937186064.8561087, acc_mvp 9.43e-4, acc_forward 6.61e-3
+(12.0 s on 2026-09-30 with nothing kept). **CA0 kept its leaf's factors
+(11.94 GB per rank, 51% of the bound) and levels 6, 5 and 4, then every run
+(three, the third with the checks) ran out of heap after level 4's
+elimination, in the transition to level 3 (the process reduction to 64
+ranks): on 5-13 of the receiving ranks a 1.3-1.4 GB request with 22.8 GB of
+the 33.4 GB pool in use and the largest free range 1.1-1.3 GB** (10.5 GB free
+in pieces: the kept factors, 18.9 GB in blocks of one wave each, sit between
+the levels' blocks, as on the 320^3 CA0 run before the pieced buffers; Color
+keeps 13.6 GB without trouble because its kept blocks lie together). This is
+the symptom compaction of the kept blocks was held in reserve for.
+
+Up to level 4 (second runs, Color / CA0): leaf 2.42 / 2.63 s (elimination
+1.96 / 1.86, shortest ranks 1.89 / 1.75; CA0's gather 0.23 and transition
+0.47 against Color's 0.46), level 6 1.85 / 1.99 s, level 5 1.35 / 1.37 s,
+level 4 elimination 0.89 / 0.86 s. The level above the CA leaf shows no
+first-exchange penalty here (exchange 1.12 vs Color's 1.13 s), so the 1.0 s
+penalty at 768^3 comes with the larger messages (4.35 GB received per rank
+against 2.98 GB), not with the rank count. CA0's elimination advantage at the
+leaf is 0.1 s here (0.3 s at 320^3 on 64 ranks: more interior ranks); with
+the gather and the larger transition it was 0.3 s behind Color through level
+4, so a finished run would have been about a tie.
+
 ### M5. CA3 (component-owner) on the GPU
 Evaluate after M1-M3 numbers. Unique owner per boundary component, the
 corner -> edge -> face DAG, FULL/COMPACT/SKELETON routing, deterministic
