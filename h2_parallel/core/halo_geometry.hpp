@@ -570,13 +570,26 @@ inline void extra_ghosts_of_region(const RegionLayout& L, uint32_t q, std::vecto
 
 }  // namespace halo_detail
 
+// The ghosts of a region beyond its one-hop shell (S2 \ S1 and S3, sorted)
+// with its blue ghosts and orange completions: computed once per region and
+// shared by the functions below (the orange completion is their main cost).
+struct RegionExtra {
+    std::vector<int64_t> extra, blue, orange;
+};
+inline RegionExtra region_extra(const RegionLayout& L, uint32_t q) {
+    if (!L.uniform) throw std::runtime_error("region_extra: the level's regions are not uniform cubes");
+    RegionExtra e;
+    halo_detail::extra_ghosts_of_region(L, q, e.extra, e.blue, e.orange);
+    return e;
+}
+
 // The ghosts of region q (all regions), with the blue and orange lists the
 // color classification needs.
-inline RegionGhosts ghosts_of_region(const RegionLayout& L, uint32_t q) {
+inline RegionGhosts ghosts_of_region(const RegionLayout& L, uint32_t q, const RegionExtra& e) {
     if (!L.uniform) throw std::runtime_error("ghosts_of_region: the level's regions are not uniform cubes");
     RegionGhosts out;
-    std::vector<int64_t> extra;
-    halo_detail::extra_ghosts_of_region(L, q, extra, out.blue, out.orange);
+    out.blue = e.blue;
+    out.orange = e.orange;
     // S1: the one-hop shell
     const auto oq = L.offset(q);
     const int32_t w = static_cast<int32_t>(L.width);
@@ -591,26 +604,31 @@ inline RegionGhosts ghosts_of_region(const RegionLayout& L, uint32_t q) {
             }
         }
     }
-    out.ghosts.insert(out.ghosts.end(), extra.begin(), extra.end());
+    out.ghosts.insert(out.ghosts.end(), e.extra.begin(), e.extra.end());
     std::sort(out.ghosts.begin(), out.ghosts.end());
     out.ghosts.erase(std::unique(out.ghosts.begin(), out.ghosts.end()), out.ghosts.end());
     return out;
 }
+inline RegionGhosts ghosts_of_region(const RegionLayout& L, uint32_t q) {
+    return ghosts_of_region(L, q, region_extra(L, q));
+}
 
 // The ghosts of region q that lie in region r (r != q), sorted.
-inline std::vector<int64_t> ghosts_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r) {
+inline std::vector<int64_t> ghosts_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r, const RegionExtra& e) {
     if (!L.uniform) throw std::runtime_error("ghosts_of_region_in: the level's regions are not uniform cubes");
     std::vector<int64_t> out;
     if (r == q) return out;
     for (int64_t m : L.boxes_near(r, q, 1)) out.push_back(m);  // (all at distance 1: r != q)
-    std::vector<int64_t> extra, blue, orange;
-    halo_detail::extra_ghosts_of_region(L, q, extra, blue, orange);
-    for (int64_t m : extra) {
+    for (int64_t m : e.extra) {
         if (L.region_of(m) == r) out.push_back(m);
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
+}
+inline std::vector<int64_t> ghosts_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r) {
+    if (r == q) return {};
+    return ghosts_of_region_in(L, q, r, region_extra(L, q));
 }
 
 // The assisting boxes of a CA region q that lie in region r (r != q): the
@@ -618,27 +636,33 @@ inline std::vector<int64_t> ghosts_of_region_in(const RegionLayout& L, uint32_t 
 // (compute_assisting_boxes with the ghosts as seeds), sorted.  A box is
 // within two hops of the one-hop shell exactly when it lies within three of
 // the cube; the ghosts beyond the shell (S2, S3) reach two further.
-inline std::vector<int64_t> assisting_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r) {
+inline std::vector<int64_t> assisting_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r,
+                                                   const RegionExtra& e) {
     if (!L.uniform) throw std::runtime_error("assisting_of_region_in: the level's regions are not uniform cubes");
     std::vector<int64_t> out;
     if (r == q) return out;
-    std::vector<int64_t> extra, blue, orange;
-    halo_detail::extra_ghosts_of_region(L, q, extra, blue, orange);
     auto is_ghost = [&](int64_t m, const std::array<int32_t, 3>& c) {
-        return L.distance_to(c, q) == 1 || std::binary_search(extra.begin(), extra.end(), m);
+        return L.distance_to(c, q) == 1 || std::binary_search(e.extra.begin(), e.extra.end(), m);
     };
-    std::set<int64_t> found;
     for (int64_t m : L.boxes_near(r, q, 3)) {
-        if (!is_ghost(m, L.coords(m))) found.insert(m);
+        if (!is_ghost(m, L.coords(m))) out.push_back(m);
     }
-    for (int64_t g : extra) {
-        L.for_each_within(L.coords(g), 2, [&](int64_t n, const std::array<int32_t, 3>& c) {
+    for (int64_t g : e.extra) {
+        // (only the ghosts within two hops of r's cube reach it)
+        const std::array<int32_t, 3> gc = L.coords(g);
+        if (L.distance_to(gc, r) > 2) continue;
+        L.for_each_within(gc, 2, [&](int64_t n, const std::array<int32_t, 3>& c) {
             if (L.region_of(n) != r || is_ghost(n, c)) return;
-            found.insert(n);
+            out.push_back(n);
         });
     }
-    out.assign(found.begin(), found.end());
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
+}
+inline std::vector<int64_t> assisting_of_region_in(const RegionLayout& L, uint32_t q, uint32_t r) {
+    if (r == q) return {};
+    return assisting_of_region_in(L, q, r, region_extra(L, q));
 }
 
 // Regions whose halo (ghosts, assisting boxes) may reach into region q, or

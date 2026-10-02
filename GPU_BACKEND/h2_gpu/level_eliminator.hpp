@@ -94,7 +94,8 @@ struct EliminatorStats {
     // their parts: buffers (layouts and allocations), launch items (of which
     // the near blocks' allocations); owner candidates, pairs (parallel, with
     // a CA level's order by source), the join (new targets), batches
-    double pb_buffers = 0.0, pb_items = 0.0, pb_near_alloc = 0.0;
+    double pb_buffers = 0.0, pb_items = 0.0;
+    double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
     double po_candidates = 0.0, po_pairs = 0.0, po_order = 0.0, po_batches = 0.0;
     double reclaim_wait = 0.0;    // full heap: waits for background copies to free blocks
     double exchange_wait = 0.0;   // full exchange arena: waits for receive buffers' host copies
@@ -2095,32 +2096,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         push(g6, wb.temp1, k, wb.xsr, k, wb.s, k, k, k, r);
         push(g7, wb.temp2, nt, wb.xsr, k, wb.xns, nt, nt, k, r);
 
-        // Step 5: the near block of every neighbor becomes A_NS + update
-        // (current neighbor rows x this box's skeleton), stored in the
-        // canonical orientation.
-        for (size_t a = 0; a < box->one_hop.size(); ++a) {
-            const int64_t nm = box->one_hop[a];
-            const int c = static_cast<int>(wb.counts[a]);
-            if (c == 0) continue;
-            DeviceMatrix fresh;
-            const auto t_alloc = clock::now();
-            fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D);
-            stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
-            int64_t ors = 1, ocs = c;
-            if (box->morton_index < nm) {
-                fresh.rows = c;  // rows = neighbor (hi)
-                fresh.cols = k;
-            } else {
-                fresh.rows = k;  // rows = this box (hi)
-                fresh.cols = c;
-                ors = k;
-                ocs = 1;
-            }
-            stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
-            max_store_m = std::max(max_store_m, c);
-            max_store_n = std::max(max_store_n, k);
-            edges_[edge_key(box->morton_index, nm)] = fresh;
-        }
         st.schur = DeviceMatrix{wb.s, k, k};
     }
 
@@ -2135,7 +2110,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     const size_t off_copy_xnr = meta_.append(copy_xnr);
     const size_t off_sym = meta_.append(sym_adds);
     const size_t off_swaps = meta_.append(swaps);
-    const size_t off_stores = meta_.append(stores);
     const size_t off_transposes = meta_.append(transposes);
     for (VBatch<S>* b : {&g1, &g2, &g3, &g4, &g5, &g6, &g7, &trsm, &getrf, &gsolve}) b->stage(meta_);
     // CA levels: one LU launch, and one launch of each solve for
@@ -2246,10 +2220,49 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                      max_tr_m, max_tr_n, stream);
     g6.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
     g7.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 0.0, queue);
-    launch_add_store(reinterpret_cast<const AddStoreItem*>(items(off_stores)), static_cast<int>(stores.size()),
-                     max_store_m, max_store_n, stream);
-    marks.mark(stream);  // 5: transposes, Schur, step 5
+    marks.mark(stream);  // 5: transposes, Schur
     stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
+
+    // ---- Step 5, planned while the device runs the box region: the near
+    // block of every neighbor becomes A_NS + update (current neighbor rows x
+    // this box's skeleton), stored in the canonical orientation.  Its tens of
+    // thousands of block allocations per wave kept the device idle when they
+    // came before the launches above; they may now take the blocks those
+    // launches retired.  The items go with the owner pass's image.
+    {
+        const auto t_near = clock::now();
+        for (int i : active) {
+            WaveBox& wb = boxes[static_cast<size_t>(i)];
+            Box* box = wb.box;
+            const int k = wb.k, nt = wb.ntot;
+            for (size_t a = 0; a < box->one_hop.size(); ++a) {
+                const int64_t nm = box->one_hop[a];
+                const int c = static_cast<int>(wb.counts[a]);
+                if (c == 0) continue;
+                DeviceMatrix fresh;
+                const auto t_alloc = clock::now();
+                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D);
+                stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
+                int64_t ors = 1, ocs = c;
+                if (box->morton_index < nm) {
+                    fresh.rows = c;  // rows = neighbor (hi)
+                    fresh.cols = k;
+                } else {
+                    fresh.rows = k;  // rows = this box (hi)
+                    fresh.cols = c;
+                    ors = k;
+                    ocs = 1;
+                }
+                stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
+                max_store_m = std::max(max_store_m, c);
+                max_store_n = std::max(max_store_n, k);
+                edges_[edge_key(box->morton_index, nm)] = fresh;
+            }
+        }
+        const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
+        stats.pb_near += seconds;
+        stats.plan += seconds;
+    }
 
     const auto t_owner = clock::now();
     owner_meta_.clear();
@@ -2438,13 +2451,16 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     owner_lap(stats.po_batches);
     stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
     const size_t off_owner_evals = owner_meta_.append(owner_evals);
+    const size_t off_stores = owner_meta_.append(stores);
     for (auto& b : owner_batches) b.stage(owner_meta_);
     stats.plan += std::chrono::duration<double>(clock::now() - t_owner).count();
     t0 = clock::now();
     char* omd = owner_meta_.upload(owner_meta_device_, stream);
     stats.bytes_up += static_cast<double>(owner_meta_.size());
+    launch_add_store(reinterpret_cast<const AddStoreItem*>(omd + off_stores), static_cast<int>(stores.size()),
+                     max_store_m, max_store_n, stream);
     eval_blocks(owner_evals, owner_meta_, omd, off_owner_evals, max_owner_m, max_owner_n, stream);
-    marks.mark(stream);  // 6: owner targets
+    marks.mark(stream);  // 6: step 5 (near blocks), owner targets
     for (const auto& b : owner_batches) {
         b.gemm(omd, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
         stats.owner_gemms += static_cast<int64_t>(b.count());
@@ -3995,13 +4011,21 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     // their coordinates, so a pair filters a short list instead of decoding
     // and looking up each of its 26 neighbors (the leaf plans hundreds of
     // thousands of two-hop pairs).  A neighbor without a recorded wave is
-    // left to collect_lazy_far_sources, which reports it.
+    // left to collect_lazy_far_sources, which reports it.  Each carries its
+    // device state and a dense index of it (the local boxes, then the remote
+    // ones): the chunks look up a source's G and P blocks by that index and
+    // the direction from the source to the child (one of its 3^dim
+    // neighbors) instead of hashing Morton pairs, a million times at the leaf.
     struct SourceCandidate {
         int32_t wave;
         int64_t morton;
         int64_t coords[3];
         bool known;
+        const BoxState* state;  // (null: no device state; state_of reports it when the source is used)
+        int id;
     };
+    const size_t num_source_ids = states_.size() + remote_states_.size();
+    constexpr int kDirections = 27;
     std::vector<std::vector<SourceCandidate>> candidates_of(level_.local_boxes.size());
     for (size_t b = 0; b < level_.local_boxes.size(); ++b) {
         auto& list = candidates_of[b];
@@ -4009,27 +4033,49 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             if (!sketch_box_eliminated(level_, candidate)) continue;
             const auto wave_it = level_.elimination_wave.find(candidate);
             SourceCandidate c{wave_it != level_.elimination_wave.end() ? wave_it->second : 0, candidate, {0, 0, 0},
-                              wave_it != level_.elimination_wave.end()};
+                              wave_it != level_.elimination_wave.end(), nullptr, -1};
             lazy_far_decode_coords(dim, candidate, c.coords);
+            if (is_local(candidate)) {
+                c.id = static_cast<int>(candidate - level_.local_morton_start);
+                c.state = &states_[static_cast<size_t>(c.id)];
+            } else if (auto rit = remote_index_.find(candidate); rit != remote_index_.end()) {
+                c.id = static_cast<int>(states_.size() + rit->second);
+                c.state = &remote_states_[rit->second];
+            }
             list.push_back(c);
         }
         std::sort(list.begin(), list.end(), [](const SourceCandidate& a, const SourceCandidate& b) {
             return a.wave != b.wave ? a.wave < b.wave : a.morton < b.morton;
         });
     }
-    auto sources_of = [&](int64_t im, int64_t jm, const int64_t cj3[3], std::vector<LazyFarSource>& out) {
+    auto sources_of = [&](int64_t im, int64_t jm, const int64_t cj3[3], std::vector<const SourceCandidate*>& out) {
         out.clear();
         for (const SourceCandidate& c : candidates_of[static_cast<size_t>(im - level_.local_morton_start)]) {
             int64_t chebyshev = 0;
             for (int d = 0; d < dim; ++d) chebyshev = std::max(chebyshev, std::abs(c.coords[d] - cj3[d]));
             if (chebyshev != 1) continue;
             if (!c.known) {
-                collect_lazy_far_sources(level_, level_.find_local_box(im), jm, dim, out);  // (throws)
-                return;
+                std::vector<LazyFarSource> unused;
+                collect_lazy_far_sources(level_, level_.find_local_box(im), jm, dim, unused);  // (throws)
+                throw std::runtime_error("LevelEliminator::build_parent: fill source " + std::to_string(c.morton) +
+                                         " has no elimination wave");
             }
-            out.push_back(LazyFarSource{c.wave, c.morton});
+            if (c.state == nullptr) state_of(c.morton);  // (throws)
+            out.push_back(&c);
         }
     };
+    // the direction from a source to one of its neighbors: 0 .. 3^dim - 1
+    auto direction = [&](const int64_t from[3], const int64_t to[3]) {
+        int slot = 0, stride = 1;
+        for (int d = 0; d < dim; ++d) {
+            const int64_t delta = to[d] - from[d];
+            if (delta < -1 || delta > 1) throw std::runtime_error("LevelEliminator::build_parent: a fill source is not next to its endpoint");
+            slot += static_cast<int>(delta + 1) * stride;
+            stride *= 3;
+        }
+        return slot;
+    };
+    std::vector<int> g_index, p_index;  // per chunk: (source id, direction) -> its G, its P (-1: none yet)
 
     // Parent blocks: the Schur block of each local parent, and a near-field
     // block for each neighbor parent (a local pair once, from its lower
@@ -4095,7 +4141,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     };
 
     size_t p0 = 0;
-    std::vector<LazyFarSource> sources;
+    std::vector<const SourceCandidate*> sources;
     std::vector<int64_t> positions;
     int64_t fill_gemms = 0;
     // Chunks alternate between two metadata images and are not waited for:
@@ -4197,20 +4243,28 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // or an offset in the chunk's buffers (G gathers, P) or in its
         // restore block
         struct GInfo { const S* ptr; int ld; size_t buffer = SIZE_MAX; size_t restore = SIZE_MAX; };
-        std::unordered_map<uint64_t, GInfo> g_of;       // (source Morton << 32) | child Morton
-        std::unordered_map<uint64_t, size_t> p_of;      // same key -> P buffer offset
+        std::vector<GInfo> g_infos;       // the chunk's G blocks, and
+        std::vector<size_t> p_offsets;    // its P blocks (buffer offsets), by g_index / p_index
+        g_index.assign(num_source_ids * kDirections, -1);
+        p_index.assign(num_source_ids * kDirections, -1);
         struct GPending { size_t offset; const S* src; int r; int k; IndexList cols; };
         std::vector<GPending> g_pending;
-        struct PPending { size_t offset; uint64_t g_key; const S* xrr; size_t xrr_restore; int r; int k; };
+        struct PPending { size_t offset; int g; const S* xrr; size_t xrr_restore; int r; int k; };
         std::vector<PPending> p_pending;
         // out -= P_{E,j}^T G_{E,i} (rows j) or G_{E,i}^T P_{E,j} (rows i)
-        struct FillTask { uint64_t g_key_i; uint64_t p_key_j; S* out; int ld; int m; int n; int r; bool rows_i; };
+        struct FillTask { int g_i; int p_j; S* out; int ld; int m; int n; int r; bool rows_i; };
         std::vector<std::vector<FillTask>> fills;  // per target child pair, in source order
 
         // G_{E,x}: temp2_E rows of child x (its skeleton), as columns of temp2_E^T
-        auto g_for = [&](int64_t em, int64_t xm) -> uint64_t {
-            const uint64_t key = (static_cast<uint64_t>(em) << 32) | static_cast<uint64_t>(xm);
-            if (g_of.count(key)) return key;
+        auto g_for = [&](const SourceCandidate& e, int64_t xm, const int64_t x3[3]) -> int {
+            const size_t slot = static_cast<size_t>(e.id) * kDirections + static_cast<size_t>(direction(e.coords, x3));
+            if (g_index[slot] >= 0) return g_index[slot];
+            const int64_t em = e.morton;
+            auto record = [&](const GInfo& info) {
+                g_infos.push_back(info);
+                g_index[slot] = static_cast<int>(g_infos.size()) - 1;
+                return g_index[slot];
+            };
             Source& s = source(em);
             BoxState& xs = state_of(xm);
             if (s.t2t == nullptr) {  // restored: contiguous columns
@@ -4226,8 +4280,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     info.ptr = nullptr;
                     info.restore = s.gall_off + static_cast<size_t>(cit->second) * s.r * D;
                 }
-                g_of.emplace(key, info);
-                return key;
+                return record(info);
             }
             LazyFarEndpoint<CoordType> endpoint;
             endpoint.morton = xm;
@@ -4253,19 +4306,19 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 g_pending.push_back(GPending{buffer_bytes, s.t2t, s.r, k, cols});
                 buffer_bytes = align_up(buffer_bytes + static_cast<size_t>(s.r) * k * D);
             }
-            g_of.emplace(key, info);
-            return key;
+            return record(info);
         };
-        auto p_for = [&](int64_t em, int64_t jm) -> uint64_t {
-            const uint64_t key = (static_cast<uint64_t>(em) << 32) | static_cast<uint64_t>(jm);
-            if (p_of.count(key)) return key;
-            const uint64_t gk = g_for(em, jm);
-            const Source& s = source(em);
+        auto p_for = [&](const SourceCandidate& e, int64_t jm, const int64_t j3[3]) -> int {
+            const size_t slot = static_cast<size_t>(e.id) * kDirections + static_cast<size_t>(direction(e.coords, j3));
+            if (p_index[slot] >= 0) return p_index[slot];
+            const int g = g_for(e, jm, j3);
+            const Source& s = source(e.morton);
             const int k = static_cast<int>(state_of(jm).skeleton.size());
-            p_of.emplace(key, buffer_bytes);
-            p_pending.push_back(PPending{buffer_bytes, gk, s.xrr, s.xrr == nullptr ? s.xrr_off : SIZE_MAX, s.r, k});
+            p_offsets.push_back(buffer_bytes);
+            p_index[slot] = static_cast<int>(p_offsets.size()) - 1;
+            p_pending.push_back(PPending{buffer_bytes, g, s.xrr, s.xrr == nullptr ? s.xrr_off : SIZE_MAX, s.r, k});
             buffer_bytes = align_up(buffer_bytes + static_cast<size_t>(s.r) * k * D);
-            return key;
+            return p_index[slot];
         };
 
         // plan the chunk's parents
@@ -4356,16 +4409,18 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         sources_of(im, jm, cj3, sources);
                         const bool i_first = !ca_ || im < jm;
                         const int64_t gi = i_first ? im : jm, pj = i_first ? jm : im;
+                        const int64_t* gi3 = i_first ? ci3 : cj3;
+                        const int64_t* pj3 = i_first ? cj3 : ci3;
                         if (ca_) {
                             std::sort(sources.begin(), sources.end(),
-                                      [](const LazyFarSource& x, const LazyFarSource& y) { return x.morton < y.morton; });
+                                      [](const SourceCandidate* x, const SourceCandidate* y) { return x->morton < y->morton; });
                         }
                         size_t t = 0;
-                        for (const LazyFarSource& src : sources) {
-                            const BoxState& es = state_of(src.morton);
+                        for (const SourceCandidate* src : sources) {
+                            const BoxState& es = *src->state;
                             if (es.r == 0) continue;  // no Schur contribution
                             if (fills.size() <= t) fills.resize(t + 1);
-                            fills[t].push_back(FillTask{g_for(src.morton, gi), p_for(src.morton, pj), target, M.rows, kr, ks,
+                            fills[t].push_back(FillTask{g_for(*src, gi, gi3), p_for(*src, pj, pj3), target, M.rows, kr, ks,
                                                         es.r, Rm == gi});
                             ++t;
                         }
@@ -4450,8 +4505,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // buffers of G and P for the chunk
         char* d_buffers = heap_.alloc(std::max<size_t>(buffer_bytes, 1));
         auto at = [&](size_t off) { return reinterpret_cast<S*>(d_buffers + off); };
-        auto g_ptr = [&](uint64_t key) -> const S* {
-            const GInfo& g = g_of.at(key);
+        auto g_ptr = [&](int index) -> const S* {
+            const GInfo& g = g_infos[static_cast<size_t>(index)];
             if (g.restore != SIZE_MAX) return restore_ptr(g.restore);
             return g.buffer == SIZE_MAX ? g.ptr : at(g.buffer);
         };
@@ -4463,20 +4518,21 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         VBatch<S> p_batch;
         for (const PPending& pp : p_pending) {
             const S* xrr = pp.xrr_restore == SIZE_MAX ? pp.xrr : restore_ptr(pp.xrr_restore);
-            p_batch.entries.push_back({xrr, g_ptr(pp.g_key), at(pp.offset), pp.r, pp.k, pp.r, pp.r,
-                                       g_of.at(pp.g_key).ld, pp.r});
+            p_batch.entries.push_back({xrr, g_ptr(pp.g), at(pp.offset), pp.r, pp.k, pp.r, pp.r,
+                                       g_infos[static_cast<size_t>(pp.g)].ld, pp.r});
         }
         // two batches per source rank: fills with rows j and fills with rows i
         std::vector<VBatch<S>> fill_j(fills.size()), fill_i(fills.size());
         for (size_t t = 0; t < fills.size(); ++t) {
             for (const FillTask& f : fills[t]) {
-                const S* P = reinterpret_cast<const S*>(d_buffers + p_of.at(f.p_key_j));
+                const S* P = reinterpret_cast<const S*>(d_buffers + p_offsets[static_cast<size_t>(f.p_j)]);
+                const int g_ld = g_infos[static_cast<size_t>(f.g_i)].ld;
                 if (!f.rows_i) {
                     // out (m x n) -= P_{E,j}^T (m x r) G_{E,i} (r x n)
-                    fill_j[t].entries.push_back({P, g_ptr(f.g_key_i), f.out, f.m, f.n, f.r, f.r, g_of.at(f.g_key_i).ld, f.ld});
+                    fill_j[t].entries.push_back({P, g_ptr(f.g_i), f.out, f.m, f.n, f.r, f.r, g_ld, f.ld});
                 } else {
                     // out (m x n) -= G_{E,i}^T (m x r) P_{E,j} (r x n): the same terms, transposed
-                    fill_i[t].entries.push_back({g_ptr(f.g_key_i), P, f.out, f.m, f.n, f.r, g_of.at(f.g_key_i).ld, f.r, f.ld});
+                    fill_i[t].entries.push_back({g_ptr(f.g_i), P, f.out, f.m, f.n, f.r, g_ld, f.r, f.ld});
                 }
                 ++fill_gemms;
                 stats.transition_flops += kFlopScale * 2.0 * f.m * f.n * f.r;

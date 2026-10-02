@@ -274,13 +274,14 @@ void hierarchical_factorization_parallel(
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         const double kernels = gpu_driver.warm_up();
+        const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
         const double evaluator = gpu_driver.warm_up_evaluator();
-        h2_warmup_seconds() = kernels + exchanges + evaluator;
+        h2_warmup_seconds() = kernels + buffers + exchanges + evaluator;
         if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
-            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, evaluator %.2f s, before the levels (not "
-                        "in the factor time)\n",
-                        kernels, exchanges, evaluator);
+            std::printf("  [gpu] warm-up: kernels %.2f s, buffers %.2f s, exchanges %.2f s, evaluator %.2f s, before "
+                        "the levels (not in the factor time)\n",
+                        kernels, buffers, exchanges, evaluator);
             std::fflush(stdout);
         }
     }
@@ -422,6 +423,11 @@ void hierarchical_factorization_parallel(
             }
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
+            // (the messages wait for the slowest rank's plan and packing)
+            double gather_prepare_max = gather_times.plan + gather_times.serialize;
+            if (print_detail && ca_staged_halo != 2) {
+                MPI_Allreduce(MPI_IN_PLACE, &gather_prepare_max, 1, MPI_DOUBLE, MPI_MAX, level_comm);
+            }
             if (print_detail && rank == level_print_rank) {
                 std::cout << "  CA initial ghost/assisting gather time: "
                           << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -431,7 +437,8 @@ void hierarchical_factorization_parallel(
                     auto ms = [](double s) { return static_cast<long long>(s * 1e3 + 0.5); };
                     if (gather_times.geometric) {
                         std::cout << " (geometric plan " << ms(gather_times.plan) << ", serialize "
-                                  << ms(gather_times.serialize) << ", messages " << ms(gather_times.mpi)
+                                  << ms(gather_times.serialize) << " [both, slowest rank: "
+                                  << ms(gather_prepare_max) << "], messages " << ms(gather_times.mpi)
                                   << ", unpack " << ms(gather_times.unpack) << ", symmetric halo "
                                   << ms(gather_times.reconstruct) << ")";
                     } else {

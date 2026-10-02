@@ -1159,6 +1159,17 @@ struct TreeLevel {
         std::vector<std::vector<int64_t>> to_peer, from_peer;
     };
     CAPeerPlan assisting_plan;
+    // A CA level with uniform regions: what each region around this one
+    // needs from it at the level-entry halo gather (its ghosts and its
+    // assisting boxes among this rank's boxes, sorted; halo_geometry.hpp),
+    // computed with the tree (compute_assisting_boxes) so the gather only
+    // serializes.  Regions that need nothing are left out.
+    struct CAHaloSend {
+        uint32_t region = 0;
+        std::vector<int64_t> ghosts, assisting;
+    };
+    std::vector<CAHaloSend> ca_halo_sends;
+    bool ca_halo_sends_valid = false;
 
     // for shared memory sync
     std::unordered_map<int64_t, omp_lock_t*> box_locks;

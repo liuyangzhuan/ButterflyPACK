@@ -2635,24 +2635,61 @@ bool gather_CA_factorization_data_geometric(
 
     // ---- what the regions around this one need from it
     struct Out {
+        uint32_t region = 0;
         int rank = -1;
         std::vector<int64_t> ghosts, assisting;  // this rank's boxes, sorted
         std::unordered_set<int64_t> ghost_set;   // the region's whole ghost set (pruning)
         std::vector<char> buffer;
     };
     std::vector<Out> outs;
-    for_each_region_within(L, my, radius, [&](uint32_t q) {
-        Out o;
-        o.ghosts = ghosts_of_region_in(L, q, my);
-        o.assisting = assisting_of_region_in(L, q, my);
-        if (o.ghosts.empty() && o.assisting.empty()) return;
-        o.rank = rank_of_region(q);
-        if (enable_symmetric_pair_pruning) {
-            const RegionGhosts rg = ghosts_of_region(L, q);
+    if (lvl.ca_halo_sends_valid) {  // (planned with the tree)
+        for (const auto& send : lvl.ca_halo_sends) {
+            Out o;
+            o.region = send.region;
+            o.rank = rank_of_region(send.region);
+            o.ghosts = send.ghosts;
+            o.assisting = send.assisting;
+            outs.push_back(std::move(o));
+        }
+    } else {
+        std::vector<uint32_t> regions;
+        for_each_region_within(L, my, radius, [&](uint32_t q) { regions.push_back(q); });
+        std::vector<Out> planned(regions.size());
+        #pragma omp parallel for schedule(dynamic)
+        for (int64_t i = 0; i < static_cast<int64_t>(regions.size()); ++i) {
+            const uint32_t q = regions[static_cast<size_t>(i)];
+            const RegionExtra e = region_extra(L, q);
+            Out& o = planned[static_cast<size_t>(i)];
+            o.region = q;
+            o.ghosts = ghosts_of_region_in(L, q, my, e);
+            o.assisting = assisting_of_region_in(L, q, my, e);
+        }
+        for (Out& o : planned) {
+            if (o.ghosts.empty() && o.assisting.empty()) continue;
+            o.rank = rank_of_region(o.region);
+            outs.push_back(std::move(o));
+        }
+    }
+    // the receivers' whole ghost sets, for the symmetric-pair pruning: only
+    // when a box carries blocks to prune (none at the leaf, or when the
+    // blocks stayed on the device)
+    bool blocks_to_prune = false;
+    if (enable_symmetric_pair_pruning) {
+        for (const auto& box : lvl.local_boxes) {
+            if (!box.near_field_modified_interactions.empty() || !box.far_field_modified_interactions.empty()) {
+                blocks_to_prune = true;
+                break;
+            }
+        }
+    }
+    if (blocks_to_prune) {
+        #pragma omp parallel for schedule(dynamic)
+        for (int64_t i = 0; i < static_cast<int64_t>(outs.size()); ++i) {
+            Out& o = outs[static_cast<size_t>(i)];
+            const RegionGhosts rg = ghosts_of_region(L, o.region);
             o.ghost_set.insert(rg.ghosts.begin(), rg.ghosts.end());
         }
-        outs.push_back(std::move(o));
-    });
+    }
     // ---- what this rank needs, by owner: its ghosts and assisting boxes, sorted
     struct In {
         std::vector<int64_t> ghosts, assisting;
@@ -2692,8 +2729,9 @@ bool gather_CA_factorization_data_geometric(
         request.on_boundary = box->on_boundary;
         return request;
     };
-    size_t send_bytes = 0;
-    for (Out& o : outs) {
+    // (one buffer per peer, packed in parallel: a rank with 26 neighboring
+    // regions would otherwise keep those with 7 waiting)
+    auto pack = [&](Out& o) {
         std::vector<size_t> ghost_bytes, assisting_bytes;
         size_t bytes = 2 * sizeof(int64_t);
         for (int64_t m : o.ghosts) {
@@ -2731,8 +2769,22 @@ bool gather_CA_factorization_data_geometric(
             ptr = end;
         }
         if (ptr != o.buffer.data() + bytes) throw std::runtime_error("CA halo gather: message size mismatch");
-        send_bytes += bytes;
+    };
+    {
+        std::exception_ptr failure;
+        #pragma omp parallel for schedule(dynamic)
+        for (int64_t i = 0; i < static_cast<int64_t>(outs.size()); ++i) {
+            try {
+                pack(outs[static_cast<size_t>(i)]);
+            } catch (...) {
+                #pragma omp critical(ca_halo_gather_pack)
+                if (!failure) failure = std::current_exception();
+            }
+        }
+        if (failure) std::rethrow_exception(failure);
     }
+    size_t send_bytes = 0;
+    for (const Out& o : outs) send_bytes += o.buffer.size();
     lap(t.serialize);
     if (memory_diagnostic) memory_diagnostic("send_buffers_ready", 0, send_bytes);
     constexpr int kSizeTag = 420, kPayloadTag = 421;

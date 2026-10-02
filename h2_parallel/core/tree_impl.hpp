@@ -1136,6 +1136,30 @@ void compute_assisting_boxes(
             throw std::runtime_error("compute_assisting_boxes: the assisting sets by region and by enumeration "
                                      "differ (level " + std::to_string(level) + ")");
         }
+        // what the regions around this one need from it (the level-entry
+        // halo gather's sends): here, not in the gather, where a rank with
+        // 26 neighboring regions would keep those with 7 waiting
+        std::vector<uint32_t> regions;
+        for_each_region_within(L, my_process_id, halo_region_radius(L), [&](uint32_t q) { regions.push_back(q); });
+        using Send = typename TreeLevel<CoordType, DataType>::CAHaloSend;
+        std::vector<Send> sends(regions.size());
+        #pragma omp parallel for schedule(dynamic)
+        for (int64_t i = 0; i < static_cast<int64_t>(regions.size()); ++i) {
+            const uint32_t q = regions[static_cast<size_t>(i)];
+            const RegionExtra e = region_extra(L, q);
+            Send& send = sends[static_cast<size_t>(i)];
+            send.region = q;
+            send.ghosts = ghosts_of_region_in(L, q, my_process_id, e);
+            send.assisting = assisting_of_region_in(L, q, my_process_id, e);
+        }
+        lvl.ca_halo_sends.clear();
+        for (Send& send : sends) {
+            if (!send.ghosts.empty() || !send.assisting.empty()) lvl.ca_halo_sends.push_back(std::move(send));
+        }
+        lvl.ca_halo_sends_valid = true;
+    } else {
+        lvl.ca_halo_sends.clear();
+        lvl.ca_halo_sends_valid = false;
     }
     
     lvl.assisting_box_points_for_kernel_evaluation.clear();

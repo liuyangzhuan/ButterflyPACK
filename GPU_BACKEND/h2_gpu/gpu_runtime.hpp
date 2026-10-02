@@ -340,6 +340,9 @@ public:
         size_ = 0;
     }
     size_t size() const { return size_; }
+    // Page-lock room for an image of `bytes` now (the warm-up: the first
+    // image otherwise pins its buffer inside a wave).
+    void reserve(size_t bytes) { ensure(bytes); }
 
     // Reserve `bytes` at a 16-byte aligned offset, to be filled via host().
     size_t alloc(size_t bytes) {

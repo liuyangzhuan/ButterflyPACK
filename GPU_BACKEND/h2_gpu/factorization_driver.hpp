@@ -131,6 +131,34 @@ public:
         }
     }
 
+    // Before the first level of the process's first factorization: the
+    // page-locked staging buffers the levels use (pinned_pool(), kept for
+    // the whole run): the copiers' ring slots, the metadata images of the
+    // waves and of their owner passes, the sketches' result buffer.  Page
+    // locking costs about a second per GB and otherwise lands in the first
+    // level that uses each buffer (the copier threads' ring slots held up
+    // the level start by 0.1-0.2 s, and by 0.08 s again at the first level
+    // with exchanges after a CA leaf).  Returns its time (0 when it already
+    // ran), which the factor time leaves out.
+    double warm_up_buffers() {
+        static bool done = false;
+        if (done || !color_gpu_enabled()) return 0.0;
+        done = true;
+        if constexpr (!gpu_data_type<DataType>) {
+            return 0.0;
+        } else {
+            const auto t0 = std::chrono::steady_clock::now();
+            Context::instance().activate();
+            PinnedPool& pool = pinned_pool();
+            pool.meta.reserve(1);
+            pool.owner_meta.reserve(1);
+            pool.result.reserve(1);
+            const int rings = tree_->mpi_size > 1 ? 4 : 2;  // (the exchange copier's: multi-rank levels)
+            for (int s = 0; s < rings; ++s) pool.ring[s].reserve(PinnedPool::kRingSlot);
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+    }
+
     // Before the first level: the application's evaluator, when a level may
     // take the device box path, which calls it (Evaluator::warm_up, once per
     // evaluator: an NVRTC compile, CuPy compiling its kernels, ...).  Returns
@@ -861,13 +889,13 @@ public:
         std::printf("  [gpu] level %d background copier: busy %.2f s, of which waiting for device data "
                     "%.2f s\n", lvl, e.finish_store, e.copier_wait);
         std::printf("  [gpu] level %d elimination device: fills %.2f, X_RR/X_SR %.2f, LU %.2f, X_NR %.2f, "
-                    "solves %.2f, Schur+near %.2f, owner targets %.2f, owner GEMMs %.2f s\n",
+                    "solves %.2f, Schur %.2f, near blocks+owner targets %.2f, owner GEMMs %.2f s\n",
                     lvl, e.el[0], e.el[1], e.el[2], e.el[3], e.el[4], e.el[5], e.el[6], e.el[7]);
-        std::printf("  [gpu] level %d host: plan boxes %.2f s [buffers %.2f, items %.2f of which near-block "
-                    "allocations %.2f], owner pass %.2f s (overlapped) [candidates %.2f, pairs %.2f, join %.2f, "
+        std::printf("  [gpu] level %d host: plan boxes %.2f s [buffers %.2f, items %.2f], near blocks %.2f s "
+                    "(overlapped; allocations %.2f), owner pass %.2f s (overlapped) [candidates %.2f, pairs %.2f, join %.2f, "
                     "batches %.2f], launch %.2f s, sketch wait %.2f s, heap-reclaim wait %.2f s, exchange-buffer "
                     "wait %.2f s | GF/s: owner %.0f, solves %.0f\n",
-                    lvl, e.plan_boxes, e.pb_buffers, e.pb_items, e.pb_near_alloc, e.plan_owner, e.po_candidates,
+                    lvl, e.plan_boxes, e.pb_buffers, e.pb_items, e.pb_near, e.pb_near_alloc, e.plan_owner, e.po_candidates,
                     e.po_pairs, e.po_order, e.po_batches, e.launch, e.sk_wait, e.reclaim_wait, e.exchange_wait,
                     e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
                     e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);

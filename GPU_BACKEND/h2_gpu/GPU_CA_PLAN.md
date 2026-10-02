@@ -1366,6 +1366,158 @@ waiting on nothing). Results identical to the M7 build's (CA0 logdet
 up in 0.2 s as before. CA0 and Color are 0.7-0.8 s faster each; CA0 is
 again slightly ahead (9.13 against 9.17 s).
 
+**320^3 on 64 ranks, 40 GB nodes, with M7 + M8 (2026-10-02, job 59220006,
+build/gpu_prep/ca0/g320_m8; commit 040fa78 as frozen_m8, and the dc52665
+build of 2026-10-01 in the same job).** The 64-rank case where CA0 first
+beat Color (512K per rank, Nmin 64, CA on the leaf).
+
+| | dc52665 (same job) | 040fa78 |
+|---|---|---|
+| Color factor time | 7.87 s | 6.74 / 6.72 s (6.69, 6.71 with the checks / the wave trace) |
+| CA0 factor time | 7.43 s | 7.26 (cold, first run of the job) / 6.76 s (6.85 with the wave trace) |
+| leaf: Color / CA0 | 2.46 / 2.27 s | 2.23 / 2.25 s |
+| level 5 (above the leaf) | 1.74 / 1.86 s | 1.65 / 1.64 s |
+| level 4 | 1.29 / 1.22 s | 1.12 / 1.15 s |
+| level 3 (ends with 64 -> 8) | 1.20 / 0.97 s | 0.80 / 0.83 s |
+| level 2 (ends with 8 -> 1) + level 1 | 0.91 / 0.85 s | 0.67 / 0.66 s |
+
+Results identical to the old build's (CA0 logdet -446707784.16925561; Color
+-446707781.18238521 against ...533, the device sum of the kept levels);
+H2_CheckError values unchanged; replica check 124704 ghost copies, 0
+differ; solve checks 5.5e-15 / 1.05e-14 for both. Color gained 1.15 s, CA0
+0.67 s: the exchange and reduction work helps every Color level, and the
+Color leaf has an exchange where the CA0 leaf has none, so CA0's lead at
+this size is gone (a tie within the run-to-run spread: 6.72 against 6.76 s).
+CA0's leaf elimination is still shorter (1.54-1.61 against 1.76-1.82 s) but
+its gather (0.13-0.23 s; the messages wait for the slowest rank) and the
+level's larger start take that back.
+
+Wave traces of both (co64_wave, ca64_wave; times of the slowest rank of each
+level, Color run): a Color level's elimination is its 16 (8) waves plus the
+transports between them:
+
+| level (boxes per rank) | waves | of which device sketch wait / plan + launch | between waves (transports) | per transport |
+|---|---|---|---|---|
+| 6, leaf (4096) | 1.03 s | 0.34 / 0.53 s | 0.47 s | 52 ms |
+| 5 (512) | 0.60 s | 0.44 / 0.15 s | 0.76 s | 84 ms |
+| 4 (64) | 0.38 s | 0.34 / 0.03 s | 0.61 s | 68 ms |
+| 3 (8) | 0.24 s | 0.22 / 0.02 s | 0.41 s | 51 ms |
+| 2 (8, 8 ranks) | 0.15 s | 0.11 / 0.03 s | 0.43 s | 53 ms |
+
+A transport on the slowest rank is the end of its wave's device elimination
+(10-25 ms), the bulk transfer (230-390 MB per transport and rank at 7-12
+GB/s: 25-35 ms) and the remote updates; the other ranks wait for it (rank
+0: 0.55-0.87 s between waves). So what is left is device latency on small
+batches (levels 4-2: one to eight boxes per wave) and the transfers (10.4 GB
+received per rank over the levels, about 1.0-1.4 s of the 6.7 s), not host
+work, except at the leaf, whose host planning and launches take 0.41-0.53 s
+of its 1.8 s elimination. The CA0 leaf (32 waves, no transports): waves
+1.02-1.47 s over the ranks (the interior ranks with 6936 boxes against the
+corner ranks' 5282: sketch wait 0.62, plan + launch 0.65 s on the slowest).
+After a CA leaf the next level's start costs 80 ms more than in the Color
+run (start 86 against 5 ms; also at 640^3): not yet looked into.
+
+### M9. Leaf host work and the CA0 start-up costs (2026-10-02, after the 320^3 traces)
+The user chose, from the 320^3 breakdown: the leaf's host planning, and the
+CA0-only costs (the 80 ms start of the level after a CA leaf, the halo
+gather's wait).  CA stays on the leaf level only.
+
+**M9a. Page-locked buffers in the warm-up.** The staging buffers of
+`pinned_pool()` (the copiers' ring slots, 64 MB each, the metadata images of
+the waves and of their owner passes, the sketches' result buffer) were
+page-locked at their first use, about a second per GB: the copier threads'
+ring slots held up the leaf's start (0.1-0.2 s at 64 ranks: the level's CUDA
+calls wait behind `cudaMallocHost`), and the exchange copier's again at the
+first level with exchanges, which after a CA leaf is the next level (the 80
+ms).  `ColorGpuDriver::warm_up_buffers` reserves them before the levels,
+with the other warm-ups; the warm-up line reads `kernels X s, buffers B s,
+exchanges Y s, evaluator Z s` (0.21-0.22 s for the buffers).  This moves a
+one-time cost of the process out of the factor time; a first factorization's
+wall time is the same.
+
+**M9b. The halo gather's send plan from the tree.** At 64-512 ranks the
+gather's "messages" (70-210 ms) were the corner ranks (7 neighboring
+regions) waiting for the interior ranks (26) to plan: each region's
+orange completion was computed three times per neighbor, 17 ms on rank 0
+and about 60 ms inside.  The plan is now made once with the tree
+(`compute_assisting_boxes`: `TreeLevel::ca_halo_sends`, in parallel over
+the regions, each region's extra ghosts computed once, `RegionExtra`), the
+gather packs its per-peer buffers in parallel, and the whole ghost sets
+for the symmetric-pair pruning are computed only when a box carries blocks
+to prune (none at the leaf).  The gather line prints the slowest rank's
+plan + packing time.  halo_geometry_test passes with the refactored
+functions.
+
+**M9c. Transition plan.** The chunks' G and P blocks were found through
+hash maps keyed by (source, child) Morton pairs, about four million lookups
+at a 4096-box leaf; they are now flat tables indexed by the source's dense
+state index and the direction from the source to the child.
+
+**M9d. A wave's near blocks after the box region's launch.** Step 5's store
+items and the allocation of their blocks (26 per box, half the box plan's
+time) are planned after the box region is launched and go with the owner
+pass's image; they may reuse the blocks the launch retired.
+
+8 ranks (jobs 59224901 and 59230263, build/gpu_prep/m9; Laplace 192 Color
+and CA0 on the leaf with the solve and replica checks; Laplace 160 Nmin 64,
+the per-rank leaf of 320^3/64 and 640^3/512, with wave traces): results
+bitwise as before (Color logdet -89253588.194065422; the CA0 leaf-only run
+9488 ghost copies, 0 differ, solve checks 2.6e-15 / 1.6e-14).  At 160^3
+(rank 0; committed build -> M9a+b -> all four): leaf start 0.1-0.2 s (64
+ranks) -> 13 -> 6-13 ms; start of the level after the CA leaf 86 -> 6 ms;
+gather 10-17 ms with no plan time; leaf transition plan 0.19-0.20 -> 0.13-0.14
+s; box plan before the launch 0.14-0.15 -> 0.06-0.07 s (near blocks 0.07-0.08
+s after it).  Leaf level 1.43-1.46 -> 1.37-1.38 s (Color), 1.44 -> 1.38-1.39
+s (CA0); factor time 3.62-3.67 -> 3.57 s and 3.68-3.79 -> 3.59-3.62 s.  The
+wave totals move little (Color 828 -> 794 ms, CA0 957 -> 951 ms): at the leaf
+the waves are host-bound, the host's own work (plan 0.25-0.28 s, launches
+0.11-0.13 s, sketch plan and launch 0.08 s) alternating with the device
+sketch it waits for (0.30-0.45 s), so moving work behind a launch does not
+shorten a wave; only less host work does (the block allocations, 0.05-0.06 s
++ the owner pass's, and the staging of the owner batches are what is left
+to trim).
+
+**320^3 on 64 ranks, 40 GB nodes (2026-10-02, job 59232015,
+build/gpu_prep/ca0/g320_m9): the committed build (frozen_m8), M9a+b
+(frozen_m9a) and all of M9 (frozen_m9b) in one job.**  Two conventions,
+kept apart from here on: the loop's "total time" line includes the
+warm-up (kernels, buffers, exchanges), the driver's "Factor time" line
+excludes it; the tables of M7/M8 quoted "total time" (then with 0.1-0.2 s
+of warm-up in it, the same in every build compared).
+
+| | frozen_m8 | M9a+b | M9 (all) |
+|---|---|---|---|
+| Factor time (excl. warm-up), Color / CA0 | 6.48-6.60 / 6.64-6.71 s | 6.26 / 6.34 s | 6.22-6.26 / 6.21-6.23 s |
+| loop total (incl. warm-up), Color / CA0 | 6.61-6.72 / 6.76-6.84 s | 6.60 / 6.69 s | 6.58-6.60 / 6.55-6.58 s |
+| warm-up | 0.16-0.22 s | 0.42 s | 0.36-0.42 s (buffers 0.21-0.22) |
+| leaf level, Color / CA0 | 2.26 / 2.28 s | 1.99 / 2.01 s | 1.92-1.96 / 1.99-2.00 s |
+| leaf start, rank 0 / slowest, Color | 221 / 210 ms | 28 / 46 ms | 38 / 24 ms |
+| leaf start, CA0 | 167 / 106 ms | 85 / 30 ms | 84 / 24 ms (rank 0 waits in the level's collectives) |
+| start of the level above the CA leaf | 82 ms | 6 ms | 6 ms |
+| CA halo gather | 138 ms (plan 17, messages 114) | 55 ms (plan 0, slowest rank's plan + packing 6, messages 50) | 64-103 ms (messages 58-98) |
+| leaf transition, Color / CA0 | 0.29 / 0.30 s | 0.29 / 0.30 s | 0.23-0.24 / 0.25-0.26 s |
+| leaf waves, rank 0 / slowest, Color | 874 / 1066 ms | 806 / 969 ms | 805 / 1014 ms |
+| leaf waves, rank 0 / slowest, CA0 | 1024 / 1475 ms | 953 / 1360 ms | 949 / 1376 ms |
+
+Results identical to the committed build's in every run (CA0 logdet
+-446707784.16925561, Color -446707781.18238521, check values unchanged,
+replica check 124704 copies 0 differ, solve checks 5.5e-15 / 1.0e-14).
+
+What is real and what is accounting: the page-locking (M9a) took 0.18 s
+in the Color leaf's start (two copier threads pinning 128 MB each beside the
+level's own start) and 0.1 + 0.08 s in the CA0 leaf's and the next level's
+starts, and now takes 0.22 s in the warm-up, serially: a first
+factorization's wall time does not change from it (the loop totals show
+the level sums falling by 0.27-0.45 s while the warm-up grows by 0.2 s); a
+process's later factorizations gain the 0.1-0.2 s outright.  The rest is
+real: CA0's gather 0.14 -> 0.06-0.10 s (what remains is the transfer and
+the ranks' arrival skew, the plan and packing being 6 ms on the slowest
+rank), the leaf transition -0.05 s, the leaf waves -0.07 s (rank 0) to
+-0.1 s (slowest rank).  Against the committed build the loop's wall time
+is 0.03 s shorter for Color and 0.26 s for CA0; the reported factor times
+6.22-6.26 (Color) and 6.21-6.23 s (CA0) are 0.22 s of that below the wall
+time.  CA0 and Color are even at this size.
+
 ## Backlog from the GPU Color work (not CA-specific)
 
 - B1. Level-start wait: the first transport of each leaf level (0.4-0.7 s at
