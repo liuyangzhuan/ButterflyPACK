@@ -1,9 +1,9 @@
 #pragma once
 
-#include "color_unstructured/factorization.hpp"
-#include "color_unstructured/compression.hpp"
-#include "color_unstructured/compression_apply.hpp"
-#include "color_unstructured/solver.hpp"
+#include "unstructured/factorization.hpp"
+#include "unstructured/compression.hpp"
+#include "unstructured/compression_apply.hpp"
+#include "unstructured/solver.hpp"
 
 namespace butterfly {
 

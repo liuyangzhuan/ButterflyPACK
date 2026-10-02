@@ -20,10 +20,10 @@
 // The previous monolithic version is preserved as butterfly_integration_old.cpp.
 // =============================================================================
 
-#include "butterfly_types.hpp"
-#include "butterfly_init.hpp"
-#include "butterfly_solve.hpp"
-#include "butterfly_compression.hpp"
-#include "butterfly_verification.hpp"
-#include "butterfly_factorization.hpp"
+#include "core/butterfly_types.hpp"
+#include "core/butterfly_init.hpp"
+#include "structured/butterfly_solve.hpp"
+#include "structured/butterfly_compression.hpp"
+#include "structured/butterfly_verification.hpp"
+#include "structured/butterfly_factorization.hpp"
 #include "h2_backend_dispatch.hpp"

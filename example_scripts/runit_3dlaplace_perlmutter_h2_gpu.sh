@@ -59,7 +59,7 @@ use_gpu=${USE_GPU:-2}
 method=${METHOD:-color}
 job_id=${JOB_ID:-}
 
-# the leaf level, as calc_num_levels (h2_parallel/butterfly_init.hpp) sets it
+# the leaf level, as calc_num_levels (h2_parallel/core/butterfly_init.hpp) sets it
 edge=$(awk -v n="${nmin_leaf}" 'BEGIN { printf "%d", n^(1/3) + 0.5 }')
 levels=0
 while (( edge <= grid_size )); do

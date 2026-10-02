@@ -182,16 +182,16 @@ The intended paper hierarchy is:
 - Public options and defaults:
   `SRC/BPACK_defs.f90`, `SRC/BPACK_utilities.f90`.
 - Per-level algorithm selection and Color driver:
-  `h2_parallel/butterfly_factorization.hpp`.
+  `h2_parallel/structured/butterfly_factorization.hpp`.
 - Elimination, streamed ID, lazy regeneration, right-side solves, and fixed
-  chunks: `h2_parallel/color_CA/factorization.hpp`.
-- Runtime options and tree geometry: `h2_parallel/color_CA/tree.hpp` and
+  chunks: `h2_parallel/core/factorization.hpp`.
+- Runtime options and tree geometry: `h2_parallel/core/tree.hpp` and
   `tree_impl.hpp`.
-- Staged CA gather: `h2_parallel/color_CA/staged_halo.hpp`.
-- Component graph: `h2_parallel/color_CA/dataflow.hpp`.
-- Component-owner execution: `h2_parallel/color_CA/owner_schedule.hpp` and
+- Staged CA gather: `h2_parallel/core/staged_halo.hpp`.
+- Component graph: `h2_parallel/core/dataflow.hpp`.
+- Component-owner execution: `h2_parallel/core/owner_schedule.hpp` and
   `owner_exchange.hpp`.
-- Owner solve and multiply: `h2_parallel/color_CA/owner_solve.hpp` and
+- Owner solve and multiply: `h2_parallel/core/owner_solve.hpp` and
   `owner_mul.hpp`.
 
 The upstream development record is in

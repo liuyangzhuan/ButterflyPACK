@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "bpack_env.hpp"
+#include "gpu_common/bpack_env.hpp"
 
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 #define BPACK_GPU_ENABLED 1
@@ -96,7 +96,7 @@ void c_bpack_gpu_delete(void* gpu) {
 #endif
 }
 
-// The application's evaluator of the entries (color_gpu/evaluator.hpp):
+// The application's evaluator of the entries (h2_gpu/evaluator.hpp):
 // `evaluator` points to a std::shared_ptr<fmm::gpu::Evaluator> (an empty one
 // clears it), made by the registrations of C_BPACK_wrapper.cpp.
 void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator) {
@@ -516,7 +516,7 @@ void c_bpack_hodlr_gpu_add_shared_level(void* gpu, const int* level, const MPI_F
 // Collective over the Fortran communicator comm (once per run): the ranks
 // of a node that use the same GPU split its memory (fmm::gpu::share_device);
 // *share: how many ranks use this rank's GPU.  Also the report of the
-// environment variables (h2_parallel/bpack_env.hpp).
+// environment variables (GPU_BACKEND/gpu_common/bpack_env.hpp).
 void c_bpack_gpu_share_device(const MPI_Fint* comm_f, int* share) {
   MPI_Comm comm = MPI_Comm_f2c(*comm_f);
   fmm::env::report_environment(comm);

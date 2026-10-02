@@ -460,6 +460,10 @@ endif()
 include_directories(${TPL_LAPACK95_INCLUDE_DIRS})
 # bpack_gpu.h, included by the C wrapper headers (BPACK_wrapper.h)
 include_directories(${CMAKE_SOURCE_DIR}/GPU_INTERFACE)
+# the H2 code (h2_parallel/: core/, structured/, unstructured/) and the GPU
+# backends (GPU_BACKEND/: gpu_common/, h2_gpu/, hodlr_gpu/), included by path
+# from these roots (e.g. "core/tree.hpp", "gpu_common/device_heap.hpp")
+include_directories(${CMAKE_SOURCE_DIR}/h2_parallel ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
 
 ######################################################################
 #
@@ -561,14 +565,14 @@ if (enable_h2_gpu)
                  ${CMAKE_BINARY_DIR}/GPU_INTERFACE/bpack_gpu_kernels_source.h @ONLY)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
                ${CMAKE_SOURCE_DIR}/GPU_INTERFACE/bpack_gpu_kernels.cuh)
-  add_library(h2_gpu_kernels OBJECT h2_parallel/color_gpu/device_kernels.cu
-                                    h2_parallel/color_gpu/device_id.cu
-                                    h2_parallel/color_gpu/device_adaptive.cu
-                                    h2_parallel/color_gpu/device_gemm.cu
-                                    h2_parallel/color_gpu/device_sketch.cu
-                                    h2_parallel/color_gpu/solve_kernels.cu
-                                    h2_parallel/color_gpu/h2_matvec_kernels.cu
-                                    h2_parallel/color_gpu/evaluator.cu)
+  add_library(h2_gpu_kernels OBJECT GPU_BACKEND/h2_gpu/device_kernels.cu
+                                    GPU_BACKEND/h2_gpu/device_id.cu
+                                    GPU_BACKEND/h2_gpu/device_adaptive.cu
+                                    GPU_BACKEND/h2_gpu/device_gemm.cu
+                                    GPU_BACKEND/h2_gpu/device_sketch.cu
+                                    GPU_BACKEND/h2_gpu/solve_kernels.cu
+                                    GPU_BACKEND/h2_gpu/h2_matvec_kernels.cu
+                                    GPU_BACKEND/h2_gpu/evaluator.cu)
   set_target_properties(h2_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(h2_gpu_kernels PRIVATE H2_HAVE_GPU)
   target_include_directories(h2_gpu_kernels PRIVATE ${CMAKE_BINARY_DIR}/GPU_INTERFACE)
@@ -585,15 +589,15 @@ if (enable_h2_gpu)
   # accuracy effect); other GPU kernels and CPU code are not affected.
   # The kernels of the adaptive ID rows (device_adaptive.cu, H2_ID_proxy 2)
   # feed the same decisions, so they are compiled the same way.
-  set_source_files_properties(h2_parallel/color_gpu/device_id.cu
-                              h2_parallel/color_gpu/device_adaptive.cu PROPERTIES
+  set_source_files_properties(GPU_BACKEND/h2_gpu/device_id.cu
+                              GPU_BACKEND/h2_gpu/device_adaptive.cu PROPERTIES
                               COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
-  # CUDA kernels of the HODLR GPU backend (hodlr_gpu/; the rest is header-only
+  # CUDA kernels of the HODLR GPU backend (GPU_BACKEND/hodlr_gpu/; the rest is header-only
   # C++ used by SRC/BPACK_gpu_wrapper.cpp)
-  add_library(hodlr_gpu_kernels OBJECT hodlr_gpu/hodlr_kernels.cu)
+  add_library(hodlr_gpu_kernels OBJECT GPU_BACKEND/hodlr_gpu/hodlr_kernels.cu)
   set_target_properties(hodlr_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(hodlr_gpu_kernels PRIVATE H2_HAVE_GPU)
-  target_include_directories(hodlr_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel)
+  target_include_directories(hodlr_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
   set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>)
 endif()
 
@@ -623,10 +627,10 @@ endif()
 
 if (enable_h2_gpu)
   target_link_libraries(butterflypack PUBLIC ${H2_GPU_LIB})
-  # Batch-independence test of the GPU kernels (h2_parallel/color_gpu/
+  # Batch-independence test of the GPU kernels (GPU_BACKEND/h2_gpu/
   # GPU_CA_PLAN.md, M1.1); not built by default: make h2_gpu_batch_determinism
   add_executable(h2_gpu_batch_determinism EXCLUDE_FROM_ALL
-                 h2_parallel/color_gpu/tests/batch_determinism.cpp)
+                 GPU_BACKEND/h2_gpu/tests/batch_determinism.cpp)
   target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_batch_determinism butterflypack)
 endif()
