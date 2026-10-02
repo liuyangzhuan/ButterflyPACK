@@ -5,7 +5,7 @@ option `HODLR_use_gpu`) on Perlmutter, September 2026. The backend runs the
 construction, the factorization, the multiply and the solve on the GPUs, for
 symmetric and unsymmetric matrices, in double and double complex, on any
 number of nodes. Options and environment switches are in
-[`hodlr_gpu/README.md`](../../hodlr_gpu/README.md); the run script is
+[`GPU_BACKEND/hodlr_gpu/README.md`](../../GPU_BACKEND/hodlr_gpu/README.md); the run script is
 [`example_scripts/runit_hodlr_perlmutter_gpu.sh`](../../example_scripts/runit_hodlr_perlmutter_gpu.sh).
 
 ## Setup

@@ -1997,6 +1997,13 @@ contains
 
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "constructing Leaf-blocks......"
 
+      ! (not in the construction time)
+      if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) call HODLR_gpu_warm_up(ho_bf1, option, ptree)
+      if (c_bpack_env_check('kernel'//c_null_char) /= 0) then
+         if (HODLR_gpu_construct_ok(ho_bf1, ho_bf1%Maxlevel + 1, option, ptree)) &
+            call HODLR_gpu_check_kernel(ho_bf1, option, msh, ker, ptree)
+      endif
+
       n1 = MPI_Wtime()
       level = 0
       flag = 0
@@ -2005,7 +2012,6 @@ contains
       stats%rankmax_of_level = 0
       allocate (stats%rankmax_of_level_global(0:ho_bf1%Maxlevel))
       stats%rankmax_of_level_global = 0
-
       do level_c = 1, ho_bf1%Maxlevel + 1
          ! do level_c = ho_bf1%Maxlevel+1,ho_bf1%Maxlevel+1
          if (level_c /= ho_bf1%Maxlevel + 1) then
@@ -2017,7 +2023,7 @@ contains
          endif
          n3 = MPI_Wtime()
          if (HODLR_gpu_construct_ok(ho_bf1, level_c, option, ptree)) then
-            ! the whole level on the GPU (HODLR_use_gpu > 0 with a device kernel)
+            ! the whole level on the GPU (HODLR_use_gpu > 0 with a GPU evaluator of the entries)
             if (ho_bf1%levels(level_c)%BP(Bidxe)%LL(1)%matrices_block(1)%level /= level) then
                level = ho_bf1%levels(level_c)%BP(Bidxe)%LL(1)%matrices_block(1)%level
                if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) 'constructing level', level, '(GPU)'
@@ -2174,7 +2180,7 @@ contains
    end subroutine HODLR_construction
 
    !> Whether level_c of the HODLR construction (Maxlevel+1: the dense
-   !> leaves) runs on the GPU: HODLR_use_gpu > 0, a device kernel and the
+   !> leaves) runs on the GPU: HODLR_use_gpu > 0, a GPU evaluator of the entries and the
    !> points registered, and for the low-rank levels BACA
    !> (RecLR_leaf=4) or BACA without overlap (RecLR_leaf=5) on whole blocks
    !> (LR_BLK_NUM=1, forwardN15flag=0)
@@ -3621,6 +3627,113 @@ contains
       endif
       deallocate (mm, nn, r0, c0, ptrs)
    end subroutine HODLR_gpu_construct_leaves
+
+   !> Before the matrix's first GPU work, and not in the construction time:
+   !> the kernels of the GPU factorization (once per process), the routines
+   !> and cuSOLVER handles of the GPU construction when it runs, and the
+   !> application's GPU evaluator when the construction uses it, so that their
+   !> first use (kernel loading, an NVRTC compile, CuPy compiling its
+   !> kernels, ...) is not paid in a level.  Collective (prints the largest
+   !> times over the ranks).
+   subroutine HODLR_gpu_warm_up(ho_bf1, option, ptree)
+      implicit none
+      type(hobf)::ho_bf1
+      type(Hoption)::option
+      type(proctree)::ptree
+      integer(c_int) :: construct, evaluate
+      real(c_double) :: seconds(2)
+      integer ierr
+
+      construct = 0
+      evaluate = 0
+      if (ho_bf1%Maxlevel >= 1) then
+         if (HODLR_gpu_construct_ok(ho_bf1, 1, option, ptree)) construct = 1  ! (the BACA levels)
+      endif
+      if (construct == 1 .or. HODLR_gpu_construct_ok(ho_bf1, ho_bf1%Maxlevel + 1, option, ptree)) evaluate = 1
+      call c_bpack_hodlr_gpu_warm_up(ho_bf1%gpu, construct, evaluate, seconds)
+      call MPI_ALLREDUCE(MPI_IN_PLACE, seconds, 2, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0 .and. seconds(1) + seconds(2) > 0) then
+         write (*, '(A,F6.2,A,F6.2,A)') ' HODLR GPU warm-up: kernels', seconds(1), ' s, evaluator', seconds(2), &
+            ' s (not in the construction time)'
+      endif
+   end subroutine HODLR_gpu_warm_up
+
+   !> BPACK_CHECK=kernel: the GPU evaluator's entries against the
+   !> application's (its CPU entry callback) on up to 32 x 32 entries of two
+   !> blocks: the first dense leaf of this rank with itself (the self terms),
+   !> and its rows with the last columns of the matrix (far); prints the
+   !> largest difference relative to each block's largest entry, over the
+   !> ranks.  Collective.
+   subroutine HODLR_gpu_check_kernel(ho_bf1, option, msh, ker, ptree)
+      implicit none
+      type(hobf), target::ho_bf1
+      type(Hoption)::option
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(matrixblock), pointer::blk
+      type(matrixblock)::ref
+      type(Hstat)::stats_chk
+      integer level_c, ii, p, ierr
+      integer(c_int) :: mm(2), nn(2), count
+      integer(c_int64_t) :: r0(2), c0(2)
+      type(c_ptr) :: ptrs(2)
+      DT, allocatable, target :: self(:, :), far(:, :)
+      real(c_double) :: scale
+      real(kind=8) :: memory, rel(2)
+
+      rel = 0
+      mm = 0
+      nn = 0
+      blk => null()
+      level_c = ho_bf1%Maxlevel + 1
+      do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+         if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) then
+            blk => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
+            exit
+         endif
+      enddo
+      if (associated(blk)) then
+         mm = min(blk%M, 32)
+         nn(1) = min(blk%N, 32)
+         nn(2) = min(msh%Nunk, 32)
+         r0 = blk%headm - 1
+         c0(1) = blk%headn - 1
+         c0(2) = msh%Nunk - nn(2)
+         allocate (self(mm(1), nn(1)), far(mm(2), nn(2)))
+         ptrs(1) = c_loc(self(1, 1))
+         ptrs(2) = c_loc(far(1, 1))
+         scale = option%scale_factor
+         count = 2
+         call c_bpack_hodlr_gpu_eval_dense(ho_bf1%gpu, scale, count, r0, mm, c0, nn, ptrs)
+         call InitStat(stats_chk)
+         do p = 1, 2
+            ref%M = mm(p)
+            ref%N = nn(p)
+            ref%headm = int(r0(p)) + 1
+            ref%headn = int(c0(p)) + 1
+            ref%row_group = blk%row_group
+            ref%col_group = blk%col_group
+            if (p == 2) ref%col_group = -1
+            call Full_construction(ref, msh, ker, stats_chk, option, ptree, memory)
+            if (p == 1) then
+               rel(p) = maxval(abs(ref%fullmat - self))
+            else
+               rel(p) = maxval(abs(ref%fullmat - far))
+            endif
+            rel(p) = rel(p)/max(maxval(abs(ref%fullmat)), tiny(rel(p)))
+            deallocate (ref%fullmat)
+            if (allocated(ref%ipiv)) deallocate (ref%ipiv)
+         enddo
+         deallocate (self, far)
+      endif
+      call MPI_ALLREDUCE(MPI_IN_PLACE, rel, 2, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) then
+         write (*, '(A,Es10.2,A,I0,A,I0,A,Es10.2,A,I0,A,I0,A)') &
+            ' HODLR GPU kernel check: max |K_gpu - K_host| / max |K_host|: self', rel(1), &
+            ' (', mm(1), 'x', nn(1), '), far', rel(2), ' (', mm(2), 'x', nn(2), ')'
+      endif
+   end subroutine HODLR_gpu_check_kernel
 
    !> BPACK_CHECK=hodlr: rebuild the blocks of level level_c on the CPU
    !> (BP_compress_entry, from the random numbers the GPU run drew) and print

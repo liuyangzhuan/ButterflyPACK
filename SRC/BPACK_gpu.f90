@@ -232,16 +232,23 @@ module BPACK_GPU
          integer(c_int) :: level, n0, n1, k, found
          integer(c_int64_t) :: c0
       end subroutine c_bpack_hodlr_gpu_download_symnode
+      subroutine c_bpack_hodlr_gpu_warm_up(gpu, construct, evaluate, seconds) bind(c, name="c_bpack_hodlr_gpu_warm_up")
+         import :: c_ptr, c_int, c_double
+         type(c_ptr), value :: gpu
+         integer(c_int) :: construct, evaluate
+         real(c_double) :: seconds(2)
+      end subroutine c_bpack_hodlr_gpu_warm_up
       subroutine c_bpack_hodlr_gpu_construct_ready(gpu, ready) bind(c, name="c_bpack_hodlr_gpu_construct_ready")
          import :: c_ptr, c_int
          type(c_ptr), value :: gpu
          integer(c_int) :: ready
       end subroutine c_bpack_hodlr_gpu_construct_ready
 
-      subroutine c_bpack_hodlr_gpu_set_points(gpu, n, xyz, ids) bind(c, name="c_bpack_hodlr_gpu_set_points")
-         import :: c_ptr, c_int64_t, c_double
+      subroutine c_bpack_hodlr_gpu_set_points(gpu, n, dim, xyz, ids) bind(c, name="c_bpack_hodlr_gpu_set_points")
+         import :: c_ptr, c_int64_t, c_int, c_double
          type(c_ptr), value :: gpu
          integer(c_int64_t) :: n
+         integer(c_int) :: dim
          real(c_double) :: xyz(*)
          integer(c_int64_t) :: ids(*)
       end subroutine c_bpack_hodlr_gpu_set_points
@@ -1187,8 +1194,8 @@ contains
    end subroutine HODLR_gpu_report
 
    !> Give the GPU backend the points of the matrix in tree order (before
-   !> msh%xyz is freed), for the HODLR construction with a device kernel;
-   !> nothing without 3D coordinates in msh%xyz.
+   !> msh%xyz is freed), for the HODLR construction with a GPU evaluator: their
+   !> 0-based original indices, and their coordinates when msh%xyz has them.
    subroutine HODLR_gpu_set_points(bmat, option, msh)
       type(Bmatrix)::bmat
       type(Hoption)::option
@@ -1196,19 +1203,23 @@ contains
       real(c_double), allocatable :: xyz(:, :)
       integer(c_int64_t), allocatable :: ids(:)
       integer(c_int64_t) :: n
+      integer(c_int) :: dim
       integer i
 
       if (option%HODLR_use_gpu <= 0 .or. option%format /= HODLR .or. .not. c_associated(bmat%gpu)) return
-      if (.not. allocated(msh%xyz)) return
-      if (size(msh%xyz, 1) /= 3 .or. lbound(msh%xyz, 2) > 1 .or. ubound(msh%xyz, 2) < msh%Nunk) return
       if (.not. allocated(msh%new2old)) return
+      dim = 0
+      if (allocated(msh%xyz)) then
+         if (lbound(msh%xyz, 2) <= 1 .and. ubound(msh%xyz, 2) >= msh%Nunk) dim = size(msh%xyz, 1)
+      endif
       n = msh%Nunk
-      allocate (xyz(3, max(1, msh%Nunk)), ids(max(1, msh%Nunk)))
+      allocate (xyz(max(1, dim), max(1, msh%Nunk)), ids(max(1, msh%Nunk)))
+      xyz = 0
       do i = 1, msh%Nunk
-         xyz(:, i) = msh%xyz(:, msh%new2old(i))
+         if (dim > 0) xyz(:, i) = msh%xyz(:, msh%new2old(i))
          ids(i) = msh%new2old(i) - 1
       enddo
-      call c_bpack_hodlr_gpu_set_points(bmat%gpu, n, xyz, ids)
+      call c_bpack_hodlr_gpu_set_points(bmat%gpu, n, dim, xyz, ids)
       deallocate (xyz, ids)
    end subroutine HODLR_gpu_set_points
 

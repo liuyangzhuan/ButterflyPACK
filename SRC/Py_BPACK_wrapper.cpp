@@ -183,7 +183,11 @@ void py_bpack_logdet(void ** pyobj, C_DT * phase, C_RDT * logabsdet)
 }
 
 
-void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int* rankmax, int argc, char* argv[])
+// The two steps of py_bpack_init_compute, for a caller that registers a GPU
+// evaluator in between (after c_bpack_construct_init, before the
+// construction, which for HODLR is c_bpack_construct_element_compute): the
+// matrix's points and tree ...
+void py_bpack_init(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int argc, char* argv[])
 {
 	pybind11::gil_scoped_acquire gil;
     bpack_handle* bpack_obj = new bpack_handle{};
@@ -321,11 +325,6 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 
     // construct matrix with geometrical points
 	c_bpack_construct_init(&Npo, &Ndim, dat_ptr, nns_ptr,&nlevel, tree, perms, &myseg, &(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncDistmn, &c_bpack_FuncNearFar, quant_ptr);
-	c_bpack_construct_element_compute(&(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncZmn, &c_bpack_FuncZmnBlock, quant_ptr);
-
-    double vtmp;
-    c_bpack_getstats(&(bpack_obj->stats),"Rank_max_Constr",&vtmp);
-    *rankmax=int(vtmp);
 
 
 	delete[] perms;
@@ -336,6 +335,24 @@ void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, in
 
     *pyobj = (void*)bpack_obj;
 
+}
+
+// ... then the construction
+void py_bpack_compute(void ** pyobj, int* rankmax)
+{
+	pybind11::gil_scoped_acquire gil;  // (the construction calls the Python block function)
+	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
+	c_bpack_construct_element_compute(&(bpack_obj->bmat), &(bpack_obj->option), &(bpack_obj->stats), &(bpack_obj->msh), &(bpack_obj->ker), &(bpack_obj->ptree), &c_bpack_FuncZmn, &c_bpack_FuncZmnBlock, bpack_obj->quant_ptr);
+
+    double vtmp;
+    c_bpack_getstats(&(bpack_obj->stats),"Rank_max_Constr",&vtmp);
+    *rankmax=int(vtmp);
+}
+
+void py_bpack_init_compute(int Npo, int Ndim, double* dat_ptr, void ** pyobj, int* rankmax, int argc, char* argv[])
+{
+	py_bpack_init(Npo, Ndim, dat_ptr, pyobj, argc, argv);
+	py_bpack_compute(pyobj, rankmax);
 }
 
 
@@ -408,13 +425,32 @@ void py_bpack_mult(void ** pyobj, int nrhs, char const *trans, C_DT   *xy_global
 
 
 
-// Register the device form of the kernel for the GPU backend of the format-7 H2
-// (c_bpack_h2_set_gpu_kernel); call it after py_bpack_init_compute and before py_bpack_factor.
-void py_bpack_set_gpu_kernel(void ** pyobj, int kind, double* params, int nparams)
+// The GPU evaluator of the entries for H2_use_gpu (format 7) and HODLR_use_gpu
+// (format 1), GPU_INTERFACE/bpack_gpu.h and doc/gpu_kernels.md; call after
+// py_bpack_init_compute and before py_bpack_factor.  An entry evaluator from
+// CUDA source text (compiled with NVRTC at its first use):
+void py_bpack_set_gpu_entry_source(void ** pyobj, const char* source, double* params, int nparams, int flags)
 {
 	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
-	c_bpack_h2_set_gpu_kernel(&(bpack_obj->bmat), &kind, params, &nparams);
-	*pyobj = (void*)bpack_obj;
+	c_bpack_set_gpu_entry_source(&(bpack_obj->bmat), source, params, &nparams, &flags);
+}
+
+// An entry-list evaluator: a function of the caller (from Python, a ctypes
+// callback; Py_BPACK_worker.py wraps the device arrays for CuPy).
+void py_bpack_set_gpu_list_evaluator(void ** pyobj, bpack_gpu_list_evaluator evaluate, void* user, int flags)
+{
+	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
+	c_bpack_set_gpu_list_evaluator(&(bpack_obj->bmat), evaluate, user, &flags);
+}
+
+// The evaluator's warm-up after its registration (c_bpack_gpu_warm_up):
+// seconds[0] its time, seconds[1] of which the NVRTC compile.  (ctypes
+// releases the GIL during the call; an entry-list evaluator's callback takes
+// it back.)
+void py_bpack_gpu_warm_up(void ** pyobj, double* seconds)
+{
+	bpack_handle* bpack_obj = (bpack_handle*)(*pyobj);
+	c_bpack_gpu_warm_up(&(bpack_obj->bmat), seconds);
 }
 
 

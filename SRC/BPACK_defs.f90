@@ -772,7 +772,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     type Bmatrix
         integer Maxlevel
         type(c_ptr) :: h2 = c_null_ptr
-        type(c_ptr) :: gpu = c_null_ptr !< GPU state (registered device kernel, HODLR device data), owned here
+        type(c_ptr) :: gpu = c_null_ptr !< GPU state (the GPU evaluator of the entries, HODLR device data), owned here
         DT, allocatable::xtrue(:,:), b_true(:,:) !< sparse verification vector and exact product retained for solve-error checks
         type(hobf), pointer::ho_bf => null()
         type(Hmat), pointer::h_mat => null()

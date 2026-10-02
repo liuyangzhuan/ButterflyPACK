@@ -18,6 +18,7 @@ Developers:Yang Liu
 #ifndef BPACK_WRAP /* allow multiple inclusions */
 #define BPACK_WRAP
 #include <stdint.h>
+#include "bpack_gpu.h" /* the GPU evaluators of the entries (GPU_INTERFACE) */
 #ifdef HAVE_MPI
 #include <mpi.h>
 #else
@@ -67,45 +68,23 @@ void c_bpack_construct_init_distributed64(const int64_t* N_global, const int64_t
 void c_bpack_construct_element_compute_distributed64(F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, c_bpack_func_zmn64 C_FuncZmn, c_bpack_func_zmn_block64 C_FuncZmnBlock, C2Fptr C_QuantApp);
 void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* N_input_local, int64_t* N_internal_local, int64_t* internal_global_start);
 /*
- * Register a device-evaluable form of the matrix kernel for the GPU backends
- * (format 7 H2 with H2_use_gpu=1 or 2; format 1 HODLR with HODLR_use_gpu=1
- * or 2), after c_bpack_construct_init and before the construction.  kind 1
- * (real): entry params[1] when the two one-based global IDs match, else
- * params[0] / |x - y| (3D).  kind 2 (complex, symmetric Helmholtz): (params[3],
- * params[4]) on matching IDs, else (params[1], params[2]) e^{i params[0] r} /
- * (params[5] r).  kind 4 with real data (format 7 H2 only): Gaussian-process
- * squared exponential kernel and its derivatives, params = {constant,
- * diagonal, three inverse metrics, mode} (color_gpu/kernel_eval.cuh); kind 4
- * with complex data is the HODLR kernel below.  Without a registered kernel
- * the H2 GPU backend runs only the Schur-update pass, and the HODLR GPU
- * backend evaluates entries on the host.  Without a GPU backend the
- * registration is ignored.
+ * The matrix's entries on the GPU (H2 with H2_use_gpu, HODLR with
+ * HODLR_use_gpu): the application's evaluator, registered after
+ * c_bpack_construct_init and before the construction.  bpack_gpu.h
+ * documents the three forms and their flags; doc/gpu_kernels.md is the user
+ * guide.  Without one, the H2 GPU backend runs only the Schur-update pass and
+ * the HODLR GPU backend evaluates the entries on the host.  Only the double
+ * and double complex libraries have a GPU backend; elsewhere these are
+ * ignored.
  */
-void c_bpack_set_gpu_kernel(F2Cptr* bmat, const int* kind, const double* params, const int* nparams);
-/* Former name of c_bpack_set_gpu_kernel, kept for existing drivers. */
-void c_bpack_h2_set_gpu_kernel(F2Cptr* bmat, const int* kind, const double* params, const int* nparams);
-/*
- * Tables of a kernel kind that has them, registered after its kind (which
- * clears them).  kind 3 (complex, symmetric): the EFIE entry of RWG edges of
- * a triangle mesh, from the edges' 0-based indices (the one-based global IDs
- * minus one); params = {wavenumber, frequency, eps0, pi, Gauss points per
- * triangle (at most 7), vertices, edges}; reals = vertex xyz (3 per vertex)
- * then the Gauss rule (ng1, ng2, ng3, weight per point); ints = per edge its
- * two vertices, its two triangles and their vertices opposite the edge (6),
- * then per triangle its vertices (3), all 0-based.  kind 4 (complex, not
- * symmetric, HODLR only): kind 2 times reals[id of the column point] (0-based
- * global ids), plus (params[6], params[7]) on the diagonal; no ints.  kind 5
- * (complex, not symmetric, HODLR only): the CFIE entry alpha Z_EFIE + (1 -
- * alpha) eta0 Z_MFIE of kind 3's edges, params[7] = alpha, and after the
- * Gauss rule in reals eta0 and the unit normal of each triangle (3 each).
- */
-void c_bpack_set_gpu_kernel_tables(F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints);
-/* Former name of c_bpack_set_gpu_kernel_tables, kept for existing drivers. */
-void c_bpack_h2_set_gpu_kernel_tables(F2Cptr* bmat, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints);
+void c_bpack_set_gpu_entry_launchers(F2Cptr* bmat, const bpack_gpu_entry_launchers* launchers);
+void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double* params, const int* nparams, const int* flags);
+void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void c_bpack_gpu_warm_up(F2Cptr* bmat, double* seconds);
 /* GPU state of formats other than H2 (SRC/BPACK_gpu_wrapper.cpp) */
 void c_bpack_gpu_create(void** gpu);
-void c_bpack_gpu_set_kernel(void* gpu, const int* kind, const double* params, const int* nparams);
-void c_bpack_gpu_set_kernel_tables(void* gpu, const double* reals, const int64_t* nreals, const int* ints, const int64_t* nints);
+void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);

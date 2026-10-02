@@ -100,7 +100,7 @@ endif ()
 
 add_library(butterflypack OBJECT ${sources} ${headers})
 target_include_directories(butterflypack PRIVATE
-  ${CMAKE_SOURCE_DIR}/h2_parallel ${CMAKE_SOURCE_DIR})
+  ${CMAKE_SOURCE_DIR}/h2_parallel ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
 
 if (enable_parsec)
   set(PARSEC_HMAT_PTG_JDF ${CMAKE_CURRENT_SOURCE_DIR}/parsec_hmat_factorization_ptg.jdf)
@@ -159,8 +159,8 @@ if (enable_python)
     ${CMAKE_CURRENT_LIST_DIR}
   )
   if (enable_h2_gpu)
-    # the CUDA kernels of the H2 GPU backend, called by the H2 code compiled into this module
-    target_sources(butterflypack_python PRIVATE $<TARGET_OBJECTS:h2_gpu_kernels>)
+    # the CUDA kernels of the H2 and HODLR GPU backends, called by the code compiled into this module
+    target_sources(butterflypack_python PRIVATE $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>)
     target_link_libraries(butterflypack_python PUBLIC ${H2_GPU_LIB})
   endif()
 endif()

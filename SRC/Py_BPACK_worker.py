@@ -55,6 +55,35 @@ def get_command_line_option(arguments, name, default=None):
     return value
 
 
+def gpu_list_callback(func, meta):
+    """The C entry-list evaluator (Py_BPACK_wrapper.GPU_LIST_EVALUATOR) of
+    func(rows, cols, values, meta): the library's device arrays as CuPy
+    arrays, func run on the library's stream.  An exception aborts the run
+    (the library cannot continue without the values)."""
+    import traceback
+    import cupy as cp
+
+    def device_array(ptr, count, dtype):
+        dtype = np.dtype(dtype)
+        memory = cp.cuda.UnownedMemory(ptr, count * dtype.itemsize, None)
+        return cp.ndarray((count,), dtype=dtype, memptr=cp.cuda.MemoryPointer(memory, 0))
+
+    def callback(count, rows, cols, values, stream, user):
+        try:
+            with cp.cuda.ExternalStream(stream or 0):
+                func(device_array(rows, count, np.int64), device_array(cols, count, np.int64),
+                     device_array(values, count, np_dt), meta)
+        except BaseException:
+            traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            if comm is not None:
+                comm.Abort(1)
+            os._exit(1)
+
+    return callback
+
+
 comm, rank, size = get_mpi()
 if comm is None:
     # Serial fallback
@@ -84,6 +113,7 @@ poll_interval = 0.001
 pyobjs = [None] * (MAX_ID_FILE + 1)
 nofactor_by_fid = [False] * (MAX_ID_FILE + 1)
 format_by_fid = [1] * (MAX_ID_FILE + 1)
+gpu_callbacks = [None] * (MAX_ID_FILE + 1)  # the GPU entry-list evaluators (ctypes callbacks)
 VALID_FLAGS = {"init", "factor", "solve", "mult", "logdet", "free", "terminate"}
 
 # Ensure the file exists; if not, wait a moment and try again.
@@ -154,28 +184,58 @@ while True:
         ####################### initialization
         pyobjs[fid] = ctypes.c_void_p()
         maxrank = ctypes.c_int(0)
-        sp.py_bpack_init_compute(
+        # (py_bpack_init_compute in two steps: a GPU evaluator is registered
+        # before the construction, which for HODLR is py_bpack_compute)
+        sp.py_bpack_init(
             meta["coordinates"].shape[0],
             meta["coordinates"].shape[1],
             meta["coordinates"].ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
             ctypes.byref(pyobjs[fid]),            # void **pyobj
-            ctypes.byref(maxrank),
             argc,                           # int argc
             argv_ctypes                     # char *argv[]
         )
+        # GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
+        # (doc/gpu_kernels.md), if the payload has one:
+        #   "gpu_entry": {"source": str, "params": floats, "flags": int}
+        #       an entry evaluator: CUDA source text defining bpack_entry,
+        #       compiled by the library with NVRTC
+        #   "gpu_list": {"func_name": str, "flags": int}
+        #       an entry-list evaluator: func_name(rows, cols, values, meta)
+        #       of block_func_module fills the CuPy array values[e] =
+        #       K(rows[e], cols[e]) (0-based global ids)
+        gpu_callbacks[fid] = None
+        if payload.get("gpu_entry") is not None:
+            gpu_entry = payload["gpu_entry"]
+            gpu_params = np.ascontiguousarray(gpu_entry.get("params", []), dtype=np.float64)
+            sp.py_bpack_set_gpu_entry_source(
+                ctypes.byref(pyobjs[fid]),
+                gpu_entry["source"].encode(),
+                gpu_params.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                len(gpu_params),
+                int(gpu_entry.get("flags", 0))
+            )
+        elif payload.get("gpu_list") is not None:
+            gpu_list = payload["gpu_list"]
+            gpu_callbacks[fid] = Py_BPACK_wrapper.GPU_LIST_EVALUATOR(
+                gpu_list_callback(getattr(mod, gpu_list["func_name"]), meta)
+            )
+            sp.py_bpack_set_gpu_list_evaluator(
+                ctypes.byref(pyobjs[fid]),
+                gpu_callbacks[fid],   # (kept alive until the matrix is freed)
+                None,
+                int(gpu_list.get("flags", 0))
+            )
+        if payload.get("gpu_entry") is not None or payload.get("gpu_list") is not None:
+            # its first-use costs (an NVRTC compile, CuPy compiling its
+            # kernels) here rather than in the factorization (H2; HODLR
+            # warms up as its construction starts)
+            warm = (ctypes.c_double * 2)()
+            sp.py_bpack_gpu_warm_up(ctypes.byref(pyobjs[fid]), warm)
+            if rank == 0 and warm[0] > 0.0:
+                print("GPU evaluator warm-up: %.2f s (NVRTC compile %.2f s)" % (warm[0], warm[1]))
+        sp.py_bpack_compute(ctypes.byref(pyobjs[fid]), ctypes.byref(maxrank))
         if(rank==0):
             print("maxrank from py_bpack_init_compute:", maxrank.value)
-        # device form of the kernel for the GPU backend of the H2 format (H2_use_gpu), if the
-        # payload has one: {"kind": int, "params": list of floats} (c_bpack_h2_set_gpu_kernel)
-        gpu_kernel = meta.get("gpu_kernel") if isinstance(meta, dict) else None
-        if gpu_kernel is not None and format_by_fid[fid] == 7:
-            gpu_params = np.ascontiguousarray(gpu_kernel["params"], dtype=np.float64)
-            sp.py_bpack_set_gpu_kernel(
-                ctypes.byref(pyobjs[fid]),
-                int(gpu_kernel["kind"]),
-                gpu_params.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-                len(gpu_params)
-            )
 
     elif(flag=="factor"):
         ####################### factor
@@ -250,6 +310,7 @@ while True:
         sp.py_bpack_free(ctypes.byref(pyobjs[fid]))
         nofactor_by_fid[fid] = False
         format_by_fid[fid] = 1
+        gpu_callbacks[fid] = None
     elif(flag=="terminate"):
         sp.py_bpack_terminate()
         break

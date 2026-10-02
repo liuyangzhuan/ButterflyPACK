@@ -6,6 +6,21 @@ import time
 import pickle
 import numpy as np
 
+# The GPU evaluators of the entries (GPU_INTERFACE/bpack_gpu.h, doc/gpu_kernels.md):
+# their flags, and the entry-list evaluator's C type, values[e] = K(rows[e], cols[e])
+# for e < count (device pointers) on the cudaStream_t `stream`
+BPACK_GPU_SYMMETRIC = 1
+BPACK_GPU_COORDINATES = 2
+GPU_LIST_EVALUATOR = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_int64,   # count
+    ctypes.c_void_p,  # rows (int64)
+    ctypes.c_void_p,  # cols (int64)
+    ctypes.c_void_p,  # values (the matrix's type)
+    ctypes.c_void_p,  # stream
+    ctypes.c_void_p   # user
+)
+
 def py_bpack_setup(sp):
     # Define the function signatures as shown in your original code
 
@@ -17,6 +32,20 @@ def py_bpack_setup(sp):
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_int,
         ctypes.POINTER(ctypes.c_void_p)
+    ]
+    # the two steps of py_bpack_init_compute (a GPU evaluator is registered in between)
+    sp.py_bpack_init.restype = None
+    sp.py_bpack_init.argtypes = [
+        ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p)
+    ]
+    sp.py_bpack_compute.restype = None
+    sp.py_bpack_compute.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_int)
     ]
     sp.py_bpack_factor.restype = None
     sp.py_bpack_factor.argtypes = [
@@ -31,12 +60,25 @@ def py_bpack_setup(sp):
     sp.py_bpack_logdet.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes_dt), ctypes.POINTER(ctypes_rdt)]
     sp.py_bpack_free.restype = None
     sp.py_bpack_free.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
-    sp.py_bpack_set_gpu_kernel.restype = None
-    sp.py_bpack_set_gpu_kernel.argtypes = [
+    sp.py_bpack_set_gpu_entry_source.restype = None
+    sp.py_bpack_set_gpu_entry_source.argtypes = [
         ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_int,
+        ctypes.c_char_p,
         ctypes.POINTER(ctypes.c_double),
+        ctypes.c_int,
         ctypes.c_int
+    ]
+    sp.py_bpack_set_gpu_list_evaluator.restype = None
+    sp.py_bpack_set_gpu_list_evaluator.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        GPU_LIST_EVALUATOR,
+        ctypes.c_void_p,
+        ctypes.c_int
+    ]
+    sp.py_bpack_gpu_warm_up.restype = None
+    sp.py_bpack_gpu_warm_up.argtypes = [
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_double)
     ]
     sp.py_bpack_terminate.restype = None
     sp.py_bpack_terminate.argtypes = None

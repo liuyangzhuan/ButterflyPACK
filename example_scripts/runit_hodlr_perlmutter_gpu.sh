@@ -16,7 +16,7 @@
 # GPUs, for sym=1 (symmetric HODLR) and sym=0, over any number of nodes: one
 # MPI rank per A100 by default (4 per node, 16 cores each); with
 # RANKS_PER_NODE=8 two ranks share each GPU and split its memory.  See
-# ../hodlr_gpu/README.md for the options and environment switches.
+# ../GPU_BACKEND/hodlr_gpu/README.md for the options and environment switches.
 #
 # Overrides: NODES, RANKS_PER_NODE, CASE (laplace, vie, efie, cfie), SYM (0 or
 # 1; default 1 for laplace, 0 otherwise), USE_GPU (1: FP64 GEMMs, 2: FP64 tensor-core GEMMs), PIECES (the option
