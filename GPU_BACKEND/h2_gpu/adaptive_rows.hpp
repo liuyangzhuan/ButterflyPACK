@@ -37,6 +37,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "core/factorization.hpp"  // the tree and box types
 #include "device_adaptive.hpp"
 #include "device_heap.hpp"
 #include "device_kernels.hpp"

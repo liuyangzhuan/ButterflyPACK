@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_common/bpack_env.hpp"
+#include "factorization.hpp"  // the deferred X_NN types
 #include "tree.hpp"
 
 #include <algorithm>

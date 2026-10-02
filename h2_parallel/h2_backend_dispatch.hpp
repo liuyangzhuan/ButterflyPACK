@@ -1,5 +1,11 @@
 #pragma once
 
+#include "core/butterfly_types.hpp"
+#include "structured/butterfly_factorization.hpp"
+#include "structured/butterfly_compression.hpp"
+#include "structured/butterfly_solve.hpp"
+#include "structured/butterfly_verification.hpp"
+
 #include "unstructured/factorization.hpp"
 #include "unstructured/compression.hpp"
 #include "unstructured/compression_apply.hpp"

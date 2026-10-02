@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/butterfly_types.hpp"
+#include "structured/butterfly_solve.hpp"
+
 #include "h2_gpu/device_solve.hpp"
 
 namespace butterfly {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "structured/butterfly_compression.hpp"
+
 #include "occupied_topology.hpp"
 
 namespace butterfly {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "structured/butterfly_verification.hpp"
+
 #include "solver_impl.hpp"
 
 namespace butterfly {

@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include "tree.hpp"
 #include "blas_declare.hpp"
+#include "factorization.hpp"  // MatrixProperty
 
 /**
  * @file apply_mul.hpp

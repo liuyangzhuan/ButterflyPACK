@@ -23,6 +23,7 @@
 // its dependency has arrived.
 #pragma once
 
+#include "factorization.hpp"  // the deferred X_NN types
 #include "serialization.hpp"
 
 #include <atomic>

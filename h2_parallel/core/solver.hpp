@@ -7,6 +7,7 @@
 //#include "kernel.hpp"
 #include "morton.hpp"
 #include "serialization.hpp"
+#include "factorization.hpp"  // MatrixProperty
 #include <mpi.h>
 #include <vector>
 #include <cstdint>

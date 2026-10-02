@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/butterfly_types.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <iostream>

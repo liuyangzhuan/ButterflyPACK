@@ -33,6 +33,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "core/factorization.hpp"  // the tree and box types
 #include "device_heap.hpp"
 #include "gpu_runtime.hpp"
 #include "h2_matvec_store.hpp"

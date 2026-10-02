@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/butterfly_types.hpp"
+
 namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;

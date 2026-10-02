@@ -1,5 +1,9 @@
 #pragma once
 
+#include "core/butterfly_types.hpp"
+#include "structured/butterfly_compression.hpp"
+#include "structured/butterfly_verification.hpp"
+
 namespace butterfly {
 namespace color_unstructured {
 

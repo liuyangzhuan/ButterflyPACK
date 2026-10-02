@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <iostream>
 #include <stdexcept>
 #include "tree.hpp"
 #include <cstdint>

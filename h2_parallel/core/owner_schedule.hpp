@@ -53,7 +53,7 @@
 // B.  Recipients install only what they were sent and mark only that as
 // eliminated.
 //
-// Include order: after factorization.hpp (uses its pass functions).
+// Uses the pass functions of factorization.hpp (included below).
 //
 // INVARIANTS — re-read before touching the event loop, the payload rules or
 // the filters (the unit test covers 1, 2, 4; the serial oracle covers 3):
@@ -91,6 +91,7 @@
 // ---------------------------------------------------------------------------
 
 #include "gpu_common/bpack_env.hpp"
+#include "factorization.hpp"  // FactorizationMethod
 
 #include <algorithm>
 #include <atomic>

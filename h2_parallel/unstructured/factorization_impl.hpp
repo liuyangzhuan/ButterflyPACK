@@ -1,5 +1,7 @@
 #pragma once
 
+#include "structured/butterfly_factorization.hpp"
+
 #include "occupied_topology.hpp"
 #include "parent_transition.hpp"
 #include "owner_deferred.hpp"

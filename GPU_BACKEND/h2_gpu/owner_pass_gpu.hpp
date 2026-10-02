@@ -15,6 +15,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "core/factorization.hpp"  // the tree and box types
 #include "gpu_runtime.hpp"
 
 #include <omp.h>
