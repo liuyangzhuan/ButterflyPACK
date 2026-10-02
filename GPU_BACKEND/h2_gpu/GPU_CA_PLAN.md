@@ -1273,6 +1273,99 @@ are within 1% of each other at this size (9.85 against 9.97 s); CA0's leaf
 elimination advantage (1.64-1.74 against 1.89-2.00 s) is spent on the
 gather and the level above the leaf, as before.
 
+### M8. After M7: what stays on the host, and the follow-ups the user chose
+At 640^3 on 512 ranks (M7c run) the numerical work is all on the device;
+the host keeps the per-wave planning (0.3 + 0.12 s at the leaf, hidden
+behind the device sketch), the leaf transition plan (0.23 s), the CA
+level-entry gather (0.1 s) and, above all, the Color exchange protocol: per
+level 0.5-0.8 s of "sizes" (the per-wave handshake, i.e. waiting for the
+slowest peer) plus 0.15-0.66 s of payload, about 5.5 s of the 10 s. The
+user chose (1) CA on level 6 as well (`--CA_level 6`, an experiment:
+build/gpu_prep/ca0/g640_ca6), (3) a cheaper exchange protocol and (4) no
+host copies of the kept boxes' factors plus a faster leaf transition plan;
+not the reduction threshold.
+
+**(1) CA on levels 7 and 6 at 640^3 on 512 ranks, 40 GB nodes (2026-10-02,
+job 59202906): does not fit, and would not pay.** The leaf runs as before
+(2.49-2.67 s, 11.94 GB kept); level 6's device halo (M2) then brings 4.18 GB
+of ghost blocks per rank (6320 blocks, sent 4.60 GB) in 1.22-1.26 s (MPI
+1.16-1.20 s: the arena-staged rounds run at ~4 GB/s here), and the level
+exhausts the 33.4 GB heap on dozens of ranks (the leaf's kept factors, the
+level's own blocks and the ghosts' leave 0.2 GB). Even with the memory, the
+halo alone (1.26 s) costs more than the level-6 exchange it replaces (1.15
+s). CA stays on the leaf at this size; the 512-rank CA7 run in the same job
+gave 9.84 s (logdet -3937186089.4963474, as before).
+
+**M8a. Exchange without the sizes handshake (implemented 2026-10-02).** A
+rank now sends everything at once (its sizes, the host header with a
+transport number, the device bulk) and receives each peer's header and
+bulk as soon as that peer's sizes are in (`MPI_Waitany` over the size
+receives, per-peer receive buffers), so no rank waits for all its peers
+before sending and the transfers from early peers overlap the wait for
+late ones. The first version probed the headers for their lengths
+(`MPI_Improbe`/`MPI_Mrecv`) instead of a sizes round; with Cray MPICH it
+matched a later transport's header while an earlier one was pending (the
+transport number in the header caught it: "rank 6 at transport 4 received
+the header of transport 5 from rank 0"), so the protocol keeps explicit
+receives and the transport number stays as a check.
+
+**M8b. Kept boxes without host copies of X_SR and the LU of X_RR
+(implemented 2026-10-02).** As for X_NR before: the eliminator skips the
+copies for the boxes it keeps (X_RS is dropped: only the host transport
+read it), `materialize_host_factors` brings them back for a host solve or
+the solve check, `rescue_skipped_xnr(true)` when the keep fails, and the
+log-determinant of a kept level comes from the device
+(`device_logdet_kept_level`, `launch_logdet_lu`: one block per box over the
+LU's diagonal with the LAPACK pivots, as the host's `accumulate_logdet_lu`;
+the host sums the levels and boxes that have a host LU). The device solve
+takes a kept box's shapes from the kept factors. The 8-rank CA0 logdet came
+out identical to the host's.
+
+**M8c. Leaf transition plan (implemented 2026-10-02).** The lazy far
+fill's sources of a child pair came from `collect_lazy_far_sources` (26
+Morton decodes, two hash lookups and a sort per two-hop pair, ~275K pairs
+at the leaf of 640^3); `build_parent` now lists each local child's
+eliminated one-hop neighbors with their waves and coordinates once and
+filters that list per pair.
+
+Validation of M8a-c on 8 ranks (2026-10-02, job 59208723,
+build/gpu_prep/m8, frozen_m8): Laplace 192 Color and CA0 (CA on levels 5
+and 4) with the solve and replica checks and without, VIE 96 (complex, CA
+leaf, adaptive ID rows) with the solve check. H2_CheckError values as the
+clean build's in every run; replica checks 0 differ; solve checks 3e-15 to
+3e-14; Color's logdet -89253588.194065422 against -89253588.194065362 (the
+device sums the kept levels' boxes in another order), CA0's
+-89253589.199881583 unchanged, VIE's equal to 11 digits. The device solve
+runs as before (its setup had first refused the kept boxes' missing host
+LU; the check now accepts a kept box, and a kept CA level the solve runs on
+the host gets its factors back first). Factor times: Color 7.8-8.6 s
+(8.4 before), CA0 8.3 s without checks (the leaf exchange on 8 ranks:
+1.68 s [sizes 1.14, rest 0.36] for 6.8 GB received; the transition plan's
+0.47 s restore dominates its 0.72 s).
+
+**640^3 on 512 ranks, 40 GB nodes, with M8a-c (2026-10-02, job 59208905,
+build/gpu_prep/ca0/g640_m8; CA0, Color, CA0, Color, CA0 with the checks).**
+
+| | M7 build (job 59194082) | + M8a-c |
+|---|---|---|
+| CA0 factor time | 10.83 (cold) / 9.85 s | 9.91 (cold) / 9.13 s |
+| Color factor time | 10.02 / 9.97 s | 9.19 / 9.17 s |
+| level 6 exchange (Color) | 1.19 s [sizes 0.76, payload 0.31] | 1.04 s [sizes 0.91, rest 0.01] |
+| level 5 / 4 exchange | 1.02 / 0.75 s | 0.83 / 0.70 s |
+| level 3 exchange (64 ranks) | 1.55 s [0.82 + 0.66] | 1.23 s [1.12 + 0.04] |
+| level 2 exchange (8 ranks) | 0.65 s [0.20 + 0.37] | 0.63 s [0.19 + 0.36] |
+| leaf transition plan | 0.23-0.24 s | 0.17-0.19 s |
+
+The payload phase of the exchanges has gone into the wait for the slowest
+peer (which stays at 0.6-1.1 s per level, the cost of the wave schedule
+itself); the 8-rank level 2 does not change (its transfers were already
+waiting on nothing). Results identical to the M7 build's (CA0 logdet
+-3937186089.4963474, the device sum reproducing the host's here; Color
+-3937186064.8561087; H2_CheckError values unchanged); replica check
+1217216 ghost copies, 0 differ; the device solve keeps levels 3-7 and sets
+up in 0.2 s as before. CA0 and Color are 0.7-0.8 s faster each; CA0 is
+again slightly ahead (9.13 against 9.17 s).
+
 ## Backlog from the GPU Color work (not CA-specific)
 
 - B1. Level-start wait: the first transport of each leaf level (0.4-0.7 s at

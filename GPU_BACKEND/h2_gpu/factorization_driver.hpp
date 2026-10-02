@@ -873,7 +873,7 @@ public:
                     e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
         if (e.remote_generators > 0 || e.exchange > 0.0) {
             const auto& tt = transport_timers();
-            std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, payload %.2f "
+            std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, rest %.2f "
                         "(serialize %.2f), deserialize %.2f, assisting %.2f, install %.2f; sent %.2f GB, "
                         "received %.2f GB], receive %.2f s (%lld remote generators, %lld buffers "
                         "outside the exchange arena)\n",

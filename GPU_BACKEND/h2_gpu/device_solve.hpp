@@ -796,30 +796,111 @@ double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
     return bytes;
 }
 
-// Kept boxes whose X_NR has no host copy (the eliminator skips its download
-// for the boxes it keeps): X_NR copied from the kept factors, before a host
-// solve or multiply reads it, or the kept factors are released.
+// Kept boxes whose factors have no host copy (the eliminator skips the
+// downloads of X_NR, X_SR and the LU of X_RR with its pivots for the boxes it
+// keeps): copied from the kept factors, before a host solve or multiply
+// reads them, or the kept factors are released.
+template<typename CoordType, typename DataType>
+void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int level, const KeptSolveLevel& kl) {
+    if (level < 0 || level >= tree->num_levels) return;
+    Context::instance().activate();
+    check_cuda(cudaStreamSynchronize(Context::instance().stream()), "host factors");
+    auto& lvl = tree->levels[static_cast<size_t>(level)];
+    auto fill = [&](BoxData<CoordType, DataType>& box) {
+        const auto it = kl.boxes.find(box.morton_index);
+        if (it == kl.boxes.end()) return;
+        const KeptSolveBox& kb = it->second;
+        const size_t k = static_cast<size_t>(kb.k), r = static_cast<size_t>(kb.r);
+        auto copy = [&](const void* src, size_t count) {
+            std::vector<DataType> v(count);
+            check_cuda(cudaMemcpy(v.data(), src, count * sizeof(DataType), cudaMemcpyDeviceToHost), "host factors");
+            return v;
+        };
+        if (kb.ntot > 0 && !box.X_NR.is_allocated()) {
+            box.X_NR.set_owned(kb.ntot, kb.r, copy(kb.xnr, static_cast<size_t>(kb.ntot) * r),
+                               MatrixStorage<DataType>::FULL);
+        }
+        if (!box.X_SR.is_allocated()) {
+            box.X_SR.set_owned(kb.k, kb.r, copy(kb.xsr, k * r), MatrixStorage<DataType>::FULL);
+        }
+        if (!box.X_RR.is_allocated()) {
+            box.X_RR.set_owned(kb.r, kb.r, copy(kb.lu, r * r), MatrixStorage<DataType>::LU_FACTORED);
+            box.X_RR_pivots.resize(r);
+            check_cuda(cudaMemcpy(box.X_RR_pivots.data(), kb.ipiv, r * sizeof(int), cudaMemcpyDeviceToHost),
+                       "host factors");
+        }
+    };
+    for (auto& box : lvl.local_boxes) fill(box);
+    for (auto& box : lvl.ghost_boxes) fill(box);
+}
+
 template<typename CoordType, typename DataType>
 void materialize_host_factors(ParallelTree<CoordType, DataType>* tree) {
     DeviceSolveStore& store = device_solve_store();
-    if (store.kept.empty()) return;
-    Context::instance().activate();
-    check_cuda(cudaStreamSynchronize(Context::instance().stream()), "host factors");
-    for (auto& [level, kl] : store.kept) {
-        if (level < 0 || level >= tree->num_levels) continue;
-        auto& lvl = tree->levels[static_cast<size_t>(level)];
-        auto fill = [&](BoxData<CoordType, DataType>& box) {
-            const auto it = kl.boxes.find(box.morton_index);
-            if (it == kl.boxes.end() || it->second.ntot == 0 || box.X_NR.is_allocated()) return;
-            const KeptSolveBox& kb = it->second;
-            std::vector<DataType> xnr(static_cast<size_t>(kb.ntot) * static_cast<size_t>(kb.r));
-            check_cuda(cudaMemcpy(xnr.data(), kb.xnr, xnr.size() * sizeof(DataType), cudaMemcpyDeviceToHost),
-                       "host factors");
-            box.X_NR.set_owned(kb.ntot, kb.r, std::move(xnr), MatrixStorage<DataType>::FULL);
-        };
-        for (auto& box : lvl.local_boxes) fill(box);
-        for (auto& box : lvl.ghost_boxes) fill(box);
+    for (auto& [level, kl] : store.kept) materialize_host_factors_level(tree, level, kl);
+}
+
+// The log-determinant contributions (the sum of log|u_kk| and of the
+// arguments of the diagonal of the LU of X_RR, LAPACK pivots counted, as
+// core/butterfly_logdet.hpp accumulate_logdet_lu) of the local boxes of
+// `level` whose LU stayed on the device without a host copy, from the kept
+// factors.  Returns how many boxes it covered (0 when the level's factors
+// are not kept); the host sums the others.
+template<typename CoordType, typename DataType>
+int64_t device_logdet_kept_level(ParallelTree<CoordType, DataType>* tree, int level, double& logabs, double& arg) {
+  if constexpr (!gpu_data_type<DataType>) {
+    (void)tree; (void)level; (void)logabs; (void)arg;
+    return 0;
+  } else {
+    using S = typename DeviceScalar<DataType>::type;
+    DeviceSolveStore& store = device_solve_store();
+    const auto kit = store.kept.find(level);
+    if (kit == store.kept.end() || level < 0 || level >= tree->num_levels) return 0;
+    const KeptSolveLevel& kl = kit->second;
+    const auto& lvl = tree->levels[static_cast<size_t>(level)];
+    std::vector<LogdetItem> items;
+    std::vector<int64_t> mortons;
+    for (const auto& box : lvl.local_boxes) {
+        const size_t r = box.redundant_indices.size();
+        if (r == 0 || box.X_RR.is_allocated()) continue;
+        const auto it = kl.boxes.find(box.morton_index);
+        if (it == kl.boxes.end() || it->second.r != static_cast<int>(r)) {
+            throw std::runtime_error("logdet: box " + std::to_string(box.morton_index) + " of level " +
+                                     std::to_string(level) + " has neither a host LU nor a kept one");
+        }
+        items.push_back(LogdetItem{it->second.lu, it->second.ipiv, static_cast<int>(r)});
+        mortons.push_back(box.morton_index);
     }
+    if (items.empty()) return 0;
+    Context& ctx = Context::instance();
+    ctx.activate();
+    cudaStream_t stream = ctx.stream();
+    const size_t n = items.size();
+    const size_t item_bytes = align_up(n * sizeof(LogdetItem)), out_bytes = align_up(2 * n * sizeof(double));
+    DeviceBuffer buffer;
+    char* d = static_cast<char*>(buffer.reserve(item_bytes + out_bytes + align_up(n * sizeof(int))));
+    check_cuda(cudaMemcpyAsync(d, items.data(), n * sizeof(LogdetItem), cudaMemcpyHostToDevice, stream), "logdet");
+    launch_logdet_lu<S>(reinterpret_cast<const LogdetItem*>(d), static_cast<int>(n),
+                        reinterpret_cast<double*>(d + item_bytes), reinterpret_cast<int*>(d + item_bytes + out_bytes),
+                        stream);
+    std::vector<double> out(2 * n);
+    std::vector<int> bad(n);
+    check_cuda(cudaMemcpyAsync(out.data(), d + item_bytes, 2 * n * sizeof(double), cudaMemcpyDeviceToHost, stream),
+               "logdet");
+    check_cuda(cudaMemcpyAsync(bad.data(), d + item_bytes + out_bytes, n * sizeof(int), cudaMemcpyDeviceToHost, stream),
+               "logdet");
+    check_cuda(cudaStreamSynchronize(stream), "logdet");
+    for (size_t i = 0; i < n; ++i) {
+        if (bad[i] != 0) {
+            throw std::runtime_error("logdet: singular/near-singular or invalid pivot at k = " +
+                                     std::to_string(bad[i] - 1) + " of box " + std::to_string(mortons[i]) +
+                                     " (level " + std::to_string(level) + ", on the device)");
+        }
+        logabs += out[2 * i];
+        arg += out[2 * i + 1];
+    }
+    return static_cast<int64_t>(n);
+  }
 }
 
 // A replicated CA level's halo exchanges in device memory, in place of the
@@ -992,7 +1073,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     reason = "boxes too large";
                     return;
                 }
-                if (r > 0 && k > 0 && box.X_RR.format != MatrixStorage<DataType>::LU_FACTORED) {
+                // (a kept box's LU may have no host copy; the kept one is an LU)
+                if (r > 0 && k > 0 && !(kept_box && !box.X_RR.is_allocated()) &&
+                    box.X_RR.format != MatrixStorage<DataType>::LU_FACTORED) {
                     reason = "X_RR not LU-factored (use H2_XRR_factor=1)";
                     return;
                 }
@@ -1076,6 +1159,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             if (host_levels.count(level)) {  // (no factors, no tables)
                 L.ca = true;
                 L.host = true;
+                // (a kept level solved on the host reads its factors there)
+                if (auto kit = store.kept.find(level); kit != store.kept.end()) {
+                    materialize_host_factors_level(tree, level, kit->second);
+                }
                 continue;
             }
             const size_t nb = lvl.local_boxes.size();
@@ -1200,21 +1287,24 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 const size_t k = box.skeleton_indices.size(), r = box.redundant_indices.size();
                 const bool eliminated = k > 0 && r > 0;
                 solve_detail::BoxLayout& l = lay[b];
-                ntot[b] = eliminated && box.X_NR.is_allocated() && !box.one_hop.empty() ? static_cast<int>(box.X_NR.rows) : 0;
-                l.has_T = eliminated && box.interpolation_matrix.is_allocated();
-                l.has_xsr = eliminated && box.X_SR.is_allocated();
+                // (a kept box's X_NR, X_SR and LU may have no host copy: its
+                // shapes from the kept one)
+                const KeptSolveBox* kb = nullptr;
                 if (kept != nullptr && eliminated) {
                     auto it = kept->boxes.find(box.morton_index);
-                    // (a kept box's X_NR may have no host copy: its rows from the kept one)
-                    if (it != kept->boxes.end() && !box.X_NR.is_allocated() && !box.one_hop.empty()) {
-                        ntot[b] = it->second.ntot;
-                    }
-                    if (it == kept->boxes.end() || it->second.k != static_cast<int>(k) || it->second.r != static_cast<int>(r) ||
-                        it->second.ntot != ntot[b] || (l.has_T && it->second.T == nullptr)) {
+                    if (it != kept->boxes.end()) kb = &it->second;
+                }
+                ntot[b] = eliminated && box.X_NR.is_allocated() && !box.one_hop.empty() ? static_cast<int>(box.X_NR.rows) : 0;
+                if (kb != nullptr && !box.X_NR.is_allocated() && !box.one_hop.empty()) ntot[b] = kb->ntot;
+                l.has_T = eliminated && (kb != nullptr ? kb->T != nullptr : box.interpolation_matrix.is_allocated());
+                l.has_xsr = eliminated && (kb != nullptr ? kb->xsr != nullptr : box.X_SR.is_allocated());
+                if (kept != nullptr && eliminated) {
+                    if (kb == nullptr || kb->k != static_cast<int>(k) || kb->r != static_cast<int>(r) ||
+                        kb->ntot != ntot[b]) {
                         throw std::runtime_error("device solve: kept factors of box " + std::to_string(box.morton_index) +
                                                  " do not match");
                     }
-                    kept_box[b] = &it->second;
+                    kept_box[b] = kb;
                 }
                 size_t at = 0;
                 if (eliminated && kept_box[b] == nullptr) {

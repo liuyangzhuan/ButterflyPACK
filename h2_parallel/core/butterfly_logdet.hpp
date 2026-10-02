@@ -3,15 +3,30 @@
 // H2 (format-7) integration: log-determinant accumulation over the factored
 // hierarchy (Bunch-Kaufman and LU blocks), shared by both backends.
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <iomanip>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "tree.hpp"
+
+#ifdef H2_HAVE_GPU
+namespace fmm {
+namespace gpu {
+// The contributions of the boxes whose LU stayed on the device without a
+// host copy (h2_gpu/device_solve.hpp); returns how many boxes it covered.
+template<typename CoordType, typename DataType>
+int64_t device_logdet_kept_level(fmm::ParallelTree<CoordType, DataType>* tree, int level, double& logabs, double& arg);
+}  // namespace gpu
+}  // namespace fmm
+#endif
 
 namespace butterfly {
 using namespace fmm;
@@ -120,6 +135,14 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
         auto& tree_level = tree->levels[level];
         if (!tree_level.is_process_active) continue;
 
+        // boxes whose LU stayed on the device without a host copy (the
+        // factors kept there): summed there
+        int64_t device_boxes = 0;
+#ifdef H2_HAVE_GPU
+        device_boxes = fmm::gpu::device_logdet_kept_level(tree, level, logabs_local, arg_local);
+#endif
+        std::atomic<int64_t> device_only{0};
+
         std::exception_ptr diagonal_exception;
         std::mutex diagonal_exception_mutex;
         std::atomic<bool> diagonal_failed{false};
@@ -139,6 +162,10 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
                     auto& box = tree_level.local_boxes[static_cast<size_t>(box_idx)];
 
                     if (box.redundant_indices.empty()) {
+                        continue;
+                    }
+                    if (!box.X_RR.is_allocated()) {
+                        device_only.fetch_add(1, std::memory_order_relaxed);
                         continue;
                     }
 
@@ -185,6 +212,11 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
         }
         if (diagonal_exception) {
             std::rethrow_exception(diagonal_exception);
+        }
+        if (device_only.load() != device_boxes) {
+            throw std::runtime_error("logdet: level " + std::to_string(level) + ": " +
+                                     std::to_string(device_only.load()) + " boxes without a host LU, " +
+                                     std::to_string(device_boxes) + " covered by the device");
         }
     }
 

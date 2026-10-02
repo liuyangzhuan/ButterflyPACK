@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace fmm {
 namespace gpu {
@@ -458,6 +459,63 @@ void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cuda
     check_launch("copy_spans_kernel");
 }
 
+// One block per item: the threads stride the diagonal, then a fixed-order
+// reduction (the sums do not depend on the schedule).
+template<typename T>
+__global__ void logdet_lu_kernel(const LogdetItem* items, double* out, int* bad) {
+    constexpr double kPi = 3.14159265358979323846;
+    __shared__ double s_logabs[kThreads], s_arg[kThreads];
+    __shared__ int s_bad[kThreads];
+    const LogdetItem item = items[blockIdx.x];
+    const T* lu = static_cast<const T*>(item.lu);
+    const int r = item.r;
+    double logabs = 0.0, arg = 0.0;
+    int first_bad = 0;
+    for (int k = threadIdx.x; k < r; k += blockDim.x) {
+        const T d = lu[k + static_cast<int64_t>(k) * r];
+        double magnitude, phase;
+        if constexpr (std::is_same_v<T, double>) {
+            magnitude = fabs(d);
+            phase = d < 0.0 ? kPi : 0.0;  // std::arg of a real
+        } else {
+            magnitude = hypot(d.re, d.im);
+            phase = atan2(d.im, d.re);
+        }
+        const int pivot = item.ipiv[k];
+        if (!(magnitude > 1e-14) || pivot < 1 || pivot > r) {
+            if (first_bad == 0) first_bad = k + 1;
+        }
+        logabs += log(magnitude);
+        arg += phase;
+        if (pivot != k + 1) arg += kPi;
+    }
+    s_logabs[threadIdx.x] = logabs;
+    s_arg[threadIdx.x] = arg;
+    s_bad[threadIdx.x] = first_bad;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            s_logabs[threadIdx.x] += s_logabs[threadIdx.x + stride];
+            s_arg[threadIdx.x] += s_arg[threadIdx.x + stride];
+            const int a = s_bad[threadIdx.x], b = s_bad[threadIdx.x + stride];
+            s_bad[threadIdx.x] = a == 0 ? b : (b == 0 ? a : min(a, b));
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[2 * blockIdx.x] = s_logabs[0];
+        out[2 * blockIdx.x + 1] = s_arg[0];
+        bad[blockIdx.x] = s_bad[0];
+    }
+}
+
+template<typename T>
+void launch_logdet_lu(const LogdetItem* items, int count, double* out, int* bad, cudaStream_t stream) {
+    if (count <= 0) return;
+    logdet_lu_kernel<T><<<count, kThreads, 0, stream>>>(items, out, bad);
+    check_launch("logdet_lu_kernel");
+}
+
 template<typename T>
 void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                         const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream) {
@@ -514,7 +572,8 @@ void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, c
     template void launch_mul_forward<T>(const SolveBox*, const SolveSlot*, const int*, int, T*, const T*, T*, int,    \
                                         int, int, cudaStream_t);                                                      \
     template void launch_mul_diagonal<T>(const SolveBox*, const int*, int, T*, int, int, cudaStream_t);               \
-    template void launch_mul_backward<T>(const SolveBox*, const int*, int, T*, T*, int, int, cudaStream_t);
+    template void launch_mul_backward<T>(const SolveBox*, const int*, int, T*, T*, int, int, cudaStream_t);        \
+    template void launch_logdet_lu<T>(const LogdetItem*, int, double*, int*, cudaStream_t);
 H2_SOLVE_LAUNCHES(double)
 H2_SOLVE_LAUNCHES(dcomplex)
 #undef H2_SOLVE_LAUNCHES

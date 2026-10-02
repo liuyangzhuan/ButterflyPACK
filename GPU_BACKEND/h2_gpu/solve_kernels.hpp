@@ -80,6 +80,20 @@ struct CopySpan {
     int64_t words;
 };
 
+// A box's LU of X_RR (r x r, elements of the factorization's type) with its
+// LAPACK pivots, for the log-determinant.
+struct LogdetItem {
+    const void* lu;
+    const int* ipiv;
+    int r;
+};
+// Per item: out[2 i] = sum_k log|u_kk|, out[2 i + 1] = sum_k arg(u_kk) (+ pi
+// for every row the pivot swaps), as core/butterfly_logdet.hpp
+// accumulate_logdet_lu; bad[i] = 0, or k + 1 of the first pivot that is
+// singular (|u_kk| <= 1e-14, or not a number) or out of range.
+template<typename T>
+void launch_logdet_lu(const LogdetItem* items, int count, double* out, int* bad, cudaStream_t stream);
+
 // Largest per-box dynamic shared memory the solve kernels may use.
 constexpr size_t kSolveSharedLimit = 96 * 1024;
 
