@@ -68,6 +68,17 @@ inline bool h2_id_trace_enabled() {
     return enabled;
 }
 
+// BPACK_TRACE=id: the adaptive rows of a box (H2_ID_proxy 2), empty otherwise
+inline std::string h2_id_adaptive_trace(const IDAdaptiveStats& stats) {
+    if (!stats.active) return std::string();
+    return " adaptive=frames:" + std::to_string(stats.frames) +
+           ",sampled:" + std::to_string(stats.sampled) +
+           ",holdout:" + std::to_string(stats.holdout) +
+           ",appended:" + std::to_string(stats.appended) +
+           ",ids:" + std::to_string(stats.recomputes) +
+           ",residual_ids:" + std::to_string(stats.extra_ids);
+}
+
 inline void h2_id_trace_write(const std::string& line) {
     static std::mutex trace_mutex;
     static std::ofstream trace_file;
@@ -5186,9 +5197,14 @@ void append_adaptive_id_training_rows(
     bool is_symmetric,
     std::vector<DataType>& workspace,
     int64_t& workspace_rows,
-    int64_t workspace_cols) {
+    int64_t workspace_cols,
+    IDAdaptiveStats* stats = nullptr) {
 
+    if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    IDAdaptiveStats local_stats;
+    IDAdaptiveStats& st = stats != nullptr ? *stats : local_stats;
+    st.active = true;
     if (!is_symmetric) {
         throw std::runtime_error(
             "adaptive H2 ID proxy selection currently requires a symmetric matrix");
@@ -5222,6 +5238,7 @@ void append_adaptive_id_training_rows(
             workspace, workspace_rows, workspace_cols, tolerance);
         extra_ids.clear();
         extra_rank = 0;
+        ++st.recomputes;
     };
 
     while (queue_head < queue.size()) {
@@ -5232,6 +5249,8 @@ void append_adaptive_id_training_rows(
         const std::vector<int64_t> sample_positions = pick_evenly_spaced_unused(
             unused, frame.lo, frame.hi, sample_batch, true);
         const int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
+        ++st.frames;
+        st.sampled += sample_rows;
         std::vector<int64_t> sample_indices(static_cast<size_t>(sample_rows));
         for (int64_t row = 0; row < sample_rows; ++row) {
             sample_indices[static_cast<size_t>(row)] =
@@ -5260,6 +5279,7 @@ void append_adaptive_id_training_rows(
         append_selected_workspace_rows(
             workspace, workspace_rows, workspace_cols,
             sampled, sample_rows, retained_rows);
+        st.appended += static_cast<int64_t>(retained_rows.size());
 
         bool converged = residual_norm < threshold;
         if (converged && !extra_ids.empty()) {
@@ -5284,6 +5304,7 @@ void append_adaptive_id_training_rows(
             if (!holdout_positions.empty()) {
                 const int64_t holdout_rows =
                     static_cast<int64_t>(holdout_positions.size());
+                st.holdout += holdout_rows;
                 std::vector<int64_t> holdout_indices(
                     static_cast<size_t>(holdout_rows));
                 for (int64_t row = 0; row < holdout_rows; ++row) {
@@ -5312,6 +5333,7 @@ void append_adaptive_id_training_rows(
                     append_selected_workspace_rows(
                         workspace, workspace_rows, workspace_cols,
                         holdout, holdout_rows, retained_holdout);
+                    st.appended += static_cast<int64_t>(retained_holdout.size());
                     for (const int64_t position : holdout_positions) {
                         unused.mark_used(position);
                     }
@@ -5332,6 +5354,7 @@ void append_adaptive_id_training_rows(
                 extra_rank + extra_id.rank <= workspace_cols) {
                 extra_rank += extra_id.rank;
                 extra_ids.push_back(std::move(extra_id));
+                ++st.extra_ids;
             } else {
                 recompute_clean_id();
             }
@@ -5358,8 +5381,11 @@ void gather_id_workspace(
     int64_t& workspace_cols, 
     int DEBUG = 0,
     bool on_boundary = false,
-    bool use_CA_boundary_semantics = false) {
+    bool use_CA_boundary_semantics = false,
+    IDAdaptiveStats* adaptive_stats = nullptr,
+    bool adaptive_rows = true) {  // false: the caller selects them (against its sketch)
 
+    if (adaptive_stats != nullptr) *adaptive_stats = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
         workspace_rows = 0;
         workspace_cols = 0;
@@ -5786,9 +5812,11 @@ void gather_id_workspace(
             std::to_string(current_row_offset));
     }
 
-    append_adaptive_id_training_rows(
-        tree, box, kernel, id_tolerance, is_symmetric,
-        workspace, workspace_rows, workspace_cols);
+    if (adaptive_rows) {
+        append_adaptive_id_training_rows(
+            tree, box, kernel, id_tolerance, is_symmetric,
+            workspace, workspace_rows, workspace_cols, adaptive_stats);
+    }
 
     // if (DEBUG){
     //     print_workspace_segment_stats(workspace, workspace_rows, workspace_cols,
@@ -8306,6 +8334,11 @@ void lazy_far_apply_sources_cached(
  * Outputs via scratch: sketch_storage = Y (d x n, column-major),
  * streamed_sketch_rows = d, streamed_sketch_valid = true, and
  * workspace_rows/workspace_cols = (m, n) for bookkeeping.
+ *
+ * H2_ID_proxy 2: the adaptive far rows are selected against Y with
+ * tolerance id_tolerance (append_adaptive_id_training_rows) and appended to
+ * it unsketched; streamed_sketch_rows and workspace_rows count them, and
+ * scratch.id_adaptive says what the selection did.
  */
 
 
@@ -8316,9 +8349,11 @@ void gather_id_target_streamed(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
-    bool on_boundary) {
+    bool on_boundary,
+    double id_tolerance) {
 
     scratch.streamed_sketch_valid = false;
+    scratch.id_adaptive = IDAdaptiveStats{};
 
     if (box == nullptr || box->num_points == 0) {
         scratch.workspace_rows = 0;
@@ -9017,9 +9052,18 @@ void gather_id_target_streamed(
         }
     }
 
-    scratch.workspace_rows = total_rows;
+    // Adaptive far rows (H2_ID_proxy 2), selected against the sketch: Y
+    // stands for the rows it sketches (the same Frobenius norm in
+    // expectation), and the selected rows, kernel rows beyond the ID
+    // neighborhood that no Schur update reaches, are appended to it unsketched.
+    int64_t sketch_rows = d;
+    append_adaptive_id_training_rows(
+        tree, box, kernel, id_tolerance, true,
+        scratch.sketch_storage, sketch_rows, n, &scratch.id_adaptive);
+
+    scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
-    scratch.streamed_sketch_rows = d;
+    scratch.streamed_sketch_rows = sketch_rows;
     scratch.streamed_sketch_valid = true;
 }
 
@@ -9236,7 +9280,20 @@ void compute_and_modify(
             " n=" + std::to_string(box->num_points) +
             " k=" + std::to_string(box->skeleton_indices.size()) +
             " wave=" + std::to_string(wave_it == level.elimination_wave.end() ? -1 : wave_it->second) +
-            " |" + scratch.id_trace);
+            " |" + scratch.id_trace + h2_id_adaptive_trace(scratch.id_adaptive));
+    } else if (h2_id_trace_enabled() && scratch.id_adaptive.active) {
+        // the materialized target (H2_ID_proxy 2 without the streamed sketch)
+        auto wave_it = level.elimination_wave.find(box->morton_index);
+        h2_id_trace_write(
+            "L" + std::to_string(level.level) +
+            " m=" + std::to_string(box->morton_index) +
+            " local=" + std::to_string(level.find_local_box(box->morton_index) != nullptr) +
+            " ob=" + std::to_string(box->on_boundary) +
+            " n=" + std::to_string(box->num_points) +
+            " k=" + std::to_string(box->skeleton_indices.size()) +
+            " wave=" + std::to_string(wave_it == level.elimination_wave.end() ? -1 : wave_it->second) +
+            " | rows=" + std::to_string(workspace_rows) + " materialized" +
+            h2_id_adaptive_trace(scratch.id_adaptive));
     }
     
     int64_t k = box->skeleton_indices.size();

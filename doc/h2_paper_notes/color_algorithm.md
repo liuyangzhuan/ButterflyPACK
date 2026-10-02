@@ -257,9 +257,16 @@ processed concurrently, not necessarily by all OpenMP workers.
 ### 5.5 Current applicability
 
 Streamed sketching is active on both Color and CA levels for the symmetric
-non-Hermitian path above level 1.  Adaptive proxy selection
-(`H2_ID_proxy=2`) currently uses the materialized route because its selected
-row set is constructed adaptively before sketching.
+non-Hermitian path above level 1.
+
+Adaptive proxy selection (`H2_ID_proxy=2`) runs on the streamed sketch: the
+adaptive rows are selected against `Y_B` in place of the materialized target
+(the base ID, the residuals of the sampled far rows and the reference norm
+all use `Y_B`, whose Frobenius norm equals the target's in expectation), and
+the selected rows are appended to `Y_B` unsketched before the final ID.  They
+are kernel rows beyond the ID neighborhood, which no Schur update reaches, so
+they need no lazy fill.  With `H2_use_sketch=0` or `1` the selection still
+uses the materialized target (and requires `H2_lazy_schur=0`).
 
 ## 6. Lazy Schur Modes
 

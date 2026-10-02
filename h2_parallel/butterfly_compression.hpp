@@ -181,15 +181,20 @@ void h2_skeletonize_box(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     double tolerance,
-    bool use_sketch) {
+    int use_sketch) {
 
+    // Adaptive ID rows (H2_ID_proxy 2) with H2_use_sketch 2: selected against
+    // the sketch of the ring rows and appended to it unsketched, as the
+    // factorization's streamed sketch does (and the device); otherwise
+    // against the materialized target, which is then sketched or not.
+    const bool adaptive_on_sketch = use_sketch == 2 && tree->id_proxy_mode == 2;
     FactorizationThreadScratch<CoordType, DataType> scratch;
     gather_id_workspace(
         tree,
         box, level, kernel, tolerance,
         static_cast<const CoordType*>(nullptr), 0, CoordType{0}, true,
         scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,
-        0, box->on_boundary);
+        0, box->on_boundary, false, &scratch.id_adaptive, !adaptive_on_sketch);
 
     if (scratch.workspace_cols == 0) {
         box->skeleton_indices.clear();
@@ -235,7 +240,18 @@ void h2_skeletonize_box(
         trace_tail = tail.str();
     }
     IDResult<DataType> id;
-    if (use_sketch) {
+    if (adaptive_on_sketch) {
+        const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
+        const int64_t d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
+        scratch.sketch_storage.assign(static_cast<size_t>(d * n), DataType{});
+        sketch_sparse_random(scratch.workspace.data(), m, n, m, scratch.sketch_storage.data(), d, d,
+                             std::min<int>(sketch_nonzeros, static_cast<int>(d)),
+                             static_cast<uint64_t>(box->morton_index + 1));
+        int64_t rows = d;
+        append_adaptive_id_training_rows(tree, box, kernel, tolerance, true, scratch.sketch_storage, rows, n,
+                                         &scratch.id_adaptive);
+        id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0);
+    } else if (use_sketch) {
         id = compute_id_sparse_sketch(
             scratch.workspace.data(), scratch.sketch_storage,
             scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
@@ -252,7 +268,8 @@ void h2_skeletonize_box(
         h2_id_trace_write("L" + std::to_string(box->level) + " m=" + std::to_string(box->morton_index) +
                           " local=1 ob=" + std::to_string(box->on_boundary) +
                           " n=" + std::to_string(box->num_points) +
-                          " k=" + std::to_string(id.skeleton_indices.size()) + " wave=-1" + trace_tail);
+                          " k=" + std::to_string(id.skeleton_indices.size()) + " wave=-1" + trace_tail +
+                          h2_id_adaptive_trace(scratch.id_adaptive));
     }
 
     box->skeleton_indices = std::move(id.skeleton_indices);
@@ -492,7 +509,7 @@ void hierarchical_compression_parallel(
     double tolerance,
     int64_t* out_rankmax,
     size_t* memory_per_rank,
-    bool use_sketch,
+    int use_sketch,  // H2_use_sketch
     bool verbose = true) {
 
     const int rank = tree->mpi_rank;
@@ -512,7 +529,9 @@ void hierarchical_compression_parallel(
     if (color_gpu_enabled()) {
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
-        gpu_ids = gpu_blocks && use_sketch &&
+        // (adaptive ID rows, H2_ID_proxy 2: on the device when they are
+        // selected against the sketch, H2_use_sketch 2)
+        gpu_ids = gpu_blocks && use_sketch && (tree->id_proxy_mode != 2 || use_sketch == 2) &&
                   gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
         // the application's evaluator before its first use (not in the

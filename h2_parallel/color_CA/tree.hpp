@@ -212,6 +212,20 @@ struct PendingSolveUpdates {
     std::unordered_map<int64_t, std::vector<DataType>> skel_updates;
 };
 
+// What the adaptive ID training (H2_ID_proxy 2) did for one box: spatial
+// nodes sampled, far rows evaluated (samples, then hold-out rows), rows
+// added to the ID target, IDs of the target after the first, and IDs of
+// residuals.
+struct IDAdaptiveStats {
+    int64_t frames = 0;
+    int64_t sampled = 0;
+    int64_t holdout = 0;
+    int64_t appended = 0;
+    int64_t recomputes = 0;
+    int64_t extra_ids = 0;
+    bool active = false;
+};
+
 template <typename CoordType, typename DataType>
 struct FactorizationThreadScratch {
     std::vector<DataType> workspace;
@@ -220,6 +234,7 @@ struct FactorizationThreadScratch {
     int64_t workspace_rows = 0;
     int64_t workspace_cols = 0;
     std::string id_trace;  // BPACK_TRACE=id: ID-target description of the current box
+    IDAdaptiveStats id_adaptive;  // H2_ID_proxy 2: the adaptive rows of the current box
 
     std::vector<DataType> x_bb;
     std::vector<int64_t> neighbor_point_counts;

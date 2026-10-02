@@ -10,6 +10,8 @@
 //           pivoted QR.  Skeleton, redundant and T go to the box as
 //           h2_skeletonize_box leaves them.  A box the device cannot sketch
 //           (sketch too large for the packed lists) is left to the caller.
+//           Adaptive rows (H2_ID_proxy 2 with H2_use_sketch 2) are selected
+//           against the sketches on the device (adaptive_rows.hpp).
 //   blocks  the coupling block K(skeleton t, skeleton s) of every local
 //           target t and source s of its interaction list, and at the leaf
 //           level the near block K(points t, points s), evaluated on the
@@ -21,6 +23,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "adaptive_rows.hpp"
 #include "device_heap.hpp"
 #include "device_kernels.hpp"
 #include "evaluator.hpp"
@@ -67,7 +70,7 @@ inline CompressionStats& compression_stats() {
 
 // The device covers the compression of this tree: a registered device form
 // of the kernel for the data type, and 3D.  Its IDs also need
-// device_sketch_supported (no adaptive training rows).
+// device_sketch_supported.
 template<typename CoordType, typename DataType, typename KernelType>
 bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const KernelType* kernel,
                            std::string* reason) {
@@ -152,6 +155,8 @@ public:
         training_slot0_ = static_cast<int>(slots);
         slots += static_cast<int64_t>(training.size());
         if (slots >= std::numeric_limits<int>::max()) throw std::runtime_error("device compression: too many points");
+        slots_ = slots;
+        scratch_slot0_ = scratch_slots_ = 0;
         std::vector<double> xyz(nd * static_cast<size_t>(slots));
         std::vector<int64_t> ids(static_cast<size_t>(slots), 0);
         for (const auto& box : level.local_boxes) {
@@ -196,6 +201,50 @@ public:
         bytes_ = static_cast<double>(xyz.size() * sizeof(double) + ids.size() * sizeof(int64_t));
     }
 
+    // Scratch slots (consecutive, from the returned one) for the points with
+    // these global indices, until the next call: the far points a round of
+    // the adaptive ID rows samples.  A larger region is taken at the table's
+    // end; the slots in use keep their places.
+    int place(const std::vector<int64_t>& global_ids, const std::vector<CoordType>* global_coords,
+              cudaStream_t stream) {
+        const int64_t count = static_cast<int64_t>(global_ids.size());
+        const int64_t nd = dim_;
+        DeviceHeap& heap = DeviceHeap::instance();
+        if (count > scratch_slots_) {
+            const int64_t extra = count + count / 2, total = slots_ + extra;
+            if (total >= std::numeric_limits<int>::max()) throw std::runtime_error("device compression: too many points");
+            double* xyz_new = heap.alloc_resident<double>(static_cast<size_t>(std::max<int64_t>(nd * total, 1)) * sizeof(double));
+            int64_t* ids_new = heap.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+            check_cuda(cudaMemcpyAsync(xyz_new, xyz_, static_cast<size_t>(nd * slots_) * sizeof(double),
+                                       cudaMemcpyDeviceToDevice, stream), "compression points");
+            check_cuda(cudaMemcpyAsync(ids_new, d_ids_, static_cast<size_t>(slots_) * sizeof(int64_t),
+                                       cudaMemcpyDeviceToDevice, stream), "compression ids");
+            heap.free(xyz_);  // later launches are ordered after the copies
+            heap.free(d_ids_);
+            xyz_ = xyz_new;
+            d_ids_ = ids_new;
+            scratch_slot0_ = static_cast<int>(slots_);
+            scratch_slots_ = static_cast<int>(extra);
+            slots_ = total;
+        }
+        // (an evaluator that reads only the ids needs no coordinates)
+        scratch_xyz_.assign(static_cast<size_t>(nd * count), 0.0);
+        if (global_coords != nullptr) {
+            for (int64_t i = 0; i < count; ++i) {
+                for (int64_t d = 0; d < nd; ++d) {
+                    scratch_xyz_[static_cast<size_t>(nd * i + d)] = static_cast<double>(
+                        (*global_coords)[static_cast<size_t>(nd * global_ids[static_cast<size_t>(i)] + d)]);
+                }
+            }
+        }
+        check_cuda(cudaMemcpyAsync(xyz_ + nd * static_cast<int64_t>(scratch_slot0_), scratch_xyz_.data(),
+                                   scratch_xyz_.size() * sizeof(double), cudaMemcpyHostToDevice, stream), "sampled points");
+        check_cuda(cudaMemcpyAsync(d_ids_ + scratch_slot0_, global_ids.data(), global_ids.size() * sizeof(int64_t),
+                                   cudaMemcpyHostToDevice, stream), "sampled ids");
+        bytes_ += static_cast<double>(scratch_xyz_.size() * sizeof(double) + global_ids.size() * sizeof(int64_t));
+        return scratch_slot0_;
+    }
+
     const Entry* find(int64_t morton) const {
         auto it = entries_.find(morton);
         return it == entries_.end() ? nullptr : &it->second;
@@ -218,6 +267,9 @@ private:
     int64_t* d_ids_ = nullptr;
     int training_slot0_ = 0;
     int dim_ = 3;
+    int64_t slots_ = 0;
+    int scratch_slot0_ = 0, scratch_slots_ = 0;
+    std::vector<double> scratch_xyz_;  // (place's host coordinates, reused)
     double bytes_ = 0.0;
 };
 
@@ -373,7 +425,14 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         return align_up(draws * I) + align_up(static_cast<size_t>(p.rows) * I) + align_up((kSketchOwners + 1) * I) +
                align_up(draws * I) + align_up(hist_ints * I);
     };
-    auto y_bytes = [&](const Plan& p) { return align_up(static_cast<size_t>(p.d) * p.n * D); };
+    // adaptive ID rows (H2_ID_proxy 2): each sketch heads a taller block that
+    // the selected far rows join, and the ID runs in a copy of it
+    using Selector = AdaptiveRowSelector<CoordType, DataType>;
+    const bool adaptive = tree->id_proxy_mode == 2;
+    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.n) : p.d; };
+    auto y_bytes = [&](const Plan& p) {
+        return (adaptive ? 2 : 1) * align_up(static_cast<size_t>(y_ld(p)) * p.n * D);
+    };
     MetaBuilder& meta = pinned_pool().meta;
     DeviceBuffer meta_device;
     const size_t budget = compression_detail::chunk_budget();
@@ -442,7 +501,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             S* Y = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
             OrderedSketchItemT<S> item{};
             item.out = Y;
-            item.ldo = p.d;
+            item.ldo = y_ld(p);
             item.d = p.d;
             item.ncols = p.n;
             item.rows = static_cast<int>(p.rows);
@@ -457,9 +516,41 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                              reinterpret_cast<int*>(d_id + id_rank) + i, reinterpret_cast<double*>(d_id + id_norm) + i,
                              reinterpret_cast<int*>(d_id + id_flag) + i};
         }
+        std::unique_ptr<Selector> selector;
+        if (adaptive) {
+            id_items.clear();  // the selector computes the IDs
+            typename Selector::Hooks hooks;
+            hooks.place_points = [&](const std::vector<int64_t>& ids, cudaStream_t s) {
+                return points.place(ids, have_coords ? &tree->id_source_point_coords : nullptr, s);
+            };
+            // the rows of the sampled points (the application's evaluator)
+            hooks.eval = [&](const std::vector<EvalItemT<S>>& items, MetaBuilder&, const char* image, size_t offset,
+                             int max_m, int max_n_items, cudaStream_t s) {
+                evaluator.eval<S>(items, reinterpret_cast<const EvalItemT<S>*>(image + offset), max_m, max_n_items,
+                                  image, points.table(), s);
+            };
+            selector = std::make_unique<Selector>(tree, tolerance, heap, std::move(hooks));
+            std::vector<typename Selector::Target> targets(static_cast<size_t>(count));
+            for (int i = 0; i < count; ++i) {
+                const Plan& p = plans[c0 + static_cast<size_t>(i)];
+                typename Selector::Target& target = targets[static_cast<size_t>(i)];
+                target.box = &level.local_boxes[static_cast<size_t>(p.box)];
+                target.n = p.n;
+                target.cols.base = p.slot;
+                target.w = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
+                target.cap = y_ld(p);
+                target.f = target.w + align_up(static_cast<size_t>(target.cap) * p.n * D) / D;
+                target.jpvt = reinterpret_cast<int*>(d_id + id_jpvt[static_cast<size_t>(i)]);
+                target.rank = reinterpret_cast<int*>(d_id + id_rank) + i;
+                target.norm = reinterpret_cast<double*>(d_id + id_norm) + i;
+                target.flag = reinterpret_cast<int*>(d_id + id_flag) + i;
+            }
+            selector->start(std::move(targets));
+        }
         const size_t off_list_items = meta.append(list_items);
         const size_t off_rows = meta.append(row_items);
         const size_t off_id = meta.append(id_items);
+        if (adaptive) selector->plan(meta);  // its first round: the IDs of the sketches, the root nodes
         stats.id_plan += std::chrono::duration<double>(clock::now() - tc).count();
 
         const auto td = clock::now();
@@ -470,13 +561,32 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         // (the row slots are the sketch lists' output: read on the device)
         evaluator.sketch_rows<S>(row_items, reinterpret_cast<const OrderedSketchItemT<S>*>(md + off_rows), max_d, max_n,
                                  points.table(), stream);
-        char* d_qrcp_work = nullptr;
-        if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
-        launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance, d_qrcp_work, stream);
-        heap.free(d_qrcp_work);
         std::vector<char> h_id(id_bytes);
-        check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
-        check_cuda(cudaStreamSynchronize(stream), "compression ids");
+        if (adaptive) {
+            // rounds until every box has its rows and its final ID
+            std::vector<char> h_status(std::max<size_t>(selector->status_bytes(), 1));
+            for (bool first = true; first || selector->active(); first = false) {
+                if (!first) {
+                    meta.clear();
+                    selector->plan(meta);
+                    md = meta.upload(meta_device, stream);
+                    stats.bytes_up += static_cast<double>(meta.size());
+                }
+                selector->launch(md, stream);
+                check_cuda(cudaMemcpyAsync(h_status.data(), selector->status(), selector->status_bytes(),
+                                           cudaMemcpyDeviceToHost, stream), "adaptive ID rows");
+                check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
+                check_cuda(cudaStreamSynchronize(stream), "adaptive ID rows");
+                selector->finish(h_status.data());
+            }
+        } else {
+            char* d_qrcp_work = nullptr;
+            if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
+            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance, d_qrcp_work, stream);
+            heap.free(d_qrcp_work);
+            check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
+            check_cuda(cudaStreamSynchronize(stream), "compression ids");
+        }
         const int* ranks = reinterpret_cast<const int*>(h_id.data() + id_rank);
         const int* flags = reinterpret_cast<const int*>(h_id.data() + id_flag);
         const double* norms = reinterpret_cast<const double*>(h_id.data() + id_norm);
@@ -501,8 +611,11 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             off_t[static_cast<size_t>(i)] = t_bytes;
             t_bytes = align_up(t_bytes + static_cast<size_t>(K) * R * D);
             if (R > 0) {
-                S* Y = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
-                gathers.push_back(GatherItemT<S>{nullptr, K, K, R, Y + static_cast<size_t>(K) * p.d, 1, p.d,
+                // (adaptive rows: T is in the block of the box's last ID)
+                const S* Y = adaptive ? selector->id_factor(static_cast<size_t>(i))
+                                      : reinterpret_cast<const S*>(block + off_y[static_cast<size_t>(i)]);
+                const int ld = adaptive ? selector->id_ld(static_cast<size_t>(i)) : p.d;
+                gathers.push_back(GatherItemT<S>{nullptr, K, K, R, Y + static_cast<size_t>(K) * ld, 1, ld,
                                                  IndexList{}, IndexList{}});
                 max_tm = std::max(max_tm, K);
                 max_tn = std::max(max_tn, R);
@@ -561,6 +674,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             if (trace) {
                 std::ostringstream tail;
                 tail << std::setprecision(10) << " | rows=" << p.rows << " d=" << p.d << " sketch_norm=" << norms[i];
+                if (adaptive) tail << h2_id_adaptive_trace(selector->stats(static_cast<size_t>(i)));
                 h2_id_trace_write("L" + std::to_string(box.level) + " m=" + std::to_string(box.morton_index) +
                                   " local=1 ob=" + std::to_string(box.on_boundary) + " n=" + std::to_string(n) +
                                   " k=" + std::to_string(K) + " wave=-1" + tail.str());

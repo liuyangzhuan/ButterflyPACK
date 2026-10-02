@@ -203,10 +203,6 @@ static butterfly::ProgramOptions read_h2_program_options64(
   if (H2_lazy_schur != 0 && H2_use_sketch != 2) {
     throw std::invalid_argument("H2_lazy_schur requires H2_use_sketch=2");
   }
-  if (H2_lazy_schur != 0 && H2_ID_proxy == 2) {
-    throw std::invalid_argument(
-        "H2_lazy_schur is not yet compatible with H2_ID_proxy=2");
-  }
   if (H2_ID_radius < 2) {
     throw std::invalid_argument("H2_ID_radius must be at least 2");
   }
@@ -1222,10 +1218,6 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_lazy_schur != 0 && H2_use_sketch != 2) {
         throw std::invalid_argument(
             "H2_lazy_schur requires H2_use_sketch=2");
-      }
-      if (H2_lazy_schur != 0 && H2_ID_proxy == 2) {
-        throw std::invalid_argument(
-            "H2_lazy_schur is not yet compatible with H2_ID_proxy=2");
       }
       if (H2_ID_radius < 2) {
         throw std::invalid_argument("H2_ID_radius must be at least 2");

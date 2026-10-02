@@ -270,7 +270,7 @@ void hierarchical_compression_unstructured(
     double tolerance,
     int64_t* out_rankmax,
     size_t* memory_per_rank,
-    bool use_sketch,
+    int use_sketch,  // H2_use_sketch
     bool verbose,
     const OccupiedTopology& occupied_topology) {
 
@@ -292,7 +292,9 @@ void hierarchical_compression_unstructured(
     if (color_gpu_enabled()) {
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
-        gpu_ids = gpu_blocks && use_sketch &&
+        // (adaptive ID rows, H2_ID_proxy 2: on the device when they are
+        // selected against the sketch, H2_use_sketch 2)
+        gpu_ids = gpu_blocks && use_sketch && (tree->id_proxy_mode != 2 || use_sketch == 2) &&
                   gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
         // the application's evaluator before its first use (not in the

@@ -42,6 +42,9 @@ struct DriverOptions {
   int reclr_leaf = -1;  // -1: the library default
   int hodlr_gpu_pieces = -1;  // -1: the library default
   int baca_batch = -1;
+  int h2_id_radius = -1;  // -1: the library default
+  int h2_id_proxy = -1;
+  int h2_id_proxy_points = -1;
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
   int h2_ca_owner_serial = 0;
@@ -204,6 +207,12 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.hodlr_gpu_pieces = parse_int(value, "HODLR_gpu_pieces");
     } else if (name == "baca_batch") {
       options.baca_batch = parse_int(value, "BACA_Batch");
+    } else if (name == "h2_id_radius") {
+      options.h2_id_radius = parse_int(value, "H2_ID_radius");
+    } else if (name == "h2_id_proxy") {
+      options.h2_id_proxy = parse_int(value, "H2_ID_proxy");
+    } else if (name == "h2_id_proxy_points") {
+      options.h2_id_proxy_points = parse_int(value, "H2_ID_proxy_points");
     } else if (name == "h2_ca_staged_halo") {
       options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
     } else if (name == "h2_ca_owner_component") {
@@ -373,7 +382,10 @@ void print_usage(const char* executable) {
       << "  --HODLR_use_gpu <0|1|2>\n"
       << "  --HODLR_gpu_pieces <n>   (pieces per rank of a shared HODLR block on the GPU; default 4)\n"
       << "  --RecLR_leaf <n>   (low-rank compression of HODLR blocks; 5: BACA without overlap)\n"
-      << "  --BACA_Batch <n>\n"
+      << "  --BACA_Batch <n>   (also the rows sampled per spatial node with --H2_ID_proxy 2)\n"
+      << "  --H2_ID_radius <n>   (ID neighborhood radius; default 2)\n"
+      << "  --H2_ID_proxy <0|1|2>   (0: none, 1: geometric surface, 2: adaptive row sampling; needs --distributed64 0)\n"
+      << "  --H2_ID_proxy_points <n>   (surface samples of --H2_ID_proxy 1)\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_owner_serial <0|1>\n"
@@ -728,6 +740,19 @@ int main(int argc, char** argv) {
     if (driver_options.baca_batch > 0) {
       d_c_bpack_set_I_option(
           &resources.option, "BACA_Batch", driver_options.baca_batch);
+    }
+    if (driver_options.h2_id_radius >= 0) {
+      d_c_bpack_set_I_option(
+          &resources.option, "H2_ID_radius", driver_options.h2_id_radius);
+    }
+    if (driver_options.h2_id_proxy >= 0) {
+      d_c_bpack_set_I_option(
+          &resources.option, "H2_ID_proxy", driver_options.h2_id_proxy);
+    }
+    if (driver_options.h2_id_proxy_points >= 0) {
+      d_c_bpack_set_I_option(
+          &resources.option, "H2_ID_proxy_points",
+          driver_options.h2_id_proxy_points);
     }
     d_c_bpack_set_I_option(
         &resources.option, "H2_CA_staged_halo",

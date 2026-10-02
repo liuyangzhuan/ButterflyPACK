@@ -163,7 +163,8 @@ using TransposeItem = TransposeItemT<double>;
 // in place (device_id.cu).  On exit: rank K; jpvt, the n column indices with
 // the skeleton first; T = R11^{-1} R12 in rows 0..K-1 of columns K..n-1 (for
 // K = 0, row 0 of columns 1..n-1 is zero); norm, the Frobenius norm of the
-// input; flag 1 for a non-finite input, 2 for a non-finite T.
+// input; flag 1 for a non-finite input, 2 for a non-finite T.  tol >= 0: the
+// item's own rank tolerance instead of the launch's.
 template<typename T>
 struct QrcpItemT {
     T* a;
@@ -174,6 +175,7 @@ struct QrcpItemT {
     int* rank;
     double* norm;
     int* flag;
+    double tol = -1.0;
 };
 using QrcpItem = QrcpItemT<double>;
 

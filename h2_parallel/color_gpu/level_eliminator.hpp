@@ -37,6 +37,7 @@
 
 #ifdef H2_HAVE_GPU
 
+#include "adaptive_rows.hpp"
 #include "device_heap.hpp"
 #include "device_kernels.hpp"
 #include "device_solve.hpp"
@@ -83,6 +84,9 @@ struct EliminatorStats {
     double finish_sources = 0.0;  // level end: wait for the background copies
     double finish_store = 0.0;    // background copier: busy time (overlapped)
     double copier_wait = 0.0;     //   ... of which waiting for device chunks
+    double sk_adaptive = 0.0;     // adaptive ID rows (H2_ID_proxy 2): the rounds after the first (host time)
+    int64_t adaptive_rounds = 0;  //   ... rounds of all waves; boxes that took more than one node
+    int64_t adaptive_multi = 0;
     double id = 0.0;          // host ID (and host sketch without the device sketch)
     double id_loop = 0.0;     //   ... device ID: its per-box store loop
     double plan = 0.0;        // host planning and metadata
@@ -650,6 +654,7 @@ private:
     }
     bool eliminated_any_ = false;  // a wave ran (the transition may need fill sources)
     char* wave_sketch_ = nullptr;  // sketches of the current wave; T in place after the device ID
+    std::vector<char*> wave_sketch_extra_;  // ... blocks of boxes whose ID target grew (adaptive rows)
     std::unique_ptr<HostCopier> copier_;  // background copies of the factors into BoxData
     // device exchange: host copies of the received generators, apart from the
     // wave downloads so the receive buffers return to the exchange arena early
@@ -662,6 +667,11 @@ private:
     PointTable points_;
     int64_t num_slots_ = 0;                            // point slots: local, training, then remote
     int training_slot0_ = 0;                           // first slot of the static ID training points
+    // slots for the far points an adaptive round samples (H2_ID_proxy 2),
+    // rewritten every round; a larger region is taken at the table's end
+    int scratch_slot0_ = 0, scratch_slots_ = 0;
+    std::vector<double> scratch_xyz_;
+    int place_scratch_points(const std::vector<int64_t>& global_ids, cudaStream_t stream);
     double* d_xyz_ = nullptr;
     int64_t* d_ids_ = nullptr;
     std::vector<int64_t> last_wave_;                   // boxes of the last wave (their generators)
@@ -1132,7 +1142,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
             try {
                 Box* box = writable_box(wave[static_cast<size_t>(bi)]);
                 if (box == nullptr) throw std::runtime_error("LevelEliminator: wave box is not local");
-                gather_id_target_streamed(tree_, box, level_, kernel_, scratch, box->on_boundary);
+                gather_id_target_streamed(tree_, box, level_, kernel_, scratch, box->on_boundary, tolerance_);
                 if (!scratch.streamed_sketch_valid) {
                     throw std::runtime_error("LevelEliminator: streamed sketch unavailable for box " +
                                              std::to_string(box->morton_index));
@@ -1154,7 +1164,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
                         " n=" + std::to_string(box->num_points) +
                         " k=" + std::to_string(box->skeleton_indices.size()) +
                         " wave=" + std::to_string(wave_it == level_.elimination_wave.end() ? -1 : wave_it->second) +
-                        " |" + scratch.id_trace);
+                        " |" + scratch.id_trace + h2_id_adaptive_trace(scratch.id_adaptive));
                 }
                 WaveBox& wb = boxes[static_cast<size_t>(bi)];
                 wb.box = box;
@@ -1220,6 +1230,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         char* lists_block = nullptr;
         std::string trace;
         S* Y = nullptr;        // d x n
+        int ldy = 0;           // its leading dimension: d, or the room for the adaptive rows (H2_ID_proxy 2)
         size_t off_y = 0;
         int fill_rank = 0;          // sum of the sources' r
         S* W = nullptr;        // d x fill_rank: [W_E1 W_E2 ...]
@@ -1372,16 +1383,22 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     ++wave_stamp_;
     meta_.clear();
     const size_t D = sizeof(S);
+    // adaptive ID rows (H2_ID_proxy 2): each sketch heads a taller block that
+    // the selected far rows join, and the ID runs in a copy (d_f)
+    using Selector = AdaptiveRowSelector<CoordType, DataType>;
+    const bool adaptive = tree_->id_proxy_mode == 2;
     size_t y_bytes = 0;
     for (Plan& p : plans) {
         p.off_y = y_bytes;
-        y_bytes = align_up(y_bytes + static_cast<size_t>(p.d) * p.n * D);
+        p.ldy = adaptive ? Selector::first_capacity(tree_, p.n) : p.d;
+        y_bytes = align_up(y_bytes + static_cast<size_t>(p.ldy) * p.n * D);
         for (Source& src : p.sources) {
             src.offset = p.fill_rank;
             p.fill_rank += src.state->r;
         }
     }
     char* d_y = heap_.alloc(std::max<size_t>(y_bytes, 1));
+    char* d_f = adaptive ? heap_.alloc(std::max<size_t>(y_bytes, 1)) : nullptr;
     std::vector<char*> fill_blocks;  // per box [P; W] and lists, freed after the sketch
     std::vector<SketchListsItem> list_items;
     std::vector<SourceListsItem> source_list_items;
@@ -1461,7 +1478,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             p.Y = reinterpret_cast<S*>(d_y + p.off_y);
             OrderedSketchItem item{};
             item.out = p.Y;
-            item.ldo = p.d;
+            item.ldo = p.ldy;
             item.d = p.d;
             item.ncols = p.n;
             item.rows = static_cast<int>(p.total_rows);
@@ -1503,7 +1520,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             // Y -= [W_E1 W_E2 ...] [P_E1; P_E2; ...]: all sources of the box
             // in one product (the host applies them one by one; the sum is
             // the same up to rounding)
-            fill_batch.entries.push_back({p.W, p.P, p.Y, p.d, p.n, p.fill_rank, p.d, p.fill_rank, p.d});
+            fill_batch.entries.push_back({p.W, p.P, p.Y, p.d, p.n, p.fill_rank, p.d, p.fill_rank, p.ldy});
         }
     }
     // device ID: rank, flag, norm and pivots of every box, in one small block
@@ -1520,8 +1537,36 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     }
     char* d_id = heap_.alloc_resident(std::max<size_t>(id_bytes, 1));  // pivots: the level's skeleton lists
     level_allocs_.push_back(d_id);  // its pivots are the device skeleton lists
-    std::vector<QrcpItem> id_items(plans.size());
-    for (size_t bi = 0; bi < plans.size(); ++bi) {
+    std::vector<QrcpItem> id_items(adaptive ? 0 : plans.size());
+    std::unique_ptr<Selector> selector;
+    if (adaptive) {
+        typename Selector::Hooks hooks;
+        hooks.place_points = [this](const std::vector<int64_t>& ids, cudaStream_t s) {
+            return place_scratch_points(ids, s);
+        };
+        hooks.eval = [this](const std::vector<EvalItem>& items, MetaBuilder& meta, const char* image, size_t offset,
+                            int max_m, int max_n, cudaStream_t s) {
+            eval_blocks(items, meta, image, offset, max_m, max_n, s);
+        };
+        selector = std::make_unique<Selector>(tree_, tolerance_, heap_, std::move(hooks));
+        std::vector<typename Selector::Target> targets(plans.size());
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            const Plan& p = plans[bi];
+            typename Selector::Target& target = targets[bi];
+            target.box = writable_box(wave[bi]);
+            target.n = p.n;
+            target.cols.base = state_of(wave[bi]).slot;
+            target.w = p.Y;
+            target.f = reinterpret_cast<S*>(d_f + p.off_y);
+            target.cap = p.ldy;
+            target.jpvt = reinterpret_cast<int*>(d_id + id_jpvt[bi]);
+            target.rank = reinterpret_cast<int*>(d_id + id_rank) + bi;
+            target.norm = reinterpret_cast<double*>(d_id + id_norm) + bi;
+            target.flag = reinterpret_cast<int*>(d_id + id_flag) + bi;
+        }
+        selector->start(std::move(targets));
+    }
+    for (size_t bi = 0; bi < id_items.size(); ++bi) {
         const Plan& p = plans[bi];
         id_items[bi] = QrcpItem{p.Y, p.d, p.n, p.d, reinterpret_cast<int*>(d_id + id_jpvt[bi]),
                                 reinterpret_cast<int*>(d_id + id_rank) + bi, reinterpret_cast<double*>(d_id + id_norm) + bi,
@@ -1534,6 +1579,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const size_t off_id = meta_.append(id_items);
     p_batch.stage(meta_);
     fill_batch.stage(meta_);
+    if (adaptive) selector->plan(meta_);  // its first round: the IDs of the sketches, the root nodes
 
     // ---- launches, then Y to the host
     stats.sk_meta += std::chrono::duration<double>(clock::now() - t_gpu).count();
@@ -1557,15 +1603,24 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     marks.mark(stream);
     fill_batch.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
     marks.mark(stream);
-    char* d_qrcp_work = nullptr;
-    if (const size_t w = qrcp_work_bytes<S>(static_cast<int>(id_items.size()), max_id_n)) d_qrcp_work = heap_.alloc(w);
-    launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
-                tolerance_, d_qrcp_work, stream);  // (every launch variant gives the same bits)
-    heap_.free(d_qrcp_work);  // later launches are ordered after the ID
+    if (adaptive) {
+        selector->launch(md, stream);
+    } else {
+        char* d_qrcp_work = nullptr;
+        if (const size_t w = qrcp_work_bytes<S>(static_cast<int>(id_items.size()), max_id_n)) {
+            d_qrcp_work = heap_.alloc(w);
+        }
+        launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
+                    tolerance_, d_qrcp_work, stream);  // (every launch variant gives the same bits)
+        heap_.free(d_qrcp_work);  // later launches are ordered after the ID
+    }
     marks.mark(stream);
     // written by the SMs into mapped pinned memory: a copy-engine transfer
     // would queue behind the background downloads of the previous wave
-    char* h_id = static_cast<char*>(pinned_pool().result.reserve(std::max<size_t>(id_bytes, 256)));
+    const size_t status_bytes = adaptive ? selector->status_bytes() : 0;
+    char* h_status = static_cast<char*>(pinned_pool().result.reserve(std::max<size_t>(status_bytes + id_bytes, 256)));
+    char* h_id = h_status + status_bytes;
+    if (adaptive) launch_copy_bytes(h_status, selector->status(), status_bytes, stream);
     launch_copy_bytes(h_id, d_id, id_bytes, stream);
     marks.mark(stream);
     {
@@ -1583,8 +1638,38 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     stats.sk_download += marks.seconds(6);
     stats.bytes_down += static_cast<double>(id_bytes);
     for (char* fill : fill_blocks) heap_.free(fill);
+    if (adaptive) {
+        // the boxes whose root node did not settle them: further rounds, each
+        // an image of its own (the sketch's is no longer read)
+        const auto ta = clock::now();
+        selector->finish(h_status);
+        while (selector->active()) {
+            ++wave_stamp_;
+            meta_.clear();
+            selector->plan(meta_);
+            md = meta_.upload(meta_device_, stream);
+            stats.bytes_up += static_cast<double>(meta_.size());
+            selector->launch(md, stream);
+            launch_copy_bytes(h_status, selector->status(), status_bytes, stream);
+            launch_copy_bytes(h_id, d_id, id_bytes, stream);
+            check_cuda(cudaStreamSynchronize(stream), "adaptive ID rows");
+            stats.bytes_down += static_cast<double>(status_bytes + id_bytes);
+            selector->finish(h_status);
+        }
+        stats.sk_adaptive += std::chrono::duration<double>(clock::now() - ta).count();
+        stats.adaptive_rounds += selector->rounds();
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            if (selector->stats(bi).frames > 1) ++stats.adaptive_multi;
+        }
+    }
     // d_id stays: its pivot arrays are the device skeleton lists of the boxes
-    wave_sketch_ = d_y;  // T lives here until the elimination has run
+    if (adaptive) {
+        heap_.free(d_y);        // the targets (their launches have run)
+        wave_sketch_ = d_f;     // T lives here until the elimination has run,
+        wave_sketch_extra_ = selector->take_factor_blocks();  // or in the block of a target that grew
+    } else {
+        wave_sketch_ = d_y;  // T lives here until the elimination has run
+    }
     stats.sketch_gpu += std::chrono::duration<double>(clock::now() - t_gpu).count();
     stats.sketch += std::chrono::duration<double>(clock::now() - t0).count();
 
@@ -1624,15 +1709,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             wb.n = n;
             wb.k = static_cast<int>(box->skeleton_indices.size());
             wb.r = static_cast<int>(box->redundant_indices.size());
-            wb.T = p.Y + static_cast<size_t>(wb.k) * p.d;  // R12 columns, solved in place
+            // R12 columns, solved in place (adaptive rows: in the ID's block)
+            S* factor = adaptive ? const_cast<S*>(selector->id_factor(static_cast<size_t>(bi))) : p.Y;
+            wb.ldt = adaptive ? selector->id_ld(static_cast<size_t>(bi)) : p.d;
+            wb.T = factor + static_cast<size_t>(wb.k) * wb.ldt;
             wb.state = &state_of(box->morton_index);
             wb.state->d_skeleton = K == n ? nullptr : reinterpret_cast<const int*>(d_id + id_jpvt[static_cast<size_t>(bi)]);
-            wb.ldt = p.d;
             if (trace) {
                 std::ostringstream tail;
                 tail << std::setprecision(10) << " | rows=" << p.total_rows << " d=" << p.d
                      << " sketch_norm=" << norms[bi] << " box_sources=";
                 for (const Source& src : p.sources) tail << src.morton << ',';
+                if (adaptive) tail << h2_id_adaptive_trace(selector->stats(static_cast<size_t>(bi)));
                 h2_id_trace_write(
                     "L" + std::to_string(level_.level) + " m=" + std::to_string(box->morton_index) +
                     " local=" + std::to_string(is_local(box->morton_index) ? 1 : 0) +
@@ -2494,6 +2582,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         heap_.free(wave_sketch_);
         wave_sketch_ = nullptr;
     }
+    for (char* p : wave_sketch_extra_) heap_.free(p);
+    wave_sketch_extra_.clear();
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
     stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
     return boundary_count;
@@ -2785,6 +2875,58 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         if (!assist.skel_indices.empty()) fresh_skeletons.emplace_back(&st, &assist.skel_indices);
     }
     set_remote_skeletons(fresh_skeletons);
+}
+
+// Far points sampled by a round of the adaptive ID rows (H2_ID_proxy 2), by
+// global index: their coordinates (the tree's global ones, dim per point; an
+// evaluator that reads only the ids needs none) and ids go to the scratch
+// slots, which a later round overwrites.  Returns the first slot.
+template<typename CoordType, typename DataType, typename KernelType>
+int LevelEliminator<CoordType, DataType, KernelType>::place_scratch_points(const std::vector<int64_t>& global_ids,
+                                                                           cudaStream_t stream) {
+    const int64_t count = static_cast<int64_t>(global_ids.size());
+    const int64_t dim = tree_->dimension;
+    if (count > scratch_slots_) {
+        // a larger table with a new scratch region at its end: the slots in
+        // use keep their places (the old region stays unused)
+        const int64_t slots = count + count / 2;
+        const int64_t total = num_slots_ + slots;
+        if (total >= std::numeric_limits<int>::max()) throw std::runtime_error("LevelEliminator: too many points per rank");
+        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double));
+        int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+        check_cuda(cudaMemcpyAsync(xyz_new, d_xyz_, static_cast<size_t>(dim * num_slots_) * sizeof(double),
+                                   cudaMemcpyDeviceToDevice, stream), "point table");
+        check_cuda(cudaMemcpyAsync(ids_new, d_ids_, static_cast<size_t>(num_slots_) * sizeof(int64_t),
+                                   cudaMemcpyDeviceToDevice, stream), "point table");
+        heap_.free(d_xyz_);  // later launches are ordered after the copies
+        heap_.free(d_ids_);
+        d_xyz_ = xyz_new;
+        d_ids_ = ids_new;
+        points_.xyz = xyz_new;
+        points_.ids = ids_new;
+        scratch_slot0_ = static_cast<int>(num_slots_);
+        scratch_slots_ = static_cast<int>(slots);
+        num_slots_ = total;
+    }
+    const auto& coords = tree_->id_source_point_coords;
+    const bool have_coords = coords.size() == static_cast<size_t>(tree_->num_points) * static_cast<size_t>(dim);
+    scratch_xyz_.assign(static_cast<size_t>(dim * count), 0.0);
+    if (have_coords) {
+        #pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < count; ++i) {
+            const size_t at = static_cast<size_t>(global_ids[static_cast<size_t>(i)]) * static_cast<size_t>(dim);
+            for (int64_t d = 0; d < dim; ++d) {
+                scratch_xyz_[static_cast<size_t>(dim * i + d)] = static_cast<double>(coords[at + static_cast<size_t>(d)]);
+            }
+        }
+    }
+    check_cuda(cudaMemcpyAsync(d_xyz_ + dim * static_cast<int64_t>(scratch_slot0_), scratch_xyz_.data(),
+                               scratch_xyz_.size() * sizeof(double), cudaMemcpyHostToDevice, stream), "sampled points");
+    check_cuda(cudaMemcpyAsync(d_ids_ + scratch_slot0_, global_ids.data(), global_ids.size() * sizeof(int64_t),
+                               cudaMemcpyHostToDevice, stream), "sampled ids");
+    eliminator_stats().bytes_up += static_cast<double>(scratch_xyz_.size() * sizeof(double) +
+                                                      global_ids.size() * sizeof(int64_t));
+    return scratch_slot0_;
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -4323,6 +4465,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
         heap_.free(wave_sketch_);
         wave_sketch_ = nullptr;
     }
+    for (char* p : wave_sketch_extra_) heap_.free(p);
+    wave_sketch_extra_.clear();
     if (adopt_) {
         for (auto& kv : adopt_->schur) heap_.free(kv.second.ptr);
         for (auto& kv : adopt_->edges) heap_.free(kv.second.ptr);

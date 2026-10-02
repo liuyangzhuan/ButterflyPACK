@@ -133,9 +133,10 @@ is useful only for interpretation.
 Important interactions in the current integration:
 
 1. `H2_use_sketch=2` is supported on both Color and CA levels.  It is enabled
-   for levels above level 1 when the matrix is symmetric non-Hermitian and
-   `H2_ID_proxy!=2`.  Adaptive proxy mode currently falls back to a
-   materialized target/sketch.
+   for levels above level 1 when the matrix is symmetric non-Hermitian.
+   Adaptive proxy mode (`H2_ID_proxy=2`) then selects its rows against the
+   streamed sketch; with `H2_use_sketch=0` or `1` it uses the materialized
+   target.
 2. A nonzero `H2_lazy_schur` requires `H2_use_sketch=2`.
 3. On a CA level, requested lazy mode 2 is intentionally reduced to mode 1;
    generated-near transport is not implemented in the CA path.

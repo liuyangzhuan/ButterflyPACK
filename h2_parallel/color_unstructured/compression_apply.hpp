@@ -630,6 +630,17 @@ void compressed_bicgstab(
                   << iterations_done
                   << " iterations, maximum relative residual="
                   << max_relative_residual << std::endl;
+#ifdef H2_HAVE_GPU
+        if (gpu::device_matvec_usable(tree)) {
+            const auto& m = gpu::matvec_stats();
+            std::printf("  GPU matvec (rank %d, %lld calls since the compression): %.2f s (upward %.2f, interactions and "
+                        "downward %.2f, near %.2f; of these, messages %.2f and host hand-offs %.2f; input/output "
+                        "transfers %.2f)\n",
+                        tree->mpi_rank, static_cast<long long>(m.calls), m.total, m.upward, m.coupling, m.near, m.mpi,
+                        m.host_handoff, m.transfer);
+            std::fflush(stdout);
+        }
+#endif
     }
 }
 

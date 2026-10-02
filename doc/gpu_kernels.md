@@ -272,11 +272,12 @@ Gaussian-process kernel).
   Other levels run on the host, with only the Schur-update pass on the GPU,
   and do not call the evaluator.
 - The interpolative decompositions sample the kernel against training
-  points. With static training rows from the whole tree (`H2_ID_radius` above
-  2, or `H2_ID_proxy 1`), an evaluator that reads coordinates needs the
-  coordinates of every point, which `H2_ID_proxy 1` keeps; otherwise those
-  levels sample on the host. Adaptive training rows (`H2_ID_proxy 2`) are
-  always sampled on the host.
+  points. With training rows from the whole tree (`H2_ID_radius` above 2,
+  `H2_ID_proxy 1`, or the adaptive rows of `H2_ID_proxy 2`, which the GPU
+  selects with `h2_use_sketch 2`), an evaluator that reads coordinates needs
+  the coordinates of every point, which `H2_ID_proxy 1` and, with
+  `H2_use_gpu`, `H2_ID_proxy 2` keep; otherwise those levels sample on the
+  host.
 
 ## First use
 
