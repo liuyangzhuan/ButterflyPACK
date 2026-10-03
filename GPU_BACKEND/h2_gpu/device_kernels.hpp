@@ -126,7 +126,6 @@ struct SketchListsItem {
     int* rows_out;          // rows
     int* ptr;               // kSketchOwners + 1
     int* entries;           // rows * sk
-    int* hist;              // 32 * kSketchOwners scratch
 };
 
 // One fill source of a box: destination lists of its stored rows.
@@ -136,7 +135,6 @@ struct SourceListsItem {
     int64_t runs_offset;    // RunDesc array in the metadata
     int* ptr;               // kSketchOwners + 1
     int* entries;           // sum of the run counts * sk
-    int* hist;              // 32 * kSketchOwners scratch
     int* row_index;         // sum of the run counts: source row of each sketched row
 };
 

@@ -419,11 +419,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     // ---- chunks of boxes: sketch lists, sketch, pivoted QR, then the
     // skeletons and T to the host
     const size_t D = sizeof(S), I = sizeof(int);
-    const size_t hist_ints = 32 * static_cast<size_t>(kSketchOwners);
     auto lists_bytes = [&](const Plan& p) {
         const size_t draws = static_cast<size_t>(p.rows) * p.sk;
         return align_up(draws * I) + align_up(static_cast<size_t>(p.rows) * I) + align_up((kSketchOwners + 1) * I) +
-               align_up(draws * I) + align_up(hist_ints * I);
+               align_up(draws * I);
     };
     // adaptive ID rows (H2_ID_proxy 2): each sketch heads a taller block that
     // the selected far rows join, and the ID runs in a copy of it
@@ -484,8 +483,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             int* d_draws = reinterpret_cast<int*>(at);    at += align_up(draws * I);
             int* d_rows = reinterpret_cast<int*>(at);     at += align_up(static_cast<size_t>(p.rows) * I);
             int* d_ptr = reinterpret_cast<int*>(at);      at += align_up((kSketchOwners + 1) * I);
-            int* d_list = reinterpret_cast<int*>(at);     at += align_up(draws * I);
-            int* d_hist = reinterpret_cast<int*>(at);
+            int* d_list = reinterpret_cast<int*>(at);
             SketchListsItem& li = list_items[static_cast<size_t>(i)];
             li.seed = static_cast<uint64_t>(box.morton_index + 1);
             li.d = p.d;
@@ -497,7 +495,6 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             li.rows_out = d_rows;
             li.ptr = d_ptr;
             li.entries = d_list;
-            li.hist = d_hist;
             S* Y = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
             OrderedSketchItemT<S> item{};
             item.out = Y;

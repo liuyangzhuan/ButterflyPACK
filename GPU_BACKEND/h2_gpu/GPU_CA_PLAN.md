@@ -1518,6 +1518,66 @@ is 0.03 s shorter for Color and 0.26 s for CA0; the reported factor times
 6.22-6.26 (Color) and 6.21-6.23 s (CA0) are 0.22 s of that below the wall
 time.  CA0 and Color are even at this size.
 
+### M9e. The sketch's list kernels, block per box (2026-10-02)
+Why CA0 ties Color at the leaf (320^3/64, slowest rank): CA0 eliminates
+6936 boxes on an interior rank (4096 local + 2840 ghosts for a 16^3 region)
+against Color's 4096, 0.4 s more device time, and saves Color's 0.47 s of
+transports; its leaf is device-bound (busy about 90% of the wave time), so
+the one lever that favors CA0 is the per-box device time (leveraged 1.7 to
+1, while Color's transports do not shrink).  An Nsight Systems profile of
+rank 0 (8 ranks, Laplace 160 Nmin 64, Color; build/gpu_prep/m9/prof.sh,
+rank 0 under nsys through nsys_own.sh; the report has to be imported from
+the .qdstrm on local disk, CFS refuses the .nsys-rep) showed the sketch's
+three list kernels (the box's std::mt19937_64 draws, the destination lists
+of its kernel rows, those of its fill sources) at 176 ms of the run's 2.34 s
+of kernel time, 1-6 ms per launch at the leaf: one warp per box, the
+counting sort's per-lane histograms in global memory, a serial chain of
+thousands of latency-bound steps per box, visible as the sketch's "upload"
+phase (75-190 ms per leaf).
+
+Rewritten in device_sketch.cu with one block of 512 threads per box or
+source: the generator's twist runs its three dependency phases with one
+state word per thread and tempers the 312 outputs in parallel (the same
+arithmetic, bitwise the host's draws); the destination lists come from a
+block-wide stable partition (each warp owns a contiguous range of the
+input, read 32 at a time in order; counts by ballots, a prefix over warps
+and owners, then the scatter), so every list keeps the input order and the
+sketch kernel's input is unchanged.  The histogram scratch is gone from
+SketchListsItem / SourceListsItem and both callers (level_eliminator.hpp,
+compression_gpu.hpp).
+
+Profile, rank 0, whole run: draws 61 -> 12 ms, row lists 66 -> 14 ms, source
+lists 49 -> 11 ms (max per launch 2.6-6.4 -> 0.5-1.1 ms).  Leaf (160^3,
+rank 0): the sketch's "upload" phase 75 -> 27 ms (Color), 113 -> 37 ms
+(CA0); leaf waves 794 -> 767 ms (Color), 951 -> 889 ms (CA0).  Results
+bitwise unchanged on 8 ranks (Laplace 192 Color and CA0 with the solve and
+replica checks, 160^3 both, VIE 96 unstructured, the EFIE sphere 9000 and
+its compression-only run with --precon 2 --solve 0: every logdet, check and
+solve-check line identical to frozen_m9b's).
+
+**320^3 on 64 ranks, 40 GB nodes (2026-10-02, job 59251416,
+build/gpu_prep/ca0/g320_m9c): frozen_m9b against frozen_m9c in one job**
+(Factor time = the driver's line, without the warm-up; the leaf = level 6):
+
+| | M9a-d (frozen_m9b) | + M9e |
+|---|---|---|
+| Factor time, Color | 6.19 / 6.25 s | 5.95 / 5.97 / 6.02 / 6.03 s |
+| Factor time, CA0 | 6.19 / 6.33 s | 6.11 (cold) / 6.00 / 6.00 / 6.00 s |
+| leaf level, Color / CA0 | 1.89-1.93 / 1.95-1.99 s | 1.83-1.88 / 1.84-1.93 s |
+| leaf waves, slowest rank, Color / CA0 | 1014 / 1426 ms | 950 / 1271 ms |
+| sketch "upload" (the list kernels), slowest rank, Color / CA0 | 134 / 193 ms | 35 / 60 ms |
+| same, rank 0 | 74 / 114 ms | 26 / 36 ms |
+
+Results bitwise unchanged (logdets, check values, replica check 124704
+copies 0 differ, solve checks 5.5e-15 / 1.0e-14).  The leaf's slowest rank
+gained 0.06 s (Color) and 0.16 s (CA0), the 1.7-to-1 leverage of CA0's
+ghost boxes; the factor times 0.2 s (Color) and 0.2-0.3 s (CA0).  CA0 and
+Color remain even at this size (6.00 against 5.97-6.03 s): CA0's leaf
+waves still take 0.32 s longer than Color's on the slowest rank, against
+Color's 0.46 s of transports, and CA0 pays its gather (0.06-0.1 s) and a
+larger transition.  What is left of the list kernels is about 1 ms per
+wave.
+
 ## Backlog from the GPU Color work (not CA-specific)
 
 - B1. Level-start wait: the first transport of each leaf level (0.4-0.7 s at
