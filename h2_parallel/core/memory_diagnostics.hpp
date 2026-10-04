@@ -35,6 +35,20 @@ struct H2MemoryCategories {
     size_t staged_parent = 0;
     size_t communication = 0;
 
+    // A breakdown of local_factors / halo_factors by the role each block plays
+    // in the solve, reported on its own H2_MEM_FACTOR line.  These are already
+    // counted in local_factors / halo_factors, so total() must NOT add them.
+    size_t local_factor_pivot = 0;
+    size_t halo_factor_pivot = 0;
+    size_t local_factor_basis = 0;
+    size_t halo_factor_basis = 0;
+    size_t local_factor_skeleton = 0;
+    size_t halo_factor_skeleton = 0;
+    size_t local_factor_near_coupling = 0;
+    size_t halo_factor_near_coupling = 0;
+    size_t local_factor_schur = 0;
+    size_t halo_factor_schur = 0;
+
     size_t total() const {
         return local_metadata + halo_metadata + local_factors + halo_factors +
                local_near + halo_near + local_far + halo_far +
@@ -104,16 +118,24 @@ inline void h2_diag_accumulate_box(
     metadata += h2_diag_vector_bytes(box.use_full_set);
     metadata += h2_diag_vector_bytes(box.two_hop);
 
-    size_t factors = h2_diag_vector_bytes(box.X_RR_pivots);
-    factors += h2_diag_matrix_bytes(box.interpolation_matrix);
-    factors += h2_diag_matrix_bytes(box.X_RR);
-    factors += h2_diag_matrix_bytes(box.X_RS);
-    factors += h2_diag_matrix_bytes(box.X_SR);
-    factors += h2_diag_matrix_bytes(box.schur_complement);
-    factors += h2_diag_matrix_bytes(box.X_RN);
-    factors += h2_diag_matrix_bytes(box.X_NR);
-    factors += h2_diag_matrix_bytes(box.X_RR_full);
-    factors += h2_diag_matrix_bytes(box.X_RS_entry);
+    // The factor bucket split by solve role: the pivot blocks drive the
+    // triangular solves, the ID basis and the coupling blocks are the bulk.
+    // The five sub-totals add up to `factors` by construction.
+    const size_t factor_pivot =
+        h2_diag_vector_bytes(box.X_RR_pivots) +
+        h2_diag_matrix_bytes(box.X_RR) +
+        h2_diag_matrix_bytes(box.X_RR_full);
+    const size_t factor_basis = h2_diag_matrix_bytes(box.interpolation_matrix);
+    const size_t factor_skeleton =
+        h2_diag_matrix_bytes(box.X_RS) +
+        h2_diag_matrix_bytes(box.X_SR) +
+        h2_diag_matrix_bytes(box.X_RS_entry);
+    const size_t factor_near_coupling =
+        h2_diag_matrix_bytes(box.X_RN) +
+        h2_diag_matrix_bytes(box.X_NR);
+    const size_t factor_schur = h2_diag_matrix_bytes(box.schur_complement);
+    const size_t factors = factor_pivot + factor_basis + factor_skeleton +
+                           factor_near_coupling + factor_schur;
 
     size_t near = h2_diag_modified_block_bytes(
         box.near_field_modified_interactions);
@@ -135,12 +157,22 @@ inline void h2_diag_accumulate_box(
     if (halo) {
         categories.halo_metadata += metadata;
         categories.halo_factors += factors;
+        categories.halo_factor_pivot += factor_pivot;
+        categories.halo_factor_basis += factor_basis;
+        categories.halo_factor_skeleton += factor_skeleton;
+        categories.halo_factor_near_coupling += factor_near_coupling;
+        categories.halo_factor_schur += factor_schur;
         categories.halo_near += near;
         categories.halo_far += far;
         categories.halo_deferred += deferred;
     } else {
         categories.local_metadata += metadata;
         categories.local_factors += factors;
+        categories.local_factor_pivot += factor_pivot;
+        categories.local_factor_basis += factor_basis;
+        categories.local_factor_skeleton += factor_skeleton;
+        categories.local_factor_near_coupling += factor_near_coupling;
+        categories.local_factor_schur += factor_schur;
         categories.local_near += near;
         categories.local_far += far;
         categories.local_deferred += deferred;
@@ -421,6 +453,21 @@ public:
                     c.h2_blocks / gib, c.assisting / gib, c.solve / gib,
                     c.level_metadata / gib, c.pending / gib, c.scratch / gib,
                     c.staged_parent / gib, c.communication / gib);
+                // How local_factors / halo_factors above split by solve role.
+                std::printf(
+                    "H2_MEM_FACTOR rank=%d seq=%zu level=%d algorithm=%s phase=%s "
+                    "local_pivot=%.6f local_basis=%.6f local_skeleton=%.6f "
+                    "local_near_coupling=%.6f local_schur=%.6f "
+                    "halo_pivot=%.6f halo_basis=%.6f halo_skeleton=%.6f "
+                    "halo_near_coupling=%.6f halo_schur=%.6f\n",
+                    rank, sequence, snapshot.level,
+                    snapshot.algorithm.c_str(), snapshot.phase.c_str(),
+                    c.local_factor_pivot / gib, c.local_factor_basis / gib,
+                    c.local_factor_skeleton / gib,
+                    c.local_factor_near_coupling / gib, c.local_factor_schur / gib,
+                    c.halo_factor_pivot / gib, c.halo_factor_basis / gib,
+                    c.halo_factor_skeleton / gib,
+                    c.halo_factor_near_coupling / gib, c.halo_factor_schur / gib);
             }
             std::fflush(stdout);
         }
