@@ -42,23 +42,31 @@ namespace gpu {
 enum class ResidentKind : uint8_t {
     Other = 0,
     FillSource,    // keep_fill_source: X_RR_full and temp2^T, per box
-    Transition,    // the Schur and edge blocks a level leaves for the next
+    LevelSchur,    // this level's own Schur and edge blocks, accumulated into by its waves
+    Transition,    // the parents' Schur and edge blocks, built by the transition
     Near,          // step 5's dense neighbor blocks
     Points,        // the level's coordinates and point ids
     Lists,         // skeleton lists, training lists, index tables
     KeptFactors,   // the solve factors a level keeps (H2_compress_factors)
     Restore,       // a transition chunk's restored fill sources
+    CaHalo,        // a CA level's received halo pieces
+    Reduction,     // the process reduction's pack and receive buffers
+    Matvec,        // the matvec's device blocks
     Count
 };
 inline const char* resident_kind_name(ResidentKind k) {
     switch (k) {
         case ResidentKind::FillSource: return "fill sources";
-        case ResidentKind::Transition: return "transition blocks";
+        case ResidentKind::LevelSchur: return "level Schur/edges";
+        case ResidentKind::Transition: return "parent blocks";
         case ResidentKind::Near: return "near blocks";
         case ResidentKind::Points: return "points";
         case ResidentKind::Lists: return "lists";
         case ResidentKind::KeptFactors: return "kept factors";
         case ResidentKind::Restore: return "restores";
+        case ResidentKind::CaHalo: return "CA halo";
+        case ResidentKind::Reduction: return "reduction";
+        case ResidentKind::Matvec: return "matvec";
         default: return "other";
     }
 }

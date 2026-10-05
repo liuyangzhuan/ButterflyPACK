@@ -276,7 +276,7 @@ CaHaloStats exchange_ca_blocks_for(ParallelTree<CoordType, DataType>* tree, int 
     }
     for (int peer = 0; peer < np; ++peer) {
         for (const Piece& p : recvs[static_cast<size_t>(peer)]) {
-            DeviceMatrixT<S> m{heap.alloc_resident<S>(p.elems() * D), p.rows, p.cols};
+            DeviceMatrixT<S> m{heap.alloc_resident<S>(p.elems() * D, ResidentKind::CaHalo), p.rows, p.cols};
             const bool fresh = p.lo == p.hi
                 ? blocks.schur.emplace(p.lo, m).second
                 : blocks.edges.emplace((static_cast<uint64_t>(p.lo) << 32) | static_cast<uint64_t>(p.hi), m).second;

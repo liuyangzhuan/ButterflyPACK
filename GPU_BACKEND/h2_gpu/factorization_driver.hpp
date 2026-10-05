@@ -824,6 +824,15 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.tr_chunks > 0) {
+                std::printf("  [gpu] level %d transition blocks: %.2f GB in all, %.2f GB written by the largest "
+                            "chunk (%lld blocks), %.2f GB summed over %lld chunks, %lld revisits\n",
+                            level.level,
+                        static_cast<double>(DeviceHeap::instance().resident_now(ResidentKind::Transition)) / 1e9,
+                        e.tr_block_bytes_max_chunk / 1e9,
+                            static_cast<long long>(e.tr_blocks_max_chunk), e.tr_block_bytes_sum / 1e9,
+                            static_cast<long long>(e.tr_chunks), static_cast<long long>(e.tr_block_revisits));
+            }
             if (reduced) {
                 std::printf("  [gpu] level %d device reduction: %.2f s (plan %.2f, pack %.2f, MPI %.2f, unpack %.2f; "
                             "%d rounds%s), sent %.2f GB in %lld blocks, received %.2f GB in %lld blocks, %lld own "

@@ -122,6 +122,17 @@ struct EliminatorStats {
     double reduction = 0.0;   // device process reduction (the parents' blocks to their owner)
     double tr_restore = 0.0, tr_restore_bytes = 0.0;  // restored fill sources (host gather, in plan)
     int64_t tr_chunks = 0;
+    // Per transition chunk, the blocks its parents' pairs write into: the
+    // largest chunk's bytes, every chunk's summed, and how many times a block
+    // is written by a chunk after the first (an edge between parents in
+    // different chunks).  If the sum is close to the total and the revisits
+    // few, a chunk's blocks could be decompressed, updated and recompressed
+    // for the chunk only, and the rest of the level's would stay compressed.
+    double tr_block_bytes_total = 0.0;
+    double tr_block_bytes_max_chunk = 0.0;
+    double tr_block_bytes_sum = 0.0;
+    int64_t tr_block_revisits = 0;
+    int64_t tr_blocks_max_chunk = 0;
     int64_t transition_fill_gemms = 0;
     double owner_flops = 0.0, transition_flops = 0.0, solve_flops = 0.0;
     double bytes_up = 0.0;
@@ -785,6 +796,7 @@ private:
     const Evaluator* evaluator_ = nullptr;  // the application's (H2Kernel::gpu_evaluator)
     bool heap_initialized_ = false;
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
+    std::unordered_set<const void*> tr_block_seen_;  // transition blocks a chunk has written (the stats)
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
     bool gpu_sketch_ = false;
     bool occupancy_ = false;           // empty boxes in the local slab (see the constructor)
@@ -2424,7 +2436,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 if (c == 0) continue;
                 DeviceMatrix fresh;
                 const auto t_alloc = clock::now();
-                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::Transition);
+                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur);
                 stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
                 int64_t ors = 1, ocs = c;
                 if (box->morton_index < nm) {
@@ -3454,7 +3466,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     auto ensure_schur = [&](BoxState& st) -> DeviceMatrix& {
         if (st.schur.ptr == nullptr) {
             const int c = current_size(st);
-            st.schur = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(c) * c * D, ResidentKind::Transition), c, c};
+            st.schur = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(c) * c * D, ResidentKind::LevelSchur), c, c};
             add_eval(st.schur.ptr, c, c, c, current_slots(st), current_slots(st));
         }
         return st.schur;
@@ -3467,7 +3479,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         BoxState& hs = state_of(hi);
         const int rows = current_size(hs), cols = current_size(ls);
         DeviceMatrix& e = edges_[key];
-        e = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition), rows, cols};
+        e = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::LevelSchur), rows, cols};
         add_eval(e.ptr, rows, rows, cols, current_slots(hs), current_slots(ls));
         return e;
     };
@@ -3527,7 +3539,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 const int rows = e_hi ? g.k : c_l, cols = e_hi ? c_l : g.k;
                 auto it = edges_.find(key);
                 if (it == edges_.end() && require_stored) return;
-                S* fresh = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition);
+                S* fresh = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::LevelSchur);
                 IndexList skeleton = current_slots(*g.st);
                 skeleton.base = 0;  // positions within E
                 if (it != edges_.end()) {
@@ -5118,6 +5130,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         const int n = parents[p].num_points;
         DeviceMatrix& sm = out->schur[pm];
         sm = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(n) * n * D, ResidentKind::Transition), n, n};
+
         pairs_of[p].push_back(Pair{pm, pm, &sm});
     }
     for (size_t p = 0; p < np; ++p) {
@@ -5138,7 +5151,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const int64_t lo = std::min(pm, qm), hi = std::max(pm, qm);
             const int rows = hi == qm ? q.n : parents[p].num_points, cols = hi == qm ? parents[p].num_points : q.n;
             DeviceMatrix& em = out->edges[edge_key(lo, hi)];
-            em = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D), rows, cols};
+            em = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition), rows, cols};
             pairs_of[p].push_back(Pair{pm, qm, &em});
         }
     }
@@ -5351,11 +5364,15 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         };
 
         // plan the chunk's parents
+        std::unordered_map<const void*, size_t> chunk_blocks;  // target -> its bytes
         size_t p1 = p0;
         while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes < budget)) {
             const size_t p = p1++;
             for (const Pair& pr : pairs_of[p]) {
                 DeviceMatrix& M = *pr.block;
+                if (M.ptr != nullptr) {
+                    chunk_blocks.emplace(M.ptr, static_cast<size_t>(M.rows) * M.cols * D);
+                }
                 const bool diag = pr.qm == pr.pm;
                 const Parent& pa = parent(pr.pm);
                 const Parent& qa = parent(pr.qm);
@@ -5575,6 +5592,17 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         for (auto& b : fill_j) b.stage(meta);
         for (auto& b : fill_i) b.stage(meta);
         stats.tr_plan += std::chrono::duration<double>(clock::now() - t_plan).count();
+        {
+            size_t bytes = 0;
+            for (const auto& [ptr, b] : chunk_blocks) {
+                bytes += b;
+                if (!tr_block_seen_.emplace(ptr).second) ++stats.tr_block_revisits;
+            }
+            stats.tr_block_bytes_sum += static_cast<double>(bytes);
+            stats.tr_block_bytes_max_chunk = std::max(stats.tr_block_bytes_max_chunk, static_cast<double>(bytes));
+            stats.tr_blocks_max_chunk = std::max(stats.tr_blocks_max_chunk,
+                                                 static_cast<int64_t>(chunk_blocks.size()));
+        }
         ++stats.tr_chunks;
         char* md = meta.upload(meta_device, stream);
         stats.bytes_up += static_cast<double>(meta.size());

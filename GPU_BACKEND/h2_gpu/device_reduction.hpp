@@ -201,7 +201,7 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
             for (size_t j = 0; j + 5 <= h.size(); j += 5) {
                 const int64_t kind = h[j], lo = h[j + 1], hi = h[j + 2];
                 const int rows = static_cast<int>(h[j + 3]), cols = static_cast<int>(h[j + 4]);
-                DeviceMatrixT<S> m{heap.alloc_resident<S>(std::max<size_t>(static_cast<size_t>(rows) * cols, 1) * D),
+                DeviceMatrixT<S> m{heap.alloc_resident<S>(std::max<size_t>(static_cast<size_t>(rows) * cols, 1) * D, ResidentKind::Reduction),
                                    rows, cols};
                 const bool fresh = kind == 0 ? blocks->schur.emplace(lo, m).second
                                              : blocks->edges.emplace(edge_key(lo, hi), m).second;
