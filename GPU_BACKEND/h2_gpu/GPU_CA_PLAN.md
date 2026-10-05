@@ -2601,9 +2601,42 @@ rank. Three things are left:
     leaf's 26.18 GB resident is what leaves only 1.56 GB, so step 4 and C4
     are the same constraint seen from two sides.
 
-  Either way the keep bound has to become compression-aware too, and the
-  rescue bug above has to be fixed first, since a failed keep is still
-  reachable.
+  **Tried, 2026-10-05: the first two are done, the third does not work yet.**
+
+  1. *The rescue bug is fixed.* rescue_skipped_xnr read `ntot * r` elements
+     from a kept X_NR that holds `xnr_bytes` of compressed chunks, running
+     off the end of the block and handing the host nonsense - the same bug
+     that materialize_host_factors already had fixed in the solve, missed in
+     this second site. It now brings the compressed bytes over and
+     decompresses them, so a mid-level keep failure no longer poisons the
+     next level. Verified: with the leaf attempting a keep, Color runs to
+     completion where it used to give NaN/Inf in level 4's ID input.
+  2. *The staging is bounded.* keep_solve_factors now keeps a wave in groups
+     of boxes whose X_NR comes to at most kXnrStagingBudget (512 MB), each
+     group compressed and gathered into a block of its own
+     (keep_solve_factor_group). At the leaf the request that used to be
+     2.70 GB becomes 559 MB. At 192^3 the groups change nothing - a level-4
+     wave is at most 473 MiB, so it is one group - which is the point: it
+     costs nothing now and is what C4 needs later. Color and CA0 both verified
+     unchanged (time_solve 0.282 s, 365 GB/s; CA0 168 GB/s).
+  3. *The compression-aware keep bound does not work yet, and is left off*
+     (kXnrBoundDivisor = 1). Dividing the bound's X_NR term by 4 does flip
+     the leaf's verdict, and the leaf then keeps 1.13 GB of its ~2.4 GB
+     before failing again - this time on fragmentation, 2.92 GB free but
+     7.7 MB in the largest range, because the compressor cannot stage its
+     group and falls back to plain. It also segfaults CA0 at CA_level 4,
+     where level 4 attempts a keep with the heap at 33.19 of 33.40 GB; that
+     is a second unhandled mid-level keep-failure path and it is **not
+     diagnosed**.
+
+  The reason 3 cannot be fixed by choosing a better divisor: decide_solve_keep
+  runs at level start and measures the heap as it is *then*, before the level
+  has allocated the 26.18 GB it holds at its peak. For the leaf the budget is
+  therefore over-optimistic however the bound is scaled - the level says yes,
+  then runs out of room half way through its own waves. Making the leaf keep
+  its factors needs the working set reduced (step 4) or a keep decision that
+  estimates the level's own working set. The groups and the rescue fix are
+  both prerequisites that are now in place.
 
   The cost of succeeding is now small. At the chunked rate (365 GB/s) the
   leaf's 17.45 GB over two sweeps is about 0.10 s, not the 1.8 s it would

@@ -628,6 +628,8 @@ private:
     }
     void keep_solve_factors(const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources,
                             cudaStream_t stream);
+    bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
+                                 const std::vector<char*>& d_sources, cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
     // factors (the level's own, or committed to the store): before a fill
     // source leaves the device (the transition restores it from the host
@@ -642,17 +644,22 @@ private:
         const KeptSolveLevel* committed = nullptr;
         auto& store_kept = device_solve_store().kept;
         if (auto it = store_kept.find(level_index_); it != store_kept.end()) committed = &it->second;
+        struct Kept { const KeptSolveBox* box; const KeptSolveLevel* level; };
         auto kept_of = [&](const Box* box, const char* what) {
-            const KeptSolveBox* kb = nullptr;
-            if (auto it = kept_.boxes.find(box->morton_index); it != kept_.boxes.end()) kb = &it->second;
-            if (kb == nullptr && committed != nullptr) {
-                if (auto it = committed->boxes.find(box->morton_index); it != committed->boxes.end()) kb = &it->second;
+            Kept k{nullptr, nullptr};
+            if (auto it = kept_.boxes.find(box->morton_index); it != kept_.boxes.end()) {
+                k = Kept{&it->second, &kept_};
             }
-            if (kb == nullptr) {
+            if (k.box == nullptr && committed != nullptr) {
+                if (auto it = committed->boxes.find(box->morton_index); it != committed->boxes.end()) {
+                    k = Kept{&it->second, committed};
+                }
+            }
+            if (k.box == nullptr) {
                 throw std::runtime_error(std::string("LevelEliminator: ") + what + " of box " +
                                          std::to_string(box->morton_index) + " neither on the host nor kept");
             }
-            return kb;
+            return k;
         };
         auto copy = [&](const void* src, size_t count, const char* what) {
             std::vector<DataType> v(count);
@@ -661,14 +668,34 @@ private:
         };
         for (Box* box : skipped_xnr_) {
             if (box->X_NR.is_allocated()) continue;
-            const KeptSolveBox* kb = kept_of(box, "X_NR");
+            const auto kept = kept_of(box, "X_NR");
+            const KeptSolveBox* kb = kept.box;
+            if (kb->xnr_bytes > 0) {
+                // H2_compress_factors: kb->xnr is xnr_bytes of compressed
+                // chunks, so reading ntot * r elements from it would run off
+                // the end and hand the host nonsense.  Bring the compressed
+                // bytes over (far fewer) and decompress, as the solve's
+                // materialize_host_factors does.
+#ifdef H2_HAVE_NVCOMP
+                std::vector<char> packed(kb->xnr_bytes);
+                check_cuda(cudaMemcpy(packed.data(), kb->xnr, kb->xnr_bytes, cudaMemcpyDeviceToHost),
+                           "X_NR host copies (compressed)");
+                std::vector<DataType> v(static_cast<size_t>(kb->ntot) * static_cast<size_t>(kb->r));
+                decompress_xnr_host<S>(packed.data(), reinterpret_cast<S*>(v.data()),
+                                       kept.level->chunk_strides.data() + kb->xnr_chunk0, kb->xnr_nchunks);
+                box->X_NR.set_owned(kb->ntot, kb->r, std::move(v), MatrixStorage<DataType>::FULL);
+#else
+                throw std::runtime_error("H2 GPU: compressed X_NR on the host needs a build with nvCOMP");
+#endif
+                continue;
+            }
             box->X_NR.set_owned(kb->ntot, kb->r, copy(kb->xnr, static_cast<size_t>(kb->ntot) * kb->r, "X_NR host copies"),
                                 MatrixStorage<DataType>::FULL);
         }
         skipped_xnr_.clear();
         if (!all) return;
         for (Box* box : skipped_factors_) {
-            const KeptSolveBox* kb = kept_of(box, "X_SR");
+            const KeptSolveBox* kb = kept_of(box, "X_SR").box;
             const size_t k = static_cast<size_t>(kb->k), r = static_cast<size_t>(kb->r);
             if (!box->X_SR.is_allocated()) {
                 box->X_SR.set_owned(kb->k, kb->r, copy(kb->xsr, k * r, "X_SR host copies"), MatrixStorage<DataType>::FULL);
@@ -3667,9 +3694,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // past that, this rank drops the level's copies.  Launched before the
 // wave's result and source blocks can be released.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// One group of a wave's boxes: their X_NR compressed, then the group's
+// factors gathered into a device block of its own.  A wave is kept in groups
+// so the compressor's staging stays bounded - it needs room for the whole
+// group at once (bitcompMaxBuflen is at least the input size however small
+// the chunks are), and a whole leaf wave does not fit beside the level's own
+// working set.  Returns false when the keep failed and the level dropped it.
+// ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
-    const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources, cudaStream_t stream) {
+bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
+    const std::vector<const WaveBox*>& kept_boxes, char* d_result, const std::vector<char*>& d_sources,
+    cudaStream_t stream) {
     const size_t D = sizeof(S), I = sizeof(int);
     struct Span { size_t off; const char* src; size_t bytes; };
     std::vector<Span> spans;
@@ -3678,21 +3714,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
                   uint32_t xnr_chunk0; uint32_t xnr_nchunks; };
     std::vector<Made> made;
 
-    // ---- phase A: this wave's X_NR, compressed while it is still in the
-    // wave's working memory.  The store that accumulates over the level then
-    // holds compressed bytes from the first wave on; compressing at level end
-    // instead would need the whole level's X_NR uncompressed at once, which is
-    // the peak this removes.
-    std::vector<const WaveBox*> kept_boxes;
-    for (const WaveBox& wb : boxes) {
-        if (wb.k == 0 || wb.r == 0) continue;
-        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
-        kept_boxes.push_back(&wb);
-    }
     std::vector<CompressedXnr> comp;
     bool compressed = false;
 #ifdef H2_HAVE_NVCOMP
-    if (compress_factors_ < 1 && !kept_boxes.empty()) ++eliminator_stats().xnr_not_requested;
     if (compress_factors_ >= 1 && !kept_boxes.empty()) {
         std::vector<const S*> srcs;
         std::vector<size_t> elems;
@@ -3709,8 +3733,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         if (compressed) ++eliminator_stats().xnr_waves_compressed;
         else ++eliminator_stats().xnr_waves_plain;
     }
-#else
-    if (!kept_boxes.empty()) ++eliminator_stats().xnr_not_requested;
 #endif
 
     size_t total = 0;
@@ -3755,7 +3777,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         }
         made.push_back(m);
     }
-    if (total == 0) return;
+    if (total == 0) return true;
     // (a level kept by the up-front decision: within its budget; otherwise
     // under the keep fraction of the heap)
     const bool over = keep_budgeted_ ? kept_.bytes + static_cast<double>(total) > keep_budget_
@@ -3776,7 +3798,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         drop_kept();
         keep_failed_ = true;
         keep_failure_ = over ? 1 : 2;
-        return;
+        return false;
     }
     char* block = heap_.alloc_resident(total);
     kept_.blocks.push_back(block);
@@ -3822,7 +3844,44 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         kb.xnr_nchunks = m.xnr_nchunks;
         kept_.boxes[m.morton] = kb;
     }
+    return true;
 }
+
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
+    const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources, cudaStream_t stream) {
+    const size_t D = sizeof(S);
+
+    // ---- this wave's boxes whose factors are worth keeping
+    std::vector<const WaveBox*> kept_boxes;
+    for (const WaveBox& wb : boxes) {
+        if (wb.k == 0 || wb.r == 0) continue;
+        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+        kept_boxes.push_back(&wb);
+    }
+    if (kept_boxes.empty()) return;
+    if (compress_factors_ < 1) ++eliminator_stats().xnr_not_requested;
+
+    // ---- in groups whose X_NR fits the staging budget, so neither the
+    // compressor's scratch nor the block the group is gathered into is as
+    // large as the whole wave.  A group takes at least one box, whatever its
+    // size.  Without compression a group is the whole wave, as before.
+    size_t at = 0;
+    while (at < kept_boxes.size()) {
+        std::vector<const WaveBox*> group;
+        size_t raw = 0;
+        while (at < kept_boxes.size()) {
+            const WaveBox* wb = kept_boxes[at];
+            const size_t bytes = static_cast<size_t>(wb->ntot) * static_cast<size_t>(wb->r) * D;
+            if (compress_factors_ >= 1 && !group.empty() && raw + bytes > kXnrStagingBudget) break;
+            group.push_back(wb);
+            raw += bytes;
+            ++at;
+        }
+        if (!keep_solve_factor_group(group, d_result, d_sources, stream)) return;
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Device exchange (multi-rank levels, CUDA-aware MPI).

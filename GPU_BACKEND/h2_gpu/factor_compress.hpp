@@ -75,6 +75,16 @@ inline constexpr double kXnrToleranceFraction = 0.2;
 // 0.9% of a compressed chunk) and the measured ratio loss is 0.04x of 19.0.
 constexpr size_t kXnrChunkBytes = 512 * 1024;
 
+// A wave is compressed in groups of boxes whose X_NR comes to no more than
+// this, because the compressor needs staging for a whole group at once:
+// bitcompMaxBuflen is at least the input size however small the chunks are,
+// so chunking the blocks does not bound the staging, only grouping does.  At
+// 0.5 MB chunks this holds about a thousand blocks, past the point where the
+// throughput curve flattens, so the bound costs nothing in rate.  It is what
+// lets the leaf keep its factors at all: a whole leaf wave wants 2.7 GB of
+// staging where the level's working set leaves about 1.5 GB free.
+constexpr size_t kXnrStagingBudget = size_t{512} << 20;
+
 // One box's compressed X_NR: the chunks it was cut into, and the shape and
 // quantization the solve needs to put it back.
 struct CompressedXnr {

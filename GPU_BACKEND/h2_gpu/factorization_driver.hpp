@@ -460,6 +460,15 @@ public:
     // budget: the level's keep then fails (its factors go to the host, as
     // without keeping) and later levels use the bound itself.  Collective
     // over level_comm.
+    //
+    // H2_compress_factors: X_NR is stored compressed, so the bound's X_NR
+    // term is divided by kXnrBoundDivisor.  Without that the leaf never keeps
+    // - its bound is tens of GB against a budget of what the heap has left
+    // once the level's own working set is in it - and the leaf is where most
+    // of X_NR lives, so its factors went to the host and came back
+    // uncompressed at the first solve (GPU_CA_PLAN.md C4).  The divisor stays
+    // far below the 18-19x the compression reaches, and a group of a wave
+    // that does not fit is still caught by the waves' own budget check.
     void decide_solve_keep(int lvl, MPI_Comm level_comm, bool ca) {
         if (!color_gpu_enabled()) return;
         int ok = 1;
@@ -467,7 +476,8 @@ public:
         keep_bound_ = 0.0;
         if (level_) {
             const DeviceHeap& heap = DeviceHeap::instance();
-            keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca);
+            keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca,
+                                           opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0);
             budget = kSolveKeepFraction * static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
             ok = keep_ratio_ * keep_bound_ <= budget ? 1 : 0;
         }
@@ -680,8 +690,8 @@ public:
                                         es.xnr_raw_bytes / 1e9, es.xnr_stored_bytes / 1e9,
                                         es.other_raw_bytes / 1e9);
                         }
-                        std::printf("  [gpu] level %d X_NR compression: %lld waves compressed, %lld fell back, "
-                                    "%lld not requested\n", lvl,
+                        std::printf("  [gpu] level %d X_NR compression: %lld batches compressed, %lld fell "
+                                    "back, %lld waves not requested\n", lvl,
                                     static_cast<long long>(es.xnr_waves_compressed),
                                     static_cast<long long>(es.xnr_waves_plain),
                                     static_cast<long long>(es.xnr_not_requested));
@@ -1018,6 +1028,22 @@ private:
     // bound's slack leaves room for: its factors take about half of it),
     // then the level below's largest factors/bound times the margin
     static constexpr double kFirstKeepRatio = 1.0, kKeepMargin = 1.25;
+    // H2_compress_factors: how much of the bound's X_NR term the keep expects
+    // to store (decide_solve_keep).  The bound already overstates X_NR by
+    // about n/r (levels come in at 53-68% of it) and the compression takes
+    // another 18x, so anything up to about 8 would be safe on the ratio.
+    //
+    // It is 1 - the compression is not taken into account - because the
+    // budget is the wrong quantity to relax while the leaf's working set is
+    // what it is: decide_solve_keep is called at level start and measures the
+    // heap as it is *then*, before the level has allocated the 26 GB it will
+    // hold at its peak, so for the leaf the budget is structurally
+    // over-optimistic whatever this divisor says.  Raising it does flip the
+    // leaf's verdict, and the leaf then keeps about half its factors and
+    // fails part way (GPU_CA_PLAN.md C4).  Raise it once the leaf's working
+    // set leaves room - step 4 - or once the decision can estimate the
+    // level's own working set.
+    static constexpr double kXnrBoundDivisor = 1.0;
     double keep_ratio_ = kFirstKeepRatio;
     double keep_bound_ = 0.0;                                          // this level's (decide_solve_keep)
 };

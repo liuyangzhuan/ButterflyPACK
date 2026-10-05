@@ -968,7 +968,7 @@ size_t build_ca_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<
 // eliminated before the box have shrunk to their skeletons): the keep
 // decision scales it (factorization_driver.hpp decide_solve_keep).
 template<typename CoordType, typename DataType>
-double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
+double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca, double xnr_divisor = 1.0) {
     const double D = static_cast<double>(sizeof(DataType)), I = sizeof(int);
     std::unordered_map<int64_t, int64_t> size;
     for (const auto& box : lvl.local_boxes) size.emplace(box.morton_index, box.num_points);
@@ -984,7 +984,7 @@ double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca) {
             const auto it = size.find(m);
             ntot += it != size.end() ? static_cast<double>(it->second) : n;
         }
-        bytes += (n * n + ntot * n) * D + n * I + 5.0 * 256.0;
+        bytes += (n * n + ntot * n / xnr_divisor) * D + n * I + 5.0 * 256.0;
     };
     for (const auto& box : lvl.local_boxes) add(box);
     if (ca) {
