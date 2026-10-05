@@ -59,6 +59,7 @@ public:
         bool is_hermitian = false;
         bool occupancy = false;
         int ca_owner_component = 0;  // H2_CA_owner_component
+        int compress_factors = 0;    // H2_compress_factors (tolerance: `tolerance`)
     };
 
     ColorGpuDriver(Tree* tree, KernelType* kernel, const Options& options)
@@ -932,11 +933,15 @@ public:
         std::printf(
             "  [gpu] level %d box path (rank 0): begin %.2f s, sketch %.2f s, ID %.2f s, plan %.2f s, "
             "device %.2f s, download %.2f s, store %.2f s, finish %.2f s | up %.2f GB, "
-            "down %.2f GB | owner %lld gemms in %lld batches, %lld new targets | heap peak %.2f GB, %lld reclaims\n",
+            "down %.2f GB | owner %lld gemms in %lld batches, %lld new targets | heap peak %.2f GB "
+            "(resident %.2f + transient %.2f), %lld reclaims\n",
             lvl, e.begin, e.sketch, e.id, e.plan, e.device, e.download, e.store, e.finish,
             e.bytes_up / 1e9, e.bytes_down / 1e9, static_cast<long long>(e.owner_gemms),
             static_cast<long long>(e.owner_batches), static_cast<long long>(e.new_targets),
-            static_cast<double>(e.heap_peak) / 1e9, static_cast<long long>(e.heap_reclaims));
+            static_cast<double>(e.heap_peak) / 1e9,
+            static_cast<double>(e.heap_peak_resident) / 1e9,
+            static_cast<double>(e.heap_peak_transient) / 1e9,
+            static_cast<long long>(e.heap_reclaims));
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",

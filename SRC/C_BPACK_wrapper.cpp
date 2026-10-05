@@ -106,6 +106,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double CA_level_d = 0.0;
   double H2_use_sketch_d = 0.0;
   double H2_lazy_schur_d = 0.0;
+  double H2_compress_factors_d = 0.0;
   double H2_GEMM_split_d = 0.0;
   double H2_XRR_factor_d = 0.0;
   double H2_use_gpu_d = 0.0;
@@ -125,6 +126,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "CA_level", &CA_level_d);
   c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
   c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
+  c_bpack_getoption(option, "H2_compress_factors", &H2_compress_factors_d);
   c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
   c_bpack_getoption(option, "H2_XRR_factor", &H2_XRR_factor_d);
   c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
@@ -146,6 +148,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
       static_cast<int>(std::llround(H2_use_sketch_d));
   const int H2_lazy_schur =
       static_cast<int>(std::llround(H2_lazy_schur_d));
+  const int H2_compress_factors =
+      static_cast<int>(std::llround(H2_compress_factors_d));
   const int H2_GEMM_split =
       static_cast<int>(std::llround(H2_GEMM_split_d));
   const int H2_XRR_factor =
@@ -172,6 +176,9 @@ static butterfly::ProgramOptions read_h2_program_options64(
   }
   if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+  }
+  if (H2_compress_factors < 0 || H2_compress_factors > 2) {
+    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
   }
   if (H2_GEMM_split < 0) {
     throw std::invalid_argument("H2_GEMM_split must be nonnegative");
@@ -226,6 +233,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.unstructured = H2_unstructured;
   result.use_sketch = H2_use_sketch;
   result.lazy_schur = H2_lazy_schur;
+  result.compress_factors = H2_compress_factors;
   result.gemm_split = H2_GEMM_split;
   result.xrr_factor = H2_XRR_factor;
   result.use_gpu = H2_use_gpu;
@@ -1132,6 +1140,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double CA_level_d;
       double H2_use_sketch_d;
       double H2_lazy_schur_d;
+      double H2_compress_factors_d;
       double H2_GEMM_split_d;
       double H2_XRR_factor_d;
       double H2_use_gpu_d;
@@ -1151,6 +1160,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "CA_level", &CA_level_d);
       c_bpack_getoption(option, "H2_use_sketch", &H2_use_sketch_d);
       c_bpack_getoption(option, "H2_lazy_schur", &H2_lazy_schur_d);
+      c_bpack_getoption(option, "H2_compress_factors", &H2_compress_factors_d);
       c_bpack_getoption(option, "H2_GEMM_split", &H2_GEMM_split_d);
       c_bpack_getoption(option, "H2_XRR_factor", &H2_XRR_factor_d);
       c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
@@ -1168,6 +1178,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
           static_cast<int>(std::llround(H2_unstructured_d));
       const int H2_use_sketch = static_cast<int>(std::llround(H2_use_sketch_d));
       const int H2_lazy_schur = static_cast<int>(std::llround(H2_lazy_schur_d));
+      const int H2_compress_factors = static_cast<int>(std::llround(H2_compress_factors_d));
       const int H2_GEMM_split = static_cast<int>(std::llround(H2_GEMM_split_d));
       const int H2_XRR_factor = static_cast<int>(std::llround(H2_XRR_factor_d));
       const int H2_use_gpu = static_cast<int>(std::llround(H2_use_gpu_d));
@@ -1187,6 +1198,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       }
       if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
         throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
+      }
+      if (H2_compress_factors < 0 || H2_compress_factors > 2) {
+        throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
       }
       if (H2_GEMM_split < 0) {
         throw std::invalid_argument("H2_GEMM_split must be nonnegative");

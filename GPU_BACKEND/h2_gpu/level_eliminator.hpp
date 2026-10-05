@@ -127,6 +127,10 @@ struct EliminatorStats {
     int64_t exchange_fallbacks = 0;     // MPI buffers the exchange arena could not hold
     int64_t remote_generators = 0;
     size_t heap_peak = 0;
+    // The split of heap_peak: retained (a level or longer, chiefly the
+    // solve factors and the fill sources) versus per-wave transient.
+    size_t heap_peak_resident = 0;
+    size_t heap_peak_transient = 0;
 };
 
 inline EliminatorStats& eliminator_stats() {
@@ -2778,7 +2782,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     for (char* p : wave_sketch_extra_) heap_.free(p);
     wave_sketch_extra_.clear();
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
-    stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
+    if (heap_.peak() > stats.heap_peak) {
+        stats.heap_peak = heap_.peak();
+        stats.heap_peak_resident = heap_.resident_at_peak();
+        stats.heap_peak_transient = heap_.transient_at_peak();
+    }
     return boundary_count;
 }
 
@@ -2964,7 +2972,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::finish() {
         copier_.reset();
         exchange_copier_.reset();
     }
-    stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
+    if (heap_.peak() > stats.heap_peak) {
+        stats.heap_peak = heap_.peak();
+        stats.heap_peak_resident = heap_.resident_at_peak();
+        stats.heap_peak_transient = heap_.transient_at_peak();
+    }
     stats.finish += std::chrono::duration<double>(clock::now() - t0).count();
 }
 
@@ -3575,7 +3587,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     work.release();
     tmp.release();
     for (char* p : retired) heap_.free(p);
-    stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
+    if (heap_.peak() > stats.heap_peak) {
+        stats.heap_peak = heap_.peak();
+        stats.heap_peak_resident = heap_.resident_at_peak();
+        stats.heap_peak_transient = heap_.transient_at_peak();
+    }
 }
 
 // Generators of the last wave's boxes with a neighbor on another rank, as
@@ -4706,7 +4722,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour
     stats.remote += seconds_since(t_apply);
     stats.exchange += std::chrono::duration<double>(t_apply - t_start).count();
     stats.device_exchange = true;
-    stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
+    if (heap_.peak() > stats.heap_peak) {
+        stats.heap_peak = heap_.peak();
+        stats.heap_peak_resident = heap_.resident_at_peak();
+        stats.heap_peak_transient = heap_.transient_at_peak();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5389,7 +5409,11 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 ++it;
             }
         }
-        stats.heap_peak = std::max(stats.heap_peak, heap_.peak());
+        if (heap_.peak() > stats.heap_peak) {
+        stats.heap_peak = heap_.peak();
+        stats.heap_peak_resident = heap_.resident_at_peak();
+        stats.heap_peak_transient = heap_.transient_at_peak();
+    }
         p0 = p1;
     }
     for (auto& kv : restored) heap_.free(kv.second.block);

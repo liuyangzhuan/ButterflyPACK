@@ -376,7 +376,10 @@ void hierarchical_factorization_parallel(
     int ca_staged_halo,
     int ca_owner_component,
     int ca_owner_serial,
-    int verbosity = 1) {
+    int verbosity = 1,
+    // H2_compress_factors: lossy compression of the kept factors at
+    // `tolerance` (0 off, 1 the retained X_NR, 2 also the fill sources).
+    int compress_factors = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
@@ -388,6 +391,11 @@ void hierarchical_factorization_parallel(
     const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
+    // The backend's pinned staging is part of the RSS but sits outside every
+    // tree structure: report it instead of leaving it in `unattributed`.
+    if (memory_diagnostics.enabled()) {
+        h2_diag_host_staging_probe() = [] { return gpu::pinned_pool_host_bytes(); };
+    }
     // (a component-owner CA level needs a larger exchange arena: a fifth of
     // the GPU, 8 GB of 40; a colour's arrivals stay in it until its end)
     if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm, ca_owner_component == 3 ? 0.2 : 0.0);
@@ -498,6 +506,7 @@ void hierarchical_factorization_parallel(
     gpu_options.method = factorization_method;
     gpu_options.use_sketch = use_sketch;
     gpu_options.lazy_schur = lazy_schur;
+    gpu_options.compress_factors = compress_factors;
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.ca_owner_component = ca_owner_component;
@@ -2227,7 +2236,8 @@ void hierarchical_factorization_parallel_if_supported(
     int ca_staged_halo = 0,
     int ca_owner_component = 0,
     int ca_owner_serial = 0,
-    int verbosity = 1) {
+    int verbosity = 1,
+    int compress_factors = 0) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
         hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
@@ -2248,7 +2258,8 @@ void hierarchical_factorization_parallel_if_supported(
             ca_staged_halo,
             ca_owner_component,
             ca_owner_serial,
-            verbosity);   // instantiated ONLY for double types
+            verbosity,
+            compress_factors);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
     }
@@ -2316,7 +2327,8 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_staged_halo,
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
-    solver->options.verbosity);
+    solver->options.verbosity,
+    solver->options.compress_factors);
   // the logdet and quick verification that end the call, and the GPU
   // kernel warm-up before its first level, are not factorization
   double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds() - butterfly::h2_warmup_seconds();

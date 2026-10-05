@@ -233,6 +233,17 @@ template<typename T>
 void launch_identity(const IdentityItemT<T>* items, int count, int max_n, cudaStream_t stream);
 template<typename T>
 void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_t stream);
+
+// max |a[i]| over a contiguous block, one result per item.  Not templated:
+// the element types are arrays of doubles in memory, so a complex block is
+// viewed as 2n doubles, which is the component-wise bound the lossy
+// compression's delta needs.
+struct AbsMaxItem {
+    const double* a;
+    int64_t n;
+    double* out;
+};
+void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream);
 template<typename T>
 void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int max_n, cudaStream_t stream);
 // Copy `bytes` (a multiple of 16, both pointers 16-byte aligned) with SM

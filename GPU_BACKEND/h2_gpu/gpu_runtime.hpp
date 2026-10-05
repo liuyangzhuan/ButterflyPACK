@@ -115,6 +115,8 @@ public:
     PinnedBuffer(const PinnedBuffer&) = delete;
     PinnedBuffer& operator=(const PinnedBuffer&) = delete;
     ~PinnedBuffer() { release(); }
+    // Pinned host bytes held (part of the process RSS).
+    size_t capacity() const { return capacity_; }
 
     void* reserve(size_t bytes) {
         if (bytes > capacity_) {
@@ -340,6 +342,8 @@ public:
         size_ = 0;
     }
     size_t size() const { return size_; }
+    // Pinned host bytes held (part of the process RSS).
+    size_t capacity() const { return capacity_; }
     // Page-lock room for an image of `bytes` now (the warm-up: the first
     // image otherwise pins its buffer inside a wave).
     void reserve(size_t bytes) { ensure(bytes); }
@@ -438,6 +442,18 @@ struct PinnedPool {
 inline PinnedPool& pinned_pool() {
     static PinnedPool* pool = new PinnedPool;
     return *pool;
+}
+
+// Pinned host bytes the backend holds.  They are part of the process RSS but
+// live outside every tree structure, so BPACK_TRACE=memory reports them on
+// their own through the host-staging probe of core/memory_diagnostics.hpp.
+inline size_t pinned_pool_host_bytes() {
+    PinnedPool& p = pinned_pool();
+    size_t bytes = p.meta.capacity() + p.owner_meta.capacity() +
+                   p.result.capacity();
+    for (const PinnedBuffer& b : p.ring) bytes += b.capacity();
+    for (const PinnedBuffer& b : p.staging) bytes += b.capacity();
+    return bytes;
 }
 
 // A variable-size MAGMA batch described on the host; its six size arrays and

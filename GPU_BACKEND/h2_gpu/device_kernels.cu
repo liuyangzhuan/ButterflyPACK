@@ -234,6 +234,35 @@ void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_
     check_launch("column_swap_kernel");
 }
 
+namespace {
+constexpr int kAbsMaxThreads = 256;
+}
+
+__global__ void abs_max_kernel(const AbsMaxItem* items) {
+    const AbsMaxItem item = items[blockIdx.x];
+    double m = 0.0;
+    for (int64_t i = threadIdx.x; i < item.n; i += kAbsMaxThreads) {
+        const double v = fabs(item.a[i]);
+        if (v > m) m = v;
+    }
+    __shared__ double shared[kAbsMaxThreads];
+    shared[threadIdx.x] = m;
+    __syncthreads();
+    for (int stride = kAbsMaxThreads / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride && shared[threadIdx.x + stride] > shared[threadIdx.x]) {
+            shared[threadIdx.x] = shared[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) *item.out = shared[0];
+}
+
+void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream) {
+    if (count <= 0) return;
+    abs_max_kernel<<<static_cast<unsigned>(count), kAbsMaxThreads, 0, stream>>>(items);
+    check_launch("abs_max_kernel");
+}
+
 #define H2_ELEMENT_LAUNCHES(T)                                                                                     \
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \

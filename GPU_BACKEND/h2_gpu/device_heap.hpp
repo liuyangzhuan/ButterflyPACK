@@ -113,9 +113,10 @@ public:
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
         if (!take(size, false, offset)) return nullptr;
-        allocated_.emplace(offset, size);
+        allocated_.emplace(offset, std::make_pair(size, false));
         used_ += size;
-        peak_ = std::max(peak_, used_);
+        transient_used_ += size;
+        note_peak();
         return base_ + offset;
     }
 
@@ -148,9 +149,10 @@ public:
             }
             ++reclaims_;
         }
-        allocated_.emplace(offset, size);
+        allocated_.emplace(offset, std::make_pair(size, resident));
         used_ += size;
-        peak_ = std::max(peak_, used_);
+        if (resident) resident_used_ += size; else transient_used_ += size;
+        note_peak();
         return base_ + offset;
     }
 
@@ -159,9 +161,12 @@ public:
         const size_t offset = static_cast<size_t>(static_cast<const char*>(ptr) - base_);
         auto it = allocated_.find(offset);
         if (it == allocated_.end()) throw std::runtime_error("H2 GPU heap: free of an unknown pointer");
-        size_t start = offset, length = it->second;
+        size_t start = offset, length = it->second.first;
+        const bool was_resident = it->second.second;
         allocated_.erase(it);
         used_ -= length;
+        if (was_resident) resident_used_ -= length;
+        else transient_used_ -= length;
         auto next = free_.lower_bound(start);
         if (next != free_.begin()) {
             auto prev = std::prev(next);
@@ -184,14 +189,25 @@ public:
         by_size_.clear();
         allocated_.clear();
         used_ = 0;
+        resident_used_ = 0;
+        transient_used_ = 0;
         if (capacity_ > 0) add_free(0, capacity_);
     }
 
     size_t used() const { return used_; }
     size_t largest_free() const { return by_size_.empty() ? 0 : by_size_.rbegin()->first; }
     size_t peak() const { return peak_; }
+    size_t resident_used() const { return resident_used_; }
+    size_t transient_used() const { return transient_used_; }
+    // The split of peak(): what each class held when it was reached.
+    size_t resident_at_peak() const { return resident_at_peak_; }
+    size_t transient_at_peak() const { return transient_at_peak_; }
     size_t capacity() const { return capacity_; }
-    void reset_peak() { peak_ = used_; }
+    void reset_peak() {
+        peak_ = used_;
+        resident_at_peak_ = resident_used_;
+        transient_at_peak_ = transient_used_;
+    }
     int64_t reclaims() const { return reclaims_; }
 
     // Compaction of long-lived blocks.  Blocks that outlive a level (the
@@ -222,7 +238,8 @@ public:
             const size_t offset = static_cast<size_t>(blocks[i] - base_);
             auto alloc = allocated_.find(offset);
             if (alloc == allocated_.end()) throw std::runtime_error("H2 GPU heap: compaction of an unknown block");
-            const size_t size = alloc->second;
+            const size_t size = alloc->second.first;
+            const bool was_resident = alloc->second.second;
             size_t dest = offset;
             for (auto it = free_.begin(); it != free_.end() && it->first < offset; ++it) {
                 if (it->second >= size) {
@@ -247,8 +264,9 @@ public:
             const size_t length = range->second;
             remove_free(range);
             if (length > size) add_free(dest + size, length - size);
-            allocated_.emplace(dest, size);
+            allocated_.emplace(dest, std::make_pair(size, was_resident));
             used_ += size;
+            if (was_resident) resident_used_ += size; else transient_used_ += size;
             moves.push_back({blocks[i], base_ + dest, size});
             blocks[i] = base_ + dest;
         }
@@ -271,6 +289,13 @@ public:
     size_t available() const { return capacity_ - used_; }
 
 private:
+    void note_peak() {
+        if (used_ <= peak_) return;
+        peak_ = used_;
+        resident_at_peak_ = resident_used_;
+        transient_at_peak_ = transient_used_;
+    }
+
     static constexpr size_t kAlign = 256;
 
     DeviceHeap() = default;
@@ -315,9 +340,17 @@ private:
     size_t capacity_ = 0;
     size_t used_ = 0;
     size_t peak_ = 0;
+    // Resident blocks (a level or longer: chiefly the retained solve factors
+    // and the fill sources) versus per-wave transient blocks, and what each
+    // held when the overall peak was reached.
+    size_t resident_used_ = 0;
+    size_t transient_used_ = 0;
+    size_t resident_at_peak_ = 0;
+    size_t transient_at_peak_ = 0;
     std::map<size_t, size_t> free_;                  // offset -> length, address order
     std::set<std::pair<size_t, size_t>> by_size_;    // (length, offset) of the same ranges
-    std::unordered_map<size_t, size_t> allocated_;   // offset -> length
+    // offset -> (length, resident)
+    std::unordered_map<size_t, std::pair<size_t, bool>> allocated_;   // offset -> length
     std::function<bool()> reclaimer_;
     int64_t reclaims_ = 0;
 };

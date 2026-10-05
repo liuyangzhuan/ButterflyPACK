@@ -319,6 +319,19 @@ if(enable_h2_gpu)
   set(CMAKE_CXX_FLAGS "-DH2_HAVE_GPU -DADD_ ${CMAKE_CXX_FLAGS}")
   include_directories(${TPL_H2_MAGMA_INCLUDE_DIRS} ${CUDAToolkit_INCLUDE_DIRS})
   set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart CUDA::cusolver CUDA::nvrtc CUDA::cuda_driver)
+  #--------------------- nvCOMP (optional) ---------------------
+  # Lossy Bitcomp compression of the H2 factors (X_NR is 86-88% of the factor
+  # bytes).  Optional: without it the factors are stored uncompressed, as
+  # before.  Both libraries are linked, so the host paths
+  # (bitcompHost*) are available as well as the device ones.
+  if(TPL_H2_NVCOMP_LIBRARIES AND TPL_H2_NVCOMP_INCLUDE_DIRS)
+    message("-- Using nvCOMP for H2 factor compression: '${TPL_H2_NVCOMP_LIBRARIES}'")
+    set(CMAKE_CXX_FLAGS "-DH2_HAVE_NVCOMP ${CMAKE_CXX_FLAGS}")
+    include_directories(${TPL_H2_NVCOMP_INCLUDE_DIRS})
+    list(APPEND H2_GPU_LIB ${TPL_H2_NVCOMP_LIBRARIES})
+  else()
+    message("-- H2 factor compression off (set TPL_H2_NVCOMP_LIBRARIES and TPL_H2_NVCOMP_INCLUDE_DIRS to enable)")
+  endif()
 endif()
 
 #--------------------- ARPACK ---------------------

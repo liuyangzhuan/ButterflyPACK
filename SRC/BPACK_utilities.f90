@@ -1318,6 +1318,7 @@ contains
       option%CA_level=10000
       option%H2_use_sketch=1
       option%H2_lazy_schur=0
+      option%H2_compress_factors=0
       option%H2_GEMM_split=16
       option%H2_XRR_factor=0
       option%H2_use_gpu=0
@@ -1381,6 +1382,8 @@ contains
                   read (strings1, *) option%H2_use_sketch
                else if (trim(strings) == '--h2_lazy_schur' .or. trim(strings) == '--H2_lazy_schur') then
                   read (strings1, *) option%H2_lazy_schur
+               else if (trim(strings) == '--h2_compress_factors' .or. trim(strings) == '--H2_compress_factors') then
+                  read (strings1, *) option%H2_compress_factors
                else if (trim(strings) == '--h2_gemm_split' .or. trim(strings) == '--H2_GEMM_split') then
                   read (strings1, *) option%H2_GEMM_split
                else if (trim(strings) == '--h2_xrr_factor' .or. trim(strings) == '--H2_XRR_factor') then
@@ -1527,6 +1530,7 @@ contains
       option1%CA_level = option%CA_level
       option1%H2_use_sketch = option%H2_use_sketch
       option1%H2_lazy_schur = option%H2_lazy_schur
+      option1%H2_compress_factors = option%H2_compress_factors
       option1%H2_GEMM_split = option%H2_GEMM_split
       option1%H2_XRR_factor = option%H2_XRR_factor
       option1%H2_use_gpu = option%H2_use_gpu
@@ -1621,6 +1625,7 @@ contains
             write (*, '(A18,I8)') 'CA_level', option%CA_level
             write (*, '(A18,I8)') 'h2_use_sketch', option%H2_use_sketch
             write (*, '(A18,I8)') 'h2_lazy_schur', option%H2_lazy_schur
+            write (*, '(A18,I8)') 'h2_compress_factors', option%H2_compress_factors
             write (*, '(A18,I8)') 'h2_gemm_split', option%H2_GEMM_split
             write (*, '(A18,I8)') 'h2_xrr_factor', option%H2_XRR_factor
             write (*, '(A18,I8)') 'h2_use_gpu', option%H2_use_gpu
