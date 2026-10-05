@@ -129,6 +129,12 @@ struct EliminatorStats {
     int64_t remote_generators = 0;
     // H2_compress_factors: waves whose X_NR was compressed, waves that fell
     // back to storing it uncompressed, and why.
+    // What the kept blocks are made of: X_NR uncompressed and as stored,
+    // against everything else (T, X_SR, the LU, pivots), which is never
+    // compressed and so bounds the whole-block ratio.
+    double xnr_raw_bytes = 0.0;
+    double xnr_stored_bytes = 0.0;
+    double other_raw_bytes = 0.0;
     int64_t xnr_waves_compressed = 0;
     int64_t xnr_waves_plain = 0;
     int64_t xnr_not_requested = 0;
@@ -3728,6 +3734,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         }
         m.lu = total;  spans.push_back({total, d_result + wb.off_xrr, r * r * D});      total = align_up(total + r * r * D);
         m.piv = total; spans.push_back({total, d_result + wb.off_piv, r * I});          total = align_up(total + r * I);
+        {
+            auto& es = eliminator_stats();
+            es.xnr_raw_bytes += static_cast<double>(align_up(nt * r * D));
+            es.xnr_stored_bytes += static_cast<double>(
+                m.xnr_bytes > 0 ? align_up(align_up(m.xnr_bytes, 4)) : align_up(nt * r * D));
+            es.other_raw_bytes += static_cast<double>(
+                2 * align_up(k * r * D) + align_up(r * r * D) + align_up(r * I));
+        }
         made.push_back(m);
     }
     if (total == 0) return;

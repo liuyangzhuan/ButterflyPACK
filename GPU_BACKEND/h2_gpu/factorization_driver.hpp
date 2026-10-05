@@ -672,6 +672,14 @@ public:
                                 lvl, v[1] / 1e9, 100.0 * v[0], kept_now / 1e9, raw_now / 1e9, ratio);
                     const auto& es = eliminator_stats();
                     if (es.xnr_waves_compressed + es.xnr_waves_plain + es.xnr_not_requested > 0) {
+                        if (es.xnr_raw_bytes > 0.0) {
+                            std::printf("  [gpu] level %d X_NR is %.0f%% of the kept block; it compresses %.1fx "
+                                        "(%.2f -> %.2f GB), the rest is %.2f GB uncompressed\n", lvl,
+                                        100.0 * es.xnr_raw_bytes / (es.xnr_raw_bytes + es.other_raw_bytes),
+                                        es.xnr_stored_bytes > 0.0 ? es.xnr_raw_bytes / es.xnr_stored_bytes : 1.0,
+                                        es.xnr_raw_bytes / 1e9, es.xnr_stored_bytes / 1e9,
+                                        es.other_raw_bytes / 1e9);
+                        }
                         std::printf("  [gpu] level %d X_NR compression: %lld waves compressed, %lld fell back, "
                                     "%lld not requested\n", lvl,
                                     static_cast<long long>(es.xnr_waves_compressed),

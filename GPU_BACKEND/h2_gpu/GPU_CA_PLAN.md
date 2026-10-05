@@ -2426,3 +2426,33 @@ remain even (8.49-8.54 against 8.57-8.64 s).
   broke the solve: acc_forward 0.19.) Shrinking this needs a solve that
   receives the ghost factors it needs, or an owner-based solve (M4).
 - Dropped by the user: matvec communication overlap.
+
+## Backlog from the factor compression (H2_compress_factors)
+
+X_NR is 92% of a kept block and compresses 16x at tol_comp/5 (measured at
+192^3 on 8 ranks), taking the device's factors from 27.76 to 2.96 GB per
+rank. Three things are left:
+
+- C1. The solve is 5.3x slower with compression on (0.251 -> 1.337 s at
+  192^3 on 8 ranks), past the 4x the user accepted. The codec is not the
+  cost: about 24 GB of X_NR per sweep over six passes is 144 GB in 3.4 s,
+  40 GB/s against the 400-600 GB/s a wave-sized batch reaches on its own.
+  The cost is per-call: a wave is one bitcompBatchUncompress (about 300 per
+  solve, and the coarse levels' waves are far below the batch size that
+  fills the GPU - 9.8 GB/s at 8 blocks), and each wave re-uploads the whole
+  SolveBox array (410 KB) to move its pointers. MPI time triples
+  (0.069 -> 0.392 s), so the decompression is serializing against the
+  exchanges rather than overlapping. Fix: decompress a window of waves in
+  one batch, and patch only the wave's box entries with a small kernel
+  instead of re-uploading the table.
+- C2. CA3 keeps 5.71 GB of 19.90 GB (3.5x) where Color and CA0 reach
+  7.4-7.7x, because land_full_factors - the component-owner path that
+  stores the factors of boxes landing from other ranks - lays them out
+  uncompressed. Its per-box composition is the same as keep_solve_factors'
+  (92% X_NR, 16x), so compressing it should bring CA3 in line. Its boxes
+  arrive one at a time rather than in waves, so they need collecting into
+  a batch before compressing.
+- C3. keep_solve_factors synchronizes the stream once per wave to keep the
+  compressor's staging alive through the gather, which costs about 10% of
+  the factorization (7.49 -> 8.22 s at tol_comp). Double buffer the staging
+  across waves instead.
