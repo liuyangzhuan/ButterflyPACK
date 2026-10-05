@@ -1021,6 +1021,12 @@ public:
                         "(%.1f%% of the sources a wave reads)\n", lvl, e.sk_slice_bytes_max_wave / 1e9,
                         e.sk_slice_bytes_sum / 1e9,
                         e.sk_src_bytes_sum > 0.0 ? 100.0 * e.sk_slice_bytes_sum / e.sk_src_bytes_sum : 0.0);
+            std::printf("  [gpu] level %d fill source runs (W side): %.2f GB by the largest wave, %.2f GB summed, "
+                        "%lld runs; P+W largest wave %.2f GB, summed %.2f GB\n", lvl,
+                        e.sk_run_bytes_max_wave / 1e9, e.sk_run_bytes_sum / 1e9,
+                        static_cast<long long>(e.sk_runs),
+                        (e.sk_slice_bytes_max_wave + e.sk_run_bytes_max_wave) / 1e9,
+                        (e.sk_slice_bytes_sum + e.sk_run_bytes_sum) / 1e9);
         }
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "

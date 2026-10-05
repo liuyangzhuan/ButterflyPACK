@@ -136,6 +136,9 @@ struct EliminatorStats {
     // ... and the slices the readers actually take: a box reads a source's
     // temp2^T only over its own columns, which is a contiguous byte range, so
     // a decompression could cover the chunks of that range alone.
+    double sk_run_bytes_max_wave = 0.0;
+    double sk_run_bytes_sum = 0.0;
+    int64_t sk_runs = 0;
     double sk_slice_bytes_max_wave = 0.0;
     double sk_slice_bytes_sum = 0.0;
     double sk_src_bytes_max_wave = 0.0;
@@ -1475,12 +1478,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // however many of the wave's boxes read it)
     std::mutex src_seen_mutex;
     std::unordered_map<int64_t, size_t> src_seen;
-    size_t src_slice_bytes = 0;  // the readers' slices of them, summed
+    size_t src_slice_bytes = 0;  // the readers' P slices of them, summed
+    size_t src_run_bytes = 0;    // ... and their W runs
+    size_t src_runs_count = 0;
 
     // (the stats of the wave's fill sources, once its plans are built)
     struct SrcStats {
         const std::unordered_map<int64_t, size_t>& seen;
         const size_t& slices;
+        const size_t& runs;
+        const size_t& nruns;
         std::unordered_set<int64_t>& all;
         ~SrcStats() {
             auto& st = eliminator_stats();
@@ -1490,6 +1497,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 bytes += b;
                 all.insert(m);
             }
+            st.sk_run_bytes_sum += static_cast<double>(runs);
+            st.sk_run_bytes_max_wave = std::max(st.sk_run_bytes_max_wave, static_cast<double>(runs));
+            st.sk_runs += static_cast<int64_t>(nruns);
             st.sk_slice_bytes_sum += static_cast<double>(slices);
             st.sk_slice_bytes_max_wave = std::max(st.sk_slice_bytes_max_wave, static_cast<double>(slices));
             st.sk_src_bytes_sum += static_cast<double>(bytes);
@@ -1498,7 +1508,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             st.sk_src_distinct = static_cast<int64_t>(all.size());
             ++st.sk_src_waves;
         }
-    } src_stats{src_seen, src_slice_bytes, sk_src_all_};
+    } src_stats{src_seen, src_slice_bytes, src_run_bytes, src_runs_count, sk_src_all_};
 
     // ---- host plans (index lists only)
     {
@@ -1635,6 +1645,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             src.entries += static_cast<int64_t>(blk.a) * p.sk;
                         }
                         if (src.runs.empty()) continue;
+                        {
+                            // the W side reads a contiguous run of E's temp2^T
+                            // per ring block, on top of the P side's own slot
+                            size_t run_rows = 0;
+                            for (const RunDesc& rd : src.runs) run_rows += static_cast<size_t>(rd.count);
+                            std::lock_guard<std::mutex> lock(src_seen_mutex);
+                            src_run_bytes += run_rows * static_cast<size_t>(ss.r) * sizeof(S);
+                            src_runs_count += src.runs.size();
+                        }
                         if (src.runs.size() > static_cast<size_t>(kMaxSourceRuns)) {
                             throw std::runtime_error("LevelEliminator: too many ring blocks per fill source");
                         }
