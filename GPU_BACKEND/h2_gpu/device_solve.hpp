@@ -152,6 +152,11 @@ struct KeptSolveBox {
     const void* lu = nullptr;
     const int* ipiv = nullptr;
     int k = 0, r = 0, ntot = 0;
+    // H2_compress_factors: xnr holds this many bytes of lossy-compressed
+    // data instead of ntot * r elements (0: uncompressed, as before), and
+    // was quantized with this delta.
+    size_t xnr_bytes = 0;
+    double xnr_delta = 0.0;
 };
 struct KeptSolveLevel {
     std::vector<char*> blocks;

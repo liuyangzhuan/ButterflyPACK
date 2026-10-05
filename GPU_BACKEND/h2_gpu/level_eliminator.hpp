@@ -39,6 +39,7 @@
 
 #include "adaptive_rows.hpp"
 #include "device_heap.hpp"
+#include "factor_compress.hpp"
 #include "device_kernels.hpp"
 #include "device_solve.hpp"
 #include "solve_kernels.hpp"
@@ -126,6 +127,11 @@ struct EliminatorStats {
     bool device_exchange = false;       // generators sent from device memory
     int64_t exchange_fallbacks = 0;     // MPI buffers the exchange arena could not hold
     int64_t remote_generators = 0;
+    // H2_compress_factors: waves whose X_NR was compressed, waves that fell
+    // back to storing it uncompressed, and why.
+    int64_t xnr_waves_compressed = 0;
+    int64_t xnr_waves_plain = 0;
+    int64_t xnr_not_requested = 0;
     size_t heap_peak = 0;
     // The split of heap_peak: retained (a level or longer, chiefly the
     // solve factors and the fill sources) versus per-wave transient.
@@ -218,6 +224,9 @@ public:
     // it did not; 1: the factors outgrew the budget; 2: no free range of the
     // heap held a wave's factors).
     virtual double level_factor_bytes() const { return 0.0; }
+    // What the kept blocks actually hold (compressed, with
+    // H2_compress_factors), against level_factor_bytes()'s uncompressed size.
+    virtual double level_kept_bytes() const { return 0.0; }
     virtual int solve_keep_failure() const { return 0; }
     // The host copies of the X_NR whose download was skipped, before a host
     // transition reads them.
@@ -295,10 +304,14 @@ public:
     // supplies before the waves.
     LevelEliminator(Tree* tree, int level_index, KernelType* kernel, double tolerance,
                     std::unique_ptr<Blocks> adopt = nullptr, bool occupancy = false, bool device_sketch = true,
-                    bool ca = false, bool owner = false)
+                    bool ca = false, bool owner = false, int compress_factors = 0)
         : tree_(tree), level_(tree->levels[static_cast<size_t>(level_index)]), kernel_(kernel),
           tolerance_(tolerance), heap_(DeviceHeap::instance()), adopt_(std::move(adopt)), occupancy_(occupancy),
-          ca_(ca || owner), owner_mode_(owner) {
+          ca_(ca || owner), owner_mode_(owner), compress_factors_(compress_factors)
+#ifdef H2_HAVE_NVCOMP
+          , xnr_compressor_(DeviceHeap::instance())
+#endif
+    {
         evaluator_ = evaluator_of(kernel->gpu_evaluator);
         gpu_sketch_ = device_sketch && device_sketch_supported(tree, *evaluator_);
         if (ca_ && !gpu_sketch_) throw std::runtime_error("LevelEliminator: CA levels need the device sketch");
@@ -380,6 +393,7 @@ public:
     }
     void restore_host_copies() override { rescue_skipped_xnr(); }
     double level_factor_bytes() const override { return factor_bytes_; }
+    double level_kept_bytes() const override { return kept_.bytes; }
     int solve_keep_failure() const override { return keep_failure_; }
 
 private:
@@ -732,6 +746,10 @@ private:
     bool occupancy_ = false;           // empty boxes in the local slab (see the constructor)
     bool ca_ = false;                  // a replicated CA level (ghosts eliminated here too)
     bool early_free_sources_ = false;  // multi-rank level: fill sources released once read
+    int compress_factors_ = 0;         // H2_compress_factors
+#ifdef H2_HAVE_NVCOMP
+    WaveXnrCompressor<S> xnr_compressor_;
+#endif
     // Fill sources whose local readers have all sketched, oldest first.  They
     // stay on the device for the transition (which otherwise restores them
     // from their host copies) until the heap needs their memory.
@@ -3649,19 +3667,64 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     const size_t D = sizeof(S), I = sizeof(int);
     struct Span { size_t off; const char* src; size_t bytes; };
     std::vector<Span> spans;
-    struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot; };
+    struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot;
+                  size_t xnr_bytes; double xnr_delta; };
     std::vector<Made> made;
-    size_t total = 0;
+
+    // ---- phase A: this wave's X_NR, compressed while it is still in the
+    // wave's working memory.  The store that accumulates over the level then
+    // holds compressed bytes from the first wave on; compressing at level end
+    // instead would need the whole level's X_NR uncompressed at once, which is
+    // the peak this removes.
+    std::vector<const WaveBox*> kept_boxes;
     for (const WaveBox& wb : boxes) {
         if (wb.k == 0 || wb.r == 0) continue;
-        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;  // (its home rank keeps them)
+        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+        kept_boxes.push_back(&wb);
+    }
+    std::vector<CompressedXnr> comp;
+    bool compressed = false;
+#ifdef H2_HAVE_NVCOMP
+    if (compress_factors_ < 1 && !kept_boxes.empty()) ++eliminator_stats().xnr_not_requested;
+    if (compress_factors_ >= 1 && !kept_boxes.empty()) {
+        std::vector<const S*> srcs;
+        std::vector<size_t> elems;
+        srcs.reserve(kept_boxes.size());
+        elems.reserve(kept_boxes.size());
+        for (const WaveBox* wb : kept_boxes) {
+            const size_t nt = static_cast<size_t>(wb->ntot), r = static_cast<size_t>(wb->r);
+            const char* source = d_sources[static_cast<size_t>(wb->source_group)];
+            srcs.push_back(reinterpret_cast<const S*>(source + wb->off_temp2));
+            elems.push_back(nt * r);
+        }
+        compressed = xnr_compressor_.compress(srcs, elems, tolerance_, comp, stream);
+        if (compressed) ++eliminator_stats().xnr_waves_compressed;
+        else ++eliminator_stats().xnr_waves_plain;
+    }
+#else
+    if (!kept_boxes.empty()) ++eliminator_stats().xnr_not_requested;
+#endif
+
+    size_t total = 0;
+    for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
+        const WaveBox& wb = *kept_boxes[bi];
         const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
         const char* source = d_sources[static_cast<size_t>(wb.source_group)];
-        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot};
+        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0};
         m.T = total;   spans.push_back({total, d_result + wb.off_t, k * r * D});        total = align_up(total + k * r * D);
         m.xsr = total; spans.push_back({total, d_result + wb.off_temp1, k * r * D});    total = align_up(total + k * r * D);
-        m.xnr = total; if (nt > 0) spans.push_back({total, source + wb.off_temp2, nt * r * D});
-        total = align_up(total + nt * r * D);
+        m.xnr = total;
+        if (compressed && nt > 0 && comp[bi].bytes > 0) {
+            // the gather copies 4-byte words, and both ends are 256-aligned
+            const size_t bytes = align_up(comp[bi].bytes, 4);
+            spans.push_back({total, xnr_compressor_.staging() + comp[bi].offset, bytes});
+            m.xnr_bytes = comp[bi].bytes;
+            m.xnr_delta = comp[bi].delta;
+            total = align_up(total + bytes);
+        } else {
+            if (nt > 0) spans.push_back({total, source + wb.off_temp2, nt * r * D});
+            total = align_up(total + nt * r * D);
+        }
         m.lu = total;  spans.push_back({total, d_result + wb.off_xrr, r * r * D});      total = align_up(total + r * r * D);
         m.piv = total; spans.push_back({total, d_result + wb.off_piv, r * I});          total = align_up(total + r * I);
         made.push_back(m);
@@ -3699,6 +3762,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     auto* d_items = static_cast<CopySpan*>(solve_meta_device_.reserve(list_bytes));
     check_cuda(cudaMemcpyAsync(d_items, items.data(), list_bytes, cudaMemcpyHostToDevice, stream), "kept factors");
     launch_copy_spans(d_items, static_cast<int>(items.size()), max_words, stream);
+#ifdef H2_HAVE_NVCOMP
+    if (compressed) {
+        // the gather reads the compressor's staging: it may only go back to
+        // the heap once the copy is done
+        check_cuda(cudaStreamSynchronize(stream), "kept factors (compressed)");
+        xnr_compressor_.release();
+    }
+#endif
     for (const Made& m : made) {
         KeptSolveBox kb;
         kb.T = block + m.T;
@@ -3709,6 +3780,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         kb.k = m.k;
         kb.r = m.r;
         kb.ntot = m.ntot;
+        kb.xnr_bytes = m.xnr_bytes;
+        kb.xnr_delta = m.xnr_delta;
         kept_.boxes[m.morton] = kb;
     }
 }
@@ -5758,7 +5831,8 @@ template<typename CoordType, typename DataType, typename KernelType>
 std::unique_ptr<LevelEliminatorBase<CoordType, DataType>> make_level_eliminator(
     ParallelTree<CoordType, DataType>* tree, int level_index, KernelType* kernel, double tolerance,
     FactorizationMethod method, std::string* reason, std::unique_ptr<DeviceLevelBlocks<DataType>> adopt = nullptr,
-    bool occupancy = false, bool device_sketch = true, bool ca = false, bool owner = false) {
+    bool occupancy = false, bool device_sketch = true, bool ca = false, bool owner = false,
+    int compress_factors = 0) {
     if constexpr (gpu_data_type<DataType>) {
         const auto& level = tree->levels[static_cast<size_t>(level_index)];
         if (!level_eliminator_supported(level, kernel, tree->dimension, method, reason, ca || owner)) {
@@ -5766,12 +5840,13 @@ std::unique_ptr<LevelEliminatorBase<CoordType, DataType>> make_level_eliminator(
             return nullptr;
         }
         auto eliminator = std::make_unique<LevelEliminator<CoordType, DataType, KernelType>>(
-            tree, level_index, kernel, tolerance, std::move(adopt), occupancy, device_sketch, ca, owner);
+            tree, level_index, kernel, tolerance, std::move(adopt), occupancy, device_sketch, ca, owner,
+            compress_factors);
         if (!owner) eliminator->begin();  // (an owner level begins after its plan)
         return eliminator;
     } else {
         (void)tree; (void)level_index; (void)kernel; (void)tolerance; (void)method; (void)adopt; (void)occupancy;
-        (void)device_sketch; (void)ca; (void)owner;
+        (void)device_sketch; (void)ca; (void)owner; (void)compress_factors;
         if (reason) *reason = "single precision is not run on the GPU";
         return nullptr;
     }

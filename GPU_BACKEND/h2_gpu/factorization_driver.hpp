@@ -309,7 +309,8 @@ public:
         MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
         std::string reason;
         level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
-                                       std::move(blocks_), opt_.occupancy, fits != 0);
+                                       std::move(blocks_), opt_.occupancy, fits != 0,
+                                       /*ca=*/false, /*owner=*/false, opt_.compress_factors);
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, false);
         if (wave_trace_enabled()) trace_.start_end();
@@ -364,7 +365,7 @@ public:
         if (fits) {
             level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
                                            blocks_ != nullptr ? std::move(blocks_) : nullptr, opt_.occupancy, true,
-                                           /*ca=*/true, /*owner=*/true);
+                                           /*ca=*/true, /*owner=*/true, opt_.compress_factors);
             if (level_) level_->set_owner_plan(view);
         }
         level_index_ = lvl;
@@ -435,7 +436,7 @@ public:
             }
             level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
                                            device_halo ? std::move(blocks_) : nullptr, opt_.occupancy, true,
-                                           /*ca=*/true);
+                                           /*ca=*/true, /*owner=*/false, opt_.compress_factors);
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, true);
@@ -651,6 +652,9 @@ public:
             } else if (v[0] > 0.0) {
                 keep_ratio_ = std::min(1.0, kKeepMargin * v[0]);
             }
+            // (before the commit: it moves the kept state into the store)
+            const double kept_now = level_ ? level_->level_kept_bytes() : 0.0;
+            const double raw_now = level_ ? level_->level_factor_bytes() : 0.0;
             if (level_) level_->commit_solve_factors(kept != 0);
             // (the level's end: this rank's finish and the slowest rank's, the
             // collectives' wait included in the total)
@@ -660,9 +664,20 @@ public:
                 std::printf("  [gpu] level %d end: finish %.2f s (slowest rank %.2f), total %.2f s\n", lvl, fin[0], fin[1],
                             std::chrono::duration<double>(std::chrono::steady_clock::now() - t_finish).count());
                 if (kept != 0) {
+                    // stored vs the uncompressed size, so H2_compress_factors
+                    // shows up (level_factor_bytes() is from the dimensions)
+                    const double ratio = kept_now > 0.0 ? raw_now / kept_now : 1.0;
                     std::printf("  [gpu] level %d solve factors: kept on the device (up to %.2f GB per rank, at most "
-                                "%.0f%% of their bound)\n",
-                                lvl, v[1] / 1e9, 100.0 * v[0]);
+                                "%.0f%% of their bound; rank 0 stored %.2f GB of %.2f GB, %.1fx)\n",
+                                lvl, v[1] / 1e9, 100.0 * v[0], kept_now / 1e9, raw_now / 1e9, ratio);
+                    const auto& es = eliminator_stats();
+                    if (es.xnr_waves_compressed + es.xnr_waves_plain + es.xnr_not_requested > 0) {
+                        std::printf("  [gpu] level %d X_NR compression: %lld waves compressed, %lld fell back, "
+                                    "%lld not requested\n", lvl,
+                                    static_cast<long long>(es.xnr_waves_compressed),
+                                    static_cast<long long>(es.xnr_waves_plain),
+                                    static_cast<long long>(es.xnr_not_requested));
+                    }
                 } else {
                     std::printf("  [gpu] level %d solve factors: to be uploaded at the first solve%s%s\n", lvl,
                                 v[2] > 0.0 ? " (the keep budget ran out during the level)" : "",

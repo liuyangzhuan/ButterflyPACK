@@ -83,7 +83,7 @@ struct CompressedXnr {
 template<typename S>
 class WaveXnrCompressor {
 public:
-    WaveXnrCompressor(DeviceHeap& heap, cudaStream_t stream) : heap_(heap), stream_(stream) {}
+    explicit WaveXnrCompressor(DeviceHeap& heap) : heap_(heap) {}
     ~WaveXnrCompressor() { release(); }
     WaveXnrCompressor(const WaveXnrCompressor&) = delete;
     WaveXnrCompressor& operator=(const WaveXnrCompressor&) = delete;
@@ -91,8 +91,9 @@ public:
     // Returns false when the scratch does not fit, so the caller stores the
     // wave uncompressed (as it would without a compressor at all).
     bool compress(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
-                  double tolerance, std::vector<CompressedXnr>& out) {
+                  double tolerance, std::vector<CompressedXnr>& out, cudaStream_t stream) {
         release();
+        stream_ = stream;
         const size_t n = srcs.size();
         out.assign(n, CompressedXnr{});
         if (n == 0) return false;
@@ -186,7 +187,7 @@ public:
 
 private:
     DeviceHeap& heap_;
-    cudaStream_t stream_;
+    cudaStream_t stream_ = nullptr;
     char* staging_ = nullptr;
     char* meta_ = nullptr;
     bitcompHandle_t plan_{};
