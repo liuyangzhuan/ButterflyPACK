@@ -34,6 +34,7 @@
 #include <nvcomp/native/bitcomp.h>
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -51,12 +52,46 @@ inline bool factor_compression_built() {
 }
 
 // One box's compressed X_NR inside a kept block.
+// |v| for the device element types (double, and the backend's dcomplex).
+inline double xnr_magnitude(double v) { return std::abs(v); }
+template<typename T>
+inline double xnr_magnitude(const T& v) { return std::sqrt(v.re * v.re + v.im * v.im); }
+
+// The compression's tolerance as a fraction of tol_comp.  At tol_comp itself
+// the quantization error (about 6e-4 relative) is comparable to the H2
+// approximation error, and measured at 96^3 it multiplied acc_mvp by 3.6 and
+// acc_forward by 4.0.  A fifth of it costs little ratio (X_NR compresses about
+// 23x at tol_comp, 12-15x here) and keeps the error well below the
+// approximation's.
+inline constexpr double kXnrToleranceFraction = 0.2;
+
 struct CompressedXnr {
     size_t offset = 0;      // of the compressed bytes in the kept block
     size_t bytes = 0;       // their length
     int64_t rows = 0;       // the uncompressed shape, for the solve
     int64_t cols = 0;
     double delta = 0.0;     // the quantization step it was compressed with
+};
+
+// The compressed X_NR of one solve wave, decompressed into a shared scratch
+// before the wave's sweep kernels run and discarded after, so only one wave's
+// X_NR is uncompressed at a time.  Both sweeps read X_NR, so a wave is
+// decompressed twice per solve; at a wave-sized batch that is a few hundred
+// GB/s, against a solve of a quarter second.
+//
+// The batch plan is built once (from the compressed data itself) and reused by
+// every sweep of every solve.
+struct SolveXnrWave {
+    std::vector<int> boxes;            // indices into the level's SolveBox array
+    std::vector<const void*> h_srcs;   // compressed bytes, in the kept block
+    std::vector<void*> h_dsts;         // into the level's scratch
+    const void** d_srcs = nullptr;
+    void** d_dsts = nullptr;
+#ifdef H2_HAVE_NVCOMP
+    bitcompHandle_t plan{};
+    bool have_plan = false;
+#endif
+    bool empty() const { return boxes.empty(); }
 };
 
 #ifdef H2_HAVE_NVCOMP
@@ -193,6 +228,56 @@ private:
     bitcompHandle_t plan_{};
     bool have_plan_ = false;
 };
+
+
+#ifdef H2_HAVE_NVCOMP
+
+// Build a wave's plan and upload its pointer arrays.  `temp` is scratch the
+// plan keeps for the compressed headers.
+inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t stream) {
+    if (w.boxes.empty()) return true;
+    const size_t n = w.boxes.size();
+    char* ptrs = heap.alloc_resident(align_up(n * sizeof(void*)) * 2);
+    w.d_srcs = reinterpret_cast<const void**>(ptrs);
+    w.d_dsts = reinterpret_cast<void**>(ptrs + align_up(n * sizeof(void*)));
+    check_cuda(cudaMemcpyAsync(w.d_srcs, w.h_srcs.data(), n * sizeof(void*),
+                               cudaMemcpyHostToDevice, stream), "xnr wave srcs");
+    check_cuda(cudaMemcpyAsync(w.d_dsts, w.h_dsts.data(), n * sizeof(void*),
+                               cudaMemcpyHostToDevice, stream), "xnr wave dsts");
+    check_cuda(cudaStreamSynchronize(stream), "xnr wave pointers");
+    if (bitcompCreateBatchPlanFromCompressedData(&w.plan, w.d_srcs, n, nullptr, stream) != BITCOMP_SUCCESS) {
+        return false;
+    }
+    w.have_plan = true;
+    bitcompSetStream(w.plan, stream);
+    return true;
+}
+
+// Decompress a wave's X_NR into the scratch its pointers were built for.
+inline void decompress_solve_xnr_wave(const SolveXnrWave& w, cudaStream_t stream) {
+    if (w.boxes.empty() || !w.have_plan) return;
+    bitcompSetStream(w.plan, stream);
+    if (bitcompBatchUncompress(w.plan, w.d_srcs, w.d_dsts) != BITCOMP_SUCCESS) {
+        throw std::runtime_error("H2 GPU solve: decompressing a wave's X_NR failed");
+    }
+}
+
+inline void release_solve_xnr_wave(SolveXnrWave& w) {
+    if (w.have_plan) { bitcompDestroyPlan(w.plan); w.have_plan = false; }
+}
+
+#endif  // H2_HAVE_NVCOMP
+
+// Decompress one block on the host (bitcompHost*), for the paths that read
+// the factors there: the host solve fallback and a kept level solved on the
+// host.  The format is the same as the device's.
+template<typename S>
+inline void decompress_xnr_host(const void* src, S* dst) {
+    bitcompHandle_t plan{};
+    H2_BK(bitcompCreatePlanFromCompressedData(&plan, src));
+    H2_BK(bitcompHostUncompress(plan, src, dst));
+    bitcompDestroyPlan(plan);
+}
 
 // Decompress one block, for the solve.  `dst` must hold rows*cols elements.
 template<typename S>

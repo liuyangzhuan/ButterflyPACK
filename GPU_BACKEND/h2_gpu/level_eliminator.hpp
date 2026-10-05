@@ -3697,7 +3697,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
             srcs.push_back(reinterpret_cast<const S*>(source + wb->off_temp2));
             elems.push_back(nt * r);
         }
-        compressed = xnr_compressor_.compress(srcs, elems, tolerance_, comp, stream);
+        compressed = xnr_compressor_.compress(
+            srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream);
         if (compressed) ++eliminator_stats().xnr_waves_compressed;
         else ++eliminator_stats().xnr_waves_plain;
     }
