@@ -639,6 +639,10 @@ endif()
 # h2_gpu/GPU_CA_PLAN.md, M7b); not built by default: make h2_halo_geometry_test
 add_executable(h2_halo_geometry_test EXCLUDE_FROM_ALL h2_parallel/tests/halo_geometry_test.cpp)
 target_include_directories(h2_halo_geometry_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
+# Test and timing of the component-owner schedule's graph of the process grid (the local
+# construction against the global one; h2_gpu/GPU_CA_PLAN.md, M5e); not built by default: make h2_owner_graph_test
+add_executable(h2_owner_graph_test EXCLUDE_FROM_ALL h2_parallel/tests/owner_graph_test.cpp)
+target_include_directories(h2_owner_graph_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
 
 set_target_properties(butterflypack PROPERTIES
   VERSION ${PROJECT_VERSION}

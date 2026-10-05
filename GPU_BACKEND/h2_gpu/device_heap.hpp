@@ -418,17 +418,22 @@ inline int share_device(MPI_Comm comm) {
 // The exchange arena (DeviceHeap::exchange_arena()) of a run of nproc ranks
 // with GPU-aware MPI, before the device pool takes its fraction of the free
 // memory: BPACK_GPU_EXCHANGE_MB MB, default min(2560 MB, a sixteenth of the
-// GPU) divided among the `share` ranks that use the GPU (share_device).  MPI
-// sends from and receives into it (registered once for MPI; buffers of the
-// main pool made the transfers ~30x slower); a message that does not fit
-// goes through the host.  No-op once reserved.
-inline void reserve_exchange_arena(int nproc, int share) {
+// GPU), or `fraction` of the GPU when that is more (a component-owner CA
+// level holds a colour's arrivals until its end: up to 2.4 GB per rank
+// each way at the leaf of 320^3 on 64 ranks), divided among the `share`
+// ranks that use the GPU (share_device).  MPI sends from and receives into
+// it (registered once for MPI; buffers of the main pool made the transfers
+// ~30x slower); a message that does not fit goes through the host.  No-op
+// once reserved.
+inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) {
     DeviceHeap& arena = DeviceHeap::exchange_arena();
     if (nproc <= 1 || !device_exchange_enabled() || arena.initialized()) return;
     Context::instance().activate();
     size_t free_bytes = 0, total_bytes = 0;
     check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
-    size_t mb = std::min<size_t>(2560, (total_bytes >> 20) / 16) / static_cast<size_t>(std::max(share, 1));
+    size_t mb = std::min<size_t>(2560, (total_bytes >> 20) / 16);
+    if (fraction > 0.0) mb = std::max(mb, static_cast<size_t>(fraction * static_cast<double>(total_bytes >> 20)));
+    mb /= static_cast<size_t>(std::max(share, 1));
     if (const char* env = std::getenv("BPACK_GPU_EXCHANGE_MB")) mb = static_cast<size_t>(std::atoll(env));
     arena.initialize_fixed(mb << 20);
 }
@@ -497,12 +502,13 @@ inline void release_operator(const void* tree) {
 
 // Start of a factorization or compression of operator `tree` (collective
 // over comm): the GPU sharing and the exchange arena (the first time, before
-// the device pool), then activates the operator and makes room from the
-// other operators' data.
-inline void begin_operator_build(const void* tree, MPI_Comm comm) {
+// the device pool; `exchange_fraction`: the arena's share of the GPU when
+// more than the default, see reserve_exchange_arena), then activates the
+// operator and makes room from the other operators' data.
+inline void begin_operator_build(const void* tree, MPI_Comm comm, double exchange_fraction = 0.0) {
     int nproc = 1;
     MPI_Comm_size(comm, &nproc);
-    reserve_exchange_arena(nproc, share_device(comm));
+    reserve_exchange_arena(nproc, share_device(comm), exchange_fraction);
     activate_operator(tree);
     OperatorContext& c = operator_context();
     const DeviceHeap& heap = DeviceHeap::instance();

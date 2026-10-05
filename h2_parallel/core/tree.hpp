@@ -1170,6 +1170,11 @@ struct TreeLevel {
     };
     std::vector<CAHaloSend> ca_halo_sends;
     bool ca_halo_sends_valid = false;
+    // A component-owner CA level factored on the device with its factors at
+    // their home ranks (h2_gpu/ca_owner.hpp): the solves and multiplies run
+    // it as a Color level (no replicated ghosts).
+    bool ca_home_factors = false;
+    std::unordered_map<int64_t, int32_t> ca_home_order;  ///< its local boxes' elimination sequence numbers
 
     // for shared memory sync
     std::unordered_map<int64_t, omp_lock_t*> box_locks;

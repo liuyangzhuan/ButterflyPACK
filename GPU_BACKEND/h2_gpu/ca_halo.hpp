@@ -34,7 +34,9 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <functional>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -63,12 +65,72 @@ struct Piece {
 
 }  // namespace ca_halo_detail
 
+// A peer of the block exchange: the ghosts it needs from this rank, the
+// ghosts of this rank it holds, and (sent) which boxes it fetches itself.
+struct CaHaloPeer {
+    int rank = -1;
+    std::vector<int64_t> requested;  // ghosts of this rank it needs (their blocks go to it)
+    std::vector<int64_t> mine;       // this rank's ghosts it owns (their blocks come from it)
+    std::function<bool(int64_t)> fetches;  // whether it fetches box x too (the pair (g, x) then comes with the lower one)
+};
+
+// The exchange over caller-supplied lists (the replicated halo below, the
+// owner-level fetch in ca_owner.hpp): `peers` by rank, every rank's lists
+// derived from data the ranks share, so both sides of a message compute
+// the same pieces in the same order.
+template<typename CoordType, typename DataType>
+CaHaloStats exchange_ca_blocks_for(ParallelTree<CoordType, DataType>* tree, int lvl,
+                                   DeviceLevelBlocks<DataType>& blocks, MPI_Comm level_comm,
+                                   std::map<int, CaHaloPeer>& peer_of, const std::function<bool(int64_t)>& i_fetch,
+                                   const char* what);
+
 template<typename CoordType, typename DataType>
 CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, int lvl,
                                      DeviceLevelBlocks<DataType>& blocks, MPI_Comm level_comm) {
   if constexpr (!gpu_data_type<DataType>) {
     (void)tree; (void)lvl; (void)blocks; (void)level_comm;
     throw std::runtime_error("exchange_ca_ghost_blocks: data type not run on the GPU");
+  } else {
+    auto& level = tree->levels[static_cast<size_t>(lvl)];
+    const RegionLayout L = RegionLayout::of(tree->dimension, lvl, level.num_active_processes);
+    if (!L.uniform || level.my_morton_id < 0) {
+        throw std::runtime_error("CA device halo: the level's regions are not uniform cubes");
+    }
+    const uint32_t my_region = static_cast<uint32_t>(level.my_morton_id);
+    auto rank_of_region = [&](uint32_t q) { return level.morton_to_rank.at(static_cast<int>(q)); };
+    auto owner_rank = [&](int64_t m) { return rank_of_region(L.region_of(m)); };
+    // the peers: ranks this one sends ghosts to (their ghost sets within
+    // this region) or receives its ghosts from
+    std::map<int, CaHaloPeer> peer_of;
+    for_each_region_within(L, my_region, halo_region_radius(L), [&](uint32_t q) {
+        std::vector<int64_t> requested = ghosts_of_region_in(L, q, my_region);
+        if (requested.empty()) return;
+        CaHaloPeer& p = peer_of[rank_of_region(q)];
+        p.rank = rank_of_region(q);
+        p.requested = std::move(requested);
+        const RegionGhosts rg = ghosts_of_region(L, q);
+        auto ghost_set = std::make_shared<std::unordered_set<int64_t>>(rg.ghosts.begin(), rg.ghosts.end());
+        p.fetches = [ghost_set](int64_t x) { return ghost_set->count(x) != 0; };
+    });
+    for (int64_t g : level.ghost_id) {
+        CaHaloPeer& p = peer_of[owner_rank(g)];
+        p.rank = owner_rank(g);
+        p.mine.push_back(g);
+    }
+    auto my_requests = std::make_shared<std::unordered_set<int64_t>>(level.ghost_id.begin(), level.ghost_id.end());
+    return exchange_ca_blocks_for(tree, lvl, blocks, level_comm, peer_of,
+                                  [my_requests](int64_t x) { return my_requests->count(x) != 0; }, "CA device halo");
+  }
+}
+
+template<typename CoordType, typename DataType>
+CaHaloStats exchange_ca_blocks_for(ParallelTree<CoordType, DataType>* tree, int lvl,
+                                   DeviceLevelBlocks<DataType>& blocks, MPI_Comm level_comm,
+                                   std::map<int, CaHaloPeer>& peer_of, const std::function<bool(int64_t)>& i_fetch,
+                                   const char* what) {
+  if constexpr (!gpu_data_type<DataType>) {
+    (void)tree; (void)lvl; (void)blocks; (void)level_comm; (void)peer_of; (void)i_fetch; (void)what;
+    throw std::runtime_error("exchange_ca_blocks_for: data type not run on the GPU");
   } else {
     using S = typename DeviceScalar<DataType>::type;
     using ca_halo_detail::Piece;
@@ -82,45 +144,21 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
     DeviceHeap& heap = DeviceHeap::instance();
     const size_t D = sizeof(S);
 
-    // ---- who sends which ghosts to whom, from the level's region layout
-    //      (halo_geometry.hpp, as the host gather at level entry), and the
-    //      peers' ghost sets; messages over the tree's communicator
-    const RegionLayout L = RegionLayout::of(tree->dimension, lvl, level.num_active_processes);
-    if (!L.uniform || level.my_morton_id < 0) {
-        throw std::runtime_error("CA device halo: the level's regions are not uniform cubes");
-    }
-    const uint32_t my_region = static_cast<uint32_t>(level.my_morton_id);
+    // ---- who sends which ghosts to whom: the caller's lists (derived on
+    //      every rank from data the ranks share); messages over the tree's
+    //      communicator
     MPI_Comm comm = tree->comm;
     const int comm_rank = tree->mpi_rank;
-    auto rank_of_region = [&](uint32_t q) { return level.morton_to_rank.at(static_cast<int>(q)); };
-    auto owner_rank = [&](int64_t m) { return rank_of_region(L.region_of(m)); };
-    // the peers: ranks this one sends ghosts to (their ghost sets within
-    // this region) or receives its ghosts from
-    struct Peer {
-        int rank = -1;
-        std::vector<int64_t> requested;          // ghosts of this rank it needs
-        std::unordered_set<int64_t> ghost_set;   // its whole ghost set
-        std::vector<int64_t> mine;               // this rank's ghosts it owns
+    auto owner_rank = [&](int64_t m) {
+        const std::vector<uint64_t> single = {static_cast<uint64_t>(m)};
+        const std::vector<uint32_t> region = morton::assign_to_processes_nd(
+            tree->dimension, single, level.num_active_processes, 1u << lvl);
+        return level.morton_to_rank.at(static_cast<int>(region[0]));
     };
-    std::map<int, Peer> peer_of;
-    for_each_region_within(L, my_region, halo_region_radius(L), [&](uint32_t q) {
-        std::vector<int64_t> requested = ghosts_of_region_in(L, q, my_region);
-        if (requested.empty()) return;
-        Peer& p = peer_of[rank_of_region(q)];
-        p.rank = rank_of_region(q);
-        p.requested = std::move(requested);
-        const RegionGhosts rg = ghosts_of_region(L, q);
-        p.ghost_set.insert(rg.ghosts.begin(), rg.ghosts.end());
-    });
-    for (int64_t g : level.ghost_id) {
-        Peer& p = peer_of[owner_rank(g)];
-        p.rank = owner_rank(g);
-        p.mine.push_back(g);
-    }
+    using Peer = CaHaloPeer;
     std::vector<Peer*> peers;
     for (auto& kv : peer_of) peers.push_back(&kv.second);
     const int np = static_cast<int>(peers.size());
-    const std::unordered_set<int64_t> my_requests(level.ghost_id.begin(), level.ghost_id.end());
 
     // the payload of ghost g for receiver `peer`, from the neighbors' sizes
     auto payload = [](int64_t g, int n_g, std::vector<int64_t> hop, auto&& peer_has, auto&& also_requested,
@@ -149,7 +187,7 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
             payload(
                 g, static_cast<int>(box->num_points), box->one_hop,
                 [&](int64_t x) { return owner_rank(x) == p.rank; },
-                [&](int64_t x) { return p.ghost_set.count(x) != 0; },
+                [&](int64_t x) { return p.fetches && p.fetches(x); },
                 [&](int64_t x) -> int {
                     const auto it = blocks.edges.find((static_cast<uint64_t>(std::min(g, x)) << 32) |
                                                       static_cast<uint64_t>(std::max(g, x)));
@@ -183,7 +221,7 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
             payload(
                 g, static_cast<int>(gb->num_points), gb->one_hop,
                 [&](int64_t x) { return level.find_local_box(x) != nullptr; },
-                [&](int64_t x) { return my_requests.count(x) != 0; }, size_on_this_rank,
+                [&](int64_t x) { return i_fetch(x); }, size_on_this_rank,
                 recvs[static_cast<size_t>(peer)]);
         }
         for (const Piece& p2 : recvs[static_cast<size_t>(peer)]) recv_elems[static_cast<size_t>(peer)] += p2.elems();
@@ -263,7 +301,7 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
         for (const Piece& p : recvs[static_cast<size_t>(peer)]) recv_shapes[static_cast<size_t>(peer)].push_back({p.rows, p.cols});
     }
     const PieceExchangeStats x = exchange_device_pieces<S>(comm, level_comm, peer_ranks, send_shapes, send_src,
-                                                          recv_shapes, recv_dst, 4700, stream, "CA device halo");
+                                                          recv_shapes, recv_dst, 4700, stream, what);
     stats.pack = x.pack;
     stats.mpi = x.mpi;
     stats.unpack = x.unpack;

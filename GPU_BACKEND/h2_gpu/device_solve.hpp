@@ -311,6 +311,22 @@ template<typename CoordType, typename DataType>
 std::vector<std::vector<int>> color_waves(const TreeLevel<CoordType, DataType>& lvl, int dimension) {
     const int num_colors = 1 << dimension;
     std::vector<std::vector<int>> waves(static_cast<size_t>(2 * num_colors));
+    if (lvl.ca_home_factors) {
+        // a component-owner level with its factors at home: the level's
+        // elimination order (the schedule's sequence numbers), not parities
+        waves.clear();
+        for (size_t b = 0; b < lvl.local_boxes.size(); ++b) {
+            const int64_t morton = lvl.local_morton_start + static_cast<int64_t>(b);
+            const auto it = lvl.ca_home_order.find(morton);
+            if (it == lvl.ca_home_order.end()) {
+                throw std::runtime_error("device solve: box " + std::to_string(morton) + " of an owner level has no wave");
+            }
+            const size_t w = static_cast<size_t>(it->second);
+            if (waves.size() <= w) waves.resize(w + 1);
+            waves[w].push_back(static_cast<int>(b));
+        }
+        return waves;
+    }
     for (size_t b = 0; b < lvl.local_boxes.size(); ++b) {
         const int64_t morton = lvl.local_morton_start + static_cast<int64_t>(b);
         const int color = static_cast<int>(morton & (num_colors - 1));
@@ -1048,6 +1064,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         int rank = 0;
         MPI_Comm_rank(tree->comm, &rank);
 
+        // (a component-owner level with its factors at home solves as a Color level)
+        auto replicated = [&](int level) {
+            return tree->level_uses_CA(level) && !tree->levels[static_cast<size_t>(level)].ca_home_factors;
+        };
         // ---- eligibility and size, on every rank
         std::string reason;
         std::vector<double> level_need(static_cast<size_t>(leaf + 1), 0.0);
@@ -1056,7 +1076,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             auto& lvl = tree->levels[static_cast<size_t>(level)];
             if (!lvl.is_process_active) continue;
             double& need = level_need[static_cast<size_t>(level)];
-            const bool ca = tree->level_uses_CA(level);
+            const bool ca = tree->level_uses_CA(level) && !lvl.ca_home_factors;
             if (ca && store.ca_levels.count(level) == 0) {
                 if (host_levels_allowed) {
                     host_only[static_cast<size_t>(level)] = 1;
@@ -1107,7 +1127,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         const double budget = room - static_cast<double>(size_t{256} << 20);
         double planned = 0.0;
         for (int level = 2; level <= leaf; ++level) {
-            if (!tree->level_uses_CA(level)) planned += 1.05 * need_max[static_cast<size_t>(level)];
+            if (!replicated(level)) planned += 1.05 * need_max[static_cast<size_t>(level)];
         }
         std::set<int> host_levels;
         if (!bad && planned > budget) {
@@ -1115,7 +1135,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             if (reason.empty()) reason = "not enough device memory";
         }
         for (int level = leaf; level >= 2 && !bad; --level) {
-            if (!tree->level_uses_CA(level)) continue;
+            if (!replicated(level)) continue;
             const double n = 1.05 * need_max[static_cast<size_t>(level)];
             if (host_only[static_cast<size_t>(level)]) {
                 host_levels.insert(level);
@@ -1172,7 +1192,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             // the boxes of the level vector: the local ones, then (a replicated
             // CA level) the ghosts, in Morton order
             using Box = BoxData<CoordType, DataType>;
-            L.ca = tree->level_uses_CA(level);
+            L.ca = replicated(level);
             std::vector<const Box*> bx;
             bx.reserve(nb + (L.ca ? lvl.ghost_boxes.size() : 0));
             for (const Box& box : lvl.local_boxes) bx.push_back(&box);
@@ -1488,7 +1508,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         }
         // the replicated CA levels' halos in device memory (all ranks)
         for (int level = 2; level <= leaf; ++level) {
-            if (!tree->level_uses_CA(level) || host_levels.count(level) != 0) continue;
+            if (!replicated(level) || host_levels.count(level) != 0) continue;
             store.bytes += static_cast<double>(
                 build_ca_halo(tree, level, store.levels[static_cast<size_t>(level)], register_seconds));
         }

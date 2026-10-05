@@ -22,6 +22,7 @@
 #include "ca_halo.hpp"
 #include "device_reduction.hpp"
 #include "level_eliminator.hpp"
+#include "owner_plan.hpp"
 #include "wave_trace.hpp"
 
 #include <algorithm>
@@ -326,9 +327,60 @@ public:
     // The device runs CA level `lvl` (all ranks decide alike): streamed
     // sketches, lazy far fill, a symmetric kernel, the LU of X_RR.
     bool ca_level_runs(int lvl, int owner_component) const {
-        if (!color_gpu_enabled() || lvl <= 1 || !tree_->level_uses_CA(lvl) || owner_component != 0) return false;
+        if (!color_gpu_enabled() || lvl <= 1 || !tree_->level_uses_CA(lvl)) return false;
+        // owner component 3 (ca_owner.hpp): its payloads move between the
+        // devices, so it needs CUDA-aware MPI
+        if (owner_component != 0 && !(owner_component == 3 && device_exchange_enabled())) return false;
         const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
         return streamed && opt_.lazy_schur > 0 && opt_.method == FactorizationMethod::LU && !opt_.occupancy;
+    }
+    // ---- a component-owner CA level (owner component 3; ca_owner.hpp)
+
+    // The level's blocks a device transition kept (the owned components'
+    // remote boxes' entry blocks are fetched into them before the start).
+    bool has_device_blocks() const { return blocks_ != nullptr; }
+    DeviceLevelBlocks<DataType>* device_blocks() { return blocks_.get(); }
+    // Level start, after the host halo gather and the fetch (all ranks of
+    // level_comm): the eliminator in owner mode with the level's plan.
+    // Returns whether the device runs the level (every box fits the device
+    // sketch's packed lists on every rank, and the eliminator supports it).
+    bool start_owner_level(int lvl, MPI_Comm level_comm, const OwnerPlanView* view, bool announce) {
+        if (wave_trace_enabled()) trace_.start_begin();
+        const Level& level = tree_->levels[static_cast<size_t>(lvl)];
+        int fits = 1;
+        for (const Box& box : level.local_boxes) {
+            if (box.num_points > kEntryDestMask) fits = 0;
+        }
+        for (const Box& box : level.ghost_boxes) {
+            if (box.num_points > kEntryDestMask) fits = 0;
+        }
+        std::string reason = "boxes over " + std::to_string(kEntryDestMask) + " points";
+        if (fits && !ca_level_supported(lvl, &reason)) fits = 0;
+        MPI_Allreduce(MPI_IN_PLACE, &fits, 1, MPI_INT, MPI_MIN, level_comm);
+        if (blocks_ != nullptr && !fits) {
+            throw std::runtime_error("start_owner_level: blocks kept on the device for a level the device declines");
+        }
+        if (fits) {
+            level_ = make_level_eliminator(tree_, lvl, kernel_, opt_.tolerance, opt_.method, &reason,
+                                           blocks_ != nullptr ? std::move(blocks_) : nullptr, opt_.occupancy, true,
+                                           /*ca=*/true, /*owner=*/true);
+            if (level_) level_->set_owner_plan(view);
+        }
+        level_index_ = lvl;
+        decide_solve_keep(lvl, level_comm, false);  // (the factors kept here are this rank's boxes')
+        if (wave_trace_enabled()) trace_.start_end();
+        if (announce) {
+            std::cout << "  GPU owner level: "
+                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                                 : "off (" + reason + ")")
+                      << std::endl;
+        }
+        return level_ != nullptr;
+    }
+    // After a colour's owned waves: its transport (ca_owner.hpp).
+    void owner_exchange(int colour) {
+        if (!level_) throw std::runtime_error("owner_exchange: no device level");
+        level_->owner_exchange(colour);
     }
     bool ca_level_runs(int lvl) const { return ca_level_runs(lvl, opt_.ca_owner_component); }
     // The eliminator's CA mode supports level `lvl` (the same on every rank;
@@ -430,7 +482,7 @@ public:
     // bitwise, by hashes of its factors.  Prints the copies checked and, per
     // rank, the first copies that differ and in which factors.
     void check_ca_replicas(int lvl, MPI_Comm level_comm, bool announce) const {
-        if (!ca_replica_check_enabled()) return;
+        if (!ca_replica_check_enabled() || opt_.ca_owner_component != 0) return;  // (an owner level has no replicas)
         const Level& level = tree_->levels[static_cast<size_t>(lvl)];
         constexpr int kParts = 8;
         static const char* const kPartNames[kParts] = {"skeleton", "T", "LU(X_RR)", "pivots",
@@ -539,6 +591,7 @@ public:
         const auto t_emit = std::chrono::steady_clock::now();
         level_->emit_generators(pending);
         const auto t_exchange = std::chrono::steady_clock::now();
+        transport_timers().presend += std::chrono::duration<double>(t_exchange - t_emit).count();
         std::vector<int64_t> installed;
         const Duration duration = host_transport(&installed);
         eliminator_stats().emit += std::chrono::duration<double>(t_exchange - t_emit).count();
@@ -564,11 +617,14 @@ public:
     // the solve's factors stay on the device (only if every rank of the
     // level still holds all of its own).
     void finish_level(int lvl, const PendingFactorUpdates<DataType>& pending, MPI_Comm level_comm, bool announce) {
+        const auto t_finish = std::chrono::steady_clock::now();
+        double finish_seconds = 0.0;  // this rank's level_->finish()
         if (level_) {
             // (every rank of level_comm has a device level here)
             const bool trace = wave_trace_enabled();
             if (trace) trace_.finish_begin();
             level_->finish();
+            finish_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_finish).count();
             if (trace) {
                 trace_.finish_end();
                 print_wave_trace(lvl, level_comm, announce);
@@ -595,7 +651,13 @@ public:
                 keep_ratio_ = std::min(1.0, kKeepMargin * v[0]);
             }
             if (level_) level_->commit_solve_factors(kept != 0);
+            // (the level's end: this rank's finish and the slowest rank's, the
+            // collectives' wait included in the total)
+            double fin[2] = {finish_seconds, finish_seconds};
+            MPI_Allreduce(MPI_IN_PLACE, &fin[1], 1, MPI_DOUBLE, MPI_MAX, level_comm);
             if (announce) {
+                std::printf("  [gpu] level %d end: finish %.2f s (slowest rank %.2f), total %.2f s\n", lvl, fin[0], fin[1],
+                            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_finish).count());
                 if (kept != 0) {
                     std::printf("  [gpu] level %d solve factors: kept on the device (up to %.2f GB per rank, at most "
                                 "%.0f%% of their bound)\n",

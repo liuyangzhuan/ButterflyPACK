@@ -71,6 +71,7 @@ namespace fmm {
 // Wall-time split of the rank exchange of factor updates (per level).
 struct TransportTimers {
     double sizes = 0.0, serialize = 0.0, payload = 0.0, deserialize = 0.0, assisting = 0.0, install = 0.0;
+    double presend = 0.0;   // a transport's start to its first message (BPACK_TRACE=skew)
     double bytes_sent = 0.0, bytes_received = 0.0;
 };
 inline TransportTimers& transport_timers() {
@@ -4968,6 +4969,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     // Morton indices of the installed generators are returned there.
     using clock = std::chrono::high_resolution_clock;
     clock::duration communication_time{};
+    const auto t_transport = clock::now();
 
     auto& lvl = tree->levels[level];
     if (device_installed != nullptr) device_installed->clear();
@@ -5084,6 +5086,7 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     auto& timers = transport_timers();
     auto seconds_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
     auto comm_start = clock::now();
+    timers.presend += std::chrono::duration<double>(comm_start - t_transport).count();
     for (size_t i = 0; i < neighbor_ranks.size(); ++i) {
         MPI_Request req;
         int err = MPI_Irecv(&recv_sizes[i], 1, MPI_UINT64_T, neighbor_ranks[i], 700, tree->comm, &req);

@@ -999,9 +999,820 @@ the gather and the larger transition it was 0.3 s behind Color through level
 
 
 ### M5. CA3 (component-owner) on the GPU
-Evaluate after M1-M3 numbers. Unique owner per boundary component, the
-corner -> edge -> face DAG, FULL/COMPACT/SKELETON routing, deterministic
-replay (R1/R2/R3). Risk: small component batches underfill the GPU.
+Unique owner per boundary component, the corner -> edge -> face DAG,
+FULL/COMPACT/SKELETON routing, deterministic replay (R1/R2/R3). Risk: small
+component batches underfill the GPU.  The design below (2026-10-02, after
+M9: CA0 and Color tied at the leaf, CA0's leaf device-bound with 1.7x the
+boxes) is the plan the user asked for before the code is written; the CPU
+feasibility numbers follow it.
+
+**Why CA3 on the device.** Color's leaf cost is 16 transports, each waiting
+for the slowest rank's wave (0.46 s of 1.9 s at 320^3/64, 0.6-1.1 s per
+level at 640^3/512); CA0 removes them at the price of 1.7x the device work
+on interior ranks.  CA3 eliminates every box once and has three dependent
+communication stages (blue -> purple -> green) plus the entry fetch and the
+return of the results, instead of 16; its overheads (fetch, routing,
+install) are bytes, which the device exchange moves at 7-12 GB/s.
+
+**Reuse (what exists and is kept as is).**
+- Host, MPI-free: `h2_parallel/core/dataflow.hpp` (process grid, component
+  graph by flood fill per colour, owner assignment with its hash, fetch
+  plan, `payload_recipients`, `auxiliary_components`, the counter Runtime).
+- Host logic of `owner_schedule.hpp`: the per-component wave partition
+  (`owner_wave_partition`, a pure function of the graph, hence the same on
+  every rank), the synchronous colour schedule, the pair watermarks
+  (R1/R2/R3) that make the numbers independent of arrival order.
+- Device: the Color eliminator's generator transport (pack on the device per
+  destination, explicit receives with transport numbers, device to device;
+  the receiver installs the generator boxes and forms its blocks' updates
+  on the device straight from the receive buffer, sources in (wave, Morton)
+  order, deltas summed in source order) -- this is CA3's COMPACT payload,
+  install and passes in one.
+- Device: `device_pieces.hpp` / `ca_halo.hpp` (pieces exchange with chunked
+  rounds through the exchange arena) for the entry fetch and the FULL
+  return; the eliminator's CA mode (writable remote boxes eliminated here,
+  LU and solves by size class so every copy factors identically).
+- Device solve: home based.  The FULL payload restores the home rank's
+  factors on its device (T, X_SR, LU, pivots, X_NR into the kept store), so
+  the Color device solve runs unchanged; the CPU's owner solve is not ported.
+
+**Schedule on the device: synchronous colours.** Per boundary colour c
+(blue+orange, purple, green): (1) one batch of all owned components of c,
+their boxes in the merged component waves (same-colour components never
+share a live pair), with the copies of c that already arrived installed in
+the same batch; (2) pack and send the batch's payloads; (3) wait for the
+remaining copies of c and install them in one batch.  Then the interior as
+today (CA0's interior group).  The arrival-driven preemption of the CPU
+schedule is a latency device for thin thread teams; on the GPU a colour's
+owned work is one wide batch anyway, and the two schedules have the same
+numerics (invariant 3 of owner_schedule.hpp).  Later (M5c) the installs of
+a colour become arrival driven within the wait.
+
+**Box kinds on the device.** Local home boxes (as today); fetched boxes
+(owned components' boxes of other ranks: entry Schur and near blocks and
+points, writable, eliminated here, their FULL state goes home afterwards);
+installed copies (eliminated elsewhere: generator state for the pairs of
+interest, marked eliminated, their temp2^T and X_RR_full kept as fill
+sources of the sketches and of the transition, as the Color path keeps
+remote generators); skeleton-only boxes (two hops: index sets, the assisting
+boxes' skeleton refresh of the Color transport).
+
+**Payloads.** From `payload_recipients`: FULL to the home rank when the
+owner is not the home (the generator plus the solve factors), COMPACT to the
+ranks holding a one-hop pair of interest (the generator: X_NR rows for the
+recipient's boxes, T, X_RR factors, as the Color transport), SKELETON to the
+two-hop readers.  Carried by the device exchange with a per-batch peer set.
+
+**Determinism.** Canonical source order (colour, wave, Morton) with pair
+watermarks: the owned waves update their pairs in wave order (R1, the
+eliminator's owner pass); the installs apply the batch's sources in (wave,
+Morton) order (the generator application); the R2/R3 bookkeeping (which
+sources a pair has already consumed when its other endpoint became live) is
+host logic over box ids, ported from `pair_watermark`.  Check: the FULL
+state at the home against the owner's copy, bitwise (as the replica check);
+box-by-box skeletons against the CPU CA3 on Laplace; logdet and
+H2_CheckError against the CPU CA3; the GPU solve check.
+
+**Milestones.**
+- M5a (runs only): CPU CA3 at the GPU's brick size (Laplace 160 Nmin 64 on 8
+  ranks; 320^3 on 64 when a slot is free): components, batches, boxes per
+  wave, bytes sent, the CPU's split; projection with the GPU's measured
+  per-wave costs; go/no-go.
+- M5b: the device CA3 level: entry fetch whole at level entry, synchronous
+  colours, payloads over the device exchange, home-based solve.  New file
+  `h2_gpu/ca_owner.hpp` (schedule glue, fetch and return plans, payload
+  framing), the eliminator's CA mode extended by the box kinds and the
+  batch entry points, a `ca_level_runs` for owner mode 3.
+- M5c: overlap: entry fetch staged by colour, sends overlapped with the
+  installs, arrival-driven installs within a colour's wait.
+- M5d: 320^3/64 and 640^3/512 against Color and CA0, per-colour breakdown.
+
+**M5a results (2026-10-02, build/gpu_prep/ca3/cpu8.sh; CPU build, Laplace
+160 Nmin 64 on 8 ranks: 16^3 bricks of 125-point boxes, CA on the leaf,
+level 5).**  Leaf level (rank 0): Color 16.9 s, CA0 15.5 s, CA3 14.5 s
+(elimination 13.5 / 12.0 / 10.5-11.0 s); factor time 62.6 / 61.2 / 56.7 s.
+CA3's owner schedule at the leaf (rank 0, a corner rank of the 2^3 grid as
+all eight are): 15 owned components with 1374 boxes (a brick's boundary is
+1352: ownership is balanced to about one boundary per rank), 11 installed
+components, 7 batches; boundary waves 24 of 16-144 boxes on rank 0, 42 of
+3-180 on the slowest rank; the CPU's split: box region 1.97 s, passes 1.39
+s, R2 replay 0.16, final 0.33, pack 0.11, install 0.46 (its thread-sum:
+temp2 solves 4.0 s, block rebuilds 1.2 s), idle wait 0.52 s; 2.4 GB sent,
+2.0 GB received per rank (the GPU Color leaf at 320^3/64 receives 2.1 GB,
+CA0's halo 3 GB).  Accuracy as Color's (acc_mvp 1.81e-3 against 1.58e-3,
+acc_forward 4.72e-3 against 4.97e-3); the serial oracle's H2_CheckError
+values equal the arrival-driven run's (the logdets differ in the 16th
+digit: the reduction's order).
+
+Projection for the GPU leaf at 320^3/64 (slowest rank, from the measured
+Color/CA0 device costs of ~0.23 ms per box): boundary 1374 boxes ~0.32 s +
+interior 2744 boxes ~0.64 s + installs ~0.1 s + fetch ~0.1 s + 2.4 GB of
+payloads ~0.25 s (overlappable) + three dependency waits ~0.3 s: about
+1.45-1.7 s against Color's 1.41 s and CA0's 1.38 s of elimination.  Even at
+64 ranks, with the upside at 512 ranks, where Color's 16 per-level waits
+cost 0.6-1.1 s and CA3 has four.
+
+**M5b as built (2026-10-03; `h2_gpu/owner_plan.hpp`, `h2_gpu/ca_owner.hpp`,
+the eliminator's owner mode).**
+- The host schedule is reused unchanged: `owner_schedule_setup` builds the
+  graph, the assignment, the wave partition and the filters as for the CPU;
+  `build_owner_plan` (ca_owner.hpp) turns it into the eliminator's view
+  (`OwnerPlanView`: the owned ghosts, the foreign local boxes, each boundary
+  box's sequence number colour * num_waves + wave and component, each owned
+  box's recipients as tree ranks from `payload_recipients`, per colour the
+  owned waves and the send and receive peers, the interior waves by Morton
+  parity, the sketch-context hook that sets `owner_current_sketch_comp`).
+- The eliminator (`owner=true`): `is_writable` = eliminated here (a local
+  box unless foreign, an owned ghost), `is_interest` = local or owned
+  ghost (the owner pass's candidates and pair targets; the Schur block
+  only of writable boxes), `held_box` for the sources' host boxes.  The
+  sketch plan sets the sketch context per box (the level's
+  `sketch_eliminated_filter` is the schedule's).  Each owned wave packs
+  its boxes' pieces per recipient (`pack_owner_generators`: the generator
+  as the Color transport's GenLayout, the X_NR rows of the recipient's
+  interest boxes, plus T, X_SR, LU and pivots for the home rank; SKELETON
+  recipients get a header entry) into a block of the exchange arena.  An
+  owned ghost's factors are neither kept nor copied to the host here (its
+  temp2 and X_RR_full are, as restorable fill sources).
+- The transport is per wave (M5c, `owner_progress`): a wave's block of
+  the exchange arena is sent as it is, a header and the bulk per
+  recipient (tags 733/734, pieces of 256 MB), once its device copies are
+  done (a stream event, polled at every wave), and freed once sent; the
+  receiver probes for headers at every wave and in the colour's wait and
+  posts the bulk receives straight into the arena.  At a colour's end
+  every recipient gets a marker (tag 735: how many wave messages this
+  rank sent it this colour), and the rank waits for its receive peers'
+  markers, as many messages and their bulk.  No colour-sized buffer and
+  no concatenation copy: the arena holds a colour's arrivals plus the
+  few wave blocks in flight (the first version concatenated the colour's
+  pieces per recipient and sent at the colour's end, which spilled from
+  the arena into the main heap, whose registration by the CUDA-aware MPI
+  made the green colour's transport 1.0-1.5 s on some ranks).  The
+  arrivals of a colour are installed at its end in sequence order, per
+  wave: the skeletons of its full-rank
+  and skeleton-only boxes, then `apply_remote_generators` (owner mode: the
+  installed box may be a ghost or a foreign local box; the rows and
+  updates cover the boxes of interest) for its generators; the FULL
+  factors of this rank's boxes land in the kept store (`land_full_factors`:
+  the keep budget as `keep_solve_factors`) or in the host boxes, T always
+  on the host; the installed generators' temp2 and X_RR_full go to the host
+  boxes in the background (the fill-source restore of the transition).
+  The colour's receive buffers return to the arena once the installs'
+  launches ran (a stream event), as the next receives may land in them.
+- The interior runs as CA0's, after the colours; `TreeLevel::ca_home_factors`
+  makes the host and device solves and the multiplies run the level as a
+  Color level (no replicated ghosts, no owner solve engine).  A device
+  transition ahead of an owner level keeps the blocks on the device; the
+  owned components' remote boxes' entry blocks then move between the
+  devices by the fetch plan (`exchange_ca_owner_blocks`, the halo's pieces
+  exchange over caller lists: `exchange_ca_blocks_for`).
+- Rules found by the 8-rank tests (every one a block the first version
+  left stale or updated when it was never read): a box homed here but
+  eliminated elsewhere gets, at its install, its pairs with ALL its
+  neighbors (not only the boxes of interest) replaced or created, as its
+  owner's elimination made them, and its owner's post-elimination Schur
+  block lands with the FULL state (then takes the later sources' updates
+  here); an owned ghost's blocks are spent after its elimination here,
+  except its pairs with boxes homed here or still to be eliminated here;
+  the generator's view of its neighbors is checked only for the boxes of
+  interest (a box of no interest it saw eliminated may have no state
+  here).  The solves and multiplies run the level in the schedule's
+  sequence order (TreeLevel::ca_home_order), not the Morton parities.
+  The installed generators stay resident for the level (no host copies to
+  restore them from; the receive buffers return to the arena after the
+  device updates).
+
+**M5b first results (2026-10-03, build/gpu_prep/ca3/gpu8.sh, frozen_m10h;
+8 ranks, Laplace 160 Nmin 64, CA3 on the leaf).**  The device CA3 level
+reproduces the CPU CA3 (cpu8_ca3.log): the leaf's compression ratio
+0.284024 and skeleton size 35.5031 identical, level 4's 55.5063 identical,
+logdet -50156606.410895944 against -50156606.410895959, every
+H2_CheckError value identical to all printed digits (acc_mvp 1.8095410e-03,
+acc_forward 4.7232536e-03); the device solve against the host solve
+2.9e-15 / 1.4e-14.  CA3 on levels 5 and 4 (the owned fetch between the
+devices, 1.81 GB received in 2667 blocks in 0.08 s) runs too (logdet
+-50156606.734, acc_mvp 1.47e-3, acc_forward 4.65e-3).  CA0 and Color
+unchanged.  Leaf time 2.62 s against Color's 1.39 and CA0's 1.38 s: waves
+0.76 s (owned 1374 boxes in 24 waves, interior 2744 in 8), the three colour
+transports 0.58 s [the slowest rank's colour 0.35, transfers 0.22: 3.04 GB
+sent, 2.50 GB received per rank] plus 0.13 s of installs, the transition
+0.24 s as Color's, and about 0.45 s around the waves (level start and
+finish) still to be found.  At Laplace 192 (884K points per rank) the
+owner level exhausts the 40 GB device (peak 33 GB against Color's 16 GB
+at 160^3; the colour payloads spill from the exchange arena into the main
+heap and fragment it): to be bounded by a wave-by-wave transport (M5c).
+
+**M5b at 320^3 on 64 ranks (2026-10-03, job 59254764, build/gpu_prep/ca3/g320,
+frozen_m10k: per-colour balancing, 256 MB payload pieces).**  CA3 on the
+leaf (level 6) against Color and CA0 of the same build in the same job:
+
+| | Color | CA0 | CA3 (owner level) |
+|---|---|---|---|
+| Factor time | 6.09 s | 6.16 s | 8.17-8.39 s |
+| leaf level | 1.94 s | 2.02 s | 4.10-4.20 s |
+| leaf: waves / transports / end wait | 0.95 + 0.47 (16 transports) | 1.27 (32 waves) / halo 0.12 | 0.73-0.76 / 0.76-0.77 (3 colours: sizes 0.3, transfers 0.3; 2.14 GB sent, 2.80 GB received) / 1.6-1.7 s |
+| logdet | -446707781.18238521 | -446707784.16925561 | -446707783.22014749 |
+| acc_mvp / acc_forward | 1.17e-3 / 5.37e-3 | 9.67e-4 / 5.49e-3 | 9.22e-4 / 5.23e-3 |
+| device solve / check | 0.338 s | | 0.346 s, 5.6e-15 / 1.05e-14 |
+
+Correct (the solve checks, the accuracy as the others'), with 1194 owned
+boxes in 14 components and 12 installed components per rank, but 2.2 s
+slower per factorization: 1.6 s of it is a wait at the level's end for
+some ranks (every rank's finish takes 0.01 s; the level-end collectives
+wait for the late ones), the same wait that shows as 0.9 s on 8 ranks at
+160^3, where the exchange trace puts it on one node's four ranks at the
+green colour; found with the per-rank timeline below.
+
+- Not bitwise across ranks: a pair held on two ranks accumulates its
+  contributions with the owner pass's grouping on one and the generator
+  application's on the other, as in the Color path (the CPU CA3's R1/R2/R3
+  machinery makes pair copies bitwise equal; the device path is instead
+  deterministic by its synchronous schedule, and its fill sources are the
+  owners' bits on every rank).  Requires CUDA-aware MPI (else the level
+  runs on the host).
+
+The level-end wait was found with the per-rank timeline (`BPACK_TRACE=
+exchange`: elapsed since a barrier at the level's start at the end of
+every colour's waves and transport): one node's four ranks spent 1.0-1.5 s
+in the green colour's transport while the others took 0.5 s; 256 MB
+pieces did not change it; a 6 GB exchange arena (`BPACK_GPU_EXCHANGE_MB`)
+did (leaf 2423 -> 1540 ms, end wait 0.89 -> 0.06 s): the colour's payload
+buffers (the waves' blocks, the concatenated send buffers and the receive
+buffers, about 3 GB in the green colour) overflowed the 2.5 GB arena into
+the main heap, whose pages the CUDA-aware MPI registers at about 1.6 GB/s.
+
+**M5c: the wave-level transport (2026-10-03, frozen_m10l; 8 ranks,
+Laplace 160 Nmin 64, CA3 on the leaf, build/gpu_prep/ca3/gpu8.sh).**  The
+protocol above (sends from the waves' arena blocks as they are packed,
+receives as the headers arrive, colour-end markers) with the default
+2.5 GB arena: the leaf 1999 -> 1068 ms (Color 1386, CA0 1382 ms), the
+level-end wait 0.9 -> 0.01 s, the colour transports 0.34 -> 0.28 s (blue
+0.03, purple 0.08, green 0.17 s), and the 0.45 s "around the waves" of
+the first version gone with the spill.  Factor time 4.39 -> 3.30 s.  The
+numbers are the previous build's to every printed digit (logdet
+-50156606.410895944, acc_mvp 1.8095410e-03, acc_forward 4.7232536e-03).
+
+The same build gave wrong numbers with CA3 on levels 5 and 4 (level 4's
+compression ratio 0.18787 against 0.189075, acc_forward 0.69; once an
+invalid pivot in a landed LU at the logdet).  The per-colour trace
+(`[exchange] ... entries N (full, compact, skeleton); held boxes of the
+colour E, without a payload M; arena fallbacks F`) showed the message sets
+complete and identical to the colour transport's, but level 4's blue
+colour sends 5.4 GB from rank 0 (8^3 bricks: larger boxes, larger
+generators) and 21 of its buffers fell back from the arena to the main
+heap.  The main heap's blocks are reused in the stream's order (a freed
+block may still be read by launches in flight: the pack's X_NR source,
+a replaced Schur block, a released fill source), which is safe for
+every launch and for a wave block (its copies are launches) but not for
+a receive buffer, which MPI writes as the data arrives.  The colour
+transport never hit this: its receive buffers were allocated after a
+stream synchronisation.  Fix (frozen_m10m): a receive buffer that falls
+back to the main heap synchronises the stream before its receives are
+posted (the arena's blocks need nothing: they are freed only after
+their reads, by the sends' completion or the installs' event).
+
+frozen_m10m (build/gpu_prep/ca3/val7.sh): the leaf 1076 ms, the numbers
+of the previous build (logdet -50156606.410895944, the solve checks
+2.9e-15 / 1.4e-14, Factor time 3.37 s); CA3 on levels 5 and 4 correct
+again (logdet -50156606.734330446, acc_mvp 1.4740937e-03, acc_forward
+4.6494769e-03, as frozen_m10k), CA0 and Color at 192 unchanged.  Level 4
+of this case (8^3 bricks of 512-point boxes, 290 owned boxes) takes
+2.6-3.0 s against the colour transport's 2.5 s: its blue colour alone
+sends 5.4 GB from rank 0 and the colour's 2.0-2.4 GB of arrivals per rank
+do not fit the 2.5 GB arena beside the wave blocks in flight (up to 21
+fallbacks per rank), so the blue transport waits 0.8-1.1 s and the
+fallback syncs stretch the next colour's waves; a non-leaf level is off
+the target (CA on the leaf only).
+
+**M5c at 320^3 on 64 ranks (2026-10-03, job 59258716, frozen_m10m, the
+2.5 GB arena).**  Correct (logdet -446707783.22014749 as frozen_m10k, the
+solve checks 5.6e-15 / 1.05e-14), Factor time 7.99-8.44 s against Color
+6.12 and CA0 6.22 s in the same job; the leaf 2.9-3.3 s against 1.51 /
+1.35-1.42 s.  The wave run's trace: rank 0's colours wait 0.04 / 0.19 /
+0.18 s, but over the 64 ranks the purple colour's wait is up to 1.27 s
+(median 0.11) and the green's up to 1.98 s (median 0.25): the colours
+move up to 1.9 and 2.4 GB per rank each way, and the arena (2.5 GB) does
+not hold a colour's arrivals beside the wave blocks in flight (up to 34
+fallbacks per rank, 14-20 on the slow ones; the fallbacks' registration
+and syncs make the stragglers everybody waits for at the colour's end
+and the level's end: "level 6 end: total 1.7-2.0 s").  The device has
+the room (CA3's heap peak 16-17 GB of 33 GB at this size; Color's 19 GB
+at 640^3/512): frozen_m10n reserves, when the factorization uses the
+component-owner level, an exchange arena of a fifth of the GPU (8 GB of
+40, `begin_operator_build(..., 0.2)`; `BPACK_GPU_EXCHANGE_MB` still
+overrides; doc/environment_variables.md).  On 8 ranks (gpu8.sh m10n) the
+leaf is unchanged (1047 ms, the same numbers, the warm-up exchange still
+0.09 s) and level 4 of the two-level case drops from 2.6-3.0 s to 1.02 s
+(no fallbacks: blue transport 0.21 s, purple 0.03, green 0.05; Factor
+time 5.18 -> 3.60 s, the numbers identical); the 192 case (884K per
+rank) still exhausts the heap, now 28.4 GB.
+
+**M5c at 320^3 on 64 ranks with the 8 GB arena (job 59259619, frozen_m10n).**
+No arena fallback on any rank; the colour waits over the 64 ranks drop
+to at most 0.05 / 0.22 / 0.46 s (medians 0.02 / 0.09 / 0.08); the leaf
+1.65-1.80 s (from 2.9-3.3 s; Color 1.51-1.57, CA0 1.35-1.42 s), the
+level-end wait 0.34-0.50 s; Factor time 6.74-7.06 s against Color 6.12
+and CA0 6.22 s of the previous job (the numbers unchanged: logdet
+-446707783.22014749).  The slowest ranks' owner-level body (the
+timeline's interior mark) ends at 0.84-0.95 s, so the leaf's remaining
+excess over Color is outside the colours: the owner level's start (plan
+0.02 s, eliminator 0.10 s), the level-end wait, and about 0.6 s of
+host work per level outside the elimination and transition timers
+("Total level time" 2676 ms against elimination 1796 + transition 291;
+Color: 1900 against 1569 + 276): the owner schedule's setup and the
+level's cleanup, to be timed next.
+
+**The owner schedule's host setup (2026-10-03, frozen_m10o: per-level
+host-phase timers under verbosity 1, `level host phases (ms, this rank /
+slowest): schedule setup, start to elimination, elimination to
+transition, after the transition`).**  On 8 ranks at 160^3 the CA3 leaf
+spends 100 ms from the level's start to the elimination (the schedule
+setup 46-52 ms, the halo gather 18 ms) against Color's 13-18 ms, and 11-27
+ms after the transition against Color's 20 ms.  The setup is
+`owner_schedule_setup`: `build_component_graph` classifies and
+flood-fills the boundary boxes of EVERY brick of the process grid, on
+every rank (dataflow.hpp; hash maps, a neighbour vector per box, per
+component the visible-rank search over its boxes), then validates the
+graph and assigns the owners.  Measured on the login node
+(h2_parallel/tests/owner_graph_timing.cpp, 16^3 bricks):
+
+| grid | components | boundary boxes | graph | validate | assign |
+|---|---|---|---|---|---|
+| 2^3 (160^3 on 8) | 117 | 10.8K | 0.038 s | 0.004 s | 0.000 s |
+| 4^3 (320^3 on 64) | 665 | 86.5K | 0.358 s | 0.033 s | 0.002 s |
+| 8^3 (640^3 on 512) | 4401 | 692K | 3.60 s | 0.32 s | 0.087 s |
+
+Linear in the number of ranks, replicated on each, inside the factor
+time: 0.4 s per owner level at 64 ranks (the 0.5-0.6 s gap above), 4 s
+at 512, where the leaf itself takes 1.5 s.  The CPU CA3 pays the same.
+Confirmed at 320^3/64 (job 59260109, frozen_m10o): the CA3 leaf's host
+phases are schedule setup 380 / 408 ms (this rank / slowest), start to
+elimination 478 / 563 ms (the setup, the halo gather 59 ms and ~60 ms
+more), after the transition 127 ms, against Color's 11 / 13 and 62 / 71
+ms; the elimination itself 1658-1734 ms against 1503-1560.
+
+**M5c at 640^3 on 512 ranks (job 59259703, frozen_m10n, build/gpu_prep/
+ca3/g640).**  Correct (logdet -3937186080.0625076 in all three CA3 runs,
+the solve checks 8.1e-15 / 9.9e-15), but the Factor time is 12.6-12.8 s
+against Color 8.57 and CA0 8.35 s: the leaf's "Total level time" is
+6.4 s with an elimination of 1.86-1.99 s and a transition of 0.29 s, so
+about 4.1 s of host setup per leaf level, as the harness predicted (the
+graph 3.6 s, its validation 0.3 s).  The owner level itself: waves
+0.71 s, colour transports 0.42 s (blue 0.06, purple 0.14-0.18, green
+0.17-0.23), level-end wait 0.56-0.60 s, the halo gather 0.14-0.20 s;
+Color's leaf elimination 1.61-1.69 s, CA0's 1.42-1.51 s.  M5e below is
+what makes CA3 viable at this scale.
+
+**M5e (plan): the owner graph from the rank's neighbourhood.**  Every
+component a rank uses (owned, shared, auxiliary, the sketch filter's and
+the halo's boxes) lies in the 3^3 bricks around it: a corner cluster
+spans the 8 bricks of its corner, an edge run the 4 of its edge, a face
+the 2 of its face, and the two-hop readers' boxes are within two boxes
+of the brick.  So: (1) each rank classifies and flood-fills the boundary
+boxes of its own brick and its 26 neighbours (36.5K boxes, a constant),
+giving the components' PARTS per brick with a key computable by every
+rank that sees the brick (brick id, colour, the part's smallest Morton
+index) and the links between parts across brick faces; (2) one
+Allgatherv over the level's ranks of each rank's own parts (key, colour,
+box count, smallest Morton index, the ranks holding its boxes, the ranks
+adjacent to them, the lower-colour parts next to it: a few hundred bytes
+per rank); (3) every rank unites the parts into the global components
+(a union-find over at most 26 P parts), numbers them by (colour, smallest
+Morton index) as today, sums their costs, sharers, adjacent and visible
+ranks and predecessors from the parts, and assigns the owners (LPT, as
+today, identical on every rank); (4) the box lists are attached only for
+the components of the rank's neighbourhood (the parts it flood-filled),
+complete for the components touching its brick, which is what the wave
+partition, the payload recipients and the schedule's filters read.  The
+result is a ComponentGraph with the same ids, owners and descriptors as
+the global build; dataflow.hpp stays MPI-free by taking the gather as a
+callback (owner_schedule.hpp supplies MPI_Allgatherv; the test supplies
+the concatenation of all ranks' parts), and owner_graph_timing.cpp
+becomes the test that the local graph of every rank equals the global
+one on the 2^3 and 4^3 grids.  Expected cost: ~50 ms per level,
+independent of the rank count; the CPU CA3 gets it too.
+
+**M5e as built (2026-10-03; dataflow.hpp `LocalParts`,
+`local_component_parts`, `assemble_component_graph`,
+`build_component_graph_local`; owner_schedule_setup supplies the
+Allgatherv over the level's ranks; the user chose it for both codes).**
+A part is a component restricted to one brick (the flood fill within the
+brick, seeds in Morton order, so its first box is its smallest index);
+its key is (brick, smallest index).  A rank's stream describes its own
+brick's parts: colour, box count, the ranks adjacent to its boxes and
+those whose halo holds one of them, the keys of the same-colour parts
+across the brick's faces (the links), of the lower-colour parts within
+one hop (preds) and within the two-hop shell (preds2).  The assembly
+parses every rank's stream, unites the parts by the links, numbers the
+components by (colour, smallest index), sums the costs and unions the
+rank sets and predecessors (preds2 minus preds minus self), derives the
+successors and the HEFT ranks, attaches the neighbourhood's box lists
+(`boxes_complete` when every sharer is in the neighbourhood: so for
+every component touching the brick) and the rank's interior node.
+`Component::first_morton` carries the global smallest index (the hash
+and the ordering use it), `ComponentGraph::local_bricks` marks a local
+graph (validate_graph checks the neighbourhood's bricks and the complete
+components' boxes); `describe` and `assignment_hash` read the cost
+instead of the local list; auxiliary_components and payload_recipients
+throw if a boundary box they look at is outside the neighbourhood (the
+brick must be at least 4 boxes wide for the two-hop shell of a
+component touching the brick to stay inside it).  Test:
+h2_parallel/tests/owner_graph_test.cpp (`make h2_owner_graph_test`):
+every brick's local graph against the global one on the 2^3 and 4^3
+grids of 16^3 bricks, three bricks of the 8^3 grid, the 2D 4^2 grid and
+the 8^3-brick case; ids, colours, costs, owners, HEFT ranks, sharers,
+adjacent, visible, preds/succs/preds2/succs2, the complete box lists and
+the partial ones' membership, box_to_comp, the interior node, the
+auxiliary components, the fetch plan, the payload recipients of the
+owned boxes, validate_graph and the hash: all equal.  Cost per rank:
+8 bricks: parts 0.014 s + assembly 0.002 s (global 0.036 s); 64 bricks:
+0.045 + 0.006 s (0.34 s); 512 bricks: 0.061 + 0.107 s (3.48 + 0.32 s of
+validation); the stream is 938 int64 per brick (5.3 MB gathered at 512).
+Validation on 8 ranks (frozen_m10p, build/gpu_prep/ca3/val_m5e.sh): the
+GPU CA3 leaf and levels 5+4 give the previous numbers to every digit
+(logdet -50156606.410895944 / -50156606.734330446, the solve checks),
+CA0 and Color at 192 unchanged, and the CPU CA3 (arrival-driven, 7
+batches) reproduces its reference cpu8_ca3.log exactly (logdet
+-50156606.410895959, acc_mvp 1.8095410e-03, acc_forward 4.7232536e-03;
+Factor time 56.2 s against 56.7).  The leaf's schedule setup 33-45 ms
+on 8 ranks (46-52 before: the neighbourhood is 27 bricks there, against
+the grid's 8).  Then the parts step over dense arrays of the
+neighbourhood's cells (colour and part index per cell, neighbours by
+coordinate offsets, no hash maps or neighbour vectors): 6 / 17 / 34 ms
+per rank on the 2^3 / 4^3 / 8^3 grids (14 / 45 / 61 before), the test
+unchanged; what remains at 512 bricks is the assembly and the owner
+assignment, 0.11 s together, of which assign_owners (the LPT with its
+polish over 4401 components and 512 ranks) is about 0.09 s.  The dense
+version (frozen_m10q) validated as m10p on 8 ranks: GPU leaf, levels
+5+4, CA0/Color at 192 and the CPU CA3 all unchanged; the GPU leaf's
+schedule setup 29-39 ms in situ (the setup also validates the local
+graph, partitions the waves and derives the auxiliary components: timed
+next).
+
+**M5e at scale (2026-10-03; 320^3/64 job 59266621 with frozen_m10q,
+640^3/512 job 59266181 with frozen_m10p; Color and CA0 of the same
+builds in the same jobs; every check clean, the numbers as before).**
+
+| | Color | CA0 | CA3 before M5e | CA3 with M5e |
+|---|---|---|---|---|
+| 320^3/64 Factor time | 6.05 s | 6.09 s | 6.70-6.81 s | 6.41-6.47 s |
+| 320^3/64 leaf: total / elimination | 1.93 / 1.52-1.61 s | 1.88 / 1.34-1.40 s | 2.64 / 1.66-1.73 s | 2.23-2.30 / 1.58-1.75 s |
+| 640^3/512 Factor time | 8.79 s | 8.50 s | 12.6-12.8 s | 8.86-9.05 s |
+| 640^3/512 leaf: total / elimination | 2.12 / 1.59-1.70 s | 2.16 / 1.44-1.53 s | 6.4 / 1.86-1.99 s | 2.64-2.68 / 1.70-1.86 s |
+
+The leaf's host phases with M5e: schedule setup 63-139 / slowest
+118-164 ms at 64 ranks (the frozen_m10p setup at 512: 232-252 / 287-400
+ms), start to elimination 169-244 / 271-313 ms at 64 and 403-420 /
+528-615 ms at 512 (the setup, the halo gather 71 / 131 ms, the rest),
+after the transition 81-90 / 106-133 ms (Color 62-71 ms: the
+transition's imbalance).  The setup's split on 8 ranks (frozen_m10r,
+`[owner-schedule] level L setup` under BPACK_TRACE=phase): 34.5 ms =
+parts 4.6, gather 9.3 (the Allgather waits for the slowest rank),
+assemble 1.5, validate 4.3, assign 0.1, waves 4.6, auxiliary components
+and runtime 9.6, filters 0.1; at 512 ranks the assembly (~20 ms), the
+owner assignment (~90 ms: the LPT's polish over 4401 components) and the
+5 MB gather come on top.  CA3 is now within 0.1-0.4 s of Color at both
+sizes: the leaf's remaining excess is the setup, the halo gather and
+the level-end wait (0.36-0.51 s against Color's 0.04-0.10 s: the
+stragglers of the colour phases).
+
+**M5f: the setup's trims (2026-10-03).**  (1) The owner assignment's
+polish (`detail::polish_assignment`) indexes every rank's components in
+`ids` order, so the search for a swap or exchange partner on a rank runs
+over that rank's components instead of all of them: the same moves in
+the same order (the test compares the owners with
+`polish_assignment_reference`, kept for it, for both policies), 17 ms
+instead of 101 at 512 bricks.  (2) The wave partition covers the
+components whose box lists are complete on the rank (those touching its
+neighbourhood entirely: every box the rank can see belongs to one; a
+first version with the owned and installed components only broke the
+CPU owner solve, which reads the sequence numbers of halo boxes), with
+num_waves fixed at the parity bound (8 in 3D) so the sequence numbers
+agree across ranks whatever subset a rank partitions; the device plan's
+`seq_of_box` holds the boxes with a wave.  (3)
+`auxiliary_components` scans the brick's two outer layers only (a
+deeper box sees, within two hops, this brick's own boundary, whose
+components the rank shares).  On 8 ranks the setup is 20.5 ms (parts
+4.7, gather 3.1, assemble 1.5, validate 3.9, waves 1.3, auxiliary and
+runtime 5.6).  320^3/64 (job 59267460, frozen_m10s): CA3 Factor time
+6.17-6.33 s against Color 5.99 and CA0 6.02 s in the same job (6.41-6.47
+with frozen_m10q); the leaf 2.11-2.20 s against 1.88 / 1.89 s, its
+setup 47-107 ms of which the gather's wait for the slowest rank 13-73
+ms (the local work ~20 ms), the level-end wait 0.24-0.40 s (CA0's
+0.43 s: the owner level's per-rank duration spreads from 0.40 to 0.91 s
+over the 64 ranks, the interior phase alone from 0.12 to 0.37 s).  The
+numbers unchanged (logdet -446707783.22014749, the solve checks).
+frozen_m10t (the wave partition over every complete component) passes
+the 8-rank set: GPU leaf and levels 5+4, CA0 and Color at 192, and the
+CPU CA3 exactly its reference (logdet -50156606.410895959); its setup
+21.7 ms on 8 ranks (waves 4.8 ms).
+
+The timeline of the 320^3/64 wave run says where the owner level's
+imbalance comes from: the corner ranks of the 4^3 grid end the interior
+phase in 0.12-0.13 s, the face and interior ranks in 0.31-0.42 s, with
+the same 2744 interior boxes each; the installs of the last colour are
+still running on the device when the interior starts, and a rank with
+26 neighbours installs more components and holds more pairs of
+interest than a corner rank with 7.  The owner assignment balances the
+owned boxes only; a per-rank pre-load from the install work (the
+`fixed_load` of assign_owners, from the halo's size) would move owned
+work off the ranks with many neighbours.  Not started (M5g).
+
+640^3/512 with the trims (job 59267797, frozen_m10s): CA3 Factor time
+8.65-8.96 s against Color 8.68 and CA0 8.39 s in the same job (8.86-9.05
+with M5e alone, 12.6-12.8 before); the leaf 2.52-2.63 s against 2.04 /
+2.07 s, its setup 142-223 ms of which the gather's wait 81-163 ms, the
+assembly 12 ms, the assignment 13 ms (90 before the indexed polish); the
+level-end wait 0.50-0.54 s (CA0's 0.54 s).  Checks clean (logdet
+-3937186080.0625076, the solve checks 8.1e-15 / 9.9e-15).
+
+**M5g: the install-aware owner assignment (2026-10-03, user go-ahead).**
+The 320^3/64 wave run's timeline, phase by phase against the per-rank
+install counts (the `entries` of the exchange trace): the green waves'
+host time grows by 0.33 ms per purple generator the rank installed (the
+device is still applying the purple colour's installs when the green
+waves start), against about 0.17 ms per owned box of the colour's own
+elimination; the interior phase is 0.47-0.52 s on every rank.  The
+level's per-rank time is thus e * owned + i * installed with i about
+2 e, and the installs are tied to the geometry: a corner rank of the
+4^3 grid installs 1061 boxes, an interior rank 1958 (their owned boxes
+being balanced at ~1194 each), which is the 1.07 against 1.57 s.
+`assign_owners(..., install_cost)`: a colour's load of rank p is
+install_cost * (boxes of the colour's components adjacent to p) +
+(1 - install_cost) * (boxes p owns); with install_cost > 1 owning
+relieves, so the greedy gives a component to its most loaded sharer,
+the polish works with the signed item cost (both variants take a
+`scale`), and the makespan relief runs in the other direction
+(`relieve_by_taking`: the rank at the maximum takes a component from a
+co-sharer, chains as before).  owner_schedule_setup passes
+kDeviceInstallCost = 2.0 for a device level (sync_colors) and 0 for the
+CPU schedule, whose numbers stay exact.  The test checks the indexed
+polish against the reference and the local graph against the global
+one with install_cost 2 as well, and prints the modelled level load
+(install = 2 owned): on the 4^3 grid min/max 3566/7032 -> 4538/6128
+(the maximum down 13%), on the 8^3 grid 3534/7032 -> 4250/6912 (2%:
+the 216 interior ranks' install work alone, 2 * 3152 boxes, is near
+the previous maximum, and they can only take components from each
+other).  frozen_m10u passes the 8-rank set with the numbers of
+frozen_m10t (on the 2^3 grid every brick is a corner, so the model
+changes no owner; the CPU CA3 exact).  320^3/64 (job 59271948): WORSE.
+CA3 Factor time 6.57-6.66 s against 6.17-6.33 with frozen_m10s (Color
+6.04, CA0 6.04 in the job); the leaf 2.47-2.51 s against 2.11-2.20: the
+corner rank 0 now owns 538 boxes (16 blue in 7 waves, 90 purple in 6,
+432 green in 4) instead of 1194 and waits 0.87-0.93 s in the colour
+transports, and the per-rank end of the owner level moved from
+0.40 / 0.61 / 0.91 s (min / median / max over the ranks) to 0.57 /
+0.95 / 1.20 s: the ranks that took the work got slower by more than the
+corners gained, so the model's install cost of 2 owned boxes is wrong
+(the regression confounded the installs with the position: an interior
+rank's owned boxes have 26 neighbours and cost more than a corner
+rank's domain-boundary boxes, which is where its waves' time went) and
+tiny waves cost the device their launch latency.  The mechanism stays
+(default 0, tested).  The regression over the two assignments (the
+per-rank end of the owner level in the wave runs of frozen_m10s and
+frozen_m10u against each rank's owned and installed boxes, from the
+assignment replayed on the login node): end = 0.085 s + 0.258 ms * owned
++ 0.179 ms * installed (rms 0.16 s; the neighbour-weighted counts fit no
+better), i.e. an install costs 0.7 of an owned box, not 2: with the
+boxes-only assignment the slowest ranks (0.83-0.91 s) own 1352-1496 and
+install 2056-2840 boxes, the corners (0.40 s) own 1194 and install 1028;
+with install_cost 2 the slowest (1.12-1.20 s) own 2376-2544.  Modelled
+with 0.7 the maximum load drops about 12% at 64 ranks (an interior
+rank's installs alone, 0.7 * 2840, exceed a corner's whole load).  Tried
+as frozen_m10v (kDeviceInstallCost = 0.7) at 320^3/64 (job 59273058):
+also WORSE.  The corner rank 0 now owns every component it shares (2538
+boxes in 26 components, installs 0; waves 1.11-1.14 s), the per-rank
+end of the owner level 0.56 / 0.64 / 0.99 s (min / median / max)
+against 0.40 / 0.61 / 0.91 with the boxes-only balance, the leaf
+2.26-2.27 s against 2.11-2.20, Factor time 6.42-6.55 s against
+6.17-6.33 (Color 6.10, CA0 6.06 in the job).  Both directions lose: the
+per-rank time is not the linear model's (an owned ghost box costs more
+than an owned local one: its entry blocks fetched, its FULL state
+shipped home, its pairs with the owner's other boxes created; and a
+rank's time is not conserved under a transfer), and the 0.16 s rms of
+the fit was the warning.  Outcome of M5g: the install cost model stays
+in assign_owners (default 0, tested with the reference polish and on
+the local graph) and the device level keeps the boxes-only assignment
+(kDeviceInstallCost = 0.0); the 640^3 job of install_cost 2 was
+cancelled.  The code was then removed at the user's decision
+(2026-10-03 evening: assign_owners lost `install_cost`, the polish
+functions their `scale`, `relieve_by_taking` went; the indexed polish,
+its reference and the per-sharer home counts stay); this record stays.
+Validated (frozen_m10y): the 8-rank set as before, and the CPU CA3 at
+320^3/64 twice in one job (59306221): logdet -446707783.22014755 and
+-446707783.22014749 from the same binary, every H2_CheckError value,
+compression ratio and skeleton size identical, the in-situ graph
+comparison clean: the 17th-digit spread of the logdet is its final
+cross-rank sum, run to run.  The leaf's imbalance (corners 0.4 s, interior ranks 0.9 s)
+is the install work tied to the halo's size, and would need the
+install itself to get cheaper (apply_remote_generators: 0.18-0.33 ms
+per installed generator box) rather than a different owner.
+
+**CPU at 640^3 on 512 ranks (2026-10-03, job 59288977,
+build/gpu_prep/ca3/cpu640; 4 ranks x 16 threads per node, the live
+build/).**  Color: Factor time 156 s, solve 1.54 s; CA0: 156 s, solve
+2.24 s (logdets as the GPU runs').  Both CA3 runs (arrival-driven and
+the serial oracle) fail at the leaf with "owner_rebuild_shipped_source:
+partner copy missing: box X neighbour G" on many ranks (238 and 12
+messages): the receiver, installing X's generator, rebuilds the pair
+(X, G) from G's copy, which the owner left out of the payload
+(BLOCK_PARTNER) because its `interest_of(receiver, G)` said the
+receiver holds no interest in G, while the receiver's interest set says
+it does (G in a component it owns).  In every case X and G lie in the
+same brick, adjacent to the receiver's, one layer from a brick edge.
+The CPU CA3 had only been validated after M5e on 8 ranks (2^3 grid: no
+truncated component anywhere); offline, on the global graph, every
+one- and two-hop neighbour of every owned box lies inside its owner's
+27-brick neighbourhood (scratch owner_reach), and the outer-layer
+auxiliary search equals the full scan (scratch aux_check), so the
+owner's local graph should know G.  Diagnosis in situ: BPACK_CHECK=
+graphcheck (the local graph compared with the whole grid's build at
+every owner level, `compare_component_graphs`) and BPACK_CHECK=
+globalgraph (the whole grid's build used), plus a guard in
+`interest_of` (a boundary box without a component throws), run at
+320^3/64 (job 59290622, cpu640/cpu_graph320.sh): the failure
+reproduces at 64 ranks, identically with the local graph, with the
+in-situ comparison (which finds no difference between the graphs: the
+run reaches the same failure) and with the whole grid's build.  So M5e
+is not the cause: the CPU CA3 is broken on grids with non-adjacent
+bricks by something earlier in this session (the 8-rank reference
+passes because every brick of the 2^3 grid touches every other).  The
+last known good CPU CA3 on a 4^3 grid is the M5 feasibility of
+2026-09-30 (192^3 on 64 ranks, Nmin 27: 16^3 bricks at level 6), before
+M7-M9 (the geometric halo plan, the halo send plan with the tree, the
+staged halo's pruning "only when blocks exist") and the M5b-M5g host
+changes.  Next: the pre-session commit dc52665 built as a CPU reference
+in the worktree ../bpack_ref_dc52665 and run at 320^3/64
+(cpu640/cpu_ref320.sh); if it passes, bisect over 54d710a (M7), 040fa78
+(M8), 4c8892a (M9a-d), 7bdce9f (M9e) and the uncommitted state.
+
+Bisection (job 59291635, CPU drivers of the commits built in the
+worktrees ../bpack_ref_<commit>): dc52665, 54d710a, 040fa78 and 7bdce9f
+all pass (Factor time 96.7-96.8 s, logdet -446707783.22014749, the GPU
+CA3's to every digit); the live tree fails.  Splitting the uncommitted
+changes on HEAD (jobs 59293143, 59294401, 59294791): the live tree.hpp,
+butterfly_factorization.hpp and butterfly_solve.hpp pass; the live
+dataflow.hpp alone (HEAD's schedule header, hence the whole grid's
+build) passes; the live owner_schedule.hpp alone, with its local-graph
+calls replaced by the whole grid's build, passes, with HEAD's wave
+count too; the live schedule and graph headers together (the local
+construction in use) fail.  And the earlier "globalgraph" and
+"graphcheck" runs were plain local-graph runs: the env parser rejects
+unknown BPACK_CHECK values ("BPACK: BPACK_CHECK: unknown value ...
+ignored"), which the logs say and I had not read.  So the local graph
+is the suspect again, in something the owner_graph_test does not
+compare (it finds every brick's local graph equal to the global one on
+this very grid, down to the fetch plans and payload recipients; the
+test under AddressSanitizer and UBSan is clean).  With the two values
+registered in bpack_env.hpp (job 59295572): the local graph fails, the
+in-situ comparison finds no difference and then fails, the whole grid's
+build PASSES (Factor time 96.6 s, logdet -446707783.22014749).  The
+failing pairs decoded on the login node (scratch failing_pairs): X is a
+blue box whose owner has G, a purple box of a component owned by the
+receiver, in its own local graph with the right component and owner,
+yet the owner's `interest_of(receiver, G)` is false on its local graph
+and true on the global one.  The cause: the assignment's CUMULATIVE
+policy (the CPU's on a fine level: not coarse) breaks ties by the
+number of a component's boxes homed at a sharer, counted from
+`k.boxes`, which on a local graph is partial for every component away
+from the rank; the owners of those components then differ from rank to
+rank (each rank's `interest_of` reads its own graph's owners), the
+block for the receiver's pair is not shipped, and the receiver finds no
+partner copy.  The device level uses the per-colour policy, which never
+reads the box lists, and the in-situ comparison and the test compared
+the owners under the per-colour policy only; the 2^3 grid has no far
+component at all.  Fix: `Component::home_counts` (boxes per sharer,
+aligned with `sharers`), filled by both constructions (the parts'
+counts per brick) and read by the tie-break (`Component::home_boxes`);
+the comparison checks it and the owners under both policies (the test
+too).  Test clean.  With the fix the CPU CA3 at 640^3/512 (job
+59296059) runs: Factor time 146 s against Color 156 and CA0 156 s, the
+solve 1.79 s against 1.54 and 2.24 s, logdet -3937186080.0625076, the
+GPU CA3's to every digit (the CPU and the GPU CA3 agree bitwise on the
+logdet at 320^3/64 and 640^3/512); its leaf level 18.4 s (elimination
+10.3-13.0 s) against Color's 20.8 (16.1-16.2) and CA0's 23.0 s
+(11.9-18.0).  The four CPU variants at 640^3 on 512 ranks (4 x 16
+threads per node, jobs 59288977 and 59296059):
+
+| CPU 640^3/512 | Factor time | solve | leaf level | logdet |
+|---|---|---|---|---|
+| Color | 156 s | 1.54 s | 20.8 s | -3937186064.8561087 |
+| CA0 | 156 s | 2.24 s | 23.0 s | -3937186089.4963474 |
+| CA3 (arrival-driven) | 146 s | 1.79 s | 18.4 s | -3937186080.0625076 |
+| CA3 serial oracle | 207 s | 1.78 s | 79.2 s | -3937186080.0625076 |
+
+The serial oracle gives the arrival-driven run's bits (one component per
+batch, 79 s for the leaf).  frozen_m10x (the GPU build with the fix)
+passes the 8-rank set with the numbers of frozen_m10w, the CPU CA3 at
+160^3 exact.
+
+**Where the time goes at 640^3/512, and what CA can win (2026-10-03).**
+The factor-time differences between the variants outside the leaf are
+run-to-run noise on identical Color levels (GPU, same job: up to 0.26 s
+on a level, e.g. level 3 1.34-1.60 s; CPU, two jobs: level 6 22.6-28.0 s,
+its rank-0 communication waits 6.7-11.0 s), so only the leaf is
+attributable: GPU leaf Color 2.04, CA0 2.06, CA3 2.52-2.63 s (the "CA0
+3% faster" of the totals is noise); CPU leaf Color 20.8 (elimination
+16.2), CA0 23.0 (11.9-18.0: a 6.2 s wait for the interior ranks' ghost
+re-elimination), CA3 18.4 s (10.3-13.0).  Color's neighbour waits on
+rank 0 ("sizes" on the GPU, "Comm time" on the CPU) by level:
+
+| level | 7 (leaf) | 6 | 5 | 4 | 3 | 2 | total | factor time |
+|---|---|---|---|---|---|---|---|---|
+| GPU | 0.59 | 0.88 | 0.75 | 0.64 | 1.01 | 0.22 | 4.1 s | 8.7 s |
+| CPU | 5.0 | 9.9 | 9.8 | 11.8 | 17.1 | 8.8 | 62 s | 156 s |
+
+The leaf holds a seventh of them; a leaf-only CA can win at most that.
+And rank 0 is a corner rank: its waits are mostly the interior ranks'
+larger per-wave work (more neighbours, more remote generators to apply),
+which CA does not remove but moves (CA0: ghost re-elimination; CA3:
+installs, 1101 generators on rank 0 against Color's 817, 2.81 against
+2.11 GB).  How much of the 4.1 s / 62 s is latency (removable by CA)
+and how much work skew (removable only by cheaper neighbour work) is
+the measurement to make next (a Color run with per-rank exchange
+traces).
+
+**The measurement: BPACK_TRACE=skew (2026-10-04;
+butterfly_factorization.hpp `LevelSkewProbe`, `level_skew_report`;
+doc/environment_variables.md).**  Per rank and level: the elimination's
+wall time and the part waiting for or receiving neighbour data (the
+transports' sizes + payload timers, serialization excluded), per wave of
+the Color loop too; gathered at the level's end on the level's first
+rank, which replays the Color waves with zero latency (a wave that
+begins with a transport starts when the rank's own and its neighbours'
+previous waves are done, any other when its own is; each takes the
+rank's measured busy time) and prints compute (the average busy time),
+work skew (the replay's excess over it: ranks with more work in a wave,
+and the chains of waits they cause) and latency (the measured time's
+excess over the replay), plus averages by number of neighbour ranks;
+per-rank CSV per level.  Smoke test on 8 ranks at 160^3 (all corner
+bricks: no geometric skew; build/gpu_prep/skew/smoke8.sh, frozen_m10z
+and frozen_cpu_skew):
+
+| 160^3/8 | leaf: compute / skew / latency | levels 4, 3, 2: latency |
+|---|---|---|
+| GPU | 882 / 150 / 27 ms | 117, 101, 71 ms |
+| CPU | 11.6 / 1.35 / 0.61 s | 1.0, 0.65, 0.53 s |
+
+The 640^3/512 jobs were cancelled at the user's request (128 nodes);
+instead 320^3 on 64 ranks (a 4^3 process grid: ranks with 7, 11, 17
+and 26 neighbours), GPU Color twice, CA0, CA3 and CPU Color, CA3, CA0
+in one 16-node job (skew/s320.sh, job 59320237).
+
+**320^3/64 results (job 59320237, all in one job).**  CPU Color, by level
+(compute / work skew / latency): leaf 13.6 / 1.2 / 0.6 s, level 5
+18.4 / 2.6 / 0.9, level 4 15.8 / 3.2 / 0.9, level 3 9.5 / 3.7 / 0.6,
+level 2 8.2 / 4.3 / 1.0 s: on the CPU the waits are work skew, four
+times the latency, and geometric (busy time by neighbour count, level
+3: 7.1 s at 7 neighbours, 8.4 at 11, 10.2 at 17, 12.7 s at 26; data
+received 1.4 to 6.3 GB).  GPU Color (two runs, first replay without the
+send-ready time): leaf 1012-1076 / 223-326 / 274-322 ms, levels 5-2
+compute 640 / 405 / 197 / 182, skew 205-211 / 121-150 / 116-118 / 72,
+"latency" 476-481 / 417-433 / 331-332 / 319-334 ms; the busy time
+rises with the neighbour count there too (level 3: 129 to 319 ms), but
+the replay put the last wave's device tail (asynchronous after the host
+returns, synchronised at the next transport's start) after the waits:
+the latency column is inflated; a send-ready time per transport was
+added (`TransportTimers::presend`) and the GPU Color runs repeated.
+
+| 320^3/64, one job | factor | solve | leaf level |
+|---|---|---|---|
+| CPU Color | 104 s | 1.31 s | 19.7 s |
+| CPU CA3 | 95.0 s | 1.29 s | 16.8 s |
+| CPU CA0 | 105 s | 1.60 s | 21.9 s |
+| GPU Color (2 runs) | 6.03-6.22 s | 0.354 s | 1.89-1.91 s |
+| GPU CA0 | 6.06 s | 0.364 s | 1.97 s |
+| GPU CA3 | 6.24 s | 0.365 s | 2.20 s |
+
+With the send-ready time in the replay (job 59320536, frozen_m10za and
+frozen_cpu_skew2; the send-ready time is small: 20-120 ms per level on
+the GPU) the split, summed over levels 6-2 of Color at 320^3/64:
+
+| Color 320^3/64 | compute | work skew | the rest |
+|---|---|---|---|
+| CPU | 65.3 s | 15.0 s | 4.0 s |
+| GPU | 2.46 s | 0.82 s | 1.78 s |
+
+"The rest" is not message latency but the transfer of the neighbours'
+data: per level it equals the most-loaded ranks' received bytes at a
+near-constant rate (GPU 11-14 GB/s at levels 6-3, 5 GB/s at level 2 with
+8 ranks; CPU 9-12 GB/s).  So the user's reading holds on the CPU (the
+waits are work skew, nearly four times the transfers); on the GPU the
+transfers are the larger part, the skew second, and both grow with the
+number of neighbour ranks (level 3: busy 129 to 319 ms and 0.8 to 3.6 GB
+received from 7 to 26 neighbours).  CA removes neither: CA0 replaces
+the transfers by re-eliminated ghosts (CPU leaf busy 11.9 s at 7
+neighbours to 17.3 s at 26), CA3 by installs (10.8 to 12.2 s), and
+CA3 moves more data than Color (rank 0: 2.81 against 2.11 GB).
+
+CPU CA3's level 5, a Color level, takes 22.0 s against Color's 25.9: not
+the communication (the split is the same) but 0.18M minor page faults
+per rank against 1.17M after the Color leaf (0.81M after CA0), about
+3 s of "staged" wall time: how the leaf leaves the host memory, with the
+runs' TCMALLOC_RELEASE_RATE=1 (the same pattern in the 640^3 jobs:
+level 6 22.6 against 27.5 s).  CPU CA0's leaf: busy 11.9 s at 7
+neighbours to 17.3 s at 26 (the ghosts re-eliminated).
+
 
 
 **M5 feasibility (2026-09-30, runs only; build/gpu_prep/ca3feas).** CPU
@@ -1577,6 +2388,26 @@ waves still take 0.32 s longer than Color's on the slowest rank, against
 Color's 0.46 s of transports, and CA0 pays its gather (0.06-0.1 s) and a
 larger transition.  What is left of the list kernels is about 1 ms per
 wave.
+
+**640^3 on 512 ranks, 40 GB nodes (2026-10-03, job 59251711,
+build/gpu_prep/ca0/g640_m9c): commit 040fa78 (frozen_m8, before M9)
+against commit 7bdce9f (frozen_m9c, M9a-e) in one job.**
+
+| | 040fa78 | 7bdce9f |
+|---|---|---|
+| Factor time, CA0 | 8.97 s | 8.54 / 8.49 s |
+| Factor time, Color | 9.06 s | 8.57 / 8.64 s |
+| leaf level, CA0 / Color | 2.40 / 2.37 s | 2.09-2.12 / 2.01-2.02 s |
+| leaf transition, CA0 / Color | 0.31 / 0.29 s | 0.25-0.26 / 0.23 s |
+| CA halo gather | 128 ms (plan 17, messages 104) | 91-112 ms (plan 0, slowest rank's plan + packing 6-7, messages 86-107) |
+| warm-up | 0.16-0.83 s | 0.37-0.40 s (buffers 0.21) |
+
+Results bitwise the earlier ones (CA0 logdet -3937186089.4963474, Color
+-3937186064.8561087; check values unchanged; replica check 1217216 copies 0
+differ; solve checks 8.1e-15 / 9.8e-15).  M9 is worth 0.45 s per
+factorization at this size (0.3 s of it at the leaf; 0.2 s of the
+reported difference is the pinning moved into the warm-up); CA0 and Color
+remain even (8.49-8.54 against 8.57-8.64 s).
 
 ## Backlog from the GPU Color work (not CA-specific)
 
