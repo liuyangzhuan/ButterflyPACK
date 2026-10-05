@@ -975,6 +975,13 @@ public:
             static_cast<double>(e.heap_peak_resident) / 1e9,
             static_cast<double>(e.heap_peak_transient) / 1e9,
             static_cast<long long>(e.heap_reclaims));
+        if (e.persist_blocks > 0) {
+            std::printf("  [gpu] level %d fill sources: %.2f GB at the peak in %lld blocks (X_RR_full %.2f GB, "
+                        "temp2^T %.2f GB, generator boxes %.2f GB), %.2f GB still held\n", lvl,
+                        e.persist_peak / 1e9, static_cast<long long>(e.persist_blocks), e.persist_xrr_bytes / 1e9,
+                        (e.persist_peak - e.persist_xrr_bytes - e.persist_gen_bytes) / 1e9,
+                        e.persist_gen_bytes / 1e9, e.persist_bytes / 1e9);
+        }
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",

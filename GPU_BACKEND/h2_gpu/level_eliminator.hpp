@@ -100,6 +100,15 @@ struct EliminatorStats {
     double pb_buffers = 0.0, pb_items = 0.0;
     double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
     double po_candidates = 0.0, po_pairs = 0.0, po_order = 0.0, po_batches = 0.0;
+    // The fill sources kept for later waves' sketches (keep_fill_source: per
+    // box X_RR_full and temp2^T, the second one ntot x r like X_NR): what
+    // they hold now and the most they held, which is the level's resident
+    // peak less the kept factors and the tables.
+    double persist_bytes = 0.0;
+    double persist_peak = 0.0;
+    double persist_xrr_bytes = 0.0;   // ... of which X_RR_full
+    double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
+    int64_t persist_blocks = 0;
     double reclaim_wait = 0.0;    // full heap: waits for background copies to free blocks
     double exchange_wait = 0.0;   // full exchange arena: waits for receive buffers' host copies
     double launch = 0.0;                        // host time issuing a wave's device work
@@ -425,6 +434,7 @@ private:
         // CA levels: a ghost box (another rank's, eliminated here too)
         bool ghost = false;
         bool on_boundary = false;
+        size_t persist_bytes = 0;  // of the fill-source block, for the stats
         // multi-rank levels: the fill-source block (temp2^T, X_RR_full) is
         // freed once every local neighbor, its only reader, is eliminated
         char* persist = nullptr;
@@ -539,12 +549,13 @@ private:
     }
     // A fill-source block of box `st` whose local neighbors among `hop` are
     // its readers (multi-rank levels), or a level allocation.
-    void keep_fill_source(BoxState& st, char* block, const std::vector<int64_t>& hop) {
+    void keep_fill_source(BoxState& st, char* block, size_t bytes, const std::vector<int64_t>& hop) {
         if (!early_free_sources_) {
             level_allocs_.push_back(block);
             return;
         }
         st.persist = block;
+        st.persist_bytes = bytes;
         st.readers = 0;
         for (int64_t m : hop) {
             if (is_writable(m) && !state_of(m).eliminated) ++st.readers;
@@ -793,6 +804,7 @@ private:
             released_sources_.pop_front();
             if (es->persist == nullptr || es->readers > 0) continue;  // gone, or kept again with readers
             rescue_skipped_xnr();  // (a restore reads the host copies)
+            eliminator_stats().persist_bytes -= static_cast<double>(es->persist_bytes);
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
             es->persist = nullptr;
             es->temp2t = nullptr;
@@ -2096,8 +2108,16 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.temp2 = reinterpret_cast<S*>(source + wb.off_temp2);
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
-                char* persist = heap_.alloc_resident(align_up(r * r * D) + std::max<size_t>(nt * r * D, 1));
-                keep_fill_source(*wb.state, persist, wb.box->one_hop);
+                const size_t persist_bytes = align_up(r * r * D) + std::max<size_t>(nt * r * D, 1);
+                char* persist = heap_.alloc_resident(persist_bytes);
+                {
+                    auto& es = eliminator_stats();
+                    es.persist_bytes += static_cast<double>(persist_bytes);
+                    es.persist_xrr_bytes += static_cast<double>(align_up(r * r * D));
+                    es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
+                    ++es.persist_blocks;
+                }
+                keep_fill_source(*wb.state, persist, persist_bytes, wb.box->one_hop);
                 wb.persist_xrr = reinterpret_cast<S*>(persist);
                 wb.persist_temp2t = reinterpret_cast<S*>(persist + align_up(r * r * D));
             }
@@ -3383,8 +3403,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             stats.bytes_up += static_cast<double>(2 * nr + static_cast<size_t>(g.r) * (g.r + g.k) * D);
         }
         const size_t t_bytes = align_up(nr);
-        char* persist = heap_.alloc_resident(t_bytes + static_cast<size_t>(g.r) * g.r * D);
-        keep_fill_source(*g.st, persist, gb->one_hop);
+        const size_t gen_persist = t_bytes + static_cast<size_t>(g.r) * g.r * D;
+        char* persist = heap_.alloc_resident(gen_persist);
+        {
+            auto& es = eliminator_stats();
+            es.persist_bytes += static_cast<double>(gen_persist);
+            es.persist_gen_bytes += static_cast<double>(gen_persist);
+            es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
+            ++es.persist_blocks;
+        }
+        keep_fill_source(*g.st, persist, gen_persist, gb->one_hop);
         if (owner_ != nullptr) g.st->readers = std::numeric_limits<int>::max() / 2;  // (no host copy to restore it from)
         g.st->temp2t = reinterpret_cast<const S*>(persist);
         g.st->xrr_full = reinterpret_cast<const S*>(persist + t_bytes);
