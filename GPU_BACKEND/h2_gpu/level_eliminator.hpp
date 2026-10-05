@@ -3751,6 +3751,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
                                      : static_cast<double>(heap_.used() + total) >
                                            kSolveKeepFraction * static_cast<double>(heap_.capacity());
     if (over || heap_.largest_free() < total) {
+        if (env::trace("wave")) {  // what the wave asked for against what the heap had
+            int r = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &r);
+            std::printf("  [gpu] keep failed on rank %d: wave wants %.1f MB, largest free %.1f MB, heap %.2f of "
+                        "%.2f GB, kept so far %.2f GB, budget %.2f GB (%s)\n", r,
+                        static_cast<double>(total) / 1e6, static_cast<double>(heap_.largest_free()) / 1e6,
+                        static_cast<double>(heap_.used()) / 1e9, static_cast<double>(heap_.capacity()) / 1e9,
+                        kept_.bytes / 1e9, keep_budget_ / 1e9, over ? "over budget" : "no contiguous range");
+            std::fflush(stdout);
+        }
         rescue_skipped_xnr(true);
         drop_kept();
         keep_failed_ = true;

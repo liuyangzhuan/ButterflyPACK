@@ -2511,12 +2511,36 @@ rank. Three things are left:
   to copy to the host. That is a latent bug in the existing keep-failure
   path, now reachable; it needs fixing before any attempt to keep the leaf.
 
-  Even fixed, the leaf has no room during its own waves, so the way to
-  compress it is not to keep it on the device but to **compress in the
-  download path**: the factors are already on the device when they are
-  downloaded, so compressing each wave there shrinks the host copy and lets
-  the first solve upload compressed bytes, with no extra device memory
-  during the factorization. Note the cost: at 19 GB/s the leaf's 17.45 GB
-  would add about 2.7 s per sweep, so a solve that now takes 0.95 s would
-  take several seconds. It is a memory-for-time trade, and the right call
-  depends on whether the target problem fits at all without it.
+  **Why it does not fit, measured** (BPACK_TRACE=wave now prints this at the
+  failure). During the leaf's waves the heap holds 31.84 of 33.40 GB, so
+  1.56 GB is free, of which 1.43 GB is in one range - the heap is full, not
+  fragmented, and the free space is the leaf's own working set's leftovers
+  (26.18 GB resident + 7.03 GB transient at the peak). Then:
+
+  1. A big leaf wave's factors are 2.70 GB uncompressed.
+  2. WaveXnrCompressor::compress stages **the whole wave at
+     bitcompMaxBuflen** (>= the input size), so it asks for 2.70 GB and
+     try_alloc fails against 1.56 GB free. The wave falls back to plain.
+  3. The plain 2.70 GB block then fails the contiguity check against
+     1.43 GB, and the level drops everything it had kept (0.87 GB).
+
+  So the binding constraint is the compressor's own staging, not the stored
+  factors: compressed, a leaf wave is about 145 MB and would fit with room
+  to spare. Two ways out, the first much cheaper:
+
+  - **Chunk the staging.** Compress a wave a few hundred MB at a time into a
+    reused buffer, so the staging is O(chunk) instead of O(wave). 512 MB
+    fits in the 1.56 GB that is free today, which would let the leaf keep
+    its factors compressed - the whole of C4 - without freeing anything
+    else.
+  - **Free working set first** (step 4, compressing the fill sources). The
+    leaf's 26.18 GB resident is what leaves only 1.56 GB, so step 4 and C4
+    are the same constraint seen from two sides.
+
+  Either way the keep bound has to become compression-aware too, and the
+  rescue bug above has to be fixed first, since a failed keep is still
+  reachable.
+
+  Note the cost of succeeding: at 19 GB/s the leaf's 17.45 GB adds about
+  2.7 s per sweep, so a solve that now takes 0.95 s would take several
+  seconds. It is a memory-for-time trade.
