@@ -1010,6 +1010,18 @@ public:
                             e.persist_gen_bytes / 1e9);
             }
         }
+        if (e.sk_src_waves > 0) {
+            std::printf("  [gpu] level %d fill sources read: %lld distinct over %lld waves, %.2f GB by the largest "
+                        "wave, %.2f GB summed (%lld wave-source pairs, %.1f waves per source)\n", lvl,
+                        static_cast<long long>(e.sk_src_distinct), static_cast<long long>(e.sk_src_waves),
+                        e.sk_src_bytes_max_wave / 1e9, e.sk_src_bytes_sum / 1e9,
+                        static_cast<long long>(e.sk_src_pairs),
+                        e.sk_src_distinct > 0 ? static_cast<double>(e.sk_src_pairs) / e.sk_src_distinct : 0.0);
+            std::printf("  [gpu] level %d fill source slices: %.2f GB by the largest wave, %.2f GB summed "
+                        "(%.1f%% of the sources a wave reads)\n", lvl, e.sk_slice_bytes_max_wave / 1e9,
+                        e.sk_slice_bytes_sum / 1e9,
+                        e.sk_src_bytes_sum > 0.0 ? 100.0 * e.sk_slice_bytes_sum / e.sk_src_bytes_sum : 0.0);
+        }
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",

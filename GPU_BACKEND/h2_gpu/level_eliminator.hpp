@@ -128,6 +128,21 @@ struct EliminatorStats {
     // different chunks).  If the sum is close to the total and the revisits
     // few, a chunk's blocks could be decompressed, updated and recompressed
     // for the chunk only, and the rest of the level's would stay compressed.
+    // Per sketch wave, the fill sources its boxes read: the largest wave's
+    // distinct temp2^T bytes (the scratch a per-wave decompression would
+    // need), the sum over waves (what it would decompress in all) and the
+    // (wave, source) pairs against the distinct sources (how many waves read
+    // a source, so how many times it would be decompressed).
+    // ... and the slices the readers actually take: a box reads a source's
+    // temp2^T only over its own columns, which is a contiguous byte range, so
+    // a decompression could cover the chunks of that range alone.
+    double sk_slice_bytes_max_wave = 0.0;
+    double sk_slice_bytes_sum = 0.0;
+    double sk_src_bytes_max_wave = 0.0;
+    double sk_src_bytes_sum = 0.0;
+    int64_t sk_src_pairs = 0;
+    int64_t sk_src_distinct = 0;
+    int64_t sk_src_waves = 0;
     double tr_block_bytes_total = 0.0;
     double tr_block_bytes_max_chunk = 0.0;
     double tr_block_bytes_sum = 0.0;
@@ -796,6 +811,7 @@ private:
     const Evaluator* evaluator_ = nullptr;  // the application's (H2Kernel::gpu_evaluator)
     bool heap_initialized_ = false;
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
+    std::unordered_set<int64_t> sk_src_all_;         // fill sources any wave read (the stats)
     std::unordered_set<const void*> tr_block_seen_;  // transition blocks a chunk has written (the stats)
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
     bool gpu_sketch_ = false;
@@ -1455,6 +1471,34 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     };
     std::vector<Plan> plans(wave.size());
     const bool trace = h2_id_trace_enabled();
+    // the fill sources this wave reads, for the stats (one entry per source,
+    // however many of the wave's boxes read it)
+    std::mutex src_seen_mutex;
+    std::unordered_map<int64_t, size_t> src_seen;
+    size_t src_slice_bytes = 0;  // the readers' slices of them, summed
+
+    // (the stats of the wave's fill sources, once its plans are built)
+    struct SrcStats {
+        const std::unordered_map<int64_t, size_t>& seen;
+        const size_t& slices;
+        std::unordered_set<int64_t>& all;
+        ~SrcStats() {
+            auto& st = eliminator_stats();
+            if (seen.empty()) return;
+            size_t bytes = 0;
+            for (const auto& [m, b] : seen) {
+                bytes += b;
+                all.insert(m);
+            }
+            st.sk_slice_bytes_sum += static_cast<double>(slices);
+            st.sk_slice_bytes_max_wave = std::max(st.sk_slice_bytes_max_wave, static_cast<double>(slices));
+            st.sk_src_bytes_sum += static_cast<double>(bytes);
+            st.sk_src_bytes_max_wave = std::max(st.sk_src_bytes_max_wave, static_cast<double>(bytes));
+            st.sk_src_pairs += static_cast<int64_t>(seen.size());
+            st.sk_src_distinct = static_cast<int64_t>(all.size());
+            ++st.sk_src_waves;
+        }
+    } src_stats{src_seen, src_slice_bytes, sk_src_all_};
 
     // ---- host plans (index lists only)
     {
@@ -1555,9 +1599,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             throw std::runtime_error("LevelEliminator: fill source " + std::to_string(cm) + " not found");
                         }
                         if (ss.r == 0 || ss.temp2t == nullptr) continue;  // no Schur contribution
+                        {
+                            std::lock_guard<std::mutex> lock(src_seen_mutex);
+                            src_seen.emplace(cm, static_cast<size_t>(ss.ntot) * static_cast<size_t>(ss.r) * sizeof(S));
+                        }
                         int64_t slot_offset = 0, slot_count = 0;
                         if (!lazy_far_locate_endpoint_rows(src_box, col_end, slot_offset, slot_count, positions)) continue;
                         if (slot_count != p.n) throw std::runtime_error("LevelEliminator: fill source holds a sliced box");
+                        {
+                            std::lock_guard<std::mutex> lock(src_seen_mutex);
+                            src_slice_bytes += static_cast<size_t>(slot_count) * static_cast<size_t>(ss.r) * sizeof(S);
+                        }
                         Source src;
                         src.morton = cm;
                         src.state = &ss;
