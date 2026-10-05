@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include "factor_compress.hpp"
@@ -107,9 +108,12 @@ struct DeviceSolveLevel {
     std::vector<SolveXnrWave> xnr_waves;   // parallel to `waves`
     bool xnr_compressed = false;           // any wave has compressed X_NR
     // staged by the box walk, consumed by the table builders (which know the
-    // wave order): per box, its compressed bytes and uncompressed size
+    // wave order): per box, its compressed bytes, uncompressed size and the
+    // padded lengths of the chunks the compressed bytes are made of
     std::vector<const void*> xnr_src_pending;
     std::vector<size_t> xnr_raw_bytes_pending;
+    std::vector<const uint32_t*> xnr_strides_pending;
+    std::vector<uint32_t> xnr_nchunks_pending;
     std::vector<SolveBox> boxes;        // local boxes, device pointers
     std::vector<SolveSlot> slots;       // their one-hop slots
     std::vector<int64_t> slot_morton;   // the neighbor of each slot
@@ -186,13 +190,19 @@ struct KeptSolveBox {
     int k = 0, r = 0, ntot = 0;
     // H2_compress_factors: xnr holds this many bytes of lossy-compressed
     // data instead of ntot * r elements (0: uncompressed, as before), and
-    // was quantized with this delta.
+    // was quantized with this delta.  The bytes are the box's chunks laid end
+    // to end (kXnrChunkBytes of elements each, the last one short); their
+    // padded lengths are xnr_nchunks entries from xnr_chunk0 of the level's
+    // chunk_strides, which is how a chunk is found.
     size_t xnr_bytes = 0;
     double xnr_delta = 0.0;
+    uint32_t xnr_chunk0 = 0;
+    uint32_t xnr_nchunks = 0;
 };
 struct KeptSolveLevel {
     std::vector<char*> blocks;
     std::unordered_map<int64_t, KeptSolveBox> boxes;  // Morton index -> factors
+    std::vector<uint32_t> chunk_strides;  // every kept box's chunks, in the order they were kept
     double bytes = 0.0;
 };
 
@@ -394,15 +404,16 @@ inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
     if (rank != 0) return;
     std::vector<size_t> bytes;
     std::vector<size_t> blocks;
-    size_t total = 0;
+    size_t total = 0, boxes_total = 0;
     for (const auto& xw : L.xnr_waves) {
         if (xw.empty()) continue;
         size_t b = 0;
+        boxes_total += xw.boxes.size();
         for (size_t i = 0; i < xw.boxes.size(); ++i) {
             b += L.xnr_raw_bytes_pending[static_cast<size_t>(xw.boxes[i])];
         }
         bytes.push_back(b);
-        blocks.push_back(xw.boxes.size());
+        blocks.push_back(xw.h_srcs.size());  // the batch's blocks: chunks, not boxes
         total += b;
     }
     if (bytes.empty()) return;
@@ -414,7 +425,8 @@ inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
               << std::fixed << std::setprecision(2) << mib(total) << " MiB of X_NR; per wave "
               << mib(sb.front()) << " / " << mib(sb[sb.size() / 2]) << " / " << mib(sb.back())
               << " MiB (min/med/max), " << sk.front() << " / " << sk[sk.size() / 2] << " / " << sk.back()
-              << " blocks; scratch " << mib(L.xnr_scratch_bytes) << " MiB" << std::endl;
+              << " blocks of " << boxes_total << " boxes; scratch " << mib(L.xnr_scratch_bytes) << " MiB in "
+              << L.xnr_buffers << std::endl;
 }
 
 // H2_compress_factors: the per-wave batches that decompress a wave's X_NR
@@ -447,19 +459,34 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
         }
         return;
     }
+    // A box's X_NR was compressed in chunks, so the batch has one entry per
+    // chunk: its compressed bytes sit `stride` apart in the kept block, and it
+    // decompresses kXnrChunkBytes further into the scratch than the one before.
+    // The box's own entry (for the pointer patch) is its first chunk's.
     L.xnr_waves.assign(L.waves.size(), SolveXnrWave{});
+    const size_t chunk_bytes_raw = kXnrChunkBytes;
     size_t widest = 0;
     for (size_t w = 0; w < L.waves.size(); ++w) {
         const auto& W = L.waves[w];
         auto& xw = L.xnr_waves[w];
         size_t bytes = 0;
         for (int i = 0; i < W.count; ++i) {
-            const int b = order[static_cast<size_t>(W.order0 + i)];
-            if (L.xnr_src_pending[static_cast<size_t>(b)] == nullptr) continue;
-            xw.boxes.push_back(b);
-            xw.h_srcs.push_back(L.xnr_src_pending[static_cast<size_t>(b)]);
-            xw.h_dsts.push_back(reinterpret_cast<void*>(bytes));  // offset for now
-            bytes = align_up(bytes + L.xnr_raw_bytes_pending[static_cast<size_t>(b)]);
+            const size_t b = static_cast<size_t>(order[static_cast<size_t>(W.order0 + i)]);
+            if (L.xnr_src_pending[b] == nullptr) continue;
+            const uint32_t* strides = L.xnr_strides_pending[b];
+            const size_t nchunks = L.xnr_nchunks_pending[b];
+            if (strides == nullptr || nchunks == 0) {
+                throw std::runtime_error("device solve: compressed X_NR without its chunk lengths");
+            }
+            xw.boxes.push_back(static_cast<int>(b));
+            xw.h_box_dsts.push_back(reinterpret_cast<void*>(bytes));  // offset for now
+            const char* src = static_cast<const char*>(L.xnr_src_pending[b]);
+            for (size_t c = 0; c < nchunks; ++c) {
+                xw.h_srcs.push_back(src);
+                xw.h_dsts.push_back(reinterpret_cast<void*>(bytes + c * chunk_bytes_raw));
+                src += strides[c];
+            }
+            bytes = align_up(bytes + L.xnr_raw_bytes_pending[b]);
         }
         xw.raw_bytes = bytes;
         widest = std::max(widest, bytes);
@@ -485,6 +512,9 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
         char* base = L.xnr_scratch + (w % L.xnr_buffers) * widest;
         for (auto& d : xw.h_dsts) {
             d = base + reinterpret_cast<size_t>(d);  // offset -> address
+        }
+        for (auto& d : xw.h_box_dsts) {
+            d = base + reinterpret_cast<size_t>(d);
         }
         if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream)) {
             throw std::runtime_error("H2 GPU solve: could not plan a wave's X_NR decompression");
@@ -994,7 +1024,8 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
                            "host factors (compressed X_NR)");
                 std::vector<DataType> v(static_cast<size_t>(kb.ntot) * r);
                 decompress_xnr_host<typename DeviceScalar<DataType>::type>(
-                    packed.data(), reinterpret_cast<typename DeviceScalar<DataType>::type*>(v.data()));
+                    packed.data(), reinterpret_cast<typename DeviceScalar<DataType>::type*>(v.data()),
+                    kl.chunk_strides.data() + kb.xnr_chunk0, kb.xnr_nchunks);
                 box.X_NR.set_owned(kb.ntot, kb.r, std::move(v), MatrixStorage<DataType>::FULL);
 #else
                 throw std::runtime_error(
@@ -1463,6 +1494,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             std::vector<const KeptSolveBox*> kept_box(nw, nullptr);
             L.xnr_src_pending.assign(nw, nullptr);
             L.xnr_raw_bytes_pending.assign(nw, 0);
+            L.xnr_strides_pending.assign(nw, nullptr);
+            L.xnr_nchunks_pending.assign(nw, 0);
             std::vector<int64_t> base(nw);
             std::vector<solve_detail::BoxLayout> lay(nw);
             std::vector<int> ntot(nw, 0);
@@ -1621,6 +1654,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         L.xnr_src_pending[b] = kb->xnr;
                         L.xnr_raw_bytes_pending[b] =
                             static_cast<size_t>(ntot[b]) * static_cast<size_t>(sb.r) * D;
+                        L.xnr_strides_pending[b] = kept->chunk_strides.data() + kb->xnr_chunk0;
+                        L.xnr_nchunks_pending[b] = kb->xnr_nchunks;
                     }
                 } else {
                     sb.T = eliminated && l.has_T ? p + l.T : nullptr;
@@ -1876,7 +1911,7 @@ public:
 
         // this is one small kernel, not a copy of the whole table.
 
-        launch_patch_xnr(const_cast<SolveBox*>(L.d_boxes), xw.d_box_idx, xw.d_dsts,
+        launch_patch_xnr(const_cast<SolveBox*>(L.d_boxes), xw.d_box_idx, xw.d_box_dsts,
 
                          static_cast<int>(xw.boxes.size()), stream_);
 

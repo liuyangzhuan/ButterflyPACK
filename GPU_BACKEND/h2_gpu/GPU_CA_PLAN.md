@@ -2473,8 +2473,56 @@ rank. Three things are left:
   123 MB of H2D traffic per sweep but measured as nothing (1.2384 ->
   1.2380 s), which is the other half of the correction above.
 
-  Left over: the 0.669 s of decompression is irreducible at 19 GB/s. Halving
-  the bytes - FP32 X_NR, the option dropped earlier - would halve it.
+  **Not irreducible after all (2026-10-05, same day).** The 19 GB/s was the
+  block count, not the codec. Lossy Bitcomp decompresses a batch in parallel
+  across its blocks, and a wave was one block per box: 27-37 of them. A sweep
+  over the dumped X_NR of a real level-4 wave (37 boxes, 436 MB) says what
+  that costs, at the tolerance the H2 path uses:
+
+  | chunk | blocks | ratio | compress GB/s | decompress GB/s | staging MB |
+  |---|---|---|---|---|---|
+  | whole box | 37 | 19.04 | 60.5 | 63.0 | 436.3 |
+  | 4 MB | 127 | 19.04 | 169.2 | 189.5 | 436.9 |
+  | 1 MB | 456 | 19.02 | 362.0 | 447.0 | 439.5 |
+  | 0.5 MB | 891 | 19.00 | 411.2 | 548.1 | 443.3 |
+  | 0.25 MB | 1759 | 18.97 | 462.3 | 612.4 | 443.6 |
+  | 0.125 MB | 3503 | 18.90 | 468.3 | 641.1 | 457.8 |
+
+  The ratio barely moves and max_err does not move at all, so the fix is to
+  cut each box's X_NR into chunks (kXnrChunkBytes, 0.5 MB) and let the batch
+  be chunks rather than boxes - the same bytes, the same scratch, just more
+  blocks. A chunk is a contiguous range of the box's elements, so the buffer
+  comes back as its chunks laid end to end; the delta stays per box, so the
+  tolerance a box is held to does not depend on how it was cut. Each chunk
+  gets a 256-byte start in the kept block (bitcomp reads its compressed bytes
+  with wide loads and faults on a 4-byte start - that was the one bug), and
+  the padded lengths go in KeptSolveLevel::chunk_strides, which is how the
+  solve walks to a chunk.
+
+  Measured at 192^3 on 8 ranks, 40 GB nodes:
+
+  | | off | per box | in 0.5 MB chunks |
+  |---|---|---|---|
+  | X_NR decompression | - | 0.669 s, 19.2 GB/s | **0.035 s, 365 GB/s** |
+  | time_solve | 0.264 s | 0.954 s (3.6x) | **0.284 s (1.07x)** |
+  | GPU solve | 0.257 s | 0.903 s | 0.273 s |
+  | of which MPI | 0.069 s | 0.356 s | 0.074 s |
+  | Factor time | 7.68 s | ~8.2 s | **7.38 s** |
+  | blocks per level-4 wave | - | 27 / 37 / 37 | 153 / 625 / 965 |
+  | ratio, levels 4/3/2 | - | 18.7 / 19.5 / 17.6 | 18.6 / 19.4 / 17.5 |
+  | acc_backward | 1.20e-15 | 1.30e-15 | 1.30e-15 |
+
+  So compression now costs 7% of the solve instead of 260%, and the
+  factorization is *faster* with it on than off - the gather copies 0.97 GB
+  into the kept blocks instead of 7.03 GB, which more than pays for the
+  compression. CA0 gains the most in rate (its waves were 52 MB): 5.4 ->
+  168 GB/s, time_solve 1.450 -> 0.946 s, the remainder being its host CA
+  level. That also settles C3 (no measurable per-wave cost left) and takes
+  away the speed argument for FP32 X_NR; FP32 remains a memory argument.
+
+  The two-buffer overlap below is now mostly redundant - 0.035 s has little
+  left to hide - but it costs nothing when the second buffer fits and falls
+  back cleanly when it does not, so it stays.
 - C2. CA3 keeps 5.71 GB of 19.90 GB (3.5x) where Color and CA0 reach
   7.4-7.7x, because land_full_factors - the component-owner path that
   stores the factors of boxes landing from other ranks - lays them out
@@ -2482,10 +2530,12 @@ rank. Three things are left:
   (92% X_NR, 16x), so compressing it should bring CA3 in line. Its boxes
   arrive one at a time rather than in waves, so they need collecting into
   a batch before compressing.
-- C3. keep_solve_factors synchronizes the stream once per wave to keep the
-  compressor's staging alive through the gather, which costs about 10% of
-  the factorization (7.49 -> 8.22 s at tol_comp). Double buffer the staging
-  across waves instead.
+- C3 (resolved by the chunking, 2026-10-05). keep_solve_factors synchronizes
+  the stream once per wave to keep the compressor's staging alive through the
+  gather, which cost about 10% of the factorization (7.49 -> 8.22 s at
+  tol_comp). With the compression at 400+ GB/s instead of 60 the sync has
+  almost nothing to wait for: the factorization is now 7.38 s with
+  compression against 7.68 s without. No double buffering needed.
 - C4 (found while measuring C1, 2026-10-05). **The leaf level never keeps
   its solve factors, so the compression misses 73% of X_NR.** At 192^3 on 8
   ranks (40 GB nodes) the leaf's X_NR is 17.45 GB per rank of the 23.87 GB
@@ -2541,6 +2591,7 @@ rank. Three things are left:
   rescue bug above has to be fixed first, since a failed keep is still
   reachable.
 
-  Note the cost of succeeding: at 19 GB/s the leaf's 17.45 GB adds about
-  2.7 s per sweep, so a solve that now takes 0.95 s would take several
-  seconds. It is a memory-for-time trade.
+  The cost of succeeding is now small. At the chunked rate (365 GB/s) the
+  leaf's 17.45 GB over two sweeps is about 0.10 s, not the 1.8 s it would
+  have been at 19 GB/s, so C4 is no longer a memory-for-time trade - it is
+  close to free, and worth doing for the ~19 GB it frees at solve time.

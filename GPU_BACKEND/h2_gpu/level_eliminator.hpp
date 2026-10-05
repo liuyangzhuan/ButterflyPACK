@@ -3674,7 +3674,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     struct Span { size_t off; const char* src; size_t bytes; };
     std::vector<Span> spans;
     struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot;
-                  size_t xnr_bytes; double xnr_delta; };
+                  size_t xnr_bytes; double xnr_delta;
+                  uint32_t xnr_chunk0; uint32_t xnr_nchunks; };
     std::vector<Made> made;
 
     // ---- phase A: this wave's X_NR, compressed while it is still in the
@@ -3717,17 +3718,27 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         const WaveBox& wb = *kept_boxes[bi];
         const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
         const char* source = d_sources[static_cast<size_t>(wb.source_group)];
-        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0};
+        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0};
         m.T = total;   spans.push_back({total, d_result + wb.off_t, k * r * D});        total = align_up(total + k * r * D);
         m.xsr = total; spans.push_back({total, d_result + wb.off_temp1, k * r * D});    total = align_up(total + k * r * D);
         m.xnr = total;
         if (compressed && nt > 0 && comp[bi].bytes > 0) {
-            // the gather copies 4-byte words, and both ends are 256-aligned
-            const size_t bytes = align_up(comp[bi].bytes, 4);
-            spans.push_back({total, xnr_compressor_.staging() + comp[bi].offset, bytes});
-            m.xnr_bytes = comp[bi].bytes;
+            // One span per chunk, end to end, each at the 256-byte start
+            // bitcomp needs to read it; those padded lengths go into the
+            // level's pool, which is how the solve walks to a chunk.
+            const auto& cks = xnr_compressor_.chunks();
+            m.xnr_chunk0 = static_cast<uint32_t>(kept_.chunk_strides.size());
+            m.xnr_nchunks = static_cast<uint32_t>(comp[bi].nchunks);
+            size_t at = total;
+            for (size_t c = 0; c < comp[bi].nchunks; ++c) {
+                const auto& ck = cks[comp[bi].chunk0 + c];
+                spans.push_back({at, xnr_compressor_.staging() + ck.offset, ck.stride});
+                kept_.chunk_strides.push_back(static_cast<uint32_t>(ck.stride));
+                at += ck.stride;
+            }
+            m.xnr_bytes = comp[bi].bytes;  // the chunks' padded lengths, summed
             m.xnr_delta = comp[bi].delta;
-            total = align_up(total + bytes);
+            total = align_up(at);
         } else {
             if (nt > 0) spans.push_back({total, source + wb.off_temp2, nt * r * D});
             total = align_up(total + nt * r * D);
@@ -3738,7 +3749,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
             auto& es = eliminator_stats();
             es.xnr_raw_bytes += static_cast<double>(align_up(nt * r * D));
             es.xnr_stored_bytes += static_cast<double>(
-                m.xnr_bytes > 0 ? align_up(align_up(m.xnr_bytes, 4)) : align_up(nt * r * D));
+                m.xnr_bytes > 0 ? align_up(m.xnr_bytes) : align_up(nt * r * D));
             es.other_raw_bytes += static_cast<double>(
                 2 * align_up(k * r * D) + align_up(r * r * D) + align_up(r * I));
         }
@@ -3807,6 +3818,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
         kb.ntot = m.ntot;
         kb.xnr_bytes = m.xnr_bytes;
         kb.xnr_delta = m.xnr_delta;
+        kb.xnr_chunk0 = m.xnr_chunk0;
+        kb.xnr_nchunks = m.xnr_nchunks;
         kept_.boxes[m.morton] = kb;
     }
 }
