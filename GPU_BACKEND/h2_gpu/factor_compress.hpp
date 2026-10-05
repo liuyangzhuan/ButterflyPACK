@@ -87,6 +87,8 @@ struct SolveXnrWave {
     std::vector<void*> h_dsts;         // into the level's scratch
     const void** d_srcs = nullptr;
     void** d_dsts = nullptr;
+    int* d_box_idx = nullptr;          // `boxes`, on the device, for launch_patch_xnr
+    size_t raw_bytes = 0;              // uncompressed bytes the wave decompresses to
 #ifdef H2_HAVE_NVCOMP
     bitcompHandle_t plan{};
     bool have_plan = false;
@@ -237,13 +239,17 @@ private:
 inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t stream) {
     if (w.boxes.empty()) return true;
     const size_t n = w.boxes.size();
-    char* ptrs = heap.alloc_resident(align_up(n * sizeof(void*)) * 2);
+    const size_t ptr_span = align_up(n * sizeof(void*));
+    char* ptrs = heap.alloc_resident(ptr_span * 2 + align_up(n * sizeof(int)));
     w.d_srcs = reinterpret_cast<const void**>(ptrs);
-    w.d_dsts = reinterpret_cast<void**>(ptrs + align_up(n * sizeof(void*)));
+    w.d_dsts = reinterpret_cast<void**>(ptrs + ptr_span);
+    w.d_box_idx = reinterpret_cast<int*>(ptrs + ptr_span * 2);
     check_cuda(cudaMemcpyAsync(w.d_srcs, w.h_srcs.data(), n * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave srcs");
     check_cuda(cudaMemcpyAsync(w.d_dsts, w.h_dsts.data(), n * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave dsts");
+    check_cuda(cudaMemcpyAsync(w.d_box_idx, w.boxes.data(), n * sizeof(int),
+                               cudaMemcpyHostToDevice, stream), "xnr wave box indices");
     check_cuda(cudaStreamSynchronize(stream), "xnr wave pointers");
     if (bitcompCreateBatchPlanFromCompressedData(&w.plan, w.d_srcs, n, nullptr, stream) != BITCOMP_SUCCESS) {
         return false;

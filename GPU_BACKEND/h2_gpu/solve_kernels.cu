@@ -459,6 +459,18 @@ void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cuda
     check_launch("copy_spans_kernel");
 }
 
+__global__ void patch_xnr_kernel(SolveBox* boxes, const int* idx, void* const* dsts, int count) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count) boxes[idx[i]].xnr = dsts[i];
+}
+
+void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, int count, cudaStream_t stream) {
+    if (count <= 0) return;
+    const int threads = 128;
+    patch_xnr_kernel<<<(count + threads - 1) / threads, threads, 0, stream>>>(boxes, idx, dsts, count);
+    check_launch("patch_xnr_kernel");
+}
+
 // One block per item: the threads stride the diagonal, then a fixed-order
 // reduction (the sums do not depend on the schedule).
 template<typename T>

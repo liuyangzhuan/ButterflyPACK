@@ -38,6 +38,11 @@
 #include "gpu_runtime.hpp"
 #include "h2_matvec_store.hpp"
 #include "solve_kernels.hpp"
+
+#include <algorithm>
+#include <array>
+#include <iomanip>
+#include <iostream>
 #include "factor_compress.hpp"
 
 #include <mpi.h>
@@ -65,6 +70,18 @@ namespace gpu {
 // The others are uploaded at the first solve.
 constexpr double kSolveKeepFraction = 0.8;
 
+// H2_compress_factors: the buffers a level's X_NR decompression rotates
+// through (DeviceSolveLevel::xnr_scratch).  Two is enough to hide the
+// decompression of the next wave behind the current wave's kernels and
+// messages; each buffer holds the widest wave, so the scratch costs twice
+// that per level.
+constexpr size_t kXnrBuffers = 2;
+
+// The second buffer is taken only while the heap keeps this much of itself
+// free afterwards: the overlap is worth about a third of the decompression,
+// never a level that then does not fit.
+constexpr double kXnrSecondBufferHeadroom = 0.1;
+
 // BPACK_CHECK=solve: also run the host solve (and multiply) and print the
 // difference.
 inline bool device_solve_check() { return env::check("solve"); }
@@ -79,11 +96,14 @@ inline bool& device_solve_suspended() {
 struct DeviceSolveLevel {
     bool active = false;
     std::vector<char*> blocks;          // factors and tables (heap)
-    // H2_compress_factors: one wave's X_NR, decompressed just before its
-    // sweep kernels.  Sized for the largest wave, so only one wave's X_NR is
-    // uncompressed at a time.
+    // H2_compress_factors: the waves' X_NR, decompressed just before their
+    // sweep kernels into kXnrBuffers buffers in turn (a wave uses the buffer
+    // of its parity), so a wave decompresses while the one before it is still
+    // being read.
     char* xnr_scratch = nullptr;
-    size_t xnr_scratch_bytes = 0;
+    size_t xnr_scratch_bytes = 0;   // xnr_buffers * xnr_buffer_bytes
+    size_t xnr_buffer_bytes = 0;    // one buffer: the widest wave
+    size_t xnr_buffers = 1;         // kXnrBuffers, or 1 when the heap is tight
     std::vector<SolveXnrWave> xnr_waves;   // parallel to `waves`
     bool xnr_compressed = false;           // any wave has compressed X_NR
     // staged by the box walk, consumed by the table builders (which know the
@@ -363,14 +383,70 @@ struct BoxLayout {
 
 namespace solve_detail {
 
+// BPACK_TRACE=wave: what the per-wave X_NR decompression has to work with at
+// this level - how many waves, how much each one holds, and the scratch the
+// largest one sizes.  A wave far below the batch size that fills the GPU runs
+// the decompressor at a fraction of its rate, so this is what decides whether
+// several waves need batching together (GPU_CA_PLAN.md C1).
+inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
+    int rank = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank != 0) return;
+    std::vector<size_t> bytes;
+    std::vector<size_t> blocks;
+    size_t total = 0;
+    for (const auto& xw : L.xnr_waves) {
+        if (xw.empty()) continue;
+        size_t b = 0;
+        for (size_t i = 0; i < xw.boxes.size(); ++i) {
+            b += L.xnr_raw_bytes_pending[static_cast<size_t>(xw.boxes[i])];
+        }
+        bytes.push_back(b);
+        blocks.push_back(xw.boxes.size());
+        total += b;
+    }
+    if (bytes.empty()) return;
+    std::vector<size_t> sb = bytes, sk = blocks;
+    std::sort(sb.begin(), sb.end());
+    std::sort(sk.begin(), sk.end());
+    const auto mib = [](size_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
+    std::cout << "H2_XNR_WAVES level " << level << ": " << bytes.size() << " waves, "
+              << std::fixed << std::setprecision(2) << mib(total) << " MiB of X_NR; per wave "
+              << mib(sb.front()) << " / " << mib(sb[sb.size() / 2]) << " / " << mib(sb.back())
+              << " MiB (min/med/max), " << sk.front() << " / " << sk[sk.size() / 2] << " / " << sk.back()
+              << " blocks; scratch " << mib(L.xnr_scratch_bytes) << " MiB" << std::endl;
+}
+
 // H2_compress_factors: the per-wave batches that decompress a wave's X_NR
 // into L.xnr_scratch just before its sweep kernels.  The scratch is sized for
 // the largest wave, so only one wave's X_NR is ever uncompressed; both sweeps
 // read X_NR, so a wave is decompressed twice per solve.  The batch plans are
 // built once here and reused by every sweep of every solve.
-inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& order, cudaStream_t stream) {
+inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& order, cudaStream_t stream,
+                                  int level) {
 #ifdef H2_HAVE_NVCOMP
-    if (!L.xnr_compressed) return;
+    if (!L.xnr_compressed) {
+        if (env::trace("wave")) {
+            int rank = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            size_t boxes_with_xnr = 0, on_heap = 0;
+            double elems = 0.0;
+            const DeviceHeap& heap = DeviceHeap::instance();
+            for (const SolveBox& sb : L.boxes) {
+                if (sb.xnr == nullptr) continue;
+                ++boxes_with_xnr;
+                if (heap.owns(sb.xnr)) ++on_heap;
+                elems += static_cast<double>(sb.ntot) * static_cast<double>(sb.r);
+            }
+            if (rank == 0) {
+                std::cout << "H2_XNR_WAVES level " << level << ": X_NR read in place (not compressed), "
+                          << boxes_with_xnr << " of " << L.boxes.size() << " boxes have X_NR, " << on_heap
+                          << " on the device heap; " << std::fixed << std::setprecision(2)
+                          << elems * 8.0 / 1e9 << " GB at 8 bytes an element" << std::endl;
+            }
+        }
+        return;
+    }
     L.xnr_waves.assign(L.waves.size(), SolveXnrWave{});
     size_t widest = 0;
     for (size_t w = 0; w < L.waves.size(); ++w) {
@@ -385,15 +461,30 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
             xw.h_dsts.push_back(reinterpret_cast<void*>(bytes));  // offset for now
             bytes = align_up(bytes + L.xnr_raw_bytes_pending[static_cast<size_t>(b)]);
         }
+        xw.raw_bytes = bytes;
         widest = std::max(widest, bytes);
     }
     if (widest == 0) { L.xnr_compressed = false; return; }
-    L.xnr_scratch = DeviceHeap::instance().alloc_resident(widest);
-    L.xnr_scratch_bytes = widest;
+    // Two buffers, each sized for the widest wave: the sweeps decompress a
+    // wave into the buffer of its parity while the previous wave's kernels and
+    // messages are still using the other one (prepare_wave_xnr).  One buffer
+    // where the second would leave the heap short - the sweeps then wait for
+    // each wave in turn, as they did before the buffers were doubled.
+    DeviceHeap& heap = DeviceHeap::instance();
+    const size_t room = static_cast<size_t>((1.0 - kXnrSecondBufferHeadroom) * static_cast<double>(heap.capacity()));
+    L.xnr_buffers = heap.used() + widest * kXnrBuffers <= room && heap.largest_free() >= widest * kXnrBuffers
+                        ? kXnrBuffers
+                        : 1;
+    L.xnr_buffer_bytes = widest;
+    L.xnr_scratch = heap.alloc_resident(widest * L.xnr_buffers);
+    L.xnr_scratch_bytes = widest * L.xnr_buffers;
     L.blocks.push_back(L.xnr_scratch);
-    for (auto& xw : L.xnr_waves) {
+    if (env::trace("wave")) report_xnr_wave_sizes(L, level);
+    for (size_t w = 0; w < L.xnr_waves.size(); ++w) {
+        auto& xw = L.xnr_waves[w];
+        char* base = L.xnr_scratch + (w % L.xnr_buffers) * widest;
         for (auto& d : xw.h_dsts) {
-            d = L.xnr_scratch + reinterpret_cast<size_t>(d);  // offset -> address
+            d = base + reinterpret_cast<size_t>(d);  // offset -> address
         }
         if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream)) {
             throw std::runtime_error("H2 GPU solve: could not plan a wave's X_NR decompression");
@@ -716,7 +807,7 @@ size_t build_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<Coo
         }
     }
 
-    solve_detail::build_solve_xnr_waves(L, order, Context::instance().stream());
+    solve_detail::build_solve_xnr_waves(L, order, Context::instance().stream(), lvl.level);
     return solve_detail::upload_solve_tables(L, remote_lists, remote_list_at, order, rorder, diag, items, parts, copies);
 }
 
@@ -833,7 +924,7 @@ size_t build_ca_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<
         }
         W.nitems = static_cast<int>(items.size()) - W.item0;
     }
-    solve_detail::build_solve_xnr_waves(L, order, Context::instance().stream());
+    solve_detail::build_solve_xnr_waves(L, order, Context::instance().stream(), lvl.level);
     return solve_detail::upload_solve_tables(L, remote_lists, remote_list_at, order, rorder, diag, items, parts, {});
 }
 
@@ -1640,6 +1731,11 @@ struct DeviceSolveTimes {
     double forward = 0.0, diagonal = 0.0, backward = 0.0, transfer = 0.0, comm = 0.0;
     double halo = 0.0;  // CA halo packing and unpacking (device copies)
     int64_t direct_messages = 0, staged_messages = 0;  // exchanges moving data: in device memory, through the host
+    // H2_compress_factors: the waves' X_NR decompression, timed on the stream
+    // (CUDA events, so the sweeps are not serialized to measure it)
+    double xnr = 0.0;
+    int64_t xnr_calls = 0;
+    double xnr_bytes = 0.0;  // uncompressed bytes produced
 };
 
 template<typename CoordType, typename DataType>
@@ -1649,6 +1745,23 @@ class DeviceSolveRun {
 
 public:
     DeviceSolveRun(ParallelTree<CoordType, DataType>* tree, int nrhs) : tree_(tree), nrhs_(nrhs) {}
+    ~DeviceSolveRun() {
+        for (XnrSlot& s : xnr_slots_) {
+            if (!s.made) continue;
+            cudaEventDestroy(s.start);
+            cudaEventDestroy(s.stop);
+        }
+        if (xnr_stream_ != nullptr) {
+            cudaStreamSynchronize(xnr_stream_);
+            for (size_t b = 0; b < kXnrBuffers; ++b) {
+                cudaEventDestroy(xnr_done_[b]);
+                cudaEventDestroy(xnr_used_[b]);
+            }
+            cudaStreamDestroy(xnr_stream_);
+        }
+    }
+    DeviceSolveRun(const DeviceSolveRun&) = delete;
+    DeviceSolveRun& operator=(const DeviceSolveRun&) = delete;
 
     // H2_compress_factors: a wave's X_NR, decompressed into the level's
 
@@ -1658,7 +1771,64 @@ public:
 
     // though wave w+1 overwrites them afterwards.
 
-    void prepare_wave_xnr(DeviceSolveLevel& L, size_t w) {
+    // A ring of event pairs around the decompression calls.  A slot is read
+    // back only when it comes round again, hundreds of calls later, so the
+    // measurement costs no synchronization of its own.
+    static constexpr size_t kXnrSlots = 256;
+    struct XnrSlot { cudaEvent_t start{}, stop{}; bool made = false, pending = false; double bytes = 0.0; };
+    std::vector<XnrSlot> xnr_slots_{kXnrSlots};
+    size_t xnr_at_ = 0;
+
+    void xnr_slot_collect(XnrSlot& s) {
+        if (!s.pending) return;
+        float ms = 0.0f;
+        check_cuda(cudaEventSynchronize(s.stop), "xnr timer");
+        check_cuda(cudaEventElapsedTime(&ms, s.start, s.stop), "xnr timer");
+        times.xnr += static_cast<double>(ms) * 1e-3;
+        times.xnr_bytes += s.bytes;
+        ++times.xnr_calls;
+        s.pending = false;
+    }
+    int xnr_timer_begin(cudaStream_t on) {
+        XnrSlot& s = xnr_slots_[xnr_at_];
+        xnr_slot_collect(s);
+        if (!s.made) {
+            check_cuda(cudaEventCreate(&s.start), "xnr timer");
+            check_cuda(cudaEventCreate(&s.stop), "xnr timer");
+            s.made = true;
+        }
+        check_cuda(cudaEventRecord(s.start, on), "xnr timer");
+        return static_cast<int>(xnr_at_);
+    }
+    void xnr_timer_end(int slot, double bytes, cudaStream_t on) {
+        XnrSlot& s = xnr_slots_[static_cast<size_t>(slot)];
+        check_cuda(cudaEventRecord(s.stop, on), "xnr timer");
+        s.pending = true;
+        s.bytes = bytes;
+        xnr_at_ = (static_cast<size_t>(slot) + 1) % kXnrSlots;
+    }
+    // The buffer rotation (prepare_wave_xnr): which wave each buffer holds,
+    // whether its last reader has been marked, and the wave before this one.
+    static constexpr size_t kNoWave = static_cast<size_t>(-1);
+    cudaStream_t xnr_stream_ = nullptr;
+    std::array<cudaEvent_t, kXnrBuffers> xnr_done_{};   // its decompression finished
+    std::array<cudaEvent_t, kXnrBuffers> xnr_used_{};   // its reader finished
+    std::array<bool, kXnrBuffers> xnr_used_valid_{};
+    std::array<size_t, kXnrBuffers> xnr_ready_{kNoWave, kNoWave};
+    size_t xnr_prev_ = kNoWave;
+    const DeviceSolveLevel* xnr_level_ = nullptr;
+    // Every pending slot, at the end of the sweeps.
+    void xnr_timers_drain() {
+        for (XnrSlot& s : xnr_slots_) xnr_slot_collect(s);
+    }
+
+    // Wave `w` of a sweep that goes on to wave w + step (step +1 forward, -1
+    // backward): its X_NR is decompressed in the buffer of its parity, and
+    // the next wave's decompression is started here, on a stream of its own,
+    // so it runs under this wave's kernels and messages.  The buffer the next
+    // wave will overwrite was read by the wave before this one, so the
+    // decompression stream waits for that read first.
+    void prepare_wave_xnr(DeviceSolveLevel& L, size_t w, int step) {
 #ifdef H2_HAVE_NVCOMP
 
         if (!L.xnr_compressed || w >= L.xnr_waves.size()) return;
@@ -1667,27 +1837,100 @@ public:
 
         if (xw.empty()) return;
 
-        decompress_solve_xnr_wave(xw, stream_);
+        if (xnr_level_ != &L) {  // another level: its buffers hold nothing of ours
 
-        for (size_t i = 0; i < xw.boxes.size(); ++i) {
+            xnr_sync_buffers();
 
-            L.boxes[static_cast<size_t>(xw.boxes[i])].xnr = xw.h_dsts[i];
+            xnr_level_ = &L;
+
+            xnr_ready_.fill(kNoWave);
+
+            xnr_used_valid_.fill(false);
+
+            xnr_prev_ = kNoWave;
 
         }
 
-        // d_boxes is const for the kernels; the table block is writable
+        const size_t b = w % L.xnr_buffers;
 
-        check_cuda(cudaMemcpyAsync(const_cast<SolveBox*>(L.d_boxes), L.boxes.data(),
+        // The previous wave's kernels are on the stream by now, so an event
+        // recorded here is after its reads of its buffer.
 
-                                   L.boxes.size() * sizeof(SolveBox), cudaMemcpyHostToDevice, stream_),
+        if (xnr_prev_ != kNoWave) {
 
-                   "wave X_NR pointers");
+            const size_t pb = xnr_prev_ % L.xnr_buffers;
+
+            check_cuda(cudaEventRecord(xnr_used_[pb], stream_), "xnr buffer use");
+
+            xnr_used_valid_[pb] = true;
+
+        }
+
+        if (xnr_ready_[b] != w) xnr_decompress(L, w);  // not prefetched (the sweep's first wave)
+
+        check_cuda(cudaStreamWaitEvent(stream_, xnr_done_[b], 0), "xnr buffer ready");
+
+        // d_boxes is const for the kernels; the table block is writable.  The
+
+        // wave's box indices and destinations are already on the device, so
+
+        // this is one small kernel, not a copy of the whole table.
+
+        launch_patch_xnr(const_cast<SolveBox*>(L.d_boxes), xw.d_box_idx, xw.d_dsts,
+
+                         static_cast<int>(xw.boxes.size()), stream_);
+
+        // With one buffer there is nowhere to put the next wave: it would
+        // overwrite this one before its kernels have run.
+
+        const size_t next = w + static_cast<size_t>(step);
+
+        if (L.xnr_buffers > 1 && step != 0 && next < L.xnr_waves.size() && !L.xnr_waves[next].empty()) {
+
+            xnr_decompress(L, next);
+
+        }
+
+        xnr_prev_ = w;
 #else
 
-        (void)L; (void)w;
+        (void)L; (void)w; (void)step;
 #endif
 
     }
+
+#ifdef H2_HAVE_NVCOMP
+    // Wave `w` into the buffer of its parity, on the decompression stream,
+    // once whoever read that buffer last is done with it.
+    void xnr_decompress(DeviceSolveLevel& L, size_t w) {
+        const size_t b = w % L.xnr_buffers;
+        xnr_make_resources();
+        if (xnr_used_valid_[b]) {
+            check_cuda(cudaStreamWaitEvent(xnr_stream_, xnr_used_[b], 0), "xnr buffer free");
+            xnr_used_valid_[b] = false;
+        }
+        const int slot = xnr_timer_begin(xnr_stream_);
+        decompress_solve_xnr_wave(L.xnr_waves[w], xnr_stream_);
+        xnr_timer_end(slot, L.xnr_waves[w].raw_bytes, xnr_stream_);
+        check_cuda(cudaEventRecord(xnr_done_[b], xnr_stream_), "xnr buffer ready");
+        xnr_ready_[b] = w;
+    }
+    void xnr_make_resources() {
+        if (xnr_stream_ != nullptr) return;
+        check_cuda(cudaStreamCreateWithFlags(&xnr_stream_, cudaStreamNonBlocking), "xnr stream");
+        for (size_t b = 0; b < kXnrBuffers; ++b) {
+            check_cuda(cudaEventCreateWithFlags(&xnr_done_[b], cudaEventDisableTiming), "xnr events");
+            check_cuda(cudaEventCreateWithFlags(&xnr_used_[b], cudaEventDisableTiming), "xnr events");
+        }
+    }
+    // Before another level takes the buffers over.
+    void xnr_sync_buffers() {
+        if (xnr_stream_ == nullptr) return;
+        check_cuda(cudaStreamSynchronize(xnr_stream_), "xnr buffers");
+    }
+#else
+    void xnr_sync_buffers() {}
+#endif
 
 
     // a level's vectors: host solve data -> device
@@ -1728,7 +1971,7 @@ public:
         S* inbox = alloc_message(L.in_max);
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
-            prepare_wave_xnr(L, wi);
+            prepare_wave_xnr(L, wi, +1);
             launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
@@ -1759,7 +2002,7 @@ public:
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
             if (!L.peers.empty()) refresh(L, W.ref[0], vec, ghost, sendbox, inbox);
-            prepare_wave_xnr(L, static_cast<size_t>(w));
+            prepare_wave_xnr(L, static_cast<size_t>(w), -1);
             launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0, W.count, vec, ghost, work, nrhs_, L.max_n,
                                   W.max_ntot, stream_);
         }
@@ -1783,7 +2026,7 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (!L.peers.empty()) refresh(L, W.ref[1], vec, ghost, sendbox, inbox);
-            prepare_wave_xnr(L, wi);
+            prepare_wave_xnr(L, wi, +1);
             launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, ghost, work, nrhs_, L.max_n,
                                W.max_ntot, stream_);
         }
@@ -1808,7 +2051,7 @@ public:
         S* inbox = alloc_message(L.in_max);
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
-            prepare_wave_xnr(L, static_cast<size_t>(w));
+            prepare_wave_xnr(L, static_cast<size_t>(w), -1);
             launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
@@ -1945,7 +2188,7 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (W.count == 0) continue;
-            prepare_wave_xnr(L, wi);
+            prepare_wave_xnr(L, wi, +1);
             launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                static_cast<const S*>(nullptr), stream_);
@@ -1975,7 +2218,7 @@ public:
             for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
                 const auto& W = L.waves[static_cast<size_t>(w)];
                 if (W.count == 0) continue;
-                prepare_wave_xnr(L, static_cast<size_t>(w));
+                prepare_wave_xnr(L, static_cast<size_t>(w), -1);
                 launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0, W.count, vec, area, work, nrhs_,
                                       L.max_n, W.max_ntot, stream_);
             }
@@ -2013,7 +2256,7 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (W.count == 0) continue;
-            prepare_wave_xnr(L, wi);
+            prepare_wave_xnr(L, wi, +1);
             launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, area, work, nrhs_, L.max_n,
                                W.max_ntot, stream_);
         }
@@ -2049,7 +2292,7 @@ public:
             for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
                 const auto& W = L.waves[static_cast<size_t>(w)];
                 if (W.count == 0) continue;
-                prepare_wave_xnr(L, static_cast<size_t>(w));
+                prepare_wave_xnr(L, static_cast<size_t>(w), -1);
                 launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
                 launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                    static_cast<const S*>(nullptr), stream_);
@@ -2275,6 +2518,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
         }
     }
     const double total = std::chrono::duration<double>(clock::now() - t0).count();
+    run.xnr_timers_drain();
     if (verbosity >= 0 && rank == 0) {
         const auto& t = run.times;
         std::printf("GPU solve: %.3f s (rank 0: forward %.3f, diagonal %.3f, backward %.3f, of which MPI %.3f%s; "
@@ -2283,6 +2527,11 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                     t.direct_messages > 0 ? (t.staged_messages > 0 ? " partly in device memory" : " in device memory")
                                           : (t.staged_messages > 0 ? " through the host" : ""),
                     t.transfer, t.halo, host_seconds);
+        if (t.xnr_calls > 0) {
+            std::printf("  X_NR decompression: %.3f s in %lld calls, %.2f GB uncompressed, %.1f GB/s\n", t.xnr,
+                        static_cast<long long>(t.xnr_calls), t.xnr_bytes / 1e9,
+                        t.xnr > 0.0 ? t.xnr_bytes / t.xnr / 1e9 : 0.0);
+        }
         std::fflush(stdout);
     }
 }
@@ -2354,6 +2603,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
         }
     }
     const double total = std::chrono::duration<double>(clock::now() - t0).count();
+    run.xnr_timers_drain();
     if (verbose && rank == 0) {
         const auto& t = run.times;
         std::printf("GPU multiply: %.3f s (rank 0: forward %.3f, diagonal %.3f, backward %.3f, of which MPI %.3f%s; "
@@ -2362,6 +2612,11 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
                     t.direct_messages > 0 ? (t.staged_messages > 0 ? " partly in device memory" : " in device memory")
                                           : (t.staged_messages > 0 ? " through the host" : ""),
                     t.transfer, t.halo, host_seconds);
+        if (t.xnr_calls > 0) {
+            std::printf("  X_NR decompression: %.3f s in %lld calls, %.2f GB uncompressed, %.1f GB/s\n", t.xnr,
+                        static_cast<long long>(t.xnr_calls), t.xnr_bytes / 1e9,
+                        t.xnr > 0.0 ? t.xnr_bytes / t.xnr / 1e9 : 0.0);
+        }
         std::fflush(stdout);
     }
 }

@@ -2433,18 +2433,48 @@ X_NR is 92% of a kept block and compresses 16x at tol_comp/5 (measured at
 192^3 on 8 ranks), taking the device's factors from 27.76 to 2.96 GB per
 rank. Three things are left:
 
-- C1. The solve is 5.3x slower with compression on (0.251 -> 1.337 s at
-  192^3 on 8 ranks), past the 4x the user accepted. The codec is not the
-  cost: about 24 GB of X_NR per sweep over six passes is 144 GB in 3.4 s,
-  40 GB/s against the 400-600 GB/s a wave-sized batch reaches on its own.
-  The cost is per-call: a wave is one bitcompBatchUncompress (about 300 per
-  solve, and the coarse levels' waves are far below the batch size that
-  fills the GPU - 9.8 GB/s at 8 blocks), and each wave re-uploads the whole
-  SolveBox array (410 KB) to move its pointers. MPI time triples
-  (0.069 -> 0.392 s), so the decompression is serializing against the
-  exchanges rather than overlapping. Fix: decompress a window of waves in
-  one batch, and patch only the wave's box entries with a small kernel
-  instead of re-uploading the table.
+- C1 (done, 2026-10-05). The solve was 4.7x slower with compression on
+  (0.264 -> 1.239 s at 192^3 on 8 ranks, 40 GB nodes), past the 4x the user
+  accepted. Overlapping the decompression with the sweeps brought it to
+  0.954 s, **3.6x**, with the same results to the last digit (logdet
+  -89253588.194065422 either way, acc_backward 1.3e-15).
+
+  The first diagnosis in this entry was wrong and is kept here as a warning.
+  It claimed the codec was not the cost and blamed per-call overhead and the
+  box-table upload. Timing the calls on the stream (CUDA events, now in
+  DeviceSolveTimes::xnr, printed by BPACK_TRACE=phase under "GPU solve") says
+  otherwise:
+
+  | | off | on, per wave | on, overlapped |
+  |---|---|---|---|
+  | GPU solve | 0.257 s | 1.231 s | 0.903 s |
+  | forward / backward | 0.105 / 0.134 | 0.592 / 0.619 | 0.430 / 0.454 |
+  | MPI | 0.069 | 0.393 | 0.356 |
+  | X_NR decompression | - | 0.666 s, 19.3 GB/s | 0.669 s, 19.2 GB/s |
+
+  The decompression is 0.666 s of the 0.973 s added, and the MPI inflation
+  (+0.324 s, ranks waiting for peers that are still decompressing) is the
+  rest - the whole slowdown, accounted for. **bitcomp's lossy decompression
+  runs at 19 GB/s here**, not the 400-600 GB/s an isolated benchmark
+  suggested, and that is the floor: the 80 calls of a solve average 160 MB
+  each, so batching waves into bigger windows had nothing to gain. (Small
+  batches do cost: CA0, whose waves are ~52 MB, gets 5.4 GB/s.)
+
+  What was done instead: each level's scratch holds kXnrBuffers = 2 waves and
+  a wave decompresses on a stream of its own while the previous wave's
+  kernels and messages run (prepare_wave_xnr, which now takes the sweep's
+  direction so it knows which wave comes next; events gate each buffer
+  against its last reader). That hid half the decompression. The second
+  buffer is taken only while the heap keeps kXnrSecondBufferHeadroom free
+  afterwards, so a tight level falls back to one buffer and the old strictly
+  per-wave behaviour - without that, a level could gain +0.7 GB (947 MiB at
+  level 4 of this case, against 473 MiB) where there is no room for it.
+  The box-table patch kernel (launch_patch_xnr) also went in; it removes
+  123 MB of H2D traffic per sweep but measured as nothing (1.2384 ->
+  1.2380 s), which is the other half of the correction above.
+
+  Left over: the 0.669 s of decompression is irreducible at 19 GB/s. Halving
+  the bytes - FP32 X_NR, the option dropped earlier - would halve it.
 - C2. CA3 keeps 5.71 GB of 19.90 GB (3.5x) where Color and CA0 reach
   7.4-7.7x, because land_full_factors - the component-owner path that
   stores the factors of boxes landing from other ranks - lays them out
@@ -2456,3 +2486,37 @@ rank. Three things are left:
   compressor's staging alive through the gather, which costs about 10% of
   the factorization (7.49 -> 8.22 s at tol_comp). Double buffer the staging
   across waves instead.
+- C4 (found while measuring C1, 2026-10-05). **The leaf level never keeps
+  its solve factors, so the compression misses 73% of X_NR.** At 192^3 on 8
+  ranks (40 GB nodes) the leaf's X_NR is 17.45 GB per rank of the 23.87 GB
+  in the whole factorization; levels 4, 3 and 2 hold 5.13, 1.15 and 0.14 GB
+  and compress 18.7x, 19.5x and 17.6x, taking the kept factors from 7.03 to
+  0.97 GB. The leaf's go to the host and come back **uncompressed** at the
+  first solve (19.81 GB per rank, 2.15 s of it host packing), so the solve
+  holds about 20.8 GB of factors on the device whether compression is on or
+  not. BPACK_TRACE=wave prints this per level ("X_NR read in place").
+
+  decide_solve_keep rejects the leaf because solve_keep_bound is both
+  uncompressed and loose - it uses each box's n where the factors have r
+  columns (levels 4-2 come in at 53-68% of their bound), and at the leaf it
+  is tens of GB against a budget of 0.8 x capacity less what the level's own
+  working set already holds (26.18 GB resident of a 28.4 GB heap).
+
+  Dividing the bound's X_NR term by 4 when compression is on does flip the
+  decision, and that was tried and reverted: the leaf then fails the keep a
+  second way ("no free range of the heap held a wave's factors" -
+  largest_free < one wave's block), and **the rescue path after that failure
+  is broken** - level 4 then reads NaN/Inf in its ID input on every rank.
+  rescue_skipped_xnr(true) does not restore what skip_xnr_ told the waves not
+  to copy to the host. That is a latent bug in the existing keep-failure
+  path, now reachable; it needs fixing before any attempt to keep the leaf.
+
+  Even fixed, the leaf has no room during its own waves, so the way to
+  compress it is not to keep it on the device but to **compress in the
+  download path**: the factors are already on the device when they are
+  downloaded, so compressing each wave there shrinks the host copy and lets
+  the first solve upload compressed bytes, with no extra device memory
+  during the factorization. Note the cost: at 19 GB/s the leaf's 17.45 GB
+  would add about 2.7 s per sweep, so a solve that now takes 0.95 s would
+  take several seconds. It is a memory-for-time trade, and the right call
+  depends on whether the target problem fits at all without it.

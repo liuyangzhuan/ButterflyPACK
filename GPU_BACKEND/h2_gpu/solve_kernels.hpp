@@ -117,6 +117,11 @@ void launch_solve_copy(const SolveCopy* items, int count, int max_n, int nrhs, c
                        cudaStream_t stream);
 void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cudaStream_t stream);
 
+// H2_compress_factors: point `count` boxes' xnr at where their X_NR was just
+// decompressed (boxes[idx[i]].xnr = dsts[i]).  One tiny kernel instead of
+// re-uploading the whole box table for the few entries a wave changes.
+void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, int count, cudaStream_t stream);
+
 // The multiply F x (the factorization applied), core/apply_mul.hpp:
 // forward W:  x_S += T x_R;  x_R -= X_SR^T x_S + X_NR^T x_N  (x_N gathered into work)
 template<typename T>
