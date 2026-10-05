@@ -2550,7 +2550,7 @@ rank. Three things are left:
   uncompressed and loose - it uses each box's n where the factors have r
   columns (levels 4-2 come in at 53-68% of their bound), and at the leaf it
   is tens of GB against a budget of 0.8 x capacity less what the level's own
-  working set already holds (26.18 GB resident of a 28.4 GB heap).
+  working set already holds (26.18 GB resident of a 33.40 GB heap).
 
   Dividing the bound's X_NR term by 4 when compression is on does flip the
   decision, and that was tried and reverted: the leaf then fails the keep a
@@ -2576,13 +2576,27 @@ rank. Three things are left:
 
   So the binding constraint is the compressor's own staging, not the stored
   factors: compressed, a leaf wave is about 145 MB and would fit with room
-  to spare. Two ways out, the first much cheaper:
+  to spare.
 
-  - **Chunk the staging.** Compress a wave a few hundred MB at a time into a
-    reused buffer, so the staging is O(chunk) instead of O(wave). 512 MB
-    fits in the 1.56 GB that is free today, which would let the leaf keep
-    its factors compressed - the whole of C4 - without freeing anything
-    else.
+  **Note what the C1 chunking did and did not do.** Cutting a box's X_NR
+  into kXnrChunkBytes blocks gave the batch its parallelism, but the staging
+  is still the whole wave - it is the sum of bitcompMaxBuflen over the
+  chunks, and that bound is at least the input size whatever the chunk size
+  (the sweep measured 443 MB of staging for 436 MB of data at 0.5 MB
+  chunks). So C4's blocker is exactly as it was. What the chunking did change
+  is that the chunks now exist, so bounding the staging is a matter of
+  grouping them rather than of cutting anything new.
+
+  Two ways out, the first much cheaper:
+
+  - **Compress a wave in groups bounded by a fixed staging buffer.** A group
+    is a run of the wave's chunk list whose bitcompMaxBuflen sum fits the
+    buffer; the staging becomes O(buffer) instead of O(wave). 512 MB fits in
+    the 1.56 GB free today and holds about 1024 chunks of 0.5 MB, which is
+    past the point where the throughput curve flattens, so it costs nothing
+    in rate. The work is in keep_solve_factors: it compresses the whole wave
+    and then gathers from the staging with one launch_copy_spans, so each
+    group has to be gathered out before the buffer is reused.
   - **Free working set first** (step 4, compressing the fill sources). The
     leaf's 26.18 GB resident is what leaves only 1.56 GB, so step 4 and C4
     are the same constraint seen from two sides.
