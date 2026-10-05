@@ -975,12 +975,31 @@ public:
             static_cast<double>(e.heap_peak_resident) / 1e9,
             static_cast<double>(e.heap_peak_transient) / 1e9,
             static_cast<long long>(e.heap_reclaims));
-        if (e.persist_blocks > 0) {
-            std::printf("  [gpu] level %d fill sources: %.2f GB at the peak in %lld blocks (X_RR_full %.2f GB, "
-                        "temp2^T %.2f GB, generator boxes %.2f GB), %.2f GB still held\n", lvl,
-                        e.persist_peak / 1e9, static_cast<long long>(e.persist_blocks), e.persist_xrr_bytes / 1e9,
-                        (e.persist_peak - e.persist_xrr_bytes - e.persist_gen_bytes) / 1e9,
-                        e.persist_gen_bytes / 1e9, e.persist_bytes / 1e9);
+        {
+            // What the level's resident peak was made of (the ceiling on
+            // boxes per GPU; the transient part comes and goes within a wave)
+            const DeviceHeap& heap = DeviceHeap::instance();
+            std::printf("  [gpu] level %d resident at the peak: %.2f GB", lvl,
+                        static_cast<double>(e.heap_peak_resident) / 1e9);
+            size_t named = 0;
+            for (size_t k = 1; k < static_cast<size_t>(ResidentKind::Count); ++k) {
+                const auto kind = static_cast<ResidentKind>(k);
+                const size_t bytes = heap.resident_at_peak(kind);
+                if (bytes == 0) continue;
+                named += bytes;
+                std::printf(" | %s %.2f GB", resident_kind_name(kind), static_cast<double>(bytes) / 1e9);
+            }
+            const size_t other = heap.resident_at_peak(ResidentKind::Other);
+            std::printf(" | other %.2f GB", static_cast<double>(other) / 1e9);
+            const double accounted = static_cast<double>(named + other);
+            std::printf(" (accounted %.2f GB)\n", accounted / 1e9);
+            if (e.persist_blocks > 0) {
+                std::printf("  [gpu] level %d fill sources: %lld blocks, X_RR_full %.2f GB, temp2^T %.2f GB, "
+                            "generator boxes %.2f GB\n", lvl, static_cast<long long>(e.persist_blocks),
+                            e.persist_xrr_bytes / 1e9,
+                            (e.persist_peak - e.persist_xrr_bytes - e.persist_gen_bytes) / 1e9,
+                            e.persist_gen_bytes / 1e9);
+            }
         }
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "

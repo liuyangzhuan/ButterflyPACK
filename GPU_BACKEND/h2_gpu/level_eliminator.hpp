@@ -1069,8 +1069,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             }
         }
     }
-    double* d_xyz = heap_.alloc_resident<double>(xyz.size() * sizeof(double));
-    int64_t* d_ids = heap_.alloc_resident<int64_t>(ids.size() * sizeof(int64_t));
+    double* d_xyz = heap_.alloc_resident<double>(xyz.size() * sizeof(double), ResidentKind::Points);
+    int64_t* d_ids = heap_.alloc_resident<int64_t>(ids.size() * sizeof(int64_t), ResidentKind::Points);
     check_cuda(cudaMemcpyAsync(d_xyz, xyz.data(), xyz.size() * sizeof(double), cudaMemcpyHostToDevice, stream), "upload points");
     check_cuda(cudaMemcpyAsync(d_ids, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice, stream), "upload ids");
     points_.xyz = d_xyz;
@@ -1081,7 +1081,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     num_slots_ = num_slots;
     stats.bytes_up += static_cast<double>(xyz.size() * sizeof(double) + ids.size() * sizeof(int64_t));
     if (!training_lists.empty()) {
-        int* d_lists = heap_.alloc_resident<int>(training_lists.size() * sizeof(int));
+        int* d_lists = heap_.alloc_resident<int>(training_lists.size() * sizeof(int), ResidentKind::Lists);
         level_allocs_.push_back(reinterpret_cast<char*>(d_lists));
         check_cuda(cudaMemcpyAsync(d_lists, training_lists.data(), training_lists.size() * sizeof(int),
                                    cudaMemcpyHostToDevice, stream), "upload training lists");
@@ -1150,7 +1150,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     auto place = [&](Placement p, int rows, int cols) {
         p.dst->rows = rows;
         p.dst->cols = cols;
-        p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * sizeof(S));
+        p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * sizeof(S), ResidentKind::Transition);
         p.offset = image_elems;
         image_elems += align_up(static_cast<size_t>(rows) * cols, 32);
         placements.push_back(p);
@@ -1738,7 +1738,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         id_bytes = align_up(id_bytes + static_cast<size_t>(plans[bi].n) * sizeof(int));
         max_id_n = std::max(max_id_n, plans[bi].n);
     }
-    char* d_id = heap_.alloc_resident(std::max<size_t>(id_bytes, 1));  // pivots: the level's skeleton lists
+    char* d_id = heap_.alloc_resident(std::max<size_t>(id_bytes, 1), ResidentKind::Lists);  // pivots: the level's skeleton lists
     level_allocs_.push_back(d_id);  // its pivots are the device skeleton lists
     std::vector<QrcpItem> id_items(adaptive ? 0 : plans.size());
     std::unique_ptr<Selector> selector;
@@ -2109,7 +2109,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
                 const size_t persist_bytes = align_up(r * r * D) + std::max<size_t>(nt * r * D, 1);
-                char* persist = heap_.alloc_resident(persist_bytes);
+                char* persist = heap_.alloc_resident(persist_bytes, ResidentKind::FillSource);
                 {
                     auto& es = eliminator_stats();
                     es.persist_bytes += static_cast<double>(persist_bytes);
@@ -2136,7 +2136,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.ans = reinterpret_cast<S*>(work + o_ans);
             wb.xnr = reinterpret_cast<S*>(work + o_xnr);
             wb.xns = reinterpret_cast<S*>(work + o_xns);
-            wb.s = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1));  // becomes the Schur block
+            wb.s = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1), ResidentKind::Near);  // becomes the Schur block
         }
     }
 
@@ -2424,7 +2424,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 if (c == 0) continue;
                 DeviceMatrix fresh;
                 const auto t_alloc = clock::now();
-                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D);
+                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::Transition);
                 stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
                 int64_t ors = 1, ocs = c;
                 if (box->morton_index < nm) {
@@ -2613,7 +2613,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (CandidateTarget& t : candidate_targets[ci]) {
             DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
             if (block->ptr == nullptr) {
-                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D);
+                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D, ResidentKind::Transition);
                 block->rows = t.rows;
                 block->cols = t.cols;
                 owner_evals.push_back(EvalItem{block->ptr, t.rows, t.rows, t.cols,
@@ -3078,7 +3078,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::set_remote_skeletons(
         all.insert(all.end(), st->skeleton.begin(), st->skeleton.end());
     }
     if (all.empty()) return;
-    int* d_lists = heap_.alloc_resident<int>(all.size() * sizeof(int));
+    int* d_lists = heap_.alloc_resident<int>(all.size() * sizeof(int), ResidentKind::Lists);
     level_allocs_.push_back(reinterpret_cast<char*>(d_lists));
     check_cuda(cudaMemcpyAsync(d_lists, all.data(), all.size() * sizeof(int), cudaMemcpyHostToDevice,
                                Context::instance().stream()),
@@ -3135,8 +3135,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sync_remote_boxes(bool sk
         }
         // a larger table: the local slots and earlier remote ones keep their places
         const int64_t total = num_slots_ + extra;
-        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double));
-        int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double), ResidentKind::Points);
+        int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t), ResidentKind::Points);
         check_cuda(cudaMemcpyAsync(xyz_new, d_xyz_, static_cast<size_t>(dim * num_slots_) * sizeof(double),
                                    cudaMemcpyDeviceToDevice, stream), "point table");
         check_cuda(cudaMemcpyAsync(ids_new, d_ids_, static_cast<size_t>(num_slots_) * sizeof(int64_t),
@@ -3182,8 +3182,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::place_scratch_points(const
         const int64_t slots = count + count / 2;
         const int64_t total = num_slots_ + slots;
         if (total >= std::numeric_limits<int>::max()) throw std::runtime_error("LevelEliminator: too many points per rank");
-        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double));
-        int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+        double* xyz_new = heap_.alloc_resident<double>(static_cast<size_t>(dim * total) * sizeof(double), ResidentKind::Points);
+        int64_t* ids_new = heap_.alloc_resident<int64_t>(static_cast<size_t>(total) * sizeof(int64_t), ResidentKind::Points);
         check_cuda(cudaMemcpyAsync(xyz_new, d_xyz_, static_cast<size_t>(dim * num_slots_) * sizeof(double),
                                    cudaMemcpyDeviceToDevice, stream), "point table");
         check_cuda(cudaMemcpyAsync(ids_new, d_ids_, static_cast<size_t>(num_slots_) * sizeof(int64_t),
@@ -3404,7 +3404,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         }
         const size_t t_bytes = align_up(nr);
         const size_t gen_persist = t_bytes + static_cast<size_t>(g.r) * g.r * D;
-        char* persist = heap_.alloc_resident(gen_persist);
+        char* persist = heap_.alloc_resident(gen_persist, ResidentKind::FillSource);
         {
             auto& es = eliminator_stats();
             es.persist_bytes += static_cast<double>(gen_persist);
@@ -3454,7 +3454,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     auto ensure_schur = [&](BoxState& st) -> DeviceMatrix& {
         if (st.schur.ptr == nullptr) {
             const int c = current_size(st);
-            st.schur = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(c) * c * D), c, c};
+            st.schur = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(c) * c * D, ResidentKind::Transition), c, c};
             add_eval(st.schur.ptr, c, c, c, current_slots(st), current_slots(st));
         }
         return st.schur;
@@ -3467,7 +3467,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         BoxState& hs = state_of(hi);
         const int rows = current_size(hs), cols = current_size(ls);
         DeviceMatrix& e = edges_[key];
-        e = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D), rows, cols};
+        e = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition), rows, cols};
         add_eval(e.ptr, rows, rows, cols, current_slots(hs), current_slots(ls));
         return e;
     };
@@ -3527,7 +3527,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 const int rows = e_hi ? g.k : c_l, cols = e_hi ? c_l : g.k;
                 auto it = edges_.find(key);
                 if (it == edges_.end() && require_stored) return;
-                S* fresh = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D);
+                S* fresh = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition);
                 IndexList skeleton = current_slots(*g.st);
                 skeleton.base = 0;  // positions within E
                 if (it != edges_.end()) {
@@ -3828,7 +3828,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         keep_failure_ = over ? 1 : 2;
         return false;
     }
-    char* block = heap_.alloc_resident(total);
+    char* block = heap_.alloc_resident(total, ResidentKind::KeptFactors);
     kept_.blocks.push_back(block);
     kept_.bytes += static_cast<double>(total);
     // the span list is a few KB: a pageable copy (staged before the call
@@ -4610,7 +4610,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(const O
             keep_failed_ = true;
             keep_failure_ = over ? 1 : 2;
         } else {
-            char* block = heap_.alloc_resident(total);
+            char* block = heap_.alloc_resident(total, ResidentKind::KeptFactors);
             kept_.blocks.push_back(block);
             kept_.bytes += static_cast<double>(total);
             size_t at = 0;
@@ -4650,7 +4650,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(const O
     // the later sources' updates, the transition reads it
     {
         BoxState& st = state_of(e.morton);
-        S* blk = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1));
+        S* blk = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1), ResidentKind::Near);
         if (k > 0) check_cuda(cudaMemcpyAsync(blk, e.bulk + lay.schur, k * k * D, cudaMemcpyDeviceToDevice, stream), "landed Schur");
         if (st.schur.ptr != nullptr) heap_.free(st.schur.ptr);  // (later launches are ordered after its reads)
         st.schur = DeviceMatrix{blk, e.k, e.k};
@@ -5117,7 +5117,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         const int64_t pm = parents[p].morton_index;
         const int n = parents[p].num_points;
         DeviceMatrix& sm = out->schur[pm];
-        sm = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(n) * n * D), n, n};
+        sm = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(n) * n * D, ResidentKind::Transition), n, n};
         pairs_of[p].push_back(Pair{pm, pm, &sm});
     }
     for (size_t p = 0; p < np; ++p) {
@@ -5478,7 +5478,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             d_raw = heap_.alloc(restore_bytes);
             for (size_t q = 0; q < pending.size(); ++q) {
                 const Pending& pd = pending[q];
-                d_restore[q] = heap_.alloc_resident(pd.end - pd.gall_off);
+                d_restore[q] = heap_.alloc_resident(pd.end - pd.gall_off, ResidentKind::Restore);
                 const int L = static_cast<int>(pd.rows.size()) + pd.r;
                 restores.push_back(TransposeItem{reinterpret_cast<const S*>(d_raw + pd.gall_off), L,
                                                  reinterpret_cast<S*>(d_restore[q]), pd.r, L, pd.r});

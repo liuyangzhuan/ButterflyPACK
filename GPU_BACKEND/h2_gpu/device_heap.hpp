@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <array>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -32,6 +33,35 @@
 
 namespace fmm {
 namespace gpu {
+
+// What a resident block is for, so a level's resident peak can be broken
+// down (BPACK_TRACE=phase).  Resident blocks are the ones that live for a
+// level or longer, which is what a level's memory ceiling is made of; the
+// transient ones come and go within a wave.  A block with no tag counts as
+// Other.
+enum class ResidentKind : uint8_t {
+    Other = 0,
+    FillSource,    // keep_fill_source: X_RR_full and temp2^T, per box
+    Transition,    // the Schur and edge blocks a level leaves for the next
+    Near,          // step 5's dense neighbor blocks
+    Points,        // the level's coordinates and point ids
+    Lists,         // skeleton lists, training lists, index tables
+    KeptFactors,   // the solve factors a level keeps (H2_compress_factors)
+    Restore,       // a transition chunk's restored fill sources
+    Count
+};
+inline const char* resident_kind_name(ResidentKind k) {
+    switch (k) {
+        case ResidentKind::FillSource: return "fill sources";
+        case ResidentKind::Transition: return "transition blocks";
+        case ResidentKind::Near: return "near blocks";
+        case ResidentKind::Points: return "points";
+        case ResidentKind::Lists: return "lists";
+        case ResidentKind::KeptFactors: return "kept factors";
+        case ResidentKind::Restore: return "restores";
+        default: return "other";
+    }
+}
 
 class DeviceHeap {
 public:
@@ -125,17 +155,18 @@ public:
     T* alloc(size_t bytes) {
         return reinterpret_cast<T*>(alloc_bytes(bytes, false));
     }
-    // A block that lives for a level or longer, from the bottom.
+    // A block that lives for a level or longer, from the bottom.  `kind` is
+    // only for the resident breakdown.
     template<typename T = char>
-    T* alloc_resident(size_t bytes) {
-        return reinterpret_cast<T*>(alloc_bytes(bytes, true));
+    T* alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other) {
+        return reinterpret_cast<T*>(alloc_bytes(bytes, true, kind));
     }
 
     // Called when an allocation does not fit: frees what it can (blocks
     // whose background copies are done) and returns whether it freed any.
     void set_reclaimer(std::function<bool()> reclaimer) { reclaimer_ = std::move(reclaimer); }
 
-    char* alloc_bytes(size_t bytes, bool resident) {
+    char* alloc_bytes(size_t bytes, bool resident, ResidentKind kind = ResidentKind::Other) {
         ensure_initialized();
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
@@ -151,7 +182,13 @@ public:
         }
         allocated_.emplace(offset, std::make_pair(size, resident));
         used_ += size;
-        if (resident) resident_used_ += size; else transient_used_ += size;
+        if (resident) {
+            resident_used_ += size;
+            resident_kind_[offset] = kind;
+            by_kind_[static_cast<size_t>(kind)] += size;
+        } else {
+            transient_used_ += size;
+        }
         note_peak();
         return base_ + offset;
     }
@@ -165,8 +202,15 @@ public:
         const bool was_resident = it->second.second;
         allocated_.erase(it);
         used_ -= length;
-        if (was_resident) resident_used_ -= length;
-        else transient_used_ -= length;
+        if (was_resident) {
+            resident_used_ -= length;
+            if (auto kit = resident_kind_.find(offset); kit != resident_kind_.end()) {
+                by_kind_[static_cast<size_t>(kit->second)] -= length;
+                resident_kind_.erase(kit);
+            }
+        } else {
+            transient_used_ -= length;
+        }
         auto next = free_.lower_bound(start);
         if (next != free_.begin()) {
             auto prev = std::prev(next);
@@ -191,6 +235,9 @@ public:
         used_ = 0;
         resident_used_ = 0;
         transient_used_ = 0;
+        resident_kind_.clear();
+        by_kind_.fill(0);
+        by_kind_at_peak_.fill(0);
         if (capacity_ > 0) add_free(0, capacity_);
     }
 
@@ -207,7 +254,11 @@ public:
         peak_ = used_;
         resident_at_peak_ = resident_used_;
         transient_at_peak_ = transient_used_;
+        by_kind_at_peak_ = by_kind_;
     }
+    // What each kind of resident block held when the peak was reached.
+    size_t resident_at_peak(ResidentKind k) const { return by_kind_at_peak_[static_cast<size_t>(k)]; }
+    size_t resident_now(ResidentKind k) const { return by_kind_[static_cast<size_t>(k)]; }
     int64_t reclaims() const { return reclaims_; }
 
     // Compaction of long-lived blocks.  Blocks that outlive a level (the
@@ -240,6 +291,9 @@ public:
             if (alloc == allocated_.end()) throw std::runtime_error("H2 GPU heap: compaction of an unknown block");
             const size_t size = alloc->second.first;
             const bool was_resident = alloc->second.second;
+            // the move frees and re-registers the block, so carry its kind
+            ResidentKind kind = ResidentKind::Other;
+            if (auto kit = resident_kind_.find(offset); kit != resident_kind_.end()) kind = kit->second;
             size_t dest = offset;
             for (auto it = free_.begin(); it != free_.end() && it->first < offset; ++it) {
                 if (it->second >= size) {
@@ -266,7 +320,13 @@ public:
             if (length > size) add_free(dest + size, length - size);
             allocated_.emplace(dest, std::make_pair(size, was_resident));
             used_ += size;
-            if (was_resident) resident_used_ += size; else transient_used_ += size;
+            if (was_resident) {
+                resident_used_ += size;
+                resident_kind_[dest] = kind;
+                by_kind_[static_cast<size_t>(kind)] += size;
+            } else {
+                transient_used_ += size;
+            }
             moves.push_back({blocks[i], base_ + dest, size});
             blocks[i] = base_ + dest;
         }
@@ -294,6 +354,7 @@ private:
         peak_ = used_;
         resident_at_peak_ = resident_used_;
         transient_at_peak_ = transient_used_;
+        by_kind_at_peak_ = by_kind_;
     }
 
     static constexpr size_t kAlign = 256;
@@ -344,6 +405,9 @@ private:
     // and the fill sources) versus per-wave transient blocks, and what each
     // held when the overall peak was reached.
     size_t resident_used_ = 0;
+    std::unordered_map<size_t, ResidentKind> resident_kind_;  // offset -> what it is for
+    std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_{};
+    std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_at_peak_{};
     size_t transient_used_ = 0;
     size_t resident_at_peak_ = 0;
     size_t transient_at_peak_ = 0;
