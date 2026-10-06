@@ -85,6 +85,15 @@ constexpr size_t kXnrChunkBytes = 512 * 1024;
 // staging where the level's working set leaves about 1.5 GB free.
 constexpr size_t kXnrStagingBudget = size_t{512} << 20;
 
+// The fill sources are compressed a slot at a time, and a slot is far smaller
+// than an X_NR block, so a group needs much less staging to reach the same
+// block count: at the leaf a box holds about 24 slots of 160 KB, so 64 MB is
+// roughly 400 blocks, past the point where the rate stops climbing.  It has to
+// be small, because the fill sources are compressed while the wave's own
+// working memory is still allocated - with 512 MB, groups at the leaf could
+// not get their staging at all and fell back to storing raw.
+constexpr size_t kFillStagingBudget = size_t{64} << 20;
+
 // One box's compressed X_NR: the chunks it was cut into, and the shape and
 // quantization the solve needs to put it back.
 struct CompressedXnr {

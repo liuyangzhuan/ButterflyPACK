@@ -683,7 +683,15 @@ private:
                             cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_sources, cudaStream_t stream);
+    // One fill source to compress: its temp2^T and the slot row counts that
+    // partition it (a slot per one-hop neighbor).
+    struct FillSrcRef {
+        const S* t2t = nullptr;
+        int r = 0;
+        const std::vector<int64_t>* counts = nullptr;
+    };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
+    void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream);
     void check_fill_round_trip(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
                                const std::vector<CompressedXnr>& comp, cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
@@ -3762,6 +3770,25 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     stats.bytes_up += static_cast<double>(meta_.size());
     launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes), static_cast<int>(transposes.size()),
                      max_tr_m, max_tr_n, stream);
+
+    // ---- the generator fill sources, compressed a slot at a time now that
+    // their transposes have written temp2^T (the second keep_fill_source site;
+    // these are 5.15 GB of the leaf's resident heap at 192^3 on 8 ranks)
+    if (compress_factors_ >= 1) {
+        std::vector<std::vector<int64_t>> counts(gens.size());
+        std::vector<FillSrcRef> items;
+        items.reserve(gens.size());
+        for (size_t gi = 0; gi < gens.size(); ++gi) {
+            const Gen& g = gens[gi];
+            if (g.st == nullptr || g.st->temp2t == nullptr || g.r == 0 || g.ntot == 0) continue;
+            const Box* gb = level_.find_generator_box(g.morton);
+            if (gb == nullptr) continue;
+            counts[gi].reserve(gb->one_hop.size());
+            for (int64_t m : gb->one_hop) counts[gi].push_back(current_size(state_of(m)));
+            items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts[gi]});
+        }
+        compress_fill_source_set(items, stream);
+    }
     eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
     launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
                   max_ga_n, md, stream);
@@ -3893,63 +3920,88 @@ void LevelEliminator<CoordType, DataType, KernelType>::check_fill_round_trip(
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
     std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream) {
+    std::vector<FillSrcRef> items;
+    items.reserve(active.size());
+    for (int i : active) {
+        const WaveBox& wb = boxes[static_cast<size_t>(i)];
+        if (wb.persist_temp2t == nullptr || wb.r == 0 || wb.ntot == 0 || wb.counts.empty()) continue;
+        items.push_back(FillSrcRef{wb.persist_temp2t, wb.r, &wb.counts});
+    }
+    compress_fill_source_set(items, stream);
+}
+
+// ---------------------------------------------------------------------------
+// The fill sources of `items`, compressed a slot at a time, in groups whose
+// raw bytes fit the staging the heap can spare.  The slot counts partition
+// temp2^T by one-hop neighbor, which is the granularity the readers take.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
+    const std::vector<FillSrcRef>& items, cudaStream_t stream) {
 #ifdef H2_HAVE_NVCOMP
     const size_t D = sizeof(S);
     const bool check = env::check("fillsrc");
     auto& stats = eliminator_stats();
 
-    // the boxes whose temp2^T is worth compressing, in groups the staging holds
-    std::vector<const WaveBox*> group;
+    std::vector<const S*> srcs;
+    std::vector<size_t> elems;
     size_t group_raw = 0;
+    size_t group_items = 0;
     auto flush = [&]() {
-        if (group.empty()) return;
-        std::vector<const S*> srcs;
-        std::vector<size_t> elems;
-        std::vector<size_t> box_of;  // per block, its box in `group`
-        for (size_t gi = 0; gi < group.size(); ++gi) {
-            const WaveBox& wb = *group[gi];
-            const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
-            for (size_t a = 0; a < wb.row0.size(); ++a) {
-                const size_t row0 = static_cast<size_t>(wb.row0[a]);
-                const size_t row1 = a + 1 < wb.row0.size() ? static_cast<size_t>(wb.row0[a + 1]) : nt;
-                if (row1 <= row0) continue;
-                srcs.push_back(wb.persist_temp2t + row0 * r);
-                elems.push_back((row1 - row0) * r);
-                box_of.push_back(gi);
-            }
+        if (srcs.empty()) {
+            group_raw = 0;
+            group_items = 0;
+            return;
         }
-        if (!srcs.empty()) {
-            std::vector<CompressedXnr> comp;
-            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
-                size_t raw = 0, stored = 0;
-                for (size_t i = 0; i < srcs.size(); ++i) {
-                    raw += elems[i] * D;
-                    stored += comp[i].bytes;
-                }
-                stats.fs_raw_bytes += static_cast<double>(raw);
-                stats.fs_stored_bytes += static_cast<double>(stored);
-                stats.fs_slots += static_cast<int64_t>(srcs.size());
-                stats.fs_boxes += static_cast<int64_t>(group.size());
-                if (check) check_fill_round_trip(srcs, elems, comp, stream);
-            } else {
-                ++stats.fs_waves_plain;
+        std::vector<CompressedXnr> comp;
+        if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+            size_t raw = 0, stored = 0;
+            for (size_t i = 0; i < srcs.size(); ++i) {
+                raw += elems[i] * D;
+                stored += comp[i].bytes;
             }
-            fill_compressor_.release();
+            stats.fs_raw_bytes += static_cast<double>(raw);
+            stats.fs_stored_bytes += static_cast<double>(stored);
+            stats.fs_slots += static_cast<int64_t>(srcs.size());
+            stats.fs_boxes += static_cast<int64_t>(group_items);
+            if (check) check_fill_round_trip(srcs, elems, comp, stream);
+        } else {
+            ++stats.fs_waves_plain;
         }
-        group.clear();
+        fill_compressor_.release();
+        srcs.clear();
+        elems.clear();
         group_raw = 0;
+        group_items = 0;
     };
-    for (int i : active) {
-        WaveBox& wb = boxes[static_cast<size_t>(i)];
-        if (wb.persist_temp2t == nullptr || wb.r == 0 || wb.ntot == 0 || wb.row0.empty()) continue;
-        const size_t bytes = static_cast<size_t>(wb.ntot) * static_cast<size_t>(wb.r) * D;
-        if (!group.empty() && group_raw + bytes > kXnrStagingBudget) flush();
-        group.push_back(&wb);
+
+    for (const FillSrcRef& it : items) {
+        if (it.t2t == nullptr || it.r == 0 || it.counts == nullptr || it.counts->empty()) continue;
+        const size_t r = static_cast<size_t>(it.r);
+        size_t bytes = 0;
+        for (int64_t c : *it.counts) bytes += static_cast<size_t>(std::max<int64_t>(c, 0)) * r * D;
+        if (bytes == 0) continue;
+        // The staging never exceeds what the heap can spare: at the leaf this
+        // runs while the wave's working memory is still allocated, and a group
+        // that cannot stage would otherwise be stored raw.
+        const size_t spare = heap_.largest_free() / 2;
+        const size_t budget = std::max<size_t>(std::min(kFillStagingBudget, spare), 1);
+        if (!srcs.empty() && group_raw + bytes > budget) flush();
+        size_t row = 0;
+        for (int64_t c : *it.counts) {
+            const size_t rows = static_cast<size_t>(std::max<int64_t>(c, 0));
+            if (rows > 0) {
+                srcs.push_back(it.t2t + row * r);
+                elems.push_back(rows * r);
+            }
+            row += rows;
+        }
         group_raw += bytes;
+        ++group_items;
     }
     flush();
 #else
-    (void)boxes; (void)active; (void)stream;
+    (void)items; (void)stream;
 #endif
 }
 
