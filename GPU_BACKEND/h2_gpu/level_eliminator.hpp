@@ -160,6 +160,14 @@ struct EliminatorStats {
     // one-hop neighbors.  The union per wave is the scratch a per-wave
     // decompression would need; the pairs against the distinct blocks say how
     // many waves read a block, so how often it would be decompressed.
+    // H2_compress_factors: what the parent blocks this transition built would
+    // come to compressed.  Measured over all of them at the end of
+    // build_parent, where they are complete; they are still stored raw.
+    double pb_raw_bytes = 0.0;
+    double pb_stored_bytes = 0.0;
+    int64_t pb_blocks = 0;
+    double pb_check_err = 0.0;
+    double pb_check_tol = 0.0;
     double lsch_union_max_wave = 0.0;
     double lsch_union_sum = 0.0;
     double ledge_union_max_wave = 0.0;
@@ -6490,6 +6498,78 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         stats.tr_p += m->seconds(1);
         stats.tr_fill += m->seconds(2);
     }
+
+#ifdef H2_HAVE_NVCOMP
+    // ---- H2_compress_factors: what these blocks would come to compressed.
+    // They are the next level's st.schur and edges_, so they are still stored
+    // raw; this is what step 2 needs to know before it is worth plumbing the
+    // compressed form through to the level that adopts them.
+    if (compress_factors_ >= 1) {
+        std::vector<const S*> srcs;
+        std::vector<size_t> elems;
+        size_t group = 0;
+        auto measure = [&]() {
+            if (srcs.empty()) return;
+            std::vector<CompressedXnr> comp;
+            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                for (size_t i = 0; i < srcs.size(); ++i) {
+                    stats.pb_raw_bytes += static_cast<double>(elems[i] * sizeof(S));
+                    stats.pb_stored_bytes += static_cast<double>(comp[i].bytes);
+                }
+                stats.pb_blocks += static_cast<int64_t>(srcs.size());
+                if (env::check("fillsrc")) {
+                    const auto& cks = fill_compressor_.chunks();
+                    const char* staging = fill_compressor_.staging();
+                    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+                    size_t widest = 0;
+                    for (size_t e : elems) widest = std::max(widest, e);
+                    char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
+                    if (back != nullptr) {
+                        std::vector<S> got, want;
+                        for (size_t i = 0; i < srcs.size(); ++i) {
+                            for (size_t c = 0; c < comp[i].nchunks; ++c) {
+                                const auto& ck = cks[comp[i].chunk0 + c];
+                                const uint32_t stride = static_cast<uint32_t>(ck.stride);
+                                decompress_xnr<S>(staging + ck.offset,
+                                                  reinterpret_cast<S*>(back) + c * chunk_elems, &stride, 1, stream);
+                            }
+                            check_cuda(cudaStreamSynchronize(stream), "parent block check");
+                            got.assign(elems[i], S{});
+                            want.assign(elems[i], S{});
+                            check_cuda(cudaMemcpy(got.data(), back, elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
+                                       "parent block check");
+                            check_cuda(cudaMemcpy(want.data(), srcs[i], elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
+                                       "parent block check");
+                            const double* g = reinterpret_cast<const double*>(got.data());
+                            const double* w = reinterpret_cast<const double*>(want.data());
+                            const size_t nd = elems[i] * (sizeof(S) / sizeof(double));
+                            for (size_t j = 0; j < nd; ++j) {
+                                stats.pb_check_err = std::max(stats.pb_check_err, std::fabs(g[j] - w[j]));
+                            }
+                            stats.pb_check_tol = std::max(stats.pb_check_tol, comp[i].delta * 0.5);
+                        }
+                        heap_.free(back);
+                    }
+                }
+            }
+            fill_compressor_.release();
+            srcs.clear();
+            elems.clear();
+            group = 0;
+        };
+        auto add = [&](const DeviceMatrix& m) {
+            if (m.ptr == nullptr || m.rows <= 0 || m.cols <= 0) return;
+            const size_t bytes = static_cast<size_t>(m.rows) * m.cols * sizeof(S);
+            if (!srcs.empty() && group + bytes > kFillStagingBudget) measure();
+            srcs.push_back(m.ptr);
+            elems.push_back(static_cast<size_t>(m.rows) * m.cols);
+            group += bytes;
+        };
+        for (const auto& [m, blk] : out->schur) add(blk);
+        for (const auto& [k, blk] : out->edges) add(blk);
+        measure();
+    }
+#endif
 
     // the child level is done: release its device data (not the new blocks)
     release_level_data();

@@ -824,6 +824,17 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.pb_blocks > 0) {
+                std::printf("  [gpu] level %d parent blocks compress: %.2f -> %.2f GB (%.1fx) over %lld blocks", level.level,
+                        e.pb_raw_bytes / 1e9, e.pb_stored_bytes / 1e9,
+                        e.pb_stored_bytes > 0.0 ? e.pb_raw_bytes / e.pb_stored_bytes : 1.0,
+                        static_cast<long long>(e.pb_blocks));
+            if (e.pb_check_tol > 0.0) {
+                std::printf("; round trip %.3e against %.3e allowed%s", e.pb_check_err, e.pb_check_tol,
+                            e.pb_check_err <= e.pb_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");
+            }
+                std::printf("\n");
+            }
             if (e.tr_chunks > 0) {
                 std::printf("  [gpu] level %d transition blocks: %.2f GB in all, %.2f GB written by the largest "
                             "chunk (%lld blocks), %.2f GB summed over %lld chunks, %lld revisits\n",
