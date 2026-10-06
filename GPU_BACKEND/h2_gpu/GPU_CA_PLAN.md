@@ -2519,7 +2519,43 @@ with a null check so a repeat is a no-op.  Both still hit it, so the pointer is
 either not heap-owned or has already been freed by another path before the
 chunk ends.
 
-Hypotheses not yet tested, in the order worth testing:
+**The diagnostic has now been run, and the free is not the problem.**  With a
+DeviceHeap::is_allocated() query (owns() only says the address is inside the
+arena, which does not tell a foreign pointer from a freed one) the free loop
+reports, at the Color leaf:
+
+    raw freed 7099, null 0, missing 0, stale 0 (foreign 0)
+
+Every block the chunk packed was still held by the heap and was freed exactly
+once.  So looking up by key and nulling the entry is correct, and the earlier
+"free of an unknown pointer" came from somewhere downstream of it.
+
+With the free clean the failure moves to the **next level**, in the
+fill-source sub-group transposes:
+
+    CUDA error in fill transposes: an illegal memory access was encountered
+
+at level 4, after level 5's transition reported normally (6 chunks, blocks
+kept on the device).  An illegal access there is a bad pointer in a
+TransposeItem, not bad data, so the suspect is the restore in begin() that
+puts the packed blocks back - it allocates each block and decompresses into
+it, and alloc_resident can call the reclaimer part way through, which frees
+released fill sources while h_src/h_dst already hold addresses.
+
+Next, in order:
+
+- test the halves apart: free without restoring (the next level then has no
+  blocks, so only the transition is exercised) and restore without freeing
+  (force it past the  guard), to say which side faults;
+- if it is the restore, allocate every block first, then build h_src/h_dst,
+  then decompress - never interleave allocation with address collection;
+- check whether the between-level compaction runs in these configurations at
+  all.  It relocates blocks and rewrites the pointers it knows about;
+  packed_owned and PackedBlock::packed are not in its list, so if it does run
+  they are stale afterwards.  Nothing in the Color runs so far has proved it
+  fires here.
+
+Older hypotheses, now unlikely given the above:
 
 - a parent block's pointer is replaced during the transition (out->edges[key]
   assigned twice for one key), so the chunk's record and the map disagree;
