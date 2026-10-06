@@ -2427,6 +2427,101 @@ remain even (8.49-8.54 against 8.57-8.64 s).
   receives the ghost factors it needs, or an owner-based solve (M4).
 - Dropped by the user: matvec communication overlap.
 
+## Where the factorization's memory went (2026-10-06)
+
+The goal is more boxes per GPU without much more factorization time.  A
+level's **resident** heap is the ceiling (its transient part comes and goes
+within a wave), and at 192^3 on 8 ranks, 40 GB nodes, the Color leaf's was
+26.18 GB of a 33.40 GB heap - two things and nothing else:
+
+| leaf term | baseline | now | how |
+|---|---|---|---|
+| fill sources (temp2^T, X_RR_full) | 15.51 GB | **2.11 GB** | compressed, done |
+| parent blocks (Schur + edges) | 9.47 GB | 9.47 GB | step 2, not started |
+| level Schur/edges | 1.14 GB | 1.14 GB | - |
+| near, points, lists | 0.06 GB | 0.06 GB | - |
+| **resident** | **26.18 GB** | **12.78 GB** | 2.05x |
+| transient | 7.02 GB | 7.02 GB | tiling, not started |
+
+logdet -89253588.194065422 -> -89253588.577188373 (4.3e-9), acc_backward
+1.3024e-15 -> 1.5636e-15, Factor time 7.71 -> 8.00 s (+3.8%), one binary.
+CA0 the same shape: leaf 23.07 -> 13.74 GB, logdet 3.8e-9 off.
+
+### What the fill-source work established
+
+temp2^T is compressed one **slot** at a time - a slot is one one-hop
+neighbor's rows - because both readers take whole slots: the sketch's P side
+its own slot, its W side one run per ring block, and a run is a slot.  Slots
+are 160 KB at the leaf but 2.2 MB at level 2, so a slot is one chunk at the
+leaf and several higher up; the per-slot record carries a chunk range.
+Ratios 9.4x at the leaf to 15x at level 2, which is well short of X_NR's
+18.6x.
+
+Everything is grouped, and every group bound was found by measurement:
+
+- **kFillStagingBudget 64 MB** - the compressor's staging, and the sub-group
+  the wave transposes, packs and frees together.  512 MB could not get its
+  staging beside the wave's working memory and 14 groups a level fell back.
+- **kFillWaveScratch 512 MB** - the sketch decompresses its sources in groups
+  of this, because a wave's distinct slots come to 7.79 GB.  Grouping by
+  source keeps every reader with the slots it needs and the batches wide.
+- the transition puts a compressed source back **whole** into a block of its
+  own chunk: it reads rows from all over a source, and the chunk's lifetime
+  already exists for the host-restored ones.
+
+### Step 2: the parent blocks, 74% of what is left
+
+Measured and de-risked, not started.  They are **not** a separate store: the
+next level adopts them as its own st.schur and edges_ (begin() does
+`st.schur = it->second`).  I had assumed they were accumulated into across
+waves, which would have made this the hard case; they are not.  Step 5
+allocates a *fresh* block per edge and replaces the old entry, and st.schur is
+only read during a wave (the three gathers for X_RR, X_SR and A_SS).  So they
+are written once and read about once, like the fill sources:
+
+| level | Schur: largest wave / reads per block | edges: largest wave / per block |
+|---|---|---|
+| 5 | 0.13 GB / 1.01 | 2.74 GB / 1.32 |
+| 4 | 0.04 GB / 1.00 | 0.57 GB / 1.21 |
+
+So the level that adopts 9.47 GB reads **0.61 GB** of it in its largest wave
+and 6.63 GB over the level - a 0.6 GB scratch and 0.018 s of decompression -
+and the transition's own live set is one chunk (0.82 GB, 0 revisits).
+
+The plumbing is the work, not the design.  DeviceMatrixT is a plain
+{ptr, rows, cols}, so the compressed form needs a parallel store in
+DeviceLevelBlocksT, threaded through build_parent (compress per chunk),
+begin() (adopt packed), the wave reads (decompress per wave),
+download_level_blocks (the host path) and the between-level compaction (which
+relocates blocks and must carry the packed ones).
+
+**The ratio for these blocks is still unmeasured.**  They are Schur
+complements rather than the smooth one-hop couplings, and temp2^T already came
+in at half X_NR's ratio, so 9.47 GB may not go to 0.5 GB.  The round trip
+reports it on the first run.
+
+### After step 2
+
+The transient (7.02 GB) becomes the largest single term, at about 60% of the
+leaf's peak.  It is the wave's per-box work blocks, all live at once
+(level_eliminator.hpp, `work_blocks`), so it is bounded by tiling rather than
+compression - but tiling it splits step 5's accumulations across sub-batches
+and reorders sums into shared near blocks, which the CA replica check relies
+on being identical.  That question has to be settled before the tiling, not
+after.
+
+Two small remainders with known routes: X_RR_full (0.73 GB) by reconstructing
+it from its own LU - exact, no tolerance - once C4 lets the leaf keep its
+factors, and the packed temp2^T (1.38 GB) only by FP32 storage, which the user
+has deferred.
+
+### Scaling, honestly
+
+Tiling makes the working memory O(1) in problem size; the compressed stores
+stay proportional to it.  So 8x more boxes a rank looks reachable and 64x does
+not - at 64x the compressed data alone exceeds the card, and that needs host
+offload with streaming, which is a different mechanism.
+
 ## Backlog from the factor compression (H2_compress_factors)
 
 X_NR is 92% of a kept block and compresses 16x at tol_comp/5 (measured at
