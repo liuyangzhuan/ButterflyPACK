@@ -2500,6 +2500,43 @@ complements rather than the smooth one-hop couplings, and temp2^T already came
 in at half X_NR's ratio, so 9.47 GB may not go to 0.5 GB.  The round trip
 reports it on the first run.
 
+### Step 2 piece 2: freeing the raw blocks is where it stands (2026-10-06)
+
+Piece 1 is in (4b01433): build_parent packs each chunk's blocks into
+DeviceLevelBlocksT::schur_packed / edges_packed, one allocation per group, and
+the raw blocks stay so results are bit-identical.  7.2x at the leaf over 7099
+blocks.
+
+Piece 2 - freeing the raw blocks once packed and putting them back at the
+adopting level - **fails and is not committed**.  Two attempts, both ending in
+
+    what():  H2 GPU heap: free of an unknown pointer
+
+during the transition itself.  What was tried: collecting the chunk's blocks
+and freeing them right after the gather that packs them, first through the
+DeviceMatrix* the Pair carries, then by key through out->schur / out->edges
+with a null check so a repeat is a no-op.  Both still hit it, so the pointer is
+either not heap-owned or has already been freed by another path before the
+chunk ends.
+
+Hypotheses not yet tested, in the order worth testing:
+
+- a parent block's pointer is replaced during the transition (out->edges[key]
+  assigned twice for one key), so the chunk's record and the map disagree;
+- something else already frees it -  in build_parent is the obvious
+  candidate, and the Pair's block may not always be a fresh allocation;
+- the free is correct but runs while the gather still reads it, and the heap
+  then sees the second free from the normal teardown.
+
+The diagnostic that settles it is cheap and was not run: at the free, print the
+pointer, whether DeviceHeap::owns() accepts it, and its key, and compare
+against the allocation log for that key.  Worth doing before another attempt -
+two hypotheses have already been wrong.
+
+Note the peak this is aimed at: the leaf's 9.47 GB of parent blocks is resident
+*during the transition*, which is where the leaf's peak is, so freeing has to
+happen per chunk to move it.  Packing at the end of build_parent would not.
+
 ### After step 2
 
 The transient (7.02 GB) becomes the largest single term, at about 60% of the
