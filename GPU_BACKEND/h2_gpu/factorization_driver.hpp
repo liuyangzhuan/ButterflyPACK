@@ -1012,10 +1012,11 @@ public:
         }
         if (e.fs_slots > 0 || e.fs_waves_plain > 0) {
             std::printf("  [gpu] level %d fill sources compressed: %.2f -> %.2f GB (%.1fx) in %lld slots of "
-                        "%lld boxes, %lld groups fell back", lvl, e.fs_raw_bytes / 1e9, e.fs_stored_bytes / 1e9,
+                        "%lld boxes, %lld groups fell back, %lld boxes unpacked", lvl, e.fs_raw_bytes / 1e9, e.fs_stored_bytes / 1e9,
                         e.fs_stored_bytes > 0.0 ? e.fs_raw_bytes / e.fs_stored_bytes : 1.0,
                         static_cast<long long>(e.fs_slots), static_cast<long long>(e.fs_boxes),
-                        static_cast<long long>(e.fs_waves_plain));
+                        static_cast<long long>(e.fs_waves_plain),
+                        static_cast<long long>(e.fs_packed_short));
             if (e.fs_check_tol > 0.0) {
                 std::printf("; round trip worst error %.3e against %.3e allowed%s", e.fs_check_err, e.fs_check_tol,
                             e.fs_check_err <= e.fs_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");

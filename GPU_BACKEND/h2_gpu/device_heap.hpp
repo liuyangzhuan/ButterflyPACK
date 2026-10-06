@@ -163,6 +163,23 @@ public:
     T* alloc(size_t bytes) {
         return reinterpret_cast<T*>(alloc_bytes(bytes, false));
     }
+    // A resident block if it fits now (no reclaim), else nullptr: for a
+    // caller that has a correct fallback, such as storing a fill source raw
+    // when its compressed copy will not fit.
+    char* try_alloc_resident(size_t bytes, ResidentKind kind = ResidentKind::Other) {
+        if (base_ == nullptr) return nullptr;
+        const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
+        size_t offset = 0;
+        if (!take(size, true, offset)) return nullptr;
+        allocated_.emplace(offset, std::make_pair(size, true));
+        used_ += size;
+        resident_used_ += size;
+        resident_kind_[offset] = kind;
+        by_kind_[static_cast<size_t>(kind)] += size;
+        note_peak();
+        return base_ + offset;
+    }
+
     // A block that lives for a level or longer, from the bottom.  `kind` is
     // only for the resident breakdown.
     template<typename T = char>

@@ -147,6 +147,7 @@ struct EliminatorStats {
     int64_t fs_slots = 0;
     int64_t fs_boxes = 0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
+    int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
     double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
     double fs_check_tol = 0.0;    //   ... and the tolerance it was held to
     double sk_union_bytes_max_wave = 0.0;
@@ -485,14 +486,24 @@ private:
         char* persist = nullptr;      // X_RR_full
         char* persist_t2t = nullptr;  // temp2^T, in a block of its own so it can go once compressed
         size_t persist_t2t_bytes = 0;
-        // H2_compress_factors: temp2^T compressed a slot at a time.  The
-        // packed bytes hold the slots end to end, each padded to the stride
-        // beside it, and the counts say how many rows a slot has, which is
-        // what turns a reader's slot into an offset.
+        // H2_compress_factors: temp2^T compressed a slot at a time, the slots
+        // laid end to end in t2t_packed.  A reader names a slot by its first
+        // row (that is what lazy_far_locate_endpoint_rows gives it), so
+        // t2t_rows maps a first row to its slot; the slot says where its bytes
+        // start and which chunks they are, because a slot over kXnrChunkBytes
+        // is more than one chunk (about 500 KB a slot at level 4, 2.2 MB at
+        // level 2, against a 512 KB chunk).
+        struct T2tSlot {
+            uint64_t off = 0;      // of the slot's bytes in t2t_packed
+            uint32_t chunk0 = 0;   // its first chunk in t2t_strides
+            uint32_t nchunks = 0;
+            int32_t rows = 0;      // uncompressed rows, for the destination
+        };
         char* t2t_packed = nullptr;
         size_t t2t_packed_bytes = 0;
+        std::vector<T2tSlot> t2t_slots;
         std::vector<uint32_t> t2t_strides;
-        std::vector<int64_t> t2t_counts;
+        std::unordered_map<int, int> t2t_rows;  // first row -> slot
         int readers = 0;
         // static ID training rows of the box: slots after training_slot0_
         const int* d_training = nullptr;
@@ -619,8 +630,9 @@ private:
             st.t2t_packed = nullptr;
             st.t2t_packed_bytes = 0;
         }
+        st.t2t_slots.clear();
         st.t2t_strides.clear();
-        st.t2t_counts.clear();
+        st.t2t_rows.clear();
         st.temp2t = nullptr;
     }
     void keep_fill_source(BoxState& st, char* block, size_t bytes, char* t2t, size_t t2t_bytes,
@@ -725,11 +737,10 @@ private:
         const S* t2t = nullptr;
         int r = 0;
         const std::vector<int64_t>* counts = nullptr;
+        BoxState* st = nullptr;   // where the packed form is recorded
     };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
     void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream);
-    void check_fill_round_trip(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
-                               const std::vector<CompressedXnr>& comp, cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
     // factors (the level's own, or committed to the store): before a fill
     // source leaves the device (the transition restores it from the host
@@ -993,6 +1004,7 @@ private:
     std::vector<Box*> skipped_factors_;  // ... whose X_SR and LU did
     KeptSolveLevel kept_;
     DeviceBuffer solve_meta_device_;
+    DeviceBuffer fill_meta_device_;  // span lists of the fill-source gathers
 
     int64_t wave_stamp_ = 0;
     MetaBuilder& meta_ = pinned_pool().meta;
@@ -3843,7 +3855,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             if (gb == nullptr) continue;
             counts[gi].reserve(gb->one_hop.size());
             for (int64_t m : gb->one_hop) counts[gi].push_back(current_size(state_of(m)));
-            items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts[gi]});
+            items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts[gi], g.st});
         }
         compress_fill_source_set(items, stream);
     }
@@ -3916,64 +3928,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // wave's result and source blocks can be released.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// BPACK_CHECK=fillsrc: every block the fill-source compression just produced,
-// decompressed again and compared with what it was made from.  A block's delta
-// is 2 * tolerance * max|block| and bitcomp rounds it down to a power of two,
-// so the error may not exceed delta / 2.  A wrong offset or stride in the
-// layout shows up here as a large error, rather than as a wrong answer three
-// levels later.
-// ---------------------------------------------------------------------------
-template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::check_fill_round_trip(
-    const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
-    const std::vector<CompressedXnr>& comp, cudaStream_t stream) {
-#ifdef H2_HAVE_NVCOMP
-    auto& stats = eliminator_stats();
-    const auto& cks = fill_compressor_.chunks();
-    const char* staging = fill_compressor_.staging();
-    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
-    size_t widest = 0;
-    for (size_t e : elems) widest = std::max(widest, e);
-    char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
-    if (back == nullptr) return;  // (a check, not a reason to fail the run)
-    std::vector<S> got, want;
-    for (size_t i = 0; i < srcs.size(); ++i) {
-        if (comp[i].nchunks == 0) continue;
-        // A slot is normally one chunk; a slot over kXnrChunkBytes is several,
-        // laid end to end in the output.
-        S* out = reinterpret_cast<S*>(back);
-        for (size_t c = 0; c < comp[i].nchunks; ++c) {
-            const auto& ck = cks[comp[i].chunk0 + c];
-            const uint32_t stride = static_cast<uint32_t>(ck.stride);  // one chunk, from its own address
-            decompress_xnr<S>(staging + ck.offset, out + c * chunk_elems, &stride, 1, stream);
-        }
-        check_cuda(cudaStreamSynchronize(stream), "fillsrc check");
-        got.assign(elems[i], S{});
-        want.assign(elems[i], S{});
-        check_cuda(cudaMemcpy(got.data(), back, elems[i] * sizeof(S), cudaMemcpyDeviceToHost), "fillsrc check");
-        check_cuda(cudaMemcpy(want.data(), srcs[i], elems[i] * sizeof(S), cudaMemcpyDeviceToHost), "fillsrc check");
-        const double* g = reinterpret_cast<const double*>(got.data());
-        const double* w = reinterpret_cast<const double*>(want.data());
-        const size_t nd = elems[i] * (sizeof(S) / sizeof(double));
-        for (size_t j = 0; j < nd; ++j) stats.fs_check_err = std::max(stats.fs_check_err, std::fabs(g[j] - w[j]));
-        stats.fs_check_tol = std::max(stats.fs_check_tol, comp[i].delta * 0.5);
-    }
-    heap_.free(back);
-#else
-    (void)srcs; (void)elems; (void)comp; (void)stream;
-#endif
-}
 
 // ---------------------------------------------------------------------------
-// The wave's fill sources (temp2^T, written by the transposes just issued),
-// compressed one block per slot: a slot is one one-hop neighbor's rows, and
-// both readers of a fill source - the P side's own slot and the W side's run
-// per ring block - take whole rows, so a slot is the smallest block that ever
-// decompresses alone.  Groups of boxes keep the compressor's staging bounded,
-// as keep_solve_factors does.
-//
-// Nothing reads the compressed form yet; this measures what it costs and, with
-// BPACK_CHECK=fillsrc, decompresses it again and reports the worst error.
+// The wave's local fill sources, once the transposes have written temp2^T.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
@@ -3983,7 +3940,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
     for (int i : active) {
         const WaveBox& wb = boxes[static_cast<size_t>(i)];
         if (wb.persist_temp2t == nullptr || wb.r == 0 || wb.ntot == 0 || wb.counts.empty()) continue;
-        items.push_back(FillSrcRef{wb.persist_temp2t, wb.r, &wb.counts});
+        items.push_back(FillSrcRef{wb.persist_temp2t, wb.r, &wb.counts, wb.state});
     }
     compress_fill_source_set(items, stream);
 }
@@ -4003,59 +3960,165 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
 
     std::vector<const S*> srcs;
     std::vector<size_t> elems;
+    std::vector<int> slot_rows;  // per block, its uncompressed rows
+    struct GroupItem { BoxState* st; size_t first; size_t last; };
+    std::vector<GroupItem> group_of;
     size_t group_raw = 0;
-    size_t group_items = 0;
-    auto flush = [&]() {
-        if (srcs.empty()) {
-            group_raw = 0;
-            group_items = 0;
-            return;
-        }
-        std::vector<CompressedXnr> comp;
-        if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
-            size_t raw = 0, stored = 0;
-            for (size_t i = 0; i < srcs.size(); ++i) {
-                raw += elems[i] * D;
-                stored += comp[i].bytes;
+
+    // Gather one group's compressed slots out of the compressor's staging into
+    // a packed block per box, recording where each slot's bytes start and
+    // which chunks they are.  A box whose packed block does not fit keeps its
+    // raw temp2^T, which is correct and only costs memory.
+    auto pack = [&](const std::vector<CompressedXnr>& comp) {
+        const auto& cks = fill_compressor_.chunks();
+        const char* staging = fill_compressor_.staging();
+        std::vector<CopySpan> spans;
+        int64_t max_words = 0;
+        for (const GroupItem& gi : group_of) {
+            BoxState& st = *gi.st;
+            size_t total = 0;
+            for (size_t i = gi.first; i < gi.last; ++i) total += comp[i].bytes;
+            if (total == 0) continue;
+            char* packed = heap_.try_alloc_resident(total, ResidentKind::FillSource);
+            if (packed == nullptr) {  // no room: this box stays raw
+                ++stats.fs_packed_short;
+                continue;
             }
-            stats.fs_raw_bytes += static_cast<double>(raw);
-            stats.fs_stored_bytes += static_cast<double>(stored);
-            stats.fs_slots += static_cast<int64_t>(srcs.size());
-            stats.fs_boxes += static_cast<int64_t>(group_items);
-            if (check) check_fill_round_trip(srcs, elems, comp, stream);
-        } else {
-            ++stats.fs_waves_plain;
+            if (st.t2t_packed != nullptr) {  // (a box compressed again drops the old one)
+                stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
+                heap_.free(st.t2t_packed);
+                st.t2t_slots.clear();
+                st.t2t_strides.clear();
+                st.t2t_rows.clear();
+            }
+            st.t2t_packed = packed;
+            st.t2t_packed_bytes = total;
+            stats.persist_bytes += static_cast<double>(total);
+            stats.persist_peak = std::max(stats.persist_peak, stats.persist_bytes);
+            uint64_t off = 0;
+            int row = 0;
+            for (size_t i = gi.first; i < gi.last; ++i) {
+                typename BoxState::T2tSlot sl;
+                sl.off = off;
+                sl.chunk0 = static_cast<uint32_t>(st.t2t_strides.size());
+                sl.nchunks = static_cast<uint32_t>(comp[i].nchunks);
+                sl.rows = slot_rows[i];
+                for (size_t c = 0; c < comp[i].nchunks; ++c) {
+                    const auto& ck = cks[comp[i].chunk0 + c];
+                    spans.push_back(CopySpan{staging + ck.offset, packed + off,
+                                             static_cast<int64_t>(ck.stride / 4)});
+                    max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                    st.t2t_strides.push_back(static_cast<uint32_t>(ck.stride));
+                    off += ck.stride;
+                }
+                st.t2t_rows.emplace(row, static_cast<int>(st.t2t_slots.size()));
+                st.t2t_slots.push_back(sl);
+                row += sl.rows;
+            }
         }
-        fill_compressor_.release();
+        if (spans.empty()) return;
+        const size_t list_bytes = spans.size() * sizeof(CopySpan);
+        if (list_bytes > fill_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "fill sources");  // the old list may still be read
+            fill_meta_device_.reserve(list_bytes);
+        }
+        auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                   "fill sources");
+        launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+        // the gather reads the staging, which goes back to the heap next
+        check_cuda(cudaStreamSynchronize(stream), "fill sources");
+
+        // BPACK_CHECK=fillsrc: read every slot back out of the packed block,
+        // through the offsets and strides just recorded, and compare it with
+        // what it was made from.  This is what tests the gather and the
+        // offset arithmetic - a wrong stride would otherwise surface as a
+        // plausible but wrong answer much later.
+        if (!check) return;
+        size_t widest = 0;
+        for (size_t e : elems) widest = std::max(widest, e);
+        char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
+        if (back == nullptr) return;
+        std::vector<S> got, want;
+        const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+        for (const GroupItem& gi : group_of) {
+            const BoxState& st = *gi.st;
+            if (st.t2t_packed == nullptr) continue;
+            for (size_t i = gi.first; i < gi.last; ++i) {
+                const size_t si = i - gi.first;
+                if (si >= st.t2t_slots.size()) break;
+                const auto& sl = st.t2t_slots[si];
+                decompress_xnr<S>(st.t2t_packed + sl.off, reinterpret_cast<S*>(back),
+                                  st.t2t_strides.data() + sl.chunk0, sl.nchunks, stream);
+                check_cuda(cudaStreamSynchronize(stream), "fillsrc check");
+                got.assign(elems[i], S{});
+                want.assign(elems[i], S{});
+                check_cuda(cudaMemcpy(got.data(), back, elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
+                           "fillsrc check");
+                check_cuda(cudaMemcpy(want.data(), srcs[i], elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
+                           "fillsrc check");
+                const double* g = reinterpret_cast<const double*>(got.data());
+                const double* w = reinterpret_cast<const double*>(want.data());
+                const size_t nd = elems[i] * (sizeof(S) / sizeof(double));
+                for (size_t j = 0; j < nd; ++j) {
+                    stats.fs_check_err = std::max(stats.fs_check_err, std::fabs(g[j] - w[j]));
+                }
+                stats.fs_check_tol = std::max(stats.fs_check_tol, comp[i].delta * 0.5);
+            }
+        }
+        heap_.free(back);
+    };
+
+    auto flush = [&]() {
+        if (!srcs.empty()) {
+            std::vector<CompressedXnr> comp;
+            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                size_t raw = 0, stored = 0;
+                for (size_t i = 0; i < srcs.size(); ++i) {
+                    raw += elems[i] * D;
+                    stored += comp[i].bytes;
+                }
+                stats.fs_raw_bytes += static_cast<double>(raw);
+                stats.fs_stored_bytes += static_cast<double>(stored);
+                stats.fs_slots += static_cast<int64_t>(srcs.size());
+                stats.fs_boxes += static_cast<int64_t>(group_of.size());
+                pack(comp);
+            } else {
+                ++stats.fs_waves_plain;
+            }
+            fill_compressor_.release();
+        }
         srcs.clear();
         elems.clear();
+        slot_rows.clear();
+        group_of.clear();
         group_raw = 0;
-        group_items = 0;
     };
 
     for (const FillSrcRef& it : items) {
-        if (it.t2t == nullptr || it.r == 0 || it.counts == nullptr || it.counts->empty()) continue;
+        if (it.t2t == nullptr || it.r == 0 || it.st == nullptr || it.counts == nullptr || it.counts->empty()) continue;
         const size_t r = static_cast<size_t>(it.r);
         size_t bytes = 0;
         for (int64_t c : *it.counts) bytes += static_cast<size_t>(std::max<int64_t>(c, 0)) * r * D;
         if (bytes == 0) continue;
-        // The staging never exceeds what the heap can spare: at the leaf this
-        // runs while the wave's working memory is still allocated, and a group
-        // that cannot stage would otherwise be stored raw.
+        // The staging never exceeds what the heap can spare: this runs while
+        // the wave's own working memory is still allocated.
         const size_t spare = heap_.largest_free() / 2;
         const size_t budget = std::max<size_t>(std::min(kFillStagingBudget, spare), 1);
         if (!srcs.empty() && group_raw + bytes > budget) flush();
+        const size_t first = srcs.size();
         size_t row = 0;
         for (int64_t c : *it.counts) {
             const size_t rows = static_cast<size_t>(std::max<int64_t>(c, 0));
             if (rows > 0) {
                 srcs.push_back(it.t2t + row * r);
                 elems.push_back(rows * r);
+                slot_rows.push_back(static_cast<int>(rows));
             }
             row += rows;
         }
+        if (srcs.size() > first) group_of.push_back(GroupItem{it.st, first, srcs.size()});
         group_raw += bytes;
-        ++group_items;
     }
     flush();
 #else
