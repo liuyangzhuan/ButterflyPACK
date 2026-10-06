@@ -2519,6 +2519,41 @@ with a null check so a repeat is a no-op.  Both still hit it, so the pointer is
 either not heap-owned or has already been freed by another path before the
 chunk ends.
 
+**It is a double free, and four hypothesis-bisects have not found it.**  The
+heap now says which kind of bad pointer it got:
+
+    free of an unknown pointer 0x... (offset 420509696 of 33398682368);
+    inside the arena; nearest block below starts at 418640128, is 1713408
+    bytes, so the pointer is past it
+
+Inside the arena and in free space, so a block is being freed twice - not an
+interior pointer into a group allocation, and not a foreign one.  The offset
+is the same every run.  What has been ruled out:
+
+- *the free in build_parent is clean.*  With a DeviceHeap::is_allocated()
+  query it reports, at the Color leaf, `raw freed 7099, null 0, missing 0,
+  stale 0 (foreign 0)` - every block still held, freed once, and the entry
+  nulled afterwards;
+- *it is not the packed_owned free in begin().*  Disabling it (leaking them
+  instead) gives the identical error at the identical offset;
+- *it is not the restore in begin() either.*  The run that looked like a
+  restore fault was free-without-restore, where the next level reads blocks
+  that are gone - the illegal access in the fill transposes was that, not a
+  bad restore.
+
+**Stop bisecting and instrument the heap.**  Each of the above cost a 25
+minute run to rule out one guess.  What ends it in one run is a map from
+offset to the last place that allocated and freed it - a tag passed to alloc
+and free, or just __builtin_return_address(0) - so the error names both frees.
+Twenty lines in DeviceHeap, behind BPACK_CHECK.
+
+Note also that the pointer the second free uses is a *copy* taken before the
+first: every path that stores a block pointer rather than reading it from
+out->schur / out->edges at the time of use is a candidate, and those are what
+the tag would identify.
+
+### The older note, kept because its measurement still stands
+
 **The diagnostic has now been run, and the free is not the problem.**  With a
 DeviceHeap::is_allocated() query (owns() only says the address is inside the
 arena, which does not tell a foreign pointer from a freed one) the free loop
