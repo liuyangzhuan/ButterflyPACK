@@ -479,7 +479,17 @@ private:
         size_t persist_bytes = 0;  // of the fill-source block, for the stats
         // multi-rank levels: the fill-source block (temp2^T, X_RR_full) is
         // freed once every local neighbor, its only reader, is eliminated
-        char* persist = nullptr;
+        char* persist = nullptr;      // X_RR_full
+        char* persist_t2t = nullptr;  // temp2^T, in a block of its own so it can go once compressed
+        size_t persist_t2t_bytes = 0;
+        // H2_compress_factors: temp2^T compressed a slot at a time.  The
+        // packed bytes hold the slots end to end, each padded to the stride
+        // beside it, and the counts say how many rows a slot has, which is
+        // what turns a reader's slot into an offset.
+        char* t2t_packed = nullptr;
+        size_t t2t_packed_bytes = 0;
+        std::vector<uint32_t> t2t_strides;
+        std::vector<int64_t> t2t_counts;
         int readers = 0;
         // static ID training rows of the box: slots after training_slot0_
         const int* d_training = nullptr;
@@ -591,13 +601,36 @@ private:
     }
     // A fill-source block of box `st` whose local neighbors among `hop` are
     // its readers (multi-rank levels), or a level allocation.
-    void keep_fill_source(BoxState& st, char* block, size_t bytes, const std::vector<int64_t>& hop) {
+    // Whatever a box still holds of its temp2^T: the raw block, the compressed
+    // one, or both while the readers have not moved over.
+    void release_fill_temp2t(BoxState& st) {
+        if (st.persist_t2t != nullptr) {
+            eliminator_stats().persist_bytes -= static_cast<double>(st.persist_t2t_bytes);
+            heap_.free(st.persist_t2t);
+            st.persist_t2t = nullptr;
+            st.persist_t2t_bytes = 0;
+        }
+        if (st.t2t_packed != nullptr) {
+            eliminator_stats().persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
+            heap_.free(st.t2t_packed);
+            st.t2t_packed = nullptr;
+            st.t2t_packed_bytes = 0;
+        }
+        st.t2t_strides.clear();
+        st.t2t_counts.clear();
+        st.temp2t = nullptr;
+    }
+    void keep_fill_source(BoxState& st, char* block, size_t bytes, char* t2t, size_t t2t_bytes,
+                          const std::vector<int64_t>& hop) {
         if (!early_free_sources_) {
             level_allocs_.push_back(block);
+            if (t2t != nullptr) level_allocs_.push_back(t2t);
             return;
         }
         st.persist = block;
         st.persist_bytes = bytes;
+        st.persist_t2t = t2t;
+        st.persist_t2t_bytes = t2t_bytes;
         st.readers = 0;
         for (int64_t m : hop) {
             if (is_writable(m) && !state_of(m).eliminated) ++st.readers;
@@ -863,6 +896,7 @@ private:
             eliminator_stats().persist_bytes -= static_cast<double>(es->persist_bytes);
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
             es->persist = nullptr;
+            release_fill_temp2t(*es);
             es->temp2t = nullptr;
             es->xrr_full = nullptr;
             return true;
@@ -2216,18 +2250,23 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.temp2 = reinterpret_cast<S*>(source + wb.off_temp2);
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
-                const size_t persist_bytes = align_up(r * r * D) + std::max<size_t>(nt * r * D, 1);
-                char* persist = heap_.alloc_resident(persist_bytes, ResidentKind::FillSource);
+                // X_RR_full and temp2^T in blocks of their own: temp2^T is the
+                // one that gets compressed, and it can only go back to the heap
+                // if it is not sharing an allocation with X_RR_full.
+                const size_t xrr_bytes = align_up(r * r * D);
+                const size_t t2t_bytes = std::max<size_t>(nt * r * D, 1);
+                char* persist = heap_.alloc_resident(xrr_bytes, ResidentKind::FillSource);
+                char* persist_t2t = heap_.alloc_resident(t2t_bytes, ResidentKind::FillSource);
                 {
                     auto& es = eliminator_stats();
-                    es.persist_bytes += static_cast<double>(persist_bytes);
-                    es.persist_xrr_bytes += static_cast<double>(align_up(r * r * D));
+                    es.persist_bytes += static_cast<double>(xrr_bytes + t2t_bytes);
+                    es.persist_xrr_bytes += static_cast<double>(xrr_bytes);
                     es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
                     ++es.persist_blocks;
                 }
-                keep_fill_source(*wb.state, persist, persist_bytes, wb.box->one_hop);
+                keep_fill_source(*wb.state, persist, xrr_bytes, persist_t2t, t2t_bytes, wb.box->one_hop);
                 wb.persist_xrr = reinterpret_cast<S*>(persist);
-                wb.persist_temp2t = reinterpret_cast<S*>(persist + align_up(r * r * D));
+                wb.persist_temp2t = reinterpret_cast<S*>(persist_t2t);
             }
             size_t w_off = 0;
             const size_t o_tmp1 = w_off; w_off = align_up(w_off + r * r * D);
@@ -3519,30 +3558,31 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             stats.bytes_up += static_cast<double>(2 * nr + static_cast<size_t>(g.r) * (g.r + g.k) * D);
         }
         const size_t t_bytes = align_up(nr);
-        const size_t gen_persist = t_bytes + static_cast<size_t>(g.r) * g.r * D;
-        char* persist = heap_.alloc_resident(gen_persist, ResidentKind::FillSource);
+        const size_t xrr_bytes = static_cast<size_t>(g.r) * g.r * D;
+        char* persist = heap_.alloc_resident(std::max<size_t>(xrr_bytes, 1), ResidentKind::FillSource);
+        char* persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillSource);
         {
             auto& es = eliminator_stats();
-            es.persist_bytes += static_cast<double>(gen_persist);
-            es.persist_gen_bytes += static_cast<double>(gen_persist);
+            es.persist_bytes += static_cast<double>(xrr_bytes + t_bytes);
+            es.persist_gen_bytes += static_cast<double>(xrr_bytes + t_bytes);
             es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
             ++es.persist_blocks;
         }
-        keep_fill_source(*g.st, persist, gen_persist, gb->one_hop);
+        keep_fill_source(*g.st, persist, xrr_bytes, persist_t2t, t_bytes, gb->one_hop);
         if (owner_ != nullptr) g.st->readers = std::numeric_limits<int>::max() / 2;  // (no host copy to restore it from)
-        g.st->temp2t = reinterpret_cast<const S*>(persist);
-        g.st->xrr_full = reinterpret_cast<const S*>(persist + t_bytes);
+        g.st->temp2t = reinterpret_cast<const S*>(persist_t2t);
+        g.st->xrr_full = reinterpret_cast<const S*>(persist);
         g.st->ntot = g.ntot;
         g.st->r = g.r;
         if (xrr_device != nullptr) {
-            check_cuda(cudaMemcpyAsync(persist + t_bytes, xrr_device, static_cast<size_t>(g.r) * g.r * D,
+            check_cuda(cudaMemcpyAsync(persist, xrr_device, static_cast<size_t>(g.r) * g.r * D,
                                        cudaMemcpyDeviceToDevice, stream), "generator X_RR_full");
         } else {
-            check_cuda(cudaMemcpyAsync(persist + t_bytes, gb->X_RR_full.data.data(),
+            check_cuda(cudaMemcpyAsync(persist, gb->X_RR_full.data.data(),
                                        static_cast<size_t>(g.r) * g.r * D, cudaMemcpyHostToDevice, stream),
                        "generator X_RR_full");
         }
-        transposes.push_back(TransposeItem{g.temp2, g.ntot, reinterpret_cast<S*>(persist), g.r, g.ntot, g.r});
+        transposes.push_back(TransposeItem{g.temp2, g.ntot, reinterpret_cast<S*>(persist_t2t), g.r, g.ntot, g.r});
         max_tr_m = std::max(max_tr_m, g.ntot);
         max_tr_n = std::max(max_tr_n, g.r);
     }
@@ -5975,10 +6015,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     for (BoxState& st : states_) {
         heap_.free(st.persist);
         st.persist = nullptr;
+        release_fill_temp2t(st);  // its temp2^T block, raw or compressed
     }
     for (BoxState& st : remote_states_) {
         heap_.free(st.persist);
         st.persist = nullptr;
+        release_fill_temp2t(st);
     }
     for (char* p : level_allocs_) heap_.free(p);
     level_allocs_.clear();
