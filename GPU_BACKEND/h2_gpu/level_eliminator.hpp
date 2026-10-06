@@ -148,6 +148,11 @@ struct EliminatorStats {
     int64_t fs_boxes = 0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
+    // the scratch a wave's sketch needs for the slots it reads, and what it
+    // decompressed in all
+    double fs_wave_scratch = 0.0;
+    double fs_wave_bytes = 0.0;
+    int64_t fs_wave_slots = 0;
     double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
     double fs_check_tol = 0.0;    //   ... and the tolerance it was held to
     double sk_union_bytes_max_wave = 0.0;
@@ -617,6 +622,10 @@ private:
     // its readers (multi-rank levels), or a level allocation.
     // Whatever a box still holds of its temp2^T: the raw block, the compressed
     // one, or both while the readers have not moved over.
+    // Whether a box still has its temp2^T, in either form.
+    static bool has_fill_source(const BoxState& st) {
+        return st.temp2t != nullptr || st.t2t_packed != nullptr;
+    }
     void release_fill_temp2t(BoxState& st) {
         if (st.persist_t2t != nullptr) {
             eliminator_stats().persist_bytes -= static_cast<double>(st.persist_t2t_bytes);
@@ -1518,6 +1527,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         int64_t morton = -1;
         const BoxState* state = nullptr;
         int slot_b = 0;             // first temp2 row of this box
+        // The temp2^T the readers index: the source's resident block, or, when
+        // it is stored compressed, its region of the wave's scratch holding
+        // just the slots this wave reads.  slot_b and the runs' src_offset are
+        // relative to it either way.
+        const S* t2t_base = nullptr;
         std::vector<RunDesc> runs;  // its stored rows, by ring block
         int64_t entries = 0;        // sketched stored rows * sk
         int offset = 0;             // first column of W / row of P in the box's fill buffers
@@ -1689,7 +1703,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                         if (src_box == nullptr) {
                             throw std::runtime_error("LevelEliminator: fill source " + std::to_string(cm) + " not found");
                         }
-                        if (ss.r == 0 || ss.temp2t == nullptr) continue;  // no Schur contribution
+                        if (ss.r == 0 || !has_fill_source(ss)) continue;  // no Schur contribution
                         {
                             std::lock_guard<std::mutex> lock(src_seen_mutex);
                             src_seen.emplace(cm, static_cast<size_t>(ss.ntot) * static_cast<size_t>(ss.r) * sizeof(S));
@@ -1758,6 +1772,118 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         boundary_count = boundary;
         if (owner_ != nullptr && owner_->set_sketch_context) owner_->set_sketch_context(-1);
     }
+
+    // ---- H2_compress_factors: the slots this wave reads out of fill sources
+    // that are stored compressed, decompressed into a scratch.
+    //
+    // Both readers take whole slots - the P side the box's own, the W side one
+    // run per ring block - so the scratch holds, per source, just the slots
+    // this wave names, laid end to end.  slot_b and each run's src_offset are
+    // rewritten to that region, so the row_index the device builds from the
+    // runs comes out relative to it and the kernels need no change.  A source
+    // still held raw keeps its own pointer and its original offsets.
+    char* fill_scratch = nullptr;
+#ifdef H2_HAVE_NVCOMP
+    {
+        // per compressed source: the slots this wave names, and where each
+        // lands in the source's region (rows, relative to the region start)
+        struct Region { const BoxState* st = nullptr; size_t base_rows = 0; std::map<int, size_t> at; };
+        std::map<int64_t, Region> regions;
+        for (Plan& p : plans) {
+            for (Source& src : p.sources) {
+                const BoxState& ss = *src.state;
+                if (ss.t2t_packed == nullptr) continue;  // raw, or nothing to do
+                Region& rg = regions[src.morton];
+                rg.st = &ss;
+                rg.at.emplace(src.slot_b, 0);
+                for (const RunDesc& rd : src.runs) rg.at.emplace(rd.src_offset, 0);
+            }
+        }
+        size_t rows_total = 0;
+        size_t blocks = 0;
+        for (auto& [m, rg] : regions) {
+            const BoxState& ss = *rg.st;
+            rg.base_rows = rows_total;
+            size_t at_rows = 0;
+            for (auto& [first_row, off] : rg.at) {
+                const auto it = ss.t2t_rows.find(first_row);
+                if (it == ss.t2t_rows.end()) {
+                    throw std::runtime_error("LevelEliminator: fill source slot " + std::to_string(first_row) +
+                                             " of box " + std::to_string(m) + " was not compressed");
+                }
+                const auto& sl = ss.t2t_slots[static_cast<size_t>(it->second)];
+                off = at_rows;
+                at_rows += static_cast<size_t>(sl.rows);
+                blocks += sl.nchunks;
+            }
+            rows_total += at_rows * static_cast<size_t>(ss.r);  // (rows x r elements)
+        }
+        if (rows_total > 0) {
+            fill_scratch = heap_.alloc(rows_total * sizeof(S));
+            // one batch over every chunk of every slot the wave reads
+            std::vector<const void*> h_src(blocks);
+            std::vector<void*> h_dst(blocks);
+            const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+            size_t at = 0;
+            for (auto& [m, rg] : regions) {
+                const BoxState& ss = *rg.st;
+                S* region = reinterpret_cast<S*>(fill_scratch) + rg.base_rows;
+                for (const auto& [first_row, off] : rg.at) {
+                    const auto& sl = ss.t2t_slots[static_cast<size_t>(ss.t2t_rows.at(first_row))];
+                    const char* csrc = ss.t2t_packed + sl.off;
+                    S* dst = region + off * static_cast<size_t>(ss.r);
+                    for (uint32_t c = 0; c < sl.nchunks; ++c) {
+                        h_src[at] = csrc;
+                        h_dst[at] = dst + static_cast<size_t>(c) * chunk_elems;
+                        csrc += ss.t2t_strides[sl.chunk0 + c];
+                        ++at;
+                    }
+                }
+            }
+            char* ptrs = heap_.alloc(align_up(blocks * sizeof(void*)) * 2);
+            auto** d_src = reinterpret_cast<const void**>(ptrs);
+            auto** d_dst = reinterpret_cast<void**>(ptrs + align_up(blocks * sizeof(void*)));
+            check_cuda(cudaMemcpyAsync(d_src, h_src.data(), blocks * sizeof(void*), cudaMemcpyHostToDevice, stream),
+                       "fill slots");
+            check_cuda(cudaMemcpyAsync(d_dst, h_dst.data(), blocks * sizeof(void*), cudaMemcpyHostToDevice, stream),
+                       "fill slots");
+            check_cuda(cudaStreamSynchronize(stream), "fill slots");
+            bitcompHandle_t plan{};
+            if (bitcompCreateBatchPlanFromCompressedData(&plan, d_src, blocks, nullptr, stream) != BITCOMP_SUCCESS) {
+                throw std::runtime_error("LevelEliminator: could not plan the fill slots' decompression");
+            }
+            bitcompSetStream(plan, stream);
+            if (bitcompBatchUncompress(plan, d_src, d_dst) != BITCOMP_SUCCESS) {
+                bitcompDestroyPlan(plan);
+                throw std::runtime_error("LevelEliminator: decompressing the fill slots failed");
+            }
+            bitcompDestroyPlan(plan);
+            check_cuda(cudaStreamSynchronize(stream), "fill slots");
+            heap_.free(ptrs);
+            stats.fs_wave_scratch = std::max(stats.fs_wave_scratch, static_cast<double>(rows_total * sizeof(S)));
+            stats.fs_wave_bytes += static_cast<double>(rows_total * sizeof(S));
+            stats.fs_wave_slots += static_cast<int64_t>(blocks);
+        }
+        // the readers' bases and offsets
+        for (Plan& p : plans) {
+            for (Source& src : p.sources) {
+                const BoxState& ss = *src.state;
+                if (ss.t2t_packed == nullptr) {
+                    src.t2t_base = ss.temp2t;  // raw, as before
+                    continue;
+                }
+                const Region& rg = regions.at(src.morton);
+                src.t2t_base = reinterpret_cast<const S*>(fill_scratch) + rg.base_rows;
+                src.slot_b = static_cast<int>(rg.at.at(src.slot_b));
+                for (RunDesc& rd : src.runs) rd.src_offset = static_cast<int>(rg.at.at(rd.src_offset));
+            }
+        }
+    }
+#else
+    for (Plan& p : plans) {
+        for (Source& src : p.sources) src.t2t_base = src.state->temp2t;
+    }
+#endif
 
     stats.sketch_plan += std::chrono::duration<double>(clock::now() - t0).count();
     const auto t_gpu = clock::now();
@@ -1875,7 +2001,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 const BoxState& ss = *src.state;
                 const int r = ss.r;
                 // P_E = X_RR_full temp2[B rows]^T; temp2 is resident row-major (NN)
-                p_batch.entries.push_back({ss.xrr_full, ss.temp2t + static_cast<size_t>(src.slot_b) * r,
+                p_batch.entries.push_back({ss.xrr_full, src.t2t_base + static_cast<size_t>(src.slot_b) * r,
                                            p.P + src.offset, r, p.n, r, r, r, p.fill_rank});
                 OrderedSketchItem w{};
                 w.out = p.W + static_cast<size_t>(src.offset) * p.d;
@@ -1886,7 +2012,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 w.ptr = src.ptr;
                 w.entries = src.list;
                 w.scale = p.scale;
-                w.src = ss.temp2t;
+                w.src = src.t2t_base;
                 w.row_stride = r;
                 w.row_index = src.row_index;
                 stored_items.push_back(w);
@@ -2013,6 +2139,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     stats.sk_download += marks.seconds(6);
     stats.bytes_down += static_cast<double>(id_bytes);
     for (char* fill : fill_blocks) heap_.free(fill);
+    if (fill_scratch != nullptr) heap_.free(fill_scratch);  // the wave's decompressed slots
     if (adaptive) {
         // the boxes whose root node did not settle them: further rounds, each
         // an image of its own (the sketch's is no longer read)

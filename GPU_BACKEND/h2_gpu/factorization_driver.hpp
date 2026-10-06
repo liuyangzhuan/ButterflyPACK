@@ -1023,6 +1023,11 @@ public:
             }
             std::printf("\n");
         }
+        if (e.fs_wave_slots > 0) {
+            std::printf("  [gpu] level %d fill slots materialized: %.2f GB in the largest wave's scratch, "
+                        "%.2f GB over the level in %lld slot chunks\n", lvl, e.fs_wave_scratch / 1e9,
+                        e.fs_wave_bytes / 1e9, static_cast<long long>(e.fs_wave_slots));
+        }
         if (e.sk_src_waves > 0) {
             std::printf("  [gpu] level %d fill sources read: %lld distinct over %lld waves, %.2f GB by the largest "
                         "wave, %.2f GB summed (%lld wave-source pairs, %.1f waves per source)\n", lvl,
