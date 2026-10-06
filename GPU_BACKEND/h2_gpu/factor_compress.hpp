@@ -94,6 +94,15 @@ constexpr size_t kXnrStagingBudget = size_t{512} << 20;
 // not get their staging at all and fell back to storing raw.
 constexpr size_t kFillStagingBudget = size_t{64} << 20;
 
+// A sketch wave reads whole slots out of its fill sources, and the union of
+// those is 7.79 GB at the Color leaf of 192^3 on 8 ranks - far too much to
+// decompress at once.  The sources are taken in groups whose slots fit this,
+// one group's worth of scratch reused by all of them: an item reads only
+// slots of its own source, so grouping by source keeps every reader in the
+// same group as the slots it needs, and the batches stay wide (about 90
+// sources and 490 items a group at the leaf).
+constexpr size_t kFillWaveScratch = size_t{512} << 20;
+
 // One box's compressed X_NR: the chunks it was cut into, and the shape and
 // quantization the solve needs to put it back.
 struct CompressedXnr {
