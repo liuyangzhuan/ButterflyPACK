@@ -2506,21 +2506,30 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.temp2 = reinterpret_cast<S*>(source + wb.off_temp2);
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
-                // X_RR_full gets its block now; temp2^T only when its
+                // X_RR_full gets its block now.  temp2^T only when its
                 // sub-group is transposed and compressed near the end of the
                 // wave, so a wave never holds more than one group of it raw
-                // (2.26 GB a wave at the Color leaf, against about 0.1 GB a
-                // group).
+                // (2.26 GB a wave at the Color leaf against about 0.1 GB a
+                // group) - but that only works because each group is freed
+                // once packed.  Without compression nothing frees it, so it
+                // has to be allocated up front as it always was.
                 const size_t xrr_bytes = align_up(r * r * D);
                 char* persist = heap_.alloc_resident(xrr_bytes, ResidentKind::FillXrr);
+                char* persist_t2t = nullptr;
+                size_t t2t_bytes = 0;
+                if (compress_factors_ < 1) {
+                    t2t_bytes = std::max<size_t>(nt * r * D, 1);
+                    persist_t2t = heap_.alloc_resident(t2t_bytes, ResidentKind::FillRaw);
+                    wb.persist_temp2t = reinterpret_cast<S*>(persist_t2t);
+                }
                 {
                     auto& es = eliminator_stats();
-                    es.persist_bytes += static_cast<double>(xrr_bytes);
+                    es.persist_bytes += static_cast<double>(xrr_bytes + t2t_bytes);
                     es.persist_xrr_bytes += static_cast<double>(xrr_bytes);
                     es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
                     ++es.persist_blocks;
                 }
-                keep_fill_source(*wb.state, persist, xrr_bytes, nullptr, 0, wb.box->one_hop);
+                keep_fill_source(*wb.state, persist, xrr_bytes, persist_t2t, t2t_bytes, wb.box->one_hop);
                 wb.persist_xrr = reinterpret_cast<S*>(persist);
             }
             size_t w_off = 0;
@@ -2659,7 +2668,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             add_gather(copy_full, max_copy_m, max_copy_n, reinterpret_cast<S*>(d_result + wb.off_t), k, k, r,
                        wb.T, 1, wb.ldt, identity, identity);
             add_gather(copy_full, max_copy_m, max_copy_n, wb.persist_xrr, r, r, r, wb.xrr, 1, r, identity, identity);
-            // (its temp2^T transpose runs with its sub-group, below)
+            if (compress_factors_ < 1 && nt > 0) {
+                // (with compression it runs with its sub-group, below)
+                transposes.push_back(TransposeItem{wb.temp2, nt, wb.persist_temp2t, r, nt, r});
+                max_tr_m = std::max(max_tr_m, nt);
+                max_tr_n = std::max(max_tr_n, r);
+            }
         }
         push(getrf, wb.xrr, r, nullptr, 1, nullptr, 1, r, r, 1);
         // X_NR = A_NR - A_NS T
@@ -2816,7 +2830,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // compression is ordered after them.  Nothing reads the compressed form
     // yet: this measures the ratio and, with BPACK_CHECK=fillsrc, checks the
     // round trip against the original.
-    if (gpu_sketch_) compress_fill_sources(boxes, active, stream);
+    if (compress_factors_ >= 1 && gpu_sketch_) compress_fill_sources(boxes, active, stream);
 
     // ---- Step 5, planned while the device runs the box region: the near
     // block of every neighbor becomes A_NS + update (current neighbor rows x
@@ -4271,8 +4285,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
             WaveBox& wb = boxes[static_cast<size_t>(i)];
             const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
             const size_t bytes = std::max<size_t>(nt * r * D, 1);
-            char* blk = heap_.try_alloc_resident(bytes, ResidentKind::FillRaw);
-            if (blk == nullptr) continue;  // no room for its raw form: it keeps none
+            // A box without its temp2^T has no fill source and quietly changes
+            // the answer, so this is not a place to degrade: alloc_resident
+            // throws if the group does not fit, and the group is bounded.
+            char* blk = heap_.alloc_resident(bytes, ResidentKind::FillRaw);
             auto& es = eliminator_stats();
             es.persist_bytes += static_cast<double>(bytes);
             es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
