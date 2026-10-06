@@ -136,6 +136,18 @@ struct EliminatorStats {
     // ... and the slices the readers actually take: a box reads a source's
     // temp2^T only over its own columns, which is a contiguous byte range, so
     // a decompression could cover the chunks of that range alone.
+    // H2_compress_factors: the fill sources' temp2^T, compressed one block per
+    // slot (a slot is one one-hop neighbor's rows, which is what a reader
+    // takes), measured as the compression runs.  BPACK_CHECK=fillsrc also
+    // decompresses each wave's and reports the worst error against the
+    // original.
+    double fs_raw_bytes = 0.0;
+    double fs_stored_bytes = 0.0;
+    int64_t fs_slots = 0;
+    int64_t fs_boxes = 0;
+    int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
+    double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
+    double fs_check_tol = 0.0;    //   ... and the tolerance it was held to
     double sk_run_bytes_max_wave = 0.0;
     double sk_run_bytes_sum = 0.0;
     int64_t sk_runs = 0;
@@ -354,6 +366,7 @@ public:
           ca_(ca || owner), owner_mode_(owner), compress_factors_(compress_factors)
 #ifdef H2_HAVE_NVCOMP
           , xnr_compressor_(DeviceHeap::instance())
+          , fill_compressor_(DeviceHeap::instance())
 #endif
     {
         evaluator_ = evaluator_of(kernel->gpu_evaluator);
@@ -670,6 +683,9 @@ private:
                             cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_sources, cudaStream_t stream);
+    void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
+    void check_fill_round_trip(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
+                               const std::vector<CompressedXnr>& comp, cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
     // factors (the level's own, or committed to the store): before a fill
     // source leaves the device (the transition restores it from the host
@@ -824,6 +840,7 @@ private:
     int compress_factors_ = 0;         // H2_compress_factors
 #ifdef H2_HAVE_NVCOMP
     WaveXnrCompressor<S> xnr_compressor_;
+    WaveXnrCompressor<S> fill_compressor_;  // the fill sources' temp2^T, per slot
 #endif
     // Fill sources whose local readers have all sketched, oldest first.  They
     // stay on the device for the transition (which otherwise restores them
@@ -2489,6 +2506,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     marks.mark(stream);  // 5: transposes, Schur
     stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
 
+    // ---- the wave's fill sources, compressed a slot at a time (the readers
+    // take one slot's rows, so a slot is the block that decompresses alone).
+    // The transposes above wrote temp2^T and run on this stream, so the
+    // compression is ordered after them.  Nothing reads the compressed form
+    // yet: this measures the ratio and, with BPACK_CHECK=fillsrc, checks the
+    // round trip against the original.
+    if (compress_factors_ >= 1 && gpu_sketch_) compress_fill_sources(boxes, active, stream);
+
     // ---- Step 5, planned while the device runs the box region: the near
     // block of every neighbor becomes A_NS + update (current neighbor rows x
     // this box's skeleton), stored in the canonical orientation.  Its tens of
@@ -3805,6 +3830,129 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // past that, this rank drops the level's copies.  Launched before the
 // wave's result and source blocks can be released.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// BPACK_CHECK=fillsrc: every block the fill-source compression just produced,
+// decompressed again and compared with what it was made from.  A block's delta
+// is 2 * tolerance * max|block| and bitcomp rounds it down to a power of two,
+// so the error may not exceed delta / 2.  A wrong offset or stride in the
+// layout shows up here as a large error, rather than as a wrong answer three
+// levels later.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::check_fill_round_trip(
+    const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
+    const std::vector<CompressedXnr>& comp, cudaStream_t stream) {
+#ifdef H2_HAVE_NVCOMP
+    auto& stats = eliminator_stats();
+    const auto& cks = fill_compressor_.chunks();
+    const char* staging = fill_compressor_.staging();
+    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+    size_t widest = 0;
+    for (size_t e : elems) widest = std::max(widest, e);
+    char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
+    if (back == nullptr) return;  // (a check, not a reason to fail the run)
+    std::vector<S> got, want;
+    for (size_t i = 0; i < srcs.size(); ++i) {
+        if (comp[i].nchunks == 0) continue;
+        // A slot is normally one chunk; a slot over kXnrChunkBytes is several,
+        // laid end to end in the output.
+        S* out = reinterpret_cast<S*>(back);
+        for (size_t c = 0; c < comp[i].nchunks; ++c) {
+            const auto& ck = cks[comp[i].chunk0 + c];
+            const uint32_t stride = static_cast<uint32_t>(ck.stride);  // one chunk, from its own address
+            decompress_xnr<S>(staging + ck.offset, out + c * chunk_elems, &stride, 1, stream);
+        }
+        check_cuda(cudaStreamSynchronize(stream), "fillsrc check");
+        got.assign(elems[i], S{});
+        want.assign(elems[i], S{});
+        check_cuda(cudaMemcpy(got.data(), back, elems[i] * sizeof(S), cudaMemcpyDeviceToHost), "fillsrc check");
+        check_cuda(cudaMemcpy(want.data(), srcs[i], elems[i] * sizeof(S), cudaMemcpyDeviceToHost), "fillsrc check");
+        const double* g = reinterpret_cast<const double*>(got.data());
+        const double* w = reinterpret_cast<const double*>(want.data());
+        const size_t nd = elems[i] * (sizeof(S) / sizeof(double));
+        for (size_t j = 0; j < nd; ++j) stats.fs_check_err = std::max(stats.fs_check_err, std::fabs(g[j] - w[j]));
+        stats.fs_check_tol = std::max(stats.fs_check_tol, comp[i].delta * 0.5);
+    }
+    heap_.free(back);
+#else
+    (void)srcs; (void)elems; (void)comp; (void)stream;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// The wave's fill sources (temp2^T, written by the transposes just issued),
+// compressed one block per slot: a slot is one one-hop neighbor's rows, and
+// both readers of a fill source - the P side's own slot and the W side's run
+// per ring block - take whole rows, so a slot is the smallest block that ever
+// decompresses alone.  Groups of boxes keep the compressor's staging bounded,
+// as keep_solve_factors does.
+//
+// Nothing reads the compressed form yet; this measures what it costs and, with
+// BPACK_CHECK=fillsrc, decompresses it again and reports the worst error.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
+    std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream) {
+#ifdef H2_HAVE_NVCOMP
+    const size_t D = sizeof(S);
+    const bool check = env::check("fillsrc");
+    auto& stats = eliminator_stats();
+
+    // the boxes whose temp2^T is worth compressing, in groups the staging holds
+    std::vector<const WaveBox*> group;
+    size_t group_raw = 0;
+    auto flush = [&]() {
+        if (group.empty()) return;
+        std::vector<const S*> srcs;
+        std::vector<size_t> elems;
+        std::vector<size_t> box_of;  // per block, its box in `group`
+        for (size_t gi = 0; gi < group.size(); ++gi) {
+            const WaveBox& wb = *group[gi];
+            const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+            for (size_t a = 0; a < wb.row0.size(); ++a) {
+                const size_t row0 = static_cast<size_t>(wb.row0[a]);
+                const size_t row1 = a + 1 < wb.row0.size() ? static_cast<size_t>(wb.row0[a + 1]) : nt;
+                if (row1 <= row0) continue;
+                srcs.push_back(wb.persist_temp2t + row0 * r);
+                elems.push_back((row1 - row0) * r);
+                box_of.push_back(gi);
+            }
+        }
+        if (!srcs.empty()) {
+            std::vector<CompressedXnr> comp;
+            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                size_t raw = 0, stored = 0;
+                for (size_t i = 0; i < srcs.size(); ++i) {
+                    raw += elems[i] * D;
+                    stored += comp[i].bytes;
+                }
+                stats.fs_raw_bytes += static_cast<double>(raw);
+                stats.fs_stored_bytes += static_cast<double>(stored);
+                stats.fs_slots += static_cast<int64_t>(srcs.size());
+                stats.fs_boxes += static_cast<int64_t>(group.size());
+                if (check) check_fill_round_trip(srcs, elems, comp, stream);
+            } else {
+                ++stats.fs_waves_plain;
+            }
+            fill_compressor_.release();
+        }
+        group.clear();
+        group_raw = 0;
+    };
+    for (int i : active) {
+        WaveBox& wb = boxes[static_cast<size_t>(i)];
+        if (wb.persist_temp2t == nullptr || wb.r == 0 || wb.ntot == 0 || wb.row0.empty()) continue;
+        const size_t bytes = static_cast<size_t>(wb.ntot) * static_cast<size_t>(wb.r) * D;
+        if (!group.empty() && group_raw + bytes > kXnrStagingBudget) flush();
+        group.push_back(&wb);
+        group_raw += bytes;
+    }
+    flush();
+#else
+    (void)boxes; (void)active; (void)stream;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // One group of a wave's boxes: their X_NR compressed, then the group's
 // factors gathered into a device block of its own.  A wave is kept in groups
