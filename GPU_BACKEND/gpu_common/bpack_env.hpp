@@ -37,7 +37,7 @@ struct Value {
 inline constexpr Value kCheckValues[] = {
     {"solve", false},  {"matvec", false}, {"kernel", false},          {"replica", false},
     {"parity", false}, {"hodlr", false},  {"hodlr-transpose", false}, {"hodlr-exact", false},
-    {"graphcheck", false}, {"globalgraph", false}, {"fillsrc", false},
+    {"graphcheck", false}, {"globalgraph", false}, {"fillsrc", false}, {"heap", false},
 };
 inline constexpr Value kTraceValues[] = {
     {"wave", false}, {"exchange", false}, {"phase", false},    {"bk", false},

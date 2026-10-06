@@ -26,7 +26,11 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <dlfcn.h>
 #include <sstream>
+#include <string>
+
+#include "../gpu_common/bpack_env.hpp"
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -54,6 +58,12 @@ enum class ResidentKind : uint8_t {
     CaHalo,        // a CA level's received halo pieces
     Reduction,     // the process reduction's pack and receive buffers
     Matvec,        // the matvec's device blocks
+    // Three things used to share Transition and so printed as "parent
+    // blocks", which made the leaf's 9.47 GB look like parent blocks at a
+    // level that adopts none:
+    Uploaded,      // begin(): the host's blocks uploaded for a level
+    Adopted,       // begin(): the parent blocks of the level below, restored
+    OwnerNear,     // the owner pass's new near-field blocks (its own edges_)
     Count
 };
 inline const char* resident_kind_name(ResidentKind k) {
@@ -71,6 +81,9 @@ inline const char* resident_kind_name(ResidentKind k) {
         case ResidentKind::CaHalo: return "CA halo";
         case ResidentKind::Reduction: return "reduction";
         case ResidentKind::Matvec: return "matvec";
+        case ResidentKind::Uploaded: return "uploaded blocks";
+        case ResidentKind::Adopted: return "adopted blocks";
+        case ResidentKind::OwnerNear: return "owner near blocks";
         default: return "other";
     }
 }
@@ -145,6 +158,14 @@ public:
         share_ranks_ = std::max(ranks, 1);
         share_free_ = free_bytes;
     }
+    // Whether this pointer is the start of a block the heap currently holds.
+    // owns() only says the address is inside the arena, which does not tell a
+    // foreign pointer from one that has already been freed.
+    bool is_allocated(const void* ptr) const {
+        if (!owns(ptr)) return false;
+        const size_t offset = static_cast<size_t>(static_cast<const char*>(ptr) - base_);
+        return allocated_.find(offset) != allocated_.end();
+    }
     bool owns(const void* ptr) const {
         const char* p = static_cast<const char*>(ptr);
         return base_ != nullptr && p >= base_ && p < base_ + capacity_;
@@ -210,6 +231,10 @@ public:
             ++reclaims_;
         }
         allocated_.emplace(offset, std::make_pair(size, resident));
+        if (heap_trace_) {
+            alloc_site_[offset] = __builtin_return_address(0);
+            free_site_.erase(offset);
+        }
         used_ += size;
         if (resident) {
             resident_used_ += size;
@@ -226,7 +251,39 @@ public:
         if (ptr == nullptr) return;
         const size_t offset = static_cast<size_t>(static_cast<const char*>(ptr) - base_);
         auto it = allocated_.find(offset);
-        if (it == allocated_.end()) throw std::runtime_error("H2 GPU heap: free of an unknown pointer");
+        if (it == allocated_.end()) {
+            if (heap_trace_) {
+                std::ostringstream t;
+                t << "H2 GPU heap: double free at offset " << offset << " (" << ptr << ")";
+                const auto a = alloc_site_.find(offset);
+                const auto f = free_site_.find(offset);
+                auto name_of = [](const void* addr) {
+                    Dl_info info{};
+                    if (addr != nullptr && dladdr(addr, &info) != 0 && info.dli_sname != nullptr) {
+                        return std::string(info.dli_sname) + "+" +
+                               std::to_string(static_cast<const char*>(addr) -
+                                              static_cast<const char*>(info.dli_saddr));
+                    }
+                    return std::string("?");
+                };
+                const auto k = freed_kind_.find(offset);
+                if (k != freed_kind_.end()) {
+                    t << ", " << k->second.second << " bytes of resident kind "
+                      << static_cast<int>(k->second.first);
+                }
+                t << "\n  allocated by  " << name_of(a != alloc_site_.end() ? a->second : nullptr)
+                  << "\n  last freed by " << name_of(f != free_site_.end() ? f->second : nullptr)
+                  << "\n  freed again by " << name_of(__builtin_return_address(0));
+                throw std::runtime_error(t.str());
+            }
+            throw std::runtime_error("H2 GPU heap: free of an unknown pointer");
+        }
+        if (heap_trace_) {
+            free_site_[offset] = __builtin_return_address(0);
+            ResidentKind fk = ResidentKind::Other;
+            if (auto kit = resident_kind_.find(offset); kit != resident_kind_.end()) fk = kit->second;
+            freed_kind_[offset] = {fk, it->second.first};
+        }
         size_t start = offset, length = it->second.first;
         const bool was_resident = it->second.second;
         allocated_.erase(it);
@@ -443,6 +500,13 @@ private:
     std::map<size_t, size_t> free_;                  // offset -> length, address order
     std::set<std::pair<size_t, size_t>> by_size_;    // (length, offset) of the same ranges
     // offset -> (length, resident)
+    // BPACK_CHECK=heap: who allocated each live block, and who last freed each
+    // offset.  A double free then names both sites instead of only the second,
+    // which is what hypothesis-bisecting a 25 minute run cannot do.
+    bool heap_trace_ = env::check("heap");
+    std::unordered_map<size_t, const void*> alloc_site_;
+    std::unordered_map<size_t, const void*> free_site_;
+    std::unordered_map<size_t, std::pair<ResidentKind, size_t>> freed_kind_;
     std::unordered_map<size_t, std::pair<size_t, bool>> allocated_;   // offset -> length
     std::function<bool()> reclaimer_;
     int64_t reclaims_ = 0;
