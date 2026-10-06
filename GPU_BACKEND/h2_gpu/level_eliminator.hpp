@@ -155,6 +155,17 @@ struct EliminatorStats {
     int64_t fs_wave_slots = 0;
     int64_t fs_wave_groups = 0;
     // the transition putting compressed fill sources back whole
+    // What a wave reads of the blocks the previous transition left: a box's own
+    // Schur block, read when it is eliminated, and the edge blocks of its
+    // one-hop neighbors.  The union per wave is the scratch a per-wave
+    // decompression would need; the pairs against the distinct blocks say how
+    // many waves read a block, so how often it would be decompressed.
+    double lsch_union_max_wave = 0.0;
+    double lsch_union_sum = 0.0;
+    double ledge_union_max_wave = 0.0;
+    double ledge_union_sum = 0.0;
+    int64_t lsch_pairs = 0, lsch_distinct = 0;
+    int64_t ledge_pairs = 0, ledge_distinct = 0;
     double fs_tr_bytes = 0.0;
     int64_t fs_tr_sources = 0;
     double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
@@ -906,6 +917,7 @@ private:
     const Evaluator* evaluator_ = nullptr;  // the application's (H2Kernel::gpu_evaluator)
     bool heap_initialized_ = false;
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
+    std::unordered_set<const void*> lsch_seen_, ledge_seen_;  // blocks any wave read (the stats)
     std::unordered_set<int64_t> sk_src_all_;         // fill sources any wave read (the stats)
     std::unordered_set<const void*> tr_block_seen_;  // transition blocks a chunk has written (the stats)
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
@@ -2457,6 +2469,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             return lu_size_class(boxes[static_cast<size_t>(a)].r) < lu_size_class(boxes[static_cast<size_t>(b)].r);
         });
     }
+    // (the blocks this wave reads of the previous transition's, for the stats)
+    std::set<const void*> wave_schur, wave_edge;
+    size_t wave_schur_bytes = 0, wave_edge_bytes = 0;
     const size_t info_offset = result_bytes;
     result_bytes = align_up(result_bytes + std::max<size_t>(active.size(), 1) * sizeof(int));
 
@@ -2581,6 +2596,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
 
         // A_RR, A_SR, A_SS from the Schur block or the kernel
         if (st.schur.ptr != nullptr) {
+            if (wave_schur.insert(st.schur.ptr).second) {
+                wave_schur_bytes += static_cast<size_t>(st.schur.rows) * st.schur.cols * D;
+            }
             if (st.schur.rows != n || st.schur.cols != n) throw std::runtime_error("LevelEliminator: Schur block shape");
             add_gather(fills, max_fill_m, max_fill_n, wb.xrr, r, r, r, st.schur.ptr, 1, n, red_local, red_local);
             add_gather(fills, max_fill_m, max_fill_n, wb.xsr, k, k, r, st.schur.ptr, 1, n, skel_local, red_local);
@@ -2603,6 +2621,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             auto it = edges_.find(edge_key(box->morton_index, nm));
             if (it != edges_.end()) {
                 const DeviceMatrix& e = it->second;
+                if (wave_edge.insert(e.ptr).second) {
+                    wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
+                }
                 int64_t rs = 1, cs = e.rows;  // view rows = neighbor, cols = this box
                 if (box->morton_index < nm) {
                     if (e.rows != c || e.cols != n) throw std::runtime_error("LevelEliminator: near block shape (lo)");
@@ -3224,6 +3245,19 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         if (st.skeleton_identity && static_cast<int>(st.skeleton.size()) != st.n) st.skeleton_identity = false;
+    }
+    {
+        auto& es = eliminator_stats();
+        es.lsch_union_sum += static_cast<double>(wave_schur_bytes);
+        es.lsch_union_max_wave = std::max(es.lsch_union_max_wave, static_cast<double>(wave_schur_bytes));
+        es.ledge_union_sum += static_cast<double>(wave_edge_bytes);
+        es.ledge_union_max_wave = std::max(es.ledge_union_max_wave, static_cast<double>(wave_edge_bytes));
+        es.lsch_pairs += static_cast<int64_t>(wave_schur.size());
+        es.ledge_pairs += static_cast<int64_t>(wave_edge.size());
+        for (const void* q : wave_schur) lsch_seen_.insert(q);
+        for (const void* q : wave_edge) ledge_seen_.insert(q);
+        es.lsch_distinct = static_cast<int64_t>(lsch_seen_.size());
+        es.ledge_distinct = static_cast<int64_t>(ledge_seen_.size());
     }
     for (char* work : work_blocks) heap_.free(work);
     heap_.free(d_t);

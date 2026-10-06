@@ -1023,6 +1023,14 @@ public:
             }
             std::printf("\n");
         }
+        if (e.lsch_pairs > 0 || e.ledge_pairs > 0) {
+            std::printf("  [gpu] level %d blocks a wave reads: Schur %.2f GB largest / %.2f GB summed over %lld "
+                        "reads of %lld blocks; edges %.2f GB largest / %.2f GB summed over %lld reads of %lld\n",
+                        lvl, e.lsch_union_max_wave / 1e9, e.lsch_union_sum / 1e9,
+                        static_cast<long long>(e.lsch_pairs), static_cast<long long>(e.lsch_distinct),
+                        e.ledge_union_max_wave / 1e9, e.ledge_union_sum / 1e9,
+                        static_cast<long long>(e.ledge_pairs), static_cast<long long>(e.ledge_distinct));
+        }
         if (e.fs_wave_slots > 0) {
             std::printf("  [gpu] level %d fill slots materialized: %.2f GB in the largest wave's scratch, "
                         "%.2f GB over the level in %lld slot chunks\n", lvl, e.fs_wave_scratch / 1e9,
