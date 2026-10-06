@@ -68,6 +68,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -148,6 +149,8 @@ struct EliminatorStats {
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
     double fs_check_tol = 0.0;    //   ... and the tolerance it was held to
+    double sk_union_bytes_max_wave = 0.0;
+    double sk_union_bytes_sum = 0.0;
     double sk_run_bytes_max_wave = 0.0;
     double sk_run_bytes_sum = 0.0;
     int64_t sk_runs = 0;
@@ -1538,6 +1541,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     std::mutex src_seen_mutex;
     std::unordered_map<int64_t, size_t> src_seen;
     size_t src_slice_bytes = 0;  // the readers' P slices of them, summed
+    // every reader takes one whole slot, so the scratch a wave needs is the
+    // union of the (source, slot) pairs it reads, not the sum of its requests
+    std::set<std::pair<int64_t, int>> src_union;
+    size_t src_union_bytes = 0;
     size_t src_run_bytes = 0;    // ... and their W runs
     size_t src_runs_count = 0;
 
@@ -1547,6 +1554,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         const size_t& slices;
         const size_t& runs;
         const size_t& nruns;
+        const size_t& uni;
         std::unordered_set<int64_t>& all;
         ~SrcStats() {
             auto& st = eliminator_stats();
@@ -1556,6 +1564,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 bytes += b;
                 all.insert(m);
             }
+            st.sk_union_bytes_sum += static_cast<double>(uni);
+            st.sk_union_bytes_max_wave = std::max(st.sk_union_bytes_max_wave, static_cast<double>(uni));
             st.sk_run_bytes_sum += static_cast<double>(runs);
             st.sk_run_bytes_max_wave = std::max(st.sk_run_bytes_max_wave, static_cast<double>(runs));
             st.sk_runs += static_cast<int64_t>(nruns);
@@ -1567,7 +1577,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             st.sk_src_distinct = static_cast<int64_t>(all.size());
             ++st.sk_src_waves;
         }
-    } src_stats{src_seen, src_slice_bytes, src_run_bytes, src_runs_count, sk_src_all_};
+    } src_stats{src_seen, src_slice_bytes, src_run_bytes, src_runs_count, src_union_bytes, sk_src_all_};
 
     // ---- host plans (index lists only)
     {
@@ -1678,6 +1688,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                         {
                             std::lock_guard<std::mutex> lock(src_seen_mutex);
                             src_slice_bytes += static_cast<size_t>(slot_count) * static_cast<size_t>(ss.r) * sizeof(S);
+                            if (src_union.emplace(cm, static_cast<int>(slot_offset)).second) {
+                                src_union_bytes += static_cast<size_t>(slot_count) * static_cast<size_t>(ss.r) * sizeof(S);
+                            }
                         }
                         Source src;
                         src.morton = cm;
@@ -1712,6 +1725,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             std::lock_guard<std::mutex> lock(src_seen_mutex);
                             src_run_bytes += run_rows * static_cast<size_t>(ss.r) * sizeof(S);
                             src_runs_count += src.runs.size();
+                            for (const RunDesc& rd : src.runs) {
+                                if (src_union.emplace(cm, rd.src_offset).second) {
+                                    src_union_bytes += static_cast<size_t>(rd.count) * static_cast<size_t>(ss.r) * sizeof(S);
+                                }
+                            }
                         }
                         if (src.runs.size() > static_cast<size_t>(kMaxSourceRuns)) {
                             throw std::runtime_error("LevelEliminator: too many ring blocks per fill source");

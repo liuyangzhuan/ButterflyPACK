@@ -1039,6 +1039,9 @@ public:
                         static_cast<long long>(e.sk_runs),
                         (e.sk_slice_bytes_max_wave + e.sk_run_bytes_max_wave) / 1e9,
                         (e.sk_slice_bytes_sum + e.sk_run_bytes_sum) / 1e9);
+            std::printf("  [gpu] level %d fill source union (distinct slots a wave reads): %.2f GB by the largest "
+                        "wave, %.2f GB summed\n", lvl, e.sk_union_bytes_max_wave / 1e9,
+                        e.sk_union_bytes_sum / 1e9);
         }
         std::printf("  [gpu] level %d detail: sketch plan %.2f s, sketch device %.2f s "
                     "(meta build %.2f, upload %.2f, rows %.2f, stored %.2f, P %.2f, fill %.2f, "
