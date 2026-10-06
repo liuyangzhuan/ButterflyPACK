@@ -2508,7 +2508,219 @@ the raw blocks stay so results are bit-identical.  7.2x at the leaf over 7099
 blocks.
 
 Piece 2 - freeing the raw blocks once packed and putting them back at the
-adopting level - **fails and is not committed**.  Two attempts, both ending in
+adopting level - **works, and buys almost no peak** (2026-10-06).  Three
+configurations at 96^3 over 8 ranks, all exit 0:
+
+| run | logdet | acc_forward | acc_backward | Factor |
+|---|---|---|---|---|
+| Color, compress 0 | -9928892.0403490998 | 3.46e-03 | 1.24e-15 | 1.16 s |
+| Color, compress 1 | -9928907.2811287567 | 9.33e-03 | 9.62e-16 | 1.29 s |
+| CA0, compress 1 | -9928906.4595639911 | 9.26e-03 | 7.29e-16 | 1.49 s |
+
+logdet moves by 1.5e-6 relative and acc_forward by 2.7x.  That is a real cost
+and it is expected: unlike X_NR, which only the solve reads, and unlike the
+fill sources, which are an update, a parent block *is* what the next level
+factorizes, so its quantization error enters the factorization.  At tol 1e-3
+acc_forward stays the same order it already was.
+
+**But the peak does not move, and 192^3 says so exactly.**  Color, 8 ranks,
+compress 1, with piece 2: the leaf peak is **12.78 GB**, the same number
+piece 1 recorded, and `Factor time` 9.20 s against piece 1's 8.56 s and 7.71
+s uncompressed - piece 2 costs 0.6 s for no memory.  logdet
+-89253766.641603738, 2.0e-6 relative from uncompressed, in line with 96^3.
+
+The leaf breakdown is the whole story:
+
+    level 5 resident at the peak: 12.78 GB | fill X_RR_full 0.73 | fill
+    temp2^T packed 1.38 | level Schur/edges 1.14 | parent blocks 9.47 |
+    near 0.02 | points 0.04
+    level 5 parent blocks compress: 6.80 -> 0.94 GB (7.2x) over 7099 blocks
+
+**That 9.47 GB is not the parent blocks, and reading the label as though it
+were cost two runs.**  ResidentKind::Transition prints as "parent blocks" but
+four different allocations shared it: build_parent's parent blocks,
+begin()'s upload of the host's blocks, begin()'s restore of the adopted
+blocks, and the owner pass's new near-field blocks.  Level 5 is the *leaf*:
+it adopts nothing, and its own parent blocks are 6.80 GB raw / 0.94 GB
+packed, so its 9.47 GB could never have been parent blocks.  Piece 2
+producing a byte-identical 12.78 GB peak was the signal, and it was read as
+"the peak sits elsewhere in the level" rather than "the label is wrong".
+
+Splitting the kind into Uploaded / Adopted / OwnerNear says exactly where the
+memory is (192^3, 8 ranks, Color, compress 1, piece 3):
+
+| level | peak | the dominant item | the rest |
+|---|---|---|---|
+| 5 (leaf) | 12.78 GB | **owner near blocks 9.47** | Schur/edges 1.14, fill 2.11 |
+| 4 | 7.74 GB | **adopted blocks 6.29** | fill 1.30, kept 0.06 |
+| 3 | 3.52 GB | adopted 1.76 | kept 0.85, fill 0.89 |
+| 2 | 2.25 GB | kept 1.05 | adopted 0.54, fill 0.65 |
+
+So:
+
+- **the global peak is the leaf's, and 74% of it is the owner pass's
+  near-field blocks** (level_eliminator.hpp, the join that allocates
+  `edges_[t.key]` for each new owner target).  Step 2 never touched them.
+  This is the same 9.55 GB measured earlier as "the part that is not fill
+  sources", now located at its allocation site;
+- **piece 4 is in, and it is worth 1.5 GB at level 4, not the 6 GB
+  projected** (see below); the 12.78 GB global peak is untouched.
+
+Which means the lever on peak device memory - the thing that decides how many
+boxes fit on a rank - is the near-field blocks, not the parent blocks.  They
+are harder than anything in step 2: the waves *accumulate* into them, so
+holding them packed means decompress-update-recompress per wave, which is the
+trade of time for memory already anticipated.  Piece 4 is still worth doing,
+but it should be understood as flattening levels 4-2, not as raising the
+number of boxes per rank.
+
+**The 96^3 breakdown says the same thing and says why.**  At level 4,
+compression on: peak 1.91 GB of which *parent blocks 0.73 GB*, against a
+compress report of 0.77 GB raw in all.  So at the moment of the peak the
+whole raw set is still allocated, because build_parent allocates every parent
+block up front (the two loops over `pairs_of`) and only then runs the chunk
+loop that packs and frees them.  Piece 2's window - between a chunk's pack
+and the next level's begin() - contains nothing else large, and begin()'s
+restore puts the whole raw set back at once.
+
+So the saving the step was measured for needs two more pieces, and the
+measurement says which one is worth doing first:
+
+- **piece 3: allocate a parent block when its chunk is planned, not up
+  front.**  A chunk's blocks are final (0 revisits, measured), so the
+  transition's live set becomes one chunk's raw (0.82 GB at 192^3) plus the
+  packed accumulation, in place of 9.47 GB.  This is the leaf level's peak -
+  the leaf adopts nothing, so its 12.78 GB peak is its own transition - which
+  makes it the largest single item left.  The work: `chunk_blocks` and the
+  `if (M.ptr != nullptr)` guards dedupe by pointer today and must dedupe by
+  key, since ptr is null until the chunk starts; shapes stay where they are.
+- **piece 4: the adopting level reads the packed form per wave** instead of
+  begin() restoring all of it - 0.61 GB of scratch at level 4 against the
+  6.63 GB it reads over the level.  This is the original step 2 design.
+
+### Piece 4, done (2026-10-06): 6.29 -> 3.85 GB at level 4, and not at the peak
+
+begin() keeps the packed store (packed_schur_, packed_edges_, strides,
+packed_owned_) and eliminate_wave materializes what its wave reads, in one
+batch, before the planner reads it.  sketch_wave does not touch these blocks,
+so the hook is in one place.  Verified at 96^3 Color and CA0 and at 192^3
+Color: logdet -9928907.2811287567, -9928906.4595639911 and
+-89253766.641603738, each exactly the pieces 1-3 value; acc_backward 9.6e-16;
+`0 left packed` on every level; materialization 0.026 s for 7099 blocks in 12
+batches.  `Factor time` 8.63 s at 192^3, against 8.84 piece 3 and 9.20 piece
+2, so it pays for itself in time as well.
+
+| level | piece 3 | piece 4 | adopted set |
+|---|---|---|---|
+| 5 (leaf) | 12.78 GB | **12.78 GB** | adopts nothing |
+| 4 | 7.74 | **6.24** | 6.29 -> 3.85 |
+| 3 | 3.52 | 3.62 | 1.76 -> 1.60 |
+| 2 | 2.25 | 2.31 | 0.54 -> 0.54 |
+
+3.85 GB rather than the 0.9 GB the read union suggested, because the Schur
+blocks are now materialized up front (below) and a block a wave materializes
+but does not retire stays for the level.  Levels 3 and 2 come out marginally
+worse, the packed form and the up-front Schur blocks costing a little more
+than the per-wave saving at that size.  **The global peak does not move**: it
+is the leaf's, and the leaf adopts nothing.
+
+#### What it cost to find: four readers and one class of writer
+
+A null ptr means "there is no block here" everywhere in the level, and every
+reader answers that from the kernel or by making a fresh block.  An adopted
+block left packed is therefore read as the original A, with no error - so
+every site that acts on a null ptr now calls assert_not_packed() and names
+itself.  That is what found the readers, in four runs: the owner pass's join,
+replace_edge in the remote-generator pass, ensure_edge's inner loop, and
+build_parent's diagonal child-Schur gather.  Each is now pre-materialized in
+one batch (run_fill_batch plans and synchronizes twice per call, so a call per
+block is not an option), with the generator pass's three conditions hoisted
+into lambdas so the pass and its pre-pass cannot drift apart.
+
+The last one was not a reader at all.  logdet stayed wrong at -9813044.20
+with every guard silent and 50 of 863 blocks never materialized; a run that
+materialized everything through the piece-4 path reproduced the exact
+uncompressed logdet, which cleared the codec and the store; and a dump of the
+leftovers said all 50 were **Schur** blocks, with a pointer in their slot.  A
+box's Schur block has several writers that reinstall it - ensure_schur builds
+it from the kernel when it finds no block, the wave replaces it with the
+skeleton block, the exchange installs one - and each drops a packed one.
+That is a class of writer, not a site, so the adopted Schur blocks are
+materialized in begin() instead: 64 of those 863 blocks, about 7% of the
+bytes, so the near blocks keep the saving and no writer has a null pointer to
+misread.
+
+### Piece 4 as built: the near blocks lazily, the Schur blocks not
+
+begin() keeps schur_packed / edges_packed / strides / packed_owned in the
+eliminator, and a block goes back in the wave that reads it
+(materialize_adopted, three passes and one run_fill_batch, as the piece 2
+restore did).  Correct at 96^3 for Color and CA0: logdet
+-9928907.2811287567 and -9928906.4595639911, both the pieces 1-3 values,
+acc_forward 9.33e-03, acc_backward 9.62e-16, and 0 blocks left packed.
+863 blocks and 0.77 GB go back in 12 batches in 0.007 s.
+
+**What it is worth, at 192^3 over 8 ranks (Color, compress 1):**
+
+| level | peak, piece 3 | peak, piece 4 | adopted blocks | materialized |
+|---|---|---|---|---|
+| 5 (leaf) | 12.78 GB | **12.78 GB** | - (adopts nothing) | - |
+| 4 | 7.74 GB | **6.24 GB** | 6.29 -> 3.85 GB | 6.80 GB, 12 batches, 0.024 s |
+| 3 | 3.52 GB | 3.62 GB | 1.76 -> 1.60 GB | 1.94 GB, 0.009 s |
+| 2 | 2.25 GB | 2.31 GB | 0.54 GB | 0.57 GB, 0.002 s |
+
+logdet -89253766.641603723, the piece 3 value exactly; acc_backward
+1.35e-15; `Factor time` 8.90 s against piece 3's 8.84 s, so the
+decompression is free at this size.
+
+**1.50 GB off level 4, and the global peak does not move** - it is the
+leaf's, and 9.47 GB of its 12.78 GB is the owner pass's near blocks.
+
+**The projection of "level 4 to about 1.5 GB" was wrong.**  The adopted set
+goes to 3.85 GB resident, not to the 0.61 GB per-wave read union: that
+measurement covered the *wave gathers* only, while the Schur blocks are now
+eager, the remote-generator pass materializes the union of all its
+generators at once, and a block materialized by a wave that then does not
+read it is never retired.  Closing that gap is possible but it would be
+work spent below the peak.
+
+**The near blocks are lazy; the Schur blocks are materialized in begin().**
+A near block has one reader and one writer: the wave gathers from it and
+replaces it.  A box's *Schur* slot has several writers that each treat a null
+pointer as "there is no block here" and fill a fresh one from the kernel -
+ensure_schur, the wave's post-elimination landing, the exchange's install -
+so a packed Schur block is dropped and its Schur-complement contents are
+replaced by kernel values.  That was logdet out by 1.2e-2 with no crash and
+no guard: 50 of 863 blocks at level 3, every one a Schur block of an
+ordinary local writable box.  Schur blocks are 64 of those 863 and about 7%
+of the bytes, so making them eager keeps the saving.
+
+**What the readers cost to find: five runs, and the guards earned their
+keep.**  Outside the wave materialization a null pointer already means "no
+block", and the reader answers from the kernel or makes a fresh one, so a
+packed block there is a wrong answer and not an error.  Every site that acts
+on a null pointer therefore calls assert_not_packed() and names itself.  It
+found the owner pass's join and replace_edge() in the remote-generator pass -
+both needed a batch of their own, since run_fill_batch() plans and
+synchronizes twice per call and one call per block is the per-call-overhead
+shape that has cost this work three times.  What it did *not* find was the
+Schur lifecycle, because ensure_schur was the one null-pointer site left
+unguarded; and one gate (`if (!packed_edges_.empty())`) switched the
+generator pre-pass off once the edges were gone, stranding the Schur blocks
+it was also responsible for.
+
+Two process notes, both of which cost a run:
+
+- *a bisect beats a hypothesis.*  Materializing everything in begin() through
+  the piece 4 path gave the right logdet and proved the packed store and the
+  decompression were sound, which moved the search to the consumers;
+- *check the build before reading the number.*  One gate run used a library
+  linked two seconds before the source it was meant to test, and its
+  unchanged result was read as "the fix does nothing".
+
+### The piece 2 bug, and the two it was hiding
+
+Two attempts ended in
 
     what():  H2 GPU heap: free of an unknown pointer
 
@@ -2541,16 +2753,152 @@ is the same every run.  What has been ruled out:
   that are gone - the illegal access in the fill transposes was that, not a
   bad restore.
 
-**Stop bisecting and instrument the heap.**  Each of the above cost a 25
-minute run to rule out one guess.  What ends it in one run is a map from
-offset to the last place that allocated and freed it - a tag passed to alloc
-and free, or just __builtin_return_address(0) - so the error names both frees.
-Twenty lines in DeviceHeap, behind BPACK_CHECK.
+**The heap tag ended it in one run, and the double free was a mask.**  Each
+of the four bisects above cost a 25 minute run to rule out one guess.  A
+twenty line tag in DeviceHeap behind BPACK_CHECK=heap - offset to the last
+place that allocated and freed it, resolved with dladdr - named all three
+sites at once:
 
-Note also that the pointer the second free uses is a *copy* taken before the
-first: every path that stores a block pointer rather than reading it from
-out->schur / out->edges at the time of use is a candidate, and those are what
-the tag would identify.
+    H2 GPU heap: double free at offset 420509696
+      allocated by  LevelEliminator::begin()+15751
+      last freed by LevelEliminator::release_level_data()+2085
+      freed again by LevelEliminator::release_level_data()+3633
+
+objdump on those offsets (no line info in the build, but the loop shapes are
+unmistakable) says what the three are:
+
+- *begin()+15751* is the restore's own alloc_resident: `mov $0x5,%edx` is
+  ResidentKind::Transition and the size comes from a PackedBlock's rows and
+  cols;
+- *release_level_data()+2085* is a stride-0x120 loop over BoxState freeing
+  +0x28 and zeroing 16 bytes there - `heap_.free(st.schur.ptr); st.schur =
+  DeviceMatrix{};`
+- *release_level_data()+3633* is the `if (adopt_)` tail: two unordered_map
+  walks (`mov 0x10(%rbx)`, then `mov 0x48(%rbx)`, nodes linked at +0x0)
+  followed by nulling adopt_, i.e. `for (auto& kv : adopt_->schur)
+  heap_.free(...)`.
+
+So one block had two owners, `st.schur` and `adopt_->schur`.  begin() creates
+that alias deliberately - `st.schur = it->second` copies the pointer and
+leaves the map's copy - and unmakes it four lines later with
+`adopt_.reset()`.  **The tail can therefore only run if begin() threw
+between the two.**  make_level_eliminator holds the eliminator in a
+unique_ptr and calls begin() itself, so a throw there destroys the object,
+the destructor calls release_level_data(), the second free throws *while
+unwinding*, and std::terminate prints that message in place of the real one.
+
+Which is why four bisects found nothing: there is no double free to find.
+The bug is whatever begin() threw, and it has never been printed.
+
+Three changes, all of them right independently of what that error turns out
+to be:
+
+1. **one owner per adopted block** - `it->second.ptr = nullptr` after
+   `st.schur = it->second`.  The tail still frees what an owner level did
+   not adopt, which is what it is for, and a throw in begin() now reports
+   itself;
+2. **the restore reads a raw slot, it never creates one** - find() instead of
+   operator[], throwing a message that names the box or the box pair.
+   operator[] would insert an empty 0x0 block for a key the transition did
+   not write, which surfaces much later as a mis-shaped block;
+3. **edges-only levels are restored too** - the guard was
+   `!schur_packed.empty()`, so a level that packed near blocks but no Schur
+   block would have had its raw edges freed and never put back.
+
+The heap's double-free message now also carries the block's resident kind and
+size, so a recurrence does not need another objdump.
+
+#### Step 2 piece 4: the adopting level reads the packed form (2026-10-06)
+
+In: begin() keeps the packed store (packed_schur_, packed_edges_,
+packed_strides_, packed_owned_) instead of restoring it, and each wave
+materializes what it is about to read, in one batch, through
+materialize_adopted().  The wave then retires the block as it always did.
+
+Correct at 96^3 over 8 ranks and at 192^3, Color and CA0, with logdet
+identical to pieces 1-3 to the last digit and 0 blocks left packed at every
+level:
+
+| run | logdet | acc_backward | Factor |
+|---|---|---|---|
+| 96^3 Color | -9928907.2811287567 | 9.62e-16 | 1.44 s (1.29 pieces 1-3, 1.16 off) |
+| 96^3 CA0 | -9928906.4595639911 | 7.29e-16 | 1.47 s |
+| 192^3 Color | -89253766.641603738 | - | 8.63 s (8.59 pieces 1-3, 7.71 off) |
+
+Materializing costs 0.026 s for 7099 blocks in 12 batches at the 192^3 leaf,
+so the codec is not the price.  **The memory is less than projected:**
+
+| level | pieces 1-3 | piece 4 | adopted, raw -> materialized + packed |
+|---|---|---|---|
+| 5 (leaf) | 12.78 GB | 12.78 GB | adopts nothing |
+| 4 | 7.74 GB | **6.24 GB** | 6.29 -> 3.85 + 0.94 |
+| 3 | 3.52 GB | 3.62 GB | 1.76 -> 1.60 + 0.25 |
+| 2 | 2.25 GB | 2.31 GB | 0.54 -> 0.54 + 0.07 |
+
+The projection assumed the resident set would be the per-wave read union
+(0.61 GB at level 4).  It is not: **a materialized block is only retired when
+the wave that read it replaces it**, and the ones no wave replaces stay, so
+the level accumulates materialized blocks as it goes.  Add the packed store,
+which must stay resident for the whole level, and levels 3 and 2 come out
+marginally *worse* than holding the raw blocks.  Level 4 still gains 1.5 GB
+because its adopted set is large relative to its packed form.
+
+#### What it cost to get right, and the lesson
+
+Five gate runs and four wrong fixes.  Outside the wave materialization a null
+ptr already means "there is no block here", and every reader answers that from
+the kernel or by making a fresh one - so a block left packed is not a crash,
+it is the original A in place of the updated block.  The guards
+(assert_not_packed, naming the site) caught three readers the wave hook
+missed: the owner pass's join, replace_edge in the remote-generator pass, and
+ensure_edge's inner loop.  Two more were silent:
+
+- build_parent reads a *child's Schur* block for a diagonal pair and falls
+  back to eval() when the pointer is null - guarded now, and the transition
+  materializes whatever the waves left;
+- and the one that mattered: **a box's Schur block has several writers that
+  reinstall it** (ensure_schur from the kernel, the wave's skeleton block
+  after elimination, the exchange), each treating a null pointer as "no
+  block".  50 of 863 blocks at level 3 of 96^3 were dropped this way, every
+  one a Schur block, for a 1.2e-2 error in logdet.  Chasing the writers one
+  run at a time was not converging, so the Schur blocks are now materialized
+  in begin() - 64 of those 863 blocks, about 7% of the bytes, so the near
+  blocks keep the saving and no writer has a null pointer to misread.
+
+What found it was not reasoning about the readers.  It was (a) a counter for
+blocks *left packed* at level end, which said 50 immediately, (b) a bisect
+that materialized everything through the piece-4 path and reproduced the
+uncompressed logdet exactly, clearing the codec and the store, and (c) a dump
+of what the leftovers were, which said "all Schur" in one run.  Each of the
+four fixes before those three diagnostics was a guess, and each cost a run.
+
+One false alarm worth recording: a run at 4.94 s against 1.29 s looked like a
+3.8x regression and was BPACK_CHECK=fillsrc, left on to see the dump - it
+turns on the fill-source read-back.  The tell was that the leaf slowed down
+too, and the leaf adopts nothing.
+
+### A gap found while reading, not yet the failure
+
+device_reduction.hpp moves parent blocks to their new owner's rank when the
+parent level runs on fewer ranks, and it works on the raw blocks only:
+
+- it sends from `blocks->schur.at(pm).ptr` and `blocks->edges.at(key).ptr`,
+  which piece 2 has freed;
+- it *erases* the entries it hands away, which leaves a schur_packed or
+  edges_packed entry with no raw slot;
+- it *emplaces* the blocks it receives, which have no packed form (harmless -
+  they stay raw);
+- and its drop path frees every block of a Blocks it discards, which with
+  piece 2 leaks that Blocks' packed_owned.
+
+So a transition whose parents are reduced to other ranks must not pack, or
+must unpack first.  Skipping the pack there costs nothing worth having: the
+reduction happens only where the rank count shrinks, which is the coarse
+levels - level 2 of this test packs 8 blocks and 0.02 GB, against 863 blocks
+and 0.77 GB at the leaf.  **This is not the current failure**: the run that
+fails reports `0 rounds, sent 0.00 GB in 0 blocks` at level 2, so no block
+was moved, and the rank that aborts is rank 0, the one that goes on to
+level 1 and runs the restore.
 
 ### The older note, kept because its measurement still stands
 
