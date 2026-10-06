@@ -779,6 +779,16 @@ public:
                             !opt_.is_hermitian;
         if (builds) {
             parents = build_structure();
+            // The parent blocks may be stored compressed only where the next
+            // level's eliminator adopts them from this device and reads them
+            // through begin()'s restore.  A process reduction sends them to
+            // another rank and download_level_blocks() copies them to the
+            // host, and both read the raw blocks: packing there left the
+            // reduction with nothing to send ("adopted Schur block of box 1
+            // is missing" at the level that follows).  `keep` below can only
+            // be promoted from false to true (a CA parent level), so missing
+            // that promotion costs a level's packing, not a result.
+            level_->set_pack_parent_blocks(!reduction_ahead && keeps_blocks_of(level.level - 1));
             blocks_ = level_->build_parent(parents);
             level_.reset();
             on_device = true;
@@ -824,6 +834,13 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.mat_blocks > 0 || e.mat_left > 0) {
+                std::printf("  [gpu] level %d adopted blocks materialized: %.2f GB in %lld blocks over %lld batches, "
+                            "%.3f s; %lld left packed\n",
+                            level.level, e.mat_bytes / 1e9, static_cast<long long>(e.mat_blocks),
+                            static_cast<long long>(e.mat_batches), e.mat_seconds,
+                            static_cast<long long>(e.mat_left));
+            }
             if (e.pb_blocks > 0) {
                 std::printf("  [gpu] level %d parent blocks compress: %.2f -> %.2f GB (%.1fx) over %lld blocks", level.level,
                         e.pb_raw_bytes / 1e9, e.pb_stored_bytes / 1e9,

@@ -163,6 +163,10 @@ struct EliminatorStats {
     // H2_compress_factors: what the parent blocks this transition built would
     // come to compressed.  Measured over all of them at the end of
     // build_parent, where they are complete; they are still stored raw.
+    // the adopted blocks the waves materialized, and what it cost
+    double mat_bytes = 0.0;
+    double mat_seconds = 0.0;
+    int64_t mat_blocks = 0, mat_batches = 0, mat_left = 0;
     double pb_raw_bytes = 0.0;
     double pb_stored_bytes = 0.0;
     int64_t pb_blocks = 0;
@@ -344,6 +348,11 @@ public:
     // The host copies of the X_NR whose download was skipped, before a host
     // transition reads them.
     virtual void restore_host_copies() {}
+    // Whether build_parent may store the parent blocks compressed
+    // (H2_compress_factors).  Only the next level's eliminator reads them
+    // through their compressed form; the process reduction and the host
+    // download both read the raw blocks, so the transition decides.
+    virtual void set_pack_parent_blocks(bool pack) { (void)pack; }
     virtual std::unique_ptr<DeviceLevelBlocks<DataType>> build_parent(
         std::vector<BoxData<CoordType, DataType>>& parents) = 0;
 };
@@ -475,6 +484,7 @@ public:
             st.skeleton_identity = true;
         }
     }
+    void set_pack_parent_blocks(bool pack) override { pack_parents_ = pack; }
     std::unique_ptr<Blocks> build_parent(std::vector<Box>& parents) override;
     void emit_generators(PendingFactorUpdates<DataType>& pending) override;
     void receive_remote(const std::vector<int64_t>& installed) override;
@@ -805,6 +815,30 @@ private:
     bool collect_fill_source(const BoxState& st, S* dst, std::vector<const void*>& h_src,
                              std::vector<void*>& h_dst);
     // One batch for everything collected.
+#ifdef H2_HAVE_NVCOMP
+    // Whether this block is adopted and still packed (its ptr is null and the
+    // key is in the packed store).  A null ptr otherwise means "no block
+    // here", which the readers answer from the kernel instead, so the two
+    // must never be confused.
+    bool is_packed_schur(int64_t morton) const { return packed_schur_.find(morton) != packed_schur_.end(); }
+    bool is_packed_edge(uint64_t key) const { return packed_edges_.find(key) != packed_edges_.end(); }
+    struct AdoptedBlock { bool schur; uint64_t key; DeviceMatrix* m; };
+    void materialize_adopted(const std::vector<AdoptedBlock>& want, cudaStream_t stream);
+    // Everywhere outside the wave materialization a null ptr means "no block
+    // here", and the reader answers from the kernel or makes a fresh block.
+    // It must not also mean "adopted and still packed": that reads as the
+    // original A rather than the updated block, with no error.  Any site that
+    // acts on a null ptr says so here.
+    void assert_not_packed(bool schur, uint64_t key, const char* site) const {
+        if (schur ? is_packed_schur(static_cast<int64_t>(key)) : is_packed_edge(key)) {
+            throw std::runtime_error(std::string("LevelEliminator: ") + site +
+                                     " reached an adopted block that is still packed (key " +
+                                     std::to_string(key) + ")");
+        }
+    }
+#else
+    void assert_not_packed(bool, uint64_t, const char*) const {}
+#endif
     void run_fill_batch(const std::vector<const void*>& h_src, const std::vector<void*>& h_dst,
                         cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
@@ -959,7 +993,17 @@ private:
     bool occupancy_ = false;           // empty boxes in the local slab (see the constructor)
     bool ca_ = false;                  // a replicated CA level (ghosts eliminated here too)
     bool early_free_sources_ = false;  // multi-rank level: fill sources released once read
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the blocks adopted from the level below, still in
+    // their compressed form.  packed_owned_ holds the group allocations they
+    // point into and is freed with the level.
+    std::unordered_map<int64_t, PackedBlock> packed_schur_;
+    std::unordered_map<uint64_t, PackedBlock> packed_edges_;
+    std::vector<uint32_t> packed_strides_;
+    std::vector<char*> packed_owned_;
+#endif
     int compress_factors_ = 0;         // H2_compress_factors
+    bool pack_parents_ = false;        // ... and the parents' blocks are adopted from the device
 #ifdef H2_HAVE_NVCOMP
     WaveXnrCompressor<S> xnr_compressor_;
     WaveXnrCompressor<S> fill_compressor_;  // the fill sources' temp2^T, per slot
@@ -1276,6 +1320,52 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     // ---- Schur and near-field blocks: adopted from the device transition,
     //      or packed on the host (in parallel), uploaded once, and scattered
     //      into their own heap allocations with one batched copy
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the transition stored its blocks compressed and
+    // handed the raw ones back, so put them back before they are adopted.
+    //
+    // In three passes, and that matters: alloc_resident can run the reclaimer,
+    // which frees other blocks, so no block address may be held across an
+    // allocation.  Allocating and collecting in one loop gave an illegal
+    // access in the next level's transposes.
+    if (adopt_ && !(adopt_->schur_packed.empty() && adopt_->edges_packed.empty())) {
+        // The level keeps them packed and materializes each block in the wave
+        // that reads it (materialize_adopted), instead of putting the whole
+        // set back here: at 192^3 the adopted set is 6.29 GB of a 7.74 GB
+        // level, against a per-wave read union of 0.61 GB.  Every block is
+        // read once and replaced by the wave that reads it, so its entry goes
+        // when it is materialized and the key is free for the fresh block.
+        packed_schur_ = std::move(adopt_->schur_packed);
+        packed_edges_ = std::move(adopt_->edges_packed);
+        packed_strides_ = std::move(adopt_->strides);
+        packed_owned_ = std::move(adopt_->packed_owned);
+        adopt_->schur_packed.clear();
+        adopt_->edges_packed.clear();
+        adopt_->strides.clear();
+        adopt_->packed_owned.clear();
+        // The adopted Schur blocks go back here, the near blocks per wave.
+        //
+        // A box's Schur block is reinstalled by several writers - ensure_schur
+        // builds it from the kernel when it finds no block, the wave replaces
+        // it with the skeleton block after elimination, the exchange installs
+        // one - and each of them treats a null pointer as "there is no block",
+        // so a packed one is dropped and its Schur-complement contents are
+        // replaced by kernel values.  That was a 1.2e-2 error in logdet with
+        // no crash: 50 of 863 blocks at level 3 of 96^3, every one of them a
+        // Schur block.  They are also the cheap part - 64 of those 863 blocks,
+        // about 7% of the bytes - so the near blocks keep the whole saving and
+        // this keeps the writers honest.
+        std::vector<AdoptedBlock> want;
+        want.reserve(packed_schur_.size());
+        for (const auto& [morton, pb] : packed_schur_) {
+            auto it = adopt_->schur.find(morton);
+            if (it != adopt_->schur.end() && it->second.ptr == nullptr) {
+                want.push_back(AdoptedBlock{true, static_cast<uint64_t>(morton), &it->second});
+            }
+        }
+        materialize_adopted(want, Context::instance().stream());
+    }
+#endif
     if (adopt_) {
         // (a CA level: the ghosts' blocks too, received from their owners'
         // devices, h2_gpu/ca_halo.hpp)
@@ -1296,6 +1386,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
                                          std::to_string(box.morton_index) + " is mis-shaped");
             }
             st.schur = it->second;
+            it->second.ptr = nullptr;  // st.schur owns it now, and only it
         }
         for (const auto& kv : adopt_->edges) {
             const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
@@ -1323,7 +1414,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     auto place = [&](Placement p, int rows, int cols) {
         p.dst->rows = rows;
         p.dst->cols = cols;
-        p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * sizeof(S), ResidentKind::Transition);
+        p.dst->ptr = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * sizeof(S), ResidentKind::Uploaded);
         p.offset = image_elems;
         image_elems += align_up(static_cast<size_t>(rows) * cols, 32);
         placements.push_back(p);
@@ -2625,6 +2716,36 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     };
     const IndexList identity{};
 
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the adopted blocks this wave is about to read.
+    // They go back now, in one batch, and the wave retires them as usual, so
+    // what is resident is this wave's read union (0.61 GB at level 4 of
+    // 192^3) and not the whole adopted set (6.29 GB).
+    if (!packed_schur_.empty() || !packed_edges_.empty()) {
+        std::vector<AdoptedBlock> want;
+        std::unordered_set<const void*> seen;
+        for (int i : active) {
+            WaveBox& wb = boxes[static_cast<size_t>(i)];
+            Box* box = wb.box;
+            BoxState& st = *wb.state;
+            if (st.schur.ptr == nullptr && is_packed_schur(box->morton_index) &&
+                seen.insert(&st.schur).second) {
+                want.push_back(AdoptedBlock{true, static_cast<uint64_t>(box->morton_index), &st.schur});
+            }
+            for (size_t a = 0; a < box->one_hop.size(); ++a) {
+                if (wb.counts[a] == 0) continue;
+                const uint64_t key = edge_key(box->morton_index, box->one_hop[a]);
+                auto it = edges_.find(key);
+                if (it == edges_.end() || it->second.ptr != nullptr) continue;
+                if (is_packed_edge(key) && seen.insert(&it->second).second) {
+                    want.push_back(AdoptedBlock{false, key, &it->second});
+                }
+            }
+        }
+        materialize_adopted(want, stream);
+    }
+#endif
+
     for (int i : active) {
         WaveBox& wb = boxes[static_cast<size_t>(i)];
         Box* box = wb.box;
@@ -2648,6 +2769,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             add_gather(fills, max_fill_m, max_fill_n, wb.s, k, k, k, st.schur.ptr, 1, n, skel_local, skel_local);
             retired.push_back(st.schur);
         } else {
+            assert_not_packed(true, static_cast<uint64_t>(box->morton_index), "the wave's Schur gather");
             add_eval(wb.xrr, r, r, r, red_slots, red_slots);
             add_eval(wb.xsr, k, k, r, skel_slots, red_slots);
             add_eval(wb.s, k, k, k, skel_slots, skel_slots);
@@ -2679,6 +2801,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 add_gather(fills, max_fill_m, max_fill_n, anr_rows, nt, c, r, e.ptr, rs, cs, identity, red_local);
                 retired.push_back(e);
             } else {
+                assert_not_packed(false, edge_key(box->morton_index, nm), "the wave's near gather");
                 const IndexList rows = current_slots(ns);
                 add_eval(ans_rows, nt, c, k, rows, skel_slots);
                 add_eval(anr_rows, nt, c, r, rows, red_slots);
@@ -3069,11 +3192,36 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::vector<typename VBatch<S>::Entry> tasks;
     };
     std::vector<Target> targets;
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the owner pass updates adopted blocks too, so they
+    // go back before the loop below - which, seeing them present, then takes
+    // the same branch it takes without compression (no kernel values: the
+    // adopted block already holds them, and an eval would overwrite it with
+    // the original A).  In one batch, not one call per target.
+    if (!packed_edges_.empty()) {
+        std::vector<AdoptedBlock> want;
+        std::unordered_set<const void*> seen;
+        for (size_t ci = 0; ci < candidates.size(); ++ci) {
+            for (CandidateTarget& t : candidate_targets[ci]) {
+                DeviceMatrix* block = t.block;
+                if (block == nullptr) {
+                    auto it = edges_.find(t.key);  // find(): a new target has no slot yet
+                    if (it == edges_.end()) continue;
+                    block = &it->second;
+                }
+                if (block->ptr != nullptr || !is_packed_edge(t.key)) continue;
+                if (seen.insert(block).second) want.push_back(AdoptedBlock{false, t.key, block});
+            }
+        }
+        materialize_adopted(want, stream);
+    }
+#endif
     for (size_t ci = 0; ci < candidates.size(); ++ci) {
         for (CandidateTarget& t : candidate_targets[ci]) {
             DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
             if (block->ptr == nullptr) {
-                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D, ResidentKind::Transition);
+                assert_not_packed(false, t.key, "the owner pass's join");
+                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D, ResidentKind::OwnerNear);
                 block->rows = t.rows;
                 block->cols = t.cols;
                 owner_evals.push_back(EvalItem{block->ptr, t.rows, t.rows, t.cols,
@@ -3361,6 +3509,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host()
     cudaStream_t stream = ctx.stream();
     auto& stats = eliminator_stats();
 
+#ifdef H2_HAVE_NVCOMP
+    // Every adopted block must have been materialized by the wave that read
+    // it before the level is downloaded; one left packed would be skipped
+    // here (a null ptr) and silently lost.
+    if (!packed_schur_.empty() || !packed_edges_.empty()) {
+        throw std::runtime_error("LevelEliminator: the host download with " +
+                                 std::to_string(packed_schur_.size() + packed_edges_.size()) +
+                                 " adopted blocks still packed");
+    }
+#endif
     struct Piece { const DeviceMatrix* m; size_t offset; };
     std::vector<Piece> pieces;
     size_t total = 0;
@@ -3936,7 +4094,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     auto ensure_edge = [&](int64_t lo, int64_t hi) -> DeviceMatrix& {
         const uint64_t key = edge_key(lo, hi);
         auto it = edges_.find(key);
-        if (it != edges_.end()) return it->second;
+        if (it != edges_.end()) {
+            if (it->second.ptr == nullptr) assert_not_packed(false, key, "ensure_edge");
+            return it->second;
+        }
         BoxState& ls = state_of(lo);
         BoxState& hs = state_of(hi);
         const int rows = current_size(hs), cols = current_size(ls);
@@ -3973,6 +4134,77 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         accums[it->second].parts.push_back(off);
     };
 
+    // An owner level: a block is kept up to date here only if it is read
+    // here: a Schur block by its box's elimination here or, a box homed here,
+    // by the transition; a pair by an endpoint's elimination here, or by the
+    // transition when an endpoint is homed here.  (An owned ghost's other
+    // blocks are spent after its elimination here; a box of no interest may
+    // have no state.)  One definition, so the pass below and the
+    // materialization above it cannot drift apart.
+    auto block_spent = [&](int64_t lm, const BoxState& ls) {
+        return owner_ != nullptr && !is_local(lm) && ls.eliminated;
+    };
+    auto pair_read = [&](int64_t lm, const BoxState& ls, int64_t nm) {
+        if (owner_ == nullptr) return true;
+        if (is_local(lm) || is_local(nm) || !ls.eliminated) return true;
+        return is_writable(nm) && !state_of(nm).eliminated;
+    };
+    auto schur_written_here = [&](int64_t lm, const BoxState& ls) {
+        return (is_writable(lm) && !block_spent(lm, ls)) ||
+               (owner_ != nullptr && is_local(lm) && ls.eliminated);
+    };
+
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: the adopted blocks this pass reads - ensure_schur's
+    // Schur blocks as well as the near blocks replace_edge() and ensure_edge()
+    // gather from - in one batch for the whole pass.  run_fill_batch() plans and
+    // synchronizes twice per call, so a call per pair is not an option.  The
+    // interest gate is the same one the loop applies, so this materializes
+    // what the pass reads and not more.
+    if (!(packed_schur_.empty() && packed_edges_.empty())) {
+        std::vector<AdoptedBlock> want;
+        std::unordered_set<const void*> seen;
+        for (const Gen& g : gens) {
+            const auto& hop = g.box->one_hop;
+            const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
+            auto want_edge = [&](int64_t a, int64_t b) {
+                const uint64_t key = edge_key(a, b);
+                auto it = edges_.find(key);
+                if (it == edges_.end() || it->second.ptr != nullptr) return;
+                if (is_packed_edge(key) && seen.insert(&it->second).second) {
+                    want.push_back(AdoptedBlock{false, key, &it->second});
+                }
+            };
+            for (size_t li = 0; li < hop.size(); ++li) {
+                if (counts[li] == 0) continue;
+                const int64_t lm = hop[li];
+                BoxState& ls = state_of(lm);
+                if (!interest(lm)) {
+                    // replace_edge(false) for a box of no interest, on an owner level
+                    if (owner_ != nullptr && g.k > 0 && is_interest(g.morton)) want_edge(lm, g.morton);
+                    continue;
+                }
+                // ensure_schur(ls)
+                if (schur_written_here(lm, ls) && ls.schur.ptr == nullptr &&
+                    is_packed_schur(lm) && seen.insert(&ls.schur).second) {
+                    want.push_back(AdoptedBlock{true, static_cast<uint64_t>(lm), &ls.schur});
+                }
+                // replace_edge(false)
+                if (g.k > 0 && pair_read(lm, ls, g.morton)) want_edge(lm, g.morton);
+                // ensure_edge(min, max) of the inner loop
+                for (size_t ni = 0; ni < hop.size(); ++ni) {
+                    if (ni == li || counts[ni] == 0) continue;
+                    const int64_t nm = hop[ni];
+                    if (!deferred_xnn_boxes_are_one_hop(level_.dimension, lm, nm)) continue;
+                    if (interest(nm) && nm < lm) continue;
+                    if (!pair_read(lm, ls, nm)) continue;
+                    want_edge(lm, nm);
+                }
+            }
+        }
+        materialize_adopted(want, Context::instance().stream());
+    }
+#endif
     for (const Gen& g : gens) {
         const auto& hop = g.box->one_hop;
         const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
@@ -4000,6 +4232,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 const bool e_hi = g.morton > lm;
                 const int rows = e_hi ? g.k : c_l, cols = e_hi ? c_l : g.k;
                 auto it = edges_.find(key);
+                if (it != edges_.end() && it->second.ptr == nullptr) {
+                    assert_not_packed(false, key, "the stored-block pass");
+                }
                 if (it == edges_.end() && require_stored) return;
                 S* fresh = heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::LevelSchur);
                 IndexList skeleton = current_slots(*g.st);
@@ -4047,13 +4282,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             // elimination here, or by the transition when an endpoint is
             // homed here.  (An owned ghost's other blocks are spent after
             // its elimination here; a box of no interest may have no state.)
-            const bool spent = owner_ != nullptr && !is_local(lm) && ls.eliminated;
-            auto pair_read_here = [&](int64_t nm) {
-                if (owner_ == nullptr) return true;
-                if (is_local(lm) || is_local(nm) || !ls.eliminated) return true;
-                return is_writable(nm) && !state_of(nm).eliminated;
-            };
-            if ((is_writable(lm) && !spent) || (owner_ != nullptr && is_local(lm) && ls.eliminated)) {
+            const bool spent = block_spent(lm, ls);
+            auto pair_read_here = [&](int64_t nm) { return pair_read(lm, ls, nm); };
+            if (schur_written_here(lm, ls)) {
+                // ensure_schur() makes a fresh block from the kernel on a null
+                // ptr, so an adopted block still packed here is a wrong answer
+                // rather than an error
+                if (ls.schur.ptr == nullptr) assert_not_packed(true, static_cast<uint64_t>(lm), "ensure_schur");
                 accumulate(~static_cast<uint64_t>(lm), ensure_schur(ls), c_l, c_l, t2_l, g.ntot, x_l, g.xnr_ld, g.r);
             }
             if (g.k > 0 && pair_read_here(g.morton)) replace_edge(false);
@@ -4287,6 +4522,70 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_fill_batch(
     (void)h_src; (void)h_dst; (void)stream;
 #endif
 }
+
+#ifdef H2_HAVE_NVCOMP
+// ---------------------------------------------------------------------------
+// The adopted blocks a wave is about to read, put back in one batch.  Every
+// block is read once and replaced by that wave, so its packed entry goes with
+// it and the key is free for the fresh block.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
+    const std::vector<AdoptedBlock>& want, cudaStream_t stream) {
+    if (want.empty()) return;
+    auto& stats = eliminator_stats();
+    const auto t0 = std::chrono::steady_clock::now();
+    auto packed_of = [&](const AdoptedBlock& w) -> const PackedBlock* {
+        if (w.schur) {
+            auto it = packed_schur_.find(static_cast<int64_t>(w.key));
+            return it == packed_schur_.end() ? nullptr : &it->second;
+        }
+        auto it = packed_edges_.find(w.key);
+        return it == packed_edges_.end() ? nullptr : &it->second;
+    };
+    // 1. every block allocated first: alloc_resident can run the reclaimer,
+    //    so no block address may be held across an allocation
+    for (const AdoptedBlock& w : want) {
+        if (w.m->ptr != nullptr) continue;
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || pb->packed == nullptr) continue;
+        if (pb->rows != w.m->rows || pb->cols != w.m->cols) {
+            throw std::runtime_error("LevelEliminator::materialize_adopted: shape of the packed block changed");
+        }
+        w.m->ptr = heap_.alloc_resident<S>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S),
+                                           ResidentKind::Adopted);
+    }
+    // 2. then their chunks
+    std::vector<const void*> h_src;
+    std::vector<void*> h_dst;
+    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+    for (const AdoptedBlock& w : want) {
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || pb->packed == nullptr || w.m->ptr == nullptr) continue;
+        const char* at = pb->packed;
+        for (uint32_t c = 0; c < pb->nchunks; ++c) {
+            h_src.push_back(at);
+            h_dst.push_back(reinterpret_cast<S*>(w.m->ptr) + static_cast<size_t>(c) * chunk_elems);
+            at += packed_strides_[pb->chunk0 + c];
+        }
+        stats.mat_bytes += static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
+        ++stats.mat_blocks;
+    }
+    // 3. and one batch for all of them
+    if (!h_src.empty()) {
+        run_fill_batch(h_src, h_dst, stream);
+        ++stats.mat_batches;
+    }
+    for (const AdoptedBlock& w : want) {
+        if (w.schur) {
+            packed_schur_.erase(static_cast<int64_t>(w.key));
+        } else {
+            packed_edges_.erase(w.key);
+        }
+    }
+    stats.mat_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The wave's local fill sources, a sub-group at a time: a group's temp2^T is
@@ -5819,6 +6118,32 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
            reclaim_released_source()) {
     }
     released_sources_.clear();
+#ifdef H2_HAVE_NVCOMP
+    // H2_compress_factors: whatever the waves did not read, the transition
+    // does - a child's Schur block for a diagonal pair, its near blocks for
+    // the rest - and it reads them without testing the pointer, falling back
+    // to the kernel instead (that was a 1.2e-2 error in logdet, with no crash
+    // and no guard).  This is the remainder after the waves (50 of 863 blocks
+    // at level 3 of 96^3), so one batch here costs nothing and settles which
+    // transition path reads what.
+    if (!packed_schur_.empty() || !packed_edges_.empty()) {
+        std::vector<AdoptedBlock> want;
+        for (const auto& [morton, pb] : packed_schur_) {
+            if (!is_interest(morton)) continue;
+            BoxState& st = state_of(morton);
+            if (st.schur.ptr == nullptr) {
+                want.push_back(AdoptedBlock{true, static_cast<uint64_t>(morton), &st.schur});
+            }
+        }
+        for (const auto& [key, pb] : packed_edges_) {
+            auto it = edges_.find(key);
+            if (it != edges_.end() && it->second.ptr == nullptr) {
+                want.push_back(AdoptedBlock{false, key, &it->second});
+            }
+        }
+        materialize_adopted(want, Context::instance().stream());
+    }
+#endif
     const int dim = level_.dimension;
     const int nc = morton::children_per_box(dim);
     const size_t np = parents.size();
@@ -5967,9 +6292,12 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         if (!built(p) || (occupancy_ && parents[p].num_points == 0)) continue;
         const int64_t pm = parents[p].morton_index;
         const int n = parents[p].num_points;
+        // the shape now, the block when its chunk is planned: every block is
+        // written by exactly one chunk, so allocating here would hold the
+        // whole set (9.47 GB at 192^3, 74% of the level's peak) for the sake
+        // of one chunk's worth of it
         DeviceMatrix& sm = out->schur[pm];
-        sm = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(n) * n * D, ResidentKind::Transition), n, n};
-
+        sm = DeviceMatrix{nullptr, n, n};
         pairs_of[p].push_back(Pair{pm, pm, &sm});
     }
     for (size_t p = 0; p < np; ++p) {
@@ -5990,7 +6318,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const int64_t lo = std::min(pm, qm), hi = std::max(pm, qm);
             const int rows = hi == qm ? q.n : parents[p].num_points, cols = hi == qm ? parents[p].num_points : q.n;
             DeviceMatrix& em = out->edges[edge_key(lo, hi)];
-            em = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::Transition), rows, cols};
+            em = DeviceMatrix{nullptr, rows, cols};
             pairs_of[p].push_back(Pair{pm, qm, &em});
         }
     }
@@ -6234,21 +6562,28 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         };
 
         // plan the chunk's parents
-        std::unordered_map<const void*, size_t> chunk_blocks;  // target -> its bytes
+        // Keyed by the map slot, not by the block's address: the blocks are
+        // allocated and freed per chunk now, so an address is reused and
+        // would both merge two blocks here and count a false revisit.
+        std::unordered_map<const void*, size_t> chunk_blocks;  // target slot -> its bytes
+        size_t chunk_block_bytes = 0;
         // ... and which key it is under, so the compressed form can be stored
         struct ChunkRef { bool schur; int64_t morton; uint64_t key; const DeviceMatrix* m; };
         std::vector<ChunkRef> chunk_refs;
         size_t p1 = p0;
-        while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes < budget)) {
+        while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes + chunk_block_bytes < budget)) {
             const size_t p = p1++;
             for (const Pair& pr : pairs_of[p]) {
                 DeviceMatrix& M = *pr.block;
-                if (M.ptr != nullptr) {
-                    if (chunk_blocks.emplace(M.ptr, static_cast<size_t>(M.rows) * M.cols * D).second) {
-                        const bool is_schur = pr.qm == pr.pm;
-                        chunk_refs.push_back(ChunkRef{is_schur, pr.pm,
-                                                      is_schur ? 0 : edge_key(pr.pm, pr.qm), &M});
+                const size_t m_bytes = static_cast<size_t>(M.rows) * M.cols * D;
+                if (m_bytes > 0 && chunk_blocks.emplace(pr.block, m_bytes).second) {
+                    if (M.ptr == nullptr) {
+                        M.ptr = heap_.alloc_resident<S>(m_bytes, ResidentKind::Transition);
                     }
+                    chunk_block_bytes += m_bytes;
+                    const bool is_schur = pr.qm == pr.pm;
+                    chunk_refs.push_back(ChunkRef{is_schur, pr.pm,
+                                                  is_schur ? 0 : edge_key(pr.pm, pr.qm), &M});
                 }
                 const bool diag = pr.qm == pr.pm;
                 const Parent& pa = parent(pr.pm);
@@ -6287,6 +6622,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                                 }
                                 gather(rs.schur.ptr, 1, kr);
                             } else {
+                                assert_not_packed(true, static_cast<uint64_t>(im), "build_parent's child Schur");
                                 eval();
                             }
                             continue;
@@ -6305,6 +6641,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         }
                         if (chebyshev <= 1) {
                             auto it = edges_.find(edge_key(im, jm));
+                            if (it != edges_.end() && it->second.ptr == nullptr) {
+                                assert_not_packed(false, edge_key(im, jm), "build_parent");
+                            }
                             if (it == edges_.end()) {
                                 // a pair no update reached (e.g. of full-rank
                                 // boxes, or with a box of another rank) keeps the
@@ -6508,7 +6847,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // into contiguous ranges, 0 revisits measured), so a chunk's blocks
         // are final here.  The raw blocks stay for now - the next level still
         // reads them - so this must not change any result.
-        if (compress_factors_ >= 1 && !chunk_refs.empty()) {
+        if (compress_factors_ >= 1 && pack_parents_ && !chunk_refs.empty()) {
             check_cuda(cudaStreamSynchronize(stream), "parent blocks");  // written by the launches above
             std::vector<const S*> srcs;
             std::vector<size_t> elems;
@@ -6522,6 +6861,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     const char* staging = fill_compressor_.staging();
                     std::vector<CopySpan> spans;
                     int64_t max_words = 0;
+                    std::vector<std::pair<bool, uint64_t>> raw_to_free;  // (schur?, morton or edge key)
                     size_t group_packed = 0;
                     for (size_t j = 0; j < srcs.size(); ++j) group_packed += comp[j].bytes;
                     char* owned = group_packed > 0
@@ -6559,6 +6899,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         } else {
                             out->edges_packed[ref.key] = pb;
                         }
+                        raw_to_free.push_back({ref.schur, ref.schur ? static_cast<uint64_t>(ref.morton) : ref.key});
                         stats.pb_raw_bytes += static_cast<double>(elems[j] * sizeof(S));
                         stats.pb_stored_bytes += static_cast<double>(comp[j].bytes);
                         ++stats.pb_blocks;
@@ -6575,6 +6916,23 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
                         // the gather reads the staging, which goes back next
                         check_cuda(cudaStreamSynchronize(stream), "parent blocks");
+                        // and the raw blocks: by key, and only what the heap
+                        // still holds, so a repeat is a no-op rather than an
+                        // error (measured clean - 7099 freed, 0 stale)
+                        for (const auto& [is_schur, key] : raw_to_free) {
+                            DeviceMatrix* m = nullptr;
+                            if (is_schur) {
+                                auto it = out->schur.find(static_cast<int64_t>(key));
+                                if (it != out->schur.end()) m = &it->second;
+                            } else {
+                                auto it = out->edges.find(key);
+                                if (it != out->edges.end()) m = &it->second;
+                            }
+                            if (m == nullptr || m->ptr == nullptr) continue;
+                            if (!heap_.is_allocated(m->ptr)) { m->ptr = nullptr; continue; }
+                            heap_.free(m->ptr);
+                            m->ptr = nullptr;
+                        }
                     }
                 }
                 fill_compressor_.release();
@@ -6663,6 +7021,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     owner_recv_count_.clear();
     owner_marks_.clear();
     owner_sent_bytes_.clear();
+#ifdef H2_HAVE_NVCOMP
+    eliminator_stats().mat_left += static_cast<int64_t>(packed_schur_.size() + packed_edges_.size());
+    for (char* b : packed_owned_) heap_.free(b);
+    packed_owned_.clear();
+    packed_schur_.clear();
+    packed_edges_.clear();
+    packed_strides_.clear();
+#endif
     for (auto& kv : edges_) heap_.free(kv.second.ptr);
     edges_.clear();
     for (BoxState& st : states_) {
