@@ -829,6 +829,7 @@ public:
                         e.pb_raw_bytes / 1e9, e.pb_stored_bytes / 1e9,
                         e.pb_stored_bytes > 0.0 ? e.pb_raw_bytes / e.pb_stored_bytes : 1.0,
                         static_cast<long long>(e.pb_blocks));
+                if (e.pb_packed_short > 0) std::printf(", %lld did not fit", static_cast<long long>(e.pb_packed_short));
             if (e.pb_check_tol > 0.0) {
                 std::printf("; round trip %.3e against %.3e allowed%s", e.pb_check_err, e.pb_check_tol,
                             e.pb_check_err <= e.pb_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");

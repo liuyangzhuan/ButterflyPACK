@@ -166,6 +166,7 @@ struct EliminatorStats {
     double pb_raw_bytes = 0.0;
     double pb_stored_bytes = 0.0;
     int64_t pb_blocks = 0;
+    int64_t pb_packed_short = 0;  // a block whose packed copy did not fit
     double pb_check_err = 0.0;
     double pb_check_tol = 0.0;
     double lsch_union_max_wave = 0.0;
@@ -244,10 +245,34 @@ struct DeviceMatrixT {
 // (by (lo, hi) key: rows = hi's points, columns = lo's).  Built by the device
 // transition and adopted by the next level's eliminator, or copied to the
 // host (download_level_blocks) when that level runs on the host.
+// H2_compress_factors: a block stored compressed.  Its bytes are the chunks
+// end to end, each padded to the stride beside it; `strides` of the level
+// holds them from chunk0.  rows and cols are the uncompressed shape, which is
+// what the adopting level checks and what a decompression needs.
+template<typename T>
+struct PackedBlockT {
+    char* packed = nullptr;
+    size_t bytes = 0;
+    uint32_t chunk0 = 0;
+    uint32_t nchunks = 0;
+    int rows = 0;
+    int cols = 0;
+};
+
 template<typename T>
 struct DeviceLevelBlocksT {
     std::unordered_map<int64_t, DeviceMatrixT<T>> schur;
     std::unordered_map<uint64_t, DeviceMatrixT<T>> edges;
+    // ... the same blocks compressed, when H2_compress_factors asked for it.
+    // A key in both is stored raw and compressed (while the raw form is still
+    // what the next level reads); a key only here is stored compressed.
+    std::unordered_map<int64_t, PackedBlockT<T>> schur_packed;
+    std::unordered_map<uint64_t, PackedBlockT<T>> edges_packed;
+    std::vector<uint32_t> strides;
+    // the allocations those point into, one per group rather than one per
+    // block: 7099 separate blocks fragmented the heap badly enough that the
+    // transition could not get its next buffer
+    std::vector<char*> packed_owned;
 };
 // The device blocks of a factorization's DataType (double or dcomplex elements).
 template<typename DataType>
@@ -364,6 +389,7 @@ class LevelEliminator : public LevelEliminatorBase<CoordType, DataType> {
     // and the launch items and blocks over it.
     using S = typename DeviceScalar<DataType>::type;
     using DeviceMatrix = DeviceMatrixT<S>;
+    using PackedBlock = PackedBlockT<S>;
     using Blocks = DeviceLevelBlocksT<S>;
     using EvalItem = EvalItemT<S>;
     using GatherItem = GatherItemT<S>;
@@ -6209,13 +6235,20 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
 
         // plan the chunk's parents
         std::unordered_map<const void*, size_t> chunk_blocks;  // target -> its bytes
+        // ... and which key it is under, so the compressed form can be stored
+        struct ChunkRef { bool schur; int64_t morton; uint64_t key; const DeviceMatrix* m; };
+        std::vector<ChunkRef> chunk_refs;
         size_t p1 = p0;
         while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes < budget)) {
             const size_t p = p1++;
             for (const Pair& pr : pairs_of[p]) {
                 DeviceMatrix& M = *pr.block;
                 if (M.ptr != nullptr) {
-                    chunk_blocks.emplace(M.ptr, static_cast<size_t>(M.rows) * M.cols * D);
+                    if (chunk_blocks.emplace(M.ptr, static_cast<size_t>(M.rows) * M.cols * D).second) {
+                        const bool is_schur = pr.qm == pr.pm;
+                        chunk_refs.push_back(ChunkRef{is_schur, pr.pm,
+                                                      is_schur ? 0 : edge_key(pr.pm, pr.qm), &M});
+                    }
                 }
                 const bool diag = pr.qm == pr.pm;
                 const Parent& pa = parent(pr.pm);
@@ -6469,6 +6502,100 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             fill_i[t].gemm(md, MagmaTrans, MagmaNoTrans, -1.0, 1.0, queue);
         }
         tmarks.mark(stream);
+#ifdef H2_HAVE_NVCOMP
+        // H2_compress_factors: this chunk's parent blocks, compressed.  Every
+        // block is written by exactly one chunk (the parents are partitioned
+        // into contiguous ranges, 0 revisits measured), so a chunk's blocks
+        // are final here.  The raw blocks stay for now - the next level still
+        // reads them - so this must not change any result.
+        if (compress_factors_ >= 1 && !chunk_refs.empty()) {
+            check_cuda(cudaStreamSynchronize(stream), "parent blocks");  // written by the launches above
+            std::vector<const S*> srcs;
+            std::vector<size_t> elems;
+            std::vector<size_t> ref_of;
+            size_t group = 0;
+            auto flush = [&]() {
+                if (srcs.empty()) return;
+                std::vector<CompressedXnr> comp;
+                if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+                    const auto& cks = fill_compressor_.chunks();
+                    const char* staging = fill_compressor_.staging();
+                    std::vector<CopySpan> spans;
+                    int64_t max_words = 0;
+                    size_t group_packed = 0;
+                    for (size_t j = 0; j < srcs.size(); ++j) group_packed += comp[j].bytes;
+                    char* owned = group_packed > 0
+                                      ? heap_.try_alloc_resident(group_packed, ResidentKind::Transition)
+                                      : nullptr;
+                    if (owned != nullptr) out->packed_owned.push_back(owned);
+                    size_t owned_at = 0;
+                    for (size_t j = 0; j < srcs.size(); ++j) {
+                        const ChunkRef& ref = chunk_refs[ref_of[j]];
+                        if (comp[j].bytes == 0) continue;
+                        if (owned == nullptr) {  // no room: these stay raw only
+                            ++stats.pb_packed_short;
+                            continue;
+                        }
+                        char* packed = owned + owned_at;
+                        owned_at += comp[j].bytes;
+                        PackedBlock pb;
+                        pb.packed = packed;
+                        pb.bytes = comp[j].bytes;
+                        pb.chunk0 = static_cast<uint32_t>(out->strides.size());
+                        pb.nchunks = static_cast<uint32_t>(comp[j].nchunks);
+                        pb.rows = ref.m->rows;
+                        pb.cols = ref.m->cols;
+                        size_t off = 0;
+                        for (size_t c = 0; c < comp[j].nchunks; ++c) {
+                            const auto& ck = cks[comp[j].chunk0 + c];
+                            spans.push_back(CopySpan{staging + ck.offset, packed + off,
+                                                     static_cast<int64_t>(ck.stride / 4)});
+                            max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+                            out->strides.push_back(static_cast<uint32_t>(ck.stride));
+                            off += ck.stride;
+                        }
+                        if (ref.schur) {
+                            out->schur_packed[ref.morton] = pb;
+                        } else {
+                            out->edges_packed[ref.key] = pb;
+                        }
+                        stats.pb_raw_bytes += static_cast<double>(elems[j] * sizeof(S));
+                        stats.pb_stored_bytes += static_cast<double>(comp[j].bytes);
+                        ++stats.pb_blocks;
+                    }
+                    if (!spans.empty()) {
+                        const size_t list_bytes = spans.size() * sizeof(CopySpan);
+                        if (list_bytes > fill_meta_device_.capacity()) {
+                            check_cuda(cudaStreamSynchronize(stream), "parent blocks");
+                            fill_meta_device_.reserve(list_bytes);
+                        }
+                        auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+                        check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice,
+                                                   stream), "parent blocks");
+                        launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+                        // the gather reads the staging, which goes back next
+                        check_cuda(cudaStreamSynchronize(stream), "parent blocks");
+                    }
+                }
+                fill_compressor_.release();
+                srcs.clear();
+                elems.clear();
+                ref_of.clear();
+                group = 0;
+            };
+            for (size_t i = 0; i < chunk_refs.size(); ++i) {
+                const DeviceMatrix& m = *chunk_refs[i].m;
+                if (m.ptr == nullptr || m.rows <= 0 || m.cols <= 0) continue;
+                const size_t bytes = static_cast<size_t>(m.rows) * m.cols * D;
+                if (!srcs.empty() && group + bytes > kFillStagingBudget) flush();
+                srcs.push_back(m.ptr);
+                elems.push_back(static_cast<size_t>(m.rows) * m.cols);
+                ref_of.push_back(i);
+                group += bytes;
+            }
+            flush();
+        }
+#endif
         heap_.free(d_buffers);  // later launches are ordered after this chunk
         heap_.free(d_raw);
         // restored sources whose last reader was in this chunk or before
@@ -6498,78 +6625,6 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         stats.tr_p += m->seconds(1);
         stats.tr_fill += m->seconds(2);
     }
-
-#ifdef H2_HAVE_NVCOMP
-    // ---- H2_compress_factors: what these blocks would come to compressed.
-    // They are the next level's st.schur and edges_, so they are still stored
-    // raw; this is what step 2 needs to know before it is worth plumbing the
-    // compressed form through to the level that adopts them.
-    if (compress_factors_ >= 1) {
-        std::vector<const S*> srcs;
-        std::vector<size_t> elems;
-        size_t group = 0;
-        auto measure = [&]() {
-            if (srcs.empty()) return;
-            std::vector<CompressedXnr> comp;
-            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
-                for (size_t i = 0; i < srcs.size(); ++i) {
-                    stats.pb_raw_bytes += static_cast<double>(elems[i] * sizeof(S));
-                    stats.pb_stored_bytes += static_cast<double>(comp[i].bytes);
-                }
-                stats.pb_blocks += static_cast<int64_t>(srcs.size());
-                if (env::check("fillsrc")) {
-                    const auto& cks = fill_compressor_.chunks();
-                    const char* staging = fill_compressor_.staging();
-                    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
-                    size_t widest = 0;
-                    for (size_t e : elems) widest = std::max(widest, e);
-                    char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
-                    if (back != nullptr) {
-                        std::vector<S> got, want;
-                        for (size_t i = 0; i < srcs.size(); ++i) {
-                            for (size_t c = 0; c < comp[i].nchunks; ++c) {
-                                const auto& ck = cks[comp[i].chunk0 + c];
-                                const uint32_t stride = static_cast<uint32_t>(ck.stride);
-                                decompress_xnr<S>(staging + ck.offset,
-                                                  reinterpret_cast<S*>(back) + c * chunk_elems, &stride, 1, stream);
-                            }
-                            check_cuda(cudaStreamSynchronize(stream), "parent block check");
-                            got.assign(elems[i], S{});
-                            want.assign(elems[i], S{});
-                            check_cuda(cudaMemcpy(got.data(), back, elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
-                                       "parent block check");
-                            check_cuda(cudaMemcpy(want.data(), srcs[i], elems[i] * sizeof(S), cudaMemcpyDeviceToHost),
-                                       "parent block check");
-                            const double* g = reinterpret_cast<const double*>(got.data());
-                            const double* w = reinterpret_cast<const double*>(want.data());
-                            const size_t nd = elems[i] * (sizeof(S) / sizeof(double));
-                            for (size_t j = 0; j < nd; ++j) {
-                                stats.pb_check_err = std::max(stats.pb_check_err, std::fabs(g[j] - w[j]));
-                            }
-                            stats.pb_check_tol = std::max(stats.pb_check_tol, comp[i].delta * 0.5);
-                        }
-                        heap_.free(back);
-                    }
-                }
-            }
-            fill_compressor_.release();
-            srcs.clear();
-            elems.clear();
-            group = 0;
-        };
-        auto add = [&](const DeviceMatrix& m) {
-            if (m.ptr == nullptr || m.rows <= 0 || m.cols <= 0) return;
-            const size_t bytes = static_cast<size_t>(m.rows) * m.cols * sizeof(S);
-            if (!srcs.empty() && group + bytes > kFillStagingBudget) measure();
-            srcs.push_back(m.ptr);
-            elems.push_back(static_cast<size_t>(m.rows) * m.cols);
-            group += bytes;
-        };
-        for (const auto& [m, blk] : out->schur) add(blk);
-        for (const auto& [k, blk] : out->edges) add(blk);
-        measure();
-    }
-#endif
 
     // the child level is done: release its device data (not the new blocks)
     release_level_data();
