@@ -2546,7 +2546,7 @@ Next, in order:
 
 - test the halves apart: free without restoring (the next level then has no
   blocks, so only the transition is exercised) and restore without freeing
-  (force it past the  guard), to say which side faults;
+  (force it past the null-pointer guard), to say which side faults;
 - if it is the restore, allocate every block first, then build h_src/h_dst,
   then decompress - never interleave allocation with address collection;
 - check whether the between-level compaction runs in these configurations at
