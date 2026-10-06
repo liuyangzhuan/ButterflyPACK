@@ -1026,6 +1026,7 @@ private:
     KeptSolveLevel kept_;
     DeviceBuffer solve_meta_device_;
     DeviceBuffer fill_meta_device_;  // span lists of the fill-source gathers
+    DeviceBuffer t2t_meta_device_;   // transpose lists of the fill-source sub-groups
 
     int64_t wave_stamp_ = 0;
     MetaBuilder& meta_ = pinned_pool().meta;
@@ -2490,23 +2491,22 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.temp2 = reinterpret_cast<S*>(source + wb.off_temp2);
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
-                // X_RR_full and temp2^T in blocks of their own: temp2^T is the
-                // one that gets compressed, and it can only go back to the heap
-                // if it is not sharing an allocation with X_RR_full.
+                // X_RR_full gets its block now; temp2^T only when its
+                // sub-group is transposed and compressed near the end of the
+                // wave, so a wave never holds more than one group of it raw
+                // (2.26 GB a wave at the Color leaf, against about 0.1 GB a
+                // group).
                 const size_t xrr_bytes = align_up(r * r * D);
-                const size_t t2t_bytes = std::max<size_t>(nt * r * D, 1);
                 char* persist = heap_.alloc_resident(xrr_bytes, ResidentKind::FillXrr);
-                char* persist_t2t = heap_.alloc_resident(t2t_bytes, ResidentKind::FillRaw);
                 {
                     auto& es = eliminator_stats();
-                    es.persist_bytes += static_cast<double>(xrr_bytes + t2t_bytes);
+                    es.persist_bytes += static_cast<double>(xrr_bytes);
                     es.persist_xrr_bytes += static_cast<double>(xrr_bytes);
                     es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
                     ++es.persist_blocks;
                 }
-                keep_fill_source(*wb.state, persist, xrr_bytes, persist_t2t, t2t_bytes, wb.box->one_hop);
+                keep_fill_source(*wb.state, persist, xrr_bytes, nullptr, 0, wb.box->one_hop);
                 wb.persist_xrr = reinterpret_cast<S*>(persist);
-                wb.persist_temp2t = reinterpret_cast<S*>(persist_t2t);
             }
             size_t w_off = 0;
             const size_t o_tmp1 = w_off; w_off = align_up(w_off + r * r * D);
@@ -2638,11 +2638,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             add_gather(copy_full, max_copy_m, max_copy_n, reinterpret_cast<S*>(d_result + wb.off_t), k, k, r,
                        wb.T, 1, wb.ldt, identity, identity);
             add_gather(copy_full, max_copy_m, max_copy_n, wb.persist_xrr, r, r, r, wb.xrr, 1, r, identity, identity);
-            if (nt > 0) {
-                transposes.push_back(TransposeItem{wb.temp2, nt, wb.persist_temp2t, r, nt, r});
-                max_tr_m = std::max(max_tr_m, nt);
-                max_tr_n = std::max(max_tr_n, r);
-            }
+            // (its temp2^T transpose runs with its sub-group, below)
         }
         push(getrf, wb.xrr, r, nullptr, 1, nullptr, 1, r, r, 1);
         // X_NR = A_NR - A_NS T
@@ -2799,7 +2795,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // compression is ordered after them.  Nothing reads the compressed form
     // yet: this measures the ratio and, with BPACK_CHECK=fillsrc, checks the
     // round trip against the original.
-    if (compress_factors_ >= 1 && gpu_sketch_) compress_fill_sources(boxes, active, stream);
+    if (gpu_sketch_) compress_fill_sources(boxes, active, stream);
 
     // ---- Step 5, planned while the device runs the box region: the near
     // block of every neighbor becomes A_NS + update (current neighbor rows x
@@ -4211,19 +4207,78 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_fill_batch(
 }
 
 // ---------------------------------------------------------------------------
-// The wave's local fill sources, once the transposes have written temp2^T.
+// The wave's local fill sources, a sub-group at a time: a group's temp2^T is
+// given its block, transposed into it, compressed and the block handed back
+// before the next group starts.  So a wave holds one group of raw temp2^T, not
+// all of it - 2.26 GB a wave at the Color leaf against about 0.1 GB a group.
+//
+// The group is the same size the compressor's staging allows
+// (kFillStagingBudget), since the two go together: a group is transposed,
+// staged, packed and freed as one.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
     std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream) {
-    std::vector<FillSrcRef> items;
-    items.reserve(active.size());
+    const size_t D = sizeof(S);
+    std::vector<int> group;          // boxes of the current group
+    std::vector<TransposeItem> tr;   // their temp2^T transposes
+    int max_m = 0, max_n = 0;
+    size_t group_raw = 0;
+
+    auto run = [&]() {
+        if (group.empty()) return;
+        // the group's blocks, and the transposes that fill them
+        tr.clear();
+        max_m = 0;
+        max_n = 0;
+        std::vector<FillSrcRef> items;
+        items.reserve(group.size());
+        for (int i : group) {
+            WaveBox& wb = boxes[static_cast<size_t>(i)];
+            const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+            const size_t bytes = std::max<size_t>(nt * r * D, 1);
+            char* blk = heap_.try_alloc_resident(bytes, ResidentKind::FillRaw);
+            if (blk == nullptr) continue;  // no room for its raw form: it keeps none
+            auto& es = eliminator_stats();
+            es.persist_bytes += static_cast<double>(bytes);
+            es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
+            wb.state->persist_t2t = blk;
+            wb.state->persist_t2t_bytes = bytes;
+            wb.persist_temp2t = reinterpret_cast<S*>(blk);
+            tr.push_back(TransposeItem{wb.temp2, static_cast<int>(nt), wb.persist_temp2t,
+                                       static_cast<int>(r), static_cast<int>(nt), static_cast<int>(r)});
+            max_m = std::max(max_m, static_cast<int>(nt));
+            max_n = std::max(max_n, static_cast<int>(r));
+            items.push_back(FillSrcRef{wb.persist_temp2t, wb.r, &wb.counts, wb.state});
+        }
+        if (!tr.empty()) {
+            const size_t list_bytes = tr.size() * sizeof(TransposeItem);
+            if (list_bytes > t2t_meta_device_.capacity()) {
+                check_cuda(cudaStreamSynchronize(stream), "fill transposes");  // the old list may still be read
+                t2t_meta_device_.reserve(list_bytes);
+            }
+            auto* d_tr = static_cast<TransposeItem*>(t2t_meta_device_.reserve(list_bytes));
+            check_cuda(cudaMemcpyAsync(d_tr, tr.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                       "fill transposes");
+            launch_transpose(d_tr, static_cast<int>(tr.size()), max_m, max_n, stream);
+        }
+        // compressed and the raw blocks handed back (compress_fill_source_set
+        // frees them once its gather is on the stream); without compression
+        // the raw blocks are what the readers use, so they stay
+        if (compress_factors_ >= 1) compress_fill_source_set(items, stream);
+        group.clear();
+        group_raw = 0;
+    };
+
     for (int i : active) {
         const WaveBox& wb = boxes[static_cast<size_t>(i)];
-        if (wb.persist_temp2t == nullptr || wb.r == 0 || wb.ntot == 0 || wb.counts.empty()) continue;
-        items.push_back(FillSrcRef{wb.persist_temp2t, wb.r, &wb.counts, wb.state});
+        if (wb.r == 0 || wb.ntot == 0 || wb.counts.empty()) continue;
+        const size_t bytes = static_cast<size_t>(wb.ntot) * static_cast<size_t>(wb.r) * D;
+        if (!group.empty() && group_raw + bytes > kFillStagingBudget) run();
+        group.push_back(i);
+        group_raw += bytes;
     }
-    compress_fill_source_set(items, stream);
+    run();
 }
 
 // ---------------------------------------------------------------------------
@@ -4315,25 +4370,37 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
         // the gather reads the staging, which goes back to the heap next
         check_cuda(cudaStreamSynchronize(stream), "fill sources");
-        for (BoxState* st : raw_to_free) {
-            if (st->persist_t2t == nullptr) continue;
-            stats.persist_bytes -= static_cast<double>(st->persist_t2t_bytes);
-            heap_.free(st->persist_t2t);
-            st->persist_t2t = nullptr;
-            st->persist_t2t_bytes = 0;
-            st->temp2t = nullptr;  // the readers take the packed form now
-        }
+        // (the raw blocks go back below, after the check has compared against
+        // them - BPACK_CHECK=fillsrc read freed memory otherwise)
+
+        auto free_raw = [&]() {
+            for (BoxState* st : raw_to_free) {
+                if (st->persist_t2t == nullptr) continue;
+                stats.persist_bytes -= static_cast<double>(st->persist_t2t_bytes);
+                heap_.free(st->persist_t2t);
+                st->persist_t2t = nullptr;
+                st->persist_t2t_bytes = 0;
+                st->temp2t = nullptr;  // the readers take the packed form now
+            }
+            raw_to_free.clear();
+        };
 
         // BPACK_CHECK=fillsrc: read every slot back out of the packed block,
         // through the offsets and strides just recorded, and compare it with
         // what it was made from.  This is what tests the gather and the
         // offset arithmetic - a wrong stride would otherwise surface as a
         // plausible but wrong answer much later.
-        if (!check) return;
+        if (!check) {
+            free_raw();
+            return;
+        }
         size_t widest = 0;
         for (size_t e : elems) widest = std::max(widest, e);
         char* back = heap_.try_alloc(std::max<size_t>(widest * sizeof(S), 1));
-        if (back == nullptr) return;
+        if (back == nullptr) {
+            free_raw();
+            return;
+        }
         std::vector<S> got, want;
         const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
         for (const GroupItem& gi : group_of) {
@@ -4362,6 +4429,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
             }
         }
         heap_.free(back);
+        free_raw();
     };
 
     auto flush = [&]() {
