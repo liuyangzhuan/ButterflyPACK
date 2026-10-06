@@ -2523,7 +2523,7 @@ Hypotheses not yet tested, in the order worth testing:
 
 - a parent block's pointer is replaced during the transition (out->edges[key]
   assigned twice for one key), so the chunk's record and the map disagree;
-- something else already frees it -  in build_parent is the obvious
+- something else already frees it - the retired list in build_parent is the
   candidate, and the Pair's block may not always be a fresh allocation;
 - the free is correct but runs while the gather still reads it, and the heap
   then sees the second free from the normal teardown.
