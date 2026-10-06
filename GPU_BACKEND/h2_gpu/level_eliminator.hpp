@@ -754,10 +754,14 @@ private:
     };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
     void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream);
-    // The whole temp2^T of a compressed fill source, decompressed into `dst`
-    // (ntot x r elements, as it was laid out).  Returns false if it is not
-    // stored compressed.
-    bool decompress_fill_source(const BoxState& st, S* dst, cudaStream_t stream);
+    // The chunks of a compressed fill source's temp2^T, appended to a batch
+    // that puts it back whole into `dst` (ntot x r elements, as it was laid
+    // out).  Returns false if it is not stored compressed.
+    bool collect_fill_source(const BoxState& st, S* dst, std::vector<const void*>& h_src,
+                             std::vector<void*>& h_dst);
+    // One batch for everything collected.
+    void run_fill_batch(const std::vector<const void*>& h_src, const std::vector<void*>& h_dst,
+                        cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
     // factors (the level's own, or committed to the store): before a fill
     // source leaves the device (the transition restores it from the host
@@ -2491,8 +2495,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 // if it is not sharing an allocation with X_RR_full.
                 const size_t xrr_bytes = align_up(r * r * D);
                 const size_t t2t_bytes = std::max<size_t>(nt * r * D, 1);
-                char* persist = heap_.alloc_resident(xrr_bytes, ResidentKind::FillSource);
-                char* persist_t2t = heap_.alloc_resident(t2t_bytes, ResidentKind::FillSource);
+                char* persist = heap_.alloc_resident(xrr_bytes, ResidentKind::FillXrr);
+                char* persist_t2t = heap_.alloc_resident(t2t_bytes, ResidentKind::FillRaw);
                 {
                     auto& es = eliminator_stats();
                     es.persist_bytes += static_cast<double>(xrr_bytes + t2t_bytes);
@@ -3795,8 +3799,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         }
         const size_t t_bytes = align_up(nr);
         const size_t xrr_bytes = static_cast<size_t>(g.r) * g.r * D;
-        char* persist = heap_.alloc_resident(std::max<size_t>(xrr_bytes, 1), ResidentKind::FillSource);
-        char* persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillSource);
+        char* persist = heap_.alloc_resident(std::max<size_t>(xrr_bytes, 1), ResidentKind::FillXrr);
+        char* persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
         {
             auto& es = eliminator_stats();
             es.persist_bytes += static_cast<double>(xrr_bytes + t_bytes);
@@ -4142,14 +4146,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // block lives for the chunk, like the sources restored from the host.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
-bool LevelEliminator<CoordType, DataType, KernelType>::decompress_fill_source(
-    const BoxState& st, S* dst, cudaStream_t stream) {
+bool LevelEliminator<CoordType, DataType, KernelType>::collect_fill_source(
+    const BoxState& st, S* dst, std::vector<const void*>& h_src, std::vector<void*>& h_dst) {
 #ifdef H2_HAVE_NVCOMP
     if (st.t2t_packed == nullptr || st.t2t_slots.empty()) return false;
     const size_t r = static_cast<size_t>(st.r);
     const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
-    std::vector<const void*> h_src;
-    std::vector<void*> h_dst;
     size_t row = 0;
     for (const auto& sl : st.t2t_slots) {
         const char* csrc = st.t2t_packed + sl.off;
@@ -4161,35 +4163,50 @@ bool LevelEliminator<CoordType, DataType, KernelType>::decompress_fill_source(
         }
         row += static_cast<size_t>(sl.rows);
     }
-    if (h_src.empty()) return false;
+    eliminator_stats().fs_tr_bytes += static_cast<double>(static_cast<size_t>(st.ntot) * r * sizeof(S));
+    ++eliminator_stats().fs_tr_sources;
+    return true;
+#else
+    (void)st; (void)dst; (void)h_src; (void)h_dst;
+    return false;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// One batch over every chunk collected for a transition chunk's fill sources.
+// Per source this used to be its own plan, pointer allocation and two stream
+// synchronizations, which the transition paid for every source of every chunk
+// - 38% of the factorization.  The same mistake the sketch's group loop made.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::run_fill_batch(
+    const std::vector<const void*>& h_src, const std::vector<void*>& h_dst, cudaStream_t stream) {
+#ifdef H2_HAVE_NVCOMP
     const size_t n = h_src.size();
+    if (n == 0) return;
     const size_t span = align_up(n * sizeof(void*));
     char* ptrs = heap_.alloc(span * 2);
     auto** d_src = reinterpret_cast<const void**>(ptrs);
     auto** d_dst = reinterpret_cast<void**>(ptrs + span);
-    check_cuda(cudaMemcpyAsync(d_src, h_src.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill source");
-    check_cuda(cudaMemcpyAsync(d_dst, h_dst.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill source");
-    check_cuda(cudaStreamSynchronize(stream), "fill source");
+    check_cuda(cudaMemcpyAsync(d_src, h_src.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill sources");
+    check_cuda(cudaMemcpyAsync(d_dst, h_dst.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill sources");
+    check_cuda(cudaStreamSynchronize(stream), "fill sources");
     bitcompHandle_t plan{};
     if (bitcompCreateBatchPlanFromCompressedData(&plan, d_src, n, nullptr, stream) != BITCOMP_SUCCESS) {
         heap_.free(ptrs);
-        throw std::runtime_error("LevelEliminator: could not plan a fill source's decompression");
+        throw std::runtime_error("LevelEliminator: could not plan the fill sources' decompression");
     }
     bitcompSetStream(plan, stream);
     const bitcompResult_t rc = bitcompBatchUncompress(plan, d_src, d_dst);
     bitcompDestroyPlan(plan);
     if (rc != BITCOMP_SUCCESS) {
         heap_.free(ptrs);
-        throw std::runtime_error("LevelEliminator: decompressing a fill source failed");
+        throw std::runtime_error("LevelEliminator: decompressing the fill sources failed");
     }
-    check_cuda(cudaStreamSynchronize(stream), "fill source");
+    check_cuda(cudaStreamSynchronize(stream), "fill sources");
     heap_.free(ptrs);
-    eliminator_stats().fs_tr_bytes += static_cast<double>(static_cast<size_t>(st.ntot) * r * sizeof(S));
-    ++eliminator_stats().fs_tr_sources;
-    return true;
 #else
-    (void)st; (void)dst; (void)stream;
-    return false;
+    (void)h_src; (void)h_dst; (void)stream;
 #endif
 }
 
@@ -4244,7 +4261,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
             size_t total = 0;
             for (size_t i = gi.first; i < gi.last; ++i) total += comp[i].bytes;
             if (total == 0) continue;
-            char* packed = heap_.try_alloc_resident(total, ResidentKind::FillSource);
+            char* packed = heap_.try_alloc_resident(total, ResidentKind::FillPacked);
             if (packed == nullptr) {  // no room: this box stays raw
                 ++stats.fs_packed_short;
                 continue;
@@ -5886,6 +5903,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             Box* box = nullptr;
         };
         std::unordered_map<int64_t, Source> source_of;
+        // the chunk's compressed fill sources, decompressed in one batch below
+        std::vector<const void*> packed_src;
+        std::vector<void*> packed_dst;
         // restored in this chunk, at increasing offsets of the staging buffer
         struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; };
         std::vector<Pending> pending;
@@ -5923,7 +5943,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 const size_t elems = static_cast<size_t>(es.ntot) * static_cast<size_t>(es.r);
                 char* blk = heap_.try_alloc_resident(elems * sizeof(S), ResidentKind::Restore);
                 if (blk != nullptr) {
-                    if (decompress_fill_source(es, reinterpret_cast<S*>(blk), stream)) {
+                    // collected now, decompressed in one batch before the
+                    // chunk's launches (the pointer is only read there)
+                    if (collect_fill_source(es, reinterpret_cast<S*>(blk), packed_src, packed_dst)) {
                         Restored& rs = restored[em];
                         rs.block = blk;
                         rs.gall = nullptr;
@@ -6305,6 +6327,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         chunk_marks.push_back(std::make_unique<StreamMarks>());
         StreamMarks& tmarks = *chunk_marks.back();
         tmarks.mark(stream);
+        run_fill_batch(packed_src, packed_dst, stream);  // the chunk's compressed sources, put back
         launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_restores), static_cast<int>(restores.size()),
                          max_rs_m, max_rs_n, stream);
         eval_blocks(evals, meta, md, off_evals, max_eval_m, max_eval_n, stream);

@@ -41,7 +41,9 @@ namespace gpu {
 // Other.
 enum class ResidentKind : uint8_t {
     Other = 0,
-    FillSource,    // keep_fill_source: X_RR_full and temp2^T, per box
+    FillXrr,       // keep_fill_source: X_RR_full, per box (never compressed)
+    FillRaw,       // ... its temp2^T, while it is still stored raw
+    FillPacked,    // ... its temp2^T, compressed a slot at a time
     LevelSchur,    // this level's own Schur and edge blocks, accumulated into by its waves
     Transition,    // the parents' Schur and edge blocks, built by the transition
     Near,          // step 5's dense neighbor blocks
@@ -56,7 +58,9 @@ enum class ResidentKind : uint8_t {
 };
 inline const char* resident_kind_name(ResidentKind k) {
     switch (k) {
-        case ResidentKind::FillSource: return "fill sources";
+        case ResidentKind::FillXrr: return "fill X_RR_full";
+        case ResidentKind::FillRaw: return "fill temp2^T raw";
+        case ResidentKind::FillPacked: return "fill temp2^T packed";
         case ResidentKind::LevelSchur: return "level Schur/edges";
         case ResidentKind::Transition: return "parent blocks";
         case ResidentKind::Near: return "near blocks";
