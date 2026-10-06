@@ -154,6 +154,9 @@ struct EliminatorStats {
     double fs_wave_bytes = 0.0;
     int64_t fs_wave_slots = 0;
     int64_t fs_wave_groups = 0;
+    // the transition putting compressed fill sources back whole
+    double fs_tr_bytes = 0.0;
+    int64_t fs_tr_sources = 0;
     double fs_check_err = 0.0;    // BPACK_CHECK=fillsrc: worst |decompressed - original|
     double fs_check_tol = 0.0;    //   ... and the tolerance it was held to
     double sk_union_bytes_max_wave = 0.0;
@@ -751,6 +754,10 @@ private:
     };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
     void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream);
+    // The whole temp2^T of a compressed fill source, decompressed into `dst`
+    // (ntot x r elements, as it was laid out).  Returns false if it is not
+    // stored compressed.
+    bool decompress_fill_source(const BoxState& st, S* dst, cudaStream_t stream);
     // The X_NR of boxes kept without a host copy, copied back from the kept
     // factors (the level's own, or committed to the store): before a fill
     // source leaves the device (the transition restores it from the host
@@ -3192,7 +3199,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
         if (gpu_sketch_) {
             BoxState& st = *wb.state;
-            st.temp2t = wb.persist_temp2t;
+            if (st.t2t_packed == nullptr) st.temp2t = wb.persist_temp2t;  // else stored compressed
             st.xrr_full = wb.persist_xrr;
             st.ntot = wb.ntot;
             st.r = wb.r;
@@ -4129,6 +4136,64 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// A compressed fill source put back whole, slot by slot in their original
+// order, which is how temp2^T was laid out.  The transition reads a source's
+// rows from all over it, so it takes the whole thing rather than slots; its
+// block lives for the chunk, like the sources restored from the host.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+bool LevelEliminator<CoordType, DataType, KernelType>::decompress_fill_source(
+    const BoxState& st, S* dst, cudaStream_t stream) {
+#ifdef H2_HAVE_NVCOMP
+    if (st.t2t_packed == nullptr || st.t2t_slots.empty()) return false;
+    const size_t r = static_cast<size_t>(st.r);
+    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+    std::vector<const void*> h_src;
+    std::vector<void*> h_dst;
+    size_t row = 0;
+    for (const auto& sl : st.t2t_slots) {
+        const char* csrc = st.t2t_packed + sl.off;
+        S* out = dst + row * r;
+        for (uint32_t c = 0; c < sl.nchunks; ++c) {
+            h_src.push_back(csrc);
+            h_dst.push_back(out + static_cast<size_t>(c) * chunk_elems);
+            csrc += st.t2t_strides[sl.chunk0 + c];
+        }
+        row += static_cast<size_t>(sl.rows);
+    }
+    if (h_src.empty()) return false;
+    const size_t n = h_src.size();
+    const size_t span = align_up(n * sizeof(void*));
+    char* ptrs = heap_.alloc(span * 2);
+    auto** d_src = reinterpret_cast<const void**>(ptrs);
+    auto** d_dst = reinterpret_cast<void**>(ptrs + span);
+    check_cuda(cudaMemcpyAsync(d_src, h_src.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill source");
+    check_cuda(cudaMemcpyAsync(d_dst, h_dst.data(), n * sizeof(void*), cudaMemcpyHostToDevice, stream), "fill source");
+    check_cuda(cudaStreamSynchronize(stream), "fill source");
+    bitcompHandle_t plan{};
+    if (bitcompCreateBatchPlanFromCompressedData(&plan, d_src, n, nullptr, stream) != BITCOMP_SUCCESS) {
+        heap_.free(ptrs);
+        throw std::runtime_error("LevelEliminator: could not plan a fill source's decompression");
+    }
+    bitcompSetStream(plan, stream);
+    const bitcompResult_t rc = bitcompBatchUncompress(plan, d_src, d_dst);
+    bitcompDestroyPlan(plan);
+    if (rc != BITCOMP_SUCCESS) {
+        heap_.free(ptrs);
+        throw std::runtime_error("LevelEliminator: decompressing a fill source failed");
+    }
+    check_cuda(cudaStreamSynchronize(stream), "fill source");
+    heap_.free(ptrs);
+    eliminator_stats().fs_tr_bytes += static_cast<double>(static_cast<size_t>(st.ntot) * r * sizeof(S));
+    ++eliminator_stats().fs_tr_sources;
+    return true;
+#else
+    (void)st; (void)dst; (void)stream;
+    return false;
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // The wave's local fill sources, once the transposes have written temp2^T.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
@@ -4172,6 +4237,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         const auto& cks = fill_compressor_.chunks();
         const char* staging = fill_compressor_.staging();
         std::vector<CopySpan> spans;
+        std::vector<BoxState*> raw_to_free;
         int64_t max_words = 0;
         for (const GroupItem& gi : group_of) {
             BoxState& st = *gi.st;
@@ -4214,6 +4280,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                 st.t2t_slots.push_back(sl);
                 row += sl.rows;
             }
+            // The packed block now holds what the raw one did - the gather
+            // below is synchronized before the staging goes back - so the raw
+            // block can go.  st.temp2t going null is what sends both readers
+            // to the packed form.
+            raw_to_free.push_back(&st);
         }
         if (spans.empty()) return;
         const size_t list_bytes = spans.size() * sizeof(CopySpan);
@@ -4227,6 +4298,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
         // the gather reads the staging, which goes back to the heap next
         check_cuda(cudaStreamSynchronize(stream), "fill sources");
+        for (BoxState* st : raw_to_free) {
+            if (st->persist_t2t == nullptr) continue;
+            stats.persist_bytes -= static_cast<double>(st->persist_t2t_bytes);
+            heap_.free(st->persist_t2t);
+            st->persist_t2t = nullptr;
+            st->persist_t2t_bytes = 0;
+            st->temp2t = nullptr;  // the readers take the packed form now
+        }
 
         // BPACK_CHECK=fillsrc: read every slot back out of the packed block,
         // through the offsets and strides just recorded, and compare it with
@@ -5831,8 +5910,34 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 s.gall = rit->second.gall;
                 s.xrr = rit->second.xrr;
                 s.col_of = &rit->second.col_of;
+                if (rit->second.gall == nullptr) s.t2t = reinterpret_cast<const S*>(rit->second.block);
                 return s;
             }
+#ifdef H2_HAVE_NVCOMP
+            // H2_compress_factors: stored compressed, so put it back whole
+            // into a block of this chunk and read it as a resident one.  That
+            // is both simpler than gathering its rows out of the slots and
+            // faster than the host restore below (0.53 s for 2.40 GB at the
+            // leaf, against decompression at 365 GB/s).
+            if (es.t2t_packed != nullptr && es.ntot > 0 && es.r > 0) {
+                const size_t elems = static_cast<size_t>(es.ntot) * static_cast<size_t>(es.r);
+                char* blk = heap_.try_alloc_resident(elems * sizeof(S), ResidentKind::Restore);
+                if (blk != nullptr) {
+                    if (decompress_fill_source(es, reinterpret_cast<S*>(blk), stream)) {
+                        Restored& rs = restored[em];
+                        rs.block = blk;
+                        rs.gall = nullptr;
+                        rs.xrr = nullptr;
+                        rs.last_parent = p0;  // freed at the end of this chunk (p0 < p1)
+                        s.t2t = reinterpret_cast<const S*>(blk);
+                        s.xrr = es.xrr_full;
+                        return s;
+                    }
+                    heap_.free(blk);
+                }
+            }
+#endif
+
             // restore in this chunk: the skeleton rows of each neighbor with
             // point data here (the only ones a pair of this rank can read)
             Box* sb = s.box;
