@@ -902,6 +902,33 @@ public:
                             e.wr_blocks > 0 ? static_cast<double>(e.wr_updates) / static_cast<double>(e.wr_blocks)
                                             : 0.0);
             }
+            {   // What a kind holds at the peak, against everything ever
+                // allocated to it.  The two answer different questions and
+                // confusing them cost three wrong designs: 34.78 GB passed
+                // through "adopted blocks" at the 192^3 leaf to leave 0.00
+                // resident, while 6.16 GB sat resident at a level that
+                // allocated none.  Churn is not occupancy.
+                const DeviceHeap& h = DeviceHeap::instance();
+                for (ResidentKind k : {ResidentKind::Adopted, ResidentKind::OwnerNear}) {
+                    if (h.kind_alloc_bytes(k) == 0 && h.resident_now(k) == 0) continue;
+                    std::printf("  [gpu] level %d kind %s: now %.2f GB, ever allocated %.2f GB in %zu, "
+                                "freed %.2f GB in %zu\n", level.level, resident_kind_name(k),
+                                static_cast<double>(h.resident_now(k)) / 1e9,
+                                static_cast<double>(h.kind_alloc_bytes(k)) / 1e9, h.kind_alloc_count(k),
+                                static_cast<double>(h.kind_free_bytes(k)) / 1e9, h.kind_free_count(k));
+                }
+            }
+            if (e.mat_blocks > 0) {
+                static const char* const kSites[6] = {"begin Schur", "owner join", "update group",
+                                                      "host download", "generators", "build_parent"};
+                std::printf("  [gpu] level %d decompressed by:", level.level);
+                for (int i = 0; i < 6; ++i) {
+                    if (e.mat_site_bytes[i] <= 0.0) continue;
+                    std::printf(" %s %.2f GB in %lld", kSites[i], e.mat_site_bytes[i] / 1e9,
+                                static_cast<long long>(e.mat_site_calls[i]));
+                }
+                std::printf("\n");
+            }
             if (e.mat_blocks > 0 || e.mat_left > 0) {
                 std::printf("  [gpu] level %d adopted blocks materialized: %.2f GB in %lld blocks over %lld batches, "
                             "%.3f s; %lld left packed\n",

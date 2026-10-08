@@ -201,6 +201,8 @@ public:
         resident_used_ += size;
         resident_kind_[offset] = kind;
         by_kind_[static_cast<size_t>(kind)] += size;
+        ++alloc_n_[static_cast<size_t>(kind)];
+        alloc_b_[static_cast<size_t>(kind)] += size;
         note_peak();
         return base_ + offset;
     }
@@ -240,6 +242,8 @@ public:
             resident_used_ += size;
             resident_kind_[offset] = kind;
             by_kind_[static_cast<size_t>(kind)] += size;
+            ++alloc_n_[static_cast<size_t>(kind)];
+            alloc_b_[static_cast<size_t>(kind)] += size;
         } else {
             transient_used_ += size;
         }
@@ -292,6 +296,8 @@ public:
             resident_used_ -= length;
             if (auto kit = resident_kind_.find(offset); kit != resident_kind_.end()) {
                 by_kind_[static_cast<size_t>(kit->second)] -= length;
+                ++free_n_[static_cast<size_t>(kit->second)];
+                free_b_[static_cast<size_t>(kit->second)] += length;
                 resident_kind_.erase(kit);
             }
         } else {
@@ -345,6 +351,14 @@ public:
     // What each kind of resident block held when the peak was reached.
     size_t resident_at_peak(ResidentKind k) const { return by_kind_at_peak_[static_cast<size_t>(k)]; }
     size_t resident_now(ResidentKind k) const { return by_kind_[static_cast<size_t>(k)]; }
+    // Cumulative, so a kind's current bytes can be checked against what was
+    // ever allocated to it.  A kind reporting bytes at the peak that it was
+    // never allocated means the accounting is wrong, not the memory.
+    // Compaction counts as a free and an allocation, so alloc - free = now.
+    size_t kind_alloc_bytes(ResidentKind k) const { return alloc_b_[static_cast<size_t>(k)]; }
+    size_t kind_free_bytes(ResidentKind k) const { return free_b_[static_cast<size_t>(k)]; }
+    size_t kind_alloc_count(ResidentKind k) const { return alloc_n_[static_cast<size_t>(k)]; }
+    size_t kind_free_count(ResidentKind k) const { return free_n_[static_cast<size_t>(k)]; }
     int64_t reclaims() const { return reclaims_; }
 
     // Compaction of long-lived blocks.  Blocks that outlive a level (the
@@ -410,6 +424,8 @@ public:
                 resident_used_ += size;
                 resident_kind_[dest] = kind;
                 by_kind_[static_cast<size_t>(kind)] += size;
+                ++alloc_n_[static_cast<size_t>(kind)];
+                alloc_b_[static_cast<size_t>(kind)] += size;
             } else {
                 transient_used_ += size;
             }
@@ -493,6 +509,7 @@ private:
     size_t resident_used_ = 0;
     std::unordered_map<size_t, ResidentKind> resident_kind_;  // offset -> what it is for
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_{};
+    std::array<size_t, static_cast<size_t>(ResidentKind::Count)> alloc_n_{}, alloc_b_{}, free_n_{}, free_b_{};
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_at_peak_{};
     size_t transient_used_ = 0;
     size_t resident_at_peak_ = 0;

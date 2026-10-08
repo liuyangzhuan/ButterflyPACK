@@ -2471,6 +2471,10 @@ Everything is grouped, and every group bound was found by measurement:
 
 ### Step 3: the near-field blocks, 9.47 GB of the leaf's 13.77 GB resident
 
+**Outcome (2026-10-08): done, 9.47 -> 3.25 GB, leaf peak -3.60 GB on Color
+and -2.94 GB on CA0.**  Read step 3a, then 3c, then "Step 3c reconciled";
+step 3b's conclusion is superseded.
+
 **Measured first, because the design turns on it.** The near blocks are not
 the parent blocks, so their ratio was sampled directly - half the budget from
 the Schur blocks and half from the edges, since a first sample filled itself
@@ -2598,6 +2602,12 @@ readers.  Each step gated on Color and CA0.
 
 #### Step 3b: built, measured, and **it does not work** (2026-10-07)
 
+> **Superseded on 2026-10-08.**  The conclusion below - that the policy
+> cannot pay - was wrong, and the measurements in it were taken against a
+> configuration that was holding the whole adopted set raw for an unrelated
+> reason.  Read "Step 3c reconciled" after it.  What survives: the last-write
+> distribution table, which is why compress-once is not an option.
+
 The machinery is in and verified; the *policy* cannot be made to pay, and the
 reason is a property of the elimination, not of the implementation.
 
@@ -2636,14 +2646,83 @@ pack once after a block's last writer - can shrink the set at that moment.
 At 192^3 the whole piece came to: Color peak 20.72 -> 20.24 GB with Factor
 7.81 -> 8.63 s; CA0 peak 22.51 -> **25.33** GB with Factor ~8.3 -> 9.87 s.
 
-**Left in place but switched off** (`if (false && ...)` at the pack call), on
-the grounds that 3a and 3b-i are verified and neutral and the only thing
-wrong is the policy.  Revert them if that dead weight is not wanted.
+**Left in place but switched off** (`kHoldNearBlocksPacked`), on the grounds
+that 3a and 3b-i are verified and neutral and the only thing wrong is the
+policy.  - Which turned out to be the right call for the wrong reason: the
+switch is on now, and the thing wrong was elsewhere.
 
-**What this means for the peak.**  The leaf's 9.47 GB of near-field blocks is
-not reclaimable by compression.  The remaining levers are the transient
-outputs (5.14 GB of the leaf's 6.29 GB wave transient, streamable with an
-accuracy cost), the duplicated temp2 (1.1-1.4 GB, cheap), and FP32.
+**What this means for the peak.** ~~The leaf's 9.47 GB of near-field blocks is
+not reclaimable by compression.~~  Wrong; see the next section.  3.60 GB of it
+is.
+
+#### Step 3c reconciled: the pre-pass was holding the raw set (2026-10-08)
+
+**The store works, and holding the near blocks packed pays on both paths.**
+192^3, 8 ranks on 2 nodes, A100 40 GB, `--h2_use_sketch 2 --h2_lazy_schur 2`,
+`--H2_compress_factors 1`:
+
+| | Color peak | Factor | CA0 peak | Factor |
+|---|---|---|---|---|
+| store off (`kHoldNearBlocksPacked` false) | 20.72 (13.77 + 6.95) | 7.49 s | 22.51 (15.56 + 6.94) | 8.41 s |
+| store on, pre-pass present | 21.01 (13.90 + 7.12) | 8.69 s | 23.48 (16.37 + 7.11) | 10.00 s |
+| store on, pre-pass removed | **17.12** (9.46 + 7.66) | 8.51 s | **19.57** (11.91 + 7.66) | 9.97 s |
+
+**-3.60 GB (-17%) on Color, -2.94 GB (-13%) on CA0**, for +14% and +19% of
+Factor time.  logdet unchanged from the store-on rows
+(-89253733.904870659, -89253641.194709614), accuracy unchanged from store-off
+(Color acc_mvp 3.046e-3 -> 2.946e-3, CA0 3.143e-3 -> 2.897e-3; acc_forward
+1.554e-2 -> 1.547e-2 and 1.369e-2 -> 1.312e-2), 96^3 gate clean on both with
+the round-trip check and the launch-item validator on.
+
+**What was actually holding the memory.**  Piece 4 put every adopted block
+back in raw form in a pre-pass before the owner join, because the join
+allocated them.  Step 3b-i moved allocation into the group loop and left the
+join recording shapes only, which made the pre-pass redundant - and harmful:
+it decompressed the entire adopted set up front, 6.16 GB live at the 192^3
+leaf, so the whole near-field set was raw at the peak no matter what the
+groups did afterwards.  The groups exist to bound that set; the pre-pass
+unbounded it one call earlier.  **The fix was deleting 20 lines.**
+
+So both of 3b's negative measurements were measuring the pre-pass.  The
+numbers were real; the attribution was not.
+
+**The peak has moved**, and that is where the next lever is.  Leaf resident
+at the peak, Color, store off -> on:
+
+| item | off | on |
+|---|---|---|
+| owner near blocks | 9.47 | 3.25 |
+| adopted blocks | 0.00 | 0.00 |
+| kept factors | 1.08 | 2.44 |
+| fill temp2^T packed | 1.38 | 2.34 |
+| fill X_RR_full | 0.64 | 1.13 |
+| level Schur/edges | 1.14 | 0.24 |
+| total resident | 13.77 | 9.46 |
+
+The near-field items fell by 7.12 GB; the rest rose by 2.81, because the peak
+now occurs at a different wave, one with more of the level's factors already
+kept.  On CA0 at the peak: kept factors 3.29, fill temp2^T 2.53, owner near
+4.31, X_RR_full 1.23, Schur/edges 0.48.
+
+**`kept factors` + `fill temp2^T` is the duplicated temp2 pair** - 4.78 GB on
+Color, 5.82 GB on CA0, against the 1.1-1.4 GB estimated when they sat lower
+in the ordering.  That backlog item is now the single largest target at the
+leaf, and the cheapest: one is the transpose of the other.  The transient,
+7.66 GB, is now the larger half of the peak, and 82% of it is the two
+n_tot x r outputs.
+
+**Costs and what is left.**  Decompression traffic at the Color leaf is
+32.11 GB in 94 group calls, 2.04 GB in 7 generator calls, 0.61 GB in one
+build_parent; CA0 48.99 GB in 152 and 1.03 GB in one (no remote generators on
+the CA path).  Of the +1 s, roughly 0.64 s is the 512 MB group budget alone -
+730 batched GEMM launches at the leaf instead of 120, a cost that is paid
+whether or not anything is compressed.  Tuning that budget is the next cheap
+win and is deferred by choice; ~2 GB groups would give ~26 groups but add
+about 1.5 GB back to the peak.
+
+Reader 1's bounded gather window (512 MB, `materialize_into_window`) is built
+and correct and reclaimed nothing here, because what it was built against was
+the pre-pass.  It will matter when the gather is the binding term.
 
 #### The original 3b sketch, for the record
 
@@ -2656,7 +2735,12 @@ null ptr, which is what found four readers there.  The codec bill is the
 leaf: a few percent of Factor time at the measured rates, but compression is
 slower than decompression and that needs measuring, not assuming.
 
-### Backlog: temp2 is stored resident twice, once transposed (1.1-1.4 GB)
+### Backlog: temp2 is stored resident twice, once transposed (4.8-5.8 GB)
+
+**Promoted to the largest single target at the leaf** by step 3c: with the
+near blocks held packed the two copies are 2.44 + 2.34 = 4.78 GB of the
+Color leaf's 9.46 GB resident, and 3.29 + 2.53 = 5.82 GB of CA0's 11.91.
+The figures below are from before that and understate it.
 
 The solve factor the code calls X_NR is `temp2` = -X_NR X_RR^{-1}: the host's
 Box::X_NR is downloaded from `wb.off_temp2` and the kept device factor is
