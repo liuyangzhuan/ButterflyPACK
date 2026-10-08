@@ -834,6 +834,74 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.nl_blocks > 0) {
+                const double tot = e.nl_bin[0] + e.nl_bin[1] + e.nl_bin[2] + e.nl_bin[3] + e.nl_bin[4];
+                std::printf("  [gpu] level %d compressed length over the level, %lld blocks: raw %.2f GB, "
+                            "first %.2f, max %.2f, last %.2f GB; sum max/first %.3f, worst block %.2f\n",
+                            level.level, static_cast<long long>(e.nl_blocks), e.nl_raw / 1e9,
+                            e.nl_first / 1e9, e.nl_max / 1e9, e.nl_last / 1e9,
+                            e.nl_first > 0.0 ? e.nl_max / e.nl_first : 0.0, e.nl_worst);
+                std::printf("  [gpu] level %d ... by max/first: %.0f%% never grow, %.0f%% <=1.1, %.0f%% <=1.25, "
+                            "%.0f%% <=1.5, %.0f%% more\n", level.level,
+                            100.0 * e.nl_bin[0] / tot, 100.0 * e.nl_bin[1] / tot, 100.0 * e.nl_bin[2] / tot,
+                            100.0 * e.nl_bin[3] / tot, 100.0 * e.nl_bin[4] / tot);
+            }
+            if (e.np_groups > 0 || e.np_groups_plain > 0) {
+                std::printf("  [gpu] level %d near blocks held packed: %.2f -> %.2f GB (%.1fx) over %lld blocks "
+                            "in %lld groups, %.2f s%s\n", level.level, e.np_raw / 1e9, e.np_stored / 1e9,
+                            e.np_stored > 0.0 ? e.np_raw / e.np_stored : 0.0,
+                            static_cast<long long>(e.np_blocks), static_cast<long long>(e.np_groups),
+                            e.np_seconds,
+                            e.np_groups_plain > 0 ? " (some groups stayed raw)" : "");
+                std::printf("  [gpu] level %d near store: %lld chunks grew into a tail, %lld blocks found no "
+                            "room and stayed uncompressed\n", level.level,
+                            static_cast<long long>(e.np_tails), static_cast<long long>(e.np_no_room));
+                std::printf("  [gpu] level %d packed groups reclaimed: %lld\n", level.level,
+                            static_cast<long long>(e.np_reclaimed));
+            }
+            if (e.nb_comp_bytes > 0.0 && e.nb_comp_seconds > 0.0) {
+                std::printf("  [gpu] level %d near-block compression: %.0f GB/s over %.0f MB (%.0f GB/s at the "
+                            "tighter tolerance), against 262-365 GB/s decompressing\n", level.level,
+                            e.nb_comp_bytes / e.nb_comp_seconds / 1e9, e.nb_comp_bytes / 1e6,
+                            e.nb_tight_seconds > 0.0 ? e.nb_tight_bytes / e.nb_tight_seconds / 1e9 : 0.0);
+            }
+            if (e.nb_raw > 0.0 || e.ne_raw > 0.0) {
+                std::printf("  [gpu] level %d compresses, at the factors' tolerance and four times tighter: "
+                            "Schur %.1f MB of %lld -> %.1fx / %.1fx | edges %.1f MB of %lld -> %.1fx / %.1fx\n",
+                            level.level,
+                            e.nb_raw / 1e6, static_cast<long long>(e.nb_blocks),
+                            e.nb_loose > 0.0 ? e.nb_raw / e.nb_loose : 0.0,
+                            e.nb_tight > 0.0 ? e.nb_raw / e.nb_tight : 0.0,
+                            e.ne_raw / 1e6, static_cast<long long>(e.ne_blocks),
+                            e.ne_loose > 0.0 ? e.ne_raw / e.ne_loose : 0.0,
+                            e.ne_tight > 0.0 ? e.ne_raw / e.ne_tight : 0.0);
+            }
+            if (e.tw_max > 0.0) {
+                std::printf("  [gpu] level %d largest wave's transient %.2f GB: A_NS %.2f, X_NS %.2f (scratch, "
+                            "%.0f%%) | X_NR %.2f, temp2 %.2f, X_NR orig %.2f (outputs, %.0f%%) | result %.2f, "
+                            "T %.2f, small %.2f\n",
+                            level.level, e.tw_max / 1e9, e.tw_ans / 1e9, e.tw_xns / 1e9,
+                            100.0 * (e.tw_ans + e.tw_xns) / e.tw_max,
+                            e.tw_xnr / 1e9, e.tw_temp2 / 1e9, e.tw_xnr_orig / 1e9,
+                            100.0 * (e.tw_xnr + e.tw_temp2 + e.tw_xnr_orig) / e.tw_max,
+                            e.tw_result / 1e9, e.tw_t / 1e9, e.tw_small / 1e9);
+            }
+            if (e.wr_final_q[0] + e.wr_final_q[1] + e.wr_final_q[2] + e.wr_final_q[3] > 0.0) {
+                const double tot = e.wr_final_q[0] + e.wr_final_q[1] + e.wr_final_q[2] + e.wr_final_q[3];
+                std::printf("  [gpu] level %d near blocks go final: %.0f%% / %.0f%% / %.0f%% / %.0f%% of %.2f GB "
+                            "by the first, second, third and last quarter of the waves\n", level.level,
+                            100.0 * e.wr_final_q[0] / tot, 100.0 * e.wr_final_q[1] / tot,
+                            100.0 * e.wr_final_q[2] / tot, 100.0 * e.wr_final_q[3] / tot, tot / 1e9);
+            }
+            if (e.wr_windows > 0) {
+                std::printf("  [gpu] level %d near-block writes: %.2f GB in the largest wave, %.2f GB over %lld "
+                            "waves, %.2f GB at their largest over %lld blocks, %.1f writes each\n",
+                            level.level, e.wr_max_window / 1e9, e.wr_sum / 1e9,
+                            static_cast<long long>(e.wr_windows), e.wr_distinct / 1e9,
+                            static_cast<long long>(e.wr_blocks),
+                            e.wr_blocks > 0 ? static_cast<double>(e.wr_updates) / static_cast<double>(e.wr_blocks)
+                                            : 0.0);
+            }
             if (e.mat_blocks > 0 || e.mat_left > 0) {
                 std::printf("  [gpu] level %d adopted blocks materialized: %.2f GB in %lld blocks over %lld batches, "
                             "%.3f s; %lld left packed\n",
@@ -1154,7 +1222,7 @@ private:
     // fails part way (GPU_CA_PLAN.md C4).  Raise it once the leaf's working
     // set leaves room - step 4 - or once the decision can estimate the
     // level's own working set.
-    static constexpr double kXnrBoundDivisor = 1.0;
+    static constexpr double kXnrBoundDivisor = 4.0;
     double keep_ratio_ = kFirstKeepRatio;
     double keep_bound_ = 0.0;                                          // this level's (decide_solve_keep)
 };

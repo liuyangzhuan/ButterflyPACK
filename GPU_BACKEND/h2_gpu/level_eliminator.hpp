@@ -167,6 +167,36 @@ struct EliminatorStats {
     double mat_bytes = 0.0;
     double mat_seconds = 0.0;
     int64_t mat_blocks = 0, mat_batches = 0, mat_left = 0;
+    int64_t owner_groups = 0;   // the owner pass's bounded target groups
+    // the near blocks held packed between groups
+    double np_raw = 0.0, np_stored = 0.0, np_seconds = 0.0;
+    int64_t np_blocks = 0, np_groups = 0, np_groups_plain = 0, np_reclaimed = 0;
+    int64_t np_tails = 0, np_no_room = 0;   // chunks that grew; blocks left uncompressed
+    // the compressed length trajectory of the near-field blocks
+    double nl_raw = 0.0, nl_first = 0.0, nl_max = 0.0, nl_last = 0.0, nl_worst = 0.0;
+    double nl_bin[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    int64_t nl_blocks = 0;
+    // What a wave writes among the near-field blocks: the working set a
+    // decompress-update-recompress scheme would hold, and the traffic it
+    // would pay.  A window is one eliminate_wave and the remote generators
+    // applied before it.
+    // The wave's transient, by array, taken at the wave whose total is the
+    // largest: which part of it tiling nt could actually remove (ans and xns
+    // are scratch; xnr and temp2 are outputs that must be produced in full).
+    // How well the level's own near-field blocks compress: a bounded sample,
+    // at the tolerance fraction in use and at a four times tighter one.
+    // compression throughput, in situ (decompression is already known: 262 GB/s
+    // at the transition's materialization, 365 GB/s in the solve)
+    double nb_comp_seconds = 0.0, nb_comp_bytes = 0.0;
+    double nb_tight_seconds = 0.0, nb_tight_bytes = 0.0;
+    double nb_raw = 0.0, nb_loose = 0.0, nb_tight = 0.0;   // the Schur blocks
+    double ne_raw = 0.0, ne_loose = 0.0, ne_tight = 0.0;   // the near-field edges
+    int64_t nb_blocks = 0, ne_blocks = 0;
+    double tw_max = 0.0, tw_ans = 0.0, tw_xns = 0.0, tw_xnr = 0.0, tw_temp2 = 0.0,
+           tw_xnr_orig = 0.0, tw_result = 0.0, tw_t = 0.0, tw_small = 0.0;
+    double wr_max_window = 0.0, wr_sum = 0.0, wr_distinct = 0.0;
+    int64_t wr_windows = 0, wr_blocks = 0, wr_updates = 0;
+    double wr_final_q[4] = {0.0, 0.0, 0.0, 0.0};   // bytes by the quarter of the level their last write fell in
     double pb_raw_bytes = 0.0;
     double pb_stored_bytes = 0.0;
     int64_t pb_blocks = 0;
@@ -261,6 +291,15 @@ struct PackedBlockT {
     uint32_t nchunks = 0;
     int rows = 0;
     int cols = 0;
+    // Where the bytes are.  `packed != nullptr` is one contiguous run, which
+    // is what build_parent writes once per level.  `packed == nullptr` means
+    // the bytes are in the near-block store, as `nchunks` chunk homes from
+    // `home0` - each its own run in B_compact plus an optional tail - because
+    // those blocks are re-compressed every time their subset runs and a run
+    // that may grow cannot stay contiguous.
+    char* owner = nullptr;
+    uint32_t home0 = 0;
+    bool live = false;      // the bytes are current; false once decompressed
 };
 
 template<typename T>
@@ -820,8 +859,14 @@ private:
     // key is in the packed store).  A null ptr otherwise means "no block
     // here", which the readers answer from the kernel instead, so the two
     // must never be confused.
-    bool is_packed_schur(int64_t morton) const { return packed_schur_.find(morton) != packed_schur_.end(); }
-    bool is_packed_edge(uint64_t key) const { return packed_edges_.find(key) != packed_edges_.end(); }
+    bool is_packed_schur(int64_t morton) const {
+        const auto it = packed_schur_.find(morton);
+        return it != packed_schur_.end() && it->second.live;
+    }
+    bool is_packed_edge(uint64_t key) const {
+        const auto it = packed_edges_.find(key);
+        return it != packed_edges_.end() && it->second.live;
+    }
     struct AdoptedBlock { bool schur; uint64_t key; DeviceMatrix* m; };
     void materialize_adopted(const std::vector<AdoptedBlock>& want, cudaStream_t stream);
     // Everywhere outside the wave materialization a null ptr means "no block
@@ -838,6 +883,494 @@ private:
     }
 #else
     void assert_not_packed(bool, uint64_t, const char*) const {}
+#endif
+    // A near-field block this window writes, keyed by its map slot (stable
+    // across the replacement of the block it holds).
+    void note_write(const void* slot, size_t bytes) {
+        if (slot == nullptr || bytes == 0) return;
+        if (wave_writes_.insert(slot).second) wave_write_bytes_ += bytes;
+        size_t& seen = level_writes_[slot];
+        seen = std::max(seen, bytes);
+        auto& lw = level_last_wave_[slot];
+        lw = std::max(lw, cur_wave_);
+        ++eliminator_stats().wr_updates;
+    }
+    void close_write_window() {
+        auto& stats = eliminator_stats();
+        if (!wave_writes_.empty()) {
+            stats.wr_max_window = std::max(stats.wr_max_window, static_cast<double>(wave_write_bytes_));
+            stats.wr_sum += static_cast<double>(wave_write_bytes_);
+            ++stats.wr_windows;
+        }
+        wave_writes_.clear();
+        wave_write_bytes_ = 0;
+    }
+    void close_write_level() {
+        close_write_window();
+        auto& stats = eliminator_stats();
+        int last = 0;
+        for (const auto& [slot, w] : level_last_wave_) last = std::max(last, w);
+        for (const auto& [slot, bytes] : level_writes_) {
+            stats.wr_distinct += static_cast<double>(bytes);
+            // which quarter of the level's waves saw this block's last write
+            const auto it = level_last_wave_.find(slot);
+            const int w = it == level_last_wave_.end() ? 0 : it->second;
+            const int q = last > 0 ? std::min(3, (4 * w) / (last + 1)) : 0;
+            stats.wr_final_q[static_cast<size_t>(q)] += static_cast<double>(bytes);
+        }
+        stats.wr_blocks += static_cast<int64_t>(level_writes_.size());
+        level_writes_.clear();
+        level_last_wave_.clear();
+    }
+    std::unordered_set<const void*> wave_writes_;
+    size_t wave_write_bytes_ = 0;
+    std::unordered_map<const void*, size_t> level_writes_;
+    std::unordered_map<const void*, int> level_last_wave_;
+    int cur_wave_ = 0;
+#ifdef H2_HAVE_NVCOMP
+    // Holding the near-field blocks packed turns on how well they compress,
+    // which is not the parent blocks' 7.2x by assumption: they are a
+    // different matrix at a different point in the elimination.  A bounded
+    // sample, because the compressor stages at least the input size.  Both
+    // tolerances, because feeding the fill GEMMs lossy inputs argues for a
+    // tighter one than the factors get.
+    // half a group each, the group size step 3b would use
+    static constexpr size_t kNearSampleBudget = size_t{256} << 20;
+    void measure_near_blocks(cudaStream_t stream) {
+        // measured and recorded; behind a check so it cannot inflate a timing
+        if (near_sampled_ || compress_factors_ < 1 || !env::check("fillsrc")) return;
+        near_sampled_ = true;
+        auto& stats = eliminator_stats();
+        const double base = tolerance_ * kXnrToleranceFraction;
+        // each kind on its own half of the budget, and reported apart
+        for (int kind = 0; kind < 2; ++kind) {
+            std::vector<const S*> srcs;
+            std::vector<size_t> elems;
+            size_t raw = 0;
+            auto take = [&](const DeviceMatrix& m) {
+                if (m.ptr == nullptr || m.rows <= 0 || m.cols <= 0) return;
+                const size_t bytes = static_cast<size_t>(m.rows) * m.cols * sizeof(S);
+                if (raw + bytes > kNearSampleBudget) return;
+                srcs.push_back(m.ptr);
+                elems.push_back(static_cast<size_t>(m.rows) * m.cols);
+                raw += bytes;
+            };
+            if (kind == 0) {
+                for (const BoxState& st : states_) take(st.schur);
+            } else {
+                for (const auto& kv : edges_) take(kv.second);
+            }
+            if (srcs.empty()) continue;
+            double loose = 0.0, tight = 0.0;
+            {   // warm-up, discarded: the first call allocates the staging and
+                // builds the plan, which showed up as 1.5 GB/s against 114
+                std::vector<CompressedXnr> warm;
+                fill_compressor_.compress(srcs, elems, base, warm, stream);
+                check_cuda(cudaStreamSynchronize(stream), "near block warm-up");
+            }
+            for (int t = 0; t < 2; ++t) {
+                std::vector<CompressedXnr> out;
+                // in situ, around the call as it runs: the one rate in this
+                // work never measured, and the whole cost of holding the near
+                // blocks packed turns on it
+                const auto c0 = std::chrono::steady_clock::now();
+                const bool ok = fill_compressor_.compress(srcs, elems, t == 0 ? base : base * 0.25, out, stream);
+                check_cuda(cudaStreamSynchronize(stream), "near block compression timing");
+                const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - c0).count();
+                if (!ok) continue;
+                stats.nb_comp_seconds += secs;
+                stats.nb_comp_bytes += static_cast<double>(raw);
+                if (t == 1) {
+                    stats.nb_tight_seconds += secs;
+                    stats.nb_tight_bytes += static_cast<double>(raw);
+                }
+                double stored = 0.0;
+                for (const auto& c : out) stored += static_cast<double>(c.bytes);
+                if (t == 0) loose = stored; else tight = stored;
+            }
+            if (kind == 0) {
+                stats.nb_raw = static_cast<double>(raw);
+                stats.nb_loose = loose; stats.nb_tight = tight;
+                stats.nb_blocks = static_cast<int64_t>(srcs.size());
+            } else {
+                stats.ne_raw = static_cast<double>(raw);
+                stats.ne_loose = loose; stats.ne_tight = tight;
+                stats.ne_blocks = static_cast<int64_t>(srcs.size());
+            }
+        }
+        fill_compressor_.release();
+    }
+    bool near_sampled_ = false;
+    uint64_t owner_group_stamp_ = 1ull << 40;   // skeleton lists of a group's image
+
+    // BPACK_CHECK=heap: every device pointer a launch item carries must lie in
+    // the heap's arena.  assert_not_packed() can only catch a site that
+    // *branches* on a null pointer; a gather, an eval, a sum-add or a GEMM
+    // simply takes the pointer and uses it, so a block nobody materialized
+    // reaches the GPU as null + offset and faults in the kernel instead of
+    // being reported at its source.  This checks them on the host, naming the
+    // list and the index, so one run gives every such site at once.
+    int bad_ptrs_ = 0;
+    void want_device(const void* ptr, const char* list, const char* field, size_t i) {
+        if (ptr != nullptr && heap_.owns(ptr)) return;
+        if (bad_ptrs_++ < 16) {
+            std::printf("[heap] level %d: %s[%zu].%s = %p is not heap device memory\n",
+                        level_index_, list, i, field, ptr);
+            std::fflush(stdout);
+        }
+    }
+    void check_items(const std::vector<GatherItem>& v, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i].m <= 0 || v[i].n <= 0) continue;
+            want_device(v[i].out, name, "out", i);
+            want_device(v[i].src, name, "src", i);
+        }
+    }
+    void check_items(const std::vector<EvalItem>& v, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i].m <= 0 || v[i].n <= 0) continue;
+            want_device(v[i].out, name, "out", i);
+        }
+    }
+    void check_items(const std::vector<SumAddItem>& v, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i].rows <= 0 || v[i].cols <= 0) continue;
+            want_device(v[i].target, name, "target", i);
+        }
+    }
+    void check_items(const std::vector<AddStoreItem>& v, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i].m <= 0 || v[i].n <= 0) continue;
+            want_device(v[i].out, name, "out", i);
+            want_device(v[i].a, name, "a", i);
+            want_device(v[i].b, name, "b", i);
+        }
+    }
+    // Only the target: a generator's a and b operands are the incoming
+    // payload's bulk or an upload of the host box's matrices, both outside
+    // the DeviceHeap, so owns() says nothing useful about them.
+    void check_targets(const VBatch<S>& b, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < b.entries.size(); ++i) {
+            const auto& e = b.entries[i];
+            if (e.m <= 0 || e.n <= 0 || e.k <= 0) continue;
+            want_device(e.c, name, "c", i);
+        }
+    }
+    void check_batch(const VBatch<S>& b, const char* name) {
+        if (!env::check("heap")) return;
+        for (size_t i = 0; i < b.entries.size(); ++i) {
+            const auto& e = b.entries[i];
+            if (e.m <= 0 || e.n <= 0 || e.k <= 0) continue;
+            want_device(e.a, name, "a", i);
+            want_device(e.b, name, "b", i);
+            want_device(e.c, name, "c", i);
+        }
+    }
+    std::unordered_map<char*, size_t> packed_live_;   // group allocation -> live blocks in it
+
+    // ---- the near-block compressed store (GPU_CA_PLAN.md step 3c)
+    //
+    // B_compact holds each chunk's compressed bytes at a home it keeps for
+    // the level, sized at its first compression with no margin.  When a
+    // re-compressed chunk is longer, only the excess goes to a B_newtail
+    // slot; the home is never abandoned and nothing accumulates.  Slots are
+    // recorded by index, so B_newtail can be enlarged by copying slot k to
+    // slot k without rewriting any record.
+    static constexpr uint32_t kNoSlot = 0xffffffffu;
+    // Extents double, from small, so the store costs about what it holds
+    // whatever the problem size.  A flat 512 MB minimum made 96^3 worse than
+    // no compression at all: the level's compressed near blocks come to
+    // 0.13 GB there and the one extent charged 0.54.
+    static constexpr size_t kCompactFirst = size_t{32} << 20;
+    static constexpr size_t kCompactMax = size_t{512} << 20;
+    size_t compact_total_ = 0;
+    static constexpr size_t kTailSlot = size_t{64} << 10;   // > the worst growth measured (17 KB)
+    struct ChunkHome {
+        char* at = nullptr;     // its run in B_compact
+        uint32_t here = 0;      // bytes stored there: its first compressed length
+        uint32_t total = 0;     // its current compressed length
+        uint32_t tail = kNoSlot;
+    };
+    std::vector<ChunkHome> chunk_homes_;
+    std::vector<char*> compact_extents_;
+    char* compact_base_ = nullptr;
+    size_t compact_at_ = 0, compact_end_ = 0;
+    // B_newtail grows by adding an extent, never by reallocating: a copy
+    // kernel built earlier in the same group already holds tail_at() pointers,
+    // and moving the slots under them is an illegal access (and frees a base
+    // the heap then sees freed twice).  Slot k keeps its address for the
+    // level, which is also why a slot index is a stable record.
+    static constexpr size_t kTailSlotsPerExtent = 256;   // 16 MB at 64 KB a slot
+    std::vector<char*> tail_extents_;
+    std::vector<uint32_t> tail_free_;
+
+    char* compact_reserve(size_t bytes) {
+        if (compact_base_ == nullptr || compact_at_ + bytes > compact_end_) {
+            const size_t grown = std::min(kCompactMax, std::max(kCompactFirst, compact_total_));
+            const size_t want = std::max(grown, align_up(bytes));
+            char* e = heap_.try_alloc_resident(want, ResidentKind::OwnerNear);
+            if (e == nullptr) return nullptr;
+            compact_extents_.push_back(e);
+            compact_base_ = e;
+            compact_at_ = 0;
+            compact_end_ = want;
+            compact_total_ += want;
+        }
+        char* p = compact_base_ + compact_at_;
+        compact_at_ += bytes;
+        return p;
+    }
+    bool tail_grow() {
+        char* e = heap_.try_alloc_resident(kTailSlotsPerExtent * kTailSlot, ResidentKind::OwnerNear);
+        if (e == nullptr) return false;
+        const size_t base = tail_extents_.size() * kTailSlotsPerExtent;
+        tail_extents_.push_back(e);
+        for (size_t i = 0; i < kTailSlotsPerExtent; ++i) {
+            tail_free_.push_back(static_cast<uint32_t>(base + i));
+        }
+        return true;
+    }
+    void tail_release(ChunkHome& h) {
+        if (h.tail == kNoSlot) return;
+        tail_free_.push_back(h.tail);
+        h.tail = kNoSlot;
+    }
+    char* tail_at(uint32_t slot) const {
+        return tail_extents_[slot / kTailSlotsPerExtent] + (slot % kTailSlotsPerExtent) * kTailSlot;
+    }
+    void release_near_store() {
+        for (char* e : compact_extents_) heap_.free(e);
+        compact_extents_.clear();
+        compact_base_ = nullptr;
+        compact_at_ = compact_end_ = 0;
+        compact_total_ = 0;
+        for (char* e : tail_extents_) heap_.free(e);
+        tail_extents_.clear();
+        tail_free_.clear();
+        chunk_homes_.clear();
+    }
+    // l_first, l_max and l_last of each near-field block's compressed length,
+    // over the waves that write it.  A slot allocator would give each block
+    // sigma = m * l_first bytes once and overwrite in place, so the margin m
+    // it needs is exactly max(l_max / l_first) - and whether that is 1.0 or
+    // 2.0 decides whether the scheme bounds memory or not.
+    struct NearLen { size_t first = 0, last = 0, max = 0, raw = 0; };
+    std::unordered_map<const void*, NearLen> near_len_;
+    template<typename TargetT>
+    void measure_near_sizes(std::vector<TargetT>& targets, size_t f, size_t l, cudaStream_t stream) {
+        std::vector<const S*> srcs;
+        std::vector<size_t> elems;
+        std::vector<size_t> which;
+        for (size_t i = f; i < l; ++i) {
+            const TargetT& t = targets[i];
+            if (t.block == nullptr || t.block->ptr == nullptr || t.rows <= 0 || t.cols <= 0) continue;
+            srcs.push_back(t.block->ptr);
+            elems.push_back(static_cast<size_t>(t.rows) * t.cols);
+            which.push_back(i);
+        }
+        if (srcs.empty()) return;
+        std::vector<CompressedXnr> comp;
+        const double tol = tolerance_ * kXnrToleranceFraction * 0.25;
+        if (!fill_compressor_.compress(srcs, elems, tol, comp, stream)) return;
+        for (size_t j = 0; j < which.size(); ++j) {
+            if (comp[j].bytes == 0) continue;
+            NearLen& rec = near_len_[targets[which[j]].block];
+            if (rec.first == 0) rec.first = comp[j].bytes;
+            rec.last = comp[j].bytes;
+            rec.max = std::max(rec.max, comp[j].bytes);
+            rec.raw = std::max(rec.raw, elems[j] * sizeof(S));
+        }
+        fill_compressor_.release();   // the compressed bytes are not kept: measuring only
+    }
+    void report_near_sizes() {
+        if (near_len_.empty()) return;
+        auto& st = eliminator_stats();
+        for (const auto& [slot, rec] : near_len_) {
+            if (rec.first == 0) continue;
+            st.nl_raw += static_cast<double>(rec.raw);
+            st.nl_first += static_cast<double>(rec.first);
+            st.nl_max += static_cast<double>(rec.max);
+            st.nl_last += static_cast<double>(rec.last);
+            const double ratio = static_cast<double>(rec.max) / static_cast<double>(rec.first);
+            st.nl_worst = std::max(st.nl_worst, ratio);
+            const size_t bin = ratio <= 1.0001 ? 0 : (ratio <= 1.1 ? 1 : (ratio <= 1.25 ? 2 : (ratio <= 1.5 ? 3 : 4)));
+            st.nl_bin[bin] += static_cast<double>(rec.first);
+            ++st.nl_blocks;
+        }
+        near_len_.clear();
+    }
+    // One fewer block in this allocation; the allocation goes back at zero.
+    void release_packed(char* owner) {
+        if (owner == nullptr) return;
+        auto it = packed_live_.find(owner);
+        if (it == packed_live_.end()) return;
+        if (--it->second > 0) return;
+        packed_live_.erase(it);
+        heap_.free(owner);
+        packed_owned_.erase(std::remove(packed_owned_.begin(), packed_owned_.end(), owner),
+                            packed_owned_.end());
+        ++eliminator_stats().np_reclaimed;
+    }
+    // The packed entry of a block that is about to hold its own bytes again.
+    void drop_packed(bool schur, uint64_t key) {
+        if (schur) {
+            auto it = packed_schur_.find(static_cast<int64_t>(key));
+            if (it == packed_schur_.end()) return;
+            char* owner = it->second.owner;
+            packed_schur_.erase(it);
+            release_packed(owner);
+        } else {
+            auto it = packed_edges_.find(key);
+            if (it == packed_edges_.end()) return;
+            char* owner = it->second.owner;
+            packed_edges_.erase(it);
+            release_packed(owner);
+        }
+    }
+    // A finished group's near blocks, compressed into the packed store, their
+    // raw memory returned.  The tolerance is the tighter one: these feed the
+    // fill GEMMs, where the factors only feed the solve, and four times
+    // tighter costs about a sixth of the ratio (6.6x -> 5.4x at the leaf).
+    // Keeping them raw when the group cannot be packed is a valid degraded
+    // form - less saving, same answer - so a failure here is not fatal.
+    template<typename TargetT>
+    void pack_near_group(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream) {
+        std::vector<const S*> srcs;
+        std::vector<size_t> elems;
+        std::vector<size_t> which;
+        for (size_t i = first; i < last; ++i) {
+            const TargetT& t = targets[i];
+            if (t.block == nullptr || t.block->ptr == nullptr || t.rows <= 0 || t.cols <= 0) continue;
+            srcs.push_back(t.block->ptr);
+            elems.push_back(static_cast<size_t>(t.rows) * t.cols);
+            which.push_back(i);
+        }
+        if (srcs.empty()) return;
+        auto& stats = eliminator_stats();
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<CompressedXnr> comp;
+        // the tighter tolerance: these feed the fill GEMMs, not just the solve
+        const double tol = tolerance_ * kXnrToleranceFraction * 0.25;
+        if (!fill_compressor_.compress(srcs, elems, tol, comp, stream)) {
+            ++stats.np_groups_plain;
+            return;
+        }
+        const auto& cks = fill_compressor_.chunks();
+        const char* staging = fill_compressor_.staging();
+        std::vector<CopySpan> spans;
+        int64_t max_words = 0;
+        std::vector<bool> ok(which.size(), false);
+
+        for (size_t j = 0; j < which.size(); ++j) {
+            if (comp[j].bytes == 0) continue;
+            const TargetT& t = targets[which[j]];
+            const bool schur = static_cast<int64_t>(t.key) < 0;
+            const uint64_t pkey = schur ? static_cast<uint64_t>(static_cast<int64_t>(~t.key)) : t.key;
+            PackedBlock* pb = nullptr;
+            if (schur) {
+                pb = &packed_schur_[static_cast<int64_t>(pkey)];
+            } else {
+                pb = &packed_edges_[pkey];
+            }
+            if (pb->packed != nullptr) {
+                // it still holds build_parent's contiguous run; release that
+                // and start chunk homes, so home0 is never read as if a
+                // contiguous block had one
+                char* owner = pb->owner;
+                *pb = PackedBlock{};
+                release_packed(owner);
+            }
+            if (pb->nchunks == 0) {
+                // first sight: a run of chunk homes.  The chunk count is
+                // ceil(elems / chunk_elems) and elems only shrinks as the
+                // block's box is eliminated, so this run is big enough for
+                // the level.
+                pb->home0 = static_cast<uint32_t>(chunk_homes_.size());
+                chunk_homes_.resize(chunk_homes_.size() + comp[j].nchunks);
+            }
+            const size_t spans_before = spans.size();
+            bool stored = comp[j].nchunks <= pb_home_room(pb, comp[j].nchunks);
+            for (size_t c = 0; stored && c < comp[j].nchunks; ++c) {
+                ChunkHome& h = chunk_homes_[pb->home0 + c];
+                const auto& ck = cks[comp[j].chunk0 + c];
+                const uint32_t len = static_cast<uint32_t>(ck.stride);
+                const char* src = staging + ck.offset;
+                tail_release(h);              // its old excess, before the new
+                if (h.at == nullptr) {
+                    h.at = compact_reserve(len);
+                    if (h.at == nullptr) { stored = false; break; }
+                    h.here = len;
+                }
+                const uint32_t fits = std::min(len, h.here);
+                spans.push_back(CopySpan{src, h.at, static_cast<int64_t>(fits / 4)});
+                max_words = std::max(max_words, static_cast<int64_t>(fits / 4));
+                if (len > h.here) {
+                    const uint32_t excess = len - h.here;
+                    if (excess > kTailSlot) { stored = false; break; }
+                    if (tail_free_.empty() && !tail_grow()) { stored = false; break; }
+                    h.tail = tail_free_.back();
+                    tail_free_.pop_back();
+                    spans.push_back(CopySpan{src + h.here, tail_at(h.tail),
+                                             static_cast<int64_t>(excess / 4)});
+                    max_words = std::max(max_words, static_cast<int64_t>(excess / 4));
+                    ++stats.np_tails;
+                }
+                h.total = len;
+            }
+            if (!stored) {
+                // no room: this block stays uncompressed, which is what every
+                // block is without this feature.  Its stale entry must go, or
+                // a reader would decompress bytes that no longer match it.
+                spans.resize(spans_before);
+                if (schur) packed_schur_.erase(static_cast<int64_t>(pkey)); else packed_edges_.erase(pkey);
+                ++stats.np_no_room;
+                continue;
+            }
+            pb->packed = nullptr;
+            pb->live = true;
+            pb->bytes = comp[j].bytes;
+            pb->nchunks = static_cast<uint32_t>(comp[j].nchunks);
+            pb->rows = t.rows;
+            pb->cols = t.cols;
+            ok[j] = true;
+            stats.np_raw += static_cast<double>(elems[j] * sizeof(S));
+            stats.np_stored += static_cast<double>(comp[j].bytes);
+            ++stats.np_blocks;
+        }
+
+        if (!spans.empty()) {
+            const size_t list_bytes = spans.size() * sizeof(CopySpan);
+            if (list_bytes > fill_meta_device_.capacity()) {
+                check_cuda(cudaStreamSynchronize(stream), "near blocks stored");
+                fill_meta_device_.reserve(list_bytes);
+            }
+            auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+            check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                       "near blocks stored");
+            launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
+            check_cuda(cudaStreamSynchronize(stream), "near blocks stored");  // the staging goes back
+        }
+        for (size_t j = 0; j < which.size(); ++j) {
+            if (!ok[j]) continue;
+            TargetT& t = targets[which[j]];
+            if (t.block->ptr == nullptr) continue;
+            heap_.free(t.block->ptr);
+            t.block->ptr = nullptr;
+        }
+        ++stats.np_groups;
+        stats.np_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    }
+    // How many chunk homes this block's run can hold.  It was sized at the
+    // block's first compression and the count only shrinks, so this is a
+    // check against a bug rather than an expected path.
+    size_t pb_home_room(const PackedBlock* pb, size_t want) const {
+        return pb->home0 + want <= chunk_homes_.size() ? want : 0;
+    }
 #endif
     void run_fill_batch(const std::vector<const void*>& h_src, const std::vector<void*>& h_dst,
                         cudaStream_t stream);
@@ -877,8 +1410,9 @@ private:
             check_cuda(cudaMemcpy(v.data(), src, count * sizeof(DataType), cudaMemcpyDeviceToHost), what);
             return v;
         };
+        int n_plain = 0, n_packed = 0, n_had = 0;
         for (Box* box : skipped_xnr_) {
-            if (box->X_NR.is_allocated()) continue;
+            if (box->X_NR.is_allocated()) { ++n_had; continue; }
             const auto kept = kept_of(box, "X_NR");
             const KeptSolveBox* kb = kept.box;
             if (kb->xnr_bytes > 0) {
@@ -895,6 +1429,7 @@ private:
                 decompress_xnr_host<S>(packed.data(), reinterpret_cast<S*>(v.data()),
                                        kept.level->chunk_strides.data() + kb->xnr_chunk0, kb->xnr_nchunks);
                 box->X_NR.set_owned(kb->ntot, kb->r, std::move(v), MatrixStorage<DataType>::FULL);
+                ++n_packed;
 #else
                 throw std::runtime_error("H2 GPU: compressed X_NR on the host needs a build with nvCOMP");
 #endif
@@ -902,6 +1437,15 @@ private:
             }
             box->X_NR.set_owned(kb->ntot, kb->r, copy(kb->xnr, static_cast<size_t>(kb->ntot) * kb->r, "X_NR host copies"),
                                 MatrixStorage<DataType>::FULL);
+            ++n_plain;
+        }
+        if (env::trace("wave")) {
+            int rk = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+            std::printf("  [gpu] rescue on rank %d level %d: X_NR %d packed, %d plain, %d already on the host; "
+                        "%zu factor boxes\n", rk, level_index_, n_packed, n_plain, n_had,
+                        all ? skipped_factors_.size() : size_t{0});
+            std::fflush(stdout);
         }
         skipped_xnr_.clear();
         if (!all) return;
@@ -1339,6 +1883,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         packed_edges_ = std::move(adopt_->edges_packed);
         packed_strides_ = std::move(adopt_->strides);
         packed_owned_ = std::move(adopt_->packed_owned);
+        // the adopted entries' owners, so a materialization can reclaim them
+        packed_live_.clear();
+        for (auto& [morton, pb] : packed_schur_) {
+            if (pb.owner == nullptr && packed_owned_.size() == 1) pb.owner = packed_owned_.front();
+            if (pb.owner != nullptr) ++packed_live_[pb.owner];
+        }
+        for (auto& [key, pb] : packed_edges_) {
+            if (pb.owner == nullptr && packed_owned_.size() == 1) pb.owner = packed_owned_.front();
+            if (pb.owner != nullptr) ++packed_live_[pb.owner];
+        }
         adopt_->schur_packed.clear();
         adopt_->edges_packed.clear();
         adopt_->strides.clear();
@@ -2476,6 +3030,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // a transport must have sent the generators of the previous wave's
     // boxes with remote neighbors (the transport schedule of the loop;
     // CA levels transport nothing)
+    close_write_window();
+    cur_wave_ = wave_index;
+#ifdef H2_HAVE_NVCOMP
+    if (wave_index >= 1) measure_near_blocks(stream);
+#endif
     if (ca_) last_wave_.clear();
     for (int64_t m : last_wave_) {
         const Box* box = level_.find_local_box(m);
@@ -2676,6 +3235,30 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
     }
 
+    {   // the wave's transient by array (unaligned sums, so a little under the
+        // allocations themselves)
+        double w_ans = 0, w_xns = 0, w_xnr = 0, w_temp2 = 0, w_orig = 0, w_res = 0, w_t = 0, w_small = 0;
+        for (int i : active) {
+            const WaveBox& wb = boxes[static_cast<size_t>(i)];
+            const double k = wb.k, r = wb.r, nt = wb.ntot, d = static_cast<double>(D);
+            w_ans += nt * k * d;                    // A_NS, gathered neighbour rows
+            w_xns += nt * k * d;                    // the X_NS update written back
+            w_xnr += nt * r * d;                    // X_NR = A_NR - A_NS T
+            w_temp2 += nt * r * d;                  // temp2 = -X_NR X_RR^-1
+            if (wb.has_remote) w_orig += nt * r * d;  // the original X_NR for the exchange
+            w_small += r * r * d + 2 * k * r * d;   // tmp1, tmp2, xsr
+            w_small += r * r * d;                   // X_RR_full
+            w_res += r * r * d + r * 4 + 2 * k * r * d;  // X_RR, pivots, temp1, X_RS
+            if (gpu_sketch_) w_res += k * r * d; else w_t += k * r * d;
+        }
+        const double total = w_ans + w_xns + w_xnr + w_temp2 + w_orig + w_res + w_t + w_small;
+        if (total > stats.tw_max) {
+            stats.tw_max = total;
+            stats.tw_ans = w_ans; stats.tw_xns = w_xns; stats.tw_xnr = w_xnr;
+            stats.tw_temp2 = w_temp2; stats.tw_xnr_orig = w_orig;
+            stats.tw_result = w_res; stats.tw_t = w_t; stats.tw_small = w_small;
+        }
+    }
     stats.pb_buffers += std::chrono::duration<double>(clock::now() - t0).count();
     const auto t_items = clock::now();
     // Launch items of the box region.
@@ -2855,6 +3438,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         push(g7, wb.temp2, nt, wb.xsr, k, wb.xns, nt, nt, k, r);
 
         st.schur = DeviceMatrix{wb.s, k, k};
+        note_write(&st.schur, static_cast<size_t>(k) * k * D);
     }
 
     stats.pb_items += std::chrono::duration<double>(clock::now() - t_items).count();
@@ -2911,6 +3495,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     elim_marks_ = std::make_unique<StreamMarks>();
     StreamMarks& marks = *elim_marks_;
     marks.mark(stream);
+    check_items(evals, "wave evals");
+    check_items(fills, "wave fills");
     eval_blocks(evals, meta_, md, off_evals, max_eval_m, max_eval_n, stream);
     launch_gather(reinterpret_cast<const GatherItem*>(items(off_fills)), static_cast<int>(fills.size()),
                   max_fill_m, max_fill_n, md, stream);
@@ -3023,6 +3609,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 max_store_m = std::max(max_store_m, c);
                 max_store_n = std::max(max_store_n, k);
                 edges_[edge_key(box->morton_index, nm)] = fresh;
+                note_write(&edges_[edge_key(box->morton_index, nm)],
+                           static_cast<size_t>(fresh.rows) * fresh.cols * D);
             }
         }
         const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
@@ -3187,9 +3775,17 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     owner_lap(stats.po_pairs);
     // the join: blocks of new targets (their kernel values first), in the
     // sequential loop's order
+    // The join records a target; its block is allocated or materialized, its
+    // kernel values evaluated and its C pointers filled in when its group
+    // runs, so that only one group's blocks need to be raw at a time.
     struct Target {
-        DeviceMatrix* block;
+        DeviceMatrix* block = nullptr;
         std::vector<typename VBatch<S>::Entry> tasks;
+        uint64_t key = 0;
+        int rows = 0, cols = 0;
+        BoxState* row_box = nullptr;
+        BoxState* col_box = nullptr;
+        bool fresh = false;   // allocated by its group: its kernel values first
     };
     std::vector<Target> targets;
 #ifdef H2_HAVE_NVCOMP
@@ -3220,58 +3816,187 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (CandidateTarget& t : candidate_targets[ci]) {
             DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
             if (block->ptr == nullptr) {
-                assert_not_packed(false, t.key, "the owner pass's join");
-                block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D, ResidentKind::OwnerNear);
-                block->rows = t.rows;
-                block->cols = t.cols;
-                owner_evals.push_back(EvalItem{block->ptr, t.rows, t.rows, t.cols,
-                                               current_slots_in(*t.row_box, owner_meta_, owner_stamp),
-                                               current_slots_in(*t.col_box, owner_meta_, owner_stamp)});
-                max_owner_m = std::max(max_owner_m, t.rows);
-                max_owner_n = std::max(max_owner_n, t.cols);
-                ++stats.new_targets;
+                // allocated, or put back, when its group runs
             } else if (block->rows != t.rows || block->cols != t.cols) {
                 std::ostringstream oss;
                 oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
                     << ", expected " << t.rows << " x " << t.cols;
                 throw std::runtime_error(oss.str());
             }
-            for (auto& e : t.tasks) e.c = block->ptr;
-            targets.push_back(Target{block, std::move(t.tasks)});
+            targets.push_back(Target{block, std::move(t.tasks), t.key, t.rows, t.cols, t.row_box, t.col_box});
         }
     }
     owner_lap(stats.po_order);
     // Sub-batch j holds the j-th contribution of every target, so no launch
     // writes a block twice and each block sees its contributions in order.
-    std::vector<VBatch<S>> owner_batches;
+    //
+    // In groups of a bounded set of blocks, so that holding the near-field
+    // blocks compressed needs one group decompressed at a time rather than
+    // the 10.61 GB a wave touches.  Each target lies wholly within one group
+    // and keeps its contributions' order inside that group's sub-batches, so
+    // every block still sees the same contributions in the same order and the
+    // bits do not move; only which GEMMs share a launch changes, which the
+    // kernels' batch-independence covers (tests/batch_determinism.cpp).  The
+    // group boundaries follow the targets' canonical order and their shapes,
+    // both rank-independent, so replicas group alike.
+    // Holding the near blocks packed is **off**: measured at 192^3 it raises
+    // the leaf peak (20.72 -> 21.01 GB Color, 22.51 -> 23.48 CA0) and costs
+    // 0.76 / 1.70 s, because the per-wave materialization is still unbounded
+    // (6.16 GB of decompressed copies at the peak) while the store itself
+    // works (near blocks 9.47 -> 3.24 GB).  GPU_CA_PLAN.md step 3c lists what
+    // remains: bounded windows for the three readers, and a group budget
+    // chosen for the GEMM launch count rather than guessed.
+    //
+    // With it off the targets form a single group, which is the launch
+    // structure the owner pass had before any of this: the budget alone takes
+    // the leaf from 120 batched GEMM calls to 730 and costs 0.64 s, whether
+    // anything is compressed or not.
+    static constexpr bool kHoldNearBlocksPacked = false;
+    const size_t kNearGroupBudget = kHoldNearBlocksPacked ? (size_t{512} << 20)
+                                                          : std::numeric_limits<size_t>::max();
+    std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
     {
-        size_t depth = 0;
-        for (const Target& t : targets) depth = std::max(depth, t.tasks.size());
-        owner_batches.resize(depth);
-        for (const Target& t : targets)
-            for (size_t j = 0; j < t.tasks.size(); ++j) owner_batches[j].entries.push_back(t.tasks[j]);
+        size_t at = 0;
+        while (at < targets.size()) {
+            size_t bytes = 0, end = at;
+            while (end < targets.size() && (end == at || bytes < kNearGroupBudget)) {
+                bytes += static_cast<size_t>(targets[end].rows) * targets[end].cols * D;
+                ++end;
+            }
+            owner_groups.push_back({at, end});
+            stats.owner_groups += 1;
+            at = end;
+        }
     }
 
     owner_lap(stats.po_batches);
     stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
-    const size_t off_owner_evals = owner_meta_.append(owner_evals);
-    const size_t off_stores = owner_meta_.append(stores);
-    for (auto& b : owner_batches) b.stage(owner_meta_);
     stats.plan += std::chrono::duration<double>(clock::now() - t_owner).count();
     t0 = clock::now();
-    char* omd = owner_meta_.upload(owner_meta_device_, stream);
-    stats.bytes_up += static_cast<double>(owner_meta_.size());
-    launch_add_store(reinterpret_cast<const AddStoreItem*>(omd + off_stores), static_cast<int>(stores.size()),
-                     max_store_m, max_store_n, stream);
-    eval_blocks(owner_evals, owner_meta_, omd, off_owner_evals, max_owner_m, max_owner_n, stream);
+    // The near pass's stores first, in an image of their own: they write the
+    // fresh blocks of step 5 and carry no metadata offsets.
+    {
+        owner_meta_.clear();
+        const size_t off_stores = owner_meta_.append(stores);
+        char* smd = owner_meta_.upload(owner_meta_device_, stream);
+        stats.bytes_up += static_cast<double>(owner_meta_.size());
+        check_items(stores, "near stores");
+        launch_add_store(reinterpret_cast<const AddStoreItem*>(smd + off_stores), static_cast<int>(stores.size()),
+                         max_store_m, max_store_n, stream);
+        check_cuda(cudaStreamSynchronize(stream), "owner stores");  // the image is reused below
+    }
     marks.mark(stream);  // 6: step 5 (near blocks), owner targets
-    for (const auto& b : owner_batches) {
-        b.gemm(omd, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
-        stats.owner_gemms += static_cast<int64_t>(b.count());
-        for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
-        ++stats.owner_batches;
+    // Then one group at a time: its blocks raw, its kernel values, its GEMMs.
+    // Each group stages its own image, because a slot list is an offset into
+    // the image it was appended to (current_slots_in) and so cannot be shared
+    // across uploads; the stamp is bumped per group to force the re-append.
+    for (const auto& [first, last] : owner_groups) {
+        {   // every block of the group raw: the ones held packed put back in one
+            // batch, the ones that do not exist yet allocated and marked for
+            // their kernel values
+            std::vector<AdoptedBlock> want;
+            for (size_t i = first; i < last; ++i) {
+                Target& t = targets[i];
+                if (t.block->ptr != nullptr) continue;
+                const bool schur = static_cast<int64_t>(t.key) < 0;
+                const int64_t morton = schur ? static_cast<int64_t>(~t.key) : 0;
+                if (schur ? is_packed_schur(morton) : is_packed_edge(t.key)) {
+                    t.block->rows = t.rows;
+                    t.block->cols = t.cols;
+                    want.push_back(AdoptedBlock{schur, schur ? static_cast<uint64_t>(morton) : t.key, t.block});
+                    continue;
+                }
+                t.block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D,
+                                                       ResidentKind::OwnerNear);
+                t.block->rows = t.rows;
+                t.block->cols = t.cols;
+                t.fresh = true;
+                ++stats.new_targets;
+            }
+            materialize_adopted(want, stream);
+        }
+        owner_meta_.clear();
+        ++owner_group_stamp_;
+        std::vector<EvalItem> evals;
+        int ev_m = 0, ev_n = 0;
+        size_t depth = 0;
+        for (size_t i = first; i < last; ++i) {
+            Target& t = targets[i];
+            note_write(t.block, static_cast<size_t>(t.rows) * t.cols * D);
+            depth = std::max(depth, t.tasks.size());
+            if (!t.fresh) continue;
+            evals.push_back(EvalItem{t.block->ptr, t.rows, t.rows, t.cols,
+                                     current_slots_in(*t.row_box, owner_meta_, owner_group_stamp_),
+                                     current_slots_in(*t.col_box, owner_meta_, owner_group_stamp_)});
+            ev_m = std::max(ev_m, t.rows);
+            ev_n = std::max(ev_n, t.cols);
+        }
+        const size_t off_ev = owner_meta_.append(evals);
+        std::vector<VBatch<S>> gb(depth);
+        for (size_t i = first; i < last; ++i) {
+            Target& t = targets[i];
+            for (auto& e : t.tasks) e.c = t.block->ptr;
+            for (size_t j = 0; j < t.tasks.size(); ++j) gb[j].entries.push_back(t.tasks[j]);
+        }
+        for (auto& b : gb) b.stage(owner_meta_);
+        char* gmd = owner_meta_.upload(owner_meta_device_, stream);
+        stats.bytes_up += static_cast<double>(owner_meta_.size());
+        check_items(evals, "group evals");
+        for (const auto& b : gb) check_batch(b, "group gemms");
+        eval_blocks(evals, owner_meta_, gmd, off_ev, ev_m, ev_n, stream);
+        for (const auto& b : gb) {
+            b.gemm(gmd, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
+            stats.owner_gemms += static_cast<int64_t>(b.count());
+            for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+            ++stats.owner_batches;
+        }
+        check_cuda(cudaStreamSynchronize(stream), "owner group");  // the image is reused
+        // OFF.  Measured negative: 70-83% of the near-block bytes have their
+        // last write in the final quarter of the level's waves, so they are
+        // still raw when the peak occurs and no packing policy can shrink the
+        // set at that moment.  Holding them packed cost 10-19% of Factor time,
+        // gained 0.48 GB on Color and lost 2.82 GB on CA0 (the churn of
+        // re-packing a block once per writing wave, 8.9 times, pins group
+        // allocations by their last live block).  Left in place because the
+        // machinery is verified and the policy is the only thing wrong with
+        // it; see GPU_CA_PLAN.md step 3.
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1) {
+            pack_near_group(targets, first, last, stream);
+        }
+        // measuring only: compress to learn the lengths, keep the full
+        // precision blocks, discard the compressed bytes
+        if (compress_factors_ >= 1 && env::check("fillsrc")) {
+            measure_near_sizes(targets, first, last, stream);
+        }
     }
     marks.mark(stream);  // 7: owner GEMMs
+    if (env::check("heap")) {
+        // A near block whose slot still names memory the heap has given back:
+        // the wave read and retired it, nothing replaced the entry, and the
+        // level's end will free it a second time.  Report the first few keys
+        // so the pairs can be identified rather than guessed at.
+        int dangling = 0;
+        for (const auto& kv : edges_) {
+            if (kv.second.ptr == nullptr || heap_.is_allocated(kv.second.ptr)) continue;
+            if (dangling++ < 6) {
+                std::printf("[heap] level %d wave %d: edges_(%lld,%lld) names freed memory, %dx%d\n",
+                            level_index_, wave_index, static_cast<long long>(kv.first >> 32),
+                            static_cast<long long>(kv.first & 0xffffffffu), kv.second.rows, kv.second.cols);
+            }
+        }
+        for (size_t b = 0; b < states_.size(); ++b) {
+            const DeviceMatrix& m = states_[b].schur;
+            if (m.ptr == nullptr || heap_.is_allocated(m.ptr)) continue;
+            if (dangling++ < 10) {
+                std::printf("[heap] level %d wave %d: schur of local box %zu names freed memory\n",
+                            level_index_, wave_index, b);
+            }
+        }
+        if (dangling > 0) {
+            std::printf("[heap] level %d wave %d: %d dangling block slots\n", level_index_, wave_index, dangling);
+            std::fflush(stdout);
+        }
+    }
     if (device_exchange_) {
         if (owner_ != nullptr) {
             pack_owner_generators(boxes, d_sources, d_xnr, d_result, stream);
@@ -3510,13 +4235,25 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host()
     auto& stats = eliminator_stats();
 
 #ifdef H2_HAVE_NVCOMP
-    // Every adopted block must have been materialized by the wave that read
-    // it before the level is downloaded; one left packed would be skipped
-    // here (a null ptr) and silently lost.
+    // The download skips a null ptr, so anything still packed would be
+    // silently lost.  Near blocks are held packed between groups now, so this
+    // puts the remainder back rather than refusing.
     if (!packed_schur_.empty() || !packed_edges_.empty()) {
-        throw std::runtime_error("LevelEliminator: the host download with " +
-                                 std::to_string(packed_schur_.size() + packed_edges_.size()) +
-                                 " adopted blocks still packed");
+        std::vector<AdoptedBlock> want;
+        for (const auto& [morton, pb] : packed_schur_) {
+            if (!is_interest(morton)) continue;
+            BoxState& st = state_of(morton);
+            if (st.schur.ptr == nullptr) {
+                want.push_back(AdoptedBlock{true, static_cast<uint64_t>(morton), &st.schur});
+            }
+        }
+        for (const auto& [key, pb] : packed_edges_) {
+            auto it = edges_.find(key);
+            if (it != edges_.end() && it->second.ptr == nullptr) {
+                want.push_back(AdoptedBlock{false, key, &it->second});
+            }
+        }
+        materialize_adopted(want, Context::instance().stream());
     }
 #endif
     struct Piece { const DeviceMatrix* m; size_t offset; };
@@ -4108,6 +4845,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     };
     auto accumulate = [&](uint64_t key, const DeviceMatrix& target, int rows, int cols, const S* a, int lda,
                           const S* b, int ldb, int k) {
+        note_write(&target, static_cast<size_t>(target.rows) * target.cols * D);
         if (target.rows != rows || target.cols != cols) {
             const int64_t lo = static_cast<int64_t>(key >> 32), hi = static_cast<int64_t>(key & 0xffffffffu);
             std::ostringstream oss;
@@ -4266,6 +5004,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                     rep_nn.entries.push_back({t2_l, g.xrs, fresh, c_l, g.k, g.r, g.ntot, g.r, rows});
                 }
                 edges_[key] = DeviceMatrix{fresh, rows, cols};
+                note_write(&edges_[key], static_cast<size_t>(rows) * cols * D);
                 replaced.insert(key);
             };
             if (!interest(lm)) {
@@ -4388,6 +5127,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     prod.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 0.0, queue);
     rep_tt.gemm(md, MagmaTrans, MagmaTrans, 1.0, 1.0, queue);
     rep_nn.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 1.0, queue);
+    check_items(sums, "generator sums");
+    check_targets(rep_tt, "generator rep_tt");
+    check_targets(rep_nn, "generator rep_nn");
     launch_sum_add(reinterpret_cast<const SumAddItem*>(md + off_sums), static_cast<int>(sums.size()), max_sum_m,
                    max_sum_n, md, stream);
     // later launches are ordered after these reads
@@ -4548,17 +5290,68 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
     for (const AdoptedBlock& w : want) {
         if (w.m->ptr != nullptr) continue;
         const PackedBlock* pb = packed_of(w);
-        if (pb == nullptr || pb->packed == nullptr) continue;
+        // `packed == nullptr` used to mean "no bytes".  In the near-block
+        // store it means the opposite - the bytes are in chunk homes - so
+        // testing it alone skipped every near block, left its ptr null, and
+        // handed null + offset to whatever read it next (compute-sanitizer:
+        // an invalid 8-byte read at 0x21c0 in sum_add_kernel, from
+        // apply_remote_generators).  A block has bytes if either form is set.
+        if (pb == nullptr || (pb->packed == nullptr && pb->nchunks == 0)) continue;
         if (pb->rows != w.m->rows || pb->cols != w.m->cols) {
             throw std::runtime_error("LevelEliminator::materialize_adopted: shape of the packed block changed");
         }
         w.m->ptr = heap_.alloc_resident<S>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S),
                                            ResidentKind::Adopted);
     }
-    // 2. then their chunks
+    // 2. then their chunks.  A block written by build_parent is one
+    //    contiguous run.  A near block is a run of chunk homes - each a piece
+    //    in B_compact plus an optional tail in B_newtail - so its bytes are
+    //    not contiguous and bitcomp cannot read them in place; those are
+    //    gathered into one scratch buffer first.
     std::vector<const void*> h_src;
     std::vector<void*> h_dst;
     const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+    size_t gather_bytes = 0;
+    for (const AdoptedBlock& w : want) {
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || pb->packed != nullptr || w.m->ptr == nullptr) continue;
+        for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
+    }
+    char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes)) : nullptr;
+    std::vector<CopySpan> gspans;
+    int64_t gmax = 0;
+    size_t gat = 0;
+    for (const AdoptedBlock& w : want) {
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || pb->packed != nullptr || w.m->ptr == nullptr || gathered == nullptr) continue;
+        for (uint32_t c = 0; c < pb->nchunks; ++c) {
+            const ChunkHome& h = chunk_homes_[pb->home0 + c];
+            char* dst = gathered + gat;
+            const uint32_t in_home = std::min(h.here, h.total);
+            gspans.push_back(CopySpan{h.at, dst, static_cast<int64_t>(in_home / 4)});
+            gmax = std::max(gmax, static_cast<int64_t>(in_home / 4));
+            if (h.total > in_home) {
+                const uint32_t rest = h.total - in_home;
+                gspans.push_back(CopySpan{tail_at(h.tail), dst + in_home, static_cast<int64_t>(rest / 4)});
+                gmax = std::max(gmax, static_cast<int64_t>(rest / 4));
+            }
+            h_src.push_back(dst);
+            h_dst.push_back(reinterpret_cast<S*>(w.m->ptr) + static_cast<size_t>(c) * chunk_elems);
+            gat += h.total;
+        }
+    }
+    if (!gspans.empty()) {
+        const size_t list_bytes = gspans.size() * sizeof(CopySpan);
+        if (list_bytes > fill_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
+            fill_meta_device_.reserve(list_bytes);
+        }
+        auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_items, gspans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                   "near blocks gathered");
+        launch_copy_spans(d_items, static_cast<int>(gspans.size()), gmax, stream);
+        check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
+    }
     for (const AdoptedBlock& w : want) {
         const PackedBlock* pb = packed_of(w);
         if (pb == nullptr || pb->packed == nullptr || w.m->ptr == nullptr) continue;
@@ -4576,11 +5369,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
         run_fill_batch(h_src, h_dst, stream);
         ++stats.mat_batches;
     }
+    heap_.free(gathered);
     for (const AdoptedBlock& w : want) {
-        if (w.schur) {
-            packed_schur_.erase(static_cast<int64_t>(w.key));
+        PackedBlock* pb = w.schur ? (packed_schur_.count(static_cast<int64_t>(w.key))
+                                         ? &packed_schur_[static_cast<int64_t>(w.key)] : nullptr)
+                                  : (packed_edges_.count(w.key) ? &packed_edges_[w.key] : nullptr);
+        if (pb == nullptr) continue;
+        if (pb->packed != nullptr) {
+            drop_packed(w.schur, w.key);   // build_parent's run: erase and reclaim
         } else {
-            packed_edges_.erase(w.key);
+            pb->live = false;              // near block: keep its homes for the next compression
         }
     }
     stats.mat_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -6880,6 +7678,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         owned_at += comp[j].bytes;
                         PackedBlock pb;
                         pb.packed = packed;
+                        pb.live = true;   // its bytes are current: without this
+                        // every adopted block reads as "not packed" to
+                        // is_packed_edge(), the wave never materializes it,
+                        // and the fills gather from a null pointer
                         pb.bytes = comp[j].bytes;
                         pb.chunk0 = static_cast<uint32_t>(out->strides.size());
                         pb.nchunks = static_cast<uint32_t>(comp[j].nchunks);
@@ -7022,9 +7824,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     owner_marks_.clear();
     owner_sent_bytes_.clear();
 #ifdef H2_HAVE_NVCOMP
+    close_write_level();
+    report_near_sizes();
     eliminator_stats().mat_left += static_cast<int64_t>(packed_schur_.size() + packed_edges_.size());
     for (char* b : packed_owned_) heap_.free(b);
     packed_owned_.clear();
+    packed_live_.clear();
+    release_near_store();
     packed_schur_.clear();
     packed_edges_.clear();
     packed_strides_.clear();
