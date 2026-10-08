@@ -225,9 +225,9 @@ public:
         const size_t meta_bytes = align_up(n * sizeof(AbsMaxItem)) + align_up(n * sizeof(double)) +
                                   3 * align_up(nc * sizeof(void*)) + 2 * align_up(nc * sizeof(size_t)) +
                                   align_up(nc * sizeof(double));
-        staging_ = heap_.try_alloc(stage_bytes);
+        staging_ = heap_.try_alloc(stage_bytes, ResidentKind::Codec);
         if (staging_ == nullptr) return false;
-        meta_ = heap_.try_alloc(meta_bytes);
+        meta_ = heap_.try_alloc(meta_bytes, ResidentKind::Codec);
         if (meta_ == nullptr) { release(); return false; }
 
         // ---- per-box max|.| on the device, for the deltas.  The scale stays

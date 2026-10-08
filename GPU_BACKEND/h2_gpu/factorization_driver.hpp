@@ -1152,6 +1152,24 @@ public:
             std::printf(" | other %.2f GB", static_cast<double>(other) / 1e9);
             const double accounted = static_cast<double>(named + other);
             std::printf(" (accounted %.2f GB)\n", accounted / 1e9);
+            // And the transient half, which is now half the peak.  Without
+            // this the only figure to hand was what a wave plans to allocate,
+            // which is not what is live when the peak is reached.
+            {
+                std::printf("  [gpu] level %d transient at the peak: %.2f GB", lvl,
+                            static_cast<double>(e.heap_peak_transient) / 1e9);
+                size_t tnamed = 0;
+                for (size_t k = 1; k < static_cast<size_t>(ResidentKind::Count); ++k) {
+                    const auto kind = static_cast<ResidentKind>(k);
+                    const size_t bytes = heap.transient_at_peak(kind);
+                    if (bytes == 0) continue;
+                    tnamed += bytes;
+                    std::printf(" | %s %.2f GB", resident_kind_name(kind), static_cast<double>(bytes) / 1e9);
+                }
+                const size_t tother = heap.transient_at_peak(ResidentKind::Other);
+                std::printf(" | other %.2f GB (accounted %.2f GB)\n", static_cast<double>(tother) / 1e9,
+                            static_cast<double>(tnamed + tother) / 1e9);
+            }
             if (e.persist_blocks > 0) {
                 // The peak is live bytes and the other two are cumulative, so
                 // subtracting them from it was meaningless - it printed a

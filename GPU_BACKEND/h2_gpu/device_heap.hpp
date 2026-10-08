@@ -65,6 +65,19 @@ enum class ResidentKind : uint8_t {
     Adopted,       // begin(): the parent blocks of the level below, restored
     OwnerNear,     // the owner pass's new near-field blocks (its own edges_)
     OwnerSrc,      // X_NR^T slots, the owner pass's other operand, built and freed per wave
+    // Transient kinds (the top of the arena), so the transient half of the
+    // peak can be attributed the way the resident half already is:
+    WaveWork,      // a box's tmp1, tmp2, X_SR, A_NS, X_NS
+    WaveOutput,    // its X_NR and temp2, until their stores exist
+    WaveSource,    // the source block the host copier takes (X_RR_full, X_NR orig)
+    WaveResult,    // the result block (LU, pivots, temp1, X_RS, T)
+    Codec,         // compressor staging and decompression destinations
+    SrcWindow,     // the owner pass's window of source slots
+    Sketch,        // the wave's sketch buffers, split four ways because
+    SketchFill,    // ... the decompressed fill slots a group reads
+    SketchVec,    // ... the random vectors it applies the matrix to
+    SketchLists,   // ... per box, the source lists and index tables
+    SketchPW,      // ... per box, [P; W]
     Count
 };
 inline const char* resident_kind_name(ResidentKind k) {
@@ -81,6 +94,17 @@ inline const char* resident_kind_name(ResidentKind k) {
         case ResidentKind::Restore: return "restores";
         case ResidentKind::CaHalo: return "CA halo";
         case ResidentKind::OwnerSrc: return "owner source slots";
+        case ResidentKind::WaveWork: return "wave work";
+        case ResidentKind::WaveOutput: return "wave outputs";
+        case ResidentKind::WaveSource: return "wave sources";
+        case ResidentKind::WaveResult: return "wave result";
+        case ResidentKind::Codec: return "codec staging";
+        case ResidentKind::SrcWindow: return "source window";
+        case ResidentKind::Sketch: return "sketch";
+        case ResidentKind::SketchFill: return "sketch fill slots";
+        case ResidentKind::SketchVec: return "sketch vectors";
+        case ResidentKind::SketchLists: return "sketch lists";
+        case ResidentKind::SketchPW: return "sketch P;W";
         case ResidentKind::Reduction: return "reduction";
         case ResidentKind::Matvec: return "matvec";
         case ResidentKind::Uploaded: return "uploaded blocks";
@@ -173,7 +197,7 @@ public:
         return base_ != nullptr && p >= base_ && p < base_ + capacity_;
     }
     // A transient block if it fits now (no reclaim), else nullptr.
-    char* try_alloc(size_t bytes) {
+    char* try_alloc(size_t bytes, ResidentKind kind = ResidentKind::Other) {
         if (base_ == nullptr) return nullptr;
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
@@ -181,14 +205,15 @@ public:
         allocated_.emplace(offset, std::make_pair(size, false));
         used_ += size;
         transient_used_ += size;
+        note_transient(offset, size, kind);
         note_peak();
         return base_ + offset;
     }
 
     // A per-wave (transient) block, from the top of the arena.
     template<typename T = char>
-    T* alloc(size_t bytes) {
-        return reinterpret_cast<T*>(alloc_bytes(bytes, false));
+    T* alloc(size_t bytes, ResidentKind kind = ResidentKind::Other) {
+        return reinterpret_cast<T*>(alloc_bytes(bytes, false, kind));
     }
     // A resident block if it fits now (no reclaim), else nullptr: for a
     // caller that has a correct fallback, such as storing a fill source raw
@@ -248,6 +273,7 @@ public:
             alloc_b_[static_cast<size_t>(kind)] += size;
         } else {
             transient_used_ += size;
+            note_transient(offset, size, kind);
         }
         note_peak();
         return base_ + offset;
@@ -304,6 +330,10 @@ public:
             }
         } else {
             transient_used_ -= length;
+            if (auto tit = transient_kind_.find(offset); tit != transient_kind_.end()) {
+                by_tkind_[static_cast<size_t>(tit->second)] -= length;
+                transient_kind_.erase(tit);
+            }
         }
         auto next = free_.lower_bound(start);
         if (next != free_.begin()) {
@@ -332,6 +362,9 @@ public:
         resident_kind_.clear();
         by_kind_.fill(0);
         by_kind_at_peak_.fill(0);
+        transient_kind_.clear();
+        by_tkind_.fill(0);
+        by_tkind_at_peak_.fill(0);
         if (capacity_ > 0) add_free(0, capacity_);
     }
 
@@ -349,9 +382,14 @@ public:
         resident_at_peak_ = resident_used_;
         transient_at_peak_ = transient_used_;
         by_kind_at_peak_ = by_kind_;
+        by_tkind_at_peak_ = by_tkind_;
     }
     // What each kind of resident block held when the peak was reached.
     size_t resident_at_peak(ResidentKind k) const { return by_kind_at_peak_[static_cast<size_t>(k)]; }
+    // The same for the transient half, which had no such accounting: a wave's
+    // buffers were reported as what it plans to allocate, and reading that as
+    // the composition of the peak cost a design.
+    size_t transient_at_peak(ResidentKind k) const { return by_tkind_at_peak_[static_cast<size_t>(k)]; }
     size_t resident_now(ResidentKind k) const { return by_kind_[static_cast<size_t>(k)]; }
     // Cumulative, so a kind's current bytes can be checked against what was
     // ever allocated to it.  A kind reporting bytes at the peak that it was
@@ -430,6 +468,7 @@ public:
                 alloc_b_[static_cast<size_t>(kind)] += size;
             } else {
                 transient_used_ += size;
+                note_transient(dest, size, kind);
             }
             moves.push_back({blocks[i], base_ + dest, size});
             blocks[i] = base_ + dest;
@@ -459,6 +498,11 @@ private:
         resident_at_peak_ = resident_used_;
         transient_at_peak_ = transient_used_;
         by_kind_at_peak_ = by_kind_;
+        by_tkind_at_peak_ = by_tkind_;
+    }
+    void note_transient(size_t offset, size_t size, ResidentKind kind) {
+        transient_kind_[offset] = kind;
+        by_tkind_[static_cast<size_t>(kind)] += size;
     }
 
     static constexpr size_t kAlign = 256;
@@ -513,6 +557,9 @@ private:
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_{};
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> alloc_n_{}, alloc_b_{}, free_n_{}, free_b_{};
     std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_kind_at_peak_{};
+    std::unordered_map<size_t, ResidentKind> transient_kind_;  // offset -> what it is for
+    std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_tkind_{};
+    std::array<size_t, static_cast<size_t>(ResidentKind::Count)> by_tkind_at_peak_{};
     size_t transient_used_ = 0;
     size_t resident_at_peak_ = 0;
     size_t transient_at_peak_ = 0;

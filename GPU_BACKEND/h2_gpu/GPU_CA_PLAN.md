@@ -2844,6 +2844,130 @@ Next steps, in the order they are worth doing:
 2.0x the boxes a rank held this morning.  Reaching the 8x goal needs FP32 on
 the stores (deferred) and the near field itself on top of that.
 
+#### Step 1 measured and designed (2026-10-08)
+
+**The number the design turns on.**  Each candidate C needs, from every source
+E next to it, *all* of E's X_NR slots, because A runs over E's whole neighbor
+list - so whether a window helps at all depends on how many distinct sources
+one group touches.  Measured per owner group under `BPACK_CHECK=fillsrc`
+(targets are grouped in canonical order, which is Morton order, so a group is
+a spatial patch and its sources are that patch's neighborhood):
+
+| 192^3 leaf | largest group's union | with repeats | summed over groups |
+|---|---|---|---|
+| Color | **0.82 GB** | 5.26 | 37.59 GB in 102 groups |
+| CA0 | **0.82 GB** | 5.27 | 53.22 GB in 156 groups |
+
+So a window of about 1 GB replaces the 5.14 GB the wave holds raw, and the
+union is 6.4x smaller than materializing per task.  The traffic is 37.6 GB a
+level on Color and 53.2 on CA0, against the 32.1 and 49.0 GB the groups
+already decompress for the near blocks: roughly a doubling of the update
+loop's codec work, 0.1-0.2 s at the measured 262-365 GB/s, plus compressing
+X_NR itself.
+
+**The shape.**  Both operands are stored transposed, which makes a slot
+contiguous: temp2^T already is (it is the fill source the sketches read), and
+X_NR^T becomes a store of the same kind.  The owner GEMM then runs
+(Trans, NoTrans) instead of (NoTrans, Trans) - implemented in both the magma
+and the tensor-core path (device_gemm.cu:242) - with lda = ldb = r, so the
+window needs no transposes and no second staging.
+
+**Lifetimes differ between the two stores, which is what makes this cheap.**
+temp2^T must live for the whole level (later waves' sketches read it) and
+already does.  X_NR^T is read only by the owner pass of the wave that produced
+it, so it is built, used and freed inside the wave: about 0.45 GB resident
+instead of 2.57 GB raw.  Freeing both raw outputs is then worth 2.57 + 2.1 GB
+against a 0.82 GB window, about -3.9 GB.
+
+**Stages, each gated.**
+- A. The X_NR^T store, built and round-trip checked, nothing reading it.  The
+  gate is bit-identical logdet, since no reader has changed; the peak goes
+  *up* by the store's 0.45 GB until stage C.
+- B. The owner pass reads both stores through the window.  logdet moves here:
+  the near-field updates would be computed from quantized temp2 and X_NR,
+  where today they use the raw values.  That is the same class of change as
+  the near blocks and the fill sources, both already lossy, but it is a change
+  to the factorization and not just to storage, so acc_forward/acc_backward
+  and logdet's relative change are the gate.
+- C. Free the raw temp2 and X_NR once the stores are built.  Only in the
+  configuration where nothing else reads them - every box pledged and
+  `skip_xnr_` - so the host download and a non-pledged keep keep today's path.
+
+#### Step 1 built: all three stages, and what they were worth (2026-10-08)
+
+| 192^3, 8 ranks, CA at the leaf | Color peak | Factor | CA0 peak | Factor |
+|---|---|---|---|---|
+| before step 1 | 16.03 | 8.60 s | 18.07 | 9.35 s |
+| A: the X_NR^T store | 16.03 | 8.93 | 18.07 | 9.51 |
+| B: the owner pass reads the stores | 16.02 | 9.09 | 18.08 | 9.73 |
+| C: the raw outputs freed | **15.40** | 9.48 | **17.47** | 10.6 s |
+
+Every stage passed its own gate.  A was bit-identical, nothing having read the
+new store.  B moved logdet by 1.4e-8 and 3.1e-8 on Color and 8.5e-10 and
+2.2e-8 on CA0, with acc_mvp, acc_forward and acc_backward inside the
+uncompressed baseline's band - the near-field updates are computed from
+quantized operands now.  C was bit-identical to B, since only the lifetimes
+changed.  The window came out exactly as measured: 0.82 GB in the largest
+group, 37.6 GB over 102 groups.
+
+**And the whole piece is worth 0.62 GB, where the wave's buffers said 3.9.**
+The outputs are 82% of what the largest leaf wave allocates, and freeing all
+5.14 GB of them moved the transient peak by 0.61.  So the peak is not reached
+while they are live: it is reached later in the wave, inside the owner pass,
+where they were already dead.  "The largest wave's transient 6.29 GB: outputs
+82%" is a sum of what a wave plans to allocate, and I read it as the
+composition of the peak.
+
+That is the fourth time in one day: the Transition label, the read union, the
+Adopted kind, and now this.  The pattern is always the same - a total, or a
+churn, read as an occupancy - and the fix is always the same instrument.  So
+the heap now tags **transient** blocks by kind as well, and prints their
+composition at the peak beside the resident one (wave work, wave outputs, wave
+sources, wave result, codec staging, source window, sketch).  Nothing further
+on the transient until that measurement is in.
+
+**What stages A to C leave behind, which is not nothing:** the near-field
+updates no longer need the raw outputs at all, so the wave's working set is
+decoupled from the owner pass.  Whatever turns out to set the transient peak,
+it can now be moved or bounded without the outputs being pinned behind it.
+
+#### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
+
+With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
+
+| transient at the peak | GB |
+|---|---|
+| **sketch [P; W]** | **5.41** |
+| sketch fill slots | 0.54 |
+| codec staging | 0.46 |
+| sketch lists | 0.29 |
+| sketch vectors | 0.13 |
+| wave result | 0.14 |
+| wave sources | 0.08 |
+| total | 7.05 (accounted 7.05) |
+
+So the single largest item in the whole 15.40 GB peak is neither the near
+blocks (3.24 resident) nor temp2^T (2.34): it is the sketch's per-box
+`[P; W]`.  The transient peak is reached in the *sketch*, at the head of a
+wave, before the solves have produced anything - which is why freeing 5.14 GB
+of wave outputs moved it by 0.61.
+
+`P` is `fill_rank x n` and `W` is `d x fill_rank`, where
+`fill_rank = sum of r over the box's fill sources`, and **every box of the
+wave has its pair allocated at once**: one loop allocates them all
+(level_eliminator.hpp, the sketch's plan loop) and one frees them all after
+the sketch.  At the leaf that is 256 boxes x about 20 MB.
+
+**The fix has a shape this codebase has used twice.**  A box's sketch is
+independent of the other boxes', so the wave's boxes can be swept in groups
+bounded by a byte budget, each group's `[P; W]` freed before the next - which
+is step 3a's owner groups and the fill-source groups again.  Nothing about
+the arithmetic changes, so the gate is bit-identical logdet on both paths.
+With a 512 MB budget, 5.41 -> about 0.5 GB, so the transient 7.05 -> about
+2.2 and the peak 15.40 -> about 10.5 GB on Color and 17.47 -> 12.6 on CA0.
+The cost is more, smaller launches inside the 1.39 s sketch.
+
+
 The solve factor the code calls X_NR is `temp2` = -X_NR X_RR^{-1}: the host's
 Box::X_NR is downloaded from `wb.off_temp2` and the kept device factor is
 compressed from the same buffer (`srcs.push_back(source + wb->off_temp2)`).

@@ -2806,7 +2806,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
         widest = std::max(widest, group_elems);
         if (widest > 0) {
-            fill_scratch = heap_.alloc(widest * sizeof(S));
+            fill_scratch = heap_.alloc(widest * sizeof(S), ResidentKind::SketchFill);
             fill_groups.resize(static_cast<size_t>(group) + 1);
             for (auto& [m, rg] : regions) {
                 const BoxState& ss = *rg.st;
@@ -2903,8 +2903,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             p.fill_rank += src.state->r;
         }
     }
-    char* d_y = heap_.alloc(std::max<size_t>(y_bytes, 1));
-    char* d_f = adaptive ? heap_.alloc(std::max<size_t>(y_bytes, 1)) : nullptr;
+    char* d_y = heap_.alloc(std::max<size_t>(y_bytes, 1), ResidentKind::SketchVec);
+    char* d_f = adaptive ? heap_.alloc(std::max<size_t>(y_bytes, 1), ResidentKind::SketchVec) : nullptr;
     std::vector<char*> fill_blocks;  // per box [P; W] and lists, freed after the sketch
     std::vector<SketchListsItem> list_items;
     std::vector<SourceListsItem> source_list_items;
@@ -2928,7 +2928,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             bytes = align_up(bytes + static_cast<size_t>(p.sources[j].entries) * I);
             bytes = align_up(bytes + static_cast<size_t>(p.sources[j].entries / p.sk) * I);  // row_index
         }
-        char* block = heap_.alloc(bytes);
+        char* block = heap_.alloc(bytes, ResidentKind::SketchLists);
         fill_blocks.push_back(block);
         p.draws = reinterpret_cast<int*>(block + o_draws);
         p.rows = reinterpret_cast<int*>(block + o_rows);
@@ -2994,7 +2994,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             max_n = std::max(max_n, p.n);
             if (p.fill_rank == 0) continue;
             const size_t p_bytes = align_up(static_cast<size_t>(p.fill_rank) * p.n * D);
-            char* fill = heap_.alloc(p_bytes + static_cast<size_t>(p.d) * p.fill_rank * D);
+            char* fill = heap_.alloc(p_bytes + static_cast<size_t>(p.d) * p.fill_rank * D, ResidentKind::SketchPW);
             fill_blocks.push_back(fill);
             p.P = reinterpret_cast<S*>(fill);
             p.W = reinterpret_cast<S*>(fill + p_bytes);
@@ -3418,16 +3418,16 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     const size_t info_offset = result_bytes;
     result_bytes = align_up(result_bytes + std::max<size_t>(active.size(), 1) * sizeof(int));
 
-    char* d_result = heap_.alloc(std::max<size_t>(result_bytes, 1));
+    char* d_result = heap_.alloc(std::max<size_t>(result_bytes, 1), ResidentKind::WaveResult);
     std::vector<char*> d_sources(source_group_bytes.size());
-    for (size_t g = 0; g < d_sources.size(); ++g) d_sources[g] = heap_.alloc(std::max<size_t>(source_group_bytes[g], 1));
+    for (size_t g = 0; g < d_sources.size(); ++g) d_sources[g] = heap_.alloc(std::max<size_t>(source_group_bytes[g], 1), ResidentKind::WaveSource);
     std::vector<char*> d_temp2(temp2_group_bytes.size());
-    for (size_t g = 0; g < d_temp2.size(); ++g) d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1));
+    for (size_t g = 0; g < d_temp2.size(); ++g) d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1), ResidentKind::WaveOutput);
     std::vector<char> temp2_to_copier(d_temp2.size(), 0);  // the copier frees these
-    char* d_xnr = xnr_bytes > 0 ? heap_.alloc(xnr_bytes) : nullptr;
+    char* d_xnr = xnr_bytes > 0 ? heap_.alloc(xnr_bytes, ResidentKind::WaveSource) : nullptr;
     std::vector<char*> work_blocks;
     std::vector<char*> xnr_blocks;
-    char* d_t = heap_.alloc(std::max<size_t>(t_bytes, 1));
+    char* d_t = heap_.alloc(std::max<size_t>(t_bytes, 1), ResidentKind::WaveWork);
     int* d_info = reinterpret_cast<int*>(d_result + info_offset);
 
     // Host image of all interpolation matrices, laid out as d_t.
@@ -3485,11 +3485,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const size_t o_xsr = w_off;  w_off = align_up(w_off + k * r * D);
             const size_t o_ans = w_off;  w_off = align_up(w_off + nt * k * D);
             const size_t o_xns = w_off;  w_off = align_up(w_off + nt * k * D);
-            char* work = heap_.alloc(w_off);
+            char* work = heap_.alloc(w_off, ResidentKind::WaveWork);
             work_blocks.push_back(work);
             // X_NR likewise: the near pass reads A_NS and X_NS out of the work
             // block after X_NR is in its store, so X_NR cannot share with them
-            char* xnr_block = heap_.alloc(std::max<size_t>(nt * r * D, 1));
+            char* xnr_block = heap_.alloc(std::max<size_t>(nt * r * D, 1), ResidentKind::WaveOutput);
             xnr_blocks.push_back(xnr_block);
             wb.tmp1 = reinterpret_cast<S*>(work + o_tmp1);
             wb.tmp2 = reinterpret_cast<S*>(work + o_tmp2);
@@ -3578,7 +3578,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     std::unordered_map<const void*, std::pair<size_t, size_t>> win_of;   // block -> (pass, offset)
     size_t win_at = 0;
     if (kHoldNearBlocksPacked && (!packed_schur_.empty() || !packed_edges_.empty())) {
-        fill_window = heap_.try_alloc(kFillWindowBytes);
+        fill_window = heap_.try_alloc(kFillWindowBytes, ResidentKind::SrcWindow);
         if (fill_window != nullptr) win_passes.emplace_back();
     }
     std::vector<size_t> fill_pass;   // the pass each fills item belongs to
@@ -4391,7 +4391,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     }
                 }
             }
-            window = heap_.try_alloc(std::max<size_t>(need_bytes, 1));
+            window = heap_.try_alloc(std::max<size_t>(need_bytes, 1), ResidentKind::SrcWindow);
             if (window == nullptr) {
                 throw std::runtime_error("H2 GPU: no room for the owner pass's source window (" +
                                          std::to_string(need_bytes / (1u << 20)) + " MB)");
@@ -6011,7 +6011,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
             for (int i : group) {
                 WaveBox& wb = boxes[static_cast<size_t>(i)];
                 const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
-                char* blk = heap_.try_alloc(std::max<size_t>(nt * r * D, 1));
+                char* blk = heap_.try_alloc(std::max<size_t>(nt * r * D, 1), ResidentKind::Codec);
                 if (blk == nullptr) { room = false; break; }
                 staging.push_back(blk);
                 xtr.push_back(TransposeItemT<S>{wb.xnr, static_cast<int>(nt), reinterpret_cast<S*>(blk),
