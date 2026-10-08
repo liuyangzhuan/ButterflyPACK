@@ -2777,13 +2777,72 @@ printed at the commit is the fill source's slot-wise size - 1.89 GB at the
 Color leaf, against the 1.13 GB the whole-matrix form comes to, because
 slot-wise deltas are finer.  The handover's own line gives the final size.
 
-**Where the peak is now.**  On Color it is still the leaf's waves, 16.03 GB,
-of which the transient is 7.66 - now 48% of the peak, and 82% of it the two
-n_tot x r wave outputs.  **On CA0 the binding level has moved off the leaf**:
-level 4 is 18.92 GB (resident 16.24 + transient 2.68) against the leaf's
-18.07, and that resident is parent blocks 6.74 + CA halo 5.99 + kept factors
-3.44.  Nothing in the near-field or temp2 work touches it; it is the halo and
-the parent blocks, which is a different piece of work.
+**Where the peak is now.**  On Color it is the leaf's waves, 16.03 GB, of
+which the transient is 7.66 - 48% of the peak.
+
+CA0 at `--CA_level 4` put the peak at level 4 instead (18.92 GB), but that was
+an artefact of the setting: CA_level is the *first* CA level, so 4 at 192^3
+made levels 4 and 5 both CA, and level 4 then held the whole level's block set
+replicated - parent blocks 6.74 GB plus a 5.99 GB received halo, 12.73 GB a
+rank, the halo being installed blocks and not a message buffer
+(ca_halo.hpp:279 emplaces them into blocks.schur/edges for the level).  **CA
+runs use CA at the leaf only from now on** (the user's decision, 2026-10-08):
+`--CA_level 5` at 192^3, one CA level, no halo exchange.  That gives
+
+| 192^3, 8 ranks, CA at the leaf | peak | Factor |
+|---|---|---|
+| Color | 16.03 (8.37 + 7.66) | 8.60 s |
+| CA0 | 18.07 (10.41 + 7.66) | 9.35 s |
+
+and level 4 falls to 11.84 GB, so the leaf binds on both paths.  CA0's extra
+2.04 GB of resident over Color is its larger replicated near field (owner near
+4.31 vs 3.25, Schur/edges 0.48 vs 0.24) and its kept factors (1.78 vs 1.35).
+
+### The peak after the two 2026-10-08 commits, and what is left
+
+Color leaf, 16.03 GB = resident 8.37 + transient 7.66:
+
+| | GB | |
+|---|---|---|
+| **transient: the wave's two outputs** | **5.14** | X_NR 2.57 + temp2 2.57, 82% of the largest wave's 6.29 |
+| owner near blocks | 3.25 | compressed, 5.9x |
+| fill temp2^T packed | 2.34 | also the kept X_NR now |
+| transient: codec and gather staging | 1.37 | 7.66 - 6.29 |
+| kept factors | 1.35 | X_NR excluded; T, X_SR, LU, pivots, all raw |
+| fill X_RR_full | 1.13 | raw |
+| transient: scratch A_NS, X_NS | 0.78 | 12% of the wave |
+| level Schur/edges, points, misc | 0.66 | |
+
+Next steps, in the order they are worth doing:
+
+1. **The wave's two outputs, 5.14 GB** - the one big lever left.  Compress
+   X_NR and temp2 per one-hop neighbor as they are produced and let the owner
+   groups materialize the slices they need, which is the bound the groups
+   already impose on the near blocks.  temp2's slot store already exists (the
+   fill source), and a slot is exactly the row range a target needs, so no new
+   granularity problem.  The traffic is the measured "fill source union" per
+   wave, 2.63 GB largest / 36.29 GB summed at level 4, so roughly a doubling
+   of the update loop's codec work: expect -3 to -4 GB for +0.5 to 1 s.
+2. **Compress X_RR_full, 1.13 GB** - the other fill source, and the only one
+   still raw.  One contiguous r x r block a box, so it is one slot in the pass
+   that already compresses temp2^T; the readers are the same sketches, which
+   already read a lossy temp2^T.  About -0.9 GB for little work.
+3. **Compress the kept factors other than X_NR, 1.35 GB at the peak** - T and
+   X_SR, leaving the LU of X_RR and the pivots exact.  They are now the
+   majority of a stored kept block (1.47 GB of 2.60 at the leaf), so this also
+   takes about -1.2 GB a level off the solve's resident factors.
+4. **One delta per box for the fill source's slots** - the slot-wise store is
+   1.89 GB at the leaf where the same data as whole matrices is 1.13, because
+   each slot gets a delta from its own max (factor_compress.hpp keeps the scale
+   per block by design).  Sharing the box's delta across its slots is about
+   -0.9 GB resident *and* makes the handover's second quantization exact, which
+   would undo the acc_mvp 2.95e-3 -> 3.11e-3 of the temp2 merge.  But it
+   loosens what the fill GEMMs read, which feeds the factorization itself, so
+   it needs logdet and acc measured before it is adopted.
+
+1 to 3 would put the Color leaf near 10.5 GB and CA0 near 12.5, which is
+2.0x the boxes a rank held this morning.  Reaching the 8x goal needs FP32 on
+the stores (deferred) and the near field itself on top of that.
 
 The solve factor the code calls X_NR is `temp2` = -X_NR X_RR^{-1}: the host's
 Box::X_NR is downloaded from `wb.off_temp2` and the kept device factor is
