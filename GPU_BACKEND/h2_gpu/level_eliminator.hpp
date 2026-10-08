@@ -846,7 +846,8 @@ private:
             bytes = xrr + align_up(r * r * sizeof(S));
         }
     };
-    void pack_generators(const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources, const char* d_xnr,
+    void pack_generators(const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources,
+                         const std::vector<char*>& d_temp2, const char* d_xnr,
                          char* d_result, cudaStream_t stream);
     // An owner level (owner_plan.hpp): a box's piece for a recipient is the
     // generator (GenLayout) and, for the box's home rank, the solve's
@@ -863,7 +864,8 @@ private:
         }
     };
     void pack_owner_generators(const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources,
-                               const char* d_xnr, char* d_result, cudaStream_t stream);
+                               const std::vector<char*>& d_temp2, const char* d_xnr, char* d_result,
+                               cudaStream_t stream);
     struct OwnerEntry {
         int64_t morton = -1;
         int32_t seq = 0;
@@ -904,10 +906,10 @@ private:
             heap_.free(ptr);
         }
     }
-    void keep_solve_factors(const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources,
+    void keep_solve_factors(const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_temp2,
                             cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
-                                 const std::vector<char*>& d_sources, cudaStream_t stream);
+                                 const std::vector<char*>& d_temp2, cudaStream_t stream);
     // H2_compress_factors: a box whose kept X_NR is still the fill source's
     // compressed temp2^T.  The two are one matrix - temp2, and temp2
     // transposed - so only one is stored, and the transition transposes it
@@ -922,6 +924,15 @@ private:
         int64_t rows = 0;  // the slots have to be all of X_NR's rows, in order
         for (const auto& sl : st->t2t_slots) rows += sl.rows;
         return rows == wb.ntot;
+    }
+    // The host does not need this box's X_NR: its factors are kept on the
+    // device, and rescue_skipped_xnr reads them back if the host ever asks.
+    // The download and the early free of temp2 have to agree about this, so
+    // both ask here rather than each spelling it out.
+    bool host_skips_xnr(const WaveBox& wb) const {
+        return skip_xnr_ && !keep_failed_ && wb.ntot > 0 &&
+               kept_.boxes.count(wb.box->morton_index) != 0 &&
+               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
     }
     // The slot a neighbor position holds in the two stores, or -1.
     static int32_t slot_at(const WaveBox& wb, size_t pos) {
@@ -3330,6 +3341,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     constexpr size_t kSourceGroup = size_t{256} << 20;
     size_t result_bytes = 0, t_bytes = 0;
     std::vector<size_t> source_group_bytes;
+    // temp2 in a block of its own, grouped exactly as the source blocks are:
+    // it is the owner pass's operand and the solve factor, and once both are
+    // read out of their stores it can go while the source block is still
+    // being copied to the host (the copier owns that one).
+    std::vector<size_t> temp2_group_bytes;
     size_t xnr_bytes = 0;  // original X_NR of generator boxes, device exchange (packed, not downloaded)
     const size_t D = sizeof(S);
     std::vector<int> active;  // boxes with a redundant part
@@ -3367,10 +3383,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             if (source_group_bytes.empty() || (source_group_bytes.back() > 0 &&
                                                source_group_bytes.back() + bytes > kSourceGroup)) {
                 source_group_bytes.push_back(0);
+                temp2_group_bytes.push_back(0);
             }
             wb.source_group = static_cast<int>(source_group_bytes.size()) - 1;
             size_t& group = source_group_bytes.back();
-            wb.off_temp2 = group;    group = align_up(group + nt * r * D);
+            size_t& t2 = temp2_group_bytes.back();
+            wb.off_temp2 = t2;       t2 = align_up(t2 + nt * r * D);
             wb.off_xrr_full = group; group = align_up(group + r * r * D);
             if (wb.has_remote && !device_exchange_) {
                 wb.off_xnr_orig = group;
@@ -3403,8 +3421,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     char* d_result = heap_.alloc(std::max<size_t>(result_bytes, 1));
     std::vector<char*> d_sources(source_group_bytes.size());
     for (size_t g = 0; g < d_sources.size(); ++g) d_sources[g] = heap_.alloc(std::max<size_t>(source_group_bytes[g], 1));
+    std::vector<char*> d_temp2(temp2_group_bytes.size());
+    for (size_t g = 0; g < d_temp2.size(); ++g) d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1));
+    std::vector<char> temp2_to_copier(d_temp2.size(), 0);  // the copier frees these
     char* d_xnr = xnr_bytes > 0 ? heap_.alloc(xnr_bytes) : nullptr;
     std::vector<char*> work_blocks;
+    std::vector<char*> xnr_blocks;
     char* d_t = heap_.alloc(std::max<size_t>(t_bytes, 1));
     int* d_info = reinterpret_cast<int*>(d_result + info_offset);
 
@@ -3428,7 +3450,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.temp1 = reinterpret_cast<S*>(d_result + wb.off_temp1);
 
             char* source = d_sources[static_cast<size_t>(wb.source_group)];
-            wb.temp2 = reinterpret_cast<S*>(source + wb.off_temp2);
+            wb.temp2 = reinterpret_cast<S*>(d_temp2[static_cast<size_t>(wb.source_group)] + wb.off_temp2);
             wb.xrr_full = reinterpret_cast<S*>(source + wb.off_xrr_full);
             if (gpu_sketch_) {
                 // X_RR_full gets its block now.  temp2^T only when its
@@ -3462,15 +3484,18 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const size_t o_tmp2 = w_off; w_off = align_up(w_off + k * r * D);
             const size_t o_xsr = w_off;  w_off = align_up(w_off + k * r * D);
             const size_t o_ans = w_off;  w_off = align_up(w_off + nt * k * D);
-            const size_t o_xnr = w_off;  w_off = align_up(w_off + nt * r * D);
             const size_t o_xns = w_off;  w_off = align_up(w_off + nt * k * D);
             char* work = heap_.alloc(w_off);
             work_blocks.push_back(work);
+            // X_NR likewise: the near pass reads A_NS and X_NS out of the work
+            // block after X_NR is in its store, so X_NR cannot share with them
+            char* xnr_block = heap_.alloc(std::max<size_t>(nt * r * D, 1));
+            xnr_blocks.push_back(xnr_block);
             wb.tmp1 = reinterpret_cast<S*>(work + o_tmp1);
             wb.tmp2 = reinterpret_cast<S*>(work + o_tmp2);
             wb.xsr = reinterpret_cast<S*>(work + o_xsr);
             wb.ans = reinterpret_cast<S*>(work + o_ans);
-            wb.xnr = reinterpret_cast<S*>(work + o_xnr);
+            wb.xnr = reinterpret_cast<S*>(xnr_block);
             wb.xns = reinterpret_cast<S*>(work + o_xns);
             wb.s = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1), ResidentKind::Near);  // becomes the Schur block
         }
@@ -3872,6 +3897,63 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // round trip against the original.
     if (compress_factors_ >= 1 && gpu_sketch_) compress_fill_sources(boxes, active, stream);
 
+    // ---- The generators, this wave's kept factors, and then the raw outputs.
+    //
+    // These three used to run after the owner pass, which was fine while the
+    // owner pass read temp2 and X_NR raw.  Now that it reads them out of their
+    // stores, they are the last readers of the raw form, and moving them here
+    // is what lets the 5.14 GB of a leaf wave's 6.29 GB transient go before
+    // the pass that used to keep it alive.  None of the three depends on the
+    // owner pass: they read the solves' output.
+    if (device_exchange_) {
+        if (owner_ != nullptr) {
+            pack_owner_generators(boxes, d_sources, d_temp2, d_xnr, d_result, stream);
+        } else {
+            pack_generators(boxes, d_sources, d_temp2, d_xnr, d_result, stream);
+        }
+        heap_.free(d_xnr);  // read by the pack only; later launches are ordered after it
+    }
+    for (const WaveBox& wb : boxes) {
+        if (wb.k == 0 || wb.r == 0) continue;
+        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+        factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
+                                             align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
+    }
+    if (keep_solve_ && !keep_failed_) keep_solve_factors(boxes, d_result, d_temp2, stream);
+    // Whether the host still wants a group's X_NR: with the factors kept on
+    // the device it does not (rescue_skipped_xnr reads them back if it ever
+    // needs them), and then temp2 has no reader left outside its store.
+    bool from_store = compress_factors_ >= 1;
+    for (const WaveBox& wb : boxes) {
+        if (!from_store) break;
+        if (wb.r == 0 || wb.ntot == 0) continue;
+        const BoxState* sst = wb.state;
+        if (sst == nullptr || sst->t2t_packed == nullptr || sst->xnrt_packed == nullptr ||
+            sst->t2t_slots.size() != sst->xnrt_slots.size()) {
+            from_store = false;
+        }
+    }
+    std::vector<char> temp2_needed(d_temp2.size(), 0);
+    for (int i : active) {
+        const WaveBox& wb = boxes[static_cast<size_t>(i)];
+        if (wb.ntot == 0) continue;
+        if (!host_skips_xnr(wb)) temp2_needed[static_cast<size_t>(wb.source_group)] = 1;
+    }
+    if (from_store) {
+        for (char* b : xnr_blocks) heap_.free(b);
+        xnr_blocks.clear();
+        for (size_t g = 0; g < d_temp2.size(); ++g) {
+            if (temp2_needed[g]) continue;
+            heap_.free(d_temp2[g]);
+            d_temp2[g] = nullptr;
+        }
+        for (WaveBox& wb : boxes) {  // nothing may read the raw form again
+            wb.xnr = nullptr;
+            wb.temp2 = nullptr;
+        }
+    }
+
     // ---- Step 5, planned while the device runs the box region: the near
     // block of every neighbor becomes A_NS + update (current neighbor rows x
     // this box's skeleton), stored in the canonical orientation.  Its tens of
@@ -3923,21 +4005,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         int32_t next = 0;
         for (size_t a = 0; a < wb.counts.size(); ++a) {
             if (wb.counts[a] > 0) wb.slot_of_pos[a] = next++;
-        }
-    }
-    // Reading the operands out of their stores rather than from the raw
-    // outputs.  All or nothing for the wave: the transposes are per batch, so
-    // one group cannot mix the two forms.
-    bool from_store = compress_factors_ >= 1;
-    if (from_store) {
-        for (const WaveBox& wb : boxes) {
-            if (wb.r == 0 || wb.ntot == 0) continue;
-            const BoxState* st = wb.state;
-            if (st == nullptr || st->t2t_packed == nullptr || st->xnrt_packed == nullptr ||
-                st->t2t_slots.size() != st->xnrt_slots.size()) {
-                from_store = false;
-                break;
-            }
         }
     }
     auto win_key = [](int32_t src, int32_t slot, int which) {
@@ -4038,12 +4105,18 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 const int32_t src_idx = static_cast<int32_t>(wit->second);
                 const WaveBox& src = boxes[wit->second];
                 if (src.r == 0 || src.ntot == 0) continue;
+                // the raw outputs are gone when the operands come from the
+                // stores, so the entries are built with null bases and the
+                // group loop points them at its window
+                auto op = [](const S* base, int row) -> const S* {
+                    return base == nullptr ? nullptr : base + row;
+                };
                 const auto& src_hop = src.box->one_hop;
                 const size_t c_pos = static_cast<size_t>(std::find(src_hop.begin(), src_hop.end(), cm) - src_hop.begin());
                 if (c_pos == src_hop.size()) throw std::runtime_error("LevelEliminator: asymmetric one_hop lists");
                 const int n_c = static_cast<int>(src.counts[c_pos]);
                 if (n_c == 0) continue;
-                const S* x_nr_c = src.xnr + src.row0[c_pos];
+                const S* x_nr_c = op(src.xnr, src.row0[c_pos]);
                 for (size_t a = 0; a < src_hop.size(); ++a) {
                     const int64_t am = src_hop[a];
                     const int n_a = static_cast<int>(src.counts[a]);
@@ -4079,7 +4152,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                         BoxState& as = state_of(am);
                         const uint64_t key = edge_key(cm, am);
                         target = &target_for(key, near_block(key), n_c, n_a, cs, as);
-                        target->tasks.push_back({src.temp2 + src.row0[c_pos], src.xnr + src.row0[a], nullptr,
+                        target->tasks.push_back({op(src.temp2, src.row0[c_pos]), op(src.xnr, src.row0[a]), nullptr,
                                                  n_c, n_a, src.r, src.ntot, src.ntot, n_c});
                         target->sources.push_back(em);
                         target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, c_pos), slot_at(src, a)});
@@ -4087,7 +4160,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     } else {
                         continue;  // owned by the other endpoint, or a lazy far pair
                     }
-                    target->tasks.push_back({src.temp2 + src.row0[a], x_nr_c, nullptr,
+                    target->tasks.push_back({op(src.temp2, src.row0[a]), x_nr_c, nullptr,
                                              n_a, n_c, src.r, src.ntot, src.ntot, n_a});
                     target->sources.push_back(em);
                     target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, a), slot_at(src, c_pos)});
@@ -4459,22 +4532,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             std::fflush(stdout);
         }
     }
-    if (device_exchange_) {
-        if (owner_ != nullptr) {
-            pack_owner_generators(boxes, d_sources, d_xnr, d_result, stream);
-        } else {
-            pack_generators(boxes, d_sources, d_xnr, d_result, stream);
-        }
-        heap_.free(d_xnr);  // read by the pack only; later launches are ordered after it
-    }
-    for (const WaveBox& wb : boxes) {
-        if (wb.k == 0 || wb.r == 0) continue;
-        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
-        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
-        factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
-                                             align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
-    }
-    if (keep_solve_ && !keep_failed_) keep_solve_factors(boxes, d_result, d_sources, stream);
     // ---- 4. factors to the host, in the background: the result block (LU,
     // pivots, temp1, X_RS, T; LU status checked on arrival) and the source
     // groups (temp2 as X_NR, X_RR_full).
@@ -4555,6 +4612,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             job.device = d_sources[g];
             job.bytes = source_group_bytes[g];
             job.ready = ready();
+            // temp2 is a block of its own now, so the X_NR the host still
+            // wants is a second job; when nothing wants it, the block was
+            // given back before the owner pass and this job stays empty.
+            HostCopier::Job t2job;
+            t2job.device = d_temp2[g];
+            t2job.bytes = temp2_group_bytes[g];
             struct Shape { Box* box; int ntot, r; };
             auto shapes = std::make_shared<std::vector<Shape>>();
             for (int i : active) {
@@ -4566,10 +4629,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 // (a kept box's X_NR stays on the device only: rescue_skipped_xnr)
                 // (an owned ghost keeps its host copies: a fill source the
                 // transition may restore, not a solve factor here)
-                const bool skip = skip_xnr_ && !keep_failed_ && nt > 0 && kept_.boxes.count(wb.box->morton_index) != 0 &&
-                                  !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
+                const bool skip = host_skips_xnr(wb);
                 if (skip) skipped_xnr_.push_back(wb.box);
-                if (nt > 0 && !skip) job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
+                if (nt > 0 && !skip) {
+                    if (d_temp2[g] == nullptr) {
+                        throw std::runtime_error("LevelEliminator: temp2 was freed but the host wants X_NR");
+                    }
+                    t2job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
+                }
                 job.segments.push_back(Seg{&wb.box->X_RR_full.data, nullptr, wb.off_xrr_full, r * r * D});
                 if (wb.has_remote && nt > 0 && !device_exchange_) {
                     job.segments.push_back(Seg{&wb.box->lazy_original_x_nr, nullptr, wb.off_xnr_orig, nt * r * D});
@@ -4591,6 +4658,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 }
             };
             copier_->submit(std::move(job));
+            if (!t2job.segments.empty()) {
+                t2job.ready = ready();
+                t2job.finalize = [] {};  // (the shapes are set by the source job's)
+                temp2_to_copier[g] = 1;
+                copier_->submit(std::move(t2job));
+            }
         }
     }
     for (int i : active) {
@@ -4643,6 +4716,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         es.ledge_distinct = static_cast<int64_t>(ledge_seen_.size());
     }
     for (char* work : work_blocks) heap_.free(work);
+    for (char* b : xnr_blocks) heap_.free(b);  // (empty when they went before the owner pass)
+    for (size_t g = 0; g < d_temp2.size(); ++g) {
+        if (d_temp2[g] != nullptr && !temp2_to_copier[g]) heap_.free(d_temp2[g]);
+    }
     heap_.free(d_t);
     if (early_free_sources_) {
         // the wave's sketches were the last reads of sources whose local
@@ -6217,7 +6294,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
-    const std::vector<const WaveBox*>& kept_boxes, char* d_result, const std::vector<char*>& d_sources,
+    const std::vector<const WaveBox*>& kept_boxes, char* d_result, const std::vector<char*>& d_temp2,
     cudaStream_t stream) {
     const size_t D = sizeof(S), I = sizeof(int);
     struct Span { size_t off; const char* src; size_t bytes; };
@@ -6247,7 +6324,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
                 pledged[bi] = 1;
                 continue;
             }
-            const char* source = d_sources[static_cast<size_t>(wb->source_group)];
+            const char* source = d_temp2[static_cast<size_t>(wb->source_group)];
             comp_at[bi] = static_cast<int>(srcs.size());
             srcs.push_back(reinterpret_cast<const S*>(source + wb->off_temp2));
             elems.push_back(nt * r);
@@ -6265,7 +6342,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
     for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
         const WaveBox& wb = *kept_boxes[bi];
         const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
-        const char* source = d_sources[static_cast<size_t>(wb.source_group)];
+        const char* source = d_temp2[static_cast<size_t>(wb.source_group)];
         Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0, false};
         m.T = total;   spans.push_back({total, d_result + wb.off_t, k * r * D});        total = align_up(total + k * r * D);
         m.xsr = total; spans.push_back({total, d_result + wb.off_temp1, k * r * D});    total = align_up(total + k * r * D);
@@ -6715,7 +6792,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::kept_xnr_through_host(con
 
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
-    const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_sources, cudaStream_t stream) {
+    const std::vector<WaveBox>& boxes, char* d_result, const std::vector<char*>& d_temp2, cudaStream_t stream) {
     const size_t D = sizeof(S);
 
     // ---- this wave's boxes whose factors are worth keeping
@@ -6744,7 +6821,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
             raw += bytes;
             ++at;
         }
-        if (!keep_solve_factor_group(group, d_result, d_sources, stream)) return;
+        if (!keep_solve_factor_group(group, d_result, d_temp2, stream)) return;
     }
 }
 
@@ -6759,8 +6836,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::pack_generators(
-    const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources, const char* d_xnr, char* d_result,
-    cudaStream_t stream) {
+    const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources, const std::vector<char*>& d_temp2,
+    const char* d_xnr, char* d_result, cudaStream_t stream) {
     if (outbox_ != nullptr || !peer_out_.empty()) {
         throw std::runtime_error("LevelEliminator: generators of two waves wait for a transport");
     }
@@ -6844,7 +6921,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::pack_generators(
         char* dst = outbox_ + peer_out_.at(pc.peer).offset + pc.off;
         const char* source = d_sources[static_cast<size_t>(wb.source_group)];
         const char* xnr = d_xnr != nullptr ? d_xnr : source;
-        copy(dst, source + wb.off_temp2, nt * r * D, "pack temp2");
+        copy(dst, d_temp2[static_cast<size_t>(wb.source_group)] + wb.off_temp2, nt * r * D, "pack temp2");
         size_t row = 0;
         for (const Run& run : pc.runs) {  // the destination's rows of every column
             check_cuda(cudaMemcpy2DAsync(dst + lay.xnr + row * D, nx * D, xnr + wb.off_xnr_orig + run.row * D, nt * D,
@@ -7185,8 +7262,8 @@ std::chrono::high_resolution_clock::duration LevelEliminator<CoordType, DataType
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::pack_owner_generators(
-    const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources, const char* d_xnr, char* d_result,
-    cudaStream_t stream) {
+    const std::vector<WaveBox>& boxes, const std::vector<char*>& d_sources, const std::vector<char*>& d_temp2,
+    const char* d_xnr, char* d_result, cudaStream_t stream) {
     const size_t D = sizeof(S), I = sizeof(int);
     struct Run { int row, len; };
     struct Piece { int peer; size_t off; const WaveBox* wb; int nx; bool full; std::vector<Run> runs; };
@@ -7283,7 +7360,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::pack_owner_generators(
             char* dst = send.block + seg_off.at(pc.peer) + pc.off;
             const char* source = d_sources[static_cast<size_t>(wb.source_group)];
             const char* xnr = d_xnr != nullptr ? d_xnr : source;
-            copy(dst, source + wb.off_temp2, nt * r * D, "pack temp2");
+            copy(dst, d_temp2[static_cast<size_t>(wb.source_group)] + wb.off_temp2, nt * r * D, "pack temp2");
             size_t row = 0;
             for (const Run& run : pc.runs) {  // the recipient's rows of every column
                 check_cuda(cudaMemcpy2DAsync(dst + lay.xnr + row * D, nx * D, xnr + wb.off_xnr_orig + run.row * D, nt * D,
