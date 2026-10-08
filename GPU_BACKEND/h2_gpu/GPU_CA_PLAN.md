@@ -2469,6 +2469,220 @@ Everything is grouped, and every group bound was found by measurement:
   own chunk: it reads rows from all over a source, and the chunk's lifetime
   already exists for the host-restored ones.
 
+### Step 3: the near-field blocks, 9.47 GB of the leaf's 13.77 GB resident
+
+**Measured first, because the design turns on it.** The near blocks are not
+the parent blocks, so their ratio was sampled directly - half the budget from
+the Schur blocks and half from the edges, since a first sample filled itself
+from the Schur blocks alone and never reached the edges, which are 89% of the
+bytes:
+
+| level | Schur, loose / tight | edges, loose / tight |
+|---|---|---|
+| 5 (leaf) | 6.3x / 5.2x | 6.6x / 5.4x (CA0 6.4 / 5.4) |
+| 4 | 7.0 / 6.1 | 7.1 / 6.2 |
+| 3 | 7.0 / 6.0 | 7.7 / 6.8 |
+| 2 | 7.8 / 6.6 | 8.2 / 6.7 |
+
+"tight" is the factors' tolerance fraction divided by four.  The edges
+compress as well as the diagonal, so the leaf's 10.61 GB of near blocks
+(owner near 9.47 + level Schur/edges 1.14) goes to about 1.6 GB loose or
+2.0 GB tight.  **Use the tight one**: 0.35 GB for a four times smaller
+quantization step on matrices the fill GEMMs read, against factors only the
+solve reads.
+
+**The transient is a separate lever and a smaller one.**  Of the leaf's
+largest wave's 6.29 GB, only 12% is scratch (A_NS 0.39 + X_NS 0.39); 82% is
+the two nt x r outputs (X_NR 2.57 + temp2 2.57), which tiling can stream but
+not avoid.  Level 4 is 14% / 81%, CA0 the same shape.  So tiling nt for the
+scratch alone is worth 0.78 GB of 6.29 and is not worth doing on its own.
+
+**And a wave writes nearly all of the near blocks** - 10.18 GB of the 10.61
+resident, 62.34 GB over 16 waves, 17.23 GB at their largest over 57203
+blocks, 8.9 writes each.  So holding them compressed *between* waves saves
+nothing: the bounded set has to come from grouping the **targets** within a
+wave, not from iterating sources.
+
+#### Step 3a (done): the owner pass runs in bounded target groups
+
+512 MB groups, launched group-major instead of one global sub-batch sweep.
+Each target lies wholly in one group and keeps its contributions' order
+within that group's sub-batches, so every block sees the same contributions
+in the same order; only which GEMMs share a launch changes, which
+batch-independence covers.  Group boundaries follow the targets' canonical
+order and their shapes, both rank-independent, so replicas group alike.
+Verified **bit-identical** at 96^3 on both paths: -9928907.2811287567 and
+-9928906.4595639911, the baselines exactly.
+
+#### Step 3c: the design that replaces 3b's store (2026-10-07)
+
+3b failed on the *store*, not the scheme: a re-compressed block's old bytes
+were never reclaimed, and reference counting at group-allocation granularity
+left a single live block pinning a whole allocation.  (The t* measurement
+below rules out only the **compress-once** policy, where a block stays
+uncompressed from its first update to its last.  It says nothing against
+compressing and decompressing per subset, where a block is uncompressed only
+while its own subset runs.)
+
+**The stores.**
+
+- `B_compact`: the compressed blocks, in a few large bump-allocated extents.
+  At a chunk's *first* compression it gets exactly its compressed length -
+  **no margin** - and keeps that home for the level.
+- `B_newtail`: a workspace in fixed-size slots with a free list, for the
+  overflow when a re-compressed chunk is longer than its home.  Only the
+  *excess* goes here, not a whole new copy.  A chunk's tail is recorded as
+  **slot indices, not pointers**, so doubling the workspace (copy slot k to
+  slot k) leaves every record valid.  When a chunk is re-compressed its old
+  tail slots return to the free list first, so nothing accumulates.
+- `Buf_o` and `Buf_c`: two bounded per-subset workspaces, e.g. 128 MB each.
+  `Buf_c` must be sized for the compression *output*, not the compressed
+  data: bitcomp needs a worst-case buffer, sum of bitcompMaxBuflen >= the
+  subset's raw size.  On the way in it holds only the gathered strings
+  (about a sixth of that).  **`Buf_c` is also the compression staging**, so
+  staging stops being a cost on top of the store.
+
+**The cycle, per subset G_i.**
+
+1. gather G_i's compressed chunks from `B_compact` (+ their tails from
+   `B_newtail`) into `Buf_c`, each chunk contiguous - bitcomp requires that,
+   and it is why the scattering of tails is invisible to the codec;
+2. decompress `Buf_c` -> `Buf_o`;
+3. apply G_i's fill updates in `Buf_o`;
+4. re-compress `Buf_o` -> `Buf_c`;
+5. copy each chunk back: what fits into its `B_compact` home, the excess into
+   `B_newtail` slots.
+
+**The three other readers.**  The near blocks are read outside the update
+pass as well, and each needs its own window:
+
+- *the per-wave gather* that assembles A_NS and A_NR for the boxes about to
+  be eliminated (these are not stored anywhere - they are gathered out of the
+  stored blocks into transient arrays, used, discarded).  Read-once: the
+  block is gathered and then retired, because the wave replaces it with a
+  smaller one.  No re-compression needed.
+- *build_parent*, once at the end of the level, forming the coarser level's
+  blocks from this level's.  Also read-once, and it already processes parents
+  in chunks with its own budget.
+- *apply_remote_generators*, which applies updates from boxes eliminated on
+  other ranks (817 at the 192^3 leaf against 36893 new targets).  This one
+  does need read-modify-write, like the update pass.
+
+**Determinism.**  Nothing here is rank-dependent: the subsets follow the
+targets' canonical order and their shapes, each block's contributions keep
+their Morton order within its subset, and replicas being bitwise identical
+compress to identical lengths, so they take the identical overflow decisions.
+
+**Memory, at the 192^3 leaf.**
+
+| | Color | CA0 |
+|---|---|---|
+| B_compact (= sum l_first) | 2.96 GB | 4.13 GB |
+| B_newtail | ~0.02 | ~0.03 |
+| Buf_c + Buf_o | 0.26 | 0.26 |
+| **total, replacing 10.61 / 11.25** | **~3.2** | **~4.4** |
+| leaf peak 20.24 / 22.51 becomes | **~12.8** | **~15.7** |
+
+**What it does not recover.**  sum l_last is 0.34 GB against sum l_first
+2.96 GB - the blocks shrink 8.7x as their boxes reduce to skeletons - so
+`B_compact` is mostly slack late in the level.  Recovering that needs an
+occasional compaction of `B_compact`; the peak is mid-level, so it is a
+follow-on, not a prerequisite.
+
+**Order of work.**  (1) the store: `B_compact` extents with exact-length
+chunk homes plus the slotted `B_newtail`, replacing 3b's group allocations
+and reference counts, with blocks still materialized into their own
+allocations as now.  This alone should remove the CA0 regression, since the
+dead weight is what caused it.  (2) the `Buf_o`/`Buf_c` windows and the three
+readers.  Each step gated on Color and CA0.
+
+#### Step 3b: built, measured, and **it does not work** (2026-10-07)
+
+The machinery is in and verified; the *policy* cannot be made to pay, and the
+reason is a property of the elimination, not of the implementation.
+
+- **3b-i**, the owner pass staging and launching one group at a time, is
+  **bit-identical** on both paths (-9928907.2811287567, -9928906.4595639911)
+  and time-neutral.  It needed more than a loop change: current_slots_in()
+  appends a box's skeleton list into whichever image it is handed and returns
+  an offset valid only against that image's uploaded base, so each group
+  stages its own image with the stamp bumped to force the re-append; and
+  `e.c` was baked into the task entries at the join, so allocation moved into
+  the group loop with the pointer fixing.
+- **3b-ii**, holding a finished group packed, is correct: logdet moves by
+  quantization only (5.1e-7 Color, 9.2e-7 CA0), no guard fires, 5.3-6.3x at
+  the tighter tolerance, and the codec runs at the measured ~120 GB/s.
+- It first appeared to save nothing because a re-packed block's previous
+  bytes were never reclaimed - 6.08 GB of raw packed to 1.15 GB where the
+  live set was 0.14 GB, about 8x dead weight, matching the 8.9 writes per
+  block.  Reference counting per group allocation fixed that for Color
+  (leaf 1.91 -> 1.41 GB at 96^3, near blocks 0.73 -> 0.14) but **CA0 got
+  worse** (1.99 -> 3.37), because its 32 waves re-pack more and a single live
+  block pins its whole group allocation.
+
+**The measurement that settles it.**  When does a near block see its last
+write?
+
+| level | 1st quarter | 2nd | 3rd | last | of |
+|---|---|---|---|---|---|
+| 5 Color | 0% | 11% | 6% | **83%** | 17.23 GB |
+| 5 CA0 | 5% | 10% | 16% | **70%** | 22.15 GB |
+| 4 Color | 0% | 20% | 11% | 69% | 5.51 GB |
+| 2 (both) | 0 | 0 | 0 | 100% | 0.44 GB |
+
+70-83% of the bytes are written into the last quarter of the waves, so they
+are necessarily raw when the peak occurs.  No policy - pack per wave, or
+pack once after a block's last writer - can shrink the set at that moment.
+At 192^3 the whole piece came to: Color peak 20.72 -> 20.24 GB with Factor
+7.81 -> 8.63 s; CA0 peak 22.51 -> **25.33** GB with Factor ~8.3 -> 9.87 s.
+
+**Left in place but switched off** (`if (false && ...)` at the pack call), on
+the grounds that 3a and 3b-i are verified and neutral and the only thing
+wrong is the policy.  Revert them if that dead weight is not wanted.
+
+**What this means for the peak.**  The leaf's 9.47 GB of near-field blocks is
+not reclaimable by compression.  The remaining levers are the transient
+outputs (5.14 GB of the leaf's 6.29 GB wave transient, streamable with an
+accuracy cost), the duplicated temp2 (1.1-1.4 GB, cheap), and FP32.
+
+#### The original 3b sketch, for the record
+
+Pack a group once its GEMMs are done and free the raw blocks; materialize a
+group before its GEMMs; let every other reader materialize on demand.  The
+piece 4 machinery carries over - packed_schur_/packed_edges_,
+materialize_adopted(), and assert_not_packed() at every site that acts on a
+null ptr, which is what found four readers there.  The codec bill is the
+62.34 GB of writes per level, so about 125 GB of traffic each way at the
+leaf: a few percent of Factor time at the measured rates, but compression is
+slower than decompression and that needs measuring, not assuming.
+
+### Backlog: temp2 is stored resident twice, once transposed (1.1-1.4 GB)
+
+The solve factor the code calls X_NR is `temp2` = -X_NR X_RR^{-1}: the host's
+Box::X_NR is downloaded from `wb.off_temp2` and the kept device factor is
+compressed from the same buffer (`srcs.push_back(source + wb->off_temp2)`).
+`wb.xnr` = A_NR - A_NS T is an intermediate, surviving only as
+box->lazy_original_x_nr where has_remote.
+
+So after a wave, temp2 is resident twice:
+
+- `persist_temp2t` / `t2t_packed` = temp2^T (r x nt), the fill source later
+  waves' sketches read - "fill temp2^T packed", 1.38 GB at the 192^3 leaf;
+- `kb.xnr` = temp2 (nt x r), the kept solve factor - "kept factors", 1.08 GB
+  at the leaf's peak with C4 on, 2.57 GB by the level's end.
+
+Two compressed copies of one matrix, one of them transposed, and
+launch_transpose already makes the second from the first. Deriving one on
+demand would free about 1.1-1.4 GB of the leaf's resident set.
+
+Before treating that as a saving: (a) do the two sets cover the same boxes -
+the fill source exists only where gpu_sketch_ and lazy Schur apply, the kept
+factor covers every box the level keeps; (b) the lifetimes differ - the fill
+source goes at the transition, the kept factor must reach the solve - so the
+kept factor would have to be the survivor, with the sketch path paying a
+decompress plus transpose. Queued behind the near-field work, which is
+7x larger.
+
 ### Step 2: the parent blocks, 74% of what is left
 
 Measured and de-risked, not started.  They are **not** a separate store: the
