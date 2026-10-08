@@ -154,6 +154,24 @@ struct EliminatorStats {
     double kx_raw_bytes = 0.0;     // uncompressed bytes transposed
     double kx_stored_bytes = 0.0;  // what their kept X_NR came to
     double kx_seconds = 0.0;
+    // BPACK_CHECK=fillsrc: what one owner group distinctly needs of the wave's
+    // two n_tot x r outputs, which is what a bounded window would hold
+    double os_union_max = 0.0;
+    double os_union_sum = 0.0;
+    double os_raw_max = 0.0;      // the same group's slot bytes with repeats
+    int64_t os_slots = 0;
+    int64_t os_groups = 0;
+    // the X_NR^T store: the owner pass's other operand, per wave
+    double xt_raw_bytes = 0.0;
+    double xt_stored_bytes = 0.0;
+    int64_t xt_slots = 0;
+    int64_t xt_boxes = 0;
+    int64_t xt_short = 0;      // groups the staging did not fit
+    // the owner pass's source window
+    double ow_bytes = 0.0;     // decompressed into it
+    double ow_max = 0.0;       // the largest group's window
+    int64_t ow_groups = 0;
+    int64_t ow_slots = 0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
     // the scratch a wave's sketch needs for the slots it reads, and what it
@@ -631,6 +649,14 @@ private:
         size_t t2t_packed_bytes = 0;
         std::vector<T2tSlot> t2t_slots;
         std::vector<uint32_t> t2t_strides;
+        // X_NR^T, the owner pass's other operand, cut into the same slots.
+        // Only the owner pass of the wave that made it reads it, so it is
+        // built, used and freed inside that wave; t2t_rows indexes both,
+        // because the row partition is the same.
+        char* xnrt_packed = nullptr;
+        size_t xnrt_packed_bytes = 0;
+        std::vector<T2tSlot> xnrt_slots;
+        std::vector<uint32_t> xnrt_strides;
         std::unordered_map<int, int> t2t_rows;  // first row -> slot
         // H2_compress_factors: this box is kept and its compressed temp2^T is
         // the only copy of the solve factor, so the bytes have to reach the
@@ -651,6 +677,9 @@ private:
         int n = 0, k = 0, r = 0, ntot = 0;
         std::vector<int64_t> counts;   // rows per one-hop neighbor (current sizes)
         std::vector<int> row0;         // first X_NR row of each neighbor
+        // the slot a neighbor position holds in the temp2^T and X_NR^T stores,
+        // which skip the neighbors with no rows; -1 where there is none
+        std::vector<int32_t> slot_of_pos;
         int64_t skeleton_offset = -1;  // metadata offsets of the local index lists
         int64_t redundant_offset = -1;
         // device buffers
@@ -894,6 +923,14 @@ private:
         for (const auto& sl : st->t2t_slots) rows += sl.rows;
         return rows == wb.ntot;
     }
+    // The slot a neighbor position holds in the two stores, or -1.
+    static int32_t slot_at(const WaveBox& wb, size_t pos) {
+        return pos < wb.slot_of_pos.size() ? wb.slot_of_pos[pos] : -1;
+    }
+    // One owner group's window of source slots: the union it reads of temp2^T
+    // and X_NR^T, 0.82 GB at the 192^3 leaf against the 5.14 GB the wave
+    // holds raw (measured, see GPU_CA_PLAN.md step 1).
+    static constexpr size_t kOwnerWindowBytes = size_t{1} << 30;
     void transpose_kept_xnr();
     bool transpose_kept_xnr_group(const std::vector<PledgedXnr>& todo, size_t first, size_t last, size_t raw,
                                   KeptSolveLevel& kl, cudaStream_t stream);
@@ -911,7 +948,10 @@ private:
         BoxState* st = nullptr;   // where the packed form is recorded
     };
     void compress_fill_sources(std::vector<WaveBox>& boxes, const std::vector<int>& active, cudaStream_t stream);
-    void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream);
+    void compress_fill_source_set(const std::vector<FillSrcRef>& items, cudaStream_t stream,
+                                  bool into_xnrt = false);
+    // Every box's X_NR^T store, at the end of the wave that read it.
+    void release_owner_sources();
     // The chunks of a compressed fill source's temp2^T, appended to a batch
     // that puts it back whole into `dst` (ntot x r elements, as it was laid
     // out).  Returns false if it is not stored compressed.
@@ -3876,6 +3916,42 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     }
 
     const auto t_owner = clock::now();
+    // The slot each neighbor position holds in the two stores: both skip the
+    // neighbors with no rows, so a position is not a slot index.
+    for (WaveBox& wb : boxes) {
+        wb.slot_of_pos.assign(wb.counts.size(), -1);
+        int32_t next = 0;
+        for (size_t a = 0; a < wb.counts.size(); ++a) {
+            if (wb.counts[a] > 0) wb.slot_of_pos[a] = next++;
+        }
+    }
+    // Reading the operands out of their stores rather than from the raw
+    // outputs.  All or nothing for the wave: the transposes are per batch, so
+    // one group cannot mix the two forms.
+    bool from_store = compress_factors_ >= 1;
+    if (from_store) {
+        for (const WaveBox& wb : boxes) {
+            if (wb.r == 0 || wb.ntot == 0) continue;
+            const BoxState* st = wb.state;
+            if (st == nullptr || st->t2t_packed == nullptr || st->xnrt_packed == nullptr ||
+                st->t2t_slots.size() != st->xnrt_slots.size()) {
+                from_store = false;
+                break;
+            }
+        }
+    }
+    auto win_key = [](int32_t src, int32_t slot, int which) {
+        return (static_cast<uint64_t>(src) << 33) | (static_cast<uint64_t>(slot) << 1) |
+               static_cast<uint64_t>(which);
+    };
+    // the slot's uncompressed bytes, which is where it lands in the window
+    auto slot_bytes = [&](int32_t src, int32_t slot, int which) -> size_t {
+        const WaveBox& sb = boxes[static_cast<size_t>(src)];
+        const auto& slots = which == 0 ? sb.state->t2t_slots : sb.state->xnrt_slots;
+        if (static_cast<size_t>(slot) >= slots.size()) return 0;
+        return align_up(static_cast<size_t>(slots[static_cast<size_t>(slot)].rows) *
+                        static_cast<size_t>(sb.r) * D);
+    };
     owner_meta_.clear();
     const uint64_t owner_stamp = ~wave_stamp_;  // skeleton lists of this image
     // ---- deferred X_NN owner pass: for every source E of the wave and every
@@ -3912,6 +3988,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // tasks are found in parallel, each in the order of the sequential loop,
     // then created (blocks, their kernel values, the edge map) and joined in
     // candidate order, which is the sequential loop's target order.
+    // Which slot of which source box a task's two operands are, so its group
+    // can point them at the window it decompressed into.
+    struct SrcSlot { int32_t src = -1; int32_t sa = -1; int32_t sb = -1; };
     struct CandidateTarget {
         uint64_t key = 0;
         DeviceMatrix* block = nullptr;  // the Schur block or an existing near block; else created at the join
@@ -3920,6 +3999,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         int rows = 0, cols = 0;
         std::vector<typename VBatch<S>::Entry> tasks;  // C set at the join
         std::vector<int64_t> sources;                 // of the tasks
+        std::vector<SrcSlot> src_slots;               // ... and their slots
     };
     std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
     std::exception_ptr owner_failure;
@@ -3955,6 +4035,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             for (int64_t em : cbox->one_hop) {
                 auto wit = wave_index_of.find(em);
                 if (wit == wave_index_of.end()) continue;
+                const int32_t src_idx = static_cast<int32_t>(wit->second);
                 const WaveBox& src = boxes[wit->second];
                 if (src.r == 0 || src.ntot == 0) continue;
                 const auto& src_hop = src.box->one_hop;
@@ -4001,6 +4082,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                         target->tasks.push_back({src.temp2 + src.row0[c_pos], src.xnr + src.row0[a], nullptr,
                                                  n_c, n_a, src.r, src.ntot, src.ntot, n_c});
                         target->sources.push_back(em);
+                        target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, c_pos), slot_at(src, a)});
                         continue;
                     } else {
                         continue;  // owned by the other endpoint, or a lazy far pair
@@ -4008,6 +4090,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     target->tasks.push_back({src.temp2 + src.row0[a], x_nr_c, nullptr,
                                              n_a, n_c, src.r, src.ntot, src.ntot, n_a});
                     target->sources.push_back(em);
+                    target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, a), slot_at(src, c_pos)});
                 }
             }
             if (ca_) {  // (a pair's contributions by source Morton)
@@ -4021,6 +4104,21 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     sorted.reserve(order.size());
                     for (size_t x : order) sorted.push_back(t.tasks[x]);
                     t.tasks.swap(sorted);
+                    // The sources and their slots travel with their tasks.  A
+                    // task's operands are named by its slot pair, so
+                    // permuting the tasks alone hands the GEMM another box's
+                    // rows - which is what it did: NaN in the next level's ID
+                    // input, on the CA path only, because only it sorts.
+                    if (t.src_slots.size() == t.tasks.size()) {
+                        std::vector<SrcSlot> ss;
+                        ss.reserve(order.size());
+                        for (size_t x : order) ss.push_back(t.src_slots[x]);
+                        t.src_slots.swap(ss);
+                    }
+                    std::vector<int64_t> src;
+                    src.reserve(order.size());
+                    for (size_t x : order) src.push_back(t.sources[x]);
+                    t.sources.swap(src);
                 }
             }
         } catch (...) {
@@ -4043,6 +4141,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         BoxState* row_box = nullptr;
         BoxState* col_box = nullptr;
         bool fresh = false;   // allocated by its group: its kernel values first
+        std::vector<SrcSlot> src_slots;
     };
     std::vector<Target> targets;
     // (piece 4 put every adopted block back here, before the join, because the
@@ -4061,7 +4160,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     << ", expected " << t.rows << " x " << t.cols;
                 throw std::runtime_error(oss.str());
             }
-            targets.push_back(Target{block, std::move(t.tasks), t.key, t.rows, t.cols, t.row_box, t.col_box});
+            targets.push_back(Target{block, std::move(t.tasks), t.key, t.rows, t.cols, t.row_box, t.col_box,
+                                     false, std::move(t.src_slots)});
         }
     }
     owner_lap(stats.po_order);
@@ -4093,11 +4193,28 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                                                           : std::numeric_limits<size_t>::max();
     std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
     {
+        // Two budgets: the targets the group writes, and - when the operands
+        // come from their stores - the source slots it has to decompress, so
+        // the window is bounded by construction rather than by what the data
+        // happens to need.
+        std::unordered_set<uint64_t> seen;
         size_t at = 0;
         while (at < targets.size()) {
-            size_t bytes = 0, end = at;
-            while (end < targets.size() && (end == at || bytes < kNearGroupBudget)) {
+            size_t bytes = 0, win = 0, end = at;
+            seen.clear();
+            while (end < targets.size()) {
+                if (end > at && (bytes >= kNearGroupBudget || win >= kOwnerWindowBytes)) break;
                 bytes += static_cast<size_t>(targets[end].rows) * targets[end].cols * D;
+                if (from_store) {
+                    for (const SrcSlot& ss : targets[end].src_slots) {
+                        for (int which = 0; which < 2; ++which) {
+                            const int32_t slot = which == 0 ? ss.sa : ss.sb;
+                            if (ss.src < 0 || slot < 0) continue;
+                            if (!seen.insert(win_key(ss.src, slot, which)).second) continue;
+                            win += slot_bytes(ss.src, slot, which);
+                        }
+                    }
+                }
                 ++end;
             }
             owner_groups.push_back({at, end});
@@ -4128,6 +4245,33 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // the image it was appended to (current_slots_in) and so cannot be shared
     // across uploads; the stamp is bumped per group to force the re-append.
     for (const auto& [first, last] : owner_groups) {
+        if (env::check("fillsrc")) {
+            // What this group distinctly needs of temp2 and X_NR.  A slot is
+            // named by its address, which is unique per (source, neighbor), so
+            // the map is the union a window would have to hold; summed over
+            // groups it is what decompressing per group would cost.  Compare
+            // with the wave's outputs, reported as the largest wave's
+            // transient.
+            std::unordered_map<const S*, size_t> slots;
+            double with_repeats = 0.0;
+            for (size_t i = first; i < last; ++i) {
+                for (const auto& e : targets[i].tasks) {
+                    const size_t a_bytes = static_cast<size_t>(e.m) * static_cast<size_t>(e.k) * D;
+                    const size_t b_bytes = static_cast<size_t>(e.n) * static_cast<size_t>(e.k) * D;
+                    slots.emplace(e.a, a_bytes);
+                    slots.emplace(e.b, b_bytes);
+                    with_repeats += static_cast<double>(a_bytes + b_bytes);
+                }
+            }
+            size_t bytes = 0;
+            for (const auto& kv : slots) bytes += kv.second;
+            auto& st = eliminator_stats();
+            st.os_union_max = std::max(st.os_union_max, static_cast<double>(bytes));
+            st.os_union_sum += static_cast<double>(bytes);
+            st.os_raw_max = std::max(st.os_raw_max, with_repeats);
+            st.os_slots += static_cast<int64_t>(slots.size());
+            ++st.os_groups;
+        }
         {   // every block of the group raw: the ones held packed put back in one
             // batch, the ones that do not exist yet allocated and marked for
             // their kernel values
@@ -4152,6 +4296,64 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
             materialize_adopted(want, stream, MatGroup);
         }
+        // The group's source slots, decompressed into a window of their own.
+        // This is what replaces holding the wave's two n_tot x r outputs raw:
+        // a slot is one neighbor's rows, which is exactly what a task reads,
+        // and the group's union of them is bounded by kOwnerWindowBytes.
+        char* window = nullptr;
+        std::unordered_map<uint64_t, size_t> win_at;
+        if (from_store) {
+            struct Need { int32_t src; int32_t slot; int which; size_t off; };
+            std::vector<Need> needs;   // in traversal order, so every rank agrees
+            size_t need_bytes = 0;
+            for (size_t i = first; i < last; ++i) {
+                for (const SrcSlot& ss : targets[i].src_slots) {
+                    for (int which = 0; which < 2; ++which) {
+                        const int32_t slot = which == 0 ? ss.sa : ss.sb;
+                        if (ss.src < 0 || slot < 0) continue;
+                        const auto [it, fresh_slot] = win_at.emplace(win_key(ss.src, slot, which), need_bytes);
+                        if (!fresh_slot) continue;
+                        needs.push_back(Need{ss.src, slot, which, need_bytes});
+                        need_bytes += slot_bytes(ss.src, slot, which);
+                    }
+                }
+            }
+            window = heap_.try_alloc(std::max<size_t>(need_bytes, 1));
+            if (window == nullptr) {
+                throw std::runtime_error("H2 GPU: no room for the owner pass's source window (" +
+                                         std::to_string(need_bytes / (1u << 20)) + " MB)");
+            }
+            SolveXnrWave w;
+            for (const Need& nd : needs) {
+                const WaveBox& sb = boxes[static_cast<size_t>(nd.src)];
+                const BoxState* sst = sb.state;
+                const char* packed = nd.which == 0 ? sst->t2t_packed : sst->xnrt_packed;
+                const auto& slots = nd.which == 0 ? sst->t2t_slots : sst->xnrt_slots;
+                const auto& strides = nd.which == 0 ? sst->t2t_strides : sst->xnrt_strides;
+                const auto& sl = slots[static_cast<size_t>(nd.slot)];
+                const char* src = packed + sl.off;
+                w.boxes.push_back(static_cast<int>(w.boxes.size()));
+                w.h_box_dsts.push_back(window + nd.off);
+                for (uint32_t c = 0; c < sl.nchunks; ++c) {
+                    w.h_srcs.push_back(src);
+                    w.h_dsts.push_back(window + nd.off + static_cast<size_t>(c) * kXnrChunkBytes);
+                    src += strides[sl.chunk0 + c];
+                }
+            }
+            if (!w.h_srcs.empty()) {
+                if (!build_solve_xnr_wave(w, heap_, stream)) {
+                    throw std::runtime_error("H2 GPU: could not plan the owner window's decompression");
+                }
+                decompress_solve_xnr_wave(w, stream);
+                check_cuda(cudaStreamSynchronize(stream), "owner window");
+                release_solve_xnr_wave(w);
+                heap_.free(reinterpret_cast<char*>(const_cast<void**>(w.d_srcs)));
+            }
+            stats.ow_bytes += static_cast<double>(need_bytes);
+            stats.ow_max = std::max(stats.ow_max, static_cast<double>(need_bytes));
+            stats.ow_slots += static_cast<int64_t>(needs.size());
+            ++stats.ow_groups;
+        }
         owner_meta_.clear();
         ++owner_group_stamp_;
         std::vector<EvalItem> evals;
@@ -4173,6 +4375,23 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (size_t i = first; i < last; ++i) {
             Target& t = targets[i];
             for (auto& e : t.tasks) e.c = t.block->ptr;
+            if (from_store) {
+                // the slots are stored transposed, r x rows, so the operands
+                // have leading dimension r and the batch runs (Trans, NoTrans)
+                if (t.src_slots.size() != t.tasks.size()) {
+                    throw std::runtime_error("LevelEliminator: owner target has " +
+                                             std::to_string(t.tasks.size()) + " tasks but " +
+                                             std::to_string(t.src_slots.size()) + " source slots");
+                }
+                for (size_t j = 0; j < t.tasks.size(); ++j) {
+                    const SrcSlot& ss = t.src_slots[j];
+                    const magma_int_t r = static_cast<magma_int_t>(boxes[static_cast<size_t>(ss.src)].r);
+                    t.tasks[j].a = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sa, 0)));
+                    t.tasks[j].lda = r;
+                    t.tasks[j].b = reinterpret_cast<const S*>(window + win_at.at(win_key(ss.src, ss.sb, 1)));
+                    t.tasks[j].ldb = r;
+                }
+            }
             for (size_t j = 0; j < t.tasks.size(); ++j) gb[j].entries.push_back(t.tasks[j]);
         }
         for (auto& b : gb) b.stage(owner_meta_);
@@ -4182,12 +4401,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (const auto& b : gb) check_batch(b, "group gemms");
         eval_blocks(evals, owner_meta_, gmd, off_ev, ev_m, ev_n, stream);
         for (const auto& b : gb) {
-            b.gemm(gmd, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
+            b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans, from_store ? MagmaNoTrans : MagmaTrans,
+                   1.0, 1.0, queue);
             stats.owner_gemms += static_cast<int64_t>(b.count());
             for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
             ++stats.owner_batches;
         }
         check_cuda(cudaStreamSynchronize(stream), "owner group");  // the image is reused
+        heap_.free(window);
         // The policy the store exists for: every near block this group just
         // wrote goes back compressed, so the resident near-field set is the
         // packed one (9.47 -> 3.25 GB at the 192^3 Color leaf) and raw copies
@@ -4439,6 +4660,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     }
     for (char* p : wave_sketch_extra_) heap_.free(p);
     wave_sketch_extra_.clear();
+    release_owner_sources();  // read by this wave's owner pass only
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
     if (heap_.peak() > stats.heap_peak) {
         stats.heap_peak = heap_.peak();
@@ -5699,6 +5921,44 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
         // frees them once its gather is on the stream); without compression
         // the raw blocks are what the readers use, so they stay
         if (compress_factors_ >= 1) compress_fill_source_set(items, stream);
+        // X_NR^T, the owner pass's other operand, cut into the same slots.
+        // Only this wave's owner pass reads it, so the transposed staging is
+        // transient and goes back here, and the store goes at the end of the
+        // wave (release_owner_sources).
+        if (compress_factors_ >= 1) {
+            std::vector<FillSrcRef> xitems;
+            std::vector<char*> staging;
+            std::vector<TransposeItemT<S>> xtr;
+            int xm = 0, xn = 0;
+            bool room = true;
+            for (int i : group) {
+                WaveBox& wb = boxes[static_cast<size_t>(i)];
+                const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+                char* blk = heap_.try_alloc(std::max<size_t>(nt * r * D, 1));
+                if (blk == nullptr) { room = false; break; }
+                staging.push_back(blk);
+                xtr.push_back(TransposeItemT<S>{wb.xnr, static_cast<int>(nt), reinterpret_cast<S*>(blk),
+                                                static_cast<int>(r), static_cast<int>(nt), static_cast<int>(r)});
+                xm = std::max(xm, static_cast<int>(nt));
+                xn = std::max(xn, static_cast<int>(r));
+                xitems.push_back(FillSrcRef{reinterpret_cast<S*>(blk), wb.r, &wb.counts, wb.state});
+            }
+            if (room && !xtr.empty()) {
+                const size_t list_bytes = xtr.size() * sizeof(TransposeItemT<S>);
+                if (list_bytes > t2t_meta_device_.capacity()) {
+                    check_cuda(cudaStreamSynchronize(stream), "owner source transposes");
+                    t2t_meta_device_.reserve(list_bytes);
+                }
+                auto* d_tr = static_cast<TransposeItemT<S>*>(t2t_meta_device_.reserve(list_bytes));
+                check_cuda(cudaMemcpyAsync(d_tr, xtr.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                           "owner source transposes");
+                launch_transpose(d_tr, static_cast<int>(xtr.size()), xm, xn, stream);
+                compress_fill_source_set(xitems, stream, true);  // (it syncs before returning)
+            } else {
+                ++eliminator_stats().xt_short;
+            }
+            for (char* b : staging) heap_.free(b);
+        }
         group.clear();
         group_raw = 0;
     };
@@ -5721,7 +5981,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_sources(
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
-    const std::vector<FillSrcRef>& items, cudaStream_t stream) {
+    const std::vector<FillSrcRef>& items, cudaStream_t stream, bool into_xnrt) {
 #ifdef H2_HAVE_NVCOMP
     const size_t D = sizeof(S);
     const bool check = env::check("fillsrc");
@@ -5730,6 +5990,20 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     std::vector<const S*> srcs;
     std::vector<size_t> elems;
     std::vector<int> slot_rows;  // per block, its uncompressed rows
+    // temp2^T or X_NR^T: the same packing into different fields of the box.
+    struct Dest {
+        char*& packed;
+        size_t& bytes;
+        std::vector<typename BoxState::T2tSlot>& slots;
+        std::vector<uint32_t>& strides;
+    };
+    auto dest_of = [into_xnrt](BoxState& st) -> Dest {
+        if (into_xnrt) {
+            return Dest{st.xnrt_packed, st.xnrt_packed_bytes, st.xnrt_slots, st.xnrt_strides};
+        }
+        return Dest{st.t2t_packed, st.t2t_packed_bytes, st.t2t_slots, st.t2t_strides};
+    };
+    const ResidentKind dest_kind = into_xnrt ? ResidentKind::OwnerSrc : ResidentKind::FillPacked;
     struct GroupItem { BoxState* st; size_t first; size_t last; };
     std::vector<GroupItem> group_of;
     size_t group_raw = 0;
@@ -5746,23 +6020,24 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         int64_t max_words = 0;
         for (const GroupItem& gi : group_of) {
             BoxState& st = *gi.st;
+            Dest dst = dest_of(st);
             size_t total = 0;
             for (size_t i = gi.first; i < gi.last; ++i) total += comp[i].bytes;
             if (total == 0) continue;
-            char* packed = heap_.try_alloc_resident(total, ResidentKind::FillPacked);
+            char* packed = heap_.try_alloc_resident(total, dest_kind);
             if (packed == nullptr) {  // no room: this box stays raw
                 ++stats.fs_packed_short;
                 continue;
             }
-            if (st.t2t_packed != nullptr) {  // (a box compressed again drops the old one)
-                stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
-                heap_.free(st.t2t_packed);
-                st.t2t_slots.clear();
-                st.t2t_strides.clear();
-                st.t2t_rows.clear();
+            if (dst.packed != nullptr) {  // (a box compressed again drops the old one)
+                stats.persist_bytes -= static_cast<double>(dst.bytes);
+                heap_.free(dst.packed);
+                dst.slots.clear();
+                dst.strides.clear();
+                if (!into_xnrt) st.t2t_rows.clear();
             }
-            st.t2t_packed = packed;
-            st.t2t_packed_bytes = total;
+            dst.packed = packed;
+            dst.bytes = total;
             stats.persist_bytes += static_cast<double>(total);
             stats.persist_peak = std::max(stats.persist_peak, stats.persist_bytes);
             uint64_t off = 0;
@@ -5770,7 +6045,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
             for (size_t i = gi.first; i < gi.last; ++i) {
                 typename BoxState::T2tSlot sl;
                 sl.off = off;
-                sl.chunk0 = static_cast<uint32_t>(st.t2t_strides.size());
+                sl.chunk0 = static_cast<uint32_t>(dst.strides.size());
                 sl.nchunks = static_cast<uint32_t>(comp[i].nchunks);
                 sl.rows = slot_rows[i];
                 for (size_t c = 0; c < comp[i].nchunks; ++c) {
@@ -5778,18 +6053,19 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                     spans.push_back(CopySpan{staging + ck.offset, packed + off,
                                              static_cast<int64_t>(ck.stride / 4)});
                     max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
-                    st.t2t_strides.push_back(static_cast<uint32_t>(ck.stride));
+                    dst.strides.push_back(static_cast<uint32_t>(ck.stride));
                     off += ck.stride;
                 }
-                st.t2t_rows.emplace(row, static_cast<int>(st.t2t_slots.size()));
-                st.t2t_slots.push_back(sl);
+                // the row map is the partition, which both stores share
+                if (!into_xnrt) st.t2t_rows.emplace(row, static_cast<int>(dst.slots.size()));
+                dst.slots.push_back(sl);
                 row += sl.rows;
             }
             // The packed block now holds what the raw one did - the gather
             // below is synchronized before the staging goes back - so the raw
             // block can go.  st.temp2t going null is what sends both readers
             // to the packed form.
-            raw_to_free.push_back(&st);
+            if (!into_xnrt) raw_to_free.push_back(&st);  // X_NR^T's staging is the caller's
         }
         if (spans.empty()) return;
         const size_t list_bytes = spans.size() * sizeof(CopySpan);
@@ -5837,14 +6113,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         std::vector<S> got, want;
         const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
         for (const GroupItem& gi : group_of) {
-            const BoxState& st = *gi.st;
-            if (st.t2t_packed == nullptr) continue;
+            BoxState& st = *gi.st;
+            Dest dst = dest_of(st);
+            if (dst.packed == nullptr) continue;
+            const size_t slot0 = dst.slots.size() - (gi.last - gi.first);
             for (size_t i = gi.first; i < gi.last; ++i) {
-                const size_t si = i - gi.first;
-                if (si >= st.t2t_slots.size()) break;
-                const auto& sl = st.t2t_slots[si];
-                decompress_xnr<S>(st.t2t_packed + sl.off, reinterpret_cast<S*>(back),
-                                  st.t2t_strides.data() + sl.chunk0, sl.nchunks, stream);
+                const size_t si = slot0 + (i - gi.first);
+                if (si >= dst.slots.size()) break;
+                const auto& sl = dst.slots[si];
+                decompress_xnr<S>(dst.packed + sl.off, reinterpret_cast<S*>(back),
+                                  dst.strides.data() + sl.chunk0, sl.nchunks, stream);
                 check_cuda(cudaStreamSynchronize(stream), "fillsrc check");
                 got.assign(elems[i], S{});
                 want.assign(elems[i], S{});
@@ -5874,10 +6152,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                     raw += elems[i] * D;
                     stored += comp[i].bytes;
                 }
-                stats.fs_raw_bytes += static_cast<double>(raw);
-                stats.fs_stored_bytes += static_cast<double>(stored);
-                stats.fs_slots += static_cast<int64_t>(srcs.size());
-                stats.fs_boxes += static_cast<int64_t>(group_of.size());
+                if (into_xnrt) {
+                    stats.xt_raw_bytes += static_cast<double>(raw);
+                    stats.xt_stored_bytes += static_cast<double>(stored);
+                    stats.xt_slots += static_cast<int64_t>(srcs.size());
+                    stats.xt_boxes += static_cast<int64_t>(group_of.size());
+                } else {
+                    stats.fs_raw_bytes += static_cast<double>(raw);
+                    stats.fs_stored_bytes += static_cast<double>(stored);
+                    stats.fs_slots += static_cast<int64_t>(srcs.size());
+                    stats.fs_boxes += static_cast<int64_t>(group_of.size());
+                }
                 pack(comp);
             } else {
                 ++stats.fs_waves_plain;
@@ -6105,6 +6390,25 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         }
     }
     return true;
+}
+
+// Every box's X_NR^T store.  The owner pass of the wave that built it is its
+// only reader, so this runs at the end of each wave.
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::release_owner_sources() {
+    if (!heap_initialized_) return;
+    auto& stats = eliminator_stats();
+    auto drop = [&](BoxState& st) {
+        if (st.xnrt_packed == nullptr) return;
+        stats.persist_bytes -= static_cast<double>(st.xnrt_packed_bytes);
+        heap_.free(st.xnrt_packed);
+        st.xnrt_packed = nullptr;
+        st.xnrt_packed_bytes = 0;
+        st.xnrt_slots.clear();
+        st.xnrt_strides.clear();
+    };
+    for (BoxState& st : states_) drop(st);
+    for (BoxState& st : remote_states_) drop(st);
 }
 
 // ---------------------------------------------------------------------------
@@ -8385,6 +8689,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     released_sources_.clear();  // their blocks are freed with the states below
     if (!heap_initialized_) return;
     transpose_kept_xnr();  // the kept X_NR, while the fill sources are still here
+    release_owner_sources();
     if (outbox_ != nullptr) free_block(outbox_);
     outbox_ = nullptr;
     for (OwnerWaveSend& w : owner_sends_) {

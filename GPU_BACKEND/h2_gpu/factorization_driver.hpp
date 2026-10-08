@@ -918,6 +918,25 @@ public:
                                 static_cast<double>(h.kind_free_bytes(k)) / 1e9, h.kind_free_count(k));
                 }
             }
+            if (e.ow_groups > 0) {
+                std::printf("  [gpu] level %d owner source window: %.2f GB in the largest group, %.2f GB "
+                            "decompressed over %lld groups in %lld slots\n", level.level, e.ow_max / 1e9,
+                            e.ow_bytes / 1e9, static_cast<long long>(e.ow_groups),
+                            static_cast<long long>(e.ow_slots));
+            }
+            if (e.xt_raw_bytes > 0.0) {
+                std::printf("  [gpu] level %d X_NR^T store: %.2f -> %.2f GB (%.1fx) in %lld slots of %lld boxes"
+                            "%s\n", level.level, e.xt_raw_bytes / 1e9, e.xt_stored_bytes / 1e9,
+                            e.xt_stored_bytes > 0.0 ? e.xt_raw_bytes / e.xt_stored_bytes : 1.0,
+                            static_cast<long long>(e.xt_slots), static_cast<long long>(e.xt_boxes),
+                            e.xt_short > 0 ? " (some groups found no staging)" : "");
+            }
+            if (e.os_groups > 0) {
+                std::printf("  [gpu] level %d owner source union: %.2f GB by the largest group, %.2f GB summed "
+                            "over %lld groups in %lld slots (largest group with repeats %.2f GB)\n", level.level,
+                            e.os_union_max / 1e9, e.os_union_sum / 1e9, static_cast<long long>(e.os_groups),
+                            static_cast<long long>(e.os_slots), e.os_raw_max / 1e9);
+            }
             if (e.kx_boxes > 0) {
                 std::printf("  [gpu] level %d kept X_NR out of the fill source: %lld boxes in %lld groups, "
                             "%.2f GB raw -> %.2f GB stored, %.3f s%s\n", level.level,
@@ -1134,11 +1153,13 @@ public:
             const double accounted = static_cast<double>(named + other);
             std::printf(" (accounted %.2f GB)\n", accounted / 1e9);
             if (e.persist_blocks > 0) {
-                std::printf("  [gpu] level %d fill sources: %lld blocks, X_RR_full %.2f GB, temp2^T %.2f GB, "
-                            "generator boxes %.2f GB\n", lvl, static_cast<long long>(e.persist_blocks),
-                            e.persist_xrr_bytes / 1e9,
-                            (e.persist_peak - e.persist_xrr_bytes - e.persist_gen_bytes) / 1e9,
-                            e.persist_gen_bytes / 1e9);
+                // The peak is live bytes and the other two are cumulative, so
+                // subtracting them from it was meaningless - it printed a
+                // negative temp2^T.  Each is reported as what it is.
+                std::printf("  [gpu] level %d fill sources: %lld blocks, %.2f GB live at their peak; allocated "
+                            "over the level: X_RR_full %.2f GB, generator boxes %.2f GB\n", lvl,
+                            static_cast<long long>(e.persist_blocks), e.persist_peak / 1e9,
+                            e.persist_xrr_bytes / 1e9, e.persist_gen_bytes / 1e9);
             }
         }
         if (e.fs_slots > 0 || e.fs_waves_plain > 0) {

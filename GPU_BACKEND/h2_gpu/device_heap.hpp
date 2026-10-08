@@ -64,6 +64,7 @@ enum class ResidentKind : uint8_t {
     Uploaded,      // begin(): the host's blocks uploaded for a level
     Adopted,       // begin(): the parent blocks of the level below, restored
     OwnerNear,     // the owner pass's new near-field blocks (its own edges_)
+    OwnerSrc,      // X_NR^T slots, the owner pass's other operand, built and freed per wave
     Count
 };
 inline const char* resident_kind_name(ResidentKind k) {
@@ -79,6 +80,7 @@ inline const char* resident_kind_name(ResidentKind k) {
         case ResidentKind::KeptFactors: return "kept factors";
         case ResidentKind::Restore: return "restores";
         case ResidentKind::CaHalo: return "CA halo";
+        case ResidentKind::OwnerSrc: return "owner source slots";
         case ResidentKind::Reduction: return "reduction";
         case ResidentKind::Matvec: return "matvec";
         case ResidentKind::Uploaded: return "uploaded blocks";
