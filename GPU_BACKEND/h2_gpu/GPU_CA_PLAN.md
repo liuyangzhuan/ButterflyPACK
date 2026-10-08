@@ -2735,12 +2735,55 @@ null ptr, which is what found four readers there.  The codec bill is the
 leaf: a few percent of Factor time at the measured rates, but compression is
 slower than decompression and that needs measuring, not assuming.
 
-### Backlog: temp2 is stored resident twice, once transposed (4.8-5.8 GB)
+### temp2 stored resident twice: done (2026-10-08), and it was 1.1 GB not 4.8
 
-**Promoted to the largest single target at the leaf** by step 3c: with the
-near blocks held packed the two copies are 2.44 + 2.34 = 4.78 GB of the
-Color leaf's 9.46 GB resident, and 3.29 + 2.53 = 5.82 GB of CA0's 11.91.
-The figures below are from before that and understate it.
+**Done.**  temp2 is stored once.  Through the level it is the fill source -
+temp2^T, r x ntot, compressed a slot (one one-hop neighbor) at a time, which
+is the form and the granularity the sketches read.  The wave that keeps a box
+*pledges* that copy as the box's solve factor instead of compressing temp2 a
+second time, and at the transition, with the heap at its emptiest,
+`transpose_kept_xnr()` decompresses each pledged box's slots end to end (they
+are consecutive column ranges, so that is the whole r x ntot), transposes into
+the ntot x r the solve's kernels read, and compresses again into a block of
+the kept store.
+
+| 192^3, 8 ranks | peak before | after | Factor |
+|---|---|---|---|
+| Color | 17.12 | **16.03** (resident 9.46 -> 8.37) | 8.51 -> 8.64 s |
+| CA0 | 19.57 | **18.92** (leaf 19.57 -> 18.07) | 9.97 -> 10.1 s |
+
+The handover costs 0.24 s a run on Color and 0.36 s on CA0, most of it at the
+leaf (17.45 GB decompressed, transposed and recompressed in 66 groups,
+0.155 s), and it replaces the keep pass's compression, so Factor moves by
+0.13 s.  logdet is unchanged to every digit on both paths and at both sizes -
+it comes from the LU of X_RR, not from X_NR - and the kept X_NR comes to
+exactly the bytes the old path stored (17.45 -> 1.13 GB, 15.4x).  The one
+cost is a second quantization of the solve factor, at the same tolerance but
+on blocks cut differently: acc_mvp 2.95e-3 -> 3.11e-3 on Color and
+2.90e-3 -> 2.98e-3 on CA0, both still inside the band the uncompressed
+baseline sits in (3.05e-3, 3.14e-3).
+
+**I had estimated 4.8-5.8 GB and it is 1.1-1.5.**  "kept factors" at the peak
+is not all X_NR: X_NR is 92% of what a *level* keeps, but at the peak wave
+only the boxes eliminated so far have been kept, and the rest of their
+factors (T, X_SR, the LU of X_RR, the pivots) is 1.35 GB of the Color leaf's
+2.44.  The duplicated part was the 1.09 GB of X_NR kept up to that wave.  The
+lesson from step 3c applies to the categories themselves and not just to
+their producers: a resident figure at the peak is not the level's total.
+
+**Reading the reports.**  The keep budget and the per-level "solve factors:
+kept" line count a pledged box's X_NR where it actually is, so the figure
+printed at the commit is the fill source's slot-wise size - 1.89 GB at the
+Color leaf, against the 1.13 GB the whole-matrix form comes to, because
+slot-wise deltas are finer.  The handover's own line gives the final size.
+
+**Where the peak is now.**  On Color it is still the leaf's waves, 16.03 GB,
+of which the transient is 7.66 - now 48% of the peak, and 82% of it the two
+n_tot x r wave outputs.  **On CA0 the binding level has moved off the leaf**:
+level 4 is 18.92 GB (resident 16.24 + transient 2.68) against the leaf's
+18.07, and that resident is parent blocks 6.74 + CA halo 5.99 + kept factors
+3.44.  Nothing in the near-field or temp2 work touches it; it is the halo and
+the parent blocks, which is a different piece of work.
 
 The solve factor the code calls X_NR is `temp2` = -X_NR X_RR^{-1}: the host's
 Box::X_NR is downloaded from `wb.off_temp2` and the kept device factor is

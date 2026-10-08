@@ -198,6 +198,11 @@ struct KeptSolveBox {
     double xnr_delta = 0.0;
     uint32_t xnr_chunk0 = 0;
     uint32_t xnr_nchunks = 0;
+    // H2_compress_factors: set between the wave that kept this box and the
+    // transition that transposes its X_NR out of the fill source
+    // (transpose_kept_xnr).  It must never still be set when the solve runs,
+    // and a null xnr would otherwise read as "not eliminated".
+    bool xnr_pending = false;
 };
 struct KeptSolveLevel {
     std::vector<char*> blocks;
@@ -1013,6 +1018,10 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
             check_cuda(cudaMemcpy(v.data(), src, count * sizeof(DataType), cudaMemcpyDeviceToHost), "host factors");
             return v;
         };
+        if (kb.xnr_pending) {
+            throw std::runtime_error("H2 GPU: the kept X_NR of box " + std::to_string(box.morton_index) +
+                                     " was never transposed out of its fill source");
+        }
         if (kb.ntot > 0 && !box.X_NR.is_allocated()) {
             // H2_compress_factors: kb.xnr is xnr_bytes of compressed data, not
             // ntot * r elements.  Bring the compressed bytes over (far fewer)
@@ -1642,6 +1651,11 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 sb.red = reinterpret_cast<const int*>(p + l.red);
                 const bool eliminated = sb.k > 0 && sb.r > 0;
                 if (const KeptSolveBox* kb = kept_box[b]) {
+                    if (kb->xnr_pending) {
+                        throw std::runtime_error("H2 GPU solve: the kept X_NR of box " +
+                                                 std::to_string(box.morton_index) +
+                                                 " was never transposed out of its fill source");
+                    }
                     sb.T = l.has_T ? kb->T : nullptr;
                     sb.xsr = l.has_xsr ? kb->xsr : nullptr;
                     sb.xnr = kb->xnr;

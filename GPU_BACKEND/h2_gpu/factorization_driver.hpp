@@ -918,6 +918,13 @@ public:
                                 static_cast<double>(h.kind_free_bytes(k)) / 1e9, h.kind_free_count(k));
                 }
             }
+            if (e.kx_boxes > 0) {
+                std::printf("  [gpu] level %d kept X_NR out of the fill source: %lld boxes in %lld groups, "
+                            "%.2f GB raw -> %.2f GB stored, %.3f s%s\n", level.level,
+                            static_cast<long long>(e.kx_boxes), static_cast<long long>(e.kx_groups),
+                            e.kx_raw_bytes / 1e9, e.kx_stored_bytes / 1e9, e.kx_seconds,
+                            e.kx_host > 0 ? " (some went round through the host)" : "");
+            }
             if (e.mat_blocks > 0) {
                 static const char* const kSites[6] = {"begin Schur", "owner join", "update group",
                                                       "host download", "generators", "build_parent"};

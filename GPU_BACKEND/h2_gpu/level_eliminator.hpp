@@ -146,6 +146,14 @@ struct EliminatorStats {
     double fs_stored_bytes = 0.0;
     int64_t fs_slots = 0;
     int64_t fs_boxes = 0;
+    // H2_compress_factors: the kept X_NR made from the fill source's temp2^T
+    // rather than from a second compression of temp2 (transpose_kept_xnr)
+    int64_t kx_boxes = 0;          // handed over
+    int64_t kx_groups = 0;
+    int64_t kx_host = 0;           // boxes that had to go round through the host
+    double kx_raw_bytes = 0.0;     // uncompressed bytes transposed
+    double kx_stored_bytes = 0.0;  // what their kept X_NR came to
+    double kx_seconds = 0.0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
     // the scratch a wave's sketch needs for the slots it reads, and what it
@@ -509,6 +517,16 @@ public:
         if (heap_initialized_) heap_.set_reclaimer(nullptr);
         copier_.reset();  // joins the worker
         exchange_copier_.reset();
+        if (heap_initialized_) {
+            // a level that never took the device transition hands its kept
+            // X_NR over here instead; a throw must not leave the destructor
+            try {
+                transpose_kept_xnr();
+            } catch (const std::exception& e) {
+                std::printf("[gpu] level %d: the kept X_NR could not be transposed: %s\n", level_index_, e.what());
+                std::fflush(stdout);
+            }
+        }
         drop_kept();
         release_level_data();
     }
@@ -542,6 +560,8 @@ public:
         if (keep && keep_solve_ && !keep_failed_) {
             device_solve_store().kept[level_index_] = std::move(kept_);
             kept_ = KeptSolveLevel{};
+            // the pledged boxes' X_NR is handed to this copy at the transition
+            committed_kept_ = &device_solve_store().kept[level_index_];
             skipped_factors_.clear();  // (read from the store from now on)
         } else {
             rescue_skipped_xnr(true);  // (another rank did not keep its factors)
@@ -612,6 +632,13 @@ private:
         std::vector<T2tSlot> t2t_slots;
         std::vector<uint32_t> t2t_strides;
         std::unordered_map<int, int> t2t_rows;  // first row -> slot
+        // H2_compress_factors: this box is kept and its compressed temp2^T is
+        // the only copy of the solve factor, so the bytes have to reach the
+        // transition, where transpose_kept_xnr() makes the kept X_NR from
+        // them.  `reclaimed` means the readers are done and the box behaves as
+        // if the fill source were gone - only the bytes are still there.
+        bool t2t_pledged = false;
+        bool t2t_reclaimed = false;
         int readers = 0;
         // static ID training rows of the box: slots after training_slot0_
         const int* d_training = nullptr;
@@ -727,14 +754,23 @@ private:
     // one, or both while the readers have not moved over.
     // Whether a box still has its temp2^T, in either form.
     static bool has_fill_source(const BoxState& st) {
+        if (st.t2t_reclaimed) return false;  // held for the kept X_NR, not for reading
         return st.temp2t != nullptr || st.t2t_packed != nullptr;
     }
-    void release_fill_temp2t(BoxState& st) {
+    // `final` at the level's end, where nothing is kept back.  Mid-level a
+    // pledged box gives up its raw temp2^T and its readers but keeps the
+    // compressed bytes, which are its kept X_NR until the transition.
+    void release_fill_temp2t(BoxState& st, bool final = true) {
         if (st.persist_t2t != nullptr) {
             eliminator_stats().persist_bytes -= static_cast<double>(st.persist_t2t_bytes);
             heap_.free(st.persist_t2t);
             st.persist_t2t = nullptr;
             st.persist_t2t_bytes = 0;
+        }
+        if (!final && st.t2t_pledged && st.t2t_packed != nullptr) {
+            st.t2t_reclaimed = true;
+            st.temp2t = nullptr;
+            return;
         }
         if (st.t2t_packed != nullptr) {
             eliminator_stats().persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
@@ -843,6 +879,29 @@ private:
                             cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_sources, cudaStream_t stream);
+    // H2_compress_factors: a box whose kept X_NR is still the fill source's
+    // compressed temp2^T.  The two are one matrix - temp2, and temp2
+    // transposed - so only one is stored, and the transition transposes it
+    // into the form the solve reads.
+    struct PledgedXnr { int64_t morton = 0; BoxState* st = nullptr; int ntot = 0; int r = 0;
+                        size_t bytes = 0; };  // what its fill source stores now
+    bool can_pledge_fill_source(const WaveBox& wb) const {
+        if (compress_factors_ < 1 || !gpu_sketch_) return false;
+        const BoxState* st = wb.state;
+        if (st == nullptr || st->t2t_packed == nullptr || st->t2t_pledged) return false;
+        if (st->t2t_slots.empty() || wb.r <= 0 || wb.ntot <= 0) return false;
+        int64_t rows = 0;  // the slots have to be all of X_NR's rows, in order
+        for (const auto& sl : st->t2t_slots) rows += sl.rows;
+        return rows == wb.ntot;
+    }
+    void transpose_kept_xnr();
+    bool transpose_kept_xnr_group(const std::vector<PledgedXnr>& todo, size_t first, size_t last, size_t raw,
+                                  KeptSolveLevel& kl, cudaStream_t stream);
+    bool kept_xnr_through_host(const PledgedXnr& p, KeptSolveLevel& kl);
+    // The raw bytes one handover group decompresses and transposes.  Twice
+    // this is the staging it needs, at the point in the level where the heap
+    // has most room.
+    static constexpr size_t kKeptTransposeBudget = size_t{256} << 20;
     // One fill source to compress: its temp2^T and the slot row counts that
     // partition it (a slot per one-hop neighbor).
     struct FillSrcRef {
@@ -1517,6 +1576,37 @@ private:
             if (box->X_NR.is_allocated()) { ++n_had; continue; }
             const auto kept = kept_of(box, "X_NR");
             const KeptSolveBox* kb = kept.box;
+#ifdef H2_HAVE_NVCOMP
+            if (kb->xnr_pending) {
+                // Mid-level: this box's kept X_NR is still the fill source's
+                // temp2^T, which the transition has yet to transpose.  Read it
+                // from there, a slot at a time, and transpose on the way in.
+                const BoxState& st = state_of(box->morton_index);
+                if (st.t2t_packed == nullptr || st.t2t_slots.empty()) {
+                    throw std::runtime_error("LevelEliminator: no X_NR to rescue for box " +
+                                             std::to_string(box->morton_index));
+                }
+                const size_t nt = static_cast<size_t>(kb->ntot), r = static_cast<size_t>(kb->r);
+                std::vector<char> packed(st.t2t_packed_bytes);
+                check_cuda(cudaMemcpy(packed.data(), st.t2t_packed, packed.size(), cudaMemcpyDeviceToHost),
+                           "X_NR host copies (pledged)");
+                std::vector<S> t(nt * r);
+                size_t o = 0;
+                for (const auto& sl : st.t2t_slots) {
+                    decompress_xnr_host<S>(packed.data() + sl.off, t.data() + o,
+                                           st.t2t_strides.data() + sl.chunk0, sl.nchunks);
+                    o += static_cast<size_t>(sl.rows) * r;
+                }
+                std::vector<DataType> v(nt * r);
+                S* x = reinterpret_cast<S*>(v.data());
+                for (size_t j = 0; j < r; ++j) {
+                    for (size_t i = 0; i < nt; ++i) x[i + j * nt] = t[j + i * r];
+                }
+                box->X_NR.set_owned(kb->ntot, kb->r, std::move(v), MatrixStorage<DataType>::FULL);
+                ++n_packed;
+                continue;
+            }
+#endif
             if (kb->xnr_bytes > 0) {
                 // H2_compress_factors: kb->xnr is xnr_bytes of compressed
                 // chunks, so reading ntot * r elements from it would run off
@@ -1575,6 +1665,13 @@ private:
     void drop_kept() {
         for (char* b : kept_.blocks) heap_.free(b);
         kept_ = KeptSolveLevel{};
+        // nothing is kept, so a pledged box owns its compressed temp2^T again
+        // and release_level_data() frees it with the rest
+        for (PledgedXnr& p : pledged_xnr_) {
+            if (p.st != nullptr) p.st->t2t_pledged = false;
+        }
+        pledged_xnr_.clear();
+        committed_kept_ = nullptr;
     }
     int owner_of(int64_t morton) {
         auto it = owner_cache_.find(morton);
@@ -1667,7 +1764,7 @@ private:
             eliminator_stats().persist_bytes -= static_cast<double>(es->persist_bytes);
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
             es->persist = nullptr;
-            release_fill_temp2t(*es);
+            release_fill_temp2t(*es, false);
             es->temp2t = nullptr;
             es->xrr_full = nullptr;
             return true;
@@ -1760,6 +1857,8 @@ private:
     std::vector<Box*> skipped_xnr_;      // ... the boxes whose X_NR stayed on the device (rescue_skipped_xnr)
     std::vector<Box*> skipped_factors_;  // ... whose X_SR and LU did
     KeptSolveLevel kept_;
+    std::vector<PledgedXnr> pledged_xnr_;       // in the order they were kept
+    KeptSolveLevel* committed_kept_ = nullptr;  // the store's copy, after the commit
     DeviceBuffer solve_meta_device_;
     DeviceBuffer fill_meta_device_;  // span lists of the fill-source gathers
     DeviceBuffer t2t_meta_device_;   // transpose lists of the fill-source sub-groups
@@ -5840,10 +5939,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
     std::vector<Span> spans;
     struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot;
                   size_t xnr_bytes; double xnr_delta;
-                  uint32_t xnr_chunk0; uint32_t xnr_nchunks; };
+                  uint32_t xnr_chunk0; uint32_t xnr_nchunks; bool xnr_pledged; };
     std::vector<Made> made;
 
     std::vector<CompressedXnr> comp;
+    std::vector<int> comp_at(kept_boxes.size(), -1);  // box -> its block of comp
+    std::vector<char> pledged(kept_boxes.size(), 0);
     bool compressed = false;
 #ifdef H2_HAVE_NVCOMP
     if (compress_factors_ >= 1 && !kept_boxes.empty()) {
@@ -5851,16 +5952,27 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         std::vector<size_t> elems;
         srcs.reserve(kept_boxes.size());
         elems.reserve(kept_boxes.size());
-        for (const WaveBox* wb : kept_boxes) {
+        for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
+            const WaveBox* wb = kept_boxes[bi];
             const size_t nt = static_cast<size_t>(wb->ntot), r = static_cast<size_t>(wb->r);
+            // This box's fill source is the same matrix transposed, and the
+            // wave compressed it a moment ago (compress_fill_sources runs
+            // first).  Pledge that copy rather than make a second one.
+            if (can_pledge_fill_source(*wb)) {
+                pledged[bi] = 1;
+                continue;
+            }
             const char* source = d_sources[static_cast<size_t>(wb->source_group)];
+            comp_at[bi] = static_cast<int>(srcs.size());
             srcs.push_back(reinterpret_cast<const S*>(source + wb->off_temp2));
             elems.push_back(nt * r);
         }
-        compressed = xnr_compressor_.compress(
-            srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream);
-        if (compressed) ++eliminator_stats().xnr_waves_compressed;
-        else ++eliminator_stats().xnr_waves_plain;
+        if (!srcs.empty()) {
+            compressed = xnr_compressor_.compress(
+                srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream);
+            if (compressed) ++eliminator_stats().xnr_waves_compressed;
+            else ++eliminator_stats().xnr_waves_plain;
+        }
     }
 #endif
 
@@ -5869,26 +5981,32 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         const WaveBox& wb = *kept_boxes[bi];
         const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
         const char* source = d_sources[static_cast<size_t>(wb.source_group)];
-        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0};
+        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0, false};
         m.T = total;   spans.push_back({total, d_result + wb.off_t, k * r * D});        total = align_up(total + k * r * D);
         m.xsr = total; spans.push_back({total, d_result + wb.off_temp1, k * r * D});    total = align_up(total + k * r * D);
         m.xnr = total;
-        if (compressed && nt > 0 && comp[bi].bytes > 0) {
+        if (pledged[bi]) {
+            // No room taken here: the transition transposes the fill source's
+            // bytes and puts the kept X_NR in a block of its own.
+            m.xnr_pledged = true;
+        } else if (compressed && comp_at[bi] >= 0 && nt > 0 &&
+                   comp[static_cast<size_t>(comp_at[bi])].bytes > 0) {
             // One span per chunk, end to end, each at the 256-byte start
             // bitcomp needs to read it; those padded lengths go into the
             // level's pool, which is how the solve walks to a chunk.
+            const CompressedXnr& ci = comp[static_cast<size_t>(comp_at[bi])];
             const auto& cks = xnr_compressor_.chunks();
             m.xnr_chunk0 = static_cast<uint32_t>(kept_.chunk_strides.size());
-            m.xnr_nchunks = static_cast<uint32_t>(comp[bi].nchunks);
+            m.xnr_nchunks = static_cast<uint32_t>(ci.nchunks);
             size_t at = total;
-            for (size_t c = 0; c < comp[bi].nchunks; ++c) {
-                const auto& ck = cks[comp[bi].chunk0 + c];
+            for (size_t c = 0; c < ci.nchunks; ++c) {
+                const auto& ck = cks[ci.chunk0 + c];
                 spans.push_back({at, xnr_compressor_.staging() + ck.offset, ck.stride});
                 kept_.chunk_strides.push_back(static_cast<uint32_t>(ck.stride));
                 at += ck.stride;
             }
-            m.xnr_bytes = comp[bi].bytes;  // the chunks' padded lengths, summed
-            m.xnr_delta = comp[bi].delta;
+            m.xnr_bytes = ci.bytes;  // the chunks' padded lengths, summed
+            m.xnr_delta = ci.delta;
             total = align_up(at);
         } else {
             if (nt > 0) spans.push_back({total, source + wb.off_temp2, nt * r * D});
@@ -5899,8 +6017,11 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         {
             auto& es = eliminator_stats();
             es.xnr_raw_bytes += static_cast<double>(align_up(nt * r * D));
+            // a pledged box's X_NR is its fill source until the transition, so
+            // that is what it stores; the handover corrects the difference
             es.xnr_stored_bytes += static_cast<double>(
-                m.xnr_bytes > 0 ? align_up(m.xnr_bytes) : align_up(nt * r * D));
+                m.xnr_pledged ? wb.state->t2t_packed_bytes
+                              : (m.xnr_bytes > 0 ? align_up(m.xnr_bytes) : align_up(nt * r * D)));
             es.other_raw_bytes += static_cast<double>(
                 2 * align_up(k * r * D) + align_up(r * r * D) + align_up(r * I));
         }
@@ -5932,6 +6053,9 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
     char* block = heap_.alloc_resident(total, ResidentKind::KeptFactors);
     kept_.blocks.push_back(block);
     kept_.bytes += static_cast<double>(total);
+    for (size_t bi = 0; bi < made.size(); ++bi) {  // the pledged X_NR is kept too
+        if (made[bi].xnr_pledged) kept_.bytes += static_cast<double>(kept_boxes[bi]->state->t2t_packed_bytes);
+    }
     // the span list is a few KB: a pageable copy (staged before the call
     // returns) into a buffer reserved at level start, so no allocation lands
     // in the wave's pipeline
@@ -5957,11 +6081,13 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         xnr_compressor_.release();
     }
 #endif
-    for (const Made& m : made) {
+    for (size_t bi = 0; bi < made.size(); ++bi) {
+        const Made& m = made[bi];
         KeptSolveBox kb;
         kb.T = block + m.T;
         kb.xsr = block + m.xsr;
-        kb.xnr = block + m.xnr;
+        kb.xnr = m.xnr_pledged ? nullptr : block + m.xnr;
+        kb.xnr_pending = m.xnr_pledged;
         kb.lu = block + m.lu;
         kb.ipiv = reinterpret_cast<const int*>(block + m.piv);
         kb.k = m.k;
@@ -5972,8 +6098,315 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         kb.xnr_chunk0 = m.xnr_chunk0;
         kb.xnr_nchunks = m.xnr_nchunks;
         kept_.boxes[m.morton] = kb;
+        if (m.xnr_pledged) {
+            BoxState* st = kept_boxes[bi]->state;
+            st->t2t_pledged = true;
+            pledged_xnr_.push_back(PledgedXnr{m.morton, st, m.ntot, m.r, st->t2t_packed_bytes});
+        }
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// The kept X_NR of the pledged boxes, made from their fill sources.
+//
+// temp2 is stored once instead of twice.  Through the level it is the fill
+// source: temp2^T, r x ntot, compressed a slot - one one-hop neighbor - at a
+// time, which is the form and the granularity the sketches read.  Here, the
+// level done and the heap at its emptiest, each pledged box's slots are
+// decompressed end to end (they are consecutive column ranges, so that is the
+// whole r x ntot), transposed into the ntot x r the solve's kernels read, and
+// compressed again into a block of the kept store.
+//
+// The second quantization is at the same tolerance as the first, on blocks
+// cut differently (whole matrices, not slots), so it can add up to another
+// delta/2 to a kept factor.  Groups are bounded by kKeptTransposeBudget; a
+// group that does not fit is retried a box at a time, and a box that still
+// does not fit goes round through the host.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::transpose_kept_xnr() {
+#ifdef H2_HAVE_NVCOMP
+    if (pledged_xnr_.empty()) return;
+    std::vector<PledgedXnr> todo;
+    todo.swap(pledged_xnr_);  // (a throw must not leave them to be tried twice)
+    KeptSolveLevel& kl = committed_kept_ != nullptr ? *committed_kept_ : kept_;
+    const size_t D = sizeof(S);
+    cudaStream_t stream = Context::instance().stream();
+    auto& stats = eliminator_stats();
+    const auto t0 = std::chrono::steady_clock::now();
+    size_t at = 0;
+    while (at < todo.size()) {
+        size_t raw = 0, end = at;
+        while (end < todo.size()) {
+            const size_t bytes = align_up(static_cast<size_t>(todo[end].ntot) *
+                                          static_cast<size_t>(todo[end].r) * D);
+            if (end > at && raw + bytes > kKeptTransposeBudget) break;
+            raw += bytes;
+            ++end;
+        }
+        if (!transpose_kept_xnr_group(todo, at, end, raw, kl, stream)) {
+            for (size_t i = at; i < end; ++i) {
+                const size_t one = align_up(static_cast<size_t>(todo[i].ntot) *
+                                            static_cast<size_t>(todo[i].r) * D);
+                if (transpose_kept_xnr_group(todo, i, i + 1, one, kl, stream)) continue;
+                if (kept_xnr_through_host(todo[i], kl)) continue;
+                throw std::runtime_error("H2 GPU: no room for the kept X_NR of box " +
+                                         std::to_string(todo[i].morton));
+            }
+        }
+        at = end;
+    }
+    stats.kx_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+#endif
+}
+
+// One group of pledged boxes.  False means it did not fit, with nothing
+// changed: the box keeps its fill source and the caller tries a smaller group
+// or the host.
+template<typename CoordType, typename DataType, typename KernelType>
+bool LevelEliminator<CoordType, DataType, KernelType>::transpose_kept_xnr_group(
+    const std::vector<PledgedXnr>& todo, size_t first, size_t last, size_t raw, KeptSolveLevel& kl,
+    cudaStream_t stream) {
+#ifdef H2_HAVE_NVCOMP
+    const size_t D = sizeof(S);
+    auto& stats = eliminator_stats();
+    const size_t n = last - first;
+    if (n == 0) return true;
+    char* a = heap_.try_alloc(std::max<size_t>(raw, 1));                          // temp2^T
+    char* b = a != nullptr ? heap_.try_alloc(std::max<size_t>(raw, 1)) : nullptr;  // temp2
+    if (a == nullptr || b == nullptr) {
+        heap_.free(b);
+        heap_.free(a);
+        return false;
+    }
+    std::vector<size_t> off(n, 0);
+    {
+        size_t o = 0;
+        for (size_t i = first; i < last; ++i) {
+            off[i - first] = o;
+            o = align_up(o + static_cast<size_t>(todo[i].ntot) * static_cast<size_t>(todo[i].r) * D);
+        }
+    }
+    // 1. every slot of every box of the group, decompressed in one batch
+    SolveXnrWave w;
+    for (size_t i = first; i < last; ++i) {
+        const PledgedXnr& p = todo[i];
+        const BoxState& st = *p.st;
+        size_t so = off[i - first];
+        w.boxes.push_back(static_cast<int>(i - first));
+        w.h_box_dsts.push_back(a + so);
+        for (const auto& sl : st.t2t_slots) {
+            const char* src = st.t2t_packed + sl.off;
+            for (uint32_t c = 0; c < sl.nchunks; ++c) {
+                w.h_srcs.push_back(src);
+                w.h_dsts.push_back(a + so + static_cast<size_t>(c) * kXnrChunkBytes);
+                src += st.t2t_strides[sl.chunk0 + c];
+            }
+            so += static_cast<size_t>(sl.rows) * static_cast<size_t>(p.r) * D;
+        }
+    }
+    if (w.h_srcs.empty() || !build_solve_xnr_wave(w, heap_, stream)) {
+        release_solve_xnr_wave(w);
+        if (w.d_srcs != nullptr) heap_.free(reinterpret_cast<char*>(const_cast<void**>(w.d_srcs)));
+        heap_.free(b);
+        heap_.free(a);
+        return false;
+    }
+    decompress_solve_xnr_wave(w, stream);
+    check_cuda(cudaStreamSynchronize(stream), "kept X_NR: decompress");
+    release_solve_xnr_wave(w);
+    heap_.free(reinterpret_cast<char*>(const_cast<void**>(w.d_srcs)));
+    // 2. transposed into the shape the solve reads
+    {
+        std::vector<TransposeItemT<S>> tr;
+        tr.reserve(n);
+        int max_m = 0, max_n = 0;
+        for (size_t i = first; i < last; ++i) {
+            const PledgedXnr& p = todo[i];
+            const size_t o = off[i - first];
+            tr.push_back(TransposeItemT<S>{reinterpret_cast<const S*>(a + o), p.r,
+                                           reinterpret_cast<S*>(b + o), p.ntot, p.r, p.ntot});
+            max_m = std::max(max_m, p.r);
+            max_n = std::max(max_n, p.ntot);
+        }
+        const size_t list_bytes = tr.size() * sizeof(TransposeItemT<S>);
+        if (list_bytes > t2t_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "kept X_NR: transposes");
+            t2t_meta_device_.reserve(list_bytes);
+        }
+        auto* d_tr = static_cast<TransposeItemT<S>*>(t2t_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_tr, tr.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                   "kept X_NR: transposes");
+        launch_transpose(d_tr, static_cast<int>(tr.size()), max_m, max_n, stream);
+    }
+    // 3. compressed again, into the kept store's layout
+    std::vector<const S*> srcs;
+    std::vector<size_t> elems;
+    srcs.reserve(n);
+    elems.reserve(n);
+    for (size_t i = first; i < last; ++i) {
+        srcs.push_back(reinterpret_cast<const S*>(b + off[i - first]));
+        elems.push_back(static_cast<size_t>(todo[i].ntot) * static_cast<size_t>(todo[i].r));
+    }
+    std::vector<CompressedXnr> comp;
+    if (!xnr_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+        xnr_compressor_.release();
+        heap_.free(b);
+        heap_.free(a);
+        return false;
+    }
+    size_t total = 0;
+    std::vector<size_t> dst(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        dst[i] = total;
+        total = align_up(total + comp[i].bytes);
+    }
+    char* block = total > 0 ? heap_.try_alloc_resident(total, ResidentKind::KeptFactors) : nullptr;
+    if (block == nullptr) {
+        xnr_compressor_.release();
+        heap_.free(b);
+        heap_.free(a);
+        return false;
+    }
+    const auto& cks = xnr_compressor_.chunks();
+    std::vector<CopySpan> items;
+    int64_t max_words = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const PledgedXnr& p = todo[first + i];
+        auto it = kl.boxes.find(p.morton);
+        if (it == kl.boxes.end()) {
+            throw std::runtime_error("H2 GPU: pledged box " + std::to_string(p.morton) +
+                                     " is not in the kept store");
+        }
+        KeptSolveBox& kb = it->second;
+        kb.xnr = block + dst[i];
+        kb.xnr_bytes = comp[i].bytes;
+        kb.xnr_delta = comp[i].delta;
+        kb.xnr_chunk0 = static_cast<uint32_t>(kl.chunk_strides.size());
+        kb.xnr_nchunks = static_cast<uint32_t>(comp[i].nchunks);
+        kb.xnr_pending = false;
+        size_t at = dst[i];
+        for (size_t c = 0; c < comp[i].nchunks; ++c) {
+            const auto& ck = cks[comp[i].chunk0 + c];
+            items.push_back(CopySpan{xnr_compressor_.staging() + ck.offset, block + at,
+                                     static_cast<int64_t>(ck.stride / 4)});
+            max_words = std::max(max_words, static_cast<int64_t>(ck.stride / 4));
+            kl.chunk_strides.push_back(static_cast<uint32_t>(ck.stride));
+            at += ck.stride;
+        }
+    }
+    kl.blocks.push_back(block);
+    {
+        double was = 0.0;
+        for (size_t i = first; i < last; ++i) was += static_cast<double>(todo[i].bytes);
+        kl.bytes += static_cast<double>(total) - was;
+        stats.xnr_stored_bytes += static_cast<double>(total) - was;
+    }
+    {
+        const size_t list_bytes = items.size() * sizeof(CopySpan);
+        if (list_bytes > solve_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "kept X_NR: gather");
+            solve_meta_device_.reserve(list_bytes);
+        }
+        auto* d_items = static_cast<CopySpan*>(solve_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_items, items.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                   "kept X_NR: gather");
+        launch_copy_spans(d_items, static_cast<int>(items.size()), max_words, stream);
+    }
+    check_cuda(cudaStreamSynchronize(stream), "kept X_NR");  // the staging goes back now
+    xnr_compressor_.release();
+    heap_.free(b);
+    heap_.free(a);
+    // 4. the fill source's copy is the one that goes
+    for (size_t i = first; i < last; ++i) {
+        BoxState& st = *todo[i].st;
+        if (st.t2t_packed != nullptr) {
+            stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
+            heap_.free(st.t2t_packed);
+        }
+        st.t2t_packed = nullptr;
+        st.t2t_packed_bytes = 0;
+        st.t2t_slots.clear();
+        st.t2t_strides.clear();
+        st.t2t_rows.clear();
+        st.t2t_pledged = false;
+        st.t2t_reclaimed = false;
+        st.temp2t = nullptr;
+    }
+    stats.kx_boxes += static_cast<int64_t>(n);
+    ++stats.kx_groups;
+    stats.kx_raw_bytes += static_cast<double>(raw);
+    stats.kx_stored_bytes += static_cast<double>(total);
+    return true;
+#else
+    (void)todo; (void)first; (void)last; (void)raw; (void)kl; (void)stream;
+    return true;
+#endif
+}
+
+// A box whose transpose did not fit on the device: its slots are decompressed
+// and transposed on the host and come back uncompressed, which is a form the
+// solve already reads (xnr_bytes 0).  Bigger, and only for the corner where
+// the device had no room at all.
+template<typename CoordType, typename DataType, typename KernelType>
+bool LevelEliminator<CoordType, DataType, KernelType>::kept_xnr_through_host(const PledgedXnr& p,
+                                                                             KeptSolveLevel& kl) {
+#ifdef H2_HAVE_NVCOMP
+    BoxState& st = *p.st;
+    if (st.t2t_packed == nullptr || st.t2t_slots.empty()) return false;
+    const size_t D = sizeof(S);
+    const size_t nt = static_cast<size_t>(p.ntot), r = static_cast<size_t>(p.r);
+    const size_t bytes = nt * r * D;
+    std::vector<char> packed(st.t2t_packed_bytes);
+    check_cuda(cudaMemcpy(packed.data(), st.t2t_packed, packed.size(), cudaMemcpyDeviceToHost),
+               "kept X_NR through the host");
+    std::vector<S> t(nt * r), x(nt * r);
+    size_t o = 0;
+    for (const auto& sl : st.t2t_slots) {
+        decompress_xnr_host<S>(packed.data() + sl.off, t.data() + o,
+                               st.t2t_strides.data() + sl.chunk0, sl.nchunks);
+        o += static_cast<size_t>(sl.rows) * r;
+    }
+    for (size_t j = 0; j < r; ++j) {
+        for (size_t i = 0; i < nt; ++i) x[i + j * nt] = t[j + i * r];
+    }
+    char* blk = heap_.try_alloc_resident(bytes, ResidentKind::KeptFactors);
+    if (blk == nullptr) return false;
+    check_cuda(cudaMemcpy(blk, x.data(), bytes, cudaMemcpyHostToDevice), "kept X_NR through the host");
+    auto it = kl.boxes.find(p.morton);
+    if (it == kl.boxes.end()) {
+        heap_.free(blk);
+        return false;
+    }
+    KeptSolveBox& kb = it->second;
+    kb.xnr = blk;  // uncompressed, which is what xnr_bytes 0 means
+    kb.xnr_bytes = 0;
+    kb.xnr_delta = 0.0;
+    kb.xnr_chunk0 = 0;
+    kb.xnr_nchunks = 0;
+    kb.xnr_pending = false;
+    kl.blocks.push_back(blk);
+    kl.bytes += static_cast<double>(bytes) - static_cast<double>(p.bytes);
+    auto& stats = eliminator_stats();
+    stats.xnr_stored_bytes += static_cast<double>(bytes) - static_cast<double>(p.bytes);
+    stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
+    heap_.free(st.t2t_packed);
+    st.t2t_packed = nullptr;
+    st.t2t_packed_bytes = 0;
+    st.t2t_slots.clear();
+    st.t2t_strides.clear();
+    st.t2t_rows.clear();
+    st.t2t_pledged = false;
+    st.t2t_reclaimed = false;
+    st.temp2t = nullptr;
+    ++stats.kx_host;
+    ++stats.kx_boxes;
+    return true;
+#else
+    (void)p; (void)kl;
+    return false;
+#endif
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -7951,6 +8384,7 @@ template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     released_sources_.clear();  // their blocks are freed with the states below
     if (!heap_initialized_) return;
+    transpose_kept_xnr();  // the kept X_NR, while the fill sources are still here
     if (outbox_ != nullptr) free_block(outbox_);
     outbox_ = nullptr;
     for (OwnerWaveSend& w : owner_sends_) {
