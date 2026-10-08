@@ -2958,7 +2958,36 @@ wave has its pair allocated at once**: one loop allocates them all
 (level_eliminator.hpp, the sketch's plan loop) and one frees them all after
 the sketch.  At the leaf that is 256 boxes x about 20 MB.
 
-**The fix has a shape this codebase has used twice.**  A box's sketch is
+**Done (2026-10-08), and it was free.**  The sum is over sources, so a group's
+terms are accumulated into Y and the scratch reused: for each fill group, build
+that group's P_E, sketch its W_E, then `Y -= W_g P_g` with beta = 1 before the
+next group overwrites the block.  The groups already existed (a group's
+temp2^T slots are only in the fill scratch while its batches run), so the only
+new thing is the per-group offsets, and one block sized for the widest group
+replaces a stack per box.
+
+| 192^3 leaf | peak | transient | Factor |
+|---|---|---|---|
+| Color before | 15.40 | 7.05 | 9.48 s |
+| Color after | **13.34** | 5.95 | 9.39 s |
+| CA0 before | 17.47 | 7.04 | 10.6 s |
+| CA0 after | **15.40** | 5.95 | 10.4 s |
+
+-2.06 GB on both paths, **bit-identical logdet** on both at both sizes, and
+marginally faster.  I expected the summation order to move the result by
+rounding and it did not: the groups are swept in the order the stacked product
+summed over k, so the terms are added in the same order.  That is this
+layout's property and not a guarantee, so the gate for any change here stays
+logdet.
+
+`sketch P;W` is now below the reporting threshold, and the transient reads
+wave work 1.09, **wave outputs 3.36**, source window 0.54, codec staging 0.52,
+wave result 0.14, sketch vectors 0.13, wave sources 0.08.  **The peak has
+moved into the window where the raw outputs are live**, which is what stage C
+shortens - so stage C, worth 0.62 GB when it landed, is now load-bearing, and
+the outputs are the next target again at 3.36 GB.
+
+**The fix had a shape this codebase has used twice.**  A box's sketch is
 independent of the other boxes', so the wave's boxes can be swept in groups
 bounded by a byte budget, each group's `[P; W]` freed before the next - which
 is step 3a's owner groups and the fill-source groups again.  Nothing about

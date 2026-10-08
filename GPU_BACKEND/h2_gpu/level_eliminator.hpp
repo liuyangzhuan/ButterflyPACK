@@ -2513,9 +2513,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         S* Y = nullptr;        // d x n
         int ldy = 0;           // its leading dimension: d, or the room for the adaptive rows (H2_ID_proxy 2)
         size_t off_y = 0;
-        int fill_rank = 0;          // sum of the sources' r
-        S* W = nullptr;        // d x fill_rank: [W_E1 W_E2 ...]
-        S* P = nullptr;        // fill_rank x n: [P_E1; P_E2; ...]
+        int fill_rank = 0;     // sum of the sources' r, over every group
+        // P_E (r_E x n) and W_E (d x r_E) live in the group's shared block,
+        // not in a per-box stack: see the fill batches below.
     };
     std::vector<Plan> plans(wave.size());
     const bool trace = h2_id_trace_enabled();
@@ -2973,8 +2973,51 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const size_t num_groups = std::max<size_t>(fill_groups.size(), 1);
     std::vector<std::vector<OrderedSketchItem>> stored_by_group(num_groups);
     std::vector<VBatch<S>> p_by_group(num_groups);
-    VBatch<S> fill_batch;
+    std::vector<VBatch<S>> fill_by_group(num_groups);
     int max_d = 0, max_n = 0, max_r = 0;
+    // Y -= sum_E W_E P_E is a sum over the box's fill sources, so a group's
+    // terms can be accumulated into Y and the scratch reused.  Stacking every
+    // source of every box first - one product a box - was 5.41 GB at the
+    // 192^3 leaf, 46x the Y it produces, because the whole wave's stacks were
+    // live at once.  The groups already exist: a group's temp2^T slots are
+    // only in the fill scratch while its batches run, and the same bound now
+    // holds for P and W.  The sum changes order, so the result moves by
+    // rounding, which is what the host has always done (it applies the
+    // sources one by one).
+    auto group_of = [&](const Source& src) {
+        return static_cast<size_t>(src.group) < num_groups ? static_cast<size_t>(src.group) : size_t{0};
+    };
+    std::vector<std::vector<int>> g_rank(num_groups, std::vector<int>(plans.size(), 0));
+    std::vector<std::vector<size_t>> g_poff(num_groups, std::vector<size_t>(plans.size(), 0));
+    std::vector<std::vector<size_t>> g_woff(num_groups, std::vector<size_t>(plans.size(), 0));
+    std::vector<std::vector<int>> g_at(num_groups, std::vector<int>(plans.size(), 0));
+    size_t pw_elems = 0;  // the widest group's P and W, which every group reuses
+    for (size_t g = 0; g < num_groups; ++g) {
+        size_t at = 0;
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            const Plan& p = plans[bi];
+            int rank = 0;
+            for (const Source& src : p.sources) {
+                if (group_of(src) == g) rank += src.state->r;
+            }
+            g_rank[g][bi] = rank;
+            if (rank == 0) continue;
+            g_poff[g][bi] = at;
+            at += static_cast<size_t>(rank) * static_cast<size_t>(p.n);
+        }
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            if (g_rank[g][bi] == 0) continue;
+            g_woff[g][bi] = at;
+            at += static_cast<size_t>(plans[bi].d) * static_cast<size_t>(g_rank[g][bi]);
+        }
+        pw_elems = std::max(pw_elems, at);
+    }
+    S* pw = nullptr;
+    if (pw_elems > 0) {
+        char* block = heap_.alloc(pw_elems * D, ResidentKind::SketchPW);
+        fill_blocks.push_back(block);
+        pw = reinterpret_cast<S*>(block);
+    }
     {
         for (Plan& p : plans) {
             p.Y = reinterpret_cast<S*>(d_y + p.off_y);
@@ -2993,20 +3036,21 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             max_d = std::max(max_d, p.d);
             max_n = std::max(max_n, p.n);
             if (p.fill_rank == 0) continue;
-            const size_t p_bytes = align_up(static_cast<size_t>(p.fill_rank) * p.n * D);
-            char* fill = heap_.alloc(p_bytes + static_cast<size_t>(p.d) * p.fill_rank * D, ResidentKind::SketchPW);
-            fill_blocks.push_back(fill);
-            p.P = reinterpret_cast<S*>(fill);
-            p.W = reinterpret_cast<S*>(fill + p_bytes);
+            const size_t bi = static_cast<size_t>(&p - plans.data());
             for (Source& src : p.sources) {
                 const BoxState& ss = *src.state;
                 const int r = ss.r;
                 // P_E = X_RR_full temp2[B rows]^T; temp2 is resident row-major (NN)
-                const size_t gi = static_cast<size_t>(src.group) < num_groups ? static_cast<size_t>(src.group) : 0;
+                const size_t gi = group_of(src);
+                const int rank_g = g_rank[gi][bi];
+                S* Pg = pw + g_poff[gi][bi];
+                S* Wg = pw + g_woff[gi][bi];
+                const int off_g = g_at[gi][bi];  // this source's rows of the group's P
+                g_at[gi][bi] += r;
                 p_by_group[gi].entries.push_back({ss.xrr_full, src.t2t_base + static_cast<size_t>(src.slot_b) * r,
-                                                  p.P + src.offset, r, p.n, r, r, r, p.fill_rank});
+                                                  Pg + off_g, r, p.n, r, r, r, rank_g});
                 OrderedSketchItem w{};
-                w.out = p.W + static_cast<size_t>(src.offset) * p.d;
+                w.out = Wg + static_cast<size_t>(off_g) * p.d;
                 w.ldo = p.d;
                 w.d = p.d;
                 w.ncols = r;
@@ -3020,10 +3064,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 stored_by_group[gi].push_back(w);
                 max_r = std::max(max_r, r);
             }
-            // Y -= [W_E1 W_E2 ...] [P_E1; P_E2; ...]: all sources of the box
-            // in one product (the host applies them one by one; the sum is
-            // the same up to rounding)
-            fill_batch.entries.push_back({p.W, p.P, p.Y, p.d, p.n, p.fill_rank, p.d, p.fill_rank, p.ldy});
+            // Y -= [W_E1 ...] [P_E1; ...] over the group's sources, added to
+            // what the other groups contribute
+            for (size_t g = 0; g < num_groups; ++g) {
+                const int rank_g = g_rank[g][bi];
+                if (rank_g == 0) continue;
+                fill_by_group[g].entries.push_back({pw + g_woff[g][bi], pw + g_poff[g][bi], p.Y,
+                                                    p.d, p.n, rank_g, p.d, rank_g, p.ldy});
+            }
         }
     }
     // device ID: rank, flag, norm and pivots of every box, in one small block
@@ -3082,7 +3130,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     for (size_t g = 0; g < num_groups; ++g) off_stored[g] = meta_.append(stored_by_group[g]);
     const size_t off_id = meta_.append(id_items);
     for (VBatch<S>& b : p_by_group) b.stage(meta_);
-    fill_batch.stage(meta_);
+    for (VBatch<S>& b : fill_by_group) b.stage(meta_);
     if (adaptive) selector->plan(meta_);  // its first round: the IDs of the sketches, the root nodes
 
     // ---- launches, then Y to the host
@@ -3120,10 +3168,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         if (!p_by_group[g].entries.empty()) {
             p_by_group[g].gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
         }
+        // and collapsed into Y before the next group reuses the scratch (both
+        // are on this stream, so the ordering is the stream's)
+        if (!fill_by_group[g].entries.empty()) {
+            fill_by_group[g].gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
+        }
     }
     marks.mark(stream);
     marks.mark(stream);
-    fill_batch.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
     marks.mark(stream);
     if (adaptive) {
         selector->launch(md, stream);
