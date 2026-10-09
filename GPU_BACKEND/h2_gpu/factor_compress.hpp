@@ -102,7 +102,7 @@ constexpr size_t kFillStagingBudget = size_t{64} << 20;
 // slots of its own source, so grouping by source keeps every reader in the
 // same group as the slots it needs, and the batches stay wide (about 90
 // sources and 490 items a group at the leaf).
-constexpr size_t kFillWaveScratch = size_t{512} << 20;
+constexpr size_t kFillWaveScratch = size_t{256} << 20;
 
 // One box's compressed X_NR: the chunks it was cut into, and the shape and
 // quantization the solve needs to put it back.

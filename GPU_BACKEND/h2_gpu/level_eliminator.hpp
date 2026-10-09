@@ -4544,7 +4544,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // structure the owner pass had before any of this: the budget alone takes
     // the leaf from 120 batched GEMM calls to 730 and costs 0.64 s, whether
     // anything is compressed or not.
-    const size_t kNearGroupBudget = kHoldNearBlocksPacked ? (size_t{512} << 20)
+    // Halving this halves both the near store's packing staging and the
+    // owner window, which are the transient's two largest items, at the price
+    // of twice the groups: more launches, and a block written in more groups
+    // is re-packed more often.
+    const size_t kNearGroupBudget = kHoldNearBlocksPacked ? (size_t{256} << 20)
                                                           : std::numeric_limits<size_t>::max();
     std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
     {
