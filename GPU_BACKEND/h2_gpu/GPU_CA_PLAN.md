@@ -3039,6 +3039,35 @@ whose degradation was already there.  acc_mvp does not move (Color 3.09e-3 ->
 the steps before it.  Anything further here should be gated the same way, on
 acc_forward rather than on bytes.
 
+#### The near pass joins the chunks, and the wave's work blocks go (2026-10-08)
+
+The one production item left whole was the work block a box - tmp1, tmp2,
+X_SR, A_NS, X_NS - because step 5, the near pass, reads A_NS and X_NS and ran
+once over the whole wave.  Moving step 5 and its launch inside the chunk loop
+lets a chunk's work blocks go with the rest of its raw output.
+
+Safe because **boxes in one wave are never one-hop neighbours** - that is what
+makes them a wave - so no box can see a same-wave neighbour's state change
+between chunks.  And unlike dividing the wave, it adds no re-packing: step 5
+*creates* each near block and writes it once.
+
+| 192^3 | peak | resident | transient | wave work | Factor |
+|---|---|---|---|---|---|
+| Color before | 9.79 | 7.27 | 2.52 | 1.09 | 11.1 s |
+| Color after | **8.74** | 7.17 | **1.58** | **0.00** | 10.8 s |
+| CA0 after | **10.44** | 8.86 | 1.58 | 0.00 | 12.0 s |
+
+logdet bit-identical on both paths at both sizes, and slightly faster.  The
+one thing this needed was care with `stores`: left outside the loop it would
+accumulate, and every chunk's launch would re-apply the earlier chunks'
+updates.
+
+**The transient is now 77% the two budgets** - source window 0.64 and codec
+staging 0.58 of 1.58 GB - so what is left of it is a memory-for-launches knob
+rather than data.  The Color leaf's resident 7.17 is owner near blocks 3.24,
+fill temp2^T 1.22, kept factors 0.99, level Schur/edges 0.88, adopted 0.48,
+X_RR_full 0.29, owner source slots 0.12.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

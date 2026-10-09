@@ -3651,8 +3651,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // the compressed stores - still run once over the whole wave, which keeps
     // a block's contributions inside one owner pass and so leaves the near
     // store's re-packing where it is.
-    std::vector<AddStoreItem> stores;
-    int max_store_m = 0, max_store_n = 0;
     bool from_store = compress_factors_ >= 1;  // and every chunk's stores, below
     elim_marks_.clear();
     // Only where nothing outside a chunk reads its raw output: the owner pass
@@ -3677,6 +3675,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1), ResidentKind::WaveOutput);
         }
         const size_t xnr_first = xnr_blocks.size();
+        const size_t work_first = work_blocks.size();
+        std::vector<AddStoreItem> stores;   // step 5's, for this chunk
+        int max_store_m = 0, max_store_n = 0;
         // Host image of all interpolation matrices, laid out as d_t.
         std::vector<char> t_image(t_bytes);
         {
@@ -4212,53 +4213,71 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 wb.temp2 = nullptr;
             }
         }
+        // ---- Step 5, planned while the device runs the box region: the near
+        // block of every neighbor becomes A_NS + update (current neighbor rows x
+        // this box's skeleton), stored in the canonical orientation.  Its tens of
+        // thousands of block allocations per wave kept the device idle when they
+        // came before the launches above; they may now take the blocks those
+        // launches retired.  The items go with the owner pass's image.
+        {
+            const auto t_near = clock::now();
+            for (int i : chunk_active) {
+                WaveBox& wb = boxes[static_cast<size_t>(i)];
+                Box* box = wb.box;
+                const int k = wb.k, nt = wb.ntot;
+                for (size_t a = 0; a < box->one_hop.size(); ++a) {
+                    const int64_t nm = box->one_hop[a];
+                    const int c = static_cast<int>(wb.counts[a]);
+                    if (c == 0) continue;
+                    DeviceMatrix fresh;
+                    const auto t_alloc = clock::now();
+                    fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur);
+                    stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
+                    int64_t ors = 1, ocs = c;
+                    if (box->morton_index < nm) {
+                        fresh.rows = c;  // rows = neighbor (hi)
+                        fresh.cols = k;
+                    } else {
+                        fresh.rows = k;  // rows = this box (hi)
+                        fresh.cols = c;
+                        ors = k;
+                        ocs = 1;
+                    }
+                    stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
+                    max_store_m = std::max(max_store_m, c);
+                    max_store_n = std::max(max_store_n, k);
+                    edges_[edge_key(box->morton_index, nm)] = fresh;
+                    note_write(&edges_[edge_key(box->morton_index, nm)],
+                               static_cast<size_t>(fresh.rows) * fresh.cols * D);
+                }
+            }
+            const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
+            stats.pb_near += seconds;
+            stats.plan += seconds;
+        }
+
+        // The near pass's stores first, in an image of their own: they write the
+        // fresh blocks of step 5 and carry no metadata offsets.
+        {
+            owner_meta_.clear();
+            const size_t off_stores = owner_meta_.append(stores);
+            char* smd = owner_meta_.upload(owner_meta_device_, stream);
+            stats.bytes_up += static_cast<double>(owner_meta_.size());
+            check_items(stores, "near stores");
+            launch_add_store(reinterpret_cast<const AddStoreItem*>(smd + off_stores), static_cast<int>(stores.size()),
+                             max_store_m, max_store_n, stream);
+            check_cuda(cudaStreamSynchronize(stream), "owner stores");  // the image is reused below
+        }
+        marks.mark(stream);  // 6: step 5 (near blocks)
+        // A_NS and X_NS were the last of this chunk's raw output with a
+        // reader, and the stores above have been launched and waited for.
+        for (size_t b = work_first; b < work_blocks.size(); ++b) heap_.free(work_blocks[b]);
+        work_blocks.resize(work_first);
     }
-    elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 6);  // the two phases below
+    elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 7);  // the owner GEMMs
     StreamMarks& marks = *elim_marks_.back().first;
     marks.mark(stream);  // where the production ends
 
-    // ---- Step 5, planned while the device runs the box region: the near
-    // block of every neighbor becomes A_NS + update (current neighbor rows x
-    // this box's skeleton), stored in the canonical orientation.  Its tens of
-    // thousands of block allocations per wave kept the device idle when they
-    // came before the launches above; they may now take the blocks those
-    // launches retired.  The items go with the owner pass's image.
-    {
-        const auto t_near = clock::now();
-        for (int i : active) {
-            WaveBox& wb = boxes[static_cast<size_t>(i)];
-            Box* box = wb.box;
-            const int k = wb.k, nt = wb.ntot;
-            for (size_t a = 0; a < box->one_hop.size(); ++a) {
-                const int64_t nm = box->one_hop[a];
-                const int c = static_cast<int>(wb.counts[a]);
-                if (c == 0) continue;
-                DeviceMatrix fresh;
-                const auto t_alloc = clock::now();
-                fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur);
-                stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
-                int64_t ors = 1, ocs = c;
-                if (box->morton_index < nm) {
-                    fresh.rows = c;  // rows = neighbor (hi)
-                    fresh.cols = k;
-                } else {
-                    fresh.rows = k;  // rows = this box (hi)
-                    fresh.cols = c;
-                    ors = k;
-                    ocs = 1;
-                }
-                stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
-                max_store_m = std::max(max_store_m, c);
-                max_store_n = std::max(max_store_n, k);
-                edges_[edge_key(box->morton_index, nm)] = fresh;
-                note_write(&edges_[edge_key(box->morton_index, nm)],
-                           static_cast<size_t>(fresh.rows) * fresh.cols * D);
-            }
-        }
-        const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
-        stats.pb_near += seconds;
-        stats.plan += seconds;
-    }
 
     const auto t_owner = clock::now();
     // The slot each neighbor position holds in the two stores: both skip the
@@ -4563,19 +4582,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
     stats.plan += std::chrono::duration<double>(clock::now() - t_owner).count();
     t0 = clock::now();
-    // The near pass's stores first, in an image of their own: they write the
-    // fresh blocks of step 5 and carry no metadata offsets.
-    {
-        owner_meta_.clear();
-        const size_t off_stores = owner_meta_.append(stores);
-        char* smd = owner_meta_.upload(owner_meta_device_, stream);
-        stats.bytes_up += static_cast<double>(owner_meta_.size());
-        check_items(stores, "near stores");
-        launch_add_store(reinterpret_cast<const AddStoreItem*>(smd + off_stores), static_cast<int>(stores.size()),
-                         max_store_m, max_store_n, stream);
-        check_cuda(cudaStreamSynchronize(stream), "owner stores");  // the image is reused below
-    }
-    marks.mark(stream);  // 6: step 5 (near blocks), owner targets
     // Then one group at a time: its blocks raw, its kernel values, its GEMMs.
     // Each group stages its own image, because a slot list is an offset into
     // the image it was appended to (current_slots_in) and so cannot be shared
