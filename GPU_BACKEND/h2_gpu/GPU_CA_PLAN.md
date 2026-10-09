@@ -3479,6 +3479,49 @@ for the blocks the heap moved; a staged level's pointers are the addresses
 its freed blocks had, and those ranges were reused by blocks that then moved.
 The compaction now skips staged levels.
 
+#### Host staging (b), done (2026-10-09): the packed fill store lives on the host
+
+The slot-compressed temp2^T of every box (the fill store, 1.47-1.58 GB at the
+leaf) now lives in pinned host memory.  No staging of its own was needed:
+bitcomp only asks that its compressed input be device-visible, and pinned
+host memory is (UVA), so the later readers - the sketches of later waves,
+the transition, the handover - decompress straight from the host copy,
+reading the small compressed input over PCIe while writing the output on the
+device.  The packer copies each packed block to a process-wide arena
+(fill_host_arena, bump allocation, reset at the level's end) on a stream of
+its own and records an event; the device copy stays until the wave's owner
+pass has read it and goes at the wave's end once the copy is done
+(evict_fill_copies).  Every reader takes its base from packed_of(st): the
+device copy while it exists, else the host one.  Counted at the leaf with
+BPACK_TRACE=wave: the owner window reads 128609 slot chunks from the device
+and none from the host, the sketches 342873 from the host and 6586 from the
+device, and the sketch costs 1.49 -> 1.59 s for it - the PCIe-fed
+decompression is nearly free.
+
+What was not free was the pinning.  cudaMallocHost pins at 1.9 GB/s: 0.85 s
+for the leaf's 1.6 GB, spent inside the packer, which stalled the host while
+the device waited (+0.55 s in "plan boxes" and the same in the owner pass's
+device bracket - idle, not work).  Measured on a node (pin_bench.cu):
+transparent huge pages are "always" there, malloc'd memory touched and
+registered with cudaHostRegister pins 1.6 GB in 0.07 s at the same 26 GB/s.
+The arena does that.
+
+| 192^3, 8 ranks | Color | CA3 | CA0 |
+|---|---|---|---|
+| leaf peak | 7.41 -> **6.10** (4.43 + 1.67) | 7.91 -> **6.57** (4.90 + 1.67) | 8.74 -> **7.33** (5.66 + 1.67) |
+| fill temp2^T packed on the device, at the peak | 1.47 -> 0.12 | 1.51 -> 0.12 | 1.58 -> 0.12 |
+| fill store on the host, at most | 1.47 GB | 1.51 GB | 1.58 GB |
+| Factor | 11.9 -> 12.3 s | 11.8 -> 12.4 s | 12.6 -> 12.7 s |
+| time_solve | 0.473 -> 0.472 | 0.504 -> 0.509 | 0.515 -> 0.516 |
+
+logdet and the accuracies are bit-identical on all three paths at both sizes
+(96^3 heap-checked).  The leaf's peak moved to a moment with a larger
+transient (1.03 -> 1.67: the source window and the sketch vectors), which is
+where the budgets come back into play.  What the leaf holds now, Color:
+owner near blocks 3.24, transient 1.67, kept factors 0.57, X_RR_full 0.30,
+owner source slots 0.15, fill store 0.12.  The near store is three quarters
+of the resident, which is (c).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

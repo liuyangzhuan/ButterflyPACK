@@ -76,6 +76,13 @@ namespace fmm {
 namespace gpu {
 
 // Per-level totals of the device box path (seconds and bytes, this rank).
+// The fill store's host copies (H2 host staging): one arena for the process,
+// reset at each level's end.
+inline PinnedArena& fill_host_arena() {
+    static PinnedArena* const arena = new PinnedArena;  // (lives to the process's end, as the heap does)
+    return *arena;
+}
+
 struct EliminatorStats {
     double begin = 0.0;       // point table and block upload
     double sketch = 0.0;      // device sketch (plan, launches, Y download)
@@ -185,6 +192,8 @@ struct EliminatorStats {
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
     // the scratch a wave's sketch needs for the slots it reads, and what it
     // decompressed in all
+    double fs_host_bytes = 0.0;    // the packed temp2^T on the host, at most (H2 host staging)
+    int64_t fs_read_dev[3] = {0, 0, 0}, fs_read_host[3] = {0, 0, 0};  // slot chunks read by the window, the sketch, the transition: from the device / the host
     double fs_wave_scratch = 0.0;
     double fs_wave_bytes = 0.0;
     int64_t fs_wave_slots = 0;
@@ -551,6 +560,11 @@ public:
         if (heap_initialized_) heap_.set_reclaimer(nullptr);
         copier_.reset();  // joins the worker
         exchange_copier_.reset();
+        if (fill_copy_stream_ != nullptr) {
+            evict_fill_copies(true);  // (release_level_data did, unless a throw got here first)
+            cudaStreamDestroy(fill_copy_stream_);
+            fill_copy_stream_ = nullptr;
+        }
         if (heap_initialized_) {
             // a level that never took the device transition hands its kept
             // X_NR over here instead; a throw must not leave the destructor
@@ -668,8 +682,10 @@ private:
             uint32_t nchunks = 0;
             int32_t rows = 0;      // uncompressed rows, for the destination
         };
-        char* t2t_packed = nullptr;
+        char* t2t_packed = nullptr;        // on the device: until this wave's owner pass has read it
         size_t t2t_packed_bytes = 0;
+        char* t2t_host = nullptr;          // the same bytes in pinned host memory (fill_host_arena),
+                                           // which the later readers decompress from over PCIe
         std::vector<T2tSlot> t2t_slots;
         std::vector<uint32_t> t2t_strides;
         // X_NR^T, the owner pass's other operand, cut into the same slots.
@@ -807,7 +823,46 @@ private:
     // Whether a box still has its temp2^T, in either form.
     static bool has_fill_source(const BoxState& st) {
         if (st.t2t_reclaimed) return false;  // held for the kept X_NR, not for reading
-        return st.temp2t != nullptr || st.t2t_packed != nullptr;
+        return st.temp2t != nullptr || packed_of(st) != nullptr;
+    }
+    // The packed temp2^T a reader decompresses from: the device copy while it
+    // is there (the wave that made it), else the pinned host copy, which the
+    // device reads over PCIe (UVA).
+    static const char* packed_of(const BoxState& st) { return st.t2t_packed != nullptr ? st.t2t_packed : st.t2t_host; }
+    // The device copies whose host copies are done go back to the heap (at a
+    // wave's end, after its owner pass); `all`: wait for them (the level's end).
+    struct PendingEvict { cudaEvent_t done = nullptr; std::vector<BoxState*> boxes; };
+    std::deque<PendingEvict> pending_evictions_;
+    // The copies to the host run on a stream of their own, under the wave's
+    // GEMMs: on the main stream they sat in the owner pass's pipeline (+0.5 s
+    // a leaf).  The gather they read is synchronized before they start.
+    cudaStream_t fill_copy_stream_ = nullptr;
+    cudaStream_t fill_copy_stream() {
+        if (fill_copy_stream_ == nullptr) {
+            check_cuda(cudaStreamCreateWithFlags(&fill_copy_stream_, cudaStreamNonBlocking), "fill copy stream");
+        }
+        return fill_copy_stream_;
+    }
+    void evict_fill_copies(bool all) {
+        auto& stats = eliminator_stats();
+        while (!pending_evictions_.empty()) {
+            PendingEvict& pe = pending_evictions_.front();
+            if (all) {
+                check_cuda(cudaEventSynchronize(pe.done), "fill store event");
+            } else {
+                const cudaError_t q = cudaEventQuery(pe.done);
+                if (q == cudaErrorNotReady) break;  // (later ones were recorded after it)
+                check_cuda(q, "fill store event");
+            }
+            for (BoxState* st : pe.boxes) {
+                if (st->t2t_packed == nullptr || st->t2t_host == nullptr) continue;  // (released since)
+                stats.persist_bytes -= static_cast<double>(st->t2t_packed_bytes);
+                heap_.free(st->t2t_packed);
+                st->t2t_packed = nullptr;
+            }
+            cudaEventDestroy(pe.done);
+            pending_evictions_.pop_front();
+        }
     }
     // `final` at the level's end, where nothing is kept back.  Mid-level a
     // pledged box gives up its raw temp2^T and its readers but keeps the
@@ -819,7 +874,7 @@ private:
             st.persist_t2t = nullptr;
             st.persist_t2t_bytes = 0;
         }
-        if (!final && st.t2t_pledged && st.t2t_packed != nullptr) {
+        if (!final && st.t2t_pledged && packed_of(st) != nullptr) {
             st.t2t_reclaimed = true;
             st.temp2t = nullptr;
             return;
@@ -828,8 +883,9 @@ private:
             eliminator_stats().persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
             heap_.free(st.t2t_packed);
             st.t2t_packed = nullptr;
-            st.t2t_packed_bytes = 0;
         }
+        st.t2t_host = nullptr;  // (the arena is reset at the level's end)
+        st.t2t_packed_bytes = 0;
         st.t2t_slots.clear();
         st.t2t_strides.clear();
         st.t2t_rows.clear();
@@ -969,7 +1025,7 @@ private:
     bool can_pledge_fill_source(const WaveBox& wb) const {
         if (compress_factors_ < 1 || !gpu_sketch_) return false;
         const BoxState* st = wb.state;
-        if (st == nullptr || st->t2t_packed == nullptr || st->t2t_pledged) return false;
+        if (st == nullptr || packed_of(*st) == nullptr || st->t2t_pledged) return false;
         if (st->t2t_slots.empty() || wb.r <= 0 || wb.ntot <= 0) return false;
         int64_t rows = 0;  // the slots have to be all of X_NR's rows, in order
         for (const auto& sl : st->t2t_slots) rows += sl.rows;
@@ -1698,10 +1754,10 @@ private:
             if (kept_.boxes.count(box->morton_index) == 0 &&
                 (committed == nullptr || committed->boxes.count(box->morton_index) == 0)) {
                 const BoxState& st = state_of(box->morton_index);
-                if (st.t2t_packed != nullptr && !st.t2t_slots.empty() && st.ntot > 0 && st.r > 0) {
+                if (packed_of(st) != nullptr && !st.t2t_slots.empty() && st.ntot > 0 && st.r > 0) {
                     const size_t nt = static_cast<size_t>(st.ntot), r = static_cast<size_t>(st.r);
                     std::vector<char> packed(st.t2t_packed_bytes);
-                    check_cuda(cudaMemcpy(packed.data(), st.t2t_packed, packed.size(), cudaMemcpyDeviceToHost),
+                    check_cuda(cudaMemcpy(packed.data(), packed_of(st), packed.size(), cudaMemcpyDefault),
                                "X_NR host copies (store)");
                     std::vector<S> t(nt * r);
                     size_t o = 0;
@@ -1729,13 +1785,13 @@ private:
                 // temp2^T, which the transition has yet to transpose.  Read it
                 // from there, a slot at a time, and transpose on the way in.
                 const BoxState& st = state_of(box->morton_index);
-                if (st.t2t_packed == nullptr || st.t2t_slots.empty()) {
+                if (packed_of(st) == nullptr || st.t2t_slots.empty()) {
                     throw std::runtime_error("LevelEliminator: no X_NR to rescue for box " +
                                              std::to_string(box->morton_index));
                 }
                 const size_t nt = static_cast<size_t>(kb->ntot), r = static_cast<size_t>(kb->r);
                 std::vector<char> packed(st.t2t_packed_bytes);
-                check_cuda(cudaMemcpy(packed.data(), st.t2t_packed, packed.size(), cudaMemcpyDeviceToHost),
+                check_cuda(cudaMemcpy(packed.data(), packed_of(st), packed.size(), cudaMemcpyDefault),
                            "X_NR host copies (pledged)");
                 std::vector<S> t(nt * r);
                 size_t o = 0;
@@ -2891,7 +2947,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         for (Plan& p : plans) {
             for (Source& src : p.sources) {
                 const BoxState& ss = *src.state;
-                if (ss.t2t_packed == nullptr) continue;  // still raw
+                if (packed_of(ss) == nullptr) continue;  // still raw
                 Region& rg = regions[src.morton];
                 rg.st = &ss;
                 rg.at.emplace(src.slot_b, 0);
@@ -2941,7 +2997,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 FillGroup& fg = fill_groups[static_cast<size_t>(rg.group)];
                 for (const auto& [first_row, off] : rg.at) {
                     const auto& sl = ss.t2t_slots[static_cast<size_t>(ss.t2t_rows.at(first_row))];
-                    const char* csrc = ss.t2t_packed + sl.off;
+                    const char* csrc = packed_of(ss) + sl.off;
+                    if (ss.t2t_packed != nullptr) ++stats.fs_read_dev[1]; else ++stats.fs_read_host[1];
                     S* dst = region + off * static_cast<size_t>(ss.r);
                     for (uint32_t c = 0; c < sl.nchunks; ++c) {
                         fg.src.push_back(csrc);
@@ -2990,7 +3047,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         for (Plan& p : plans) {
             for (Source& src : p.sources) {
                 const BoxState& ss = *src.state;
-                if (ss.t2t_packed == nullptr) {
+                if (packed_of(ss) == nullptr) {
                     src.t2t_base = ss.temp2t;  // raw, as before
                     src.group = 0;
                     continue;
@@ -4244,7 +4301,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             if (wb.r == 0 || wb.ntot == 0) continue;
             const BoxState* sst = wb.state;
-            if (sst == nullptr || sst->t2t_packed == nullptr || sst->xnrt_packed == nullptr ||
+            if (sst == nullptr || packed_of(*sst) == nullptr || sst->xnrt_packed == nullptr ||
                 sst->t2t_slots.size() != sst->xnrt_slots.size()) {
                 chunk_stored = false;
             }
@@ -4765,7 +4822,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             for (const Need& nd : needs) {
                 const WaveBox& sb = boxes[static_cast<size_t>(nd.src)];
                 const BoxState* sst = sb.state;
-                const char* packed = nd.which == 0 ? sst->t2t_packed : sst->xnrt_packed;
+                const char* packed = nd.which == 0 ? packed_of(*sst) : sst->xnrt_packed;
+                if (nd.which == 0) { if (sst->t2t_packed != nullptr) ++stats.fs_read_dev[0]; else ++stats.fs_read_host[0]; }
                 const auto& slots = nd.which == 0 ? sst->t2t_slots : sst->xnrt_slots;
                 const auto& strides = nd.which == 0 ? sst->t2t_strides : sst->xnrt_strides;
                 const auto& sl = slots[static_cast<size_t>(nd.slot)];
@@ -5044,7 +5102,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
         if (gpu_sketch_) {
             BoxState& st = *wb.state;
-            if (st.t2t_packed == nullptr) st.temp2t = wb.persist_temp2t;  // else stored compressed
+            if (packed_of(st) == nullptr) st.temp2t = wb.persist_temp2t;  // else stored compressed
             st.xrr_full = wb.persist_xrr;
             st.ntot = wb.ntot;
             st.r = wb.r;
@@ -5119,6 +5177,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     for (char* p : wave_sketch_extra_) heap_.free(p);
     wave_sketch_extra_.clear();
     release_owner_sources();  // read by this wave's owner pass only
+    evict_fill_copies(false);  // and the packed temp2^T whose host copies are done
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
     if (heap_.peak() > stats.heap_peak) {
         stats.heap_peak = heap_.peak();
@@ -6120,7 +6179,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             for (size_t j = 0; j < gg.gens.size(); ++j) {
                 Gen& g = gens[gg.gens[j]];
                 if (g.st == nullptr) continue;
-                if (g.st->t2t_packed != nullptr) {
+                if (packed_of(*g.st) != nullptr) {
                     g.st->temp2t = nullptr;  // the packed form is the fill source now
                     continue;
                 }
@@ -6225,12 +6284,13 @@ template<typename CoordType, typename DataType, typename KernelType>
 bool LevelEliminator<CoordType, DataType, KernelType>::collect_fill_source(
     const BoxState& st, S* dst, std::vector<const void*>& h_src, std::vector<void*>& h_dst) {
 #ifdef H2_HAVE_NVCOMP
-    if (st.t2t_packed == nullptr || st.t2t_slots.empty()) return false;
+    if (packed_of(st) == nullptr || st.t2t_slots.empty()) return false;
     const size_t r = static_cast<size_t>(st.r);
     const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
     size_t row = 0;
     for (const auto& sl : st.t2t_slots) {
-        const char* csrc = st.t2t_packed + sl.off;
+        const char* csrc = packed_of(st) + sl.off;
+        if (st.t2t_packed != nullptr) ++eliminator_stats().fs_read_dev[2]; else ++eliminator_stats().fs_read_host[2];
         S* out = dst + row * r;
         for (uint32_t c = 0; c < sl.nchunks; ++c) {
             h_src.push_back(csrc);
@@ -6576,6 +6636,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         const char* staging = fill_compressor_.staging();
         std::vector<CopySpan> spans;
         std::vector<BoxState*> raw_to_free;
+        std::vector<BoxState*> packed_now;  // (temp2^T only: X_NR^T stays on the device for its wave)
         int64_t max_words = 0;
         for (const GroupItem& gi : group_of) {
             BoxState& st = *gi.st;
@@ -6597,6 +6658,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
             }
             dst.packed = packed;
             dst.bytes = total;
+            if (!into_xnrt) packed_now.push_back(&st);
             stats.persist_bytes += static_cast<double>(total);
             stats.persist_peak = std::max(stats.persist_peak, stats.persist_bytes);
             uint64_t off = 0;
@@ -6638,6 +6700,25 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
         // the gather reads the staging, which goes back to the heap next
         check_cuda(cudaStreamSynchronize(stream), "fill sources");
+        // ---- the host copy (H2 host staging of the fill store): the same
+        // bytes in pinned memory, which the later readers decompress from
+        // over PCIe; the device copy goes once this wave's owner pass has
+        // read it (evict_fill_copies, when the copies are done)
+        if (!packed_now.empty()) {
+            PinnedArena& arena = fill_host_arena();
+            cudaStream_t cs = fill_copy_stream();
+            for (BoxState* st : packed_now) {
+                st->t2t_host = arena.alloc(st->t2t_packed_bytes);
+                check_cuda(cudaMemcpyAsync(st->t2t_host, st->t2t_packed, st->t2t_packed_bytes, cudaMemcpyDeviceToHost,
+                                           cs), "fill store to the host");
+            }
+            stats.fs_host_bytes = std::max(stats.fs_host_bytes, static_cast<double>(arena.used()));
+            PendingEvict pe;
+            check_cuda(cudaEventCreateWithFlags(&pe.done, cudaEventDisableTiming), "fill store event");
+            check_cuda(cudaEventRecord(pe.done, cs), "fill store event");
+            pe.boxes = packed_now;
+            pending_evictions_.push_back(std::move(pe));
+        }
         // (the raw blocks go back below, after the check has compared against
         // them - BPACK_CHECK=fillsrc read freed memory otherwise)
 
@@ -7129,7 +7210,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::transpose_kept_xnr_group(
         w.boxes.push_back(static_cast<int>(i - first));
         w.h_box_dsts.push_back(a + so);
         for (const auto& sl : st.t2t_slots) {
-            const char* src = st.t2t_packed + sl.off;
+            const char* src = packed_of(st) + sl.off;
             for (uint32_t c = 0; c < sl.nchunks; ++c) {
                 w.h_srcs.push_back(src);
                 w.h_dsts.push_back(a + so + static_cast<size_t>(c) * kXnrChunkBytes);
@@ -7258,6 +7339,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::transpose_kept_xnr_group(
             heap_.free(st.t2t_packed);
         }
         st.t2t_packed = nullptr;
+        st.t2t_host = nullptr;
         st.t2t_packed_bytes = 0;
         st.t2t_slots.clear();
         st.t2t_strides.clear();
@@ -7286,12 +7368,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::kept_xnr_through_host(con
                                                                              KeptSolveLevel& kl) {
 #ifdef H2_HAVE_NVCOMP
     BoxState& st = *p.st;
-    if (st.t2t_packed == nullptr || st.t2t_slots.empty()) return false;
+    if (packed_of(st) == nullptr || st.t2t_slots.empty()) return false;
     const size_t D = sizeof(S);
     const size_t nt = static_cast<size_t>(p.ntot), r = static_cast<size_t>(p.r);
     const size_t bytes = nt * r * D;
     std::vector<char> packed(st.t2t_packed_bytes);
-    check_cuda(cudaMemcpy(packed.data(), st.t2t_packed, packed.size(), cudaMemcpyDeviceToHost),
+    check_cuda(cudaMemcpy(packed.data(), packed_of(st), packed.size(), cudaMemcpyDefault),
                "kept X_NR through the host");
     std::vector<S> t(nt * r), x(nt * r);
     size_t o = 0;
@@ -7322,9 +7404,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::kept_xnr_through_host(con
     kl.bytes += static_cast<double>(bytes) - static_cast<double>(p.bytes);
     auto& stats = eliminator_stats();
     stats.xnr_stored_bytes += static_cast<double>(bytes) - static_cast<double>(p.bytes);
-    stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
-    heap_.free(st.t2t_packed);
+    if (st.t2t_packed != nullptr) {
+        stats.persist_bytes -= static_cast<double>(st.t2t_packed_bytes);
+        heap_.free(st.t2t_packed);
+    }
     st.t2t_packed = nullptr;
+    st.t2t_host = nullptr;
     st.t2t_packed_bytes = 0;
     st.t2t_slots.clear();
     st.t2t_strides.clear();
@@ -8814,7 +8899,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             // is both simpler than gathering its rows out of the slots and
             // faster than the host restore below (0.53 s for 2.40 GB at the
             // leaf, against decompression at 365 GB/s).
-            if (es.t2t_packed != nullptr && es.ntot > 0 && es.r > 0) {
+            if (packed_of(es) != nullptr && es.ntot > 0 && es.r > 0) {
                 const size_t elems = static_cast<size_t>(es.ntot) * static_cast<size_t>(es.r);
                 char* blk = heap_.try_alloc_resident(elems * sizeof(S), ResidentKind::Restore);
                 if (blk != nullptr) {
@@ -9407,6 +9492,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     released_sources_.clear();  // their blocks are freed with the states below
     if (!heap_initialized_) return;
     transpose_kept_xnr();  // the kept X_NR, while the fill sources are still here
+    evict_fill_copies(true);
     release_owner_sources();
     if (outbox_ != nullptr) free_block(outbox_);
     outbox_ = nullptr;
@@ -9465,6 +9551,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
         st.persist = nullptr;
         release_fill_temp2t(st);
     }
+    fill_host_arena().reset();  // the level's packed temp2^T on the host, all of it read by now
     for (char* p : level_allocs_) heap_.free(p);
     level_allocs_.clear();
     heap_.free(d_xyz_);

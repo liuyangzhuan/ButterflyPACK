@@ -5,6 +5,9 @@
 
 #ifdef H2_HAVE_GPU
 
+#include <chrono>
+#include <cstdlib>
+#include <sys/mman.h>
 #include <cuda_runtime.h>
 #include "magma_v2.h"
 #include "device_kernels.hpp"
@@ -144,6 +147,78 @@ private:
 inline size_t align_up(size_t bytes, size_t alignment = 256) {
     return (bytes + alignment - 1) / alignment * alignment;
 }
+
+// Grow-only pinned host arena with bump allocation: chunks of kChunk (or a
+// request when larger), used in order, reset() keeps them for the next
+// level, and they live as long as the process.  The chunks are malloc'd,
+// touched and registered rather than cudaMallocHost'd: with transparent
+// huge pages (always on the Perlmutter nodes) 1.6 GB registers in 0.07 s
+// where cudaMallocHost pinned it at 1.9 GB/s, 0.81 s, with the same 26 GB/s
+// copies.  Registered mapped, the memory is device-visible at its host
+// address (UVA, checked): a kernel reads it over PCIe, which is what the
+// fill store's readers do with their compressed input.
+class PinnedArena {
+public:
+    static constexpr size_t kChunk = size_t{256} << 20;
+    PinnedArena() = default;
+    PinnedArena(const PinnedArena&) = delete;
+    PinnedArena& operator=(const PinnedArena&) = delete;
+    ~PinnedArena() { release(); }
+    char* alloc(size_t bytes) {
+        bytes = align_up(std::max<size_t>(bytes, 1));
+        while (at_ < chunks_.size() && chunks_[at_].used + bytes > chunks_[at_].bytes) ++at_;
+        if (at_ == chunks_.size()) {
+            const auto t0 = std::chrono::steady_clock::now();
+            Chunk c;
+            c.bytes = std::max(kChunk, bytes);
+            void* p = nullptr;
+            if (posix_memalign(&p, size_t{2} << 20, c.bytes) != 0 || p == nullptr) {
+                throw std::runtime_error("H2 GPU: no host memory for the fill store's arena");
+            }
+            madvise(p, c.bytes, MADV_HUGEPAGE);
+            for (size_t off = 0; off < c.bytes; off += 4096) static_cast<volatile char*>(p)[off] = 0;  // faulted in first
+            check_cuda(cudaHostRegister(p, c.bytes, cudaHostRegisterMapped), "pinned arena: register");
+            void* dp = nullptr;
+            check_cuda(cudaHostGetDevicePointer(&dp, p, 0), "pinned arena: device pointer");
+            if (dp != p) {
+                throw std::runtime_error("H2 GPU: the fill store's host arena has different host and device addresses (no UVA)");
+            }
+            c.ptr = static_cast<char*>(p);
+            pin_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            pinned_ += c.bytes;
+            chunks_.push_back(c);
+        }
+        Chunk& c = chunks_[at_];
+        char* p = c.ptr + c.used;
+        c.used += bytes;
+        used_ += bytes;
+        return p;
+    }
+    void reset() {
+        for (Chunk& c : chunks_) c.used = 0;
+        at_ = 0;
+        used_ = 0;
+    }
+    void release() {
+        for (Chunk& c : chunks_) {
+            cudaHostUnregister(c.ptr);
+            std::free(c.ptr);
+        }
+        chunks_.clear();
+        at_ = 0;
+        used_ = 0;
+        pinned_ = 0;
+    }
+    size_t used() const { return used_; }      // bytes handed out since the last reset
+    size_t pinned() const { return pinned_; }  // bytes pinned in all
+    double pin_seconds() const { return pin_seconds_; }
+
+private:
+    struct Chunk { char* ptr = nullptr; size_t bytes = 0, used = 0; };
+    std::vector<Chunk> chunks_;
+    size_t at_ = 0, used_ = 0, pinned_ = 0;
+    double pin_seconds_ = 0.0;
+};
 
 // Scalar type MAGMA uses for DataType (std::complex<double> and
 // magmaDoubleComplex share their layout).
