@@ -3272,10 +3272,12 @@ CA0 22.51 -> 8.74 (-61%), Factor 7.49 -> 11.2 s.
 Without compression the transient is the sketch's [P; W] (0.63 GB) and the
 resident is the raw fill source plus the raw kept factors; with it, the
 transient is the budgets (source window 0.54) and the peak is 3.4x / 4.0x
-lower.  The accuracy cost is the standing one: the compressed 96^3 run has
-read 1.0e-2 since the first log, and the lossy stores add roughly 7e-3 to
-acc_forward at either size - 2.9x of a 3.5e-3 base at 96^3, +3% of the
-1.55e-2 base at 192^3.
+lower.  The accuracy cost is the standing one, and the same at both sizes:
+the compressed 96^3 run has read 1.0e-2 since the first log, and at 192^3
+the uncompressed Color run reads acc_forward 4.20e-3 / acc_mvp 8.11e-4
+against 1.60e-2 / 2.95e-3 compressed - 3.8x and 3.6x.  (A "1.554e-2
+uncompressed" quoted earlier in this work was a compressed variant; the
+2026-10-06 `*192off` logs are the uncompressed ones.)
 
 192^3 on 8 ranks does not run without compression any more: the leaf dies in
 its 12th wave of 16 on a 3.85 GB request with 21.7 GB in use and 2.4 GB in
@@ -3284,10 +3286,24 @@ kept X_NR (another 17.45, which only the pledge lets them share) cannot both
 sit on the card, and there is no option to decline the keep (decide_solve_keep
 is automatic, per the env policy).  16 ranks is not a valid count (the 3D
 tree needs 8^k; 64 would be 16 nodes and 512 boxes a rank, a different
-regime).  The uncompressed figures that exist for this case are from the
-2026-10-05/06 code, when it still fitted with nothing to spare: peak 33.20 GB
-(resident 26.18 + transient 7.02), Factor 7.71 s, GPU solve 0.257 s, logdet
--89253588.194065422; against today's compressed 7.41 GB, 11.2 s, 0.476 s.
+regime).  The uncompressed figures that exist for this case are Color only, from
+the 2026-10-06 code (A_v192off / A_f192off), when it still fitted with
+nothing to spare; today's compressed runs beside them:
+
+| 192^3, 8 ranks | Color off (2026-10-06) | Color on | CA0 on |
+|---|---|---|---|
+| peak (resident + transient) | 33.21 (26.18 + 7.02) | **7.41** (6.37 + 1.03) | **8.74** (7.72 + 1.03) |
+| the resident's two largest | temp2^T raw 14.82, parent blocks 9.47 | owner near 3.24, temp2^T packed 1.47 | owner near 4.31, temp2^T 1.58 |
+| kept store, rank 0, leaf | none: keep failed, 18.92 GB uploaded at the first solve (set-up 2.25 s) | 2.28 (8.3x), set-up 0.11 s | 3.05 (8.6x) |
+| Factor | 7.71 s (7.54 in its twin) | 11.2 s (+45%) | 11.6 s |
+| GPU solve (fwd / bwd, MPI) | 0.257 s (0.105 / 0.133, 0.068) | 0.464 s (0.183 / 0.229, 0.140), +81% | 0.499 s |
+| time_mvp | 2.61 s (the multiply of that date) | 0.890 s | 0.885 s |
+| acc_mvp | 8.11e-4 | 2.95e-3 (3.6x) | 2.97e-3 |
+| acc_forward | 4.20e-3 | 1.60e-2 (3.8x) | 1.62e-2 |
+| logdet | -89253588.194065422 | -89253748.104239851 (1.8e-6) | -89253736.570008814 |
+
+No uncompressed CA0 run at 192^3 exists (the 22.51 GB of 2026-10-08 was
+compressed with the near store off, like the 20.72 of Color).
 (The 20.72 GB / 7.49 s quoted as "before" in the running tally is the
 compressed run with the near store off, not an uncompressed one.)
 
