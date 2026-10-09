@@ -108,12 +108,16 @@ struct DeviceSolveLevel {
     std::vector<SolveXnrWave> xnr_waves;   // parallel to `waves`
     bool xnr_compressed = false;           // any wave has compressed X_NR
     // staged by the box walk, consumed by the table builders (which know the
-    // wave order): per box, its compressed bytes, uncompressed size and the
-    // padded lengths of the chunks the compressed bytes are made of
-    std::vector<const void*> xnr_src_pending;
-    std::vector<size_t> xnr_raw_bytes_pending;
-    std::vector<const uint32_t*> xnr_strides_pending;
-    std::vector<uint32_t> xnr_nchunks_pending;
+    // wave order): per box, each compressed factor's bytes, uncompressed size
+    // and the padded lengths of the chunks the compressed bytes are made of
+    // (src null: that factor is read in place)
+    struct PackedPart {
+        const void* src = nullptr;
+        size_t raw_bytes = 0;
+        const uint32_t* strides = nullptr;
+        uint32_t nchunks = 0;
+    };
+    std::vector<PackedPart> pending_xnr, pending_t, pending_xsr;
     std::vector<SolveBox> boxes;        // local boxes, device pointers
     std::vector<SolveSlot> slots;       // their one-hop slots
     std::vector<int64_t> slot_morton;   // the neighbor of each slot
@@ -198,6 +202,10 @@ struct KeptSolveBox {
     double xnr_delta = 0.0;
     uint32_t xnr_chunk0 = 0;
     uint32_t xnr_nchunks = 0;
+    // H2_compress_factors: T and X_SR likewise, k * r elements each, their
+    // chunks found the same way (bytes 0: uncompressed, read in place).
+    size_t t_bytes = 0, xsr_bytes = 0;
+    uint32_t t_chunk0 = 0, t_nchunks = 0, xsr_chunk0 = 0, xsr_nchunks = 0;
     // H2_compress_factors: set between the wave that kept this box and the
     // transition that transposes its X_NR out of the fill source
     // (transpose_kept_xnr).  It must never still be set when the solve runs,
@@ -415,7 +423,8 @@ inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
         size_t b = 0;
         boxes_total += xw.boxes.size();
         for (size_t i = 0; i < xw.boxes.size(); ++i) {
-            b += L.xnr_raw_bytes_pending[static_cast<size_t>(xw.boxes[i])];
+            const size_t bx = static_cast<size_t>(xw.boxes[i]);
+            b += L.pending_xnr[bx].raw_bytes + L.pending_t[bx].raw_bytes + L.pending_xsr[bx].raw_bytes;
         }
         bytes.push_back(b);
         blocks.push_back(xw.h_srcs.size());  // the batch's blocks: chunks, not boxes
@@ -427,7 +436,7 @@ inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
     std::sort(sk.begin(), sk.end());
     const auto mib = [](size_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
     std::cout << "H2_XNR_WAVES level " << level << ": " << bytes.size() << " waves, "
-              << std::fixed << std::setprecision(2) << mib(total) << " MiB of X_NR; per wave "
+              << std::fixed << std::setprecision(2) << mib(total) << " MiB of X_NR, T and X_SR; per wave "
               << mib(sb.front()) << " / " << mib(sb[sb.size() / 2]) << " / " << mib(sb.back())
               << " MiB (min/med/max), " << sk.front() << " / " << sk[sk.size() / 2] << " / " << sk.back()
               << " blocks of " << boxes_total << " boxes; scratch " << mib(L.xnr_scratch_bytes) << " MiB in "
@@ -464,34 +473,51 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
         }
         return;
     }
-    // A box's X_NR was compressed in chunks, so the batch has one entry per
-    // chunk: its compressed bytes sit `stride` apart in the kept block, and it
-    // decompresses kXnrChunkBytes further into the scratch than the one before.
-    // The box's own entry (for the pointer patch) is its first chunk's.
+    // A box's factors were compressed in chunks, so the batch has one entry
+    // per chunk: its compressed bytes sit `stride` apart in the kept block,
+    // and it decompresses kXnrChunkBytes further into the scratch than the one
+    // before.  A box's compressed factors land one after another, T, X_SR,
+    // then X_NR, each at its own offset (kNone: that factor is read in place
+    // and its pointer is left alone); the box's entry for the pointer patch
+    // is each factor's first chunk.
     L.xnr_waves.assign(L.waves.size(), SolveXnrWave{});
     const size_t chunk_bytes_raw = kXnrChunkBytes;
+    constexpr size_t kNone = static_cast<size_t>(-1);
+    struct BoxOffsets { size_t xnr, t, xsr; };
+    std::vector<std::vector<BoxOffsets>> offsets(L.waves.size());
     size_t widest = 0;
     for (size_t w = 0; w < L.waves.size(); ++w) {
         const auto& W = L.waves[w];
         auto& xw = L.xnr_waves[w];
         size_t bytes = 0;
+        auto place = [&](const DeviceSolveLevel::PackedPart& part, const char* what) {
+            if (part.src == nullptr) return kNone;
+            if (part.strides == nullptr || part.nchunks == 0) {
+                throw std::runtime_error(std::string("device solve: compressed ") + what +
+                                         " without its chunk lengths");
+            }
+            const size_t at = bytes;
+            const char* src = static_cast<const char*>(part.src);
+            for (size_t c = 0; c < part.nchunks; ++c) {
+                xw.h_srcs.push_back(src);
+                xw.h_dsts.push_back(reinterpret_cast<void*>(at + c * chunk_bytes_raw));  // offset for now
+                src += part.strides[c];
+            }
+            bytes = align_up(bytes + part.raw_bytes);
+            return at;
+        };
         for (int i = 0; i < W.count; ++i) {
             const size_t b = static_cast<size_t>(order[static_cast<size_t>(W.order0 + i)]);
-            if (L.xnr_src_pending[b] == nullptr) continue;
-            const uint32_t* strides = L.xnr_strides_pending[b];
-            const size_t nchunks = L.xnr_nchunks_pending[b];
-            if (strides == nullptr || nchunks == 0) {
-                throw std::runtime_error("device solve: compressed X_NR without its chunk lengths");
+            if (L.pending_xnr[b].src == nullptr && L.pending_t[b].src == nullptr &&
+                L.pending_xsr[b].src == nullptr) {
+                continue;
             }
             xw.boxes.push_back(static_cast<int>(b));
-            xw.h_box_dsts.push_back(reinterpret_cast<void*>(bytes));  // offset for now
-            const char* src = static_cast<const char*>(L.xnr_src_pending[b]);
-            for (size_t c = 0; c < nchunks; ++c) {
-                xw.h_srcs.push_back(src);
-                xw.h_dsts.push_back(reinterpret_cast<void*>(bytes + c * chunk_bytes_raw));
-                src += strides[c];
-            }
-            bytes = align_up(bytes + L.xnr_raw_bytes_pending[b]);
+            BoxOffsets o{};
+            o.t = place(L.pending_t[b], "T");
+            o.xsr = place(L.pending_xsr[b], "X_SR");
+            o.xnr = place(L.pending_xnr[b], "X_NR");
+            offsets[w].push_back(o);
         }
         xw.raw_bytes = bytes;
         widest = std::max(widest, bytes);
@@ -518,8 +544,14 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
         for (auto& d : xw.h_dsts) {
             d = base + reinterpret_cast<size_t>(d);  // offset -> address
         }
-        for (auto& d : xw.h_box_dsts) {
-            d = base + reinterpret_cast<size_t>(d);
+        auto address = [&](size_t off) { return off == kNone ? nullptr : static_cast<void*>(base + off); };
+        xw.h_box_dsts.resize(xw.boxes.size());
+        xw.h_box_t_dsts.resize(xw.boxes.size());
+        xw.h_box_xsr_dsts.resize(xw.boxes.size());
+        for (size_t i = 0; i < xw.boxes.size(); ++i) {
+            xw.h_box_dsts[i] = address(offsets[w][i].xnr);
+            xw.h_box_t_dsts[i] = address(offsets[w][i].t);
+            xw.h_box_xsr_dsts[i] = address(offsets[w][i].xsr);
         }
         if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream)) {
             throw std::runtime_error("H2 GPU solve: could not plan a wave's X_NR decompression");
@@ -1045,6 +1077,21 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
                                MatrixStorage<DataType>::FULL);
         }
         if (!box.X_SR.is_allocated()) {
+            if (kb.xsr_bytes > 0) {  // H2_compress_factors: compressed like X_NR
+#ifdef H2_HAVE_NVCOMP
+                std::vector<char> packed(kb.xsr_bytes);
+                check_cuda(cudaMemcpy(packed.data(), kb.xsr, kb.xsr_bytes, cudaMemcpyDeviceToHost),
+                           "host factors (compressed X_SR)");
+                std::vector<DataType> v(k * r);
+                decompress_xnr_host<typename DeviceScalar<DataType>::type>(
+                    packed.data(), reinterpret_cast<typename DeviceScalar<DataType>::type*>(v.data()),
+                    kl.chunk_strides.data() + kb.xsr_chunk0, kb.xsr_nchunks);
+                box.X_SR.set_owned(kb.k, kb.r, std::move(v), MatrixStorage<DataType>::FULL);
+#else
+                throw std::runtime_error(
+                    "H2 GPU: compressed X_SR on the host needs a build with nvCOMP");
+#endif
+            } else
             box.X_SR.set_owned(kb.k, kb.r, copy(kb.xsr, k * r), MatrixStorage<DataType>::FULL);
         }
         if (!box.X_RR.is_allocated()) {
@@ -1501,10 +1548,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             const KeptSolveLevel* kept = nullptr;
             if (auto kit = store.kept.find(level); kit != store.kept.end()) kept = &kit->second;
             std::vector<const KeptSolveBox*> kept_box(nw, nullptr);
-            L.xnr_src_pending.assign(nw, nullptr);
-            L.xnr_raw_bytes_pending.assign(nw, 0);
-            L.xnr_strides_pending.assign(nw, nullptr);
-            L.xnr_nchunks_pending.assign(nw, 0);
+            L.pending_xnr.assign(nw, DeviceSolveLevel::PackedPart{});
+            L.pending_t.assign(nw, DeviceSolveLevel::PackedPart{});
+            L.pending_xsr.assign(nw, DeviceSolveLevel::PackedPart{});
             std::vector<int64_t> base(nw);
             std::vector<solve_detail::BoxLayout> lay(nw);
             std::vector<int> ntot(nw, 0);
@@ -1661,15 +1707,26 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     sb.xnr = kb->xnr;
                     sb.lu = kb->lu;
                     sb.ipiv = kb->ipiv;
-                    // A compressed X_NR cannot be read in place: note it, and
-                    // the sweeps decompress its wave into L.xnr_scratch.
-                    if (kb->xnr_bytes > 0 && ntot[b] > 0) {
+                    // A compressed factor cannot be read in place: note it,
+                    // and the sweeps decompress its wave into L.xnr_scratch.
+                    auto pending = [&](DeviceSolveLevel::PackedPart& part, const void* src, size_t bytes,
+                                       size_t raw_bytes, uint32_t chunk0, uint32_t nchunks) {
+                        if (bytes == 0 || raw_bytes == 0) return;
                         L.xnr_compressed = true;
-                        L.xnr_src_pending[b] = kb->xnr;
-                        L.xnr_raw_bytes_pending[b] =
-                            static_cast<size_t>(ntot[b]) * static_cast<size_t>(sb.r) * D;
-                        L.xnr_strides_pending[b] = kept->chunk_strides.data() + kb->xnr_chunk0;
-                        L.xnr_nchunks_pending[b] = kb->xnr_nchunks;
+                        part.src = src;
+                        part.raw_bytes = raw_bytes;
+                        part.strides = kept->chunk_strides.data() + chunk0;
+                        part.nchunks = nchunks;
+                    };
+                    const size_t rr = static_cast<size_t>(sb.r), kk = static_cast<size_t>(sb.k);
+                    pending(L.pending_xnr[b], kb->xnr, kb->xnr_bytes, static_cast<size_t>(ntot[b]) * rr * D,
+                            kb->xnr_chunk0, kb->xnr_nchunks);
+                    if (l.has_T) {
+                        pending(L.pending_t[b], kb->T, kb->t_bytes, kk * rr * D, kb->t_chunk0, kb->t_nchunks);
+                    }
+                    if (l.has_xsr) {
+                        pending(L.pending_xsr[b], kb->xsr, kb->xsr_bytes, kk * rr * D, kb->xsr_chunk0,
+                                kb->xsr_nchunks);
                     }
                 } else {
                     sb.T = eliminated && l.has_T ? p + l.T : nullptr;
@@ -1925,9 +1982,8 @@ public:
 
         // this is one small kernel, not a copy of the whole table.
 
-        launch_patch_xnr(const_cast<SolveBox*>(L.d_boxes), xw.d_box_idx, xw.d_box_dsts,
-
-                         static_cast<int>(xw.boxes.size()), stream_);
+        launch_patch_xnr(const_cast<SolveBox*>(L.d_boxes), xw.d_box_idx, xw.d_box_dsts, xw.d_box_t_dsts,
+                         xw.d_box_xsr_dsts, static_cast<int>(xw.boxes.size()), stream_);
 
         // With one buffer there is nowhere to put the next wave: it would
         // overwrite this one before its kernels have run.

@@ -684,11 +684,14 @@ public:
                     if (es.xnr_waves_compressed + es.xnr_waves_plain + es.xnr_not_requested > 0) {
                         if (es.xnr_raw_bytes > 0.0) {
                             std::printf("  [gpu] level %d X_NR is %.0f%% of the kept block; it compresses %.1fx "
-                                        "(%.2f -> %.2f GB), the rest is %.2f GB uncompressed\n", lvl,
+                                        "(%.2f -> %.2f GB), T and X_SR %.1fx (%.2f -> %.2f GB), the LU and "
+                                        "pivots are %.2f GB uncompressed\n", lvl,
                                         100.0 * es.xnr_raw_bytes / (es.xnr_raw_bytes + es.other_raw_bytes),
                                         es.xnr_stored_bytes > 0.0 ? es.xnr_raw_bytes / es.xnr_stored_bytes : 1.0,
                                         es.xnr_raw_bytes / 1e9, es.xnr_stored_bytes / 1e9,
-                                        es.other_raw_bytes / 1e9);
+                                        es.tx_stored_bytes > 0.0 ? es.tx_raw_bytes / es.tx_stored_bytes : 1.0,
+                                        es.tx_raw_bytes / 1e9, es.tx_stored_bytes / 1e9,
+                                        (es.other_raw_bytes - es.tx_raw_bytes) / 1e9);
                         }
                         std::printf("  [gpu] level %d X_NR compression: %lld batches compressed, %lld fell "
                                     "back, %lld waves not requested\n", lvl,
@@ -952,6 +955,13 @@ public:
                             "over %lld groups in %lld slots (largest group with repeats %.2f GB)\n", level.level,
                             e.os_union_max / 1e9, e.os_union_sum / 1e9, static_cast<long long>(e.os_groups),
                             static_cast<long long>(e.os_slots), e.os_raw_max / 1e9);
+            }
+            if (e.tx_raw_bytes > 0.0) {
+                std::printf("  [gpu] level %d kept T and X_SR: %.2f GB raw -> %.2f GB stored (%.1fx); X_NR %.2f -> "
+                            "%.2f GB; the LU and pivots %.2f GB, uncompressed\n", level.level, e.tx_raw_bytes / 1e9,
+                            e.tx_stored_bytes / 1e9, e.tx_stored_bytes > 0.0 ? e.tx_raw_bytes / e.tx_stored_bytes : 1.0,
+                            e.xnr_raw_bytes / 1e9, e.xnr_stored_bytes / 1e9,
+                            (e.other_raw_bytes - e.tx_raw_bytes) / 1e9);
             }
             if (e.kx_boxes > 0) {
                 std::printf("  [gpu] level %d kept X_NR out of the fill source: %lld boxes in %lld groups, "

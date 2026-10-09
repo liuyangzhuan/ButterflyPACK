@@ -3150,6 +3150,108 @@ Color's level 4 underneath is the leaf's kept factors (2.65) and its parents
 put back lazily, 6.24 resident, which no item here touches.  Across the two
 days: Color 20.72 -> 7.75 GB (-63%), CA0 22.51 -> 9.18, Factor 7.49 -> 10.9 s.
 
+#### T and X_SR compressed in the kept block (2026-10-09)
+
+A kept block is T (k x r), X_SR (k x r), X_NR, the LU of X_RR and its pivots.
+With X_NR compressed, the leaf's stored block on rank 0 was 2.63 GB of which
+X_NR 1.14, T and X_SR 0.48 and the LU with pivots 0.99: the two small factors
+were 18% of what the solve keeps, raw, and the LU - which must stay exact -
+38%.  Now T and X_SR go through the same compressor batch as X_NR
+(keep_solve_factor_group adds two sources a box, pledged boxes included),
+each with its own chunk list in the level's chunk_strides pool and its own
+`t_bytes`/`xsr_bytes` on KeptSolveBox.  The solve's per-wave batch decompresses
+T, X_SR and X_NR of a wave's boxes into the parity buffer one after another and
+patches the three SolveBox pointers (launch_patch_xnr; a null destination
+leaves a pointer alone, which is how a box with X_NR read in place keeps it).
+The two host readers of X_SR (materialize_host_factors_level, rescue_skipped_xnr)
+decompress with the host codec as they do X_NR; T has its own host copy.  The
+LU and pivots are raw.  land_full_factors (owned ghosts of a multi-rank Color
+level) keeps them raw as it keeps X_NR raw; it kept no box in these runs.
+
+One bug on the way: build_solve_xnr_wave is shared with the factorization's
+own batches (the owner source window, transpose_kept_xnr), which patch no
+pointers and leave the new box arrays empty - `data()` of an empty vector is
+null, and a 4096-pointer copy from it is "invalid argument".  Those arrays are
+zeroed when a batch has none.
+
+**The step is the whole story.**  At X_NR's step (kXnrToleranceFraction 0.2)
+the memory came as predicted and the accuracy did not: acc_forward +55% at
+96^3 and +34% at 192^3 on both paths, acc_mvp +40% (the device multiply reads
+the same kept T), where X_NR at that step had cost 3%.  T and X_SR are 2.5%
+of the raw bytes, so a finer step is nearly free - each 10x is 3.3 bits an
+element - and rather than pick one, four were measured at 96^3 (acc_forward
+against the X_NR-only run, 1.0098824e-2 Color / 9.7304948e-3 CA0):
+
+| T, X_SR step / tol | stored | acc_forward Color | CA0 |
+|---|---|---|---|
+| 0.2 (X_NR's) | 5.7x | +55% | +56% |
+| 0.02 | 4.4x | +0.62% | +0.71% |
+| **0.002** | **3.6x** | **+0.012%** | **+0.015%** |
+| 0.0002 | 3.0x | -0.0002% | -0.0008% |
+
+kSmallFactorToleranceFraction = 0.002, passed per source into the batch
+(`tolerance_of`, one entry a block, in place of a second compressor call).
+Against 0.02 it costs 24 MB a rank at 192^3, 0.3% of the peak.  A trap in the
+sweep worth writing down: claplace3d_h2 has an RPATH and all of the H2 code is
+in libbutterflypack.so.5, so three "binaries" built with three constants were
+one executable loading the last-built library - identical results to every
+digit, identical md5s.  The sweep was rerun with one library snapshot per
+constant preloaded inside the srun wrapper, with 0.0002 repeated as a control
+that reproduced the first run exactly.
+
+| 192^3 | peak | resident | kept factors at the peak | kept store, rank 0 | Factor | time_solve | acc_forward |
+|---|---|---|---|---|---|---|---|
+| Color before | 7.75 | 6.72 | 1.47 | 2.63 | 10.9 s | 0.467 | 1.5978148e-2 |
+| Color after | **7.40** | 6.37 | 1.12 | 2.28 | 11.2 s | 0.476 | 1.5978626e-2 |
+| CA0 before | 9.18 | 8.15 | 1.90 | 3.49 | 11.6 s | 0.501 | 1.6185732e-2 |
+| CA0 after | **8.74** | 7.72 | 1.47 | 3.05 | 11.6 s | 0.508 | 1.6186747e-2 |
+
+logdet is bit-identical on both paths at both sizes (the factorization never
+reads the kept T or X_SR; 96^3 heap-checked), acc_mvp is unchanged to five
+digits, the solve is 2% slower (a wave's buffer grows 1%).  Level 4 follows:
+Color 7.33 -> 6.98 (kept factors 2.65 -> 2.30), CA0 8.11 -> 7.67.  The
+per-level kept T and X_SR line in the report ("kept T and X_SR: 0.48 GB raw ->
+0.13 GB stored (3.6x); X_NR 17.45 -> 1.14 GB; the LU and pivots 0.99 GB,
+uncompressed") is the measurement that the 2026-10-08 list's "X_NR is N% of
+the kept block" line was meant to be; that one never printed (its counters
+are read after the level's stats are reset) and now carries the same fields.
+
+acc_backward - the residual of the device multiply applied to the device
+solve, 1e-15 everywhere until now - reads 4.3e-13 (96^3) and 5.3e-12 (192^3)
+on CA0 at 0.002, deterministic (two runs agree to all digits), while 0.02 and
+0.0002 give 1e-15 and Color gives 1e-15 at 0.002.  One quantization step off
+in one element would show as ~1e-8, so this is rounding-level over many
+elements, and it is specific to the replicated CA leaf, where a ghost box's
+factors are kept and compressed on every rank that holds it.
+With one rank (the 3D tree needs 8^k, so 1 against 8 is the only
+replication-free comparison) CA0 at 0.002 is the Color run to every digit
+and acc_backward is 1.2e-15; with 8 ranks Color stays at 1e-15 and CA0 does
+not.  A ghost box's factors are eliminated on every rank that holds it, from
+inputs accumulated in different orders, so two raw copies differ in the last
+bit; quantized, they agree exactly unless an element sits within that bit of
+a rounding boundary of the step, and then the two ranks' copies are one step
+apart there - a chance event per step (none at 0.02 or 0.0002, one or a few
+at 0.002), deterministic, and delta * |x_j| / ||b|| in size, which is the
+order seen.  Lossy-compressed replicated factors are consistent across ranks
+only to the step: X_NR has carried the same property since it was compressed
+(a coarser step, 36x the elements), and at 5e-12 against a 1.6e-2
+factorization it is noted, not pursued.
+
+**Where the two paths stand**, every item tagged:
+
+| Color leaf, 7.40 GB | GB | | CA0 leaf, 8.74 GB | GB |
+|---|---|---|---|---|
+| owner near blocks | 3.24 | | owner near blocks | 4.31 |
+| fill temp2^T packed | 1.47 | | fill temp2^T packed | 1.58 |
+| kept factors | 1.12 | | kept factors | 1.47 |
+| transient, all of it | 1.03 | | transient, all of it | 1.03 |
+| X_RR_full, adopted, slots, points | 0.53 | | X_RR_full, adopted, slots, points | 0.35 |
+
+Of the kept factors at the leaf's peak, the LU and pivots are now the
+majority and exact by design; what is left of the kept block is FP32 on the
+three stores (deferred).  Across the two days: Color 20.72 -> 7.40 GB (-64%),
+CA0 22.51 -> 8.74 (-61%), Factor 7.49 -> 11.2 s.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

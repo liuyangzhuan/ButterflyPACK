@@ -291,11 +291,14 @@ struct EliminatorStats {
     // H2_compress_factors: waves whose X_NR was compressed, waves that fell
     // back to storing it uncompressed, and why.
     // What the kept blocks are made of: X_NR uncompressed and as stored,
-    // against everything else (T, X_SR, the LU, pivots), which is never
-    // compressed and so bounds the whole-block ratio.
+    // against everything else (T, X_SR, the LU, pivots); of that, T and X_SR
+    // compress with X_NR, the LU and pivots never do and so bound the
+    // whole-block ratio.
     double xnr_raw_bytes = 0.0;
     double xnr_stored_bytes = 0.0;
     double other_raw_bytes = 0.0;
+    double tx_raw_bytes = 0.0;     // of other_raw_bytes: T and X_SR, and what they came to
+    double tx_stored_bytes = 0.0;
     int64_t xnr_waves_compressed = 0;
     int64_t xnr_waves_plain = 0;
     int64_t xnr_not_requested = 0;
@@ -1770,10 +1773,28 @@ private:
         skipped_xnr_.clear();
         if (!all) return;
         for (Box* box : skipped_factors_) {
-            const KeptSolveBox* kb = kept_of(box, "X_SR").box;
+            const auto kept = kept_of(box, "X_SR");
+            const KeptSolveBox* kb = kept.box;
             const size_t k = static_cast<size_t>(kb->k), r = static_cast<size_t>(kb->r);
             if (!box->X_SR.is_allocated()) {
-                box->X_SR.set_owned(kb->k, kb->r, copy(kb->xsr, k * r, "X_SR host copies"), MatrixStorage<DataType>::FULL);
+                if (kb->xsr_bytes > 0) {
+                    // H2_compress_factors: compressed like X_NR, so the bytes
+                    // come over and are decompressed here
+#ifdef H2_HAVE_NVCOMP
+                    std::vector<char> packed(kb->xsr_bytes);
+                    check_cuda(cudaMemcpy(packed.data(), kb->xsr, kb->xsr_bytes, cudaMemcpyDeviceToHost),
+                               "X_SR host copies (compressed)");
+                    std::vector<DataType> v(k * r);
+                    decompress_xnr_host<S>(packed.data(), reinterpret_cast<S*>(v.data()),
+                                           kept.level->chunk_strides.data() + kb->xsr_chunk0, kb->xsr_nchunks);
+                    box->X_SR.set_owned(kb->k, kb->r, std::move(v), MatrixStorage<DataType>::FULL);
+#else
+                    throw std::runtime_error("H2 GPU: compressed X_SR on the host needs a build with nvCOMP");
+#endif
+                } else {
+                    box->X_SR.set_owned(kb->k, kb->r, copy(kb->xsr, k * r, "X_SR host copies"),
+                                        MatrixStorage<DataType>::FULL);
+                }
             }
             if (!box->X_RR.is_allocated()) {
                 box->X_RR.set_owned(kb->r, kb->r, copy(kb->lu, r * r, "LU host copies"),
@@ -6731,22 +6752,38 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
     std::vector<Span> spans;
     struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot;
                   size_t xnr_bytes; double xnr_delta;
-                  uint32_t xnr_chunk0; uint32_t xnr_nchunks; bool xnr_pledged; };
+                  uint32_t xnr_chunk0; uint32_t xnr_nchunks; bool xnr_pledged;
+                  size_t t_bytes, xsr_bytes; uint32_t t_chunk0, t_nchunks, xsr_chunk0, xsr_nchunks; };
     std::vector<Made> made;
 
     std::vector<CompressedXnr> comp;
     std::vector<int> comp_at(kept_boxes.size(), -1);  // box -> its block of comp
+    std::vector<int> t_at(kept_boxes.size(), -1), xsr_at(kept_boxes.size(), -1);  // T and X_SR likewise
     std::vector<char> pledged(kept_boxes.size(), 0);
     bool compressed = false;
 #ifdef H2_HAVE_NVCOMP
     if (compress_factors_ >= 1 && !kept_boxes.empty()) {
         std::vector<const S*> srcs;
         std::vector<size_t> elems;
-        srcs.reserve(kept_boxes.size());
-        elems.reserve(kept_boxes.size());
+        std::vector<double> tols;  // per block: T and X_SR take the finer step
+        srcs.reserve(3 * kept_boxes.size());
+        elems.reserve(3 * kept_boxes.size());
+        tols.reserve(3 * kept_boxes.size());
         for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
             const WaveBox* wb = kept_boxes[bi];
             const size_t nt = static_cast<size_t>(wb->ntot), r = static_cast<size_t>(wb->r);
+            // T and X_SR (k x r each) go in the same batch: small next to
+            // X_NR, but once that is compressed they are a quarter of what
+            // the solve keeps
+            const size_t k = static_cast<size_t>(wb->k);
+            t_at[bi] = static_cast<int>(srcs.size());
+            srcs.push_back(reinterpret_cast<const S*>(d_result + wb->off_t));
+            elems.push_back(k * r);
+            tols.push_back(tolerance_ * kSmallFactorToleranceFraction);
+            xsr_at[bi] = static_cast<int>(srcs.size());
+            srcs.push_back(reinterpret_cast<const S*>(d_result + wb->off_temp1));
+            elems.push_back(k * r);
+            tols.push_back(tolerance_ * kSmallFactorToleranceFraction);
             // This box's fill source is the same matrix transposed, and the
             // wave compressed it a moment ago (compress_fill_sources runs
             // first).  Pledge that copy rather than make a second one.
@@ -6758,10 +6795,11 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
             comp_at[bi] = static_cast<int>(srcs.size());
             srcs.push_back(reinterpret_cast<const S*>(source + wb->off_temp2));
             elems.push_back(nt * r);
+            tols.push_back(tolerance_ * kXnrToleranceFraction);
         }
         if (!srcs.empty()) {
             compressed = xnr_compressor_.compress(
-                srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream);
+                srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream, nullptr, &tols);
             if (compressed) ++eliminator_stats().xnr_waves_compressed;
             else ++eliminator_stats().xnr_waves_plain;
         }
@@ -6769,27 +6807,18 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
 #endif
 
     size_t total = 0;
-    for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
-        const WaveBox& wb = *kept_boxes[bi];
-        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
-        const char* source = d_temp2[static_cast<size_t>(wb.source_group)];
-        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0, false};
-        m.T = total;   spans.push_back({total, d_result + wb.off_t, k * r * D});        total = align_up(total + k * r * D);
-        m.xsr = total; spans.push_back({total, d_result + wb.off_temp1, k * r * D});    total = align_up(total + k * r * D);
-        m.xnr = total;
-        if (pledged[bi]) {
-            // No room taken here: the transition transposes the fill source's
-            // bytes and puts the kept X_NR in a block of its own.
-            m.xnr_pledged = true;
-        } else if (compressed && comp_at[bi] >= 0 && nt > 0 &&
-                   comp[static_cast<size_t>(comp_at[bi])].bytes > 0) {
-            // One span per chunk, end to end, each at the 256-byte start
-            // bitcomp needs to read it; those padded lengths go into the
-            // level's pool, which is how the solve walks to a chunk.
-            const CompressedXnr& ci = comp[static_cast<size_t>(comp_at[bi])];
+    // One factor of the block: compressed, one span per chunk, end to end,
+    // each at the 256-byte start bitcomp needs to read it, and those padded
+    // lengths go into the level's pool, which is how the solve walks to a
+    // chunk; otherwise the raw bytes.  Returns the factor's offset.
+    auto place = [&](int at_comp, const char* raw, size_t raw_bytes, size_t& bytes, uint32_t& chunk0,
+                     uint32_t& nchunks) {
+        const size_t off = total;
+        if (compressed && at_comp >= 0 && raw_bytes > 0 && comp[static_cast<size_t>(at_comp)].bytes > 0) {
+            const CompressedXnr& ci = comp[static_cast<size_t>(at_comp)];
             const auto& cks = xnr_compressor_.chunks();
-            m.xnr_chunk0 = static_cast<uint32_t>(kept_.chunk_strides.size());
-            m.xnr_nchunks = static_cast<uint32_t>(ci.nchunks);
+            chunk0 = static_cast<uint32_t>(kept_.chunk_strides.size());
+            nchunks = static_cast<uint32_t>(ci.nchunks);
             size_t at = total;
             for (size_t c = 0; c < ci.nchunks; ++c) {
                 const auto& ck = cks[ci.chunk0 + c];
@@ -6797,12 +6826,30 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
                 kept_.chunk_strides.push_back(static_cast<uint32_t>(ck.stride));
                 at += ck.stride;
             }
-            m.xnr_bytes = ci.bytes;  // the chunks' padded lengths, summed
-            m.xnr_delta = ci.delta;
+            bytes = ci.bytes;  // the chunks' padded lengths, summed
             total = align_up(at);
         } else {
-            if (nt > 0) spans.push_back({total, source + wb.off_temp2, nt * r * D});
-            total = align_up(total + nt * r * D);
+            if (raw_bytes > 0) spans.push_back({total, raw, raw_bytes});
+            total = align_up(total + raw_bytes);
+        }
+        return off;
+    };
+    for (size_t bi = 0; bi < kept_boxes.size(); ++bi) {
+        const WaveBox& wb = *kept_boxes[bi];
+        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+        const char* source = d_temp2[static_cast<size_t>(wb.source_group)];
+        Made m{wb.box->morton_index, 0, 0, 0, 0, 0, wb.k, wb.r, wb.ntot, 0, 0.0, 0, 0, false, 0, 0, 0, 0, 0, 0};
+        m.T = place(t_at[bi], d_result + wb.off_t, k * r * D, m.t_bytes, m.t_chunk0, m.t_nchunks);
+        m.xsr = place(xsr_at[bi], d_result + wb.off_temp1, k * r * D, m.xsr_bytes, m.xsr_chunk0, m.xsr_nchunks);
+        if (pledged[bi]) {
+            // No room taken here: the transition transposes the fill source's
+            // bytes and puts the kept X_NR in a block of its own.
+            m.xnr = total;
+            m.xnr_pledged = true;
+        } else {
+            m.xnr = place(comp_at[bi], source + wb.off_temp2, nt * r * D, m.xnr_bytes, m.xnr_chunk0,
+                          m.xnr_nchunks);
+            if (m.xnr_bytes > 0) m.xnr_delta = comp[static_cast<size_t>(comp_at[bi])].delta;
         }
         m.lu = total;  spans.push_back({total, d_result + wb.off_xrr, r * r * D});      total = align_up(total + r * r * D);
         m.piv = total; spans.push_back({total, d_result + wb.off_piv, r * I});          total = align_up(total + r * I);
@@ -6816,6 +6863,10 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
                               : (m.xnr_bytes > 0 ? align_up(m.xnr_bytes) : align_up(nt * r * D)));
             es.other_raw_bytes += static_cast<double>(
                 2 * align_up(k * r * D) + align_up(r * r * D) + align_up(r * I));
+            es.tx_raw_bytes += static_cast<double>(2 * align_up(k * r * D));
+            es.tx_stored_bytes += static_cast<double>(
+                (m.t_bytes > 0 ? align_up(m.t_bytes) : align_up(k * r * D)) +
+                (m.xsr_bytes > 0 ? align_up(m.xsr_bytes) : align_up(k * r * D)));
         }
         made.push_back(m);
     }
@@ -6889,6 +6940,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         kb.xnr_delta = m.xnr_delta;
         kb.xnr_chunk0 = m.xnr_chunk0;
         kb.xnr_nchunks = m.xnr_nchunks;
+        kb.t_bytes = m.t_bytes;
+        kb.t_chunk0 = m.t_chunk0;
+        kb.t_nchunks = m.t_nchunks;
+        kb.xsr_bytes = m.xsr_bytes;
+        kb.xsr_chunk0 = m.xsr_chunk0;
+        kb.xsr_nchunks = m.xsr_nchunks;
         kept_.boxes[m.morton] = kb;
         if (BoxState* st = kept_boxes[bi]->state; st != nullptr) {
             st->xrr_lu = reinterpret_cast<const S*>(kb.lu);   // X_RR_full = P L U of this

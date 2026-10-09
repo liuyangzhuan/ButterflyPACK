@@ -459,15 +459,22 @@ void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cuda
     check_launch("copy_spans_kernel");
 }
 
-__global__ void patch_xnr_kernel(SolveBox* boxes, const int* idx, void* const* dsts, int count) {
+__global__ void patch_xnr_kernel(SolveBox* boxes, const int* idx, void* const* dsts, void* const* t_dsts,
+                                 void* const* xsr_dsts, int count) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < count) boxes[idx[i]].xnr = dsts[i];
+    if (i >= count) return;
+    SolveBox& b = boxes[idx[i]];
+    if (dsts[i] != nullptr) b.xnr = dsts[i];
+    if (t_dsts[i] != nullptr) b.T = t_dsts[i];
+    if (xsr_dsts[i] != nullptr) b.xsr = xsr_dsts[i];
 }
 
-void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, int count, cudaStream_t stream) {
+void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, void* const* t_dsts,
+                      void* const* xsr_dsts, int count, cudaStream_t stream) {
     if (count <= 0) return;
     const int threads = 128;
-    patch_xnr_kernel<<<(count + threads - 1) / threads, threads, 0, stream>>>(boxes, idx, dsts, count);
+    patch_xnr_kernel<<<(count + threads - 1) / threads, threads, 0, stream>>>(boxes, idx, dsts, t_dsts, xsr_dsts,
+                                                                              count);
     check_launch("patch_xnr_kernel");
 }
 

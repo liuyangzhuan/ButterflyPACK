@@ -66,6 +66,11 @@ inline double xnr_magnitude(const T& v) { return std::sqrt(v.re * v.re + v.im * 
 // 23x at tol_comp, 12-15x here) and keeps the error well below the
 // approximation's.
 inline constexpr double kXnrToleranceFraction = 0.2;
+// T and X_SR (k x r each, kept with X_NR): their quantization step relative
+// to tol_comp.  At X_NR's 0.2 they cost acc_forward +34% where X_NR costs
+// 3%, and they are 2.5% of the raw bytes, so a tighter step is nearly free:
+// each 10x adds 3.3 bits an element.
+inline constexpr double kSmallFactorToleranceFraction = 0.002;
 
 // Lossy Bitcomp decompresses a batch in parallel across its blocks, so the
 // rate follows the block count, not the bytes: on an A100 a wave of 37 boxes
@@ -115,7 +120,8 @@ struct CompressedXnr {
     size_t nchunks = 0;
 };
 
-// The compressed X_NR of one solve wave, decompressed into a shared scratch
+// The compressed factors of one solve wave (X_NR, and T and X_SR when those
+// are compressed too), decompressed into a shared scratch
 // before the wave's sweep kernels run and discarded after, so only one wave's
 // X_NR is uncompressed at a time.  Both sweeps read X_NR, so a wave is
 // decompressed twice per solve; at a wave-sized batch that is a few hundred
@@ -130,6 +136,11 @@ struct SolveXnrWave {
     std::vector<void*> h_box_dsts;
     int* d_box_idx = nullptr;          // for launch_patch_xnr
     void** d_box_dsts = nullptr;
+    // ... and where its T and X_SR land when those are compressed too (null:
+    // read in place, the pointer is left alone)
+    std::vector<void*> h_box_t_dsts, h_box_xsr_dsts;
+    void** d_box_t_dsts = nullptr;
+    void** d_box_xsr_dsts = nullptr;
     // per chunk of the wave, in box order: the batch the decompression runs
     std::vector<const void*> h_srcs;   // compressed bytes, in the kept block
     std::vector<void*> h_dsts;         // into the level's scratch
@@ -189,10 +200,13 @@ public:
     // temp2^T slots each took their own, and a finer step costs bits: the
     // slot-wise store measured 1.89 GB where the same data as whole matrices
     // was 1.13.  Sharing it holds a box to one relative tolerance, which is
-    // what the kept X_NR has always had.
+    // what the kept X_NR has always had.  `tolerance_of`, one entry a block,
+    // replaces `tolerance` for that block (the kept T and X_SR take a finer
+    // step than X_NR in the same batch).
     bool compress(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
                   double tolerance, std::vector<CompressedXnr>& out, cudaStream_t stream,
-                  const std::vector<int>* group_of = nullptr) {
+                  const std::vector<int>* group_of = nullptr,
+                  const std::vector<double>* tolerance_of = nullptr) {
         release();
         stream_ = stream;
         const size_t n = srcs.size();
@@ -277,7 +291,8 @@ public:
         }
         for (size_t i = 0; i < n; ++i) {
             // A block of zeros has no scale: any positive delta is exact.
-            out[i].delta = maxabs[i] > 0.0 ? 2.0 * tolerance * maxabs[i] : 1.0;
+            const double tol = tolerance_of != nullptr && tolerance_of->size() == n ? (*tolerance_of)[i] : tolerance;
+            out[i].delta = maxabs[i] > 0.0 ? 2.0 * tol * maxabs[i] : 1.0;
         }
         std::vector<void*> h_out(nc);
         std::vector<double> delta(nc);
@@ -348,17 +363,30 @@ inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t
     const size_t nc = w.h_srcs.size();   // chunks, the decompression batch
     const size_t chunk_span = align_up(nc * sizeof(void*));
     const size_t box_span = align_up(nb * sizeof(void*));
-    char* ptrs = heap.alloc_resident(chunk_span * 2 + box_span + align_up(nb * sizeof(int)));
+    char* ptrs = heap.alloc_resident(chunk_span * 2 + box_span * 3 + align_up(nb * sizeof(int)));
     w.d_srcs = reinterpret_cast<const void**>(ptrs);
     w.d_dsts = reinterpret_cast<void**>(ptrs + chunk_span);
     w.d_box_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2);
-    w.d_box_idx = reinterpret_cast<int*>(ptrs + chunk_span * 2 + box_span);
+    w.d_box_t_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span);
+    w.d_box_xsr_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span * 2);
+    w.d_box_idx = reinterpret_cast<int*>(ptrs + chunk_span * 2 + box_span * 3);
     check_cuda(cudaMemcpyAsync(w.d_srcs, w.h_srcs.data(), nc * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave srcs");
     check_cuda(cudaMemcpyAsync(w.d_dsts, w.h_dsts.data(), nc * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave dsts");
     check_cuda(cudaMemcpyAsync(w.d_box_dsts, w.h_box_dsts.data(), nb * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave box dsts");
+    // (the factorization's batches patch no pointers and leave these empty:
+    // then nothing to point at)
+    auto box_ptrs = [&](void** d, const std::vector<void*>& h, const char* what) {
+        if (h.size() == nb) {
+            check_cuda(cudaMemcpyAsync(d, h.data(), nb * sizeof(void*), cudaMemcpyHostToDevice, stream), what);
+        } else {
+            check_cuda(cudaMemsetAsync(d, 0, nb * sizeof(void*), stream), what);
+        }
+    };
+    box_ptrs(w.d_box_t_dsts, w.h_box_t_dsts, "xnr wave box T dsts");
+    box_ptrs(w.d_box_xsr_dsts, w.h_box_xsr_dsts, "xnr wave box X_SR dsts");
     check_cuda(cudaMemcpyAsync(w.d_box_idx, w.boxes.data(), nb * sizeof(int),
                                cudaMemcpyHostToDevice, stream), "xnr wave box indices");
     check_cuda(cudaStreamSynchronize(stream), "xnr wave pointers");
