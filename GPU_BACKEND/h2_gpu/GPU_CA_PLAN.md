@@ -3522,6 +3522,80 @@ owner near blocks 3.24, transient 1.67, kept factors 0.57, X_RR_full 0.30,
 owner source slots 0.15, fill store 0.12.  The near store is three quarters
 of the resident, which is (c).
 
+#### Host staging (c), the near store: review before building (2026-10-09)
+
+**What the store is** (step 3c, as built).  The level's Schur complement:
+one block per one-hop pair and the Schur block of each box, 57203 blocks of
+17.23 GB raw at their largest on the Color leaf, held packed at 5.3x.  A
+block's packed bytes are a run of *chunk homes* in B_compact (extents of
+32 MB doubling to 512 MB, bump-allocated, a home sized at the chunk's first
+compressed length and never moved) plus a *tail slot* (64 KB, in 16 MB
+extents) for what a re-compression adds beyond the home.  Resident at the
+leaf peak: 3.24 GB Color and CA3, 4.31 CA0 - three quarters of what is
+resident now.
+
+**Who writes it.**  The owner pass, a group at a time (kNearGroupBudget
+256 MB of raw targets): the group's raw blocks are compressed into the
+compressor's device staging and copy_spans scatters the chunks into their
+homes and tails, then the raw blocks are freed.  Per leaf level: 451501
+block packs in 326 groups, 10.46 GB of packed bytes written (CA0 15.1 GB
+in 550 groups), 0.47 s, 8.9 writes a block; 83% of the blocks go final only
+in the last quarter of the waves, so nothing can leave early.
+
+**Who reads it.**  One path, materialize_adopted: allocate the raw blocks,
+gather each chunk's home and tail into a contiguous "store gathers"
+staging (copy_spans), decompress in one batch.  Per leaf level, Color:
+update groups 34.9 GB in 181 batches, generators 2.2, build_parent 0.8 -
+38 GB decompressed from 7.2 GB of packed input (CA0: 54 GB from 10.3).  The
+transition's build_parent then packs the parent blocks as contiguous runs
+(packed_owned), which the next level adopts: "adopted blocks" 1.87 GB
+under level 4.
+
+**The proposal.**  Put the extents - B_compact's, B_newtail's, and
+build_parent's packed_owned runs - in pinned host memory (the arena of (b)
+is the model: malloc + THP + cudaHostRegister, device-visible), and change
+nothing in the structure: compact_reserve and tail_grow take from the
+arena; copy_spans scatters a group's packed chunks into the host homes
+(zero-copy writes over PCIe); materialize_adopted's gather reads the host
+homes into the device staging (zero-copy reads), and the decompression is
+as now.  The level's region resets when its eliminator goes; the parent
+runs live in the next level's region, since that level reads them.  The
+between-level compaction must leave host pointers alone (the lesson of
+(a)).  About 150 lines, all in the allocator and the two copy sites.
+
+**What it buys.**  Leaf, Color: resident 4.43 -> ~1.2, peak 6.10 -> ~2.9 GB;
+CA3 6.57 -> ~3.3; CA0 7.33 -> ~3.0.  Level 4 with the adopted runs on the
+host: 4.68 -> ~2.3.  Against two days ago that is 20.72 -> ~2.9 on Color,
+7x, and the 8x-boxes goal at 192^3 (3 GB x 8 = 24 GB of the card) comes
+within reach.
+
+**What it costs, estimated from measured rates.**  Writes: 10.5 GB of
+scattered 4-byte-word kernel writes to host memory a leaf level (CA0 15
+GB).  Reads: 7.2 GB (CA0 10.3) gathered the same way.  At a PCIe-4 x16
+link's ~20 GB/s each way that is 0.35-0.5 s of reads and 0.5-0.75 s of
+writes a leaf level, +0.9-1.3 s on an 12.3 s factorization if none of it
+overlaps - and today none would: the packer synchronizes after each
+group's scatter so the compressor's staging can be reused, and the gather
+precedes each group's decompression.  Double-buffering the staging and
+running the scatter on the copy stream would hide most of the writes; a
+follow-up, not the first version.  The solve is untouched.
+
+**The unknown to measure before building** (the rule from the bitcomp
+benchmark: the kernel where it runs, not a guess): the bandwidth of
+copy_spans's access pattern - 4-byte words, 64-512 KB spans, coalesced per
+warp - against mapped host memory, device-to-host and host-to-device, on
+one GPU and with four ranks a node at once.  PCIe is efficient at 128-byte
+transactions and poor below; if the pattern lands well under 10 GB/s, the
+alternative is a contiguous device staging per group with one bulk copy
+each way and a host-side scatter (the background copier's thread has
+spare time).  Thirty minutes with pin_bench.cu's harness.
+
+**The honest limit.**  Host memory per rank is 64 GB on these nodes.  At
+8x the boxes a rank the three staged stores come to about 8.5 GB x 8 = 68
+GB a rank - the edge of what fits, with the near store 26 GB of it.  At
+64x they do not fit on the host either; that regime needs a smaller
+representation or more ranks, not staging.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
