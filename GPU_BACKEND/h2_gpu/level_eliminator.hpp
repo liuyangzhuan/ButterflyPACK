@@ -916,7 +916,7 @@ private:
         }
         waited();
         ++eliminator_stats().exchange_fallbacks;
-        return heap_.alloc(bytes);
+        return heap_.alloc(bytes, ResidentKind::Exchange);
     }
     void free_block(const void* ptr) {
         DeviceHeap& arena = DeviceHeap::exchange_arena();
@@ -970,7 +970,7 @@ private:
     // output is 2 n_tot r, and the batch used to be the whole wave, so this
     // divides the largest item in the transient.  The consumers still see the
     // whole wave.
-    static constexpr int kWaveChunks = 8;
+    static constexpr int kWaveChunks = 8;   // 16 gave the same peak and cost 0.5 s more
     void transpose_kept_xnr();
     bool transpose_kept_xnr_group(const std::vector<PledgedXnr>& todo, size_t first, size_t last, size_t raw,
                                   KeptSolveLevel& kl, cudaStream_t stream);
@@ -1553,7 +1553,7 @@ private:
             if (pb == nullptr || pb->packed != nullptr) continue;
             for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
         }
-        char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes)) : nullptr;
+        char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes), ResidentKind::Gather) : nullptr;
         std::vector<CopySpan> gspans;
         std::vector<const void*> h_src;
         std::vector<void*> h_dst;
@@ -3316,7 +3316,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     } else {
         char* d_qrcp_work = nullptr;
         if (const size_t w = qrcp_work_bytes<S>(static_cast<int>(id_items.size()), max_id_n)) {
-            d_qrcp_work = heap_.alloc(w);
+            d_qrcp_work = heap_.alloc(w, ResidentKind::Adaptive);
         }
         launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
                     tolerance_, d_qrcp_work, stream);  // (every launch variant gives the same bits)
@@ -5554,7 +5554,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         tmp_bytes = align_up(align_up(tmp_bytes + nr) + nr) + align_up(static_cast<size_t>(gens[i].r) * gens[i].k * D);
     }
     PiecedBuffer tmp;
-    tmp.allocate(heap_, tmp_starts, tmp_bytes);
+    tmp.allocate(heap_, tmp_starts, tmp_bytes, ResidentKind::GenUpload);
     std::vector<TransposeItem> transposes;
     int max_tr_m = 0, max_tr_n = 0;
     for (size_t i = 0; i < gens.size(); ++i) {
@@ -5886,7 +5886,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     std::vector<size_t> work_starts;
     for (const Product& p : products) work_starts.push_back(p.off);
     PiecedBuffer work;
-    work.allocate(heap_, work_starts, work_bytes);
+    work.allocate(heap_, work_starts, work_bytes, ResidentKind::GenWork);
     VBatch<S> prod;
     for (const Product& p : products) {
         prod.entries.push_back({p.a, p.b, reinterpret_cast<S*>(work.at(p.off)), p.m, p.n, p.k, p.lda, p.ldb, p.m});
@@ -6134,7 +6134,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
         if (pb == nullptr || pb->packed != nullptr || w.m->ptr == nullptr) continue;
         for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
     }
-    char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes)) : nullptr;
+    char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes), ResidentKind::Gather) : nullptr;
     std::vector<CopySpan> gspans;
     int64_t gmax = 0;
     size_t gat = 0;
@@ -6835,8 +6835,8 @@ bool LevelEliminator<CoordType, DataType, KernelType>::transpose_kept_xnr_group(
     auto& stats = eliminator_stats();
     const size_t n = last - first;
     if (n == 0) return true;
-    char* a = heap_.try_alloc(std::max<size_t>(raw, 1));                          // temp2^T
-    char* b = a != nullptr ? heap_.try_alloc(std::max<size_t>(raw, 1)) : nullptr;  // temp2
+    char* a = heap_.try_alloc(std::max<size_t>(raw, 1), ResidentKind::Codec);     // temp2^T
+    char* b = a != nullptr ? heap_.try_alloc(std::max<size_t>(raw, 1), ResidentKind::Codec) : nullptr;  // temp2
     if (a == nullptr || b == nullptr) {
         heap_.free(b);
         heap_.free(a);
@@ -8797,7 +8797,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         int max_rs_m = 0, max_rs_n = 0;
         if (!pending.empty()) {
             const auto t_restore = clock::now();
-            d_raw = heap_.alloc(restore_bytes);
+            d_raw = heap_.alloc(restore_bytes, ResidentKind::TrRestore);
             for (size_t q = 0; q < pending.size(); ++q) {
                 const Pending& pd = pending[q];
                 d_restore[q] = heap_.alloc_resident(pd.end - pd.gall_off, ResidentKind::Restore);
@@ -8854,7 +8854,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         }
 
         // buffers of G and P for the chunk
-        char* d_buffers = heap_.alloc(std::max<size_t>(buffer_bytes, 1));
+        char* d_buffers = heap_.alloc(std::max<size_t>(buffer_bytes, 1), ResidentKind::TrBuffers);
         auto at = [&](size_t off) { return reinterpret_cast<S*>(d_buffers + off); };
         auto g_ptr = [&](int index) -> const S* {
             const GInfo& g = g_infos[static_cast<size_t>(index)];

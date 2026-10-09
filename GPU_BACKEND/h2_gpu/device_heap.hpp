@@ -78,6 +78,13 @@ enum class ResidentKind : uint8_t {
     SketchVec,    // ... the random vectors it applies the matrix to
     SketchLists,   // ... per box, the source lists and index tables
     SketchPW,      // ... per box, [P; W]
+    TrRestore,     // the transition chunk's fill sources, restored from the host
+    TrBuffers,     // ... and its G and P buffers
+    Exchange,      // halo and generator buffers that did not fit the exchange arena
+    Gather,        // the near store's chunk homes, gathered contiguous to be read
+    Adaptive,      // the adaptive ID's frames and status
+    GenUpload,     // remote generators, uploaded: temp2, X_NR, X_RS, temp2^T, X_RR_full
+    GenWork,       // ... and the buffers of the products they drive
     Count
 };
 inline const char* resident_kind_name(ResidentKind k) {
@@ -105,6 +112,13 @@ inline const char* resident_kind_name(ResidentKind k) {
         case ResidentKind::SketchVec: return "sketch vectors";
         case ResidentKind::SketchLists: return "sketch lists";
         case ResidentKind::SketchPW: return "sketch P;W";
+        case ResidentKind::TrRestore: return "transition restores";
+        case ResidentKind::TrBuffers: return "transition G;P";
+        case ResidentKind::Exchange: return "exchange overflow";
+        case ResidentKind::Gather: return "store gathers";
+        case ResidentKind::Adaptive: return "adaptive ID";
+        case ResidentKind::GenUpload: return "generator uploads";
+        case ResidentKind::GenWork: return "generator products";
         case ResidentKind::Reduction: return "reduction";
         case ResidentKind::Matvec: return "matvec";
         case ResidentKind::Uploaded: return "uploaded blocks";
@@ -595,7 +609,8 @@ public:
     ~PiecedBuffer() { release(); }
 
     // `starts`: the sub-buffers' offsets; `end`: the end of the last one.
-    void allocate(DeviceHeap& heap, const std::vector<size_t>& starts, size_t end) {
+    void allocate(DeviceHeap& heap, const std::vector<size_t>& starts, size_t end,
+                  ResidentKind kind = ResidentKind::Other) {
         release();
         heap_ = &heap;
         for (size_t j = 0; j < starts.size(); ++j) {
@@ -606,7 +621,7 @@ public:
         }
         for (size_t p = 0; p < start_.size(); ++p) {
             const size_t stop = p + 1 < start_.size() ? start_[p + 1] : end;
-            base_.push_back(stop > start_[p] ? heap.alloc(stop - start_[p]) : nullptr);
+            base_.push_back(stop > start_[p] ? heap.alloc(stop - start_[p], kind) : nullptr);
         }
     }
     // Device address of a logical offset (inside a sub-buffer).

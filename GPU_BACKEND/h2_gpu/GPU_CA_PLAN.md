@@ -2931,6 +2931,43 @@ updates no longer need the raw outputs at all, so the wave's working set is
 decoupled from the owner pass.  Whatever turns out to set the transient peak,
 it can now be moved or bounded without the outputs being pinned behind it.
 
+#### The production runs in chunks, and the peak leaves the factorization (2026-10-08)
+
+`kWaveChunks` chunks of a wave's boxes for the production half; the consumers
+still see the whole wave.  8 chunks: Color 12.84 -> **11.33 GB**, CA0
+14.57 -> **12.46**, Factor +12.5% on both, logdet bit-identical.  **16 chunks
+gave exactly the same peak and cost 0.5-0.8 s more**, because by then the
+production is no longer what binds; 8 is the setting.
+
+Three things it needed, each of which broke a run first: the generator pack
+registers a wave's transport once (split into plan_generators once a wave and
+copy_generators a chunk at a time); the LU's INFO array is the wave's, one
+entry a box, and every chunk was writing the same first slots; and the
+predicate for freeing a chunk's raw output is not the one for letting the
+owner pass read the stores - conflating them meant nothing was freed until the
+last chunk, which put the peak *up* to 14.01 GB.
+
+**Where the peak is now, with every allocation tagged.**  The wave's own items
+are gone from the Color leaf's peak, and what is left is of a different
+character on each path:
+
+| Color leaf, 11.33 GB | GB | | CA0 leaf, 12.46 GB | GB |
+|---|---|---|---|---|
+| **generator products** (transient) | **4.62** | | owner near blocks | 4.33 |
+| level Schur/edges | 3.07 | | fill temp2^T packed | 2.23 |
+| fill temp2^T raw | 1.69 | | kept factors | 1.42 |
+| owner near blocks | 1.07 | | level Schur/edges | 1.13 |
+| codec staging | 0.29 | | wave work (transient) | 1.09 |
+| adopted blocks | 0.23 | | codec staging + source window | 1.08 |
+| the rest | 0.36 | | the rest | 1.18 |
+
+Color's largest item is the `work` PiecedBuffer of
+`apply_remote_generators` - the buffers for the products the *other ranks'*
+generators drive, which is why CA0 does not have it at all (a CA level sends
+no generators).  CA0's peak is its replicated resident set.  So the two paths
+now need different work, and neither needs anything more from the wave's
+production.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
