@@ -6347,6 +6347,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     std::vector<const S*> srcs;
     std::vector<size_t> elems;
     std::vector<int> slot_rows;  // per block, its uncompressed rows
+    std::vector<int> slot_box;   // ... and its box, whose maximum sets its step
     // temp2^T or X_NR^T: the same packing into different fields of the box.
     struct Dest {
         char*& packed;
@@ -6503,7 +6504,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     auto flush = [&]() {
         if (!srcs.empty()) {
             std::vector<CompressedXnr> comp;
-            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream)) {
+            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream,
+                                          &slot_box)) {
                 size_t raw = 0, stored = 0;
                 for (size_t i = 0; i < srcs.size(); ++i) {
                     raw += elems[i] * D;
@@ -6529,6 +6531,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
         srcs.clear();
         elems.clear();
         slot_rows.clear();
+        slot_box.clear();
         group_of.clear();
         group_raw = 0;
     };
@@ -6552,6 +6555,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                 srcs.push_back(it.t2t + row * r);
                 elems.push_back(rows * r);
                 slot_rows.push_back(static_cast<int>(rows));
+                slot_box.push_back(static_cast<int>(group_of.size()));  // the box being packed
             }
             row += rows;
         }

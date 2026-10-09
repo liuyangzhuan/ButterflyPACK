@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fmm {
@@ -183,8 +184,15 @@ public:
 
     // Returns false when the scratch does not fit, so the caller stores the
     // wave uncompressed (as it would without a compressor at all).
+    // `group_of`, one entry a block: the blocks of a group share one
+    // quantization step, taken from the largest of their maxima.  A box's
+    // temp2^T slots each took their own, and a finer step costs bits: the
+    // slot-wise store measured 1.89 GB where the same data as whole matrices
+    // was 1.13.  Sharing it holds a box to one relative tolerance, which is
+    // what the kept X_NR has always had.
     bool compress(const std::vector<const S*>& srcs, const std::vector<size_t>& elems,
-                  double tolerance, std::vector<CompressedXnr>& out, cudaStream_t stream) {
+                  double tolerance, std::vector<CompressedXnr>& out, cudaStream_t stream,
+                  const std::vector<int>* group_of = nullptr) {
         release();
         stream_ = stream;
         const size_t n = srcs.size();
@@ -259,6 +267,14 @@ public:
                                    cudaMemcpyDeviceToHost, stream_), "xnr maxabs");
         check_cuda(cudaStreamSynchronize(stream_), "xnr maxabs");
 
+        if (group_of != nullptr && group_of->size() == n) {
+            std::unordered_map<int, double> gmax;
+            for (size_t i = 0; i < n; ++i) {
+                double& m = gmax[(*group_of)[i]];
+                m = std::max(m, maxabs[i]);
+            }
+            for (size_t i = 0; i < n; ++i) maxabs[i] = gmax[(*group_of)[i]];
+        }
         for (size_t i = 0; i < n; ++i) {
             // A block of zeros has no scale: any positive delta is exact.
             out[i].delta = maxabs[i] > 0.0 ? 2.0 * tolerance * maxabs[i] : 1.0;

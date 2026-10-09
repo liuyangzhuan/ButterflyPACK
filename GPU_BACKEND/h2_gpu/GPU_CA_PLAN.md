@@ -3007,6 +3007,38 @@ So the transient is bounded by budgets we choose and the resident is what grows
 with boxes a rank.  FP32 on the two compressed stores - 3.24 + 2.04 on Color,
 more on CA0 - is now the one lever left that is worth more than 1 GB.
 
+#### One quantization step a box for the fill slots (2026-10-08)
+
+A box's temp2^T is compressed a slot at a time - one slot a one-hop neighbor,
+which is the granularity the sketches read - and each slot took its step from
+its own maximum.  A finer step costs bits, so the slot-wise store was far
+bigger than it needed to be.  The slots of a box now share one step, taken
+from the largest of their maxima, which holds the box to one relative
+tolerance: the same basis the kept X_NR has always had.  Entirely host-side,
+since the deltas were already computed on the host from the per-block maxima.
+
+| 192^3 | peak | resident | fill temp2^T | store ratio | Factor |
+|---|---|---|---|---|---|
+| Color before | 10.69 | 8.17 | 2.04 | 9.4x | 10.6 s |
+| Color after | **9.79** | 7.27 | **1.22** | **15.3x** | 11.1 s |
+| CA0 before | 12.46 | 9.93 | 2.23 | | 11.8 s |
+| CA0 after | **11.48** | 8.96 | **1.34** | | 12.1 s |
+
+**This is the first step that costs accuracy rather than nothing**, and the
+user accepted the trade on the measurement:
+
+| acc_forward | uncompressed | before | after |
+|---|---|---|---|
+| Color | 1.554e-2 | 1.564e-2 | 1.681e-2 |
+| CA0 | 1.369e-2 | 1.593e-2 | 1.584e-2 |
+
+So -0.9 GB on both paths for +7.5% of Color's forward error and none of CA0's,
+whose degradation was already there.  acc_mvp does not move (Color 3.09e-3 ->
+3.12e-3, CA0 3.06e-3 -> 2.92e-3) and acc_backward stays at 1e-15; logdet moves
+1.1e-7 relative on Color and 9.1e-8 on CA0, about ten times the perturbation of
+the steps before it.  Anything further here should be gated the same way, on
+acc_forward rather than on bytes.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
