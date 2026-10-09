@@ -3708,9 +3708,44 @@ report shows where: 0.34 of Color's 0.36 is accrued by the leaf.  The near
 store's extents double from 32 MB up to kCompactMax = 512 MB, and a request
 larger than the arena's 256 MB chunk cannot take a chunk pinned ahead - it
 pins synchronously, as before.  A 3.24 GB leaf store has five or six 512 MB
-extents at 0.08 s each: the 0.34 s.  (c3) makes the chunk 512 MB, which also
-covers build_parent's per-chunk parent runs (2.3 GB in 10 chunks at the
-leaf's transition, some above 256 MB).
+extents at 0.08 s each: the 0.34 s.
+
+**(c3), measured and reverted (2026-10-09): 512 MB chunks.**  With the
+chunk at the largest extent every extent takes a chunk pinned ahead, and the
+levels' waits did fall - to 0.00 s on Color, 0.13 CA3, 0.07 CA0 at 192^3 -
+but the pinning work rose from 1.24 / 1.34 / 1.52 s to 1.91 / 1.95 / 2.06 s
+(8.59 GB pinned instead of 7.78, and concurrent pinners slow each other),
+and the Factor time did not follow the waits: 14.3 -> 14.2 s Color, 14.0 ->
+14.2 CA3, 14.9 -> 15.0 CA0, and at 96^3 it rose 2.51 -> 2.78, 3.03 -> 3.29,
+3.33 -> 3.51 while the pinned total went 1.61 -> 2.15 GB.  Logdets and peaks
+identical in all six runs.  So pinning on a worker thread is not hidden:
+what the main thread stops waiting for, it loses as slower progress while
+the worker pins - at 96^3 one for one (+0.30 s of pinning, +0.27 s of
+Factor).  The 256 MB chunk stays; the remaining 0.36-0.58 s are the price of
+registering 7.8 GB in a process that factorizes once.
+
+**The mechanism, measured (pin_bench2.cu, one A100, 2026-10-09).**  A worker
+thread pins 2 GB in 256 MB chunks the way PinnedArena does while the main
+thread launches.  The THP fault-in (touch) alone takes 0.156 s and the main
+thread keeps 100% of its rate (423k tiny launches/s, or 156 6-ms kernels/s).
+cudaHostRegister on touched memory takes 0.093 s, and while it runs the main
+thread gets 2% of its launch rate and 12% of its kernel rate: the
+registration blocks the process's other CUDA calls almost entirely.  Both
+together, 0.250 s at 60-66%.  So of the 0.15 s a GB, the 0.08 of fault-in
+hides behind the GPU work and the 0.046 of registration does not, whichever
+thread does it: 7.8 GB registered is 0.36 s of the factorization - what (c2)
+left, and what (c3) could not take away.  What would: registering less (the
+arenas are within 10% of the stores' maxima), or registering while the GPU
+holds a long queue of launched work, which the group-synchronous owner pass
+never has.  A process that factorizes twice pays it once.
+
+**Where (c) stands after (c2)**, against (b): leaf peak 6.10 -> 5.01 Color,
+6.57 -> 4.14 CA3, 7.33 -> 3.01 CA0; level 4 4.5-4.7 -> 3.1-3.2; Factor
++2.0 / +1.6 / +2.2 s at 192^3 (14-17%), of which ~0.36 s is registration,
+~1.0 s PCIe traffic at the link rate (the scatter's 0.5 s could overlap the
+GEMMs on a side stream, the rest precedes what reads it), and the rest the
+plan site's and the transition's reads and writes; +0.27 / +0.36 / +0.50 s
+at 96^3.  Solve unchanged.
 
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 

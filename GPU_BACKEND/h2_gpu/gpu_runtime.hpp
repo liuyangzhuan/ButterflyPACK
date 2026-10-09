@@ -169,6 +169,9 @@ inline size_t align_up(size_t bytes, size_t alignment = 256) {
 // staging (c), 2026-10-09).
 class PinnedArena {
 public:
+    // 256 MB, not the near store's largest extent (512 MB): with 512 MB chunks
+    // the levels waited less but pinned 0.7 s more in all, and Factor time did
+    // not move at 192^3 and rose 0.2-0.3 s at 96^3 (GPU_CA_PLAN.md, (c3)).
     static constexpr size_t kChunk = size_t{256} << 20;
     static constexpr int kAheadMax = 4;   // 1 GB pinning ahead at most
     PinnedArena() = default;
