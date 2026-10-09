@@ -209,6 +209,10 @@ struct EliminatorStats {
     double np_raw = 0.0, np_stored = 0.0, np_seconds = 0.0;
     int64_t np_blocks = 0, np_groups = 0, np_groups_plain = 0, np_reclaimed = 0;
     int64_t np_tails = 0, np_no_room = 0;   // chunks that grew; blocks left uncompressed
+    // ... of which step 5's fresh blocks, packed as soon as add_store has
+    // written them rather than waiting for an owner group to come by
+    double np5_raw = 0.0, np5_stored = 0.0, np5_seconds = 0.0;
+    int64_t np5_blocks = 0, np5_groups = 0;
     // the wave's gather window: what it put back, in how many passes
     double fw_bytes = 0.0, fw_seconds = 0.0;
     int64_t fw_batches = 0, fw_passes = 0, fw_peak = 0;
@@ -1540,6 +1544,13 @@ private:
     // of Factor time and no change in accuracy.  Off restores the single-group
     // owner pass that predates all of this; see GPU_CA_PLAN.md step 3c.
     static constexpr bool kHoldNearBlocksPacked = true;
+    // The bytes of near blocks one group writes - the owner pass's groups, and
+    // now step 5's packing.  Halving it halves both the store's packing
+    // staging and the owner window, the transient's two largest items, for
+    // twice the groups: more launches, and a block written in more groups is
+    // re-packed more often.  512 -> 256 MB measured -0.48 GB for +0.1 s.
+    static constexpr size_t kNearGroupBudget = kHoldNearBlocksPacked ? (size_t{256} << 20)
+                                                                     : std::numeric_limits<size_t>::max();
     void materialize_into_window(const std::vector<WinBlock>& list, char* window, cudaStream_t stream) {
         if (list.empty() || window == nullptr) return;
         auto& stats = eliminator_stats();
@@ -3678,6 +3689,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         const size_t work_first = work_blocks.size();
         std::vector<AddStoreItem> stores;   // step 5's, for this chunk
         int max_store_m = 0, max_store_n = 0;
+        // ... and the blocks they write, to pack once written.  All the
+        // store's packer reads of a target is these four fields.
+        struct FreshNear { DeviceMatrix* block; uint64_t key; int rows, cols; };
+        std::vector<FreshNear> fresh_near;
         // Host image of all interpolation matrices, laid out as d_t.
         std::vector<char> t_image(t_bytes);
         {
@@ -4246,9 +4261,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
                     max_store_m = std::max(max_store_m, c);
                     max_store_n = std::max(max_store_n, k);
-                    edges_[edge_key(box->morton_index, nm)] = fresh;
-                    note_write(&edges_[edge_key(box->morton_index, nm)],
-                               static_cast<size_t>(fresh.rows) * fresh.cols * D);
+                    const uint64_t fkey = edge_key(box->morton_index, nm);
+                    edges_[fkey] = fresh;
+                    note_write(&edges_[fkey], static_cast<size_t>(fresh.rows) * fresh.cols * D);
+                    fresh_near.push_back(FreshNear{&edges_[fkey], fkey, fresh.rows, fresh.cols});
                 }
             }
             const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
@@ -4268,6 +4284,35 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                              max_store_m, max_store_n, stream);
             check_cuda(cudaStreamSynchronize(stream), "owner stores");  // the image is reused below
         }
+#ifdef H2_HAVE_NVCOMP
+        // Step 5's blocks into the near store now, in groups bounded as the
+        // owner pass's are.  They used to sit raw until the first owner group
+        // to update them came by, which at the 192^3 leaf was 0.88 GB of the
+        // resident set at the peak.  Nothing in this wave writes them again:
+        // the owner pass writes pairs of a source's neighbours, and these are
+        // the source's own.  A later wave's owner group puts one back exactly
+        // as it puts back any other packed target.
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !fresh_near.empty()) {
+            const auto t_np5 = std::chrono::steady_clock::now();
+            const double raw0 = stats.np_raw, stored0 = stats.np_stored;
+            const int64_t blocks0 = stats.np_blocks;
+            size_t at = 0;
+            while (at < fresh_near.size()) {
+                size_t bytes = 0, end = at;
+                while (end < fresh_near.size() && (end == at || bytes < kNearGroupBudget)) {
+                    bytes += static_cast<size_t>(fresh_near[end].rows) * fresh_near[end].cols * D;
+                    ++end;
+                }
+                pack_near_group(fresh_near, at, end, stream);
+                ++stats.np5_groups;
+                at = end;
+            }
+            stats.np5_raw += stats.np_raw - raw0;
+            stats.np5_stored += stats.np_stored - stored0;
+            stats.np5_blocks += stats.np_blocks - blocks0;
+            stats.np5_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_np5).count();
+        }
+#endif
         marks.mark(stream);  // 6: step 5 (near blocks)
         // A_NS and X_NS were the last of this chunk's raw output with a
         // reader, and the stores above have been launched and waited for.
@@ -4544,12 +4589,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // structure the owner pass had before any of this: the budget alone takes
     // the leaf from 120 batched GEMM calls to 730 and costs 0.64 s, whether
     // anything is compressed or not.
-    // Halving this halves both the near store's packing staging and the
-    // owner window, which are the transient's two largest items, at the price
-    // of twice the groups: more launches, and a block written in more groups
-    // is re-packed more often.
-    const size_t kNearGroupBudget = kHoldNearBlocksPacked ? (size_t{256} << 20)
-                                                          : std::numeric_limits<size_t>::max();
+
     std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
     {
         // Two budgets: the targets the group writes, and - when the operands

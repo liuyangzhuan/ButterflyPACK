@@ -3068,6 +3068,47 @@ rather than data.  The Color leaf's resident 7.17 is owner near blocks 3.24,
 fill temp2^T 1.22, kept factors 0.99, level Schur/edges 0.88, adopted 0.48,
 X_RR_full 0.29, owner source slots 0.12.
 
+#### Step 5's blocks go into the near store as they are written (2026-10-09)
+
+`level Schur/edges` was the near-field blocks the store did not cover: step 5
+creates one per (eliminated box, neighbour) as A_NS + update, and it sat raw
+until the first owner group to update it came by - 0.88 GB of the Color leaf's
+resident set at the peak, 1.13 on CA0.  Step 5 now packs its own blocks right
+after add_store has written them, in groups bounded like the owner pass's;
+all the store's packer reads of a target is block, key, rows and cols, and
+every reader already puts a packed block back before touching it.  Nothing in
+the same wave writes them again: the owner pass writes pairs of a source's
+neighbours, and these are the source's own.
+
+| 192^3 | max peak | leaf peak | Factor | logdet (rel.) | acc_forward |
+|---|---|---|---|---|---|
+| Color before | 8.23 | 8.23 | 10.9 s | | 1.681e-2 |
+| Color after | **7.97** | **7.75** | 11.0 s | 3.3e-8 | 1.598e-2 |
+| CA0 before | 9.92 | 9.92 | 12.3 s | | 1.584e-2 |
+| CA0 after | **9.18** | 9.18 | 11.5 s | 8.2e-8 | 1.619e-2 |
+
+At the leaf it packs 5.27 -> 1.04 GB over 128430 blocks in 0.11 s (Color),
+`level Schur/edges` is gone from both resident lists, and CA0 is 0.8 s faster.
+Accuracy is a wash: Color's acc_forward comes back from 1.681e-2 to 1.598e-2,
+CA0's moves 1.584e-2 -> 1.619e-2, both inside the band of the step before.
+
+**On Color the peak has left the leaf.**  The leaf fell to 7.75, and level 4,
+which had been sitting at 7.72 all along, now binds at 7.97 - 96% resident:
+
+| Color level 4, 7.97 GB | GB |
+|---|---|
+| kept factors (the leaf's, all of them now) | 2.64 |
+| adopted blocks (the leaf's parents, put back lazily) | 2.29 |
+| fill temp2^T raw (level 4's own, before packing) | 1.18 |
+| parent blocks | 0.94 |
+| owner near blocks | 0.54 |
+| transient, all of it | 0.28 |
+
+That is the level-end resident floor predicted when the production was
+chunked: once a level's transient is small, the next level up inherits the
+whole kept set and the whole parent set at once.  CA0's leaf still binds, at
+9.18 = 8.15 resident + 1.03.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

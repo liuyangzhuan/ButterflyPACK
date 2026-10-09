@@ -918,6 +918,13 @@ public:
                                 static_cast<double>(h.kind_free_bytes(k)) / 1e9, h.kind_free_count(k));
                 }
             }
+            if (e.np5_blocks > 0) {
+                std::printf("  [gpu] level %d step 5's blocks packed as written: %.2f -> %.2f GB (%.1fx) over %lld "
+                            "blocks in %lld groups, %.3f s\n", level.level, e.np5_raw / 1e9, e.np5_stored / 1e9,
+                            e.np5_stored > 0.0 ? e.np5_raw / e.np5_stored : 1.0,
+                            static_cast<long long>(e.np5_blocks), static_cast<long long>(e.np5_groups),
+                            e.np5_seconds);
+            }
             if (e.gw_products > 0) {
                 std::printf("  [gpu] level %d remote generators: %lld partial products staged in %.2f GB, summed "
                             "into %lld targets of %.2f GB (%.1f partials a target, at most %lld)\n", level.level,
