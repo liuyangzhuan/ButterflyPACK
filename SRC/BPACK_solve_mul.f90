@@ -1658,8 +1658,13 @@ contains
       DT::we_local, we_sum, rerr_local, rerr_sum, err_local, err_sum, b_sum, x_sum,vtmp
       DT::ta_local, ta_sum, bmag_local, bmag_sum1, dumb_ali(6)
       DT::etha, rho, rho_local, amgis, amgis_local, ahpla, dum, dum_local, beta
-      real(kind=8)::bmag, rerr_last, breakdown_tol
+      real(kind=8)::bmag, rerr_last, breakdown_tol, rerr_bound
       integer::iter_last
+      !>**** TFQMR bounds the true residual by sqrt(m+1)*tau after m half-steps, so the
+      ! explicit residual (which costs one extra matvec on top of the two the recurrence
+      ! needs) is only required when that bound says convergence is possible; it is still
+      ! refreshed every resid_check_freq iterations so the reported history stays honest
+      integer, parameter::resid_check_freq = 5
       logical::breakdown
       character(len=128)::breakdown_reason
 
@@ -1841,7 +1846,11 @@ contains
          x = x + etha*d
 
          !  check if the result has converged.
-         if (mod(it, 1) == 0 .or. rerr < 1d0*err) then
+         rerr_bound = ta*sqrt(2d0*it + 1d0)/bmag
+         if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
+            print *, '# ofiter,bound:', it, rerr_bound
+         end if
+         if (rerr_bound <= err .or. mod(it, resid_check_freq) == 0) then
             call blackbox_MVP(Ndim, 'N',nn_loc_md,nn_loc_md,1,x,r,ker)
             r = bb - r
             rerr_local = dot_product(r(:,1), r(:,1))
@@ -1858,7 +1867,7 @@ contains
             iter_last = it
 
             if (ptree%MyID == Main_ID .and. option%verbosity >= 0) then
-               print *, '# ofiter,error:', it, rerr
+               print *, '# ofiter,error:', it, rerr, ' qmrbound:', ta*sqrt(2d0*it + 1d0)/bmag
                ! write(32,*)'# ofiter,error:',it,rerr ! iterations file
             end if
 
@@ -1927,9 +1936,9 @@ contains
          return
       endif
       iter = itmax
+      if (ptree%MyID == Main_ID) print *, 'Iterative solver is terminated without convergence!!!', it, err
 
-      print *, 'Iterative solver is terminated without convergence!!!', it, err
-      stop
+      deallocate(r0_initial, x_last)
 
       return
    end subroutine Ztfqmr_MD_usermatvec_precon_kernel

@@ -1016,6 +1016,29 @@ contains
    end subroutine BP_MD_vec_slot_group
 
 
+   !>**** polynomial hash of one MD vector slot key; intermediate values are masked to
+   ! 40 bits so the accumulation cannot overflow a 64-bit integer
+   integer(kind=8) function BP_MD_vec_slot_key_hash(Ndim, group_md, idxs, idxe)
+
+      implicit none
+      integer Ndim
+      integer group_md(Ndim), idxs(Ndim), idxe(Ndim)
+      integer dim_i
+      integer(kind=8)::h
+      integer(kind=8), parameter::hmask40 = 1099511627775_8
+      integer(kind=8), parameter::hmul = 1000003_8
+
+      h = 0_8
+      do dim_i = 1, Ndim
+         h = IAND(h*hmul + int(group_md(dim_i), kind=8), hmask40)
+         h = IAND(h*hmul + int(idxs(dim_i), kind=8), hmask40)
+         h = IAND(h*hmul + int(idxe(dim_i), kind=8), hmask40)
+      enddo
+      BP_MD_vec_slot_key_hash = h
+
+   end function BP_MD_vec_slot_key_hash
+
+
    subroutine BP_MD_vec_build_unique_map(Ndim, BP, ll, rowcol, one2all, ptree, msh, map)
 
       implicit none
@@ -1029,6 +1052,13 @@ contains
       integer group_md(Ndim), idxs(Ndim), idxe(Ndim)
       integer, allocatable::uniq_group(:,:), uniq_idxs(:,:), uniq_idxe(:,:)
       logical owned, found
+      !>**** the number of slots reaches O(10^5) at the finest levels, so looking a key
+      ! up by scanning the unique list makes this O(nslot*nuniq); the open-addressing
+      ! index below keeps it O(nslot), which matters because the map is rebuilt twice
+      ! per level on every matvec
+      integer, allocatable::htab(:)
+      integer::hmask, hsize, hpos, probe
+      integer(kind=8)::hkey
 
       call BP_MD_vec_groupmap_clear(map)
       nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
@@ -1044,19 +1074,32 @@ contains
       map%owner_slot = 0
       map%nuniq = 0
 
+      hsize = 16
+      do while (hsize < 2*nslot)
+         hsize = hsize*2
+      enddo
+      hmask = hsize - 1
+      allocate(htab(0:hmask))
+      htab = 0
+
       do bb_loc = 1, nslot
          call BP_MD_vec_slot_group(Ndim, BP, ll, bb_loc, rowcol, group_md)
          call BP_MD_vec_slot_box(Ndim, BP, ll, bb_loc, rowcol, ptree, msh, idxs, idxe, owned)
          call assert(owned, 'local MD vector slot should be owned when building unique map')
 
+         hkey = BP_MD_vec_slot_key_hash(Ndim, group_md, idxs, idxe)
+         hpos = int(IAND(hkey, int(hmask, kind=8)))
          found = .false.
-         do uu = 1, map%nuniq
+         do probe = 0, hmask
+            uu = htab(hpos)
+            if (uu == 0) exit
             if (ALL(group_md == uniq_group(:,uu)) .and. ALL(idxs == uniq_idxs(:,uu)) .and. &
                 ALL(idxe == uniq_idxe(:,uu))) then
                map%slot_map(bb_loc) = uu
                found = .true.
                exit
             endif
+            hpos = IAND(hpos + 1, hmask)
          enddo
          if (.not. found) then
             map%nuniq = map%nuniq + 1
@@ -1065,9 +1108,11 @@ contains
             uniq_group(:,map%nuniq) = group_md
             uniq_idxs(:,map%nuniq) = idxs
             uniq_idxe(:,map%nuniq) = idxe
+            htab(hpos) = map%nuniq
          endif
       enddo
 
+      deallocate(htab)
       deallocate(uniq_group, uniq_idxs, uniq_idxe)
 
    end subroutine BP_MD_vec_build_unique_map
@@ -1181,6 +1226,25 @@ contains
       integer cache_slot
       logical use_cached_vecs, use_unique_vecs
       type(vec_redist_groupmap_MD), allocatable::Vin_maps(:), Vout_maps(:)
+      !>**** per-call profiling of one MD MVP level (rank 0 only)
+      real(kind=8)::t_prep0, t_prep1, t_call0, t_call1
+      real(kind=8)::prof0(10), prof1(10)
+      integer::nslot_prof, nuniq_prof
+
+      t_call0 = MPI_Wtime()
+      t_prep0 = t_call0
+      prof0(1) = stats%Time_C_Mult_RedistSetup
+      prof0(2) = stats%Time_C_Mult_RedistMPI
+      prof0(3) = stats%Time_C_Mult_RedistPack
+      prof0(4) = stats%Time_C_Mult_RedistUnpack
+      prof0(5) = stats%Time_C_Mult_Block
+      prof0(6) = stats%Time_C_Mult_Pack
+      prof0(7) = stats%Time_C_Mult_Unpack
+      prof0(8) = stats%Time_C_Mult_Gemm
+      prof0(9) = stats%Time_C_Mult_Full
+      prof0(10) = stats%Time_C_Mult_RedistSetupLocal
+      nslot_prof = 0
+      nuniq_prof = 0
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
 
@@ -1274,6 +1338,14 @@ contains
 		            endif
 		         enddo
 		      endif
+
+      t_prep1 = MPI_Wtime()
+      if (use_unique_vecs) then
+         do ll = level_s, level_e
+            nslot_prof = nslot_prof + Vin_maps(ll)%nslot
+            nuniq_prof = nuniq_prof + Vin_maps(ll)%nuniq
+         enddo
+      endif
 
       n1 = MPI_Wtime()
 	      if (chara == 'N') then
@@ -1375,6 +1447,11 @@ contains
             if(ptree%MyID==0)then
             write(*,*)n4-n3," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
             endif
+            prof1(5) = stats%Time_C_Mult_Block - prof0(5)
+            prof1(6) = stats%Time_C_Mult_Pack - prof0(6)
+            prof1(7) = stats%Time_C_Mult_Unpack - prof0(7)
+            prof1(8) = stats%Time_C_Mult_Gemm - prof0(8)
+            prof1(9) = stats%Time_C_Mult_Full - prof0(9)
 
 
 	      n1 = MPI_Wtime()
@@ -1437,6 +1514,30 @@ contains
 	      n2 = MPI_Wtime()
 	      stats%Time_C_Mult_Final = stats%Time_C_Mult_Final + n2-n1
 
+      if (ptree%MyID == 0 .and. option%verbosity >= 2) then
+         prof1(1) = stats%Time_C_Mult_RedistSetup - prof0(1)
+         prof1(2) = stats%Time_C_Mult_RedistMPI - prof0(2)
+         prof1(3) = stats%Time_C_Mult_RedistPack - prof0(3)
+         prof1(4) = stats%Time_C_Mult_RedistUnpack - prof0(4)
+         prof1(10) = stats%Time_C_Mult_RedistSetupLocal - prof0(10)
+         t_call1 = MPI_Wtime()
+         write(*,'(A,I3,A,I3,A,11(A,Es10.3),2(A,I9))') &
+            ' MVPPROF lev', level_s, '-', level_e, ':', &
+            ' tot=', t_call1 - t_call0, &
+            ' prep=', t_prep1 - t_prep0, &
+            ' plan=', prof1(1), &
+            ' planloc=', prof1(10), &
+            ' rmpi=', prof1(2), &
+            ' rpack=', prof1(3) + prof1(4), &
+            ' lev=', n4 - n3, &
+            ' blk=', prof1(5), &
+            ' gemm=', prof1(8), &
+            ' dup=', prof1(6) + prof1(7), &
+            ' fin=', n2 - n1, &
+            ' nslot=', nslot_prof, &
+            ' nuniq=', nuniq_prof
+      endif
+
 	   end subroutine Bplus_MD_block_MVP_dat
 
 
@@ -1462,6 +1563,11 @@ contains
       DT ctemp1, ctemp2
       real(kind=8) t1, t2
       logical use_unique_vecs
+      integer(kind=8) bytes_per_col
+      integer nthreads_dup
+      !>**** cap on the stacked duplicate batch, so widening it to feed the threads can
+      ! never blow up the working set at the coarse levels
+      integer(kind=8), parameter::dup_stack_budget = 67108864_8
 #ifdef HAVE_OPENMP
       integer(kind=omp_lock_kind), allocatable::out_locks(:)
 #endif
@@ -1485,7 +1591,35 @@ contains
             rep => bplus%LL(ll)%matrices_block(rep_bb)
             dim_in = rep%N_loc
             dim_out = rep%M_loc
+            !>**** all duplicate members of one representative block are applied as one
+            ! batched matvec, and at the leaf levels those batch columns are the only
+            ! thing to spread over threads: BF_MD_block_mvp_level_butterfly0 slices Nvec
+            ! across threads and level_butterfly==0 leaves no block parallelism, so a
+            ! batch narrower than the thread count leaves threads idle. Widen it just
+            ! enough to give every thread a column. Widening much further was measured to
+            ! cost more in the block matvec (the stacked vectors stop fitting in cache)
+            ! than it saves in pack/unpack, so the budget below keeps it modest.
             stack_limit = max(1, option%BACA_Batch)
+            !>**** A level_butterfly==0 representative has no block parallelism, so the
+            ! batch columns are the only thing its matvec can spread over threads
+            ! (BF_MD_block_mvp_level_butterfly0 slices Nvec across threads): a batch
+            ! narrower than the thread count leaves threads idle and reduces each gemm to
+            ! a matrix-vector product. Widen it just enough to give every thread a column.
+            ! Blocks that do carry butterfly structure already keep the threads busy per
+            ! block, and widening their batch was measured to cost more in cache locality
+            ! than it saves, so they keep BACA_Batch.
+            if (rep%level_butterfly == 0) then
+               nthreads_dup = 1
+#ifdef HAVE_OPENMP
+               nthreads_dup = omp_get_max_threads()
+#endif
+               bytes_per_col = (int(storage_size(ctemp1), kind=8)/8_8)*int(Nrnd, kind=8)* &
+                  (int(product(dim_in), kind=8) + int(product(dim_out), kind=8))
+               if (bytes_per_col > 0_8 .and. &
+                   bytes_per_col*int(nthreads_dup, kind=8) <= dup_stack_budget) then
+                  stack_limit = max(stack_limit, nthreads_dup)
+               endif
+            endif
             do batch_start = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
                bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, stack_limit
                batch_end = min(bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, &
@@ -10066,12 +10200,18 @@ contains
       t0 = t_total
       blocks_1 => BP%LL(1)%matrices_block(1)
       tag = blocks_1%pgno + 1200 + 10*rowcol + one2all
-      slot = 1 + rowcol + 2*one2all
+      !>**** one cached plan per (starting level, row/col, direction): the MVP is
+      ! driven level-by-level (htensor_mvp_level_batch), so a cache keyed only on
+      ! rowcol/one2all is invalidated by the level range on every single call and
+      ! the plan ends up rebuilt once per level per direction per MVP
+      call assert(level_s >= 1 .and. level_s <= LplusMax, &
+         'level_s out of range for the MD vector redistribution plan cache')
+      slot = 4*level_s + 1 + rowcol + 2*one2all
       mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
       compact_slots = 0
       if (present(slot_maps)) compact_slots = 1
 
-      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4))
+      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4*(LplusMax + 1)))
       if (BP%vec_redist_plans(slot)%ready /= 1 .or. &
           BP%vec_redist_plans(slot)%rowcol /= rowcol .or. &
           BP%vec_redist_plans(slot)%one2all /= one2all .or. &
