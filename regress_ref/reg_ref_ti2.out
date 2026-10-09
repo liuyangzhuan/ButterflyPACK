@@ -1,0 +1,287 @@
+ButterflyPACK Version: 5.0.0
+Tensor grid padding: physical 320 x 320 x 320 padded to 320 x 320 x 320 with Nmin_leaf 40 effective leaves 40 x 40 x 40 and levels 3 x 3 x 3
+ NUMBER_MPI=          64
+ OMP_NUM_THREADS=           8
+ BPACK_BUTTERFLY_SOLVER
+    
+ User-supplied kernel:
+ User-supplied kernel requiring reorder:
+     
+ Hierarchical format......
+ warning: too many processes for paralleling leaf boxes, keep refining the tree ...
+ 
+ MD dimension:           1
+ Maxlevel_for_blocks:           4
+ N_leaf:          20
+ 
+ Constructing basis groups...
+ 
+ MD dimension:           2
+ Maxlevel_for_blocks:           4
+ N_leaf:          20
+ 
+ Constructing basis groups...
+ 
+ MD dimension:           3
+ Maxlevel_for_blocks:           4
+ N_leaf:          20
+ 
+ Constructing basis groups...
+ #admissible           0 #inadmissible           0
+ #admissible                    0 #inadmissible                   64
+ #admissible                 3096 #inadmissible                 1000
+ #admissible                53352 #inadmissible                10648
+ #admissible               611136 #inadmissible                70336
+ Hierarchical format finished
+ Hierarchical format time:   8.1684379999842349E-003 Seconds
+     
+smax: 2.4485 PPW: 5.10516 PPW(s0): 6.25 From: 320 x 320 x 320 To: 320 x 320 x 320
+Scatterer unknowns: 32768000 out of 32768000
+  
+ ***************************
+ Printing Solver Options:
+            format       6
+           lrlevel       5
+               sym       0
+         algorithm HTENSOR-BF
+         near_para 2.1000000E+00
+         nmin_leaf      40
+            n_iter       2
+            precon       2
+           xyzsort       1
+              rmax       4
+         bp_cnt_lr       1
+             nogeo       0
+           per_geo       0
+           itermax       1
+         verbosity       1
+ fastsample_tensor       2
+   trans_invariant       2
+ htensor_mvp_batch       1
+      elem_extract       0
+               cpp       1
+               knn       0
+           use_zfp       1
+ use_fft_circulant       1
+    fftw_plan_mode       0
+        use_parsec       0
+       iter_solver       1
+           use_qtt       0
+          rankrate 2.0000000E+00
+          tol_comp 1.0000000E-02
+       tol_itersol 1.0000000E-02
+     knn_near_para 2.0000000E+01
+       sample_para 8.0000000E-01
+ sample_para_outer 8.0000000E-01
+ ***************************
+  
+ Hierarchical tensor construction......
+ 
+ SVD error threshold   1.0000000000000000E-002
+ 
+ constructing HTENSOR......
+ Finishing level            1 in BP_MD_compress_entry, level_butterfly:           4 rankmax at this level:           0 time:   1.7840000055002747E-006 mem(rank0):   0.0000000000000000     
+ trans_invariant unique/compact local blocks at this level:           0           0
+ Finishing level            2 in BP_MD_compress_entry, level_butterfly:           3 rankmax at this level:           0 time:   8.9999957708641887E-008 mem(rank0):   0.0000000000000000     
+ trans_invariant unique/compact local blocks at this level:           0           0
+ Finishing level            3 in BP_MD_compress_entry, level_butterfly:           2 rankmax at this level:           7 time:   2.0772000460000299      mem(rank0):   43.811945312499930     
+ trans_invariant unique/compact local blocks at this level:          16          40
+ Finishing level            4 in BP_MD_compress_entry, level_butterfly:           1 rankmax at this level:           8 time:  0.34041437500002303      mem(rank0):   5.9727656250000001     
+ trans_invariant unique/compact local blocks at this level:          16         371
+ Finishing level            5 in BP_MD_compress_entry, level_butterfly:           0 rankmax at this level:           6 time:   6.5864744999998948E-002 mem(rank0):   3.5311875000000001     
+ trans_invariant unique/compact local blocks at this level:          20        7980
+ rankmax_of_level:           0           0           7           8           6
+ 
+ Total construction time:   2.6188849619999246      Seconds
+ Total entry eval time:   2.4222868130000279      Seconds
+ Total construction flops:      1.76E+11
+ time_tmp   0.0000000000000000     
+ 
+   2919.6391406249968      MB costed for butterfly forward blocks
+   177.95699999999999      MB costed for direct forward blocks
+ 
+ Hierarchical tensor construction finished
+   6.5020000192816951E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.87377838100007921       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.58917892500005564       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.73638555900004121       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+ BPACK_MD_CheckError: fnorm: 8.5932525E+03 8.5910623E+03 acc:  8.26E-03 time:  5.84E+00
+
+
+Generating the incident fields: 
+   9.4200004241429269E-007  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.89783172199997807       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.85178522600006090       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.72605218899991542       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+         Constr time:      2.62E+00 Seconds
+      EntryEval time:      3.30E+00 Seconds
+      traversal time:      0.00E+00 Seconds
+     BF compute time:      0.00E+00 Seconds
+    communicate time:      0.00E+00 Seconds
+      Tot constr mem:      3.10E+03 MB
+        Constr flops:      1.76E+11
+  Rank before factor:             8
+         Factor time:      0.00E+00 Seconds
+      Tot factor mem:      0.00E+00 MB
+        Factor flops:      0.00E+00
+          Solve time:      0.00E+00 Seconds
+         Solve flops:      0.00E+00
+       BLK_mult time:      0.00E+00 Seconds
+         C_mult time:      6.83E+00 Seconds
+        C_mult flops:      2.33E+12
+ C_mult wrapper time:      4.68E+00 Seconds
+   C_mult block time:      2.55E+00 Seconds
+   C_mult full block:      3.94E-01 Seconds
+    C_mult fft total:      3.82E-01 Seconds
+    C_mult fft check:      4.05E-05 Seconds
+    C_mult fft apply:      3.82E-01 Seconds
+    C_mult fft alloc:      3.24E-04 Seconds
+    C_mult fft input:      2.69E-02 Seconds
+      C_mult fft fwd:      1.64E-01 Seconds
+     C_mult fft mult:      2.97E-02 Seconds
+      C_mult fft bwd:      1.69E-01 Seconds
+   C_mult fft output:      3.23E-03 Seconds
+    C_mult redist in:      1.94E+00 Seconds
+   C_mult redist out:      4.12E-03 Seconds
+   C_mult level time:      3.62E+00 Seconds
+   C_mult trans plan:      0.00E+00 Seconds
+  C_mult redist self:      8.77E-03 Seconds
+  C_mult redist pack:      1.37E-01 Seconds
+   C_mult redist MPI:      1.72E+00 Seconds
+C_mult redist unpack:      1.98E-01 Seconds
+ C_mult redist setup:      1.22E-05 Seconds
+ C_mult rsetup local:      0.00E+00 Seconds
+ C_mult redist alloc:      2.89E-03 Seconds
+  C_mult redist free:      1.63E-02 Seconds
+ C_mult redist total:      1.94E+00 Seconds
+    C_mult pack time:      3.86E-01 Seconds
+    C_mult full time:      1.05E-02 Seconds
+  C_mult unpack time:      5.61E-01 Seconds
+   C_mult final time:      2.89E-02 Seconds
+      C_mult reshape:      4.28E-01 Seconds
+        reshape init:      0.00E+00 Seconds
+       reshape right:      1.87E-01 Seconds
+      reshape middle:      0.00E+00 Seconds
+        reshape left:      2.47E-01 Seconds
+       reshape final:      0.00E+00 Seconds
+         C_mult gemm:      1.16E+00 Seconds
+    C_mult init time:      3.31E-01 Seconds
+   C_mult right time:      1.14E-01 Seconds
+      C_mult all2all:      3.66E-02 Seconds
+  C_mult middle time:      2.78E-01 Seconds
+    C_mult left time:      1.19E+00 Seconds
+   C_mult clean time:      5.85E-03 Seconds
+       RedistV time:       4.54E+00 Seconds
+      C_extract time:      0.00E+00 Seconds
+     C_extract flops:      0.00E+00
+            Peak mem:      1.47E+03 MB
+      Peak mem (sum):      8.19E+04 MB
+
+
+Solving the volume IE: 
+ Iterative Solve ......
+  
+   1.5730000768598984E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.90882084200006830       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76270572999999331       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.72367456100005256       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+   1.0620000239214278E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.91584694099992703       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76921565099996769       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.73333679799998208       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+ # ofiter,error:           0   1.0000000000000000     
+   1.1529999710546690E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.91044884100006129       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.75121062799996707       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.73509005900007196       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+ # ofiter,bound:           1   1.1740990441833385     
+   1.2030000107188243E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.89690343300003406       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76588692400002856       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.73120702900007473       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+   1.1019999419659143E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.90840411600004245       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76511212500008696       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.73577436200002921       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+ # ofiter,bound:           2   1.5051319578749798     
+   1.8140000292987679E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.90203281300000526       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.75040080200005832       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.76217469400000937       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+   9.6200005827995483E-007  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.90670140300005642       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76720382100006645       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.76230029599992122       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+ Iterative solver is terminated without convergence!!!           3  0.95240895222528577     
+ Iterative Solve finished
+     
+   1.3430000080916216E-006  seconds for level            2  to            2  of Bplus_MD_block_MVP_dat
+  0.90578903899995566       seconds for level            3  to            3  of Bplus_MD_block_MVP_dat
+  0.76595853200001329       seconds for level            4  to            4  of Bplus_MD_block_MVP_dat
+  0.72390351300009570       seconds for level            5  to            5  of Bplus_MD_block_MVP_dat
+
+
+Printing stats of the scaled Green/VIE operator: 
+         Constr time:      2.62E+00 Seconds
+      EntryEval time:      3.30E+00 Seconds
+      traversal time:      0.00E+00 Seconds
+     BF compute time:      0.00E+00 Seconds
+    communicate time:      0.00E+00 Seconds
+      Tot constr mem:      3.10E+03 MB
+        Constr flops:      1.76E+11
+  Rank before factor:             8
+         Factor time:      0.00E+00 Seconds
+      Tot factor mem:      0.00E+00 MB
+        Factor flops:      0.00E+00
+          Solve time:      3.31E+01 Seconds
+         Solve flops:      0.00E+00
+       BLK_mult time:      0.00E+00 Seconds
+         C_mult time:      6.86E+00 Seconds
+        C_mult flops:      2.33E+12
+ C_mult wrapper time:      4.74E+00 Seconds
+   C_mult block time:      2.52E+00 Seconds
+   C_mult full block:      3.92E-01 Seconds
+    C_mult fft total:      3.80E-01 Seconds
+    C_mult fft check:      3.85E-05 Seconds
+    C_mult fft apply:      3.80E-01 Seconds
+    C_mult fft alloc:      2.73E-04 Seconds
+    C_mult fft input:      2.64E-02 Seconds
+      C_mult fft fwd:      1.63E-01 Seconds
+     C_mult fft mult:      2.89E-02 Seconds
+      C_mult fft bwd:      1.70E-01 Seconds
+   C_mult fft output:      3.27E-03 Seconds
+    C_mult redist in:      2.00E+00 Seconds
+   C_mult redist out:      4.47E-03 Seconds
+   C_mult level time:      3.61E+00 Seconds
+   C_mult trans plan:      0.00E+00 Seconds
+  C_mult redist self:      9.53E-03 Seconds
+  C_mult redist pack:      1.38E-01 Seconds
+   C_mult redist MPI:      1.76E+00 Seconds
+C_mult redist unpack:      2.02E-01 Seconds
+ C_mult redist setup:      5.57E-06 Seconds
+ C_mult rsetup local:      0.00E+00 Seconds
+ C_mult redist alloc:      2.84E-03 Seconds
+  C_mult redist free:      1.73E-02 Seconds
+ C_mult redist total:      2.01E+00 Seconds
+    C_mult pack time:      3.89E-01 Seconds
+    C_mult full time:      1.03E-02 Seconds
+  C_mult unpack time:      5.56E-01 Seconds
+   C_mult final time:      2.94E-02 Seconds
+      C_mult reshape:      4.18E-01 Seconds
+        reshape init:      0.00E+00 Seconds
+       reshape right:      1.77E-01 Seconds
+      reshape middle:      0.00E+00 Seconds
+        reshape left:      2.41E-01 Seconds
+       reshape final:      0.00E+00 Seconds
+         C_mult gemm:      1.13E+00 Seconds
+    C_mult init time:      3.16E-01 Seconds
+   C_mult right time:      1.13E-01 Seconds
+      C_mult all2all:      3.66E-02 Seconds
+  C_mult middle time:      2.91E-01 Seconds
+    C_mult left time:      1.21E+00 Seconds
+   C_mult clean time:      6.65E-03 Seconds
+       RedistV time:       2.05E+01 Seconds
+      C_extract time:      0.00E+00 Seconds
+     C_extract flops:      0.00E+00
+            Peak mem:      1.47E+03 MB
+      Peak mem (sum):      8.19E+04 MB

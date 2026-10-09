@@ -1,0 +1,22 @@
+Golden structural reference for changes to HMAT_MD_structuring.
+
+Case: 320^3 (h=0.0025), omega=201.06192983 (= 804.24/4, keeps PPW vs the 1280^3
+production case), ivelo=9, format=6, nmin_leaf=32, tol_comp=1e-2, 64 MPI ranks on
+4 CPU nodes, OMP_NUM_THREADS=8.  Reproduce with regress_md_struct.sh.
+
+Compared per trans_invariant setting against ITSELF -- ti=0 and ti=2 are not
+mutually comparable in general (at 80^3 they gave different hierarchy depths),
+though at 320^3 they happen to agree on structure.
+
+EXACT invariants (pure geometry, fully deterministic -- any change here means the
+operator changed):
+  #admissible   per level: 0, 0, 3096, 53352, 611136
+  #inadmissible per level: 0, 64, 1000, 10648, 70336
+  rankmax_of_level:        0, 0, 7, 8, 6
+
+NOT exact: acc (BPACK_MD_CheckError draws an unseeded random vector; measured
+run-to-run spread is ~10%, so treat 8.2e-3 as a band, not a value). Storage and
+construction time are sampling-dependent too.
+
+Reference storage, for scale: ti=0 66437 MB butterfly + 65192 MB direct;
+ti=2 2920 MB + 178 MB. Translational invariance is worth ~42x here.
