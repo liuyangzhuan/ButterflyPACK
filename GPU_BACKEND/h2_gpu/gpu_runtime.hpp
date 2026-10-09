@@ -314,6 +314,7 @@ public:
     void synchronize() const {
         if (!events_.empty()) check_cuda(cudaEventSynchronize(events_.back()), "cudaEventSynchronize");
     }
+    size_t count() const { return events_.size(); }
     // seconds from mark i to mark i + 1
     double seconds(size_t i) const {
         float ms = 0.0f;
