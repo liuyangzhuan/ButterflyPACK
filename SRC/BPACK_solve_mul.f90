@@ -4528,6 +4528,7 @@ contains
       ! complex(kind=8)::Vin(:,:),Vout(:,:)
       DT::Vin(product(Ns), num_vectors), Vout(product(Ns), num_vectors)
       type(Hmat_md)::h_mat_md
+      logical, save:: md_struct_reported = .false.
 
       trans_tmp = trans
       if (trans == 'C') then
@@ -4541,6 +4542,15 @@ contains
    ! write(*,*)blocks%row_group,blocks%col_group,'nani', allocated(blocks%MiddleQTT(1)%core),size(blocks%MiddleQTT(1)%core)
 
 
+      if (option%verbosity >= 2) then
+         if (.not. md_struct_reported) then
+            md_struct_reported = .true.
+            call Bplus_MD_struct_diag(Ndim, h_mat_md%BP, ptree)
+            call Bplus_MD_rowgroup_diag(Ndim, h_mat_md%BP, ptree)
+         endif
+         call Bplus_MD_MVP_diag(h_mat_md%BP, ptree, stats, 0)
+      endif
+
       level_batch = max(1, option%htensor_mvp_level_batch)
       ll = 2
       do while (ll <= h_mat_md%BP%Lplus)
@@ -4552,6 +4562,8 @@ contains
          endif
          ll = ll_end + 1
       enddo
+
+      if (option%verbosity >= 2) call Bplus_MD_MVP_diag(h_mat_md%BP, ptree, stats, 1)
 
 
 

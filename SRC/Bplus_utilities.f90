@@ -128,7 +128,322 @@ module Bplus_Utilities
 #endif
    end interface
 #endif
+   !>**** DIAGNOSTIC (verbosity>=2): per-level compute time of the current MD matvec on
+   ! this rank, filled by Bplus_MD_block_MVP_dat and reduced across ranks once per matvec
+   ! by Bplus_MD_MVP_diag. Rank-local; not part of the solver state.
+   real(kind=8), save:: BP_MD_lev_time(0:LplusMax) = 0d0
+   !>**** DIAGNOSTIC: per-level transient memory of the current MD matvec on this rank.
+   ! The high-water mark reached inside a level minus what was already live at entry, i.e.
+   ! what that level alone allocates and frees.
+   real(kind=8), save:: BP_MD_lev_memdelta(0:LplusMax) = 0d0
+
 contains
+
+   !>**** DIAGNOSTIC: report MD matvec load balance per level and the memory high-water
+   ! mark. phase==0 before the level sweep (memory only), phase==1 after (memory+balance).
+   ! Does one reduction per matvec, not one per level, so it does not add per-level
+   ! synchronisation to the thing being measured.
+   !>**** DIAGNOSTIC: one-shot structural report of how tensor-butterfly work is spread
+   ! over ranks at each level. Tests candidate cost models against the measured per-rank
+   ! times: the tensor butterfly stores one transfer matrix per mode, so the middle-stage
+   ! volume grows like rank**(2*Ndim) and a rank spread of 2x per mode is 2**(2*Ndim) in
+   ! work. Distributing middle groups by COUNT therefore cannot balance; the weight whose
+   ! max/mean matches the measured time max/mean is the one to distribute by.
+   !>**** DIAGNOSTIC: far-field partner count per row sub-tensor. Ownership is keyed on the
+   ! row group, so a rank's block count is the SUM of its row groups' partner counts. This
+   ! reports how many row groups a rank owns, the spread of partner counts within a rank
+   ! (small => the map pairs similar groups, so a better pairing can balance), and the
+   ! global max partner count against the fair share (if any single group exceeds the fair
+   ! share, no assignment of whole groups can balance and the groups must be split).
+   subroutine Bplus_MD_rowgroup_diag(Ndim, BP, ptree)
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      integer ll, bb, ierr, nslot, uu, nuniq, hsize, hmask, hpos, probe, nrep
+      integer group_md(Ndim)
+      integer, allocatable::htab(:), cnt(:), ug(:,:)
+      integer(kind=8)::hkey
+      real(kind=8)::loc(4), vmax(4), vmin(4), vsum(4), fair
+      logical found
+      !>**** LPT prediction bookkeeping
+      integer::ktree, ngpd, ngtot, gflat, gstride, dim_i, rr, nbest
+      real(kind=8)::npred
+      real(kind=8), allocatable::gcnt(:), gsum(:), rpred(:)
+      integer, allocatable::gord(:)
+
+      if (ptree%MyID == Main_ID) write (*, '(A)') ' MDROWG  per-rank: #rowgroups, '// &
+         'within-rank partner-count min/max; global: partner-count min/max vs fair share'
+
+      do ll = 1, BP%Lplus
+         nrep = BP%LL(ll)%Nbound_loc
+         nslot = nrep + BP%LL(ll)%trans_ndup
+         if (nslot <= 0) cycle
+         hsize = 16
+         do while (hsize < 2*nslot)
+            hsize = hsize*2
+         enddo
+         hmask = hsize - 1
+         allocate (htab(0:hmask), cnt(nslot), ug(Ndim, nslot))
+         htab = 0; cnt = 0; nuniq = 0
+
+         do bb = 1, nslot
+            if (bb <= nrep) then
+               group_md = BP%LL(ll)%matrices_block(bb)%row_group
+            else
+               group_md = BP%LL(ll)%trans_dup_row_group(:, bb - nrep)
+            endif
+            hkey = BP_MD_vec_slot_key_hash(Ndim, group_md, group_md, group_md)
+            hpos = int(IAND(hkey, int(hmask, kind=8)))
+            found = .false.
+            do probe = 0, hmask
+               uu = htab(hpos)
+               if (uu == 0) exit
+               if (ALL(group_md == ug(:, uu))) then
+                  cnt(uu) = cnt(uu) + 1
+                  found = .true.
+                  exit
+               endif
+               hpos = IAND(hpos + 1, hmask)
+            enddo
+            if (.not. found) then
+               nuniq = nuniq + 1
+               ug(:, nuniq) = group_md
+               cnt(nuniq) = 1
+               htab(hpos) = nuniq
+            endif
+         enddo
+
+         !>**** predict what a longest-processing-time-first assignment of WHOLE row groups
+         ! to ranks would achieve. Partner counts are a geometric property, so gathering
+         ! them globally and running LPT here predicts exactly what option B would deliver,
+         ! without touching the solver.
+         ktree = GetTreelevel(ug(1, 1)) - 1
+         ngpd = 2**ktree
+         npred = -1d0
+         if (real(ngpd, kind=8)**Ndim <= 4d6) then
+            ngtot = ngpd**Ndim
+            allocate (gcnt(0:ngtot - 1), gsum(0:ngtot - 1))
+            gcnt = 0d0
+            do uu = 1, nuniq
+               gflat = 0
+               gstride = 1
+               do dim_i = 1, Ndim
+                  gflat = gflat + (ug(dim_i, uu) - ngpd)*gstride
+                  gstride = gstride*ngpd
+               enddo
+               if (gflat >= 0 .and. gflat < ngtot) gcnt(gflat) = gcnt(gflat) + dble(cnt(uu))
+            enddo
+            call MPI_ALLREDUCE(gcnt, gsum, ngtot, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID) then
+               allocate (rpred(0:ptree%nproc - 1), gord(ngtot))
+               !>**** quick_sort returns gsum ascending; walk it backwards for LPT
+               call quick_sort(gsum, gord, ngtot)
+               rpred = 0d0
+               do uu = ngtot, 1, -1
+                  if (gsum(uu) <= 0d0) cycle
+                  nbest = 0
+                  do rr = 1, ptree%nproc - 1
+                     if (rpred(rr) < rpred(nbest)) nbest = rr
+                  enddo
+                  rpred(nbest) = rpred(nbest) + gsum(uu)
+               enddo
+               npred = maxval(rpred)/max(sum(rpred)/dble(ptree%nproc), 1d-30)
+               deallocate (rpred, gord)
+            endif
+            deallocate (gcnt, gsum)
+         endif
+
+         loc(1) = dble(nuniq)
+         loc(2) = dble(minval(cnt(1:nuniq)))
+         loc(3) = dble(maxval(cnt(1:nuniq)))
+         loc(4) = dble(sum(cnt(1:nuniq)))
+         call MPI_ALLREDUCE(loc, vmax, 4, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(loc, vmin, 4, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(loc, vsum, 4, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if (ptree%MyID == Main_ID) then
+            fair = vsum(4)/dble(ptree%nproc)
+            write (*, '(A,I3,A,F8.2,A,I7,A,I7,A,I7,A,I7,A,F9.1,A,F7.3)') ' MDROWG lev', ll, &
+               ' rowgroups/rank=', vsum(1)/dble(ptree%nproc), &
+               '  partners: gmin=', nint(vmin(2)), ' gmax=', nint(vmax(3)), &
+               '  within-rank spread: min=', nint(vmin(3) - vmax(2)), ' max=', nint(vmax(3) - vmin(2)), &
+               '  fair_share=', fair, '  gmax/fair=', vmax(3)/max(fair, 1d-12)
+            if (npred > 0d0) write (*, '(A,I3,A,F8.3,A,F8.3)') ' MDLPT  lev', ll, &
+               '  current blockcount max/mean=', vmax(4)/max(fair, 1d-12), &
+               '   predicted after LPT=', npred
+         endif
+         deallocate (htab, cnt, ug)
+      enddo
+
+   end subroutine Bplus_MD_rowgroup_diag
+
+   subroutine Bplus_MD_struct_diag(Ndim, BP, ptree)
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      type(matrixblock_MD), pointer::blk
+      integer ll, bb, ierr, inst, nrep
+      real(kind=8)::r, mvol, nvol
+      real(kind=8)::w(6), wmax(6), wmin(6), wsum(6)
+      real(kind=8)::rstat(3), rmx(3), rmn(3), rsm(3)
+      real(kind=8)::vstat(3), vmx(3), vmn(3), vsm(3), vol, nmid
+      integer::iw, mm
+
+      if (ptree%MyID == Main_ID) write (*, '(A)') ' MDSTRUCT  weights: W1=instances '// &
+         'W2=inst*r W3=inst*r^Ndim W4=inst*r*(Mvol+Nvol) W5=inst*r^(2*Ndim) '// &
+         'W6=inst*sum_over_subtensors(prod(dims_m)*prod(dims_n))  [W6 is the true middle volume]'
+
+      do ll = 1, BP%Lplus
+         w = 0d0
+         rstat(1) = 1d30; rstat(2) = 0d0; rstat(3) = 0d0
+         vstat(1) = 1d30; vstat(2) = 0d0; vstat(3) = 0d0
+         nmid = 0d0
+         nrep = BP%LL(ll)%Nbound_loc
+         do bb = 1, nrep
+            blk => BP%LL(ll)%matrices_block(bb)
+            inst = 1
+            if (allocated(BP%LL(ll)%trans_dup_member_offset)) &
+               inst = 1 + (BP%LL(ll)%trans_dup_member_offset(bb + 1) &
+                           - BP%LL(ll)%trans_dup_member_offset(bb))
+            r = dble(max(blk%rankmax, 1))
+            mvol = dble(product(blk%M_loc))
+            nvol = dble(product(blk%N_loc))
+            w(1) = w(1) + dble(inst)
+            w(2) = w(2) + dble(inst)*r
+            w(3) = w(3) + dble(inst)*r**Ndim
+            w(4) = w(4) + dble(inst)*r*(mvol + nvol)
+            w(5) = w(5) + dble(inst)*r**(2*Ndim)
+            !>**** the honest middle-stage volume: each subtensor (middle group) carries its
+            ! own per-mode skeleton dims, so this captures the rank spread WITHIN a tensor
+            ! butterfly as well as between butterflies, which blk%rankmax cannot
+            if (allocated(blk%ButterflyMiddle)) then
+               do mm = 1, size(blk%ButterflyMiddle)
+                  if (allocated(blk%ButterflyMiddle(mm)%dims_m) .and. &
+                      allocated(blk%ButterflyMiddle(mm)%dims_n)) then
+                     vol = dble(product(blk%ButterflyMiddle(mm)%dims_m)) &
+                          *dble(product(blk%ButterflyMiddle(mm)%dims_n))
+                     w(6) = w(6) + dble(inst)*vol
+                     vstat(1) = min(vstat(1), vol)
+                     vstat(2) = max(vstat(2), vol)
+                     vstat(3) = vstat(3) + vol
+                     nmid = nmid + 1d0
+                  endif
+               enddo
+            endif
+            rstat(1) = min(rstat(1), r)
+            rstat(2) = max(rstat(2), r)
+            rstat(3) = rstat(3) + r
+         enddo
+         if (nrep == 0) rstat(1) = 0d0
+         if (nmid == 0d0) vstat(1) = 0d0
+         vstat(3) = nmid   ! reuse slot 3 to carry the subtensor count
+
+         call MPI_ALLREDUCE(w, wmax, 6, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(w, wmin, 6, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(w, wsum, 6, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vmx, 3, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vmn, 3, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vsm, 3, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rmx, 3, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rmn, 3, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rsm, 3, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+
+         if (ptree%MyID == Main_ID) then
+            if (wsum(1) > 0d0) then
+               write (*, '(A,I3,A,I8,A,F6.1,A,F6.1,A,F7.1)') ' MDSTRUCT lev', ll, &
+                  ' reps_tot=', nint(wsum(1)), '  rank min=', rmn(1), ' max=', rmx(2), &
+                  ' mean=', rsm(3)/max(wsum(1), 1d0)
+               if (vsm(3) > 0d0) write (*, '(A,I3,A,I10,3(A,Es11.4))') ' MDSTRUCT lev', ll, &
+                  ' subtensors=', nint(vsm(3)), '  middle vol per subtensor: min=', vmn(1), &
+                  ' max=', vmx(2), ' spread=', vmx(2)/max(vmn(1), 1d-30)
+               do iw = 1, 6
+                  write (*, '(A,I3,A,I2,3(A,Es11.4),A,F8.2)') ' MDSTRUCT lev', ll, ' W', iw, &
+                     ': min=', wmin(iw), ' mean=', wsum(iw)/dble(ptree%nproc), ' max=', wmax(iw), &
+                     '  max/mean=', wmax(iw)/max(wsum(iw)/dble(ptree%nproc), 1d-30)
+               enddo
+            endif
+         endif
+      enddo
+
+   end subroutine Bplus_MD_struct_diag
+
+   subroutine Bplus_MD_MVP_diag(BP, ptree, stats, phase)
+
+      implicit none
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      type(Hstat)::stats
+      integer phase
+      integer ll, ierr, nl
+      real(kind=8)::pair(2, 0:LplusMax), pmax(2, 0:LplusMax)
+      real(kind=8)::vmin(0:LplusMax), vsum(0:LplusMax)
+      real(kind=8)::tot_pair(2), tot_pmax(2), summax, curmax, pkmax, pksum
+      integer, save:: nmvp = 0
+
+      call MPI_ALLREDUCE(stats%Mem_Current, curmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(stats%Mem_Peak, pkmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(stats%Mem_Peak, pksum, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+
+      if (phase == 0) then
+         if (ptree%MyID == Main_ID) write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp + 1, &
+            ' entry: cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+         return
+      endif
+
+      nmvp = nmvp + 1
+      nl = BP%Lplus
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_time(ll)
+         pair(2, ll) = dble(ptree%MyID)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_time, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_time, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      tot_pair(1) = sum(BP_MD_lev_time(0:LplusMax))
+      tot_pair(2) = dble(ptree%MyID)
+      call MPI_ALLREDUCE(tot_pair, tot_pmax, 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+
+      if (ptree%MyID == Main_ID) then
+         summax = 0d0
+         do ll = 0, nl
+            if (pmax(1, ll) > 0d0) then
+               write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2)') ' MDBAL mvp', nmvp, ' lev', ll, &
+                  ' min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                  ' @rank=', nint(pmax(2, ll)), ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12)
+               summax = summax + pmax(1, ll)
+            endif
+         enddo
+         write (*, '(A,I4,2(A,Es11.4),A,I6,A,Es11.4)') ' MDBAL mvp', nmvp, &
+            ' sum_of_level_max=', summax, ' max_of_rank_total=', tot_pmax(1), &
+            ' @rank=', nint(tot_pmax(2)), ' sync_penalty=', summax - tot_pmax(1)
+         write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp, &
+            ' exit : cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+      endif
+
+      !>**** which level's transient sets the peak, and how imbalanced is it across ranks
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_memdelta(ll)
+         pair(2, ll) = dble(ptree%MyID)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_memdelta, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_memdelta, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) then
+         do ll = 0, nl
+            if (pmax(1, ll) > 0d0) write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2)') ' MDMEMLEV mvp', nmvp, &
+               ' lev', ll, ' transientMB min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), &
+               ' max=', pmax(1, ll), ' @rank=', nint(pmax(2, ll)), &
+               ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12)
+         enddo
+      endif
+      BP_MD_lev_memdelta = 0d0
+
+      BP_MD_lev_time = 0d0
+
+   end subroutine Bplus_MD_MVP_diag
 
    subroutine BFvec_pool_acquire(kerls, block, nrow, ncol, zero_new)
 
@@ -1230,9 +1545,16 @@ contains
       real(kind=8)::t_prep0, t_prep1, t_call0, t_call1
       real(kind=8)::prof0(10), prof1(10)
       integer::nslot_prof, nuniq_prof
+      real(kind=8)::mem_peak_save, mem_entry_loc
 
       t_call0 = MPI_Wtime()
       t_prep0 = t_call0
+      !>**** restart the memory high-water mark so it measures THIS level, then restore the
+      ! global peak on exit. LogMemory only raises Mem_Peak on positive deltas, so resetting
+      ! it to the live total is safe and leaves the globally reported peak unchanged.
+      mem_peak_save = stats%Mem_Peak
+      mem_entry_loc = stats%Mem_Current
+      stats%Mem_Peak = stats%Mem_Current
       prof0(1) = stats%Time_C_Mult_RedistSetup
       prof0(2) = stats%Time_C_Mult_RedistMPI
       prof0(3) = stats%Time_C_Mult_RedistPack
@@ -1444,6 +1766,7 @@ contains
 	            endif
 		      n4 = MPI_Wtime()
 		      stats%Time_C_Mult_Level = stats%Time_C_Mult_Level + n4-n3
+            if (level_s >= 0 .and. level_s <= LplusMax) BP_MD_lev_time(level_s) = n4 - n3
             if(ptree%MyID==0)then
             write(*,*)n4-n3," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
             endif
@@ -1513,6 +1836,10 @@ contains
 	      deallocate (Vout)
 	      n2 = MPI_Wtime()
 	      stats%Time_C_Mult_Final = stats%Time_C_Mult_Final + n2-n1
+
+      if (level_s >= 0 .and. level_s <= LplusMax) &
+         BP_MD_lev_memdelta(level_s) = stats%Mem_Peak - mem_entry_loc
+      stats%Mem_Peak = max(mem_peak_save, stats%Mem_Peak)
 
       if (ptree%MyID == 0 .and. option%verbosity >= 2) then
          prof1(1) = stats%Time_C_Mult_RedistSetup - prof0(1)
