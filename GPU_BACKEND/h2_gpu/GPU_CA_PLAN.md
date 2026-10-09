@@ -3381,6 +3381,53 @@ keeping the 10.5 s.  That would make CA3 the path with the best memory *and*
 time, which is a reason to do these before the host staging rather than
 after.
 
+#### CA3's three, done (2026-10-09): 20.67 -> 7.91 GB
+
+1. **The owner-component production is chunked.**  pack_owner_generators is
+   now plan_owner_generators (once a wave: headers, pieces, the block of the
+   arena, the send's messages), copy_owner_generators (a chunk's pieces into
+   it) and finish_owner_generators (the ready event, after the loop - a last
+   chunk with no boxes is skipped inside it, which also left the wave's X_NR
+   origin block unfreed; both now happen after the loop).  chunk_production
+   no longer requires `owner_ == nullptr`.
+2. **The remote generators' temp2^T is packed on an owner level.**  fill_item
+   looked the generator up in the generator table, which has only remote
+   boxes; the rank's own boxes landed FULL were not found and took the raw
+   fallback, every one of them.  It uses the box found when the generator was
+   set up (`g.box`).  Generator boxes allocated raw at the leaf: 6.09 -> 0.28 GB.
+3. **The landed FULL factors are compressed.**  The kept-block builder is
+   keep_factor_sources over KeptSource (morton, state, the five pointers,
+   shapes, pledge): a wave's boxes come through keep_solve_factor_group from
+   the result and source blocks, a sequence's FULL entries through
+   land_full_factors straight from their payloads (no pledge, no X_RR_full
+   rebuild from this LU: that came with the payload), in groups of
+   kXnrStagingBudget.  Kept store at the leaf: 5.47 GB (3.6x) -> 2.33 (8.5x).
+
+| 8 ranks | CA3 96^3 before | after | CA3 192^3 before | **after** | Color | CA0 |
+|---|---|---|---|---|---|---|
+| peak (resident + transient) | 4.42 (3.27 + 1.16) | 1.97 (1.10 + 0.86) | 20.67 (14.01 + 6.66) | **7.91** (6.87 + 1.04) | 7.41 | 8.74 |
+| level-4 peak | 2.23 | 1.45 | 10.00 | 6.86 | 6.98 | 7.67 |
+| kept store, rank 0, leaf | 1.06 (2.2x) | 0.29 (8.2x) | 5.47 (3.6x) | 2.33 (8.5x) | 2.28 (8.3x) | 3.05 (8.6x) |
+| Factor | 2.30 s | 2.66 s | 10.5 s | 11.2 s | 11.1 s | 11.5 s |
+| GPU solve | 0.131 s | 0.138 s | 0.471 s | 0.496 s | 0.475 s | 0.505 s |
+| acc_mvp / acc_forward | 1.43e-3 / 9.32e-3 | 1.43e-3 / 9.29e-3 | 3.18e-3 / 1.61e-2 | 2.97e-3 / 1.54e-2 | 2.95e-3 / 1.60e-2 | 2.97e-3 / 1.62e-2 |
+| logdet | -9928899.530 | -9928899.446 | -89253739.706 | -89253742.145 | -89253748.104 | -89253736.570 |
+
+Color and CA0 are bit-identical to the runs before (logdet, kept bytes,
+peaks, accuracies), which gates the refactor.  CA3's logdet moved 8.4e-9 /
+2.7e-8 because the later waves' sketches now read the generators' packed
+temp2^T, as Color's did when its fill sources were compressed; its accuracy
+is unchanged (96^3) or better (192^3), inside the three paths' spread.  The
+time went where the chunking put it on Color: Factor 10.5 -> 11.2 s, now
+Color's.  What is still CA3's own: the landed boxes' kept X_NR is compressed
+from the payload rather than pledged (their fill pack comes later in the
+sequence than the landing), about 0.2 GB of kept factors (1.33 against
+Color's 1.12), and their X_RR_full arrives raw with the payload rather than
+rebuilt (fill X_RR_full 0.45 against 0.28).
+
+**The three paths at the 192^3 leaf**: Color 7.41 GB / 11.1 s, CA3 7.91 /
+11.2, CA0 8.74 / 11.5.  Host staging now applies to all three alike.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
