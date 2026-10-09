@@ -3307,6 +3307,33 @@ compressed with the near store off, like the 20.72 of Color).
 (The 20.72 GB / 7.49 s quoted as "before" in the running tally is the
 compressed run with the near store off, not an uncompressed one.)
 
+#### FP32 does not shrink the stores (2026-10-09)
+
+Measured before planning around it (h2_c1_work/prec_bench.cu on the dumped
+level-4 wave: 37 real X_NR boxes, 435.75 MB as FP64), bitcomp lossy from
+FP64 and from an FP32 copy of the same data, the same delta a box, the H2
+path's 64K-element chunks:
+
+| step | type | packed MB | vs FP64 raw | bits/el | comp GB/s (own bytes) | dcmp GB/s | max_err |
+|---|---|---|---|---|---|---|---|
+| 2e-4 (X_NR, near) | FP64 | 22.91 | 19.0x | 3.36 | 428 | 593 | 6.1e-5 |
+| 2e-4 | FP32 | 22.51 | 19.4x | 3.31 | 447 | 636 | 6.1e-5 |
+| 2e-6 (T, X_SR) | FP64 | 68.37 | 6.37x | 10.0 | 415 | 503 | 4.8e-7 |
+| 2e-6 | FP32 | 67.92 | 6.42x | 10.0 | 421 | 480 | 4.9e-7 |
+
+The packed bytes are the quantized integers' bits - round(x / delta) is the
+same integer whichever type x came in - so FP32 input gives 1.7% fewer bytes
+and the same error.  What FP32 halves is the codec's time an element (the
+same GB/s on half the bytes) and every buffer that exists raw.  The "FP32
+halves the compressed stores" written above (the 8x-goal remarks of
+2026-10-08 and the kept-block remark of 2026-10-09) is therefore wrong, and
+FP32 is a smaller item than it was taken for: the transient and the
+decompressed working sets (~0.5-0.7 GB of the leaf's 7.41), the raw parent
+blocks under level 4 (0.94 -> 0.47), about half of the codec passes' time
+(near packing 0.50 s, handover 0.15 s, the windows: perhaps 0.5 s a leaf),
+and the GEMMs if TF32 is acceptable; the LU and its solves stay FP64.  The
+route to 8x and 64x boxes a rank is host staging of the stores.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
