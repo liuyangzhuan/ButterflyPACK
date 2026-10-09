@@ -3686,6 +3686,32 @@ targets, so the next group's gather has to wait for the scatter only across
 a wave boundary) - worth about 0.5 s at 192^3, more lines than (c2) for
 less.  The solve is untouched (0.48-0.51 s).
 
+#### (c2), done (2026-10-09): the arenas pin ahead of demand
+
+PinnedArena pins its next chunk on a worker thread (std::async) as soon as
+one is taken, and the driver warms all three arenas at each level's start
+so the first growth is ready before it is asked for; when the chunk a
+request takes is not ready yet, the arena pins twice as far ahead from then
+on (kAheadMax 4).  The report line now says how much of the pinning the
+levels actually waited for.  Gate: six runs, logdets, accuracies and every
+level's peak identical to (c) (the arenas hand out the same addresses in
+the same order), 0 errors.
+
+| Factor, (c) -> (c2) | 192^3 | 96^3 | pinning / waited at 192^3 |
+|---|---|---|---|
+| Color | 14.6 -> 14.3 s | 2.60 -> 2.51 | 1.24 s / 0.36 s |
+| CA3 | 14.5 -> 14.0 | 3.13 -> 3.03 | 1.34 / 0.42 |
+| CA0 | 15.1 -> 14.9 | 3.40 -> 3.33 | 1.52 / 0.58 |
+
+Less than the 0.95 s because 0.36-0.58 s is still waited for, and the
+report shows where: 0.34 of Color's 0.36 is accrued by the leaf.  The near
+store's extents double from 32 MB up to kCompactMax = 512 MB, and a request
+larger than the arena's 256 MB chunk cannot take a chunk pinned ahead - it
+pins synchronously, as before.  A 3.24 GB leaf store has five or six 512 MB
+extents at 0.08 s each: the 0.34 s.  (c3) makes the chunk 512 MB, which also
+covers build_parent's per-chunk parent runs (2.3 GB in 10 chunks at the
+leaf's transition, some above 256 MB).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

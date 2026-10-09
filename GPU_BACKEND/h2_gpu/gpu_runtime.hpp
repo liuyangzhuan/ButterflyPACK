@@ -7,6 +7,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <deque>
+#include <future>
 #include <sys/mman.h>
 #include <cuda_runtime.h>
 #include "magma_v2.h"
@@ -157,9 +159,18 @@ inline size_t align_up(size_t bytes, size_t alignment = 256) {
 // copies.  Registered mapped, the memory is device-visible at its host
 // address (UVA, checked): a kernel reads it over PCIe, which is what the
 // fill store's readers do with their compressed input.
+//
+// Chunks are pinned ahead of demand on worker threads (std::async): a new
+// chunk is taken from those pinned ahead, and whenever the one taken is
+// not ready yet - the demand outran the pinning - the arena pins twice as
+// far ahead from then on, up to kAheadMax chunks.  Pinning runs at 0.15 s
+// a GB (THP fault-in and cudaHostRegister); done synchronously inside the
+// owner pass's packing it cost 0.95 s of a 192^3 factorization (host
+// staging (c), 2026-10-09).
 class PinnedArena {
 public:
     static constexpr size_t kChunk = size_t{256} << 20;
+    static constexpr int kAheadMax = 4;   // 1 GB pinning ahead at most
     PinnedArena() = default;
     PinnedArena(const PinnedArena&) = delete;
     PinnedArena& operator=(const PinnedArena&) = delete;
@@ -167,32 +178,22 @@ public:
     char* alloc(size_t bytes) {
         bytes = align_up(std::max<size_t>(bytes, 1));
         while (at_ < chunks_.size() && chunks_[at_].used + bytes > chunks_[at_].bytes) ++at_;
-        if (at_ == chunks_.size()) {
-            const auto t0 = std::chrono::steady_clock::now();
-            Chunk c;
-            c.bytes = std::max(kChunk, bytes);
-            void* p = nullptr;
-            if (posix_memalign(&p, size_t{2} << 20, c.bytes) != 0 || p == nullptr) {
-                throw std::runtime_error("H2 GPU: no host memory for the fill store's arena");
-            }
-            madvise(p, c.bytes, MADV_HUGEPAGE);
-            for (size_t off = 0; off < c.bytes; off += 4096) static_cast<volatile char*>(p)[off] = 0;  // faulted in first
-            check_cuda(cudaHostRegister(p, c.bytes, cudaHostRegisterMapped), "pinned arena: register");
-            void* dp = nullptr;
-            check_cuda(cudaHostGetDevicePointer(&dp, p, 0), "pinned arena: device pointer");
-            if (dp != p) {
-                throw std::runtime_error("H2 GPU: the fill store's host arena has different host and device addresses (no UVA)");
-            }
-            c.ptr = static_cast<char*>(p);
-            pin_seconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-            pinned_ += c.bytes;
-            chunks_.push_back(c);
-        }
+        if (at_ == chunks_.size()) chunks_.push_back(next_chunk(bytes));
+        pin_ahead();
         Chunk& c = chunks_[at_];
         char* p = c.ptr + c.used;
         c.used += bytes;
         used_ += bytes;
         return p;
+    }
+    // Start pinning the chunks the arena hands out next, so a level's first
+    // growth is ready before it is asked for.  Called by alloc, and by the
+    // driver at each level's start.
+    void pin_ahead() {
+        if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned arena: device");
+        while (static_cast<int>(ahead_.size()) < ahead_count_) {
+            ahead_.push_back(std::async(std::launch::async, &PinnedArena::pin_chunk, kChunk, device_));
+        }
     }
     void reset() {
         for (Chunk& c : chunks_) c.used = 0;
@@ -200,24 +201,75 @@ public:
         used_ = 0;
     }
     void release() {
-        for (Chunk& c : chunks_) {
-            cudaHostUnregister(c.ptr);
-            std::free(c.ptr);
+        for (auto& f : ahead_) {
+            try { unpin(f.get()); } catch (...) {}   // (at exit the runtime may be gone already)
         }
+        ahead_.clear();
+        for (Chunk& c : chunks_) unpin(c);
         chunks_.clear();
         at_ = 0;
         used_ = 0;
         pinned_ = 0;
     }
     size_t used() const { return used_; }      // bytes handed out since the last reset
-    size_t pinned() const { return pinned_; }  // bytes pinned in all
-    double pin_seconds() const { return pin_seconds_; }
+    size_t pinned() const { return pinned_; }  // bytes pinned and handed to the arena in all
+    double pin_seconds() const { return pin_seconds_; }    // the pinning work, wherever it ran
+    double pin_wait_seconds() const { return pin_wait_; }  // what alloc waited for it
 
 private:
-    struct Chunk { char* ptr = nullptr; size_t bytes = 0, used = 0; };
+    struct Chunk { char* ptr = nullptr; size_t bytes = 0, used = 0; double seconds = 0.0; };
+    static Chunk pin_chunk(size_t bytes, int device) {
+        const auto t0 = std::chrono::steady_clock::now();
+        check_cuda(cudaSetDevice(device), "pinned arena: device");   // (a fresh thread: no current device)
+        Chunk c;
+        c.bytes = bytes;
+        void* p = nullptr;
+        if (posix_memalign(&p, size_t{2} << 20, bytes) != 0 || p == nullptr) {
+            throw std::runtime_error("H2 GPU: no host memory for the fill store's arena");
+        }
+        madvise(p, bytes, MADV_HUGEPAGE);
+        for (size_t off = 0; off < bytes; off += 4096) static_cast<volatile char*>(p)[off] = 0;  // faulted in first
+        check_cuda(cudaHostRegister(p, bytes, cudaHostRegisterMapped), "pinned arena: register");
+        void* dp = nullptr;
+        check_cuda(cudaHostGetDevicePointer(&dp, p, 0), "pinned arena: device pointer");
+        if (dp != p) {
+            throw std::runtime_error("H2 GPU: the fill store's host arena has different host and device addresses (no UVA)");
+        }
+        c.ptr = static_cast<char*>(p);
+        c.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return c;
+    }
+    static void unpin(const Chunk& c) {
+        if (c.ptr == nullptr) return;
+        cudaHostUnregister(c.ptr);
+        std::free(c.ptr);
+    }
+    // The chunk a request takes: the one pinned ahead when that is big
+    // enough - waited for if it is still pinning, and then the arena pins
+    // further ahead - else one pinned here and now.
+    Chunk next_chunk(size_t bytes) {
+        const auto t0 = std::chrono::steady_clock::now();
+        Chunk c;
+        if (bytes <= kChunk && !ahead_.empty()) {
+            const bool ready = ahead_.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            c = ahead_.front().get();
+            ahead_.pop_front();
+            if (!ready) ahead_count_ = std::min(ahead_count_ * 2, kAheadMax);
+        } else {
+            if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned arena: device");
+            c = pin_chunk(std::max(kChunk, bytes), device_);
+        }
+        pin_wait_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        pin_seconds_ += c.seconds;
+        pinned_ += c.bytes;
+        return c;
+    }
     std::vector<Chunk> chunks_;
+    std::deque<std::future<Chunk>> ahead_;
+    int ahead_count_ = 1;
+    int device_ = -1;
     size_t at_ = 0, used_ = 0, pinned_ = 0;
-    double pin_seconds_ = 0.0;
+    double pin_seconds_ = 0.0, pin_wait_ = 0.0;
 };
 
 // Scalar type MAGMA uses for DataType (std::complex<double> and
