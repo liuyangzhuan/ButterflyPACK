@@ -3334,6 +3334,53 @@ blocks under level 4 (0.94 -> 0.47), about half of the codec passes' time
 and the GEMMs if TF32 is acceptable; the LU and its solves stay FP64.  The
 route to 8x and 64x boxes a rank is host staging of the stores.
 
+#### CA3 on the current code (2026-10-09): correct, fastest, and three reductions short
+
+CA3 (`--H2_CA_owner_component 3`, CA at the leaf only) had not been run
+since 2026-10-06, when two CA levels exhausted the heap.  On commit 66a1002
+it runs clean on both sizes, 8 ranks:
+
+| | CA3 off 96^3 | CA3 on 96^3 | CA3 on 192^3 | Color on 192^3 | CA0 on 192^3 |
+|---|---|---|---|---|---|
+| peak (resident + transient) | 7.02 (6.38 + 0.64) | 4.42 (3.27 + 1.16) | **20.67** (14.01 + 6.66) | 7.41 | 8.74 |
+| level-4 peak | 4.33 | 2.23 | 10.00 (8.94 + 1.05) | 6.98 | 7.67 |
+| kept store, rank 0, leaf | 2.36 (1.0x) | 1.06 (2.2x) | 5.47 of 19.90 (3.6x) | 2.28 (8.3x) | 3.05 (8.6x) |
+| Factor | 1.30 s | 2.30 s | **10.5 s** | 11.2 s | 11.6 s |
+| GPU solve | 0.117 s | 0.131 s | 0.471 s | 0.464 s | 0.499 s |
+| acc_mvp / acc_forward | 7.94e-4 / 3.46e-3 | 1.43e-3 / 9.32e-3 | 3.18e-3 / 1.61e-2 | 2.95e-3 / 1.60e-2 | 2.97e-3 / 1.62e-2 |
+| acc_backward | 6.5e-16 | 6.9e-16 | 1.4e-15 | 1.1e-15 | 5.3e-12 |
+| logdet | -9928892.253 | -9928899.530 | -89253739.706 | -89253748.104 | -89253736.570 |
+
+Correct (logdets within 1.3e-7 of the other two paths at 192^3, the same
+accuracy, no errors), the fastest factorization of the three, and - unlike
+CA0 - no replication: 3532 boxes pledged plus 564 landed is the rank's 4096,
+and its near store is Color's 3.24 GB.  Its memory is 2.8x Color's because
+three of the reductions never reached the owner-component path, and the
+leaf's breakdown prices each:
+
+1. **The production is not chunked, 5.6 GB transient** (wave outputs 4.50,
+   wave work 1.09): chunk_production requires `owner_ == nullptr`, because
+   pack_owner_generators packs a wave's generators once a wave and does not
+   separate into plan and copy (the Color transport's split of 2026-10-08).
+2. **The remote generators' temp2^T stays raw, 5.81 GB live (6.09 allocated
+   over the level)**: the 10-09 group staging runs, but its raw fallback
+   fires for essentially every generator here (1121 of ~5.4 MB), where
+   Color's level 4 packs all but 0.15 GB.  Why the packer finds nothing to
+   pack for them (fill_item's generator-box lookup, or no room) is the first
+   thing to establish for the fix.
+3. **C2, the landed FULL factors are raw: 4.5 GB in the kept store** (564
+   boxes; 5.47 GB stored at 3.6x where the pledged 3532 reach 15x), and it
+   sits under every later level (level 4's kept 5.49, level 2's 6.35).
+   land_full_factors is called once per entry; the receive buffers live to
+   the end of owner_exchange, so a per-sequence batch through the kept-block
+   compressor is possible.
+
+With the three in place the CA3 leaf should sit near Color's (the same
+stores, no replication): roughly 20.7 -> ~7 GB and level 4 10.0 -> ~5.8,
+keeping the 10.5 s.  That would make CA3 the path with the best memory *and*
+time, which is a reason to do these before the host staging rather than
+after.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
