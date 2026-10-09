@@ -88,6 +88,37 @@ struct ColumnSwapItemT {
 };
 using ColumnSwapItem = ColumnSwapItemT<double>;
 
+// A = P L U, rebuilt from the LU that replaced it.  X_RR_full is the
+// symmetrized X_RR as it stood before getrf factored it in place, so a box
+// that keeps its solve factors need not store it: the product of the kept
+// factors is the same matrix to rounding, which is ~1e-16 relative against
+// the 1e-3 tolerances the fill sources are held to.
+// The product itself is a batched GEMM (magma's, not a hand-rolled one: the
+// first version of this was a dot product per thread with stride-ldlu loads
+// and cost 2.1 s a run).  So L and U are split out first, multiplied, and the
+// pivots undone on the rows of the result.
+template<typename T>
+struct LuSplitItemT {
+    const T* lu;     // the factorization, r x r, leading dimension ldlu
+    int ldlu;
+    T* l;            // unit lower, r x r, leading dimension r
+    T* u;            // upper, r x r, leading dimension r
+    int r;
+};
+using LuSplitItem = LuSplitItemT<double>;
+
+// For i = r-1 .. 0 swap rows i and piv[i] - 1 of a (r x cols), undoing the
+// pivoting of getrf.
+template<typename T>
+struct RowSwapItemT {
+    T* a;
+    int lda;
+    int cols;
+    const int* piv;
+    int r;
+};
+using RowSwapItem = RowSwapItemT<double>;
+
 // ---- device construction of the sketch lists (device_sketch.cu)
 //
 // Sketched rows row_base .. row_base + count - 1 are the points
@@ -141,6 +172,11 @@ struct SourceListsItem {
 using OrderedSketchItem = OrderedSketchItemT<double>;
 // (the sketch of kernel rows: Evaluator::sketch_rows; of stored rows:
 // launch_ordered_sketch_stored, evaluator_device.hpp)
+
+template<typename T>
+void launch_lu_split(const LuSplitItemT<T>* items, int count, int max_r, cudaStream_t stream);
+template<typename T>
+void launch_row_swaps(const RowSwapItemT<T>* items, int count, cudaStream_t stream);
 
 void launch_sketch_lists(const SketchListsItem* boxes, int num_boxes, int max_blocks,
                          const SourceListsItem* sources, int num_sources, const char* meta, cudaStream_t stream);

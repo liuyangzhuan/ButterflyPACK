@@ -109,6 +109,8 @@ struct EliminatorStats {
     double persist_peak = 0.0;
     double persist_xrr_bytes = 0.0;   // ... of which X_RR_full
     double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
+    int64_t xr_dropped = 0;           // boxes whose X_RR_full is rebuilt from their LU instead of stored
+    int64_t xr_rebuilt = 0;           // ... and the rebuilds that cost
     int64_t persist_blocks = 0;
     double reclaim_wait = 0.0;    // full heap: waits for background copies to free blocks
     double exchange_wait = 0.0;   // full exchange arena: waits for receive buffers' host copies
@@ -618,6 +620,13 @@ private:
         // (r x ntot column-major, i.e. temp2^T) and X_RR_full (r x r)
         const S* temp2t = nullptr;
         const S* xrr_full = nullptr;
+        // X_RR_full is the symmetrized X_RR as it stood before getrf factored
+        // it in place, and a kept box's LU is resident for the solve, so the
+        // stored copy is redundant: launch_lu_expand rebuilds P L U where a
+        // reader wants it.  Null for a box whose factors are not kept, and for
+        // a remote box, whose LU is on its owner's rank.
+        const S* xrr_lu = nullptr;
+        const int* xrr_piv = nullptr;
         int ntot = 0;
         int r = 0;
         // boxes of other ranks (assisting boxes): points appended to the
@@ -924,6 +933,10 @@ private:
         int64_t rows = 0;  // the slots have to be all of X_NR's rows, in order
         for (const auto& sl : st->t2t_slots) rows += sl.rows;
         return rows == wb.ntot;
+    }
+    // Rebuilt rather than stored: see BoxState::xrr_lu.
+    static bool xrr_rebuilt(const BoxState& st) {
+        return st.xrr_full == nullptr && st.xrr_lu != nullptr && st.xrr_piv != nullptr && st.r > 0;
     }
     // The host does not need this box's X_NR: its factors are kept on the
     // device, and rescue_skipped_xnr reads them back if the host ever asks.
@@ -1810,7 +1823,9 @@ private:
         while (!released_sources_.empty()) {
             BoxState* es = released_sources_.front();
             released_sources_.pop_front();
-            if (es->persist == nullptr || es->readers > 0) continue;  // gone, or kept again with readers
+            // (a box whose X_RR_full was dropped for its LU has no persist
+            // block, but its temp2^T is still there to retire)
+            if ((es->persist == nullptr && !xrr_rebuilt(*es)) || es->readers > 0) continue;
             rescue_skipped_xnr();  // (a restore reads the host copies)
             eliminator_stats().persist_bytes -= static_cast<double>(es->persist_bytes);
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
@@ -3012,6 +3027,54 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
         pw_elems = std::max(pw_elems, at);
     }
+    // X_RR_full of the sources that no longer store it, rebuilt from their LU
+    // into a window of this group's own: L and U split out, multiplied by a
+    // batched GEMM, the pivots undone on the rows.  The product is magma's and
+    // not hand-rolled - the first version was a dot product a thread with
+    // stride-ldlu loads and cost 2.1 s a run.  One rebuild a (group, source),
+    // not one per reader.
+    struct XrrRebuild { size_t gi; const S* lu; const int* piv; int r; size_t off; };
+    std::vector<XrrRebuild> xrr_jobs;
+    std::map<std::pair<size_t, int64_t>, size_t> xrr_off;  // (group, source) -> its result
+    size_t xrr_elems = 0;
+    {
+        std::vector<size_t> at(num_groups, 0);
+        for (const Plan& p : plans) {
+            if (p.fill_rank == 0) continue;
+            for (const Source& src : p.sources) {
+                if (!xrr_rebuilt(*src.state)) continue;
+                const size_t gi = group_of(src);
+                const auto key = std::make_pair(gi, src.morton);
+                if (xrr_off.count(key) != 0) continue;
+                const BoxState& ss = *src.state;
+                xrr_off.emplace(key, at[gi]);
+                xrr_jobs.push_back(XrrRebuild{gi, ss.xrr_lu, ss.xrr_piv, ss.r, at[gi]});
+                at[gi] += 3 * static_cast<size_t>(ss.r) * static_cast<size_t>(ss.r);  // result, L, U
+            }
+        }
+        for (size_t g = 0; g < num_groups; ++g) xrr_elems = std::max(xrr_elems, at[g]);
+    }
+    std::vector<std::vector<LuSplitItemT<S>>> xrr_split(num_groups);
+    std::vector<std::vector<RowSwapItemT<S>>> xrr_swap(num_groups);
+    std::vector<VBatch<S>> xrr_gemm(num_groups);
+    int max_xrr_r = 0;
+    S* xrr_win = nullptr;
+    if (xrr_elems > 0) {
+        char* block = heap_.alloc(xrr_elems * D, ResidentKind::SketchPW);
+        fill_blocks.push_back(block);
+        xrr_win = reinterpret_cast<S*>(block);
+        for (const XrrRebuild& jb : xrr_jobs) {
+            const size_t rr = static_cast<size_t>(jb.r) * static_cast<size_t>(jb.r);
+            S* dst = xrr_win + jb.off;
+            S* l = dst + rr;
+            S* u = l + rr;
+            xrr_split[jb.gi].push_back(LuSplitItemT<S>{jb.lu, jb.r, l, u, jb.r});
+            xrr_gemm[jb.gi].entries.push_back({l, u, dst, jb.r, jb.r, jb.r, jb.r, jb.r, jb.r});
+            xrr_swap[jb.gi].push_back(RowSwapItemT<S>{dst, jb.r, jb.r, jb.piv, jb.r});
+            max_xrr_r = std::max(max_xrr_r, jb.r);
+        }
+        eliminator_stats().xr_rebuilt += static_cast<int64_t>(xrr_jobs.size());
+    }
     S* pw = nullptr;
     if (pw_elems > 0) {
         char* block = heap_.alloc(pw_elems * D, ResidentKind::SketchPW);
@@ -3042,12 +3105,21 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 const int r = ss.r;
                 // P_E = X_RR_full temp2[B rows]^T; temp2 is resident row-major (NN)
                 const size_t gi = group_of(src);
+                const S* xrr = ss.xrr_full;
+                if (xrr == nullptr) {  // rebuilt into this group's window
+                    const auto it = xrr_off.find(std::make_pair(gi, src.morton));
+                    if (it == xrr_off.end()) {
+                        throw std::runtime_error("LevelEliminator: fill source " + std::to_string(src.morton) +
+                                                 " has no X_RR_full and no LU to rebuild it from");
+                    }
+                    xrr = xrr_win + it->second;
+                }
                 const int rank_g = g_rank[gi][bi];
                 S* Pg = pw + g_poff[gi][bi];
                 S* Wg = pw + g_woff[gi][bi];
                 const int off_g = g_at[gi][bi];  // this source's rows of the group's P
                 g_at[gi][bi] += r;
-                p_by_group[gi].entries.push_back({ss.xrr_full, src.t2t_base + static_cast<size_t>(src.slot_b) * r,
+                p_by_group[gi].entries.push_back({xrr, src.t2t_base + static_cast<size_t>(src.slot_b) * r,
                                                   Pg + off_g, r, p.n, r, r, r, rank_g});
                 OrderedSketchItem w{};
                 w.out = Wg + static_cast<size_t>(off_g) * p.d;
@@ -3128,6 +3200,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const size_t off_rows = meta_.append(row_items);
     std::vector<size_t> off_stored(num_groups, 0);
     for (size_t g = 0; g < num_groups; ++g) off_stored[g] = meta_.append(stored_by_group[g]);
+    std::vector<size_t> off_xrr_split(num_groups, 0), off_xrr_swap(num_groups, 0);
+    for (size_t g = 0; g < num_groups; ++g) {
+        off_xrr_split[g] = meta_.append(xrr_split[g]);
+        off_xrr_swap[g] = meta_.append(xrr_swap[g]);
+    }
+    for (VBatch<S>& b : xrr_gemm) b.stage(meta_);
     const size_t off_id = meta_.append(id_items);
     for (VBatch<S>& b : p_by_group) b.stage(meta_);
     for (VBatch<S>& b : fill_by_group) b.stage(meta_);
@@ -3164,6 +3242,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         if (!stored_by_group[g].empty()) {
             launch_ordered_sketch_stored(reinterpret_cast<const OrderedSketchItem*>(md + off_stored[g]),
                                          static_cast<int>(stored_by_group[g].size()), max_d, max_r, stream);
+        }
+        if (!xrr_split[g].empty()) {  // X_RR_full = P L U, before its readers
+            launch_lu_split(reinterpret_cast<const LuSplitItemT<S>*>(md + off_xrr_split[g]),
+                            static_cast<int>(xrr_split[g].size()), max_xrr_r, stream);
+            xrr_gemm[g].gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
+            launch_row_swaps(reinterpret_cast<const RowSwapItemT<S>*>(md + off_xrr_swap[g]),
+                             static_cast<int>(xrr_swap[g].size()), stream);
         }
         if (!p_by_group[g].entries.empty()) {
             p_by_group[g].gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
@@ -4732,6 +4817,19 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             st.xrr_full = wb.persist_xrr;
             st.ntot = wb.ntot;
             st.r = wb.r;
+            // Its LU is kept, so the stored X_RR_full is redundant and goes
+            // back here - r x r a box, 0.90 GB of the 192^3 Color leaf's
+            // resident set.  Only when the box owns the block: without
+            // early_free_sources_ it belongs to level_allocs_.
+            if (st.xrr_lu != nullptr && st.persist != nullptr && st.persist == reinterpret_cast<char*>(wb.persist_xrr)) {
+                auto& es = eliminator_stats();
+                es.persist_bytes -= static_cast<double>(st.persist_bytes);
+                heap_.free(st.persist);
+                st.persist = nullptr;
+                st.persist_bytes = 0;
+                st.xrr_full = nullptr;
+                ++es.xr_dropped;
+            }
         }
     }
     stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
@@ -6512,6 +6610,10 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         kb.xnr_chunk0 = m.xnr_chunk0;
         kb.xnr_nchunks = m.xnr_nchunks;
         kept_.boxes[m.morton] = kb;
+        if (BoxState* st = kept_boxes[bi]->state; st != nullptr) {
+            st->xrr_lu = reinterpret_cast<const S*>(kb.lu);   // X_RR_full = P L U of this
+            st->xrr_piv = kb.ipiv;
+        }
         if (m.xnr_pledged) {
             BoxState* st = kept_boxes[bi]->state;
             st->t2t_pledged = true;
@@ -8156,6 +8258,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         size_t last_parent = 0;
     };
     std::unordered_map<int64_t, Restored> restored;
+    // X_RR_full of the sources that dropped it for their LU, rebuilt once a
+    // chunk into blocks of its own (r x r, so one small block a source).
+    std::vector<char*> xrr_exp_blocks;
     cudaEvent_t staged[2] = {nullptr, nullptr};
     int stage_turn = 0;
     auto last_reader = [&](const Box* sb) {
@@ -8203,6 +8308,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         // the chunk's compressed fill sources, decompressed in one batch below
         std::vector<const void*> packed_src;
         std::vector<void*> packed_dst;
+        std::vector<LuSplitItemT<S>> xrr_split;
+        std::vector<RowSwapItemT<S>> xrr_swap;
+        VBatch<S> xrr_gemm;
+        int max_xrr_r = 0;
         // restored in this chunk, at increasing offsets of the staging buffer
         struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; };
         std::vector<Pending> pending;
@@ -8216,10 +8325,30 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             Source& s = source_of[em];
             s.r = es.r;
             s.box = es.remote ? level_.find_generator_box(em) : held_box(em);
+            // X_RR_full: stored, or rebuilt from the LU this box kept
+            const S* xrr_of_es = es.xrr_full;
+            if (xrr_of_es == nullptr && xrr_rebuilt(es)) {
+                const size_t rr = static_cast<size_t>(es.r) * static_cast<size_t>(es.r);
+                char* blk = heap_.try_alloc_resident(3 * rr * sizeof(S), ResidentKind::Restore);
+                if (blk == nullptr) {
+                    throw std::runtime_error("LevelEliminator::build_parent: no room to rebuild X_RR_full of " +
+                                             std::to_string(em));
+                }
+                xrr_exp_blocks.push_back(blk);
+                S* dst = reinterpret_cast<S*>(blk);
+                S* l = dst + rr;
+                S* u = l + rr;
+                xrr_split.push_back(LuSplitItemT<S>{es.xrr_lu, es.r, l, u, es.r});
+                xrr_gemm.entries.push_back({l, u, dst, es.r, es.r, es.r, es.r, es.r, es.r});
+                xrr_swap.push_back(RowSwapItemT<S>{dst, es.r, es.r, es.xrr_piv, es.r});
+                max_xrr_r = std::max(max_xrr_r, es.r);
+                xrr_of_es = dst;
+                ++eliminator_stats().xr_rebuilt;
+            }
             if (s.box == nullptr) throw std::runtime_error("LevelEliminator::build_parent: fill source " + std::to_string(em) + " not found");
             if (es.temp2t != nullptr) {
                 s.t2t = es.temp2t;
-                s.xrr = es.xrr_full;
+                s.xrr = xrr_of_es;
                 return s;
             }
             auto rit = restored.find(em);
@@ -8249,7 +8378,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         rs.xrr = nullptr;
                         rs.last_parent = p0;  // freed at the end of this chunk (p0 < p1)
                         s.t2t = reinterpret_cast<const S*>(blk);
-                        s.xrr = es.xrr_full;
+                        s.xrr = xrr_of_es;
                         return s;
                     }
                     heap_.free(blk);
@@ -8618,6 +8747,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             }
         }
         const size_t off_restores = meta.append(restores);
+        const size_t off_xrr_split = meta.append(xrr_split);
+        const size_t off_xrr_swap = meta.append(xrr_swap);
+        xrr_gemm.stage(meta);
         const size_t off_evals = meta.append(evals);
         const size_t off_gathers = meta.append(gathers);
         const size_t off_g = meta.append(g_gathers);
@@ -8643,6 +8775,13 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         StreamMarks& tmarks = *chunk_marks.back();
         tmarks.mark(stream);
         run_fill_batch(packed_src, packed_dst, stream);  // the chunk's compressed sources, put back
+        if (!xrr_split.empty()) {  // and the X_RR_full its P products read
+            launch_lu_split(reinterpret_cast<const LuSplitItemT<S>*>(md + off_xrr_split),
+                            static_cast<int>(xrr_split.size()), max_xrr_r, stream);
+            xrr_gemm.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
+            launch_row_swaps(reinterpret_cast<const RowSwapItemT<S>*>(md + off_xrr_swap),
+                             static_cast<int>(xrr_swap.size()), stream);
+        }
         launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_restores), static_cast<int>(restores.size()),
                          max_rs_m, max_rs_n, stream);
         eval_blocks(evals, meta, md, off_evals, max_eval_m, max_eval_n, stream);
@@ -8794,6 +8933,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         p0 = p1;
     }
     for (auto& kv : restored) heap_.free(kv.second.block);
+    for (char* b : xrr_exp_blocks) heap_.free(b);
     for (cudaEvent_t e : staged) {
         if (e != nullptr) cudaEventDestroy(e);
     }

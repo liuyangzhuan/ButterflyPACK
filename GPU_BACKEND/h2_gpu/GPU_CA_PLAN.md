@@ -2987,6 +2987,40 @@ moved into the window where the raw outputs are live**, which is what stage C
 shortens - so stage C, worth 0.62 GB when it landed, is now load-bearing, and
 the outputs are the next target again at 3.36 GB.
 
+#### X_RR_full is rebuilt, not stored (2026-10-08)
+
+The user's observation: X_RR_full is completely reconstructible.  It is the
+symmetrized X_RR as it stood before getrf factored it in place
+(level_eliminator.hpp, the gather beside the symmetrize), and a kept box's LU
+is resident for the solve, so `X_RR_full = P L U` of what is already there.
+Rebuilding costs rounding - 1e-16 relative, against the 1e-3 the fill sources
+are held to - where compressing it would have cost 1e-3.
+
+A box gives its stored copy back as soon as its factors are kept, and the two
+readers rebuild what they need: the sketch into a window a fill group at a
+time (one rebuild a (group, source), not one per reader), and the transition
+into a block a source.  A remote box keeps the stored copy, since its LU is on
+its owner's rank, and so does a level that keeps no factors.
+
+| 192^3 leaf | peak | resident | transient | Factor |
+|---|---|---|---|---|
+| Color before | 13.34 | 7.38 | 5.95 | 9.39 s |
+| Color after | **12.84** | **6.11** | 6.73 | 9.42 s |
+| CA0 before | 15.40 | 9.45 | 5.95 | 10.4 s |
+| CA0 after | **14.57** | **7.85** | 6.72 | 10.4 s |
+
+`fill X_RR_full` 0.90 -> 0.30 GB (what remains is the current wave's, given
+back at the keep), and the resident falls 1.27 GB on Color and 1.60 on CA0.
+The peak falls less - 0.50 and 0.83 - because the peak moment moves and the
+transient takes some of it back.  logdet moves by 1.7e-16 relative at most.
+
+**The first version cost 2.1 s a run, +22%.**  I wrote the product as a kernel
+with a dot product a thread and stride-ldlu loads - a hand-rolled GEMM, and a
+bad one.  Splitting L and U out with an elementwise kernel, multiplying with
+magma's batched GEMM and undoing the pivots afterwards made it free (+0.03 s).
+The lesson is narrow but worth keeping: a product of two r x r matrices is a
+GEMM, and there is a batched one to hand.
+
 **The fix had a shape this codebase has used twice.**  A box's sketch is
 independent of the other boxes', so the wave's boxes can be swept in groups
 bounded by a byte budget, each group's `[P; W]` freed before the next - which
