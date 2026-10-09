@@ -2968,6 +2968,45 @@ no generators).  CA0's peak is its replicated resident set.  So the two paths
 now need different work, and neither needs anything more from the wave's
 production.
 
+#### The remote generators add in place (2026-10-08)
+
+A box eliminated on another rank sends us its factors, and applying it means
+the same near-field update the owner pass does locally: for every pair (C, A)
+of its neighbours that live here, N_{C,A} -= temp2_E[C rows] X_NR_E[A rows]^T.
+Each is one small GEMM.  They could not be added straight into their blocks,
+because several remote boxes contribute to the same block and a batched GEMM
+may not have two entries writing one output - so every partial was given a
+slot in a staging buffer and a kernel summed the slots afterwards.  Measured,
+that buffer was the Color leaf's largest single item: 4.62 GB.
+
+| 192^3, cumulative over a level's 7 generator calls | leaf |
+|---|---|
+| partial products staged | 49729, in 11.09 GB |
+| targets they sum into | 34339, of 7.63 GB |
+| partials a target | 1.4 average, **7 at most** |
+
+Only 1.4 partials a target, so most blocks had a whole copy made of a result
+that could have been added in place, and no block needed more than 7.  That is
+the local owner pass's situation exactly, and its answer applies: sub-batch j
+holds the j-th partial of every target, launched in sequence, so no launch
+writes a block twice and each partial goes in with beta = 1.  At most 7
+sub-batches, about 69% of the work in the first.
+
+Color peak 11.33 -> **10.69 GB**, the transient 5.02 -> 2.52, Factor unchanged
+at 10.6 s, and logdet bit-identical on both paths at both sizes.  CA0 is the
+control and is identical throughout, a CA level sending no generators.
+
+**Both paths are now resident-dominated and their transients agree** (2.52 GB
+each, which is wave work 1.09 + codec staging 0.56 + source window 0.52 +
+small).  The Color leaf's 8.17 GB resident is owner near blocks 3.24, fill
+temp2^T 2.04 (which is also the kept X_NR), kept factors 0.99, level
+Schur/edges 0.88, adopted blocks 0.48, X_RR_full 0.29, owner source slots
+0.21.  CA0's 9.93 is the same list with the replicated sizes.
+
+So the transient is bounded by budgets we choose and the resident is what grows
+with boxes a rank.  FP32 on the two compressed stores - 3.24 + 2.04 on Color,
+more on CA0 - is now the one lever left that is worth more than 1 GB.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

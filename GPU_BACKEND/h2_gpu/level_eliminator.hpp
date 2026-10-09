@@ -5685,15 +5685,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             }
             throw std::runtime_error(oss.str());
         }
-        const size_t off = work_bytes;
+        // (work_bytes is what staging these would have cost, for the report)
         work_bytes = align_up(work_bytes + static_cast<size_t>(rows) * cols * D);
-        products.push_back(Product{off, a, lda, b, ldb, rows, cols, k});
+        products.push_back(Product{0, a, lda, b, ldb, rows, cols, k});
         auto it = accum_of.find(key);
         if (it == accum_of.end()) {
             it = accum_of.emplace(key, accums.size()).first;
             accums.push_back(Accum{target.ptr, target.rows, rows, cols, {}});
         }
-        accums[it->second].parts.push_back(off);
+        accums[it->second].parts.push_back(products.size() - 1);
     };
 
     // An owner level: a block is kept up to date here only if it is read
@@ -5889,47 +5889,34 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         }
     }
 
-    // (one sub-buffer per product, in pieces: PiecedBuffer)
-    std::vector<size_t> work_starts;
-    for (const Product& p : products) work_starts.push_back(p.off);
-    {   // what the staging is made of, against the targets it sums into
+    // Every partial product added straight into its target, sub-batch j
+    // holding the j-th partial of every target, so no launch writes a block
+    // twice.  This is what the local owner pass does; staging them all first
+    // and summing afterwards cost 4.62 GB at the 192^3 Color leaf, 1.4x the
+    // targets it summed into, because most targets take a single partial.
+    size_t depth = 0;
+    for (const Accum& a : accums) depth = std::max(depth, a.parts.size());
+    {
         auto& st = eliminator_stats();
-        st.gw_bytes += static_cast<double>(work_bytes);
+        st.gw_bytes += static_cast<double>(work_bytes);  // what staging would have cost
         st.gw_products += static_cast<int64_t>(products.size());
         st.gw_targets += static_cast<int64_t>(accums.size());
+        st.gw_max_parts = std::max(st.gw_max_parts, static_cast<int64_t>(depth));
         for (const Accum& a : accums) {
             st.gw_target_bytes += static_cast<double>(static_cast<size_t>(a.rows) * a.cols * D);
-            st.gw_max_parts = std::max(st.gw_max_parts, static_cast<int64_t>(a.parts.size()));
         }
     }
-    PiecedBuffer work;
-    work.allocate(heap_, work_starts, work_bytes, ResidentKind::GenWork);
-    VBatch<S> prod;
-    for (const Product& p : products) {
-        prod.entries.push_back({p.a, p.b, reinterpret_cast<S*>(work.at(p.off)), p.m, p.n, p.k, p.lda, p.ldb, p.m});
-    }
-    std::vector<const S*> part_ptrs;
-    std::vector<size_t> part_start(accums.size());
-    for (size_t a = 0; a < accums.size(); ++a) {
-        part_start[a] = part_ptrs.size();
-        for (size_t off : accums[a].parts) part_ptrs.push_back(reinterpret_cast<const S*>(work.at(off)));
-    }
-    const size_t off_parts = meta_.append(part_ptrs);
-    std::vector<SumAddItem> sums;
-    int max_sum_m = 0, max_sum_n = 0;
-    for (size_t a = 0; a < accums.size(); ++a) {
-        const Accum& acc = accums[a];
-        sums.push_back(SumAddItem{acc.target, acc.ld, acc.rows, acc.cols,
-                                  static_cast<int64_t>(off_parts + part_start[a] * sizeof(const S*)),
-                                  static_cast<int>(acc.parts.size())});
-        max_sum_m = std::max(max_sum_m, acc.rows);
-        max_sum_n = std::max(max_sum_n, acc.cols);
+    std::vector<VBatch<S>> prods(depth);
+    for (const Accum& acc : accums) {
+        for (size_t j = 0; j < acc.parts.size(); ++j) {
+            const Product& p = products[acc.parts[j]];
+            prods[j].entries.push_back({p.a, p.b, acc.target, p.m, p.n, p.k, p.lda, p.ldb, acc.ld});
+        }
     }
     const size_t off_transposes = meta_.append(transposes);
     const size_t off_evals = meta_.append(evals);
     const size_t off_gathers = meta_.append(gathers);
-    const size_t off_sums = meta_.append(sums);
-    prod.stage(meta_);
+    for (VBatch<S>& b : prods) b.stage(meta_);
     rep_tt.stage(meta_);
     rep_nn.stage(meta_);
     char* md = meta_.upload(meta_device_, stream);
@@ -5958,16 +5945,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
     launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
                   max_ga_n, md, stream);
-    prod.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 0.0, queue);
+    for (const VBatch<S>& b : prods) {
+        check_targets(b, "generator products");
+        b.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
+    }
     rep_tt.gemm(md, MagmaTrans, MagmaTrans, 1.0, 1.0, queue);
     rep_nn.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 1.0, queue);
-    check_items(sums, "generator sums");
     check_targets(rep_tt, "generator rep_tt");
     check_targets(rep_nn, "generator rep_nn");
-    launch_sum_add(reinterpret_cast<const SumAddItem*>(md + off_sums), static_cast<int>(sums.size()), max_sum_m,
-                   max_sum_n, md, stream);
     // later launches are ordered after these reads
-    work.release();
     tmp.release();
     for (char* p : retired) heap_.free(p);
     if (heap_.peak() > stats.heap_peak) {
