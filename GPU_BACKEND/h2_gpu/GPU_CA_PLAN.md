@@ -3605,6 +3605,87 @@ GB a rank - the edge of what fits, with the near store 26 GB of it.  At
 64x they do not fit on the host either; that regime needs a smaller
 representation or more ranks, not staging.
 
+#### Host staging (c), done (2026-10-09): the near store in pinned host memory
+
+Built as reviewed, nothing restructured: compact_reserve and tail_grow take
+their extents from a pinned host arena - two arenas, by level parity, so the
+parent runs build_parent writes for the level above live in that level's
+arena and each arena resets when its level's eliminator goes; copy_spans
+scatters a group's packed chunks into the host homes and gathers them back
+into the device staging in front of each decompression; the between-level
+compaction and the frees skip host pointers (heap_.owns).  The chunk-home
+structure, the groups and the readers are as they were.
+
+Gate: six runs, logdet bit-identical to (b) on every one (Color
+-89253748.104239851, CA3 -89253742.144751042, CA0 -89253736.570008814 at
+192^3; -9928903.0965428073 / -9928899.4463859536 / -9928897.9223398492 at
+96^3), acc_forward and acc_backward unchanged, heap-checked at 96^3, 0 real
+errors.  Peaks as "peak (resident + transient)" where the moment matters:
+
+| 192^3, 8 ranks | leaf peak, (b) -> (c) | level 4 | level 3 | level 2 | Factor | time_solve |
+|---|---|---|---|---|---|---|
+| Color | 6.10 (4.43+1.67) -> **5.01** (3.46+1.55) | 4.68 -> 3.20 | 2.30 -> 1.90 | 1.54 -> 1.41 | 12.3 -> 14.6 s | 0.472 -> 0.482 |
+| CA3 | 6.57 (4.90+1.67) -> **4.14** (2.45+1.69) | 4.51 -> 3.06 | 2.27 -> 1.88 | 1.52 -> 1.40 | 12.4 -> 14.5 | 0.509 -> 0.499 |
+| CA0 | 7.33 (5.66+1.67) -> **3.01** (1.34+1.67) | 4.62 -> 3.14 | 2.31 -> 1.91 | 1.52 -> 1.40 | 12.7 -> 15.1 | 0.516 -> 0.507 |
+
+| 96^3, 8 ranks, heap-checked | level 4, (b) -> (c) | level 3 | level 2 | Factor |
+|---|---|---|---|---|
+| Color | 1.82 (1.06+0.76) -> 1.56 (0.80+0.76) | 1.23 -> 1.05 | 0.84 -> 0.78 | 2.24 -> 2.60 s |
+| CA3 | 1.79 (0.94+0.86) -> 1.47 (0.66+0.81) | 1.16 -> 1.00 | 0.84 -> 0.77 | 2.67 -> 3.13 |
+| CA0 | 2.21 (1.35+0.86) -> 1.12 (0.26+0.86) | 1.19 -> 1.02 | 0.84 -> 0.78 | 2.83 -> 3.40 |
+
+On the host at 192^3: near store 3.24 GB at most on the Color and CA3 leaf,
+4.31 on CA0, 2.26-2.29 at level 4; the pinned arenas come to 7.78 GB a rank
+on Color and CA3 and 8.86 on CA0, fill store included.  Against two days
+ago the Color leaf is 20.72 -> 5.01 GB, 4.1x; CA0 22.51 -> 3.01, 7.5x.
+
+**What the peaks are now.**  CA0 landed where the review said (3.0 GB):
+resident 1.34, of which 0.91 is the leaf's own kept factors, which (a)
+stages out only at the next level's start.  CA3 at 4.14 is 0.8 above the
+estimate: resident 2.45 = fill X_RR_full 0.47 + temp2^T packed 0.33 + the
+level's own Schur/edge blocks 0.62 + kept factors 0.67.  Color at 5.01 is
+2.1 above it: with the store gone from the peak moment, the next-highest
+moment is a wave chunk early in the level holding 2.88 GB of *level
+Schur/edges* - step 5's fresh near blocks of the chunk (A_NS + update, c x k
+per neighbor of every box in the chunk, ResidentKind::LevelSchur), allocated
+raw when the chunk is planned and packed only by the owner pass's groups
+behind it.  That is the next item on Color, and its knob is the wave chunk
+(kWaveChunks = 8 a wave, regardless of bytes).  Level 4 is 3.1-3.2 on all
+three paths, with the materialized adopted blocks 1.76-1.87 GB of it - the
+raw parent blocks a wave's read set restores - and the transient half
+unchanged at 1.05-1.09.
+
+**What it costs, measured: +2.2-2.4 s, not the +0.7-1.0 estimated.**  The
+transfers themselves run at the link's rate.  On the Color leaf "near
+blocks held packed" went 0.47 -> 1.37 s for 10.46 GB written (0.40 s of
+that at 26 GB/s) and "adopted blocks materialized" 0.30 -> 0.55 for 7.2 GB
+read (0.27 s); level 4: 0.12 -> 0.47 and 0.09 -> 0.19.  Two things were
+left out of the estimate:
+
+1. *Pinning.*  The arenas grow 256 MB at a time, synchronously, inside the
+   packing: posix_memalign + THP fault-in + cudaHostRegister at 0.15 s a
+   GB.  The near arenas pin 6.2 GB of new memory a rank (7.78 less the fill
+   store's 1.61): "pinning 0.20 s so far" became 1.15 s (CA3 1.08, CA0
+   1.27), all on the critical path - about 0.95 s of the 2.3.  It is paid
+   once a process, but the benchmark factorizes once.
+2. *The traffic at the other sites*: the plan site's store gathers for the
+   box buffers (+0.22 s in "plan boxes [buffers]"), build_parent's parent
+   runs written into the next level's arena in the transition (+0.22 s),
+   level 4's reads and writes above (+0.45) - about 0.9 s more at the link
+   rate, none of it overlapped: the packer still synchronizes after each
+   group's scatter so the compressor can reuse its staging, and the gather
+   precedes each decompression.
+
+Where it goes next, cheapest first: (c2) pin ahead of demand - a worker
+thread pins the next chunk while the current one fills, and pins further
+ahead whenever a request had to wait; ~40 lines in PinnedArena, and it hides
+most of the 0.95 s.  Then, if wanted, the scatter on a side stream
+overlapping the next group's GEMMs (a dedicated span list, an event before
+the compressor reuses its staging; the groups of a wave partition its
+targets, so the next group's gather has to wait for the scatter only across
+a wave boundary) - worth about 0.5 s at 192^3, more lines than (c2) for
+less.  The solve is untouched (0.48-0.51 s).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

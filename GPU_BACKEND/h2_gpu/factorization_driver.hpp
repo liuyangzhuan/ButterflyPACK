@@ -1235,10 +1235,11 @@ public:
                             static_cast<long long>(e.persist_blocks), e.persist_peak / 1e9,
                             e.persist_xrr_bytes / 1e9, e.persist_gen_bytes / 1e9);
             }
-            if (e.fs_host_bytes > 0.0) {
-                std::printf("  [gpu] level %d fill store on the host: %.2f GB at most (pinned arena %.2f GB, "
-                            "pinning %.2f s so far)\n", lvl, e.fs_host_bytes / 1e9, fill_host_arena().pinned() / 1e9,
-                            fill_host_arena().pin_seconds());
+            if (e.fs_host_bytes > 0.0 || e.ns_host_bytes > 0.0) {
+                std::printf("  [gpu] level %d on the host: fill store %.2f GB, near store %.2f GB at most (pinned arenas "
+                            "%.2f GB, pinning %.2f s so far)\n", lvl, e.fs_host_bytes / 1e9, e.ns_host_bytes / 1e9,
+                            (fill_host_arena().pinned() + near_host_arena(0).pinned() + near_host_arena(1).pinned()) / 1e9,
+                            fill_host_arena().pin_seconds() + near_host_arena(0).pin_seconds() + near_host_arena(1).pin_seconds());
                 if (wave_trace_enabled()) {  // which reader takes the host copies (the window must not)
                     std::printf("  [gpu] level %d fill store read as slots (device / host): window %lld / %lld, sketch %lld / "
                                 "%lld, transition %lld / %lld\n", lvl, static_cast<long long>(e.fs_read_dev[0]),

@@ -83,6 +83,16 @@ inline PinnedArena& fill_host_arena() {
     return *arena;
 }
 
+// The near store's host copies (H2 host staging (c)): two arenas by level
+// parity, because a level's transition packs the parent blocks for the
+// level below while its own store is still read.  A level's region holds
+// its store and the runs it adopted from the level above, and resets when
+// its eliminator goes (release_near_store).
+inline PinnedArena& near_host_arena(int level) {
+    static PinnedArena* const arenas[2] = {new PinnedArena, new PinnedArena};  // (live to the process's end)
+    return *arenas[level & 1];
+}
+
 struct EliminatorStats {
     double begin = 0.0;       // point table and block upload
     double sketch = 0.0;      // device sketch (plan, launches, Y download)
@@ -193,6 +203,7 @@ struct EliminatorStats {
     // the scratch a wave's sketch needs for the slots it reads, and what it
     // decompressed in all
     double fs_host_bytes = 0.0;    // the packed temp2^T on the host, at most (H2 host staging)
+    double ns_host_bytes = 0.0;    // the near store on the host, at most
     int64_t fs_read_dev[3] = {0, 0, 0}, fs_read_host[3] = {0, 0, 0};  // slot chunks read by the window, the sketch, the transition: from the device / the host
     double fs_wave_scratch = 0.0;
     double fs_wave_bytes = 0.0;
@@ -1346,8 +1357,11 @@ private:
         if (compact_base_ == nullptr || compact_at_ + bytes > compact_end_) {
             const size_t grown = std::min(kCompactMax, std::max(kCompactFirst, compact_total_));
             const size_t want = std::max(grown, align_up(bytes));
-            char* e = heap_.try_alloc_resident(want, ResidentKind::OwnerNear);
-            if (e == nullptr) return nullptr;
+            // H2 host staging (c): the extents are host memory, device-visible;
+            // the scatter writes them and the gather reads them over PCIe
+            char* e = near_host_arena(level_index_).alloc(want);
+            auto& ns = eliminator_stats();
+            ns.ns_host_bytes = std::max(ns.ns_host_bytes, static_cast<double>(near_host_arena(level_index_).used()));
             compact_extents_.push_back(e);
             compact_base_ = e;
             compact_at_ = 0;
@@ -1359,8 +1373,9 @@ private:
         return p;
     }
     bool tail_grow() {
-        char* e = heap_.try_alloc_resident(kTailSlotsPerExtent * kTailSlot, ResidentKind::OwnerNear);
-        if (e == nullptr) return false;
+        char* e = near_host_arena(level_index_).alloc(kTailSlotsPerExtent * kTailSlot);
+        auto& ns = eliminator_stats();
+        ns.ns_host_bytes = std::max(ns.ns_host_bytes, static_cast<double>(near_host_arena(level_index_).used()));
         const size_t base = tail_extents_.size() * kTailSlotsPerExtent;
         tail_extents_.push_back(e);
         for (size_t i = 0; i < kTailSlotsPerExtent; ++i) {
@@ -1377,15 +1392,16 @@ private:
         return tail_extents_[slot / kTailSlotsPerExtent] + (slot % kTailSlotsPerExtent) * kTailSlot;
     }
     void release_near_store() {
-        for (char* e : compact_extents_) heap_.free(e);
+        // (the extents are the level's host region, reset below, as are the
+        // runs adopted from the level above)
         compact_extents_.clear();
         compact_base_ = nullptr;
         compact_at_ = compact_end_ = 0;
         compact_total_ = 0;
-        for (char* e : tail_extents_) heap_.free(e);
         tail_extents_.clear();
         tail_free_.clear();
         chunk_homes_.clear();
+        near_host_arena(level_index_).reset();
     }
     // l_first, l_max and l_last of each near-field block's compressed length,
     // over the waves that write it.  A slot allocator would give each block
@@ -1444,7 +1460,7 @@ private:
         if (it == packed_live_.end()) return;
         if (--it->second > 0) return;
         packed_live_.erase(it);
-        heap_.free(owner);
+        if (heap_.owns(owner)) heap_.free(owner);  // (a host run goes with its level's region)
         packed_owned_.erase(std::remove(packed_owned_.begin(), packed_owned_.end(), owner),
                             packed_owned_.end());
         ++eliminator_stats().np_reclaimed;
@@ -9354,9 +9370,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     std::vector<std::pair<bool, uint64_t>> raw_to_free;  // (schur?, morton or edge key)
                     size_t group_packed = 0;
                     for (size_t j = 0; j < srcs.size(); ++j) group_packed += comp[j].bytes;
-                    char* owned = group_packed > 0
-                                      ? heap_.try_alloc_resident(group_packed, ResidentKind::Transition)
-                                      : nullptr;
+                    // (the level below adopts these: its host region)
+                    char* owned = group_packed > 0 ? near_host_arena(level_index_ - 1).alloc(group_packed) : nullptr;
                     if (owned != nullptr) out->packed_owned.push_back(owned);
                     size_t owned_at = 0;
                     for (size_t j = 0; j < srcs.size(); ++j) {
@@ -9523,7 +9538,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     close_write_level();
     report_near_sizes();
     eliminator_stats().mat_left += static_cast<int64_t>(packed_schur_.size() + packed_edges_.size());
-    for (char* b : packed_owned_) heap_.free(b);
+    for (char* b : packed_owned_) {
+        if (heap_.owns(b)) heap_.free(b);  // (a host run goes with the region, reset by release_near_store)
+    }
     packed_owned_.clear();
     packed_live_.clear();
     release_near_store();
