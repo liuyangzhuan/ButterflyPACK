@@ -918,6 +918,15 @@ public:
                                 static_cast<double>(h.kind_free_bytes(k)) / 1e9, h.kind_free_count(k));
                 }
             }
+            if (e.gw_products > 0) {
+                std::printf("  [gpu] level %d remote generators: %lld partial products staged in %.2f GB, summed "
+                            "into %lld targets of %.2f GB (%.1f partials a target, at most %lld)\n", level.level,
+                            static_cast<long long>(e.gw_products), e.gw_bytes / 1e9,
+                            static_cast<long long>(e.gw_targets), e.gw_target_bytes / 1e9,
+                            e.gw_targets > 0 ? static_cast<double>(e.gw_products) / static_cast<double>(e.gw_targets)
+                                             : 0.0,
+                            static_cast<long long>(e.gw_max_parts));
+            }
             if (e.ow_groups > 0) {
                 std::printf("  [gpu] level %d owner source window: %.2f GB in the largest group, %.2f GB "
                             "decompressed over %lld groups in %lld slots\n", level.level, e.ow_max / 1e9,

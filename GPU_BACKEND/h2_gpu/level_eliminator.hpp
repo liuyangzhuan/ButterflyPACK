@@ -111,6 +111,13 @@ struct EliminatorStats {
     double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
     int64_t xr_dropped = 0;           // boxes whose X_RR_full is rebuilt from their LU instead of stored
     int64_t xr_rebuilt = 0;           // ... and the rebuilds that cost
+    // apply_remote_generators: the partial products of other ranks' generators,
+    // all staged before they are summed into their targets
+    double gw_bytes = 0.0;            // the staging that costs
+    double gw_target_bytes = 0.0;     // the distinct targets they sum into
+    int64_t gw_products = 0;
+    int64_t gw_targets = 0;
+    int64_t gw_max_parts = 0;         // the most partials one target takes
     int64_t persist_blocks = 0;
     double reclaim_wait = 0.0;    // full heap: waits for background copies to free blocks
     double exchange_wait = 0.0;   // full exchange arena: waits for receive buffers' host copies
@@ -5885,6 +5892,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     // (one sub-buffer per product, in pieces: PiecedBuffer)
     std::vector<size_t> work_starts;
     for (const Product& p : products) work_starts.push_back(p.off);
+    {   // what the staging is made of, against the targets it sums into
+        auto& st = eliminator_stats();
+        st.gw_bytes += static_cast<double>(work_bytes);
+        st.gw_products += static_cast<int64_t>(products.size());
+        st.gw_targets += static_cast<int64_t>(accums.size());
+        for (const Accum& a : accums) {
+            st.gw_target_bytes += static_cast<double>(static_cast<size_t>(a.rows) * a.cols * D);
+            st.gw_max_parts = std::max(st.gw_max_parts, static_cast<int64_t>(a.parts.size()));
+        }
+    }
     PiecedBuffer work;
     work.allocate(heap_, work_starts, work_bytes, ResidentKind::GenWork);
     VBatch<S> prod;
