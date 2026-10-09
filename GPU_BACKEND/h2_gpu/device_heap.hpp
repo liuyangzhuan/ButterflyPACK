@@ -210,6 +210,12 @@ public:
         const char* p = static_cast<const char*>(ptr);
         return base_ != nullptr && p >= base_ && p < base_ + capacity_;
     }
+    // The length of a block this heap handed out (0: not one of its blocks).
+    size_t bytes_of(const void* ptr) const {
+        if (!owns(ptr)) return 0;
+        const auto it = allocated_.find(static_cast<size_t>(static_cast<const char*>(ptr) - base_));
+        return it == allocated_.end() ? 0 : it->second.first;
+    }
     // A transient block if it fits now (no reclaim), else nullptr.
     char* try_alloc(size_t bytes, ResidentKind kind = ResidentKind::Other) {
         if (base_ == nullptr) return nullptr;

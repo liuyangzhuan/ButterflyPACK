@@ -217,6 +217,20 @@ struct KeptSolveLevel {
     std::unordered_map<int64_t, KeptSolveBox> boxes;  // Morton index -> factors
     std::vector<uint32_t> chunk_strides;  // every kept box's chunks, in the order they were kept
     double bytes = 0.0;
+    // Host staging.  Once a level's transition is done nothing of the
+    // factorization reads its store again, so its blocks go to pinned host
+    // memory (stage_kept_level, at the start of the next level) and come
+    // back at the first solve (upload_kept_level).  The boxes keep the device
+    // addresses the blocks had and are rebased on the upload; a read in
+    // between goes through kept_fetch.  The kept-LU logdet is summed before
+    // the LU leaves (device_logdet_kept_level keeps it here).
+    struct StagedBlock { uintptr_t was = 0; size_t off = 0, bytes = 0; };
+    std::vector<StagedBlock> staged;  // by `was`; empty: the blocks are on the device
+    void* host = nullptr;             // staged_bytes long (pageable: pinning ran at 1.9 GB/s)
+    size_t staged_bytes = 0;
+    std::vector<double> logdet_per_box;  // (log|det|, arg) per kept LU, in local box order
+    int64_t logdet_boxes = -1;        // -1: not summed yet
+    bool on_host() const { return host != nullptr; }
 };
 
 struct DeviceSolveStore {
@@ -251,6 +265,7 @@ struct DeviceSolveStore {
         DeviceHeap& heap = DeviceHeap::instance();
         for (auto& [level, kl] : kept) {
             for (char* b : kl.blocks) heap.free(b);
+            if (kl.host != nullptr) std::free(kl.host);
         }
         kept.clear();
         ca_levels.clear();
@@ -261,6 +276,149 @@ struct DeviceSolveStore {
         bytes = 0.0;
     }
 };
+
+// Staged blocks keep a page-aligned start, on the host and once uploaded.
+constexpr size_t kStagedAlign = size_t{64} << 10;
+
+// The staged block holding `p` (an address a kept block had on the device),
+// or null.
+inline const KeptSolveLevel::StagedBlock* staged_block_of(const KeptSolveLevel& kl, const void* p) {
+    const uintptr_t a = reinterpret_cast<uintptr_t>(p);
+    auto it = std::upper_bound(kl.staged.begin(), kl.staged.end(), a,
+                               [](uintptr_t v, const KeptSolveLevel::StagedBlock& b) { return v < b.was; });
+    if (it == kl.staged.begin()) return nullptr;
+    --it;
+    return a < it->was + it->bytes ? &*it : nullptr;
+}
+
+// `bytes` of a kept factor into host memory: from the device, or from the
+// staged copy when the level is on the host.
+inline void kept_fetch(const KeptSolveLevel& kl, const void* src, size_t bytes, void* dst, const char* what) {
+    if (bytes == 0) return;
+    if (!kl.on_host()) {
+        check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost), what);
+        return;
+    }
+    const KeptSolveLevel::StagedBlock* b = staged_block_of(kl, src);
+    if (b == nullptr || reinterpret_cast<uintptr_t>(src) + bytes > b->was + b->bytes) {
+        throw std::runtime_error(std::string("H2 GPU: ") + what + ": not in the level's staged kept store");
+    }
+    std::memcpy(dst, static_cast<const char*>(kl.host) + b->off + (reinterpret_cast<uintptr_t>(src) - b->was), bytes);
+}
+
+// A level's kept blocks to host memory, and off the device.  Pageable memory
+// and synchronous copies: pinning 2.3 GB took 1.2 s where the copy took 0.09,
+// and a pageable copy stages through the driver at a few GB/s, which is
+// cheaper for a copy made once.  The allocation and the copy are timed apart.
+// Every box's pointers are checked to fall in a block, and the first bytes
+// of each block are compared after the copy, so a wrong length or offset
+// fails here and not in the solve.
+inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& alloc_seconds, double& copy_seconds) {
+    using clock = std::chrono::steady_clock;
+    if (kl.on_host() || kl.blocks.empty()) return;
+    DeviceHeap& heap = DeviceHeap::instance();
+    std::vector<KeptSolveLevel::StagedBlock> staged;
+    staged.reserve(kl.blocks.size());
+    size_t total = 0;
+    for (char* b : kl.blocks) {
+        const size_t n = heap.bytes_of(b);
+        if (n == 0) throw std::runtime_error("H2 GPU: a kept block is not on the heap");
+        staged.push_back(KeptSolveLevel::StagedBlock{reinterpret_cast<uintptr_t>(b), total, n});
+        total = align_up(total + n, kStagedAlign);  // (each block keeps a page-aligned start)
+    }
+    std::vector<KeptSolveLevel::StagedBlock> by_was = staged;
+    std::sort(by_was.begin(), by_was.end(),
+              [](const KeptSolveLevel::StagedBlock& a, const KeptSolveLevel::StagedBlock& b) { return a.was < b.was; });
+    for (size_t i = 1; i < by_was.size(); ++i) {  // the blocks must not overlap or repeat (the lookup needs it)
+        if (by_was[i].was < by_was[i - 1].was + by_was[i - 1].bytes) {
+            throw std::runtime_error("H2 GPU: kept blocks overlap: " + std::to_string(by_was[i - 1].was) + "+" +
+                                     std::to_string(by_was[i - 1].bytes) + " and " + std::to_string(by_was[i].was) +
+                                     "+" + std::to_string(by_was[i].bytes) + " (" + std::to_string(by_was.size()) +
+                                     " blocks)");
+        }
+    }
+    {
+        KeptSolveLevel probe;  // (the lookup over the sorted list, before the copy)
+        probe.staged = by_was;
+        auto inside = [&](const void* p, size_t bytes, int64_t morton, const char* what) {
+            if (p == nullptr) return;
+            const KeptSolveLevel::StagedBlock* b = staged_block_of(probe, p);
+            if (b == nullptr || reinterpret_cast<uintptr_t>(p) + bytes > b->was + b->bytes) {
+                throw std::runtime_error(std::string("H2 GPU: the kept ") + what + " of box " + std::to_string(morton) +
+                                         " is not inside the level's kept blocks");
+            }
+        };
+        for (const auto& [morton, kb] : kl.boxes) {
+            inside(kb.T, 0, morton, "T");
+            inside(kb.xsr, 0, morton, "X_SR");
+            inside(kb.xnr, kb.xnr_bytes, morton, "X_NR");
+            inside(kb.lu, 0, morton, "LU");
+            inside(kb.ipiv, static_cast<size_t>(kb.r) * sizeof(int), morton, "pivots");
+        }
+    }
+    auto t0 = clock::now();
+    void* host = nullptr;
+    if (posix_memalign(&host, kStagedAlign, std::max<size_t>(total, kStagedAlign)) != 0 || host == nullptr) {
+        throw std::runtime_error("H2 GPU: no host memory for the staged kept factors");
+    }
+    alloc_seconds += std::chrono::duration<double>(clock::now() - t0).count();
+    t0 = clock::now();
+    check_cuda(cudaStreamSynchronize(stream), "kept factors: to the host");  // (the last writes of the blocks)
+    for (size_t i = 0; i < kl.blocks.size(); ++i) {
+        check_cuda(cudaMemcpy(static_cast<char*>(host) + staged[i].off, kl.blocks[i], staged[i].bytes,
+                              cudaMemcpyDeviceToHost), "kept factors: to the host");
+    }
+    copy_seconds += std::chrono::duration<double>(clock::now() - t0).count();
+    {   // the copy against the device at each block's start, and the bytes against the store's accounting
+        double summed = 0.0;
+        for (size_t i = 0; i < kl.blocks.size(); ++i) {
+            summed += static_cast<double>(staged[i].bytes);
+            char head[256];
+            const size_t n = std::min<size_t>(256, staged[i].bytes);
+            check_cuda(cudaMemcpy(head, kl.blocks[i], n, cudaMemcpyDeviceToHost), "kept factors: check");
+            if (std::memcmp(head, static_cast<const char*>(host) + staged[i].off, n) != 0) {
+                throw std::runtime_error("H2 GPU: staged kept block " + std::to_string(i) + " differs from the device's");
+            }
+        }
+        if (summed + 1.0 < kl.bytes) {
+            throw std::runtime_error("H2 GPU: the staged kept blocks hold fewer bytes than the store counts");
+        }
+    }
+    for (char* b : kl.blocks) heap.free(b);
+    kl.blocks.clear();
+    kl.staged = std::move(by_was);
+    kl.host = host;
+    kl.staged_bytes = total;
+}
+
+// A staged level back on the device, in one block; every box's pointers
+// rebased to it.
+inline void upload_kept_level(KeptSolveLevel& kl, cudaStream_t stream) {
+    if (!kl.on_host()) return;
+    DeviceHeap& heap = DeviceHeap::instance();
+    char* raw = heap.alloc_resident(std::max<size_t>(kl.staged_bytes + kStagedAlign, 1), ResidentKind::KeptFactors);
+    char* dev = reinterpret_cast<char*>(align_up(reinterpret_cast<uintptr_t>(raw), kStagedAlign));
+    check_cuda(cudaStreamSynchronize(stream), "kept factors: upload");
+    check_cuda(cudaMemcpy(dev, kl.host, kl.staged_bytes, cudaMemcpyHostToDevice), "kept factors: upload");
+    auto rebase = [&](const void* p) -> const char* {
+        if (p == nullptr) return nullptr;
+        const KeptSolveLevel::StagedBlock* b = staged_block_of(kl, p);
+        if (b == nullptr) throw std::runtime_error("H2 GPU: a kept factor is outside its level's staged blocks");
+        return dev + b->off + (reinterpret_cast<uintptr_t>(p) - b->was);
+    };
+    for (auto& [morton, kb] : kl.boxes) {
+        kb.T = rebase(kb.T);
+        kb.xsr = rebase(kb.xsr);
+        kb.xnr = rebase(kb.xnr);
+        kb.lu = rebase(kb.lu);
+        kb.ipiv = reinterpret_cast<const int*>(rebase(kb.ipiv));
+    }
+    std::free(kl.host);
+    kl.host = nullptr;
+    kl.staged.clear();
+    kl.staged_bytes = 0;
+    kl.blocks.push_back(raw);
+}
 
 // The store of the active operator (one per operator, device_heap.hpp).
 inline DeviceSolveStore& device_solve_store() {
@@ -553,8 +711,11 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
             xw.h_box_t_dsts[i] = address(offsets[w][i].t);
             xw.h_box_xsr_dsts[i] = address(offsets[w][i].xsr);
         }
-        if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream)) {
-            throw std::runtime_error("H2 GPU solve: could not plan a wave's X_NR decompression");
+        int code = 0;
+        if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream, &code)) {
+            throw std::runtime_error("H2 GPU solve: could not plan wave " + std::to_string(w) + "'s X_NR decompression (" +
+                                     std::to_string(xw.h_srcs.size()) + " chunks of " + std::to_string(xw.boxes.size()) +
+                                     " boxes, bitcomp " + std::to_string(code) + ")");
         }
     }
 #else
@@ -1047,7 +1208,7 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
         const size_t k = static_cast<size_t>(kb.k), r = static_cast<size_t>(kb.r);
         auto copy = [&](const void* src, size_t count) {
             std::vector<DataType> v(count);
-            check_cuda(cudaMemcpy(v.data(), src, count * sizeof(DataType), cudaMemcpyDeviceToHost), "host factors");
+            kept_fetch(kl, src, count * sizeof(DataType), v.data(), "host factors");
             return v;
         };
         if (kb.xnr_pending) {
@@ -1061,8 +1222,7 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
             if (kb.xnr_bytes > 0) {
 #ifdef H2_HAVE_NVCOMP
                 std::vector<char> packed(kb.xnr_bytes);
-                check_cuda(cudaMemcpy(packed.data(), kb.xnr, kb.xnr_bytes, cudaMemcpyDeviceToHost),
-                           "host factors (compressed X_NR)");
+                kept_fetch(kl, kb.xnr, kb.xnr_bytes, packed.data(), "host factors (compressed X_NR)");
                 std::vector<DataType> v(static_cast<size_t>(kb.ntot) * r);
                 decompress_xnr_host<typename DeviceScalar<DataType>::type>(
                     packed.data(), reinterpret_cast<typename DeviceScalar<DataType>::type*>(v.data()),
@@ -1080,8 +1240,7 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
             if (kb.xsr_bytes > 0) {  // H2_compress_factors: compressed like X_NR
 #ifdef H2_HAVE_NVCOMP
                 std::vector<char> packed(kb.xsr_bytes);
-                check_cuda(cudaMemcpy(packed.data(), kb.xsr, kb.xsr_bytes, cudaMemcpyDeviceToHost),
-                           "host factors (compressed X_SR)");
+                kept_fetch(kl, kb.xsr, kb.xsr_bytes, packed.data(), "host factors (compressed X_SR)");
                 std::vector<DataType> v(k * r);
                 decompress_xnr_host<typename DeviceScalar<DataType>::type>(
                     packed.data(), reinterpret_cast<typename DeviceScalar<DataType>::type*>(v.data()),
@@ -1097,8 +1256,7 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
         if (!box.X_RR.is_allocated()) {
             box.X_RR.set_owned(kb.r, kb.r, copy(kb.lu, r * r), MatrixStorage<DataType>::LU_FACTORED);
             box.X_RR_pivots.resize(r);
-            check_cuda(cudaMemcpy(box.X_RR_pivots.data(), kb.ipiv, r * sizeof(int), cudaMemcpyDeviceToHost),
-                       "host factors");
+            kept_fetch(kl, kb.ipiv, r * sizeof(int), box.X_RR_pivots.data(), "host factors");
         }
     };
     for (auto& box : lvl.local_boxes) fill(box);
@@ -1127,7 +1285,7 @@ int64_t device_logdet_kept_level(ParallelTree<CoordType, DataType>* tree, int le
     DeviceSolveStore& store = device_solve_store();
     const auto kit = store.kept.find(level);
     if (kit == store.kept.end() || level < 0 || level >= tree->num_levels) return 0;
-    const KeptSolveLevel& kl = kit->second;
+    KeptSolveLevel& kl = kit->second;
     const auto& lvl = tree->levels[static_cast<size_t>(level)];
     std::vector<LogdetItem> items;
     std::vector<int64_t> mortons;
@@ -1143,6 +1301,21 @@ int64_t device_logdet_kept_level(ParallelTree<CoordType, DataType>* tree, int le
         mortons.push_back(box.morton_index);
     }
     if (items.empty()) return 0;
+    if (kl.on_host()) {
+        // the sum was taken before the LU left the device (stage_kept_level
+        // runs this first); the boxes it covered are those without a host
+        // LU, which is what `items` holds now as well
+        if (kl.logdet_boxes != static_cast<int64_t>(items.size())) {
+            throw std::runtime_error("logdet: level " + std::to_string(level) + " was staged with " +
+                                     std::to_string(kl.logdet_boxes) + " kept LUs, " +
+                                     std::to_string(items.size()) + " are asked for");
+        }
+        for (int64_t i = 0; i < kl.logdet_boxes; ++i) {  // box by box, as the device path adds them
+            logabs += kl.logdet_per_box[static_cast<size_t>(2 * i)];
+            arg += kl.logdet_per_box[static_cast<size_t>(2 * i + 1)];
+        }
+        return kl.logdet_boxes;
+    }
     Context& ctx = Context::instance();
     ctx.activate();
     cudaStream_t stream = ctx.stream();
@@ -1170,6 +1343,8 @@ int64_t device_logdet_kept_level(ParallelTree<CoordType, DataType>* tree, int le
         logabs += out[2 * i];
         arg += out[2 * i + 1];
     }
+    kl.logdet_per_box = out;  // (kept for after the level is staged)
+    kl.logdet_boxes = static_cast<int64_t>(n);
     return static_cast<int64_t>(n);
   }
 }
@@ -1341,6 +1516,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 break;
             }
             const bool kept_level = store.kept.count(level) != 0;
+            if (kept_level && store.kept.at(level).on_host()) {  // (uploaded again at the setup)
+                need += static_cast<double>(store.kept.at(level).staged_bytes);
+            }
             auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
                 const int64_t n = box.num_points, k = static_cast<int64_t>(box.skeleton_indices.size()),
                               r = static_cast<int64_t>(box.redundant_indices.size());
@@ -1421,7 +1599,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         cudaStream_t stream = ctx.stream();
         store.levels.resize(static_cast<size_t>(leaf + 1));
         double upload_seconds = 0.0, register_seconds = 0.0, pack_seconds = 0.0, wait_seconds = 0.0;
-        double kept_bytes = 0.0;
+        double kept_bytes = 0.0, staged_bytes = 0.0;
         for (const auto& [level, kl] : store.kept) kept_bytes += kl.bytes;
         cudaEvent_t staged[2] = {nullptr, nullptr};
         int turn = 0;
@@ -1439,6 +1617,13 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     materialize_host_factors_level(tree, level, kit->second);
                 }
                 continue;
+            }
+            if (auto kit = store.kept.find(level); kit != store.kept.end() && kit->second.on_host()) {
+                // staged to the host after its level: back on the device for the sweeps
+                const auto tu = clock::now();
+                staged_bytes += static_cast<double>(kit->second.staged_bytes);
+                upload_kept_level(kit->second, Context::instance().stream());
+                upload_seconds += std::chrono::duration<double>(clock::now() - tu).count();
             }
             const size_t nb = lvl.local_boxes.size();
             auto is_local = [&](int64_t m) {
@@ -1802,16 +1987,18 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         MPI_Allreduce(MPI_IN_PLACE, &seconds, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &kept_bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
+        MPI_Allreduce(MPI_IN_PLACE, &staged_bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         std::string kept_levels, on_host;
         for (const auto& [level, kl] : store.kept) kept_levels += (kept_levels.empty() ? "" : ",") + std::to_string(level);
         for (int level : host_levels) on_host += (on_host.empty() ? "" : ",") + std::to_string(level);
         (void)verbosity;
         if (rank == 0) {  // once per factorization, also for a silent first solve
-            std::printf("GPU solve: set up in %.2f s; factors kept on the device during the factorization: %s "
-                        "(up to %.2f GB per rank), uploaded now: up to %.2f GB per rank (upload %.2f s [host packing "
+            std::printf("GPU solve: set up in %.2f s; factors kept during the factorization: %s "
+                        "(up to %.2f GB per rank, of which %.2f GB staged to the host at the levels' ends and brought "
+                        "back here), uploaded now: up to %.2f GB per rank (upload %.2f s [host packing "
                         "%.2f, waiting for the copies %.2f], neighbor registration %.2f s on rank 0)\n",
                         seconds, kept_levels.empty() ? "none" : ("levels " + kept_levels).c_str(), kept_bytes / 1e9,
-                        bytes / 1e9, upload_seconds, pack_seconds, wait_seconds, register_seconds);
+                        staged_bytes / 1e9, bytes / 1e9, upload_seconds, pack_seconds, wait_seconds, register_seconds);
             if (!host_levels.empty()) {
                 std::string sizes;
                 for (int level : host_levels) {

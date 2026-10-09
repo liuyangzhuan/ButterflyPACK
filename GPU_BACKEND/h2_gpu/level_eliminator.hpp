@@ -1822,9 +1822,11 @@ private:
         }
         skipped_factors_.clear();
     }
-    double kept_bytes_total() const {
+    double kept_bytes_total() const {  // (what is on the device: a staged level's store is not)
         double bytes = kept_.bytes;
-        for (const auto& [lvl, kl] : device_solve_store().kept) bytes += kl.bytes;
+        for (const auto& [lvl, kl] : device_solve_store().kept) {
+            if (!kl.on_host()) bytes += kl.bytes;
+        }
         return bytes;
     }
     void drop_kept() {

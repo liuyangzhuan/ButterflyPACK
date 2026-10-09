@@ -296,7 +296,31 @@ public:
     // kernel).  Its sketches run on the host when a box of any rank is
     // wider than the device sketch's packed lists take.  `announce`: this
     // rank prints the decision.
+    // Host staging of the solve factors.  A level's kept store is read by
+    // nothing of the factorization once its transition is done (the kept-LU
+    // logdet is summed here first), so at the start of a level the deeper
+    // levels' stores go to pinned host memory, and come back at the first
+    // solve.  What it buys is the store's bytes under every later level.
+    void stage_solve_factors(int lvl, bool announce) {
+        DeviceSolveStore& store = device_solve_store();
+        double pin_s = 0.0, copy_s = 0.0, bytes = 0.0;
+        std::string which;
+        for (auto& [level, kl] : store.kept) {
+            if (level <= lvl || kl.on_host() || kl.blocks.empty()) continue;
+            double la = 0.0, ar = 0.0;
+            device_logdet_kept_level(tree_, level, la, ar);  // (kept in the store before the LU leaves)
+            stage_kept_level(kl, Context::instance().stream(), pin_s, copy_s);
+            bytes += static_cast<double>(kl.staged_bytes);
+            which += (which.empty() ? "" : ",") + std::to_string(level);
+        }
+        if (announce && bytes > 0.0) {
+            std::printf("  [gpu] level %d start: the solve factors of level%s %s staged to the host, %.2f GB "
+                        "(allocation %.2f s, copy %.2f s)\n", lvl, which.find(',') != std::string::npos ? "s" : "",
+                        which.c_str(), bytes / 1e9, pin_s, copy_s);
+        }
+    }
     void start_level(int lvl, bool use_streamed_level, MPI_Comm level_comm, bool announce) {
+        stage_solve_factors(lvl, announce);
         if (!(color_gpu_enabled() && use_streamed_level && lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
               opt_.is_symmetric && !opt_.is_hermitian)) {
             return;
@@ -347,6 +371,7 @@ public:
     // Returns whether the device runs the level (every box fits the device
     // sketch's packed lists on every rank, and the eliminator supports it).
     bool start_owner_level(int lvl, MPI_Comm level_comm, const OwnerPlanView* view, bool announce) {
+        stage_solve_factors(lvl, announce);
         if (wave_trace_enabled()) trace_.start_begin();
         const Level& level = tree_->levels[static_cast<size_t>(lvl)];
         int fits = 1;
@@ -404,6 +429,7 @@ public:
     // Returns whether the device runs the level: every box fits the device
     // sketch's packed lists on every rank, and the eliminator supports it.
     bool start_ca_level(int lvl, MPI_Comm level_comm, bool announce) {
+        stage_solve_factors(lvl, announce);
         if (wave_trace_enabled()) trace_.start_begin();
         const Level& level = tree_->levels[static_cast<size_t>(lvl)];
         int fits = 1;
@@ -1083,6 +1109,10 @@ public:
         if (staging != nullptr) heap.free(staging);
         if (!moves.empty()) {
             for (auto& [level, kl] : store.kept) {
+                // (a staged level's pointers are the addresses its blocks had,
+                // kept for the upload's rebase; its old ranges may since have
+                // been reused by blocks that just moved)
+                if (kl.on_host()) continue;
                 for (char*& b : kl.blocks) b = DeviceHeap::relocated(b, moves);
                 for (auto& [morton, kb] : kl.boxes) {
                     kb.T = DeviceHeap::relocated(kb.T, moves);

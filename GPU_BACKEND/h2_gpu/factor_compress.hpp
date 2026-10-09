@@ -357,7 +357,7 @@ private:
 
 // Build a wave's plan and upload its pointer arrays.  `temp` is scratch the
 // plan keeps for the compressed headers.
-inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t stream) {
+inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t stream, int* code = nullptr) {
     if (w.boxes.empty()) return true;
     const size_t nb = w.boxes.size();    // boxes, for the pointer patch
     const size_t nc = w.h_srcs.size();   // chunks, the decompression batch
@@ -390,7 +390,9 @@ inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t
     check_cuda(cudaMemcpyAsync(w.d_box_idx, w.boxes.data(), nb * sizeof(int),
                                cudaMemcpyHostToDevice, stream), "xnr wave box indices");
     check_cuda(cudaStreamSynchronize(stream), "xnr wave pointers");
-    if (bitcompCreateBatchPlanFromCompressedData(&w.plan, w.d_srcs, nc, nullptr, stream) != BITCOMP_SUCCESS) {
+    const bitcompResult_t r = bitcompCreateBatchPlanFromCompressedData(&w.plan, w.d_srcs, nc, nullptr, stream);
+    if (r != BITCOMP_SUCCESS) {
+        if (code != nullptr) *code = static_cast<int>(r);
         return false;
     }
     w.have_plan = true;

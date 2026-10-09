@@ -3428,6 +3428,57 @@ rebuilt (fill X_RR_full 0.45 against 0.28).
 **The three paths at the 192^3 leaf**: Color 7.41 GB / 11.1 s, CA3 7.91 /
 11.2, CA0 8.74 / 11.5.  Host staging now applies to all three alike.
 
+#### Host staging (a), done (2026-10-09): the kept factors leave the device between levels
+
+At each level's start (start_level, start_owner_level, start_ca_level) every
+deeper level's kept store goes to host memory (stage_kept_level): the kept-LU
+logdet is summed on the device first and kept per box, so
+device_logdet_kept_level adds it later in the same order and the logdet stays
+bit-identical; the blocks are copied end to end with page-aligned starts, then
+freed; the boxes keep the device addresses the blocks had.  The first solve's
+set-up brings each level back in one block and rebases the pointers
+(upload_kept_level); a host-copy reader in between goes through kept_fetch;
+the solve's eligibility counts the staged bytes as needed again.  Pageable
+memory, synchronous copies: pinning ran at 1.9 GB/s (1.2-1.6 s a leaf store
+where the copy took 0.09), a pageable copy stages at ~7 GB/s out and ~4.6 GB/s
+back, once.
+
+| 192^3, 8 ranks | Color | CA3 | CA0 |
+|---|---|---|---|
+| leaf peak | 7.41 -> 7.41 | 7.91 -> 7.91 | 8.74 -> 8.74 |
+| level 4 peak | 6.98 -> **4.71** | 6.86 -> **4.54** | 7.67 -> **4.64** |
+| level 3 / level 2 peak | 5.30 / 4.72 -> 2.31 / 1.54 | 5.31 / 4.74 -> 2.29 / 1.52 | 6.06 / 5.46 -> 2.32 / 1.52 |
+| staged, rank 0 | 3.29 GB | 3.26 GB | 3.99 GB |
+| staging copies | 0.45 s (+0.10 alloc) | 0.41 s | 0.52 s (+0.08) |
+| Factor | 11.1 -> 11.9 s | 11.2 -> 11.8 s | 11.5 -> 12.6 s |
+| solve set-up, first solve | 0.11 -> 0.35 s | 0.11 -> 0.35 s | 0.13 -> 0.41 s |
+| time_solve | 0.476 -> 0.473 | 0.496 -> 0.504 | 0.505 -> 0.515 |
+
+logdet and the accuracies are bit-identical on all three paths at both sizes
+(96^3 heap-checked).  The leaf is now the only level that binds, by 2.7-4.1
+GB; under it nothing changed, which is what (b) and (c) are for.  Factor's
++0.6-1.1 s is the copies (0.4-0.6 s) plus the stream sync the staging puts on
+the critical path at each level start; an asynchronous copy with
+stream-ordered frees would overlap the next level's host planning, a
+follow-up if the time matters.
+
+**The bug, and why ten runs were needed to see it.**  The first gate failed
+the solve's plan with bitcomp -2 (invalid data) on a level-3 wave, on a
+wave that moved from run to run, while every check said the staging was
+right: the copy was byte-identical to the device, the accounting matched the
+heap to the byte, every chunk planned alone at its original address, every
+chunk's head matched the host copy after the upload, the uploaded block was
+intact before and after the failed plan, no pointer lay outside it, and
+bitcomp (offline, on real chunks) accepted any pointer order and any
+relocation.  All of those compared the staged copy *through the same
+mapping* as the solve, so a mapping error passed them all.  What caught it
+was an independent record: the boxes' pointers at staging against those at
+upload - five of 64 boxes had T, X_SR and the LU rewritten by one offset.
+The driver's between-level compaction relocates every kept store's pointers
+for the blocks the heap moved; a staged level's pointers are the addresses
+its freed blocks had, and those ranges were reused by blocks that then moved.
+The compaction now skips staged levels.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
