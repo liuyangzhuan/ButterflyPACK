@@ -3109,6 +3109,47 @@ chunked: once a level's transient is small, the next level up inherits the
 whole kept set and the whole parent set at once.  CA0's leaf still binds, at
 9.18 = 8.15 resident + 1.03.
 
+#### The remote generators' temp2^T is staged a group at a time (2026-10-09)
+
+`fill temp2^T raw` at Color's level 4 was apply_remote_generators' doing: one
+raw block per remote generator for its transposed temp2^T, all allocated up
+front, all transposed in one launch, and all waiting on a single compression
+pass at the end - 1.18 GB live at the level's peak for the sake of a store
+that comes to 0.12.  The same stage-everything-then-collapse shape as the
+sketch's [P; W] and the generators' products.
+
+Now one staging sized for the largest group (kFillStagingBudget, 64 MB) is
+shared: a group's transposes launch as a contiguous sub-range of the list
+already in the image, its slots are packed (the packer waits for the staging
+to be read), and the next group reuses it.  A generator whose pack finds no
+room gets a block of its own copied out before the staging moves on, so the
+fallback is what it was; it never fired here.  Without compression nothing
+changes, since then the raw block *is* the fill source.
+
+| 192^3 Color | max peak | level 4 | leaf | Factor |
+|---|---|---|---|---|
+| before | 7.97 (level 4) | 7.97 = 7.68 + 0.28 | 7.75 | 11.0 s |
+| after | **7.75** (leaf) | **7.33** = 6.24 + 1.09 | 7.75 | 10.9 s |
+
+logdet is bit-identical on both paths at both sizes - bitcomp is deterministic
+per block, and only the staging address changed - and CA0, which sends no
+generators, is identical throughout.  Level 4's resident falls 1.44 GB and
+the leaf binds again on Color, 0.42 GB above level 4.
+
+**Where the two paths stand**, every item tagged, no transient above 0.4 GB:
+
+| Color leaf, 7.75 GB | GB | | CA0 leaf, 9.18 GB | GB |
+|---|---|---|---|---|
+| owner near blocks | 3.24 | | owner near blocks | 4.31 |
+| fill temp2^T packed | 1.47 | | kept factors | 1.90 |
+| kept factors | 1.47 | | fill temp2^T packed | 1.58 |
+| transient, all of it | 1.03 | | transient, all of it | 1.03 |
+| X_RR_full, adopted, slots, points | 0.53 | | X_RR_full, adopted, slots, points | 0.35 |
+
+Color's level 4 underneath is the leaf's kept factors (2.65) and its parents
+put back lazily, 6.24 resident, which no item here touches.  Across the two
+days: Color 20.72 -> 7.75 GB (-63%), CA0 22.51 -> 9.18, Factor 7.49 -> 10.9 s.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

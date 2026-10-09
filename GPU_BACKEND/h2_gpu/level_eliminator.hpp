@@ -5613,6 +5613,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     PiecedBuffer tmp;
     tmp.allocate(heap_, tmp_starts, tmp_bytes, ResidentKind::GenUpload);
     std::vector<TransposeItem> transposes;
+    // With compression on, the generators' temp2^T is transposed into one
+    // staging a group at a time and packed group by group, instead of a raw
+    // block each until a single pass at the end.  A group's transposes are
+    // contiguous in the list, one a generator in gens order.
+    struct GenGroup { std::vector<size_t> gens; std::vector<size_t> off; size_t bytes = 0; size_t first_tr = 0; };
+    std::vector<GenGroup> gen_groups;
+    size_t gen_staging_max = 0;
     int max_tr_m = 0, max_tr_n = 0;
     for (size_t i = 0; i < gens.size(); ++i) {
         Gen& g = gens[i];
@@ -5647,15 +5654,34 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         const size_t t_bytes = align_up(nr);
         const size_t xrr_bytes = static_cast<size_t>(g.r) * g.r * D;
         char* persist = heap_.alloc_resident(std::max<size_t>(xrr_bytes, 1), ResidentKind::FillXrr);
-        char* persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+        // temp2^T: raw only until its slots are packed, so with compression on
+        // it goes into the group staging below rather than a block of its own.
+        // One block a generator, all waiting on a single pass at the end, was
+        // 1.18 GB of Color's level 4 at the peak.
+        char* persist_t2t = nullptr;
+        if (compress_factors_ < 1) {
+            persist_t2t = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+        } else {
+            if (gen_groups.empty() || (gen_groups.back().bytes > 0 &&
+                                       gen_groups.back().bytes + t_bytes > kFillStagingBudget)) {
+                gen_groups.push_back(GenGroup{});
+                gen_groups.back().first_tr = transposes.size();
+            }
+            GenGroup& gg = gen_groups.back();
+            gg.gens.push_back(i);
+            gg.off.push_back(gg.bytes);
+            gg.bytes += t_bytes;
+            gen_staging_max = std::max(gen_staging_max, gg.bytes);
+        }
         {
             auto& es = eliminator_stats();
-            es.persist_bytes += static_cast<double>(xrr_bytes + t_bytes);
-            es.persist_gen_bytes += static_cast<double>(xrr_bytes + t_bytes);
+            const size_t raw = persist_t2t != nullptr ? t_bytes : 0;
+            es.persist_bytes += static_cast<double>(xrr_bytes + raw);
+            es.persist_gen_bytes += static_cast<double>(xrr_bytes + raw);
             es.persist_peak = std::max(es.persist_peak, es.persist_bytes);
             ++es.persist_blocks;
         }
-        keep_fill_source(*g.st, persist, xrr_bytes, persist_t2t, t_bytes, gb->one_hop);
+        keep_fill_source(*g.st, persist, xrr_bytes, persist_t2t, persist_t2t != nullptr ? t_bytes : 0, gb->one_hop);
         if (owner_ != nullptr) g.st->readers = std::numeric_limits<int>::max() / 2;  // (no host copy to restore it from)
         g.st->temp2t = reinterpret_cast<const S*>(persist_t2t);
         g.st->xrr_full = reinterpret_cast<const S*>(persist);
@@ -5963,6 +5989,35 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             prods[j].entries.push_back({p.a, p.b, acc.target, p.m, p.n, p.k, p.lda, p.ldb, acc.ld});
         }
     }
+    // The staging, and the grouped generators' temp2^T addresses into it,
+    // before the transposes are baked into the image.  No room for it means
+    // the old way: a block each, packed in one pass at the end.
+    char* gen_staging = nullptr;
+    if (!gen_groups.empty()) {
+        gen_staging = heap_.try_alloc(std::max<size_t>(gen_staging_max, 1), ResidentKind::Codec);
+        for (GenGroup& gg : gen_groups) {
+            for (size_t j = 0; j < gg.gens.size(); ++j) {
+                Gen& g = gens[gg.gens[j]];
+                char* dst = gen_staging != nullptr ? gen_staging + gg.off[j] : nullptr;
+                if (dst == nullptr) {
+                    const size_t t_bytes = align_up(static_cast<size_t>(g.ntot) * g.r * D);
+                    dst = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+                    auto& es = eliminator_stats();
+                    es.persist_bytes += static_cast<double>(t_bytes);
+                    es.persist_gen_bytes += static_cast<double>(t_bytes);
+                    if (early_free_sources_) {
+                        g.st->persist_t2t = dst;
+                        g.st->persist_t2t_bytes = t_bytes;
+                    } else {
+                        level_allocs_.push_back(dst);
+                    }
+                }
+                g.st->temp2t = reinterpret_cast<const S*>(dst);
+                transposes[gg.first_tr + j].dst = reinterpret_cast<S*>(dst);
+            }
+        }
+        if (gen_staging == nullptr) gen_groups.clear();  // one pass at the end, as before
+    }
     const size_t off_transposes = meta_.append(transposes);
     const size_t off_evals = meta_.append(evals);
     const size_t off_gathers = meta_.append(gathers);
@@ -5971,26 +6026,67 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     rep_nn.stage(meta_);
     char* md = meta_.upload(meta_device_, stream);
     stats.bytes_up += static_cast<double>(meta_.size());
-    launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes), static_cast<int>(transposes.size()),
-                     max_tr_m, max_tr_n, stream);
-
-    // ---- the generator fill sources, compressed a slot at a time now that
-    // their transposes have written temp2^T (the second keep_fill_source site;
-    // these are 5.15 GB of the leaf's resident heap at 192^3 on 8 ranks)
-    if (compress_factors_ >= 1) {
-        std::vector<std::vector<int64_t>> counts(gens.size());
-        std::vector<FillSrcRef> items;
-        items.reserve(gens.size());
-        for (size_t gi = 0; gi < gens.size(); ++gi) {
-            const Gen& g = gens[gi];
-            if (g.st == nullptr || g.st->temp2t == nullptr || g.r == 0 || g.ntot == 0) continue;
-            const Box* gb = level_.find_generator_box(g.morton);
-            if (gb == nullptr) continue;
-            counts[gi].reserve(gb->one_hop.size());
-            for (int64_t m : gb->one_hop) counts[gi].push_back(current_size(state_of(m)));
-            items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts[gi], g.st});
+    // A generator's fill-source slots, for the packer.
+    auto fill_item = [&](size_t gi, std::vector<int64_t>& counts, std::vector<FillSrcRef>& items) {
+        const Gen& g = gens[gi];
+        if (g.st == nullptr || g.st->temp2t == nullptr || g.r == 0 || g.ntot == 0) return;
+        const Box* gb = level_.find_generator_box(g.morton);
+        if (gb == nullptr) return;
+        counts.reserve(gb->one_hop.size());
+        for (int64_t m : gb->one_hop) counts.push_back(current_size(state_of(m)));
+        items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts, g.st});
+    };
+    if (gen_groups.empty()) {
+        launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes),
+                         static_cast<int>(transposes.size()), max_tr_m, max_tr_n, stream);
+        // ---- the generator fill sources, compressed a slot at a time now
+        // that their transposes have written temp2^T (the second
+        // keep_fill_source site)
+        if (compress_factors_ >= 1) {
+            std::vector<std::vector<int64_t>> counts(gens.size());
+            std::vector<FillSrcRef> items;
+            items.reserve(gens.size());
+            for (size_t gi = 0; gi < gens.size(); ++gi) fill_item(gi, counts[gi], items);
+            compress_fill_source_set(items, stream);
         }
-        compress_fill_source_set(items, stream);
+    } else {
+        // ---- group by group: the group's transposes into the staging, its
+        // slots packed (which waits for the staging to be read), the staging
+        // reused by the next.  A generator whose pack found no room keeps a
+        // raw block of its own, copied out before the staging moves on.
+        for (const GenGroup& gg : gen_groups) {
+            launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes) + gg.first_tr,
+                             static_cast<int>(gg.gens.size()), max_tr_m, max_tr_n, stream);
+            std::vector<std::vector<int64_t>> counts(gg.gens.size());
+            std::vector<FillSrcRef> items;
+            items.reserve(gg.gens.size());
+            for (size_t j = 0; j < gg.gens.size(); ++j) fill_item(gg.gens[j], counts[j], items);
+            compress_fill_source_set(items, stream);
+            for (size_t j = 0; j < gg.gens.size(); ++j) {
+                Gen& g = gens[gg.gens[j]];
+                if (g.st == nullptr) continue;
+                if (g.st->t2t_packed != nullptr) {
+                    g.st->temp2t = nullptr;  // the packed form is the fill source now
+                    continue;
+                }
+                const size_t t_bytes = align_up(static_cast<size_t>(g.ntot) * g.r * D);
+                char* own = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+                check_cuda(cudaMemcpyAsync(own, gen_staging + gg.off[j], t_bytes, cudaMemcpyDeviceToDevice, stream),
+                           "generator temp2^T kept raw");
+                auto& es = eliminator_stats();
+                es.persist_bytes += static_cast<double>(t_bytes);
+                es.persist_gen_bytes += static_cast<double>(t_bytes);
+                if (early_free_sources_) {
+                    g.st->persist_t2t = own;
+                    g.st->persist_t2t_bytes = t_bytes;
+                } else {
+                    level_allocs_.push_back(own);
+                }
+                g.st->temp2t = reinterpret_cast<const S*>(own);
+            }
+            check_cuda(cudaStreamSynchronize(stream), "generator staging");  // before the next group overwrites it
+        }
+        heap_.free(gen_staging);
     }
     eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
     launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
