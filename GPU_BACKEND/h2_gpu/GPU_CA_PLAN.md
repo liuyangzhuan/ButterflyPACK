@@ -3590,6 +3590,15 @@ alternative is a contiguous device staging per group with one bulk copy
 each way and a host-side scatter (the background copier's thread has
 spare time).  Thirty minutes with pin_bench.cu's harness.
 
+**Measured (bw_bench.cu, 2026-10-09).**  copy_spans's pattern against mapped
+host memory runs at the link's rate: 26.3-26.4 GB/s writing to the host and
+26.7 GB/s reading from it, for spans of 64, 256 and 512 KB, sequential or
+scattered, 4-byte or 16-byte words - the same as cudaMemcpy - and all four
+ranks of a node get it at once, each GPU on its own link.  So the estimate
+above holds at its better end: 0.40 s of writes and 0.27 s of reads a Color
+leaf level (CA0 0.57 and 0.39), +0.7-1.0 s unoverlapped, and no host-side
+scatter is needed.
+
 **The honest limit.**  Host memory per rank is 64 GB on these nodes.  At
 8x the boxes a rank the three staged stores come to about 8.5 GB x 8 = 68
 GB a rank - the edge of what fits, with the near store 26 GB of it.  At
