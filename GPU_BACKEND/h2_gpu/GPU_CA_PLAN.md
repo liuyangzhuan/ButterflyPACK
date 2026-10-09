@@ -3252,6 +3252,45 @@ majority and exact by design; what is left of the kept block is FP32 on the
 three stores (deferred).  Across the two days: Color 20.72 -> 7.40 GB (-64%),
 CA0 22.51 -> 8.74 (-61%), Factor 7.49 -> 11.2 s.
 
+#### With and without bitcomp, same binary (2026-10-09)
+
+`--H2_compress_factors 0` against 1, commit 66a1002, 8 ranks on 2 nodes.
+96^3, heap-checked (the peak is level 4 on both):
+
+| 96^3 | Color off | Color on | CA0 off | CA0 on |
+|---|---|---|---|---|
+| peak (resident + transient) | 6.21 (5.54 + 0.67) | **1.84** (1.08 + 0.76) | 10.02 (9.34 + 0.67) | **2.48** (1.62 + 0.86) |
+| the resident's two largest | temp2^T raw 3.20, kept 2.13 | Schur/edges 0.61, owner near 0.27 | kept 4.65, temp2^T raw 4.32 | owner near 1.09, temp2^T 0.26 |
+| kept store, rank 0, leaf | 2.18 (1.0x) | 0.28 (7.9x) | 4.69 (1.0x) | 0.55 (8.5x) |
+| Factor | 1.39 s | 2.23 s (+60%) | 1.34 s | 2.63 s (+96%) |
+| GPU solve | 0.097 s | 0.112 s (+16%) | 0.116 s | 0.136 s (+18%) |
+| time_mvp | 0.250 s | 0.274 s | 0.285 s | 0.300 s |
+| acc_mvp | 7.47e-4 | 1.55e-3 (2.1x) | 7.53e-4 | 1.48e-3 (2.0x) |
+| acc_forward | 3.46e-3 | 1.01e-2 (2.9x) | 3.42e-3 | 9.73e-3 (2.8x) |
+| logdet | -9928892.040 | -9928903.097 (1.1e-6) | -9928892.266 | -9928897.922 (5.7e-7) |
+
+Without compression the transient is the sketch's [P; W] (0.63 GB) and the
+resident is the raw fill source plus the raw kept factors; with it, the
+transient is the budgets (source window 0.54) and the peak is 3.4x / 4.0x
+lower.  The accuracy cost is the standing one: the compressed 96^3 run has
+read 1.0e-2 since the first log, and the lossy stores add roughly 7e-3 to
+acc_forward at either size - 2.9x of a 3.5e-3 base at 96^3, +3% of the
+1.55e-2 base at 192^3.
+
+192^3 on 8 ranks does not run without compression any more: the leaf dies in
+its 12th wave of 16 on a 3.85 GB request with 21.7 GB in use and 2.4 GB in
+the largest free range - the raw fill source (17.45 GB a level) and the raw
+kept X_NR (another 17.45, which only the pledge lets them share) cannot both
+sit on the card, and there is no option to decline the keep (decide_solve_keep
+is automatic, per the env policy).  16 ranks is not a valid count (the 3D
+tree needs 8^k; 64 would be 16 nodes and 512 boxes a rank, a different
+regime).  The uncompressed figures that exist for this case are from the
+2026-10-05/06 code, when it still fitted with nothing to spare: peak 33.20 GB
+(resident 26.18 + transient 7.02), Factor 7.71 s, GPU solve 0.257 s, logdet
+-89253588.194065422; against today's compressed 7.41 GB, 11.2 s, 0.476 s.
+(The 20.72 GB / 7.49 s quoted as "before" in the running tally is the
+compressed run with the near store off, not an uncompressed one.)
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
