@@ -3627,6 +3627,15 @@ errors.  Peaks as "peak (resident + transient)" where the moment matters:
 | Color | 6.10 (4.43+1.67) -> **5.01** (3.46+1.55) | 4.68 -> 3.20 | 2.30 -> 1.90 | 1.54 -> 1.41 | 12.3 -> 14.6 s | 0.472 -> 0.482 |
 | CA3 | 6.57 (4.90+1.67) -> **4.14** (2.45+1.69) | 4.51 -> 3.06 | 2.27 -> 1.88 | 1.52 -> 1.40 | 12.4 -> 14.5 | 0.509 -> 0.499 |
 | CA0 | 7.33 (5.66+1.67) -> **3.01** (1.34+1.67) | 4.62 -> 3.14 | 2.31 -> 1.91 | 1.52 -> 1.40 | 12.7 -> 15.1 | 0.516 -> 0.507 |
+| Color, no bitcomp (2026-10-06, A_f192off / A_v192off) | 33.21 (26.18+7.02) | 16.04 | 10.88 | 8.39 | 7.54 s (7.71 in its twin) | 0.263 (18.92 GB uploaded at the first solve, set-up 2.25 s) |
+
+The uncompressed row is the only one there is at 192^3: on 8 ranks the
+uncompressed leaf has died on the heap since the kept store exists (see
+"With and without bitcomp"), and CA0 and CA3 never ran uncompressed at this
+size.  Its accuracy is the standing comparison, acc_forward 4.20e-3 against
+1.60e-2 compressed (acc_mvp 8.11e-4 vs 2.95e-3); logdet -89253588.194 vs
+-89253748.104 (1.8e-6).  Against it, (c) is 6.6x less peak memory on Color
+for 1.9x the Factor time and 1.8x the solve.
 
 | 96^3, 8 ranks, heap-checked | level 4, (b) -> (c) | level 3 | level 2 | Factor |
 |---|---|---|---|---|
