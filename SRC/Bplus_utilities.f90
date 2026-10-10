@@ -153,6 +153,15 @@ module Bplus_Utilities
    integer(kind=8), save:: BP_MD_slot_budget_bytes = -1_8
    integer, parameter:: BP_MD_max_rounds = 64
    integer, save:: BP_MD_last_nround = 1
+   !>**** DIAGNOSTIC (verbosity>=2): per-level phase timers of the current matvec on this
+   ! rank, split by how blocks were applied -- representatives standalone in the block loop
+   ! (rep) against duplicates batched in Bplus_MD_compact_dup_MVP_local_N (dup). Columns as
+   ! in BP_MD_phase_snapshot. Reduced across ranks once per matvec by Bplus_MD_MVP_diag.
+   integer, parameter:: BP_MD_nphase = 14
+   real(kind=8), save:: BP_MD_lev_rep(0:LplusMax, BP_MD_nphase) = 0d0
+   real(kind=8), save:: BP_MD_lev_dup(0:LplusMax, BP_MD_nphase) = 0d0
+   integer, save:: BP_MD_lev_nrep(0:LplusMax) = 0
+   integer, save:: BP_MD_lev_ndup(0:LplusMax) = 0
 
 contains
 
@@ -391,6 +400,30 @@ contains
    ! hwm = VmHWM, the high-water mark since process start or since the last reset. -1 where
    ! /proc is unavailable. The kernel flushes per-thread RSS counters lazily, so a single
    ! reading can be low by a few hundred kB per thread; irrelevant at the GB scale here.
+   !>**** DIAGNOSTIC: snapshot of the block-matvec phase counters, so a region's cost can be
+   ! read as a difference. 1 Block (whole BF_MD_block_mvp), 2 Init, 3 Reshape, 4 Reshape_Init,
+   ! 5 Reshape_Middle, 6 Reshape_Final, 7 Right, 8 Middle, 9 Left, 10 Gemm, 11 Cleanup,
+   ! 12 Pack+Unpack (duplicate stacking), 13 Full (dense blocks), 14 wall clock.
+   subroutine BP_MD_phase_snapshot(stats, v)
+      implicit none
+      type(Hstat)::stats
+      real(kind=8)::v(BP_MD_nphase)
+      v(1) = stats%Time_C_Mult_Block
+      v(2) = stats%Time_C_Mult_Init
+      v(3) = stats%Time_C_Mult_Reshape
+      v(4) = stats%Time_C_Mult_Reshape_Init
+      v(5) = stats%Time_C_Mult_Reshape_Middle
+      v(6) = stats%Time_C_Mult_Reshape_Final
+      v(7) = stats%Time_C_Mult_Right
+      v(8) = stats%Time_C_Mult_Middle
+      v(9) = stats%Time_C_Mult_Left
+      v(10) = stats%Time_C_Mult_Gemm
+      v(11) = stats%Time_C_Mult_Cleanup
+      v(12) = stats%Time_C_Mult_Pack + stats%Time_C_Mult_Unpack
+      v(13) = stats%Time_C_Mult_Full
+      v(14) = MPI_Wtime()
+   end subroutine BP_MD_phase_snapshot
+
    subroutine BP_MD_proc_rss(rss, hwm, anon, shm, huge)
       implicit none
       real(kind=8), intent(out)::rss, hwm
@@ -460,6 +493,8 @@ contains
       real(kind=8)::anon_now, shm_now, huge_now, anon_max, shm_max, huge_max
       real(kind=8)::lev_node(0:LplusMax), lev_node_sum(0:LplusMax), lev_node_max(0:LplusMax)
       real(kind=8)::ventry_max(0:LplusMax)
+      real(kind=8)::phv(BP_MD_nphase), phg(BP_MD_nphase)
+      integer::cnt2(2), cntg(2), ipath
       integer, save:: node_comm = MPI_COMM_NULL
 
       if (node_comm == MPI_COMM_NULL) &
@@ -568,6 +603,57 @@ contains
       endif
       BP_MD_lev_rssdelta = 0d0
       BP_MD_lev_rssentry = 0d0
+
+      !>**** where the critical rank's compute goes, by application path: the rank with the
+      ! largest wall in the block loop (representatives, applied standalone) reports its phase
+      ! breakdown and counts; likewise for the duplicate path. Picked out by a masked sum.
+      do ipath = 1, 2
+         do ll = 0, LplusMax
+            if (ipath == 1) then
+               pair(1, ll) = BP_MD_lev_rep(ll, BP_MD_nphase)
+            else
+               pair(1, ll) = BP_MD_lev_dup(ll, BP_MD_nphase)
+            endif
+            pair(2, ll) = dble(ptree%MyID)
+         enddo
+         call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(pair(1, :), vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         do ll = 0, nl
+            if (pmax(1, ll) <= 0d0) cycle
+            phv = 0d0
+            cnt2 = 0
+            if (ptree%MyID == nint(pmax(2, ll))) then
+               if (ipath == 1) then
+                  phv = BP_MD_lev_rep(ll, :)
+               else
+                  phv = BP_MD_lev_dup(ll, :)
+               endif
+               cnt2(1) = BP_MD_lev_nrep(ll)
+               cnt2(2) = BP_MD_lev_ndup(ll)
+            endif
+            call MPI_ALLREDUCE(phv, phg, BP_MD_nphase, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+            call MPI_ALLREDUCE(cnt2, cntg, 2, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID) then
+               if (ipath == 1) then
+                  write (*, '(A,I4,A,I3,A,I8,A,I8,2(A,Es10.3),A,I6,13(A,Es9.2))') ' MDSPLIT mvp', nmvp, ' lev', ll, &
+                     ' REP  nrep=', cntg(1), ' ndup=', cntg(2), ' wall mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                     ' @rank=', nint(pmax(2, ll)), ' | blk=', phg(1), ' init=', phg(2), ' rsh=', phg(3), ' rshI=', phg(4), &
+                     ' rshM=', phg(5), ' rshF=', phg(6), ' right=', phg(7), ' mid=', phg(8), ' left=', phg(9), ' gemm=', phg(10), &
+                     ' clean=', phg(11), ' packunp=', phg(12), ' full=', phg(13)
+               else
+                  write (*, '(A,I4,A,I3,A,I8,A,I8,2(A,Es10.3),A,I6,13(A,Es9.2))') ' MDSPLIT mvp', nmvp, ' lev', ll, &
+                     ' DUP  nrep=', cntg(1), ' ndup=', cntg(2), ' wall mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                     ' @rank=', nint(pmax(2, ll)), ' | blk=', phg(1), ' init=', phg(2), ' rsh=', phg(3), ' rshI=', phg(4), &
+                     ' rshM=', phg(5), ' rshF=', phg(6), ' right=', phg(7), ' mid=', phg(8), ' left=', phg(9), ' gemm=', phg(10), &
+                     ' clean=', phg(11), ' packunp=', phg(12), ' full=', phg(13)
+               endif
+            endif
+         enddo
+      enddo
+      BP_MD_lev_rep = 0d0
+      BP_MD_lev_dup = 0d0
+      BP_MD_lev_nrep = 0
+      BP_MD_lev_ndup = 0
 
       BP_MD_lev_time = 0d0
 
@@ -1809,6 +1895,7 @@ contains
       integer::iround, nround, kneed_r, kloc_r, ierr_r
       integer(kind=8)::elem_bytes_r, budget_r
       real(kind=8)::t_lev_acc
+      real(kind=8)::snap0(BP_MD_nphase), snap1(BP_MD_nphase), snap2(BP_MD_nphase)
 
       t_call0 = MPI_Wtime()
       t_prep0 = t_call0
@@ -1956,6 +2043,14 @@ contains
       endif
 
       t_lev_acc = 0d0
+      if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+         BP_MD_lev_nrep(level_s) = 0
+         BP_MD_lev_ndup(level_s) = 0
+         do ll = level_s, level_e
+            BP_MD_lev_nrep(level_s) = BP_MD_lev_nrep(level_s) + bplus%LL(ll)%Nbound_loc
+            BP_MD_lev_ndup(level_s) = BP_MD_lev_ndup(level_s) + bplus%LL(ll)%trans_ndup
+         enddo
+      endif
       !>**** D1: stream the unique input slots in rounds: gather one round's slots, apply
       ! every local block and duplicate that reads them, accumulate into the output slots,
       ! free them, next round. One round is the pre-streaming behaviour.
@@ -1984,6 +2079,7 @@ contains
 	      stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + n2-n1
 
 		      n3 = MPI_Wtime()
+         if (option%verbosity >= 2) call BP_MD_phase_snapshot(stats, snap0)
 		      do ll = level_s, level_e
 		         do bb = 1, bplus%LL(ll)%Nbound_loc
 		            blocks => bplus%LL(ll)%matrices_block(bb)
@@ -2042,6 +2138,10 @@ contains
 			            if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
 			         enddo
 			      enddo
+         if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+            call BP_MD_phase_snapshot(stats, snap1)
+            BP_MD_lev_rep(level_s, :) = BP_MD_lev_rep(level_s, :) + (snap1 - snap0)
+         endif
 	            if (option%trans_invariant /= 0) then
 	               if(chara == 'N')then
 	                  if (use_unique_vecs) then
@@ -2055,6 +2155,10 @@ contains
 	                  write(*,*)"Bplus_MD_compact_dup_MVP_local_T is not yet implemented"
 	               endif
 	            endif
+         if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+            call BP_MD_phase_snapshot(stats, snap2)
+            BP_MD_lev_dup(level_s, :) = BP_MD_lev_dup(level_s, :) + (snap2 - snap1)
+         endif
 	            if (allocated(Vout_loc)) then
 	               call LogMemory(stats, -SIZEOF(Vout_loc)/1024.0d3)
 	               deallocate(Vout_loc)
