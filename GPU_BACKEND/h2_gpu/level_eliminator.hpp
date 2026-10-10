@@ -231,6 +231,10 @@ struct EliminatorStats {
     double np_raw = 0.0, np_stored = 0.0, np_seconds = 0.0;
     int64_t np_blocks = 0, np_groups = 0, np_groups_plain = 0, np_reclaimed = 0;
     int64_t np_tails = 0, np_no_room = 0;   // chunks that grew; blocks left uncompressed
+    // ... of which the adopted blocks the remote-generator passes put back,
+    // re-packed right after each pass rather than left raw for a later reader
+    int64_t np_gen_blocks = 0;
+    double np_gen_raw = 0.0;
     // ... of which step 5's fresh blocks, packed as soon as add_store has
     // written them rather than waiting for an owner group to come by
     double np5_raw = 0.0, np5_stored = 0.0, np5_seconds = 0.0;
@@ -1513,7 +1517,8 @@ private:
     // Keeping them raw when the group cannot be packed is a valid degraded
     // form - less saving, same answer - so a failure here is not fatal.
     template<typename TargetT>
-    void pack_near_group(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream) {
+    void pack_near_group(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream,
+                         double tol_scale = 1.0) {
         std::vector<const S*> srcs;
         std::vector<size_t> elems;
         std::vector<size_t> which;
@@ -1529,7 +1534,9 @@ private:
         const auto t0 = std::chrono::steady_clock::now();
         std::vector<CompressedXnr> comp;
         // the tighter tolerance: these feed the fill GEMMs, not just the solve
-        const double tol = tolerance_ * kXnrToleranceFraction * 0.25;
+        // (tol_scale < 1: a pack that would otherwise add a quantization of
+        // its own to a block the owner pass packs again, finer so it does not)
+        const double tol = tolerance_ * kXnrToleranceFraction * 0.25 * tol_scale;
         if (!fill_compressor_.compress(srcs, elems, tol, comp, stream)) {
             ++stats.np_groups_plain;
             return;
@@ -2421,27 +2428,25 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         adopt_->edges_packed.clear();
         adopt_->strides.clear();
         adopt_->packed_owned.clear();
-        // The adopted Schur blocks go back here, the near blocks per wave.
-        //
-        // A box's Schur block is reinstalled by several writers - ensure_schur
-        // builds it from the kernel when it finds no block, the wave replaces
-        // it with the skeleton block after elimination, the exchange installs
-        // one - and each of them treats a null pointer as "there is no block",
-        // so a packed one is dropped and its Schur-complement contents are
-        // replaced by kernel values.  That was a 1.2e-2 error in logdet with
-        // no crash: 50 of 863 blocks at level 3 of 96^3, every one of them a
-        // Schur block.  They are also the cheap part - 64 of those 863 blocks,
-        // about 7% of the bytes - so the near blocks keep the whole saving and
-        // this keeps the writers honest.
-        std::vector<AdoptedBlock> want;
-        want.reserve(packed_schur_.size());
-        for (const auto& [morton, pb] : packed_schur_) {
-            auto it = adopt_->schur.find(morton);
-            if (it != adopt_->schur.end() && it->second.ptr == nullptr) {
-                want.push_back(AdoptedBlock{true, static_cast<uint64_t>(morton), &it->second});
-            }
-        }
-        materialize_adopted(want, Context::instance().stream(), MatBeginSchur);
+        // The adopted Schur blocks stay packed too, like the near blocks, and
+        // go back in the wave that reads them.  They used to be materialized
+        // here, all of them: a box's Schur block is reinstalled by several
+        // writers - ensure_schur builds it from the kernel when it finds no
+        // block, the wave replaces it with the skeleton block after
+        // elimination, the exchange installs one - and when each of them
+        // treated a null pointer as "there is no block", a packed one was
+        // dropped and its Schur-complement contents replaced by kernel values:
+        // a 1.2e-2 error in logdet with no crash (50 of 863 blocks at level 3
+        // of 96^3).  Since then every such site either names the block to the
+        // materialization that precedes it (the wave's gather reads it through
+        // its window, the remote-generator pass and build_parent list it) or
+        // asserts it is not packed (assert_not_packed), so a missed site is a
+        // throw, not a wrong number.  The slot keeps the block's shape with a
+        // null pointer; after the box's elimination the skeleton block takes
+        // the slot and the stale packed entry is never consulted again, as
+        // with a replaced near block (the packer resets it when it next packs
+        // the slot).  At 192^3 the eager set was 0.46-0.48 GB of the 1.8 GB
+        // of adopted blocks resident at level 4's peak.
     }
 #endif
     if (adopt_) {
@@ -6033,8 +6038,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     // synchronizes twice per call, so a call per pair is not an option.  The
     // interest gate is the same one the loop applies, so this materializes
     // what the pass reads and not more.
+    std::vector<AdoptedBlock> adopted_read;   // what this pass puts back; re-packed at its end
     if (!(packed_schur_.empty() && packed_edges_.empty())) {
-        std::vector<AdoptedBlock> want;
+        std::vector<AdoptedBlock>& want = adopted_read;
         std::unordered_set<const void*> seen;
         for (const Gen& g : gens) {
             const auto& hop = g.box->one_hop;
@@ -6338,6 +6344,36 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     check_targets(rep_nn, "generator rep_nn");
     // later launches are ordered after these reads
     tmp.release();
+#ifdef H2_HAVE_NVCOMP
+    // The adopted blocks this pass put back go packed again right away, the
+    // way the owner pass's groups do.  Left raw, they stayed resident until
+    // some later reader happened to retire them: 1.76-1.87 GB of "adopted
+    // blocks" at the 192^3 level-4 peak, against a 0.6 GB per-wave read
+    // union (GPU_CA_PLAN.md, piece 4).  The map slots are what the pass
+    // wrote into, whether it accumulated into the adopted block or replaced
+    // it with a fresh one, so the slot's current block is what goes back.
+    if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !adopted_read.empty()) {
+        struct PackItem { DeviceMatrix* block; uint64_t key; int rows, cols; };
+        std::vector<PackItem> items;
+        items.reserve(adopted_read.size());
+        for (const AdoptedBlock& w : adopted_read) {
+            if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0) continue;
+            items.push_back(PackItem{w.m, w.schur ? ~w.key : w.key, w.m->rows, w.m->cols});
+            ++stats.np_gen_blocks;
+            stats.np_gen_raw += static_cast<double>(static_cast<size_t>(w.m->rows) * w.m->cols * D);
+        }
+        size_t at = 0;
+        while (at < items.size()) {
+            size_t bytes = 0, end = at;
+            while (end < items.size() && (end == at || bytes < kNearGroupBudget)) {
+                bytes += static_cast<size_t>(items[end].rows) * items[end].cols * D;
+                ++end;
+            }
+            pack_near_group(items, at, end, stream, 0.25);   // (finer: these are packed again by the owner pass)
+            at = end;
+        }
+    }
+#endif
     for (char* p : retired) heap_.free(p);
     if (heap_.peak() > stats.heap_peak) {
         stats.heap_peak = heap_.peak();

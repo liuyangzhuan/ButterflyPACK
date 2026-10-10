@@ -3884,6 +3884,59 @@ registration of the arenas (0.36-0.6 s) cannot be hidden by any thread.
 Factor at 192^3 against the synchronous (c2): Color 14.3 -> 14.1 s, CA3
 14.0 -> 13.7, CA0 14.9 -> 14.5; peaks unchanged.
 
+#### Adopted blocks, steps A and B (2026-10-09): the generator pass re-packs, the Schur blocks lazy
+
+Level 4 (Color on every path, CA being at the leaf only) peaked at 3.06-3.20
+GB with 1.76-1.87 GB of "adopted blocks": the raw copies of this level's
+packed near and Schur blocks.  Three things made them, all named in the
+piece-4 notes: begin() materialized every adopted Schur block eagerly
+(0.46-0.48 GB); the remote-generator pass materialized the union of what
+its generators read in one batch (5.1-5.4 GB decompressed a level in 7
+passes) and left the updated blocks raw until some later reader happened to
+retire them; and a block a wave materialized but did not read was never
+retired.
+
+**Step A.**  The generator pass re-packs what it put back, right after its
+GEMMs, in kNearGroupBudget groups as the owner pass does ("adopted blocks
+re-packed after the generator passes": 9468 blocks, 4.2-4.4 GB raw at level
+4; 7717 and 18948 at the CA3 and Color leaf, whose generator passes read
+packed near blocks too).  Level 4: 3.20 / 3.06 / 3.14 -> 2.80 / 2.67 / 2.74
+GB, with the peak moment moved to a generator pass's own union (adopted
+2.16-2.29 GB resident, the decoder's staging 0.27 the only transient); the
+leaf too, 5.01 -> 4.88 Color and 4.14 -> 3.97 CA3; levels 3 and 2 by 0.3.
+Not bit-identical: every re-pack is one more quantization of those blocks,
+and logdet moved by 2.7e-7 at 192^3 with acc_forward 1.60e-2 -> 1.64e-2
+Color and 1.54 -> 1.70 CA3 (and 1.01 -> 0.98 at 96^3 Color: noise, not
+drift).
+
+**A'.**  Those re-packs at a 4x finer step (pack_near_group's tol_scale
+0.25): the owner pass packs the same blocks again at its own step, so the
+finer bytes are transient.  Logdet back within 1e-8 to 3e-8 of (c)'s and
+acc_forward within 2%:
+
+| (c) async -> A+A'+B | level 4 peak | leaf peak | logdet | acc_forward | Factor |
+|---|---|---|---|---|---|
+| Color 192^3 | 3.20 -> **2.68** GB | 5.01 -> 4.88 | -89253748.104 -> -89253747.301 | 1.60e-2 -> 1.58e-2 | 14.1 -> 14.1 s |
+| CA3 192^3 | 3.06 -> **2.55** | 4.14 -> 3.97 | -89253742.145 -> -89253739.943 | 1.54e-2 -> 1.57e-2 | 13.7 -> 13.7 |
+| CA0 192^3 | 3.14 -> **2.61** | 3.01 -> 3.01 | -89253736.570 -> -89253734.923 | 1.62e-2 -> 1.64e-2 | 14.5 -> 14.6 |
+| Color 96^3 | 1.56 -> 1.53 | - | -9928903.097 -> -9928902.514 | 1.01e-2 -> 1.03e-2 | 2.47 -> 2.51 |
+| CA3 96^3 | 1.47 -> 1.47 | - | -9928899.446 -> -9928899.926 | 9.29e-3 -> 9.22e-3 | 3.00 -> 2.98 |
+| CA0 96^3 | 1.12 -> 1.12 | - | -9928897.922 -> -9928898.059 | 9.73e-3 -> 9.67e-3 | 3.28 -> 3.29 |
+
+**Step B.**  The adopted Schur blocks stay packed at the level's start, like
+the near blocks.  What made that unsafe before - writers treating a null
+pointer as "no block" and filling from the kernel - is covered now: the
+wave's gather reads a packed Schur block through its window, the
+generator pass and build_parent name it to the materialization that
+precedes them, and every other null-pointer site asserts (assert_not_packed),
+so a missed site throws instead of silently answering from the kernel.
+After the box's elimination the skeleton block takes the slot and the stale
+packed entry is never consulted again, as with a replaced near block (the
+packer resets it when it next packs the slot).  No guard fired on the six
+runs.  Level 4 -0.12 / -0.13 GB: the eager set's share at the peak moment,
+a late pass; it was 0.46-0.48 at begin().  The 2.1 GB still resident there
+is one generator pass's union, which is step C.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
