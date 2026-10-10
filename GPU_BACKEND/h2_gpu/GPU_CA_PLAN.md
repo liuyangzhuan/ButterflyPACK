@@ -3798,6 +3798,50 @@ priority (its blocks go ahead of the GEMMs' as SMs free up; one line), and
 cudaMemcpyBatchAsync (CUDA 13.2) for the gather and the scatter, which uses
 the copy engines and no SMs at all.
 
+#### Asynchronous host staging, (a) (2026-10-09): measured, reverted
+
+Built: the kept factors' host copy in a pinned arena of its own
+(kept_host_arena, pinned ahead like the others), the copies issued on a
+kept copy stream at the level's start after the blocks' last writes, the
+device blocks returned once the copies had landed (finish_kept_staging,
+after the eliminator's construction, before the waves; the heads compared
+there), the solve's upload from pinned memory.  Gate: logdets and
+accuracies identical, 0 errors.  What it measured, 192^3:
+
+| (c) async -> (a) async | Factor | level-4 start, 2.3-3.0 GB staged | solve set-up | pinned arenas | level 4 peak |
+|---|---|---|---|---|---|
+| Color | 14.1 -> 14.1 s | copy 0.32 s -> allocation 0.44, copy hidden | 0.35 -> 0.23 s | 7.78 -> 10.05 GB | 3.20 -> 3.20 |
+| CA3 | 13.7 -> 13.9 | 0.32 -> 0.33 | 0.34 -> 0.23 | 7.78 -> 10.11 | 3.06 -> 3.06 |
+| CA0 | 14.5 -> 14.7 | 0.42 -> 0.43 | 0.39 -> 0.26 | 8.86 -> 11.90 | 3.14 -> **3.51** |
+
+Three things, all foreseeable from what was already measured.  The window
+the copy can hide under is the eliminator's construction, 0.01 s ("begin")
+- the kept store is complete only at the level's end (the pledged X_NR is
+handed over in the transition) and the next level's first wave is its
+sketch - so the copy is not hidden, it is only faster (26 GB/s pinned vs
+13 pageable), and that saving is paid back by pinning the arena: a 2.3 GB
+request is bigger than a chunk pinned ahead and pins synchronously, 0.33-
+0.44 s, where the pageable copy cost 0.32-0.42.  Pinned memory a rank goes
+up by the kept store, 2.3-3.0 GB.  And on a CA level the start is not
+empty: the device halo exchange allocates its received pieces while the
+leaving blocks are still on the card, 3.14 -> 3.51 GB at CA0's level 4 -
+the one place the overlap existed, it cost memory.  Reverted; the solve
+set-up's 0.12 s is not worth the rest.
+
+What would make (a) asynchronous for real: copy each kept block as it is
+produced, under the waves, the way the fill store's producer already does
+- the T, X_SR, LU and pivots blocks are final per group during the level,
+the pledged X_NR blocks per group of the transition's handover - with the
+device copy freed when the copy lands.  That hides the whole copy, needs
+no level-start window, and takes the level's own kept factors off the
+card: 0.67 GB of CA3's and 0.91 GB of CA0's leaf peak (Color's peak moment
+holds 0.08).  It changes the kept store's lifecycle (every mid-level
+reader of a kept block: rescue_skipped_xnr, the logdet, the handover) and
+is a day's work with its own gate; not started.  A cheaper partial, a
+shared pool of pinned chunks so the kept store takes the leaf's near
+arena's chunks instead of pinning its own, would recover ~0.3 s and the
+extra 2.3-3.0 GB of pinned memory, but not hide the copy.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
