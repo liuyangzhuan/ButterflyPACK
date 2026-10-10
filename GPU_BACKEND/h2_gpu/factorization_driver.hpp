@@ -511,10 +511,12 @@ public:
             keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca,
                                            opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0);
             budget = kSolveKeepFraction * static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
-            ok = keep_ratio_ * keep_bound_ <= budget ? 1 : 0;
+            if (compression_ <= 0.0) compression_ = opt_.compress_factors >= 1 ? kFirstCompression : 1.0;
+            kept_expected_ = keep_ratio_ * keep_bound_ / compression_;   // what the store will hold
+            ok = kept_expected_ <= budget ? 1 : 0;
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
-        if (level_) level_->set_solve_keep(ok != 0, budget);
+        if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
     }
     // After the host's post-elimination assisting gather: the assisting
     // boxes' skeletons, for the device transition.
@@ -686,17 +688,21 @@ public:
             // itself after a failed keep
             const double bytes = level_ ? level_->level_factor_bytes() : 0.0;
             const int failure = level_ ? level_->solve_keep_failure() : 0;
-            double v[4] = {keep_bound_ > 0.0 ? bytes / keep_bound_ : 0.0, bytes, failure == 1 ? 1.0 : 0.0,
-                           failure == 2 ? 1.0 : 0.0};
-            MPI_Allreduce(MPI_IN_PLACE, v, 4, MPI_DOUBLE, MPI_MAX, level_comm);
+            // (before the commit: it moves the kept state into the store)
+            const double kept_now = level_ ? level_->level_kept_bytes() : 0.0;
+            const double raw_now = bytes;
+            // v[4]: minus the compression this rank measured, so the maximum
+            // is the least compression of any rank (the next level's estimate)
+            double v[5] = {keep_bound_ > 0.0 ? bytes / keep_bound_ : 0.0, bytes, failure == 1 ? 1.0 : 0.0,
+                           failure == 2 ? 1.0 : 0.0, kept_now > 0.0 && raw_now > 0.0 ? -(raw_now / kept_now) : 0.0};
+            MPI_Allreduce(MPI_IN_PLACE, v, 5, MPI_DOUBLE, MPI_MAX, level_comm);
             if (v[2] > 0.0 || v[3] > 0.0) {
                 keep_ratio_ = 1.0;
+                compression_ = 1.0;   // (the estimate was too small: the bound itself from here on)
             } else if (v[0] > 0.0) {
                 keep_ratio_ = std::min(1.0, kKeepMargin * v[0]);
             }
-            // (before the commit: it moves the kept state into the store)
-            const double kept_now = level_ ? level_->level_kept_bytes() : 0.0;
-            const double raw_now = level_ ? level_->level_factor_bytes() : 0.0;
+            if (v[4] < 0.0 && !(v[2] > 0.0 || v[3] > 0.0)) compression_ = std::max(1.0, -v[4]);
             if (level_) level_->commit_solve_factors(kept != 0);
             // (the level's end: this rank's finish and the slowest rank's, the
             // collectives' wait included in the total)
@@ -903,6 +909,11 @@ public:
                     std::printf("  [gpu] level %d gather window: %lld chunks got none, %lld blocks put back one by one\n",
                                 level.level, static_cast<long long>(e.fw_no_window), static_cast<long long>(e.fw_fallbacks));
                 }
+            }
+            {
+                double rss = 0.0, hwm = 0.0;
+                host_memory_gb(rss, hwm);
+                std::printf("  [gpu] level %d host memory: RSS %.2f GB, high-water %.2f GB\n", level.level, rss, hwm);
             }
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
@@ -1409,6 +1420,14 @@ private:
     static constexpr double kXnrBoundDivisor = 4.0;
     double keep_ratio_ = kFirstKeepRatio;
     double keep_bound_ = 0.0;                                          // this level's (decide_solve_keep)
+    // The kept store's raw / stored, measured on the last level (0: none
+    // yet; kFirstCompression then, with the factors compressed).  The keep
+    // estimate and the hold limit divide by it: without it the leaf at 8x
+    // the boxes a rank declines on the full card (158 GB raw against a 25 GB
+    // budget) and its X_NR goes to the host uncompressed (2026-10-10).
+    static constexpr double kFirstCompression = 8.0;
+    double compression_ = 0.0;
+    double kept_expected_ = 0.0;                                       // this level's estimate, compressed
 };
 
 }  // namespace gpu

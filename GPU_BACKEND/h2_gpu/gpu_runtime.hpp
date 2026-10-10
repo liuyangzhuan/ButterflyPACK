@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <deque>
 #include <future>
 #include <sys/mman.h>
@@ -274,6 +275,21 @@ private:
     size_t at_ = 0, used_ = 0, pinned_ = 0;
     double pin_seconds_ = 0.0, pin_wait_ = 0.0;
 };
+
+// The process's resident set and its high-water mark, from /proc (GB):
+// the host side of the memory question, per level and per wave.
+inline void host_memory_gb(double& rss, double& hwm) {
+    rss = hwm = 0.0;
+    if (FILE* f = std::fopen("/proc/self/status", "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof line, f) != nullptr) {
+            long kb = 0;
+            if (std::sscanf(line, "VmRSS: %ld kB", &kb) == 1) rss = static_cast<double>(kb) / 1e6;
+            else if (std::sscanf(line, "VmHWM: %ld kB", &kb) == 1) hwm = static_cast<double>(kb) / 1e6;
+        }
+        std::fclose(f);
+    }
+}
 
 // Scalar type MAGMA uses for DataType (std::complex<double> and
 // magmaDoubleComplex share their layout).

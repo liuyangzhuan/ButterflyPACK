@@ -462,9 +462,10 @@ public:
     // decide_solve_keep) and its budget: a level that keeps them skips the
     // host copies of their X_NR, and its waves keep factors while they stay
     // within `budget` bytes (else the level's keep fails).
-    virtual void set_solve_keep(bool keep, double budget) {
+    virtual void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) {
         (void)keep;
         (void)budget;
+        (void)expected_kept;
     }
     // The bytes this level's solve factors take (kept or not: the next
     // level's keep estimate), and why its keep failed during the waves (0:
@@ -659,13 +660,14 @@ public:
             drop_kept();
         }
     }
-    void set_solve_keep(bool keep, double budget) override {
+    void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) override {
         if (!keep) {
             drop_kept();
             keep_solve_ = false;
         }
         keep_budgeted_ = keep_solve_;
         keep_budget_ = budget;
+        kept_expected_ = keep ? expected_kept : 0.0;   // (the hold limit reserves it)
         // (the host copies stay where the host reads X_NR during the level:
         // generators sent through the host, the replica check)
         skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
@@ -1131,7 +1133,7 @@ private:
     // output is 2 n_tot r, and the batch used to be the whole wave, so this
     // divides the largest item in the transient.  The consumers still see the
     // whole wave.
-    static constexpr int kWaveChunks = 4;   // 16 gave the same peak and cost 0.5 s more; 8 -> 4 (2026-10-10)
+    static constexpr size_t kWaveChunkBytes = size_t{2} << 30;   // a chunk's outputs and work at most (the count was a fixed 4 a wave until 2026-10-10)
     void transpose_kept_xnr();
     bool transpose_kept_xnr_group(const std::vector<PledgedXnr>& todo, size_t first, size_t last, size_t raw,
                                   KeptSolveLevel& kl, cudaStream_t stream);
@@ -1730,9 +1732,17 @@ private:
     // heap and so forces the packed regime for a test.
     static constexpr size_t kTransientReserve = kOwnerWindowBytes + kFillWindowBytes + 2 * kNearGroupBudget +
                                                 kFillWaveScratch + kXnrStagingBudget + 2 * kKeptTransposeBudget;
+    // ... less the solve factors this level will accumulate on the card
+    // before the next level starts (kept_expected_, the keep rule's own
+    // estimate): the raw near set would otherwise take that room first and
+    // the factors, growing through the level and at its handover, overflow
+    // it.  At 192^3 the term is 2.5 GB (23.1 -> 20.6 GB, nothing packs); at
+    // 8x the boxes a rank it is ~20 GB and the level packs from its first
+    // wave (2026-10-10).
     size_t hold_limit() const {
         const size_t cap = heap_.capacity();
-        return cap > kTransientReserve + cap / 10 ? cap - kTransientReserve - cap / 10 : cap / 2;
+        const size_t reserve = kTransientReserve + cap / 10 + static_cast<size_t>(std::max(0.0, kept_expected_));
+        return cap > reserve ? cap - reserve : 0;
     }
     bool under_pressure() const {
         g_hold_limit_bytes = hold_limit();
@@ -2204,6 +2214,7 @@ private:
     bool keep_failed_ = false;
     bool keep_budgeted_ = false;  // decided before the waves (set_solve_keep)
     double keep_budget_ = 0.0;    // then: the bytes its kept factors may take
+    double kept_expected_ = 0.0;  // what its kept store is expected to hold on the device by its end
     double factor_bytes_ = 0.0;   // the eliminated boxes' factors, as keep_solve_factors lays them out
     int keep_failure_ = 0;        // solve_keep_failure
     bool skip_xnr_ = false;       // kept boxes' X_NR, X_SR and LU not downloaded
@@ -3838,10 +3849,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                                   keep_solve_ && !keep_failed_ && chunk_for_room;
     ++stats.np_waves;
     if (chunk_production) ++stats.np_waves_chunked;
-    const size_t chunk_boxes =
-        (std::max<size_t>(n_active_boxes, 1) +
-         (chunk_production ? static_cast<size_t>(kWaveChunks) : 1) - 1) /
-        (chunk_production ? static_cast<size_t>(kWaveChunks) : 1);
+    // as many chunks as the wave's bytes need at kWaveChunkBytes each, so a
+    // chunk's outputs stay bounded whatever the wave's size (a 56 GB CA wave
+    // at 8x the boxes a rank gets 28 chunks, not 4)
+    const size_t wave_chunks = chunk_production
+        ? std::min(std::max<size_t>(n_active_boxes, 1),
+                   std::max<size_t>(1, (wave_bytes + kWaveChunkBytes - 1) / kWaveChunkBytes))
+        : 1;
+    const size_t chunk_boxes = (std::max<size_t>(n_active_boxes, 1) + wave_chunks - 1) / wave_chunks;
     std::vector<int> group_chunk_of;   // per source group, the chunk it belongs to
     std::vector<size_t> source_group_bytes;
     // temp2 in a block of its own, grouped exactly as the source blocks are:
@@ -3955,9 +3970,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         if (owner_ != nullptr) plan_owner_generators(boxes, active);
         else plan_generators(boxes, active);
     }
-    const int nchunks = can_chunk
-        ? static_cast<int>(std::min<size_t>(static_cast<size_t>(kWaveChunks), std::max<size_t>(active.size(), 1)))
-        : 1;
+    const int nchunks = can_chunk ? static_cast<int>(std::min(wave_chunks, std::max<size_t>(active.size(), 1))) : 1;
     for (int chunk = 0; chunk < nchunks; ++chunk) {
         const size_t c0 = std::min(active.size(), static_cast<size_t>(chunk) * chunk_boxes);
         const size_t c1 = nchunks == 1 ? active.size() : std::min(active.size(), c0 + chunk_boxes);
@@ -5444,6 +5457,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         evict_fill_copies(false);
     }
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
+    if (env::trace("wave")) {   // the host side, wave by wave (BPACK_TRACE=wave)
+        double rss = 0.0, hwm = 0.0;
+        host_memory_gb(rss, hwm);
+        std::printf("  [gpu] level %d wave %d: host RSS %.2f GB (high-water %.2f), heap used %.2f GB, pinned arenas %.2f GB\n",
+                    level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
+                    static_cast<double>(fill_host_arena().pinned() + near_host_arena(0).pinned() + near_host_arena(1).pinned()) / 1e9);
+        std::fflush(stdout);
+    }
     if (heap_.peak() > stats.heap_peak) {
         stats.heap_peak = heap_.peak();
         stats.heap_peak_resident = heap_.resident_at_peak();
