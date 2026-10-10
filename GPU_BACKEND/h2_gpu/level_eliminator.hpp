@@ -6032,58 +6032,56 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     };
 
 #ifdef H2_HAVE_NVCOMP
-    // H2_compress_factors: the adopted blocks this pass reads - ensure_schur's
-    // Schur blocks as well as the near blocks replace_edge() and ensure_edge()
-    // gather from - in one batch for the whole pass.  run_fill_batch() plans and
-    // synchronizes twice per call, so a call per pair is not an option.  The
-    // interest gate is the same one the loop applies, so this materializes
-    // what the pass reads and not more.
-    std::vector<AdoptedBlock> adopted_read;   // what this pass puts back; re-packed at its end
-    if (!(packed_schur_.empty() && packed_edges_.empty())) {
-        std::vector<AdoptedBlock>& want = adopted_read;
-        std::unordered_set<const void*> seen;
-        for (const Gen& g : gens) {
-            const auto& hop = g.box->one_hop;
-            const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
-            auto want_edge = [&](int64_t a, int64_t b) {
-                const uint64_t key = edge_key(a, b);
-                auto it = edges_.find(key);
-                if (it == edges_.end() || it->second.ptr != nullptr) return;
-                if (is_packed_edge(key) && seen.insert(&it->second).second) {
-                    want.push_back(AdoptedBlock{false, key, &it->second});
-                }
-            };
-            for (size_t li = 0; li < hop.size(); ++li) {
-                if (counts[li] == 0) continue;
-                const int64_t lm = hop[li];
-                BoxState& ls = state_of(lm);
-                if (!interest(lm)) {
-                    // replace_edge(false) for a box of no interest, on an owner level
-                    if (owner_ != nullptr && g.k > 0 && is_interest(g.morton)) want_edge(lm, g.morton);
-                    continue;
-                }
-                // ensure_schur(ls)
-                if (schur_written_here(lm, ls) && ls.schur.ptr == nullptr &&
-                    is_packed_schur(lm) && seen.insert(&ls.schur).second) {
-                    want.push_back(AdoptedBlock{true, static_cast<uint64_t>(lm), &ls.schur});
-                }
-                // replace_edge(false)
-                if (g.k > 0 && pair_read(lm, ls, g.morton)) want_edge(lm, g.morton);
-                // ensure_edge(min, max) of the inner loop
-                for (size_t ni = 0; ni < hop.size(); ++ni) {
-                    if (ni == li || counts[ni] == 0) continue;
-                    const int64_t nm = hop[ni];
-                    if (!deferred_xnn_boxes_are_one_hop(level_.dimension, lm, nm)) continue;
-                    if (interest(nm) && nm < lm) continue;
-                    if (!pair_read(lm, ls, nm)) continue;
-                    want_edge(lm, nm);
-                }
+    // H2_compress_factors: the adopted blocks one generator's updates read -
+    // ensure_schur's Schur blocks as well as the near blocks replace_edge()
+    // and ensure_edge() gather from - as candidates, less what `seen` holds.
+    // The interest gate is the same one the loop applies, so this names what
+    // the generator reads and not more.  A chunk of generators is
+    // materialized in one batch (run_fill_batch() plans and synchronizes
+    // twice per call, so a call per pair is not an option).
+    auto want_of_gen = [&](const Gen& g, const std::unordered_set<const void*>& seen,
+                           std::vector<AdoptedBlock>& cand) {
+        const auto& hop = g.box->one_hop;
+        const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
+        std::unordered_set<const void*> mine;   // (a block twice in one generator)
+        auto want_edge = [&](int64_t a, int64_t b) {
+            const uint64_t key = edge_key(a, b);
+            auto it = edges_.find(key);
+            if (it == edges_.end() || it->second.ptr != nullptr) return;
+            if (is_packed_edge(key) && seen.count(&it->second) == 0 && mine.insert(&it->second).second) {
+                cand.push_back(AdoptedBlock{false, key, &it->second});
+            }
+        };
+        for (size_t li = 0; li < hop.size(); ++li) {
+            if (counts[li] == 0) continue;
+            const int64_t lm = hop[li];
+            BoxState& ls = state_of(lm);
+            if (!interest(lm)) {
+                // replace_edge(false) for a box of no interest, on an owner level
+                if (owner_ != nullptr && g.k > 0 && is_interest(g.morton)) want_edge(lm, g.morton);
+                continue;
+            }
+            // ensure_schur(ls)
+            if (schur_written_here(lm, ls) && ls.schur.ptr == nullptr && is_packed_schur(lm) &&
+                seen.count(&ls.schur) == 0 && mine.insert(&ls.schur).second) {
+                cand.push_back(AdoptedBlock{true, static_cast<uint64_t>(lm), &ls.schur});
+            }
+            // replace_edge(false)
+            if (g.k > 0 && pair_read(lm, ls, g.morton)) want_edge(lm, g.morton);
+            // ensure_edge(min, max) of the inner loop
+            for (size_t ni = 0; ni < hop.size(); ++ni) {
+                if (ni == li || counts[ni] == 0) continue;
+                const int64_t nm = hop[ni];
+                if (!deferred_xnn_boxes_are_one_hop(level_.dimension, lm, nm)) continue;
+                if (interest(nm) && nm < lm) continue;
+                if (!pair_read(lm, ls, nm)) continue;
+                want_edge(lm, nm);
             }
         }
-        materialize_adopted(want, Context::instance().stream(), MatGenerator);
-    }
+    };
 #endif
-    for (const Gen& g : gens) {
+    // One generator's updates, into the chunk's batches.
+    auto process_gen = [&](const Gen& g) {
         const auto& hop = g.box->one_hop;
         const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
         for (size_t li = 0; li < hop.size(); ++li) {
@@ -6203,32 +6201,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 }
             }
         }
-    }
+    };
 
-    // Every partial product added straight into its target, sub-batch j
-    // holding the j-th partial of every target, so no launch writes a block
-    // twice.  This is what the local owner pass does; staging them all first
-    // and summing afterwards cost 4.62 GB at the 192^3 Color leaf, 1.4x the
-    // targets it summed into, because most targets take a single partial.
-    size_t depth = 0;
-    for (const Accum& a : accums) depth = std::max(depth, a.parts.size());
-    {
-        auto& st = eliminator_stats();
-        st.gw_bytes += static_cast<double>(work_bytes);  // what staging would have cost
-        st.gw_products += static_cast<int64_t>(products.size());
-        st.gw_targets += static_cast<int64_t>(accums.size());
-        st.gw_max_parts = std::max(st.gw_max_parts, static_cast<int64_t>(depth));
-        for (const Accum& a : accums) {
-            st.gw_target_bytes += static_cast<double>(static_cast<size_t>(a.rows) * a.cols * D);
-        }
-    }
-    std::vector<VBatch<S>> prods(depth);
-    for (const Accum& acc : accums) {
-        for (size_t j = 0; j < acc.parts.size(); ++j) {
-            const Product& p = products[acc.parts[j]];
-            prods[j].entries.push_back({p.a, p.b, acc.target, p.m, p.n, p.k, p.lda, p.ldb, acc.ld});
-        }
-    }
+    // ---- the generators' temp2^T first, in an image of their own: their
+    // transposes into the staging and the slots packed group by group (the
+    // second keep_fill_source site).  None of it touches the adopted blocks,
+    // so it runs once for the pass, before the chunks below.
     // The staging, and the grouped generators' temp2^T addresses into it,
     // before the transposes are baked into the image.  No room for it means
     // the old way: a block each, packed in one pass at the end.
@@ -6259,122 +6237,204 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         if (gen_staging == nullptr) gen_groups.clear();  // one pass at the end, as before
     }
     const size_t off_transposes = meta_.append(transposes);
-    const size_t off_evals = meta_.append(evals);
-    const size_t off_gathers = meta_.append(gathers);
-    for (VBatch<S>& b : prods) b.stage(meta_);
-    rep_tt.stage(meta_);
-    rep_nn.stage(meta_);
-    char* md = meta_.upload(meta_device_, stream);
-    stats.bytes_up += static_cast<double>(meta_.size());
-    // A generator's fill-source slots, for the packer.
-    auto fill_item = [&](size_t gi, std::vector<int64_t>& counts, std::vector<FillSrcRef>& items) {
-        const Gen& g = gens[gi];
-        if (g.st == nullptr || g.st->temp2t == nullptr || g.r == 0 || g.ntot == 0) return;
-        // (an owner level's generator may be one of this rank's own boxes,
-        // landed FULL: the box found when the generator was set up, not the
-        // generator table, which has only the remote ones)
-        const Box* gb = g.box;
-        if (gb == nullptr) return;
-        counts.reserve(gb->one_hop.size());
-        for (int64_t m : gb->one_hop) counts.push_back(current_size(state_of(m)));
-        items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts, g.st});
-    };
-    if (gen_groups.empty()) {
-        launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes),
-                         static_cast<int>(transposes.size()), max_tr_m, max_tr_n, stream);
-        // ---- the generator fill sources, compressed a slot at a time now
-        // that their transposes have written temp2^T (the second
-        // keep_fill_source site)
-        if (compress_factors_ >= 1) {
-            std::vector<std::vector<int64_t>> counts(gens.size());
-            std::vector<FillSrcRef> items;
-            items.reserve(gens.size());
-            for (size_t gi = 0; gi < gens.size(); ++gi) fill_item(gi, counts[gi], items);
-            compress_fill_source_set(items, stream);
-        }
-    } else {
-        // ---- group by group: the group's transposes into the staging, its
-        // slots packed (which waits for the staging to be read), the staging
-        // reused by the next.  A generator whose pack found no room keeps a
-        // raw block of its own, copied out before the staging moves on.
-        for (const GenGroup& gg : gen_groups) {
-            launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes) + gg.first_tr,
-                             static_cast<int>(gg.gens.size()), max_tr_m, max_tr_n, stream);
-            std::vector<std::vector<int64_t>> counts(gg.gens.size());
-            std::vector<FillSrcRef> items;
-            items.reserve(gg.gens.size());
-            for (size_t j = 0; j < gg.gens.size(); ++j) fill_item(gg.gens[j], counts[j], items);
-            compress_fill_source_set(items, stream);
-            for (size_t j = 0; j < gg.gens.size(); ++j) {
-                Gen& g = gens[gg.gens[j]];
-                if (g.st == nullptr) continue;
-                if (packed_of(*g.st) != nullptr) {
-                    g.st->temp2t = nullptr;  // the packed form is the fill source now
-                    continue;
-                }
-                const size_t t_bytes = align_up(static_cast<size_t>(g.ntot) * g.r * D);
-                char* own = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
-                check_cuda(cudaMemcpyAsync(own, gen_staging + gg.off[j], t_bytes, cudaMemcpyDeviceToDevice, stream),
-                           "generator temp2^T kept raw");
-                auto& es = eliminator_stats();
-                es.persist_bytes += static_cast<double>(t_bytes);
-                es.persist_gen_bytes += static_cast<double>(t_bytes);
-                if (early_free_sources_) {
-                    g.st->persist_t2t = own;
-                    g.st->persist_t2t_bytes = t_bytes;
-                } else {
-                    level_allocs_.push_back(own);
-                }
-                g.st->temp2t = reinterpret_cast<const S*>(own);
+    {
+        char* md = meta_.upload(meta_device_, stream);
+        stats.bytes_up += static_cast<double>(meta_.size());
+        // A generator's fill-source slots, for the packer.
+        auto fill_item = [&](size_t gi, std::vector<int64_t>& counts, std::vector<FillSrcRef>& items) {
+            const Gen& g = gens[gi];
+            if (g.st == nullptr || g.st->temp2t == nullptr || g.r == 0 || g.ntot == 0) return;
+            // (an owner level's generator may be one of this rank's own boxes,
+            // landed FULL: the box found when the generator was set up, not the
+            // generator table, which has only the remote ones)
+            const Box* gb = g.box;
+            if (gb == nullptr) return;
+            counts.reserve(gb->one_hop.size());
+            for (int64_t m : gb->one_hop) counts.push_back(current_size(state_of(m)));
+            items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts, g.st});
+        };
+        if (gen_groups.empty()) {
+            launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes),
+                             static_cast<int>(transposes.size()), max_tr_m, max_tr_n, stream);
+            // ---- the generator fill sources, compressed a slot at a time now
+            // that their transposes have written temp2^T (the second
+            // keep_fill_source site)
+            if (compress_factors_ >= 1) {
+                std::vector<std::vector<int64_t>> counts(gens.size());
+                std::vector<FillSrcRef> items;
+                items.reserve(gens.size());
+                for (size_t gi = 0; gi < gens.size(); ++gi) fill_item(gi, counts[gi], items);
+                compress_fill_source_set(items, stream);
             }
-            check_cuda(cudaStreamSynchronize(stream), "generator staging");  // before the next group overwrites it
+        } else {
+            // ---- group by group: the group's transposes into the staging, its
+            // slots packed (which waits for the staging to be read), the staging
+            // reused by the next.  A generator whose pack found no room keeps a
+            // raw block of its own, copied out before the staging moves on.
+            for (const GenGroup& gg : gen_groups) {
+                launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_transposes) + gg.first_tr,
+                                 static_cast<int>(gg.gens.size()), max_tr_m, max_tr_n, stream);
+                std::vector<std::vector<int64_t>> counts(gg.gens.size());
+                std::vector<FillSrcRef> items;
+                items.reserve(gg.gens.size());
+                for (size_t j = 0; j < gg.gens.size(); ++j) fill_item(gg.gens[j], counts[j], items);
+                compress_fill_source_set(items, stream);
+                for (size_t j = 0; j < gg.gens.size(); ++j) {
+                    Gen& g = gens[gg.gens[j]];
+                    if (g.st == nullptr) continue;
+                    if (packed_of(*g.st) != nullptr) {
+                        g.st->temp2t = nullptr;  // the packed form is the fill source now
+                        continue;
+                    }
+                    const size_t t_bytes = align_up(static_cast<size_t>(g.ntot) * g.r * D);
+                    char* own = heap_.alloc_resident(std::max<size_t>(t_bytes, 1), ResidentKind::FillRaw);
+                    check_cuda(cudaMemcpyAsync(own, gen_staging + gg.off[j], t_bytes, cudaMemcpyDeviceToDevice, stream),
+                               "generator temp2^T kept raw");
+                    auto& es = eliminator_stats();
+                    es.persist_bytes += static_cast<double>(t_bytes);
+                    es.persist_gen_bytes += static_cast<double>(t_bytes);
+                    if (early_free_sources_) {
+                        g.st->persist_t2t = own;
+                        g.st->persist_t2t_bytes = t_bytes;
+                    } else {
+                        level_allocs_.push_back(own);
+                    }
+                    g.st->temp2t = reinterpret_cast<const S*>(own);
+                }
+                check_cuda(cudaStreamSynchronize(stream), "generator staging");  // before the next group overwrites it
+            }
+            heap_.free(gen_staging);
         }
-        heap_.free(gen_staging);
+        check_cuda(cudaStreamSynchronize(stream), "generator transposes");  // (the image is reused below)
     }
-    eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
-    launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
-                  max_ga_n, md, stream);
-    for (const VBatch<S>& b : prods) {
-        check_targets(b, "generator products");
-        b.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
-    }
-    rep_tt.gemm(md, MagmaTrans, MagmaTrans, 1.0, 1.0, queue);
-    rep_nn.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 1.0, queue);
-    check_targets(rep_tt, "generator rep_tt");
-    check_targets(rep_nn, "generator rep_nn");
-    // later launches are ordered after these reads
-    tmp.release();
+    // ---- then the updates, in chunks of generators whose adopted read set
+    // fits kNearGroupBudget raw.  A chunk's blocks are put back, written and
+    // packed again before the next chunk's, so a pass's union is never
+    // resident at once: it was 2.2 GB of the 2.8 GB level-4 peak at 192^3,
+    // where a wave's own gather needs 0.6.  A block two chunks read is
+    // packed twice, which the finer step of these packs allows.
+    size_t g0 = 0;
+    while (g0 < gens.size()) {
+        std::vector<AdoptedBlock> adopted_read;   // what this chunk puts back; packed again at its end
+        size_t g1 = g0;
 #ifdef H2_HAVE_NVCOMP
-    // The adopted blocks this pass put back go packed again right away, the
-    // way the owner pass's groups do.  Left raw, they stayed resident until
-    // some later reader happened to retire them: 1.76-1.87 GB of "adopted
-    // blocks" at the 192^3 level-4 peak, against a 0.6 GB per-wave read
-    // union (GPU_CA_PLAN.md, piece 4).  The map slots are what the pass
-    // wrote into, whether it accumulated into the adopted block or replaced
-    // it with a fresh one, so the slot's current block is what goes back.
-    if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !adopted_read.empty()) {
-        struct PackItem { DeviceMatrix* block; uint64_t key; int rows, cols; };
-        std::vector<PackItem> items;
-        items.reserve(adopted_read.size());
-        for (const AdoptedBlock& w : adopted_read) {
-            if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0) continue;
-            items.push_back(PackItem{w.m, w.schur ? ~w.key : w.key, w.m->rows, w.m->cols});
-            ++stats.np_gen_blocks;
-            stats.np_gen_raw += static_cast<double>(static_cast<size_t>(w.m->rows) * w.m->cols * D);
-        }
-        size_t at = 0;
-        while (at < items.size()) {
-            size_t bytes = 0, end = at;
-            while (end < items.size() && (end == at || bytes < kNearGroupBudget)) {
-                bytes += static_cast<size_t>(items[end].rows) * items[end].cols * D;
-                ++end;
+        if (!(packed_schur_.empty() && packed_edges_.empty())) {
+            std::unordered_set<const void*> seen;
+            size_t bytes = 0;
+            while (g1 < gens.size()) {
+                std::vector<AdoptedBlock> cand;
+                want_of_gen(gens[g1], seen, cand);
+                size_t added = 0;
+                for (const AdoptedBlock& w : cand) added += static_cast<size_t>(w.m->rows) * w.m->cols * D;
+                if (g1 > g0 && bytes + added > kNearGroupBudget) break;
+                for (const AdoptedBlock& w : cand) {
+                    seen.insert(w.m);
+                    adopted_read.push_back(w);
+                }
+                bytes += added;
+                ++g1;
             }
-            pack_near_group(items, at, end, stream, 0.25);   // (finer: these are packed again by the owner pass)
-            at = end;
+            materialize_adopted(adopted_read, stream, MatGenerator);
+        } else {
+            g1 = gens.size();
         }
-    }
+#else
+        g1 = gens.size();
 #endif
-    for (char* p : retired) heap_.free(p);
+        ++wave_stamp_;
+        meta_.clear();
+        evals.clear();
+        gathers.clear();
+        products.clear();
+        accums.clear();
+        accum_of.clear();
+        rep_tt.entries.clear();
+        rep_nn.entries.clear();
+        max_ev_m = max_ev_n = max_ga_m = max_ga_n = 0;
+        work_bytes = 0;
+        for (size_t gi = g0; gi < g1; ++gi) process_gen(gens[gi]);
+
+        // Every partial product added straight into its target, sub-batch j
+        // holding the j-th partial of every target, so no launch writes a block
+        // twice.  This is what the local owner pass does; staging them all first
+        // and summing afterwards cost 4.62 GB at the 192^3 Color leaf, 1.4x the
+        // targets it summed into, because most targets take a single partial.
+        size_t depth = 0;
+        for (const Accum& a : accums) depth = std::max(depth, a.parts.size());
+        {
+            auto& st = eliminator_stats();
+            st.gw_bytes += static_cast<double>(work_bytes);  // what staging would have cost
+            st.gw_products += static_cast<int64_t>(products.size());
+            st.gw_targets += static_cast<int64_t>(accums.size());
+            st.gw_max_parts = std::max(st.gw_max_parts, static_cast<int64_t>(depth));
+            for (const Accum& a : accums) {
+                st.gw_target_bytes += static_cast<double>(static_cast<size_t>(a.rows) * a.cols * D);
+            }
+        }
+        std::vector<VBatch<S>> prods(depth);
+        for (const Accum& acc : accums) {
+            for (size_t j = 0; j < acc.parts.size(); ++j) {
+                const Product& p = products[acc.parts[j]];
+                prods[j].entries.push_back({p.a, p.b, acc.target, p.m, p.n, p.k, p.lda, p.ldb, acc.ld});
+            }
+        }
+        const size_t off_evals = meta_.append(evals);
+        const size_t off_gathers = meta_.append(gathers);
+        for (VBatch<S>& b : prods) b.stage(meta_);
+        rep_tt.stage(meta_);
+        rep_nn.stage(meta_);
+        char* md = meta_.upload(meta_device_, stream);
+        stats.bytes_up += static_cast<double>(meta_.size());
+        eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
+        launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
+                      max_ga_n, md, stream);
+        for (const VBatch<S>& b : prods) {
+            check_targets(b, "generator products");
+            b.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
+        }
+        rep_tt.gemm(md, MagmaTrans, MagmaTrans, 1.0, 1.0, queue);
+        rep_nn.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 1.0, queue);
+        check_targets(rep_tt, "generator rep_tt");
+        check_targets(rep_nn, "generator rep_nn");
+        check_cuda(cudaStreamSynchronize(stream), "generator chunk");  // the image is reused by the next chunk
+    #ifdef H2_HAVE_NVCOMP
+        // The adopted blocks this pass put back go packed again right away, the
+        // way the owner pass's groups do.  Left raw, they stayed resident until
+        // some later reader happened to retire them: 1.76-1.87 GB of "adopted
+        // blocks" at the 192^3 level-4 peak, against a 0.6 GB per-wave read
+        // union (GPU_CA_PLAN.md, piece 4).  The map slots are what the pass
+        // wrote into, whether it accumulated into the adopted block or replaced
+        // it with a fresh one, so the slot's current block is what goes back.
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !adopted_read.empty()) {
+            struct PackItem { DeviceMatrix* block; uint64_t key; int rows, cols; };
+            std::vector<PackItem> items;
+            items.reserve(adopted_read.size());
+            for (const AdoptedBlock& w : adopted_read) {
+                if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0) continue;
+                items.push_back(PackItem{w.m, w.schur ? ~w.key : w.key, w.m->rows, w.m->cols});
+                ++stats.np_gen_blocks;
+                stats.np_gen_raw += static_cast<double>(static_cast<size_t>(w.m->rows) * w.m->cols * D);
+            }
+            size_t at = 0;
+            while (at < items.size()) {
+                size_t bytes = 0, end = at;
+                while (end < items.size() && (end == at || bytes < kNearGroupBudget)) {
+                    bytes += static_cast<size_t>(items[end].rows) * items[end].cols * D;
+                    ++end;
+                }
+                pack_near_group(items, at, end, stream, 0.25);   // (finer: these are packed again by the owner pass)
+                at = end;
+            }
+        }
+    #endif
+        // the replaced blocks this chunk's gathers read (later launches are
+        // ordered after them)
+        for (char* p : retired) heap_.free(p);
+        retired.clear();
+        g0 = g1;
+    }
+    tmp.release();
+
     if (heap_.peak() > stats.heap_peak) {
         stats.heap_peak = heap_.peak();
         stats.heap_peak_resident = heap_.resident_at_peak();

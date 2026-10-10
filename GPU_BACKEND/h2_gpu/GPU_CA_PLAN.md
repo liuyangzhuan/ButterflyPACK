@@ -3937,6 +3937,47 @@ runs.  Level 4 -0.12 / -0.13 GB: the eager set's share at the peak moment,
 a late pass; it was 0.46-0.48 at begin().  The 2.1 GB still resident there
 is one generator pass's union, which is step C.
 
+#### Adopted blocks, step C (2026-10-09): the generator pass in bounded chunks
+
+The remote-generator pass now runs in chunks of generators whose adopted
+read set fits kNearGroupBudget raw: each chunk's blocks are put back
+(materialize_adopted), its generators' updates built into batches of their
+own (the per-generator body is a lambda, process_gen), launched, and the
+chunk's blocks packed again at the finer step before the next chunk's are
+put back.  The generators' own temp2^T - their transposes into the staging
+and the slot packing - runs once per pass in an image of its own, before
+the chunks; `replaced` persists across chunks (a replaced block must still
+not be accumulated into), the retired blocks go back per chunk.  A block
+two chunks read is packed twice, at the finer step.
+
+Gate: six runs, 0 errors, no guard fired.  Level 4 at 192^3: 2.68 / 2.55 /
+2.61 -> **1.57 / 1.53 / 1.55 GB** (resident 0.30 / 0.22 / 0.29 with no
+adopted blocks in it; the peak moment is now a wave's, transient 1.27-1.31);
+level 3 1.59 -> 1.10, level 2 1.33 -> 1.07-1.18; the leaf unchanged (4.88 /
+3.97 / 3.01).  At 96^3 nothing moves: level 4 holds no adopted set there.
+Accuracy: the chunk-shared blocks' extra packs show as logdet 3e-8 to 8e-8
+relative against step B (Color -89253747.301 -> -89253740.435, CA3
+-89253739.943 -> -89253734.641, CA0 -89253734.923 -> -89253731.853) and
+acc_forward 1.58e-2 -> 1.62e-2, 1.57 -> 1.59, 1.64 -> 1.64; against (c)
+that is within 3% on every path and size.  Factor 14.1 -> 14.3 s Color,
+13.7 -> 13.9 CA3, 14.6 -> 14.6 CA0: the 93-95 materialization batches at
+level 4 where there were 75, and an image upload per chunk.
+
+**Where the peaks stand (2026-10-09, against (b) two commits of host staging
+ago and against two days ago):**
+
+| 192^3, 8 ranks | leaf | level 4 | level 3 | level 2 | rank's peak |
+|---|---|---|---|---|---|
+| Color | 4.88 GB (step 5's fresh near blocks of a wave chunk, 2.95) | 1.57 | 1.10 | 1.07 | 4.88 (was 20.72 on 2026-10-07, 6.10 at (b)) |
+| CA3 | 3.97 (kept factors 0.67, Schur/edges 0.59, X_RR_full 0.47, temp2^T 0.33) | 1.53 | 1.09 | 1.15 | 3.97 (6.57 at (b)) |
+| CA0 | 3.01 (kept factors 0.91) | 1.55 | 1.10 | 1.18 | 3.01 (22.51 on 2026-10-08, 7.33 at (b)) |
+
+The leaf is the rank's peak on every path now, and level 4 is no longer a
+floor under it.  Next levers, by size: Color's 2.95 GB of fresh near blocks
+in one wave chunk (kWaveChunks = 8 a wave regardless of bytes: chunk by
+bytes); the CA paths' kept factors (tier 2 of the producer-side (a), 0.67-
+0.91 GB); CA3's fill X_RR_full 0.47.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
