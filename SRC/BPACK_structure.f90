@@ -1971,39 +1971,6 @@ end function distance_geo
       type(proctree)::ptree
       integer,allocatable::boundary_map(:,:)
       integer, allocatable::child_offset(:,:), row_group_child(:,:), row_gg2(:), row_further(:), row_pgno(:)
-      !>**** STAGE A2: reference far-partner count per row group (from the existing
-      ! enumeration) against the count derived from the near-delta set alone
-      integer, allocatable::farcnt_ref(:), farcnt_pred(:), farcnt_tmp(:)
-      !>**** STAGE B1: parent walk routed through (nparent, pnear, npnear). use_lpt is not
-      ! enabled yet, so this reproduces the original local walk exactly.
-      logical::use_lpt
-      !>**** STAGE B2 far-field ownership balancing: OFF, rejected by measurement
-      ! (2026-10-09, 320^3 / 64 ranks).  Reassigning a child row group's far blocks to
-      ! an LPT-chosen owner while hierarchy descent stays on the natural owner (the
-      ! "if (row_owned) child_counts" below) severs parent->child locality: a rank that
-      ! holds a child's far blocks but not its parent must materialise its own copy of
-      ! the parent's output.  Balance did improve (level 4 max/mean 1.681 -> 1.309,
-      ! level 5 1.202 -> 1.049) but total work rose 17.6% (per-rank mean 2.809 -> 3.305 s;
-      ! the LIGHTEST rank at level 5 went 0.717 -> 1.164 s, above the old mean) and the
-      ! level-5 transient grew 9.1x (129 -> 1176 MB).  Net critical path 3.605 -> 3.775 s,
-      ! worse than doing nothing.  Balancing this way requires the whole subtree to move
-      ! with the group: one LPT at the coarsest level having >= nproc groups, inherited
-      ! downward, so parent and children share an owner.  The delta set, the LPT helper
-      ! and the parent walk are validated (DELTACHK/FARCHK) and kept; with this .false.
-      ! they cost nothing and the parent walk is an exact no-op.
-      logical, parameter::md_lpt_farown = .false.
-      integer::nparent, npnear, nd_lvl, b_nn, nmaxnear
-      integer, allocatable::pnear(:,:), dlist_lvl(:,:)
-      !>**** STAGE B2: balanced far-block ownership
-      integer::b_gg, b_dd, b_slot, b_ng
-      integer::b_pm(Ndim), b_pn(Ndim)
-      integer, allocatable::farcnt_b(:), own_far(:), leafpgno(:)
-      integer::b_ownpgno
-      logical::row_owned_far
-      integer, allocatable::dpresent_loc(:), dpresent_glb(:)
-      integer::a2_dspan(Ndim), a2_dlt(Ndim), a2_idx(Ndim), a2_pm(Ndim), a2_pn(Ndim)
-      integer::a2_flat, a2_stride, a2_dim, a2_dd, a2_slot, a2_gg, a2_bb, a2_nbad, a2_tot
-      integer(kind=8)::a2_nspace
       type(nil_onelevel_MD),allocatable:: nlist_MD(:)
       type(nil_onelevel_MD),allocatable:: flist_MD(:)
       type(nil_key_onelevel_MD),allocatable:: nlist_key_MD(:)
@@ -2163,117 +2130,10 @@ end function distance_geo
                Nblock_data_loc=0
                Nblock_dup_loc=0
                dims = 2**(level_ll)
-               !>**** STAGE A1: check the delta-set premise before anything relies on it
-               if (option%trans_invariant /= 0 .and. option%verbosity >= 2) then
-                  if (nlist_MD(ll)%len > 0 .and. allocated(nlist_key_MD(ll)%keys)) &
-                     call HMAT_MD_validate_delta_nearset(Ndim, nlist_MD(ll)%len, &
-                        nlist_key_MD(ll)%keys, nlist_MD(ll), dims, groupm_start, ptree, ll)
-               endif
                if (option%trans_invariant /= 0) then
-                  if (option%verbosity >= 2) then
-                     allocate(farcnt_ref(Nboundall**Ndim))
-                     farcnt_ref = 0
-                  endif
                   allocate(child_counts(nchild), child_local_idx(nchild))
-                  !>**** STAGE B1 setup: delta set for this level, and the parent-walk bounds
-                  use_lpt = .false.
-                  nd_lvl = 0
-                  if (allocated(dlist_lvl)) deallocate(dlist_lvl)
-                  if (nlist_MD(ll)%len > 0 .and. allocated(nlist_key_MD(ll)%keys)) &
-                     call HMAT_MD_build_delta_set(Ndim, nlist_MD(ll)%len, &
-                        nlist_key_MD(ll)%keys, nlist_MD(ll), dims, groupm_start, &
-                        ptree%pgrp(h_mat_md%BP%pgno)%Comm, nd_lvl, dlist_lvl)
-                  nmaxnear = nd_lvl
-                  do b_nn = 1, nlist_MD(ll)%len
-                     nmaxnear = max(nmaxnear, nlist_MD(ll)%list(b_nn)%nn)
-                  enddo
-                  if (allocated(pnear)) deallocate(pnear)
-                  allocate(pnear(Ndim, max(1, nmaxnear)))
-
-                  !>**** STAGE B2: balance which rank owns each row group's far-field blocks.
-                  ! Ownership is keyed on the row group, so a rank's block count is the sum of
-                  ! its row groups' far-partner counts; GetMshGroup_Pgno hands each rank a
-                  ! spatially contiguous set, and adjacent groups have similar counts, so it
-                  ! pairs heavy with heavy (measured 83..378 blocks/rank at level 4, 1.80x
-                  ! compute imbalance). The delta set lets every rank derive every group's
-                  ! count identically with no communication, so an LPT assignment can be
-                  ! recomputed redundantly and agreed on without an exchange.
-                  !
-                  ! Only where each row group maps to a single rank. GetMshGroup_Pgno's
-                  ! descent depth depends only on the level, so one probe decides it. With
-                  ! fewer row groups than ranks (level 3: 64 groups, 256 ranks) whole-group
-                  ! assignment idles most ranks and measured 4.7x WORSE.
-                  b_ng = Nboundall**Ndim
-                  if (allocated(farcnt_b)) deallocate(farcnt_b)
-                  if (allocated(own_far)) deallocate(own_far)
-                  if (md_lpt_farown .and. nd_lvl > 0 .and. b_ng > 0) then
-                     if (ptree%pgrp(GetMshGroup_Pgno(ptree, Ndim, groupm_start_global))%nproc == 1) then
-                        allocate(farcnt_b(b_ng), own_far(b_ng))
-                        farcnt_b = 0
-                        do b_gg = 1, product(dims)
-                           call SingleIndexToMultiIndex(Ndim, dims, b_gg, b_pm)
-                           b_pm = b_pm + groupm_start - 1
-                           do b_dd = 1, nd_lvl
-                              b_pn = b_pm - dlist_lvl(:,b_dd)
-                              if (.not.(ALL(b_pn >= groupm_start) .and. &
-                                        ALL(b_pn <= groupm_start + dims - 1))) cycle
-                              groupm_start1 = b_pm*2**levelm
-                              groupn_start1 = b_pn*2**levelm
-                              do bb = 1, nchild
-                                 row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
-                              enddo
-                              call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, &
-                                 row_group_child, b_pm, b_pn, groupn_start1, msh, option, ker, &
-                                 trans_cache_delta, trans_cache_nearfar, trans_cache_nnear, &
-                                 trans_cache_near_cc, trans_cache_nfar, trans_cache_far_cc, &
-                                 trans_cache_size, trans_cache_capacity, b_slot)
-                              do bb = 1, nchild
-                                 group_m = row_group_child(bb,:) - groupm_start_global + 1
-                                 call MultiIndexToSingleIndex(Ndim, dims2, jj, group_m)
-                                 if (ll+1 < h_mat_md%Maxlevel+1) then
-                                    farcnt_b(jj) = farcnt_b(jj) + trans_cache_nfar(bb,b_slot)
-                                 else
-                                    farcnt_b(jj) = farcnt_b(jj) + trans_cache_nfar(bb,b_slot) &
-                                                   + trans_cache_nnear(bb,b_slot)
-                                 endif
-                              enddo
-                           enddo
-                        enddo
-                        call HMAT_MD_lpt_owner(b_ng, farcnt_b, ptree%nproc, own_far)
-                        !>**** leaf process group of each rank, so the balanced owner can be
-                        ! written into block%pgno
-                        if (allocated(leafpgno)) deallocate(leafpgno)
-                        allocate(leafpgno(0:ptree%nproc-1))
-                        leafpgno = -1
-                        do b_dd = 1, 2**(ptree%nlevel) - 1
-                           if (ptree%pgrp(b_dd)%nproc == 1) then
-                              if (ptree%pgrp(b_dd)%head >= 0 .and. &
-                                  ptree%pgrp(b_dd)%head < ptree%nproc) &
-                                 leafpgno(ptree%pgrp(b_dd)%head) = b_dd
-                           endif
-                        enddo
-                        if (minval(leafpgno) < 0) then
-                           deallocate(farcnt_b, own_far, leafpgno)
-                        else
-                           use_lpt = .true.
-                        endif
-                     endif
-                  endif
-
-                  if (use_lpt) then
-                     nparent = product(dims)
-                  else
-                     nparent = nlist_MD(ll)%len
-                  endif
-                  do gg=1,nparent
-                     if (use_lpt) then
-                        call SingleIndexToMultiIndex(Ndim, dims, gg, group_m1)
-                        group_m1 = group_m1 + groupm_start - 1
-                     else
-                        group_m1 = nlist_key_MD(ll)%keys(:,gg)
-                     endif
-                     call HMAT_MD_parent_nearlist(Ndim, use_lpt, group_m1, nd_lvl, dlist_lvl, &
-                        dims, groupm_start, nlist_MD(ll), gg, pnear, npnear)
+                  do gg=1,nlist_MD(ll)%len
+                     group_m1 = nlist_key_MD(ll)%keys(:,gg)
                      groupm_start1 = group_m1*2**levelm
                      do bb = 1, nchild
                         row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
@@ -2288,8 +2148,8 @@ end function distance_geo
 
                      child_counts = 0
                      child_local_idx = 0
-                     do nn=1,npnear
-                        group_n1 = pnear(:,nn)
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                         groupn_start1 = group_n1*2**levelm
                         call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
                            group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
@@ -2300,13 +2160,6 @@ end function distance_geo
                            furhter_partition = row_further(bb)
                            row_owned = IOwnPgrp(ptree, row_pgno(bb))
                            row_count_owner = (ptree%MyID == ptree%pgrp(row_pgno(bb))%head)
-                           !>**** STAGE B2: far-field blocks follow the balanced (LPT) owner;
-                           ! the near list and the hierarchy descent keep the natural owner
-                           if (use_lpt) then
-                              row_owned_far = (own_far(row_gg2(bb)) == ptree%MyID)
-                           else
-                              row_owned_far = row_owned
-                           endif
                            if (furhter_partition == 1) then
                               nadd = nchild
                               if (row_owned) child_counts(bb) = child_counts(bb) + nadd
@@ -2317,10 +2170,8 @@ end function distance_geo
                               if (row_count_owner) then
                                  Ninadmissible_tot_8 = Ninadmissible_tot_8 + int(nadd,kind=8)
                                  Nadmissible_tot_8 = Nadmissible_tot_8 + int(trans_cache_nfar(bb,cache_slot),kind=8)
-                                 if (allocated(farcnt_ref)) farcnt_ref(row_gg2(bb)) = &
-                                    farcnt_ref(row_gg2(bb)) + trans_cache_nfar(bb,cache_slot)
                               endif
-                              if (row_owned_far) then
+                              if (row_owned) then
                                  if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
                                     do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
                                        cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
@@ -2342,10 +2193,8 @@ end function distance_geo
                               if (row_count_owner) then
                                  Ninadmissible_tot_8 = Ninadmissible_tot_8 + int(trans_cache_nnear(bb,cache_slot),kind=8)
                                  Nadmissible_tot_8 = Nadmissible_tot_8 + int(trans_cache_nfar(bb,cache_slot),kind=8)
-                                 if (allocated(farcnt_ref)) farcnt_ref(row_gg2(bb)) = &
-                                    farcnt_ref(row_gg2(bb)) + trans_cache_nfar(bb,cache_slot)
                               endif
-                              if (row_owned_far) then
+                              if (row_owned) then
                                  if (ptree%pgrp(row_pgno(bb))%nproc == 1) then
                                     do ii_pair = 1, trans_cache_nnear(bb,cache_slot)
                                        cc = trans_cache_near_cc(bb,ii_pair,cache_slot)
@@ -2394,8 +2243,8 @@ end function distance_geo
                            Ninadmissible_max = max(Ninadmissible_max, child_counts(bb))
                         enddo
 
-                        do nn=1,npnear
-                           group_n1 = pnear(:,nn)
+                        do nn=1,nlist_MD(ll)%list(gg)%nn
+                           group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                            groupn_start1 = group_n1*2**levelm
                            call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
                               group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
@@ -2435,102 +2284,6 @@ end function distance_geo
                      write(*,*)'#admissible',Nadmissible_tot_8,'#inadmissible',Ninadmissible_tot_8
                   endif
 
-                  !>**** STAGE A2: can a rank derive EVERY row group's far-partner count
-                  ! from the near-delta set alone -- including groups outside its subtree?
-                  ! That is precisely what balanced far-block ownership requires. Walks all
-                  ! level-ll parents (not just local ones), which is the capability under test.
-                  if (allocated(farcnt_ref)) then
-                     allocate(farcnt_tmp(Nboundall**Ndim))
-                     call MPI_ALLREDUCE(farcnt_ref, farcnt_tmp, Nboundall**Ndim, MPI_INTEGER, &
-                        MPI_SUM, ptree%pgrp(h_mat_md%BP%pgno)%Comm, ierr)
-                     farcnt_ref = farcnt_tmp
-                     deallocate(farcnt_tmp)
-
-                     do a2_dim = 1, Ndim
-                        a2_dspan(a2_dim) = 2*dims(a2_dim) - 1
-                     enddo
-                     a2_nspace = 1_8
-                     do a2_dim = 1, Ndim
-                        a2_nspace = a2_nspace*int(a2_dspan(a2_dim), kind=8)
-                     enddo
-                     if (a2_nspace <= 20000000_8) then
-                        allocate(dpresent_loc(0:int(a2_nspace)-1), dpresent_glb(0:int(a2_nspace)-1))
-                        dpresent_loc = 0
-                        do a2_gg = 1, nlist_MD(ll)%len
-                           a2_pm = nlist_key_MD(ll)%keys(:,a2_gg)
-                           do nn = 1, nlist_MD(ll)%list(a2_gg)%nn
-                              a2_pn = nlist_MD(ll)%list(a2_gg)%nlist(nn,:)
-                              a2_dlt = a2_pm - a2_pn
-                              a2_flat = 0
-                              a2_stride = 1
-                              do a2_dim = 1, Ndim
-                                 if (abs(a2_dlt(a2_dim)) > dims(a2_dim)-1) then
-                                    a2_flat = -1
-                                    exit
-                                 endif
-                                 a2_flat = a2_flat + (a2_dlt(a2_dim)+dims(a2_dim)-1)*a2_stride
-                                 a2_stride = a2_stride*a2_dspan(a2_dim)
-                              enddo
-                              if (a2_flat >= 0) dpresent_loc(a2_flat) = 1
-                           enddo
-                        enddo
-                        call MPI_ALLREDUCE(dpresent_loc, dpresent_glb, int(a2_nspace), &
-                           MPI_INTEGER, MPI_MAX, ptree%pgrp(h_mat_md%BP%pgno)%Comm, ierr)
-
-                        allocate(farcnt_pred(Nboundall**Ndim))
-                        farcnt_pred = 0
-                        do a2_gg = 1, product(dims)
-                           call SingleIndexToMultiIndex(Ndim, dims, a2_gg, a2_pm)
-                           a2_pm = a2_pm + groupm_start - 1
-                           do a2_flat = 0, int(a2_nspace)-1
-                              if (dpresent_glb(a2_flat) == 0) cycle
-                              a2_dd = a2_flat
-                              do a2_dim = 1, Ndim
-                                 a2_idx(a2_dim) = mod(a2_dd, a2_dspan(a2_dim))
-                                 a2_dd = a2_dd/a2_dspan(a2_dim)
-                                 a2_dlt(a2_dim) = a2_idx(a2_dim) - (dims(a2_dim)-1)
-                              enddo
-                              a2_pn = a2_pm - a2_dlt
-                              if (.not.(ALL(a2_pn >= groupm_start) .and. &
-                                        ALL(a2_pn <= groupm_start + dims - 1))) cycle
-                              groupm_start1 = a2_pm*2**levelm
-                              groupn_start1 = a2_pn*2**levelm
-                              do a2_bb = 1, nchild
-                                 row_group_child(a2_bb,:) = child_offset(a2_bb,:) + groupm_start1 - 1
-                              enddo
-                              call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, &
-                                 row_group_child, a2_pm, a2_pn, groupn_start1, msh, option, ker, &
-                                 trans_cache_delta, trans_cache_nearfar, trans_cache_nnear, &
-                                 trans_cache_near_cc, trans_cache_nfar, trans_cache_far_cc, &
-                                 trans_cache_size, trans_cache_capacity, a2_slot)
-                              do a2_bb = 1, nchild
-                                 group_m = row_group_child(a2_bb,:) - groupm_start_global + 1
-                                 call MultiIndexToSingleIndex(Ndim, dims2, jj, group_m)
-                                 farcnt_pred(jj) = farcnt_pred(jj) + trans_cache_nfar(a2_bb,a2_slot)
-                              enddo
-                           enddo
-                        enddo
-
-                        a2_nbad = 0
-                        a2_tot = 0
-                        do jj = 1, Nboundall**Ndim
-                           if (farcnt_ref(jj) > 0 .or. farcnt_pred(jj) > 0) a2_tot = a2_tot + 1
-                           if (farcnt_ref(jj) /= farcnt_pred(jj)) a2_nbad = a2_nbad + 1
-                        enddo
-                        if (ptree%MyID == Main_ID) then
-                           if (a2_nbad == 0) then
-                              write(*,'(A,I3,A,I9,A)') ' FARCHK lev', ll, ': PASS  groups=', a2_tot, &
-                                 '  every far-partner count derived from the delta set alone'
-                           else
-                              write(*,'(A,I3,A,I9,A,I9)') ' FARCHK lev', ll, ': FAIL  groups=', a2_tot, &
-                                 '  mismatches=', a2_nbad
-                           endif
-                        endif
-                        deallocate(farcnt_pred, dpresent_loc, dpresent_glb)
-                     endif
-                     deallocate(farcnt_ref)
-                  endif
-
                   h_mat_md%BP%LL(ll + 1)%Nbound = Nadmissible_tot_8
                   h_mat_md%BP%LL(ll + 1)%Nbound_loc = Nblock_data_loc
                   h_mat_md%BP%LL(ll + 1)%trans_ndup = Nblock_dup_loc
@@ -2550,15 +2303,8 @@ end function distance_geo
                   dup_idx = 0
                   trans_nrep_key = 0
 
-                  do gg=1,nparent
-                     if (use_lpt) then
-                        call SingleIndexToMultiIndex(Ndim, dims, gg, group_m1)
-                        group_m1 = group_m1 + groupm_start - 1
-                     else
-                        group_m1 = nlist_key_MD(ll)%keys(:,gg)
-                     endif
-                     call HMAT_MD_parent_nearlist(Ndim, use_lpt, group_m1, nd_lvl, dlist_lvl, &
-                        dims, groupm_start, nlist_MD(ll), gg, pnear, npnear)
+                  do gg=1,nlist_MD(ll)%len
+                     group_m1 = nlist_key_MD(ll)%keys(:,gg)
                      groupm_start1 = group_m1*2**levelm
                      do bb = 1, nchild
                         row_group_child(bb,:) = child_offset(bb,:) + groupm_start1 - 1
@@ -2567,11 +2313,9 @@ end function distance_geo
                         level = GetTreelevel(row_group_child(bb,1)) - 1
                         row_further(bb) = 0
                         if (level >= option%LRlevel .and. ptree%pgrp(pgno)%nproc>1) row_further(bb) = 1
-                        group_m = row_group_child(bb,:) - groupm_start_global + 1
-                        call MultiIndexToSingleIndex(Ndim,dims2, row_gg2(bb), group_m)
                      enddo
-                     do nn=1,npnear
-                        group_n1 = pnear(:,nn)
+                     do nn=1,nlist_MD(ll)%list(gg)%nn
+                        group_n1 = nlist_MD(ll)%list(gg)%nlist(nn,:)
                         groupn_start1 = group_n1*2**levelm
                         call HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
                            group_m1, group_n1, groupn_start1, msh, option, ker, trans_cache_delta, &
@@ -2580,19 +2324,7 @@ end function distance_geo
                         do bb = 1, nchild
                            group_m = row_group_child(bb,:)
                            row_owned = IOwnPgrp(ptree, row_pgno(bb))
-                           !>**** STAGE B2: far-field blocks follow the balanced (LPT) owner;
-                           ! the near list and the hierarchy descent keep the natural owner
-                           if (use_lpt) then
-                              row_owned_far = (own_far(row_gg2(bb)) == ptree%MyID)
-                           else
-                              row_owned_far = row_owned
-                           endif
-                           if (use_lpt) then
-                              b_ownpgno = leafpgno(own_far(row_gg2(bb)))
-                           else
-                              b_ownpgno = row_pgno(bb)
-                           endif
-                           if (.not. row_owned_far) cycle
+                           if (.not. row_owned) cycle
                            if (row_further(bb) /= 1 .and. ll+1 < h_mat_md%Maxlevel+1) then
                               do ii_pair = 1, trans_cache_nfar(bb,cache_slot)
                                  cc = trans_cache_far_cc(bb,ii_pair,cache_slot)
@@ -2609,7 +2341,7 @@ end function distance_geo
                                  if (new_rep == 1) then
                                     Nadmissible_tot_loc = Nadmissible_tot_loc + 1
                                     blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
-                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats, b_ownpgno)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
                                     if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
                                  else
                                     dup_idx = dup_idx + 1
@@ -2634,7 +2366,7 @@ end function distance_geo
                                  if (new_rep == 1) then
                                     Nadmissible_tot_loc = Nadmissible_tot_loc + 1
                                     blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
-                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats, b_ownpgno)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
                                     if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
                                  else
                                     dup_idx = dup_idx + 1
@@ -2658,7 +2390,7 @@ end function distance_geo
                                  if (new_rep == 1) then
                                     Nadmissible_tot_loc = Nadmissible_tot_loc + 1
                                     blocks => h_mat_md%BP%LL(ll + 1)%matrices_block(Nadmissible_tot_loc)
-                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats, b_ownpgno)
+                                    call HMAT_MD_init_block(Ndim, blocks, group_m, group_n, h_mat_md%Maxlevel, near_far, option, msh, ptree, stats)
                                     if (rep_slot > 0) rep_block_idx(rep_slot) = Nadmissible_tot_loc
                                  else
                                     dup_idx = dup_idx + 1
@@ -2925,7 +2657,7 @@ end function distance_geo
    end subroutine HMAT_MD_clear_nil_level
 
 
-   subroutine HMAT_MD_init_block(Ndim, block, group_m, group_n, Maxlevel, near_far, option, msh, ptree, stats, pgno_in)
+   subroutine HMAT_MD_init_block(Ndim, block, group_m, group_n, Maxlevel, near_far, option, msh, ptree, stats)
 
       implicit none
       integer Ndim, Maxlevel, near_far, dim_i
@@ -2935,10 +2667,6 @@ end function distance_geo
       type(mesh)::msh(Ndim)
       type(proctree)::ptree
       type(Hstat)::stats
-      !>**** owner for this block; defaults to the row group's natural owner. Must match
-      ! whichever rank actually creates it, because ComputeParallelIndices_MD derives M_p/N_p
-      ! from it and the vector redistribution tests IOwnPgrp(blocks%pgno).
-      integer, optional:: pgno_in
 
       block%Ndim = Ndim
       allocate(block%row_group(Ndim))
@@ -2951,11 +2679,7 @@ end function distance_geo
       else
          block%level_butterfly = min(Maxlevel,option%LRlevel) - block%level
       endif
-      if (present(pgno_in)) then
-         block%pgno = pgno_in
-      else
-         block%pgno = GetMshGroup_Pgno(ptree, Ndim, group_m)
-      endif
+      block%pgno = GetMshGroup_Pgno(ptree, Ndim, group_m)
 
       allocate(block%M(Ndim))
       allocate(block%N(Ndim))
@@ -2983,288 +2707,6 @@ end function distance_geo
       call LogMemory(stats, SIZEOF(block)/1024.0d3)
 
    end subroutine HMAT_MD_init_block
-
-
-   !>**** STAGE A1 VALIDATION for the delta-set route to balanced far-block ownership.
-   !
-   ! Ownership of a far-field block is keyed on its row group, and a rank can only
-   ! enumerate row groups inside its own subtree, which is why the far-field work cannot
-   ! currently be reassigned. The near/far classification is translation invariant, though
-   ! (HMAT_MD_get_trans_nearfar_table is cached purely on group_m1-group_n1), so the set of
-   ! near deltas D at a level is the same everywhere and a rank that knows D can enumerate
-   ! ANY row group's partners, including groups outside its subtree.
-   !
-   ! This checks that premise before anything depends on it: D is collected from the local
-   ! near lists and unioned across ranks, then for every local row group P we require
-   !     |{ d in D : P-d in bounds }|  ==  nlist(P)%nn
-   ! which exercises the delta convention and the boundary truncation that produces the
-   ! partner-count spread in the first place. Reports PASS/FAIL per level; changes nothing.
-   !>**** Derive the near-field delta set D at one level of the HTENSOR hierarchy.
-   !
-   ! The near/far classification is translation invariant -- HMAT_MD_get_trans_nearfar_table
-   ! is cached purely on group_m1-group_n1 -- so a group's near partners are
-   !     { G - d : d in D, G-d in bounds }
-   ! for a level-dependent set D that is the same everywhere. Measured |D| = 27 (the
-   ! 3x3x3 stencil at near_para=2.1), and the resulting counts reproduce the reference
-   ! #inadmissible exactly (10^3, 22^3, 46^3 per level). D is collected from the local near
-   ! lists and unioned across ranks, so it is exact rather than whatever one rank sees.
-   !
-   ! Knowing D lets a rank enumerate ANY row group's partners, including groups outside its
-   ! own subtree -- which is what balanced far-block ownership needs, since ownership is
-   ! keyed on the row group and a rank otherwise only reaches its own subtree.
-   !
-   ! dmax bounds the stencil radius so the presence array is (2*dmax+1)^Ndim (27 entries for
-   ! dmax=1) rather than spanning the whole level, which would grow with problem size.
-   !>**** This parent's near partners, either derived from the delta set (which works for
-   ! ANY parent, including ones outside this rank's subtree) or read from the local near
-   ! list. With use_lpt false the two are identical by construction -- that equivalence is
-   ! what DELTACHK verified -- so this is behaviour preserving until use_lpt is enabled.
-   subroutine HMAT_MD_parent_nearlist(Ndim, use_lpt, group_m1, nd, dlist, dims, &
-      groupm_start, nlist_lvl, gg, pnear, npnear)
-
-      implicit none
-      integer Ndim, nd, gg, npnear
-      logical use_lpt
-      integer group_m1(Ndim), dims(Ndim), groupm_start(Ndim)
-      integer, allocatable:: dlist(:,:)
-      type(nil_onelevel_MD)::nlist_lvl
-      integer, allocatable:: pnear(:,:)
-      integer ii, pn(Ndim)
-
-      npnear = 0
-      if (use_lpt) then
-         do ii = 1, nd
-            pn = group_m1 - dlist(:, ii)
-            if (ALL(pn >= groupm_start) .and. ALL(pn <= groupm_start + dims - 1)) then
-               npnear = npnear + 1
-               pnear(:, npnear) = pn
-            endif
-         enddo
-      else
-         do ii = 1, nlist_lvl%list(gg)%nn
-            npnear = npnear + 1
-            pnear(:, npnear) = nlist_lvl%list(gg)%nlist(ii, :)
-         enddo
-      endif
-
-   end subroutine HMAT_MD_parent_nearlist
-
-
-   subroutine HMAT_MD_build_delta_set(Ndim, nlist_len, nlist_keys, nlist_lvl, dims, &
-      groupm_start, comm, nd, dlist)
-
-      implicit none
-      integer Ndim, nlist_len, comm, nd
-      integer nlist_keys(:,:)
-      type(nil_onelevel_MD)::nlist_lvl
-      integer dims(Ndim), groupm_start(Ndim)
-      integer, allocatable:: dlist(:,:)
-
-      integer gg, nn, dim_i, ierr, flat, stride, dmax_loc, dmax, span, nspace, ii
-      integer pm(Ndim), pn(Ndim), dlt(Ndim), idx(Ndim)
-      integer, allocatable:: pres_loc(:), pres_glb(:)
-
-      nd = 0
-      !>**** stencil radius, unioned across ranks
-      dmax_loc = 0
-      do gg = 1, nlist_len
-         pm = nlist_keys(:, gg)
-         do nn = 1, nlist_lvl%list(gg)%nn
-            pn = nlist_lvl%list(gg)%nlist(nn, :)
-            dmax_loc = max(dmax_loc, maxval(abs(pm - pn)))
-         enddo
-      enddo
-      call MPI_ALLREDUCE(dmax_loc, dmax, 1, MPI_INTEGER, MPI_MAX, comm, ierr)
-      if (dmax < 0) return
-      span = 2*dmax + 1
-      nspace = span**Ndim
-      if (nspace <= 0 .or. nspace > 2000000) return
-
-      allocate (pres_loc(0:nspace - 1), pres_glb(0:nspace - 1))
-      pres_loc = 0
-      do gg = 1, nlist_len
-         pm = nlist_keys(:, gg)
-         do nn = 1, nlist_lvl%list(gg)%nn
-            pn = nlist_lvl%list(gg)%nlist(nn, :)
-            dlt = pm - pn
-            flat = 0
-            stride = 1
-            do dim_i = 1, Ndim
-               flat = flat + (dlt(dim_i) + dmax)*stride
-               stride = stride*span
-            enddo
-            pres_loc(flat) = 1
-         enddo
-      enddo
-      call MPI_ALLREDUCE(pres_loc, pres_glb, nspace, MPI_INTEGER, MPI_MAX, comm, ierr)
-
-      nd = sum(pres_glb)
-      if (nd > 0) then
-         allocate (dlist(Ndim, nd))
-         ii = 0
-         do flat = 0, nspace - 1
-            if (pres_glb(flat) == 0) cycle
-            ii = ii + 1
-            stride = flat
-            do dim_i = 1, Ndim
-               idx(dim_i) = mod(stride, span)
-               stride = stride/span
-               dlist(dim_i, ii) = idx(dim_i) - dmax
-            enddo
-         enddo
-      endif
-      deallocate (pres_loc, pres_glb)
-
-   end subroutine HMAT_MD_build_delta_set
-
-
-   !>**** Balanced owner for each row group's far-field blocks, by longest-processing-time
-   ! first on the far-partner counts. Deterministic and computed from replicated data, so
-   ! every rank derives the identical map with no communication. Only valid where each row
-   ! group maps to a single rank: with fewer row groups than ranks (level 3 here: 64 groups,
-   ! 256 ranks) assigning whole groups would idle most ranks and measured 4.7x WORSE than
-   ! the existing map, so the caller must not enable it there.
-   subroutine HMAT_MD_lpt_owner(ngroup, wcount, nproc, own)
-
-      implicit none
-      integer ngroup, nproc
-      integer wcount(ngroup), own(ngroup)
-      integer ii, rr, nbest, wmax
-      integer, allocatable:: bucket(:), order(:)
-      integer(kind=8), allocatable:: load(:)
-      integer(kind=8):: best
-
-      own = -1
-      if (ngroup <= 0 .or. nproc <= 0) return
-
-      !>**** counting sort, descending weight, ties by ascending index for determinism
-      wmax = max(0, maxval(wcount))
-      allocate (bucket(0:wmax), order(ngroup))
-      bucket = 0
-      do ii = 1, ngroup
-         bucket(wcount(ii)) = bucket(wcount(ii)) + 1
-      enddo
-      nbest = 1
-      do rr = wmax, 0, -1
-         ii = bucket(rr)
-         bucket(rr) = nbest
-         nbest = nbest + ii
-      enddo
-      do ii = 1, ngroup
-         order(bucket(wcount(ii))) = ii
-         bucket(wcount(ii)) = bucket(wcount(ii)) + 1
-      enddo
-
-      allocate (load(0:nproc - 1))
-      load = 0_8
-      do ii = 1, ngroup
-         best = load(0)
-         nbest = 0
-         do rr = 1, nproc - 1
-            if (load(rr) < best) then
-               best = load(rr)
-               nbest = rr
-            endif
-         enddo
-         own(order(ii)) = nbest
-         load(nbest) = load(nbest) + int(wcount(order(ii)), kind=8)
-      enddo
-      deallocate (bucket, order, load)
-
-   end subroutine HMAT_MD_lpt_owner
-
-
-   subroutine HMAT_MD_validate_delta_nearset(Ndim, nlist_len, nlist_keys, nlist_lvl, &
-      dims, groupm_start, ptree, tag_level)
-
-      implicit none
-      integer Ndim, nlist_len, tag_level
-      integer nlist_keys(:,:)
-      type(nil_onelevel_MD)::nlist_lvl
-      integer dims(Ndim), groupm_start(Ndim)
-      type(proctree)::ptree
-
-      integer gg, nn, dim_i, ierr, dd, nd, flat, stride, ngood, nbad, ntot
-      integer dspan(Ndim)
-      integer pm(Ndim), pn(Ndim), dlt(Ndim), idx(Ndim)
-      integer, allocatable:: present_loc(:), present_glb(:)
-      integer(kind=8):: nspace
-      integer:: npred, nref, nbad_loc, ncheck_loc, red(2), red_g(2)
-
-      do dim_i = 1, Ndim
-         dspan(dim_i) = 2*dims(dim_i) - 1
-      enddo
-      nspace = 1_8
-      do dim_i = 1, Ndim
-         nspace = nspace*int(dspan(dim_i), kind=8)
-      enddo
-      if (nspace > 20000000_8) return        ! delta space too large to enumerate cheaply
-
-      allocate (present_loc(0:int(nspace) - 1), present_glb(0:int(nspace) - 1))
-      present_loc = 0
-
-      !>**** collect the deltas this rank can see from its own near lists
-      do gg = 1, nlist_len
-         pm = nlist_keys(:, gg)
-         do nn = 1, nlist_lvl%list(gg)%nn
-            pn = nlist_lvl%list(gg)%nlist(nn, :)
-            dlt = pm - pn
-            flat = 0
-            stride = 1
-            do dim_i = 1, Ndim
-               if (abs(dlt(dim_i)) > dims(dim_i) - 1) then
-                  flat = -1
-                  exit
-               endif
-               flat = flat + (dlt(dim_i) + dims(dim_i) - 1)*stride
-               stride = stride*dspan(dim_i)
-            enddo
-            if (flat >= 0) present_loc(flat) = 1
-         enddo
-      enddo
-
-      call MPI_ALLREDUCE(present_loc, present_glb, int(nspace), MPI_INTEGER, MPI_MAX, &
-         ptree%Comm, ierr)
-      nd = sum(present_glb)
-
-      !>**** every local row group's near count must be reproducible from D alone
-      nbad_loc = 0
-      ncheck_loc = 0
-      do gg = 1, nlist_len
-         pm = nlist_keys(:, gg)
-         npred = 0
-         do flat = 0, int(nspace) - 1
-            if (present_glb(flat) == 0) cycle
-            dd = flat
-            do dim_i = 1, Ndim
-               idx(dim_i) = mod(dd, dspan(dim_i))
-               dd = dd/dspan(dim_i)
-               dlt(dim_i) = idx(dim_i) - (dims(dim_i) - 1)
-            enddo
-            pn = pm - dlt
-            if (ALL(pn >= groupm_start) .and. ALL(pn <= groupm_start + dims - 1)) npred = npred + 1
-         enddo
-         nref = nlist_lvl%list(gg)%nn
-         ncheck_loc = ncheck_loc + 1
-         if (npred /= nref) nbad_loc = nbad_loc + 1
-      enddo
-
-      red(1) = nbad_loc
-      red(2) = ncheck_loc
-      call MPI_ALLREDUCE(red, red_g, 2, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
-      if (ptree%MyID == Main_ID) then
-         if (red_g(1) == 0) then
-            write (*, '(A,I3,A,I7,A,I8,A)') ' DELTACHK lev', tag_level, ': PASS  |D|=', nd, &
-               '  groups checked=', red_g(2), '  all near counts reproduced from the delta set'
-         else
-            write (*, '(A,I3,A,I7,A,I8,A,I8)') ' DELTACHK lev', tag_level, ': FAIL  |D|=', nd, &
-               '  groups checked=', red_g(2), '  mismatches=', red_g(1)
-         endif
-      endif
-
-      deallocate (present_loc, present_glb)
-
-   end subroutine HMAT_MD_validate_delta_nearset
 
 
    subroutine HMAT_MD_get_trans_nearfar_table(Ndim, nchild, child_offset, row_group_child, &
