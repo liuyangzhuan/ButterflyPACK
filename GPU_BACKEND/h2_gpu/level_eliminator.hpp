@@ -6049,8 +6049,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     // the generator reads and not more.  A chunk of generators is
     // materialized in one batch (run_fill_batch() plans and synchronizes
     // twice per call, so a call per pair is not an option).
+    // `fresh` counts what the generator would make from the kernel (a target
+    // with no stored block, and every replace_edge): those are raw from the
+    // chunk's start to its pack as well, so the chunk's budget covers them
+    // too.  A block two generators of a chunk would both make is counted
+    // twice, which only makes the chunk smaller.
     auto want_of_gen = [&](const Gen& g, const std::unordered_set<const void*>& seen,
-                           std::vector<AdoptedBlock>& cand) {
+                           std::vector<AdoptedBlock>& cand, size_t& fresh) {
         const auto& hop = g.box->one_hop;
         const auto& counts = g.box->deferred_xnn_neighbor_point_counts;
         std::unordered_set<const void*> mine;   // (a block twice in one generator)
@@ -6062,22 +6067,39 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 cand.push_back(AdoptedBlock{false, key, &it->second});
             }
         };
+        auto replace_bytes = [&](size_t li) {   // replace_edge's fresh block for pair (hop[li], g)
+            const bool e_hi = g.morton > hop[li];
+            const size_t c_l = static_cast<size_t>(counts[li]), k = static_cast<size_t>(g.k);
+            return (e_hi ? k : c_l) * (e_hi ? c_l : k) * D;
+        };
         for (size_t li = 0; li < hop.size(); ++li) {
             if (counts[li] == 0) continue;
             const int64_t lm = hop[li];
             BoxState& ls = state_of(lm);
             if (!interest(lm)) {
                 // replace_edge(false) for a box of no interest, on an owner level
-                if (owner_ != nullptr && g.k > 0 && is_interest(g.morton)) want_edge(lm, g.morton);
+                if (owner_ != nullptr && g.k > 0 && is_interest(g.morton)) {
+                    want_edge(lm, g.morton);
+                    fresh += replace_bytes(li);
+                }
                 continue;
             }
             // ensure_schur(ls)
-            if (schur_written_here(lm, ls) && ls.schur.ptr == nullptr && is_packed_schur(lm) &&
-                seen.count(&ls.schur) == 0 && mine.insert(&ls.schur).second) {
-                cand.push_back(AdoptedBlock{true, static_cast<uint64_t>(lm), &ls.schur});
+            if (schur_written_here(lm, ls) && ls.schur.ptr == nullptr) {
+                if (is_packed_schur(lm)) {
+                    if (seen.count(&ls.schur) == 0 && mine.insert(&ls.schur).second) {
+                        cand.push_back(AdoptedBlock{true, static_cast<uint64_t>(lm), &ls.schur});
+                    }
+                } else {
+                    const size_t c = static_cast<size_t>(current_size(ls));
+                    fresh += c * c * D;
+                }
             }
             // replace_edge(false)
-            if (g.k > 0 && pair_read(lm, ls, g.morton)) want_edge(lm, g.morton);
+            if (g.k > 0 && pair_read(lm, ls, g.morton)) {
+                want_edge(lm, g.morton);
+                fresh += replace_bytes(li);
+            }
             // ensure_edge(min, max) of the inner loop
             for (size_t ni = 0; ni < hop.size(); ++ni) {
                 if (ni == li || counts[ni] == 0) continue;
@@ -6086,6 +6108,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 if (interest(nm) && nm < lm) continue;
                 if (!pair_read(lm, ls, nm)) continue;
                 want_edge(lm, nm);
+                if (edges_.find(edge_key(lm, nm)) == edges_.end()) {
+                    const BoxState& hs = state_of(std::max(lm, nm));
+                    const BoxState& los = state_of(std::min(lm, nm));
+                    fresh += static_cast<size_t>(current_size(hs)) * static_cast<size_t>(current_size(los)) * D;
+                }
             }
         }
     };
@@ -6334,8 +6361,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             size_t bytes = 0;
             while (g1 < gens.size()) {
                 std::vector<AdoptedBlock> cand;
-                want_of_gen(gens[g1], seen, cand);
-                size_t added = 0;
+                size_t added = 0;   // what the generator puts back, and what it makes
+                want_of_gen(gens[g1], seen, cand, added);
                 for (const AdoptedBlock& w : cand) added += static_cast<size_t>(w.m->rows) * w.m->cols * D;
                 if (g1 > g0 && bytes + added > kNearGroupBudget) break;
                 for (const AdoptedBlock& w : cand) {

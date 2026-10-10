@@ -3978,6 +3978,62 @@ in one wave chunk (kWaveChunks = 8 a wave regardless of bytes: chunk by
 bytes); the CA paths' kept factors (tier 2 of the producer-side (a), 0.67-
 0.91 GB); CA3's fill X_RR_full 0.47.
 
+#### The generator passes' kernel-made targets (2026-10-09): the Color leaf's 2.95 GB
+
+A correction first: the 2.95 GB of "level Schur/edges" at the Color leaf's
+peak was not step 5's fresh near blocks - those are packed as they are
+written (3.93 -> 0.78 GB over 128 groups a leaf, ~31 MB raw a chunk).  The
+only other allocations of that kind are the targets the remote-generator
+pass makes from the kernel when a pair has no stored block yet
+(ensure_schur, ensure_edge, replace_edge), and step A re-packed only what
+the pass had *materialized*, not what it made.  At the Color leaf the
+passes sum into 34987 targets of 7.75 GB over the level, most of them
+fresh in the early waves; CA3's leaf had 0.59 GB of them at its peak
+moment; CA0's leaf, a replicated level with no generator pass, none.
+
+**Built in two commits.**  The three lambdas record the blocks they
+allocate and the chunk packs them with the adopted ones it put back (at
+the finer step; "packed after the generator passes: 33115 adopted blocks
+(5.48 GB raw), 9344 targets made from the kernel (2.95 GB raw)" at the
+Color leaf, 14379 of 4.40 GB at CA3's).  That alone took CA3's leaf 3.97
+-> 3.39 GB and the 96^3 level 4 peaks 1.47 -> 1.17 (CA3) and 1.53 -> 1.09
+(Color), but Color's leaf only 4.88 -> 3.83: its peak moment still held
+the 2.95 GB, now with a 0.39 GB transient - the moment inside one chunk
+after the targets are allocated and before they are packed.  The chunk
+budget counted only the adopted blocks a chunk reads, and the leaf's first
+pass reads almost none, so one chunk took every generator.  The second
+commit counts what a generator would make from the kernel (a target with
+no stored block, and every replace_edge) in the budget as well.
+
+| (c) async -> now | leaf peak | level 4 | logdet | acc_forward | Factor |
+|---|---|---|---|---|---|
+| Color 192^3 | 5.01 -> 4.88 -> 3.83 -> **2.87** GB | 3.20 -> 1.58 | -89253748.104 -> -89253743.343 (5e-8) | 1.60e-2 -> 1.64e-2 | 14.1 -> 14.3 s |
+| CA3 192^3 | 4.14 -> 3.97 -> **3.39** | 3.06 -> 1.51 | -89253742.145 -> -89253737.442 (5e-8) | 1.54e-2 -> 1.57e-2 | 13.7 -> 14.1 |
+| CA0 192^3 | 3.01 -> **3.01** | 3.14 -> 1.55 | -89253736.570 -> -89253729.441 (8e-8) | 1.62e-2 -> 1.64e-2 | 14.5 -> 14.5 |
+| Color 96^3 | level 4 1.56 -> **1.04** | - | -9928903.097 -> -9928902.363 | 1.01e-2 -> 0.99e-2 | 2.47 -> 2.63 |
+| CA3 96^3 | level 4 1.47 -> **1.17** | - | -9928899.446 -> -9928901.097 | 9.29e-3 -> 1.01e-2 | 3.00 -> 3.22 |
+| CA0 96^3 | level 4 1.12 -> 1.12 | - | -9928897.922 -> -9928898.027 | 9.73e-3 -> 9.72e-3 | 3.28 -> 3.32 |
+
+Six runs, 0 errors, no guard fired.  The Color leaf's resident at its new
+peak moment, a late wave's owner pass: X_RR_full 0.30, temp2^T 0.12, kept
+factors 0.57, owner source slots 0.15, under a 1.67 GB transient.
+
+**Where the peaks stand (2026-10-09, end of day).**  Against the uncompressed
+Color run of 2026-10-06 (33.21 GB) and two days ago (20.72 Color, 22.51 CA0):
+
+| 192^3, 8 ranks | leaf (the rank's peak) | level 4 | level 3 | level 2 | Factor | solve |
+|---|---|---|---|---|---|---|
+| Color | **2.87** GB: 1.19 resident (kept 0.57, X_RR_full 0.30) + 1.67 transient | 1.58 | 1.09 | 1.08 | 14.3 s | 0.48 |
+| CA3 | **3.39**: 1.69 resident (kept 0.67, Schur 0.59 gone, X_RR_full 0.47, temp2^T 0.33) + 1.70 | 1.51 | 1.09 | 1.06 | 14.1 | 0.49 |
+| CA0 | **3.01**: 1.34 resident (kept 0.91) + 1.67 | 1.55 | 1.09 | 1.09 | 14.5 | 0.51 |
+
+Every path's peak is its leaf, and the transient half (the sketch's and
+the owner pass's bounded budgets, 1.67-1.70) is now more than half of it.
+Next levers: the kept factors at the leaf (0.57-0.91: tier 2 of the
+producer-side (a)); CA3's fill X_RR_full 0.47; and the transient's two
+budgets, the owner window (kOwnerWindowBytes 1 GB, 0.54 used) and the
+sketch's fill slots, which are the first items that are not stores at all.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
