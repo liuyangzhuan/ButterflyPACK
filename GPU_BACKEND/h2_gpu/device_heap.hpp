@@ -391,6 +391,10 @@ public:
     size_t used() const { return used_; }
     size_t largest_free() const { return by_size_.empty() ? 0 : by_size_.rbegin()->first; }
     size_t peak() const { return peak_; }
+    // the allocator's work: free ranges now, transient takes and the ranges they scanned from the top
+    size_t free_ranges() const { return free_.size(); }
+    size_t take_calls() const { return take_calls_; }
+    size_t take_scans() const { return take_scans_; }
     size_t resident_used() const { return resident_used_; }
     size_t transient_used() const { return transient_used_; }
     // The split of peak(): what each class held when it was reached.
@@ -552,7 +556,9 @@ private:
             if (length > size) add_free(start + size, length - size);
             return true;
         }
+        ++take_calls_;
         for (auto it = free_.rbegin(); it != free_.rend(); ++it) {
+            ++take_scans_;
             if (it->second < size) continue;
             const size_t start = it->first, length = it->second;
             remove_free(free_.find(start));
@@ -569,6 +575,7 @@ private:
     size_t capacity_ = 0;
     size_t used_ = 0;
     size_t peak_ = 0;
+    size_t take_calls_ = 0, take_scans_ = 0;
     // Resident blocks (a level or longer: chiefly the retained solve factors
     // and the fill sources) versus per-wave transient blocks, and what each
     // held when the overall peak was reached.

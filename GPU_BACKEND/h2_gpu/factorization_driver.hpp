@@ -301,6 +301,7 @@ public:
     // logdet is summed here first), so at the start of a level the deeper
     // levels' stores go to pinned host memory, and come back at the first
     // solve.  What it buys is the store's bytes under every later level.
+    bool pressure_seen_ = false;   // a level packed or chunked for room: memory is tight from here on
     void stage_solve_factors(int lvl, bool announce) {
         // the host arenas' next chunks pin while the level sketches (H2 host staging (c2))
         fill_host_arena().pin_ahead();
@@ -311,6 +312,7 @@ public:
         std::string which;
         for (auto& [level, kl] : store.kept) {
             if (level <= lvl || kl.on_host() || kl.blocks.empty()) continue;
+            if (!(pressure_seen_ || device_under_pressure())) continue;   // room enough: the factors stay
             double la = 0.0, ar = 0.0;
             device_logdet_kept_level(tree_, level, la, ar);  // (kept in the store before the LU leaves)
             stage_kept_level(kl, Context::instance().stream(), pin_s, copy_s);
@@ -878,6 +880,33 @@ public:
                             "%.0f%% <=1.5, %.0f%% more\n", level.level,
                             100.0 * e.nl_bin[0] / tot, 100.0 * e.nl_bin[1] / tot, 100.0 * e.nl_bin[2] / tot,
                             100.0 * e.nl_bin[3] / tot, 100.0 * e.nl_bin[4] / tot);
+            }
+            {
+                DeviceHeap& hp = DeviceHeap::instance();
+                static size_t calls0 = 0, scans0 = 0;
+                std::printf("  [gpu] level %d heap: %lld free ranges now; %lld transient takes scanned %lld ranges from the top\n",
+                            level.level, static_cast<long long>(hp.free_ranges()),
+                            static_cast<long long>(hp.take_calls() - calls0), static_cast<long long>(hp.take_scans() - scans0));
+                calls0 = hp.take_calls();
+                scans0 = hp.take_scans();
+            }
+            if (e.np_pressure_groups > 0 || e.tr_pack_chunks_packed > 0 || e.np_waves_chunked > 0) pressure_seen_ = true;
+            if (e.np_pressure_groups + e.np_raw_groups + e.np_waves > 0) {
+                std::printf("  [gpu] level %d memory pressure (hold limit %.2f GB): %lld owner groups packed, %lld left raw; "
+                            "%lld of %lld waves chunked; parents packed in %lld of %lld transition chunks; %lld fill sources "
+                            "copied to the host on demand\n", level.level, g_hold_limit_bytes / 1e9,
+                            static_cast<long long>(e.np_pressure_groups), static_cast<long long>(e.np_raw_groups),
+                            static_cast<long long>(e.np_waves_chunked), static_cast<long long>(e.np_waves),
+                            static_cast<long long>(e.tr_pack_chunks_packed), static_cast<long long>(e.tr_pack_chunks),
+                            static_cast<long long>(e.fs_staged_late));
+                if (e.fw_no_window > 0) {
+                    std::printf("  [gpu] level %d gather window: %lld chunks got none, %lld blocks put back one by one\n",
+                                level.level, static_cast<long long>(e.fw_no_window), static_cast<long long>(e.fw_fallbacks));
+                }
+            }
+            if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
+                std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
+                            "pack %.2f s\n", level.level, e.og_mat, e.og_win, e.og_stage, e.og_launch, e.og_pack);
             }
             if (e.np_gen_blocks > 0 || e.np_gen_fresh_blocks > 0) {
                 std::printf("  [gpu] level %d packed after the generator passes: %lld adopted blocks (%.2f GB raw), "

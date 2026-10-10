@@ -4034,6 +4034,104 @@ producer-side (a)); CA3's fill X_RR_full 0.47; and the transient's two
 budgets, the owner window (kOwnerWindowBytes 1 GB, 0.54 used) and the
 sketch's fill slots, which are the first items that are not stores at all.
 
+#### Memory pressure (2026-10-10): pack and stage only when the card is short of room
+
+**The question.**  Against bitcomp off (7.54 s uncompressed, 7.49 s with
+the fill sources compressed and everything else on the card), the packed
+and staged factorization took 14.3 s at 192^3 on 8 ranks, 1.9x.  The
+peak was 2.9-3.4 GB on a 40 GB card: the packing and the staging were
+paying their time whether or not the room was needed.
+
+**What the time was** (Color leaf, from the breakdown and the owner-pass
+timers added for this): the owner pass 0.68 -> 2.25 s (GEMMs 0.7, pack
+0.76, materialize 0.51, window 0.17, stage 0.13, 1396 batches instead of
+120); the wave's production chunks 0.26 -> 1.17 s (the "plan boxes
+[buffers]" number is a timer artifact: its start is set once before the
+chunk loop and reset after each chunk's launches, so it measures the
+previous chunk's tail - the compression of its fill sources, kept factors
+and X_NR^T with their syncs); the transition 0.53 -> 0.87; the kept
+staging 0.45; the arenas' pinning 0.5; level 4 +1.7.  The heap's
+transient scan was suspected and acquitted by a counter (1.7M range
+steps over 18k takes, milliseconds).  A 60 MB host image of the wave's
+interpolation matrices, allocated per chunk and never read on the
+device-sketch path, was removed; it was not the cost either.
+
+**Budgets x4 and chunks 8 -> 4 first** (the "window budget" idea): 14.3 ->
+13.0 s Color, 14.5 -> 13.1 CA0, peak 5.8-5.9 GB.  Most of it was the
+chunking.
+
+**Then the policy.**  A block may be raw or packed at any moment and every
+reader handles both, so each pack site asks whether the heap is above a
+hold limit now - the capacity less the transient budgets less 10% - and
+packs only then: an owner group's targets, step 5's fresh blocks, a
+generator chunk's blocks; the fill store's device copies are evicted (and
+the host copies made, on demand) only then; the wave's production runs in
+chunks only when its outputs would not fit beside what the heap holds; the
+transition packs the parents only then; the solve factors are staged at
+the next level's start only once a level has packed or chunked (or the
+heap is above the limit).  The budgets are x2 of the originals (window 2
+GB, fill window 1 GB, group 512 MB, scratch 512 MB, codec stagings 1 GB /
+128 MB, handover 512 MB), the chunks 4 a wave, and the transient reserve
+behind the hold limit is their sum, 6.5 GB.  Scaling the budgets x4 "with
+room" was tried and removed: a wave's groups are formed while the heap is
+still under the limit, and an 8 GB window taken then left a 13.8 GB heap
+without a gather window for the next chunk.  The gather window halves
+until it fits, and a wave that gets none puts its packed blocks back one
+by one (9220 at the CA3 leaf in a 11 GB heap) instead of tripping the
+guards.  BPACK_GPU_HEAP_FRACTION (an existing variable) shrinks the heap
+and forces the regime for a test.
+
+**Gate, default heap (six runs, 0 errors)**, against the packed state
+(dd75ba4) and the uncompressed runs:
+
+| default heap | Factor packed -> now | uncompressed | acc_forward packed -> now (uncompressed) | leaf peak | level 4 |
+|---|---|---|---|---|---|
+| Color 192^3 | 14.3 -> **8.51 s** | 7.54 | 1.64e-2 -> 8.0e-3 (4.2e-3) | 18.3 GB | 10.1 |
+| CA3 192^3 | 14.1 -> **8.65** | - | 1.57e-2 -> 9.2e-3 | 18.9 | 7.7 |
+| CA0 192^3 | 14.5 -> **8.33** | - | 1.64e-2 -> 8.2e-3 | 19.2 | 10.8 |
+| Color 96^3 | 2.63 -> **1.43** | 1.34 | 9.9e-3 -> 5.4e-3 (3.5e-3) | 2.16 | - |
+| CA3 96^3 | 3.22 -> **1.73** | - | 1.0e-2 -> 5.5e-3 | 2.11 | - |
+| CA0 96^3 | 3.32 -> **1.68** | 1.39 | 9.7e-3 -> 5.2e-3 (3.4e-3) | 2.93 | - |
+
+Nothing packed, no wave chunked, no parent packed, no factor staged (CA3's
+leaf transition packed 3 of 9 chunks, briefly over the limit, and its
+factors were then staged).  Logdet Color 192^3 -89253593.153 against the
+uncompressed -89253588.194 (5.6e-8): only the fill sources and the kept
+factors are quantized now.  The solve: 0.38-0.41 s (set-up 0.10).
+
+**Gate, forced pressure** (0 errors unless said): 96^3 at 15% of the heap
+(hold limit 2.5-3.0 GB), heap-checked, all three paths: parents packed,
+factors staged, 1.6-1.8 s, logdets in the packed band.  192^3 Color at 35%
+(13.8 GB, limit 5.4): 20 of 32 owner groups packed, 13 of 16 waves
+chunked, parents packed in 15 of 15 chunks, factors staged, near store 3.25
+GB on the host, peak 9.6 GB, 11.7 s, acc_forward 1.53e-2.  CA3 at 35%
+(11 GB, limit 3.6): 82 of 110 groups packed, 1667 fill sources copied on
+demand, one chunk without a window, 11.4 GB peak, 0 errors.  CA0 at 55% and
+45% (limits 12.5 and 8.9 GB): 4 and 20 groups packed, parents packed in 8
+of 10 and 11 of 11 chunks, peaks 14.5 and 11.0 GB, 10.0 and 10.8 s, 0
+errors.
+
+**Known issue, pre-existing path.**  CA0 at 35% fails at level 4's first
+wave with "near block shape (hi): block 279 x 360, box 512 n 279, neighbor
+79 c 361 (windowed), packed entry live": an adopted block one column short
+of a *remote* neighbor's current size, the case begin()'s shape check
+skips.  It appears only when the small heap also makes decide_solve_keep
+decline the leaf's factors (the raw bound / 4 against 80% of the heap), so
+the X_NR goes to the host and the remote skeleton sizes travel another
+path; with the factors kept (45%, 55%) the same mixed transitions pass.
+Not pursued: the keep-declined path is not where the 8x regime should
+run, and the keep rule itself is the next 8x item - at 8x the boxes a
+rank the raw bound / 4 exceeds 80% of a 33 GB heap and the leaf would
+decline on the full card (its X_NR then going to the host uncompressed).
+The rule should compare the compressed size (the measured 8.3-8.6x) and
+the kept store should leave the device as it is produced (tier 2).
+
+**Where it stands.**  At 192^3 on 8 ranks the slowdown against bitcomp off
+is 1.13x (8.51 vs 7.54 s) with a 18-19 GB peak; the memory regime engages
+by itself when the card is short, at the costs measured before (the near
+store 5x, staging, 11-14 s at this size), and in between the two mix per
+group, per wave and per transition chunk.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

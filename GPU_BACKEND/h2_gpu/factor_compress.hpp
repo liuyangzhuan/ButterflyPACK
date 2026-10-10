@@ -89,7 +89,7 @@ constexpr size_t kXnrChunkBytes = 512 * 1024;
 // throughput curve flattens, so the bound costs nothing in rate.  It is what
 // lets the leaf keep its factors at all: a whole leaf wave wants 2.7 GB of
 // staging where the level's working set leaves about 1.5 GB free.
-constexpr size_t kXnrStagingBudget = size_t{512} << 20;
+constexpr size_t kXnrStagingBudget = size_t{1} << 30;   // (x2, 2026-10-10)
 
 // The fill sources are compressed a slot at a time, and a slot is far smaller
 // than an X_NR block, so a group needs much less staging to reach the same
@@ -98,7 +98,7 @@ constexpr size_t kXnrStagingBudget = size_t{512} << 20;
 // be small, because the fill sources are compressed while the wave's own
 // working memory is still allocated - with 512 MB, groups at the leaf could
 // not get their staging at all and fell back to storing raw.
-constexpr size_t kFillStagingBudget = size_t{64} << 20;
+constexpr size_t kFillStagingBudget = size_t{128} << 20;   // (x2, 2026-10-10)
 
 // A sketch wave reads whole slots out of its fill sources, and the union of
 // those is 7.79 GB at the Color leaf of 192^3 on 8 ranks - far too much to
@@ -107,7 +107,7 @@ constexpr size_t kFillStagingBudget = size_t{64} << 20;
 // slots of its own source, so grouping by source keeps every reader in the
 // same group as the slots it needs, and the batches stay wide (about 90
 // sources and 490 items a group at the leaf).
-constexpr size_t kFillWaveScratch = size_t{256} << 20;
+constexpr size_t kFillWaveScratch = size_t{512} << 20;   // (x2, 2026-10-10)
 
 // One box's compressed X_NR: the chunks it was cut into, and the shape and
 // quantization the solve needs to put it back.
