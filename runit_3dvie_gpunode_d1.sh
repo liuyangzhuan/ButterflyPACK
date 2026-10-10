@@ -72,7 +72,7 @@ rmax=4
 LRlevel=5
 rankrate=2.0
 itermax=1
-use_zfp=1
+use_zfp=${USE_ZFP:-1}        # 0 = store factors uncompressed (D1 freed the headroom); default 1 as in every baseline
 use_qtt=0
 use_fftw=1
 
@@ -105,4 +105,4 @@ run_one () {
 # level_batch=1 gives 12 sync points per matvec, 6 gives 2.
 # per-level load balance + memory high-water mark, level_batch=1 so each
 # MVPPROF/MDBAL level entry corresponds to exactly one Bplus level
-run_one d1b${BPACK_MD_SLOT_BUDGET_MB} $ROOT/build_diag 1
+run_one d1b${BPACK_MD_SLOT_BUDGET_MB}z${use_zfp}${RUNTAG} $ROOT/build_diag 1

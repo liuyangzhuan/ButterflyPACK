@@ -153,6 +153,16 @@ module Bplus_Utilities
    integer(kind=8), save:: BP_MD_slot_budget_bytes = -1_8
    integer, parameter:: BP_MD_max_rounds = 64
    integer, save:: BP_MD_last_nround = 1
+   !>**** Duplicate pack/unpack: vectors at least this large are reoriented with all threads
+   ! inside one duplicate at a time (no per-slot locks); smaller ones keep the batch-parallel
+   ! path, where a parallel region per duplicate costs more than it saves: measured at 1280^3,
+   ! 65 MB vectors gained 2x inside, 8 MB vectors lost 50% (fork/join and wake-up on ~0.2 ms of
+   ! work per thread, twice per duplicate). 2^21 entries = 32 MB keeps the 160^3 level inside.
+   integer, parameter:: BP_MD_par_inside_min = 2097152
+   !>**** BPACK_MD_PACK_CHECK=1: run the element-wise reference pack/unpack beside the affine
+   ! one on every call and report any difference (first 20 reports)
+   integer, save:: BP_MD_pack_check = -1
+   integer, save:: BP_MD_pack_check_reports = 0
    !>**** DIAGNOSTIC (verbosity>=2): per-level phase timers of the current matvec on this
    ! rank, split by how blocks were applied -- representatives standalone in the block loop
    ! (rep) against duplicates batched in Bplus_MD_compact_dup_MVP_local_N (dup). Columns as
@@ -423,6 +433,57 @@ contains
       v(13) = stats%Time_C_Mult_Full
       v(14) = MPI_Wtime()
    end subroutine BP_MD_phase_snapshot
+
+   logical function BP_MD_pack_check_on()
+      implicit none
+      character(len=16)::str
+      integer::ios, ln
+      if (BP_MD_pack_check < 0) then
+         BP_MD_pack_check = 0
+         call get_environment_variable('BPACK_MD_PACK_CHECK', str, length=ln, status=ios)
+         if (ios == 0 .and. ln > 0) then
+            if (str(1:1) == '1') BP_MD_pack_check = 1
+         endif
+      endif
+      BP_MD_pack_check_on = (BP_MD_pack_check == 1)
+   end function BP_MD_pack_check_on
+
+   !>**** Reorient a 3-D tensor: for every target entry in natural order over (d1,d2,d3), read
+   ! the source entry at base + (i1-1)*s1 + (i2-1)*s2 + (i3-1)*s3. An axis permutation with
+   ! reversals is affine in the indices, so the signed strides carry the whole map and the
+   ! innermost loop is a constant-stride gather (contiguous when the fastest axes coincide).
+   ! accumulate adds into the target instead of overwriting; par runs the (i3,i2) loops over the
+   ! team (the parallel region is skipped, not nested, when par is false).
+   subroutine BP_MD_permuted_gather(d1, d2, d3, s1, s2, s3, base, Nrnd, src, tgt, accumulate, par)
+      implicit none
+      integer d1, d2, d3, s1, s2, s3, base, Nrnd
+      DT src(:,:), tgt(:,:)
+      logical accumulate, par
+      integer i1, i2, i3, jj, isrc, itgt
+#ifdef HAVE_OPENMP
+!$omp parallel do if(par) default(shared) private(i1,i2,i3,jj,isrc,itgt) collapse(2) schedule(static)
+#endif
+      do i3 = 1, d3
+         do i2 = 1, d2
+            itgt = (i3 - 1)*d2*d1 + (i2 - 1)*d1
+            isrc = base + (i2 - 1)*s2 + (i3 - 1)*s3
+            do jj = 1, Nrnd
+               if (accumulate) then
+                  do i1 = 1, d1
+                     tgt(itgt + i1, jj) = tgt(itgt + i1, jj) + src(isrc + (i1 - 1)*s1, jj)
+                  enddo
+               else
+                  do i1 = 1, d1
+                     tgt(itgt + i1, jj) = src(isrc + (i1 - 1)*s1, jj)
+                  enddo
+               endif
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_OPENMP
+!$omp end parallel do
+#endif
+   end subroutine BP_MD_permuted_gather
 
    subroutine BP_MD_proc_rss(rss, hwm, anon, shm, huge)
       implicit none
@@ -2299,6 +2360,7 @@ contains
       type(matrixblock_MD), pointer::rep
       integer ll, rep_bb, member, dup_idx, rr, batch_count, batch_start, batch_end
       integer stack_limit, col_s, col_e, slot
+      logical par_inside
       integer zfp_mvp_mode
       integer dims_dup_in(Ndim), dims_dup_out(Ndim), head_tmp(Ndim)
       integer delta_dup(Ndim), delta_rep(Ndim), dim_in(Ndim), dim_out(Ndim)
@@ -2338,6 +2400,9 @@ contains
             rep => bplus%LL(ll)%matrices_block(rep_bb)
             dim_in = rep%N_loc
             dim_out = rep%M_loc
+            !>**** large vectors: reorient one duplicate at a time with all threads inside; small:
+            ! keep the batch-parallel loop (the directives below carry if(.not. par_inside))
+            par_inside = product(dim_in) >= BP_MD_par_inside_min
             !>**** all duplicate members of one representative block are applied as one
             ! batched matvec, and at the leaf levels those batch columns are the only
             ! thing to spread over threads: BF_MD_block_mvp_level_butterfly0 slices Nvec
@@ -2392,7 +2457,7 @@ contains
                Vout_stack = 0
 
 	               t1 = MPI_Wtime()
-!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_in, head_tmp) schedule(static)
 	               do rr = 1, batch_count
 		                  member = mem_sel(batch_start + rr - 1)
@@ -2408,7 +2473,7 @@ contains
                      msh, dims_dup_in, head_tmp)
 	                  call Bplus_MD_compact_pack_vector(Ndim, option%trans_invariant, delta_dup, &
 	                     delta_rep, dims_dup_in, dim_in, Nrnd, Vin_locs(ll)%vs(slot)%vector, &
-	                     Vin_stack(:,col_s:col_e))
+	                     Vin_stack(:,col_s:col_e), par_inside)
 	               enddo
 !$omp end parallel do
 	               t2 = MPI_Wtime()
@@ -2450,7 +2515,7 @@ contains
 		               t1 = MPI_Wtime()
 	               if (use_unique_vecs) then
 #ifdef HAVE_OPENMP
-!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 #endif
 		                  do rr = 1, batch_count
@@ -2470,7 +2535,7 @@ contains
 #endif
 		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
 		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
-		                        Vout_locs(ll)%vs(slot)%vector)
+		                        Vout_locs(ll)%vs(slot)%vector, par_inside)
 #ifdef HAVE_OPENMP
 	                     call omp_unset_lock(out_locks(slot))
 #endif
@@ -2479,7 +2544,7 @@ contains
 !$omp end parallel do
 #endif
 	               else
-	!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+	!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 	!$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 		                  do rr = 1, batch_count
 		                     member = mem_sel(batch_start + rr - 1)
@@ -2494,7 +2559,7 @@ contains
 	                        msh, dims_dup_out, head_tmp)
 		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
 		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
-		                        Vout_locs(ll)%vs(slot)%vector)
+		                        Vout_locs(ll)%vs(slot)%vector, par_inside)
 		                  enddo
 	!$omp end parallel do
 	               endif
@@ -2773,7 +2838,7 @@ contains
    end subroutine Bplus_MD_compact_axis_map
 
 
-   subroutine Bplus_MD_compact_pack_vector(Ndim, trans_invariant, group_dup, group_rep, &
+   subroutine Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
       dims_dup, dims_rep, Nrnd, source, target)
 
       implicit none
@@ -2860,10 +2925,67 @@ contains
          enddo
       endif
 
+   end subroutine Bplus_MD_compact_pack_vector_ref
+
+   !>**** Copy a duplicate's input tensor (natural order of dims_dup) into its representative's
+   ! frame (natural order of dims_rep). Iterates over the target so writes are contiguous; the
+   ! source index is affine in the target indices (rep axis k reads dup axis inv(k), reversed or
+   ! not). Ndim /= 3 falls back to the element-wise reference.
+   subroutine Bplus_MD_compact_pack_vector(Ndim, trans_invariant, group_dup, group_rep, &
+      dims_dup, dims_rep, Nrnd, source, target, par)
+      implicit none
+      integer Ndim, trans_invariant, Nrnd
+      integer group_dup(Ndim), group_rep(Ndim), dims_dup(Ndim), dims_rep(Ndim)
+      DT source(:,:), target(:,:)
+      logical, optional::par
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer inv(3), stride_dup(3), s(3), base, k, i, nentry
+      logical par_loc
+      DT, allocatable::tmp(:,:)
+      real(kind=8)::diff
+      if (Ndim /= 3) then
+         call Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
+            dims_dup, dims_rep, Nrnd, source, target)
+         return
+      endif
+      par_loc = .false.
+      if (present(par)) par_loc = par
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      do i = 1, 3
+         inv(map_dup_to_rep(i)) = i
+      enddo
+      stride_dup(1) = 1
+      stride_dup(2) = dims_dup(1)
+      stride_dup(3) = dims_dup(1)*dims_dup(2)
+      base = 1
+      do k = 1, 3
+         i = inv(k)
+         s(k) = stride_dup(i)
+         if (reverse_dup_to_rep(i) == 1) then
+            s(k) = -s(k)
+            base = base + (dims_dup(i) - 1)*stride_dup(i)
+         endif
+      enddo
+      call BP_MD_permuted_gather(dims_rep(1), dims_rep(2), dims_rep(3), s(1), s(2), s(3), base, Nrnd, &
+         source, target, .false., par_loc)
+      if (BP_MD_pack_check_on()) then
+         nentry = product(dims_dup)
+         allocate (tmp(size(target, 1), Nrnd))
+         call Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
+            dims_dup, dims_rep, Nrnd, source, tmp)
+         diff = maxval(abs(target(1:nentry, 1:Nrnd) - tmp(1:nentry, 1:Nrnd)))
+         if (diff > 0d0 .and. BP_MD_pack_check_reports < 20) then
+            BP_MD_pack_check_reports = BP_MD_pack_check_reports + 1
+            write (*, '(A,Es12.4,A,3I5,A,3I3,A,3I2)') ' PACKCHECK pack  MISMATCH maxdiff=', diff, &
+               ' dims=', dims_dup, ' map=', map_dup_to_rep, ' rev=', reverse_dup_to_rep
+         endif
+         deallocate (tmp)
+      endif
    end subroutine Bplus_MD_compact_pack_vector
 
 
-   subroutine Bplus_MD_compact_unpack_vector(Ndim, trans_invariant, group_rep, group_dup, &
+   subroutine Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
       dims_rep, dims_dup, Nrnd, source, target)
 
       implicit none
@@ -2950,6 +3072,62 @@ contains
          enddo
       endif
 
+   end subroutine Bplus_MD_compact_unpack_vector_ref
+
+   !>**** Add a representative-frame result (natural order of dims_rep) into the duplicate's
+   ! output slot (natural order of dims_dup). Iterates over the target, so the accumulation is
+   ! contiguous and threads touch disjoint rows -- no lock is needed while one duplicate is
+   ! processed at a time. Ndim /= 3 falls back to the element-wise reference.
+   subroutine Bplus_MD_compact_unpack_vector(Ndim, trans_invariant, group_rep, group_dup, &
+      dims_rep, dims_dup, Nrnd, source, target, par)
+      implicit none
+      integer Ndim, trans_invariant, Nrnd
+      integer group_rep(Ndim), group_dup(Ndim), dims_rep(Ndim), dims_dup(Ndim)
+      DT source(:,:), target(:,:)
+      logical, optional::par
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer stride_rep(3), s(3), base, i, nentry
+      logical par_loc
+      DT, allocatable::tmp(:,:)
+      real(kind=8)::diff
+      if (Ndim /= 3) then
+         call Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
+            dims_rep, dims_dup, Nrnd, source, target)
+         return
+      endif
+      par_loc = .false.
+      if (present(par)) par_loc = par
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      nentry = product(dims_dup)
+      if (BP_MD_pack_check_on()) then
+         allocate (tmp(size(target, 1), Nrnd))
+         tmp(1:nentry, 1:Nrnd) = target(1:nentry, 1:Nrnd)
+         call Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
+            dims_rep, dims_dup, Nrnd, source, tmp)
+      endif
+      stride_rep(1) = 1
+      stride_rep(2) = dims_rep(1)
+      stride_rep(3) = dims_rep(1)*dims_rep(2)
+      base = 1
+      do i = 1, 3
+         s(i) = stride_rep(map_dup_to_rep(i))
+         if (reverse_dup_to_rep(i) == 1) then
+            s(i) = -s(i)
+            base = base + (dims_dup(i) - 1)*stride_rep(map_dup_to_rep(i))
+         endif
+      enddo
+      call BP_MD_permuted_gather(dims_dup(1), dims_dup(2), dims_dup(3), s(1), s(2), s(3), base, Nrnd, &
+         source, target, .true., par_loc)
+      if (BP_MD_pack_check_on()) then
+         diff = maxval(abs(target(1:nentry, 1:Nrnd) - tmp(1:nentry, 1:Nrnd)))
+         if (diff > 0d0 .and. BP_MD_pack_check_reports < 20) then
+            BP_MD_pack_check_reports = BP_MD_pack_check_reports + 1
+            write (*, '(A,Es12.4,A,3I5,A,3I3,A,3I2)') ' PACKCHECK unpack MISMATCH maxdiff=', diff, &
+               ' dims=', dims_dup, ' map=', map_dup_to_rep, ' rev=', reverse_dup_to_rep
+         endif
+         deallocate (tmp)
+      endif
    end subroutine Bplus_MD_compact_unpack_vector
 
 
