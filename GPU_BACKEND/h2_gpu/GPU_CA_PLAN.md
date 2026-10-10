@@ -3842,6 +3842,48 @@ shared pool of pinned chunks so the kept store takes the leaf's near
 arena's chunks instead of pinning its own, would recover ~0.3 s and the
 extra 2.3-3.0 GB of pinned memory, but not hide the copy.
 
+#### The near copy stream by the copy engines (2026-10-09): measured, reverted
+
+Why the prefetched gather bought 0.06 s of 0.25, measured
+(h2_c1_work/gather_bench.cu, one A100, driver 580.178): 2000 spans of 4-256
+KB, 124 MB, between pinned host memory and the device on a stream of their
+own.  The copy kernel runs at 26.7 GB/s alone and at **2.6 GB/s** under a
+kernel that fills the SMs on another stream - its blocks run only as the
+other kernel's retire - and the highest stream priority changes nothing
+(it orders pending blocks; it does not preempt resident ones).
+cudaMemcpyBatchAsync (CUDA 12.8+, the copy engines) runs at 25 GB/s alone
+and under the load and slows the loaded kernel by nothing - and costs
+0.8-1.0 ms of host time per call of 2000 entries, 0.5 us an entry, where
+the kernel's issue is a list upload and a launch.
+
+Built (the scatter and the prefetched gather through cudaMemcpyBatchAsync,
+guarded by CUDART_VERSION, the kernel otherwise) and gated against the
+asynchronous (c) logs: the three 96^3 runs and CA3 at 192^3 bit-identical;
+Color and CA0 at 192^3 died in the leaf's fourth wave with "unspecified
+launch failure", a device fault surfaced by the fill store's event query.
+Not diagnosed, because the surviving run disqualifies the path on its own:
+CA3's leaf packing 0.91 -> 1.14 s and materialization 0.54 -> 0.77, +0.46 s
+a leaf level, which is the host cost of its 606 calls of ~2000 entries.
+The owner pass's groups hold ~2000 blocks of ~20 KB, one chunk each, so the
+entry count is what it is.  The copy engines are the right hardware at the
+wrong granularity.  Reverted to the kernel version (0dfedec); the stream
+priority went with it.  (If this is taken up again: the first suspect for
+the fault is the lifetime of the call's host arrays - they were
+temporaries - and the way to the entry count is coalescing adjacent homes:
+the homes are allocated in the targets' canonical order and the groups
+walk that order every wave, so consecutive blocks of a group are often
+adjacent in B_compact and in the gather scratch alike.)
+
+**Where asynchronous host staging stands, 2026-10-09.**  (b)'s producer
+copies were asynchronous from the start.  (c)'s scatter is hidden
+entirely: the packing fell by its whole PCIe time.  (c)'s gather prefetch
+overlaps only what leaves SMs free.  (a) cannot be hidden at the level's
+start (a 0.01 s window) and a pinned copy pays its pinning; the version
+that would hide it copies each kept block as it is produced.  The
+registration of the arenas (0.36-0.6 s) cannot be hidden by any thread.
+Factor at 192^3 against the synchronous (c2): Color 14.3 -> 14.1 s, CA3
+14.0 -> 13.7, CA0 14.9 -> 14.5; peaks unchanged.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
