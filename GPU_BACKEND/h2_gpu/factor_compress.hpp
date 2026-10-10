@@ -335,7 +335,15 @@ public:
     // Where a block's compressed bytes sit, for the copy into the kept block.
     const char* staging() const { return staging_; }
 
+    // A consumer still reading the staging on another stream (the near
+    // store's scatter, H2 host staging (c)): release() waits for it before
+    // the staging goes back.  Null withdraws the hold.
+    void hold_staging(cudaEvent_t done) { held_ = done; }
     void release() {
+        if (held_ != nullptr) {
+            check_cuda(cudaEventSynchronize(held_), "compressor: staging held by a scatter");
+            held_ = nullptr;
+        }
         if (have_plan_) { bitcompDestroyPlan(plan_); have_plan_ = false; }
         if (meta_ != nullptr) { heap_.free(meta_); meta_ = nullptr; }
         if (staging_ != nullptr) { heap_.free(staging_); staging_ = nullptr; }
@@ -347,6 +355,7 @@ private:
     cudaStream_t stream_ = nullptr;
     char* staging_ = nullptr;
     char* meta_ = nullptr;
+    cudaEvent_t held_ = nullptr;
     std::vector<StageChunk> chunks_;
     bitcompHandle_t plan_{};
     bool have_plan_ = false;

@@ -1013,10 +1013,10 @@ public:
             }
             if (e.mat_blocks > 0 || e.mat_left > 0) {
                 std::printf("  [gpu] level %d adopted blocks materialized: %.2f GB in %lld blocks over %lld batches, "
-                            "%.3f s; %lld left packed\n",
+                            "%.3f s; %lld left packed; %lld group gathers prefetched\n",
                             level.level, e.mat_bytes / 1e9, static_cast<long long>(e.mat_blocks),
                             static_cast<long long>(e.mat_batches), e.mat_seconds,
-                            static_cast<long long>(e.mat_left));
+                            static_cast<long long>(e.mat_left), static_cast<long long>(e.mat_prefetched));
             }
             if (e.pb_blocks > 0) {
                 std::printf("  [gpu] level %d parent blocks compress: %.2f -> %.2f GB (%.1fx) over %lld blocks", level.level,

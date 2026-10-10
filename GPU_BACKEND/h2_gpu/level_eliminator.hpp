@@ -71,6 +71,7 @@
 #include <set>
 #include <unordered_set>
 #include <vector>
+#include <optional>
 
 namespace fmm {
 namespace gpu {
@@ -222,6 +223,7 @@ struct EliminatorStats {
     double mat_bytes = 0.0;
     double mat_seconds = 0.0;
     int64_t mat_blocks = 0, mat_batches = 0, mat_left = 0;
+    int64_t mat_prefetched = 0;   // group gathers run under the previous group's GEMMs
     double mat_site_bytes[6] = {0, 0, 0, 0, 0, 0};   // which caller decompressed what
     int64_t mat_site_calls[6] = {0, 0, 0, 0, 0, 0};
     int64_t owner_groups = 0;   // the owner pass's bounded target groups
@@ -367,6 +369,7 @@ struct PackedBlockT {
     char* owner = nullptr;
     uint32_t home0 = 0;
     bool live = false;      // the bytes are current; false once decompressed
+    uint32_t written_seq = 0;  // the near store's scatter that last wrote its homes (0: none)
 };
 
 template<typename T>
@@ -588,6 +591,14 @@ public:
         }
         drop_kept();
         release_level_data();
+        if (near_copy_stream_ != nullptr) {   // (release_level_data waited for the last scatter)
+            fill_compressor_.hold_staging(nullptr);
+            if (near_scatter_done_ != nullptr) cudaEventDestroy(near_scatter_done_);
+            if (near_prefetch_done_ != nullptr) cudaEventDestroy(near_prefetch_done_);
+            if (near_reuse_ != nullptr) cudaEventDestroy(near_reuse_);
+            cudaStreamDestroy(near_copy_stream_);
+            near_copy_stream_ = nullptr;
+        }
     }
 
     void begin();
@@ -1113,6 +1124,19 @@ private:
                    MatBuildParent, MatSiteCount };
     void materialize_adopted(const std::vector<AdoptedBlock>& want, cudaStream_t stream,
                              MatSite site = MatSiteCount);
+    // H2 host staging (c), asynchronous: the gather half of a materialization
+    // kept apart, so a group's gather can run on the near copy stream under
+    // the previous group's GEMMs and be decompressed when its turn comes.
+    struct GatherPlan {
+        std::vector<AdoptedBlock> want;
+        char* gathered = nullptr;          // the chunk-home pieces, contiguous
+        std::vector<const void*> src;      // per chunk: its piece, or a contiguous run's chunk (host)
+        std::vector<uint32_t> dst_block;   // ... which block of `want`
+        std::vector<uint32_t> dst_chunk;   // ... and which of its chunks
+        cudaEvent_t done = nullptr;        // recorded after a gather on another stream
+    };
+    void plan_gather(GatherPlan& g, cudaStream_t stream, cudaEvent_t done);
+    void materialize_from_gather(GatherPlan& g, cudaStream_t stream, MatSite site);
     // Everywhere outside the wave materialization a null ptr means "no block
     // here", and the reader answers from the kernel or makes a fresh block.
     // It must not also mean "adopted and still packed": that reads as the
@@ -1392,6 +1416,7 @@ private:
         return tail_extents_[slot / kTailSlotsPerExtent] + (slot % kTailSlotsPerExtent) * kTailSlot;
     }
     void release_near_store() {
+        wait_near_scatter_host();   // the last group's scatter, before its region resets
         // (the extents are the level's host region, reset below, as are the
         // runs adopted from the level above)
         compact_extents_.clear();
@@ -1586,24 +1611,19 @@ private:
             pb->nchunks = static_cast<uint32_t>(comp[j].nchunks);
             pb->rows = t.rows;
             pb->cols = t.cols;
+            pb->written_seq = near_scatter_seq_ + 1;   // the scatter about to be issued
             ok[j] = true;
             stats.np_raw += static_cast<double>(elems[j] * sizeof(S));
             stats.np_stored += static_cast<double>(comp[j].bytes);
             ++stats.np_blocks;
         }
 
-        if (!spans.empty()) {
-            const size_t list_bytes = spans.size() * sizeof(CopySpan);
-            if (list_bytes > fill_meta_device_.capacity()) {
-                check_cuda(cudaStreamSynchronize(stream), "near blocks stored");
-                fill_meta_device_.reserve(list_bytes);
-            }
-            auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
-            check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
-                       "near blocks stored");
-            launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, stream);
-            check_cuda(cudaStreamSynchronize(stream), "near blocks stored");  // the staging goes back
-        }
+        // The scatter into the host homes runs on the near copy stream under
+        // the next group's work (the compression synchronized the stream, so
+        // the staging is complete); the raw blocks were read by the
+        // compression and go back now, and the staging is held until the
+        // scatter is done (hold_staging).
+        scatter_near_async(spans, max_words);
         for (size_t j = 0; j < which.size(); ++j) {
             if (!ok[j]) continue;
             TargetT& t = targets[which[j]];
@@ -1657,11 +1677,14 @@ private:
         };
         // the chunk-home blocks are in pieces, so gather them contiguous first
         size_t gather_bytes = 0;
+        uint32_t need = 0;   // the last scatter that wrote any of them
         for (const WinBlock& w : list) {
             const PackedBlock* pb = packed_of(w);
             if (pb == nullptr || pb->packed != nullptr) continue;
             for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
+            need = std::max(need, pb->written_seq);
         }
+        wait_near_scatter(stream, need);
         char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes), ResidentKind::Gather) : nullptr;
         std::vector<CopySpan> gspans;
         std::vector<const void*> h_src;
@@ -2108,6 +2131,56 @@ private:
     KeptSolveLevel* committed_kept_ = nullptr;  // the store's copy, after the commit
     DeviceBuffer solve_meta_device_;
     DeviceBuffer fill_meta_device_;  // span lists of the fill-source gathers
+    // H2 host staging (c), asynchronous.  The near store's scatters (device
+    // staging -> host homes) run on a stream of their own under the next
+    // group's work, and a group's gather (host homes -> device staging) is
+    // prefetched under the previous group's GEMMs.  A reader waits only for
+    // the scatter that last wrote one of its blocks (PackedBlock::written_seq
+    // against the scatters the host knows complete); the compressor holds its
+    // staging until the scatter reading it is done.
+    cudaStream_t near_copy_stream_ = nullptr;
+    cudaStream_t near_copy_stream() {
+        if (near_copy_stream_ == nullptr) {
+            check_cuda(cudaStreamCreateWithFlags(&near_copy_stream_, cudaStreamNonBlocking), "near copy stream");
+        }
+        return near_copy_stream_;
+    }
+    cudaEvent_t near_scatter_done_ = nullptr;    // recorded after each scatter
+    cudaEvent_t near_prefetch_done_ = nullptr;   // ... after a prefetched gather
+    cudaEvent_t near_reuse_ = nullptr;           // the compute stream past a decompression: its scratch may be reused
+    uint32_t near_scatter_seq_ = 0;              // scatters issued
+    uint32_t near_scatter_synced_ = 0;           // ... the host has waited for
+    DeviceBuffer near_scatter_meta_;             // the scatter's span list (the gathers' is reused under it)
+    DeviceBuffer near_prefetch_meta_;            // the prefetched gather's
+    static cudaEvent_t make_event() {
+        cudaEvent_t e = nullptr;
+        check_cuda(cudaEventCreateWithFlags(&e, cudaEventDisableTiming), "near copy event");
+        return e;
+    }
+    void scatter_near_async(const std::vector<CopySpan>& spans, int64_t max_words) {
+        if (spans.empty()) return;
+        wait_near_scatter_host();   // its span list and the compressor's staging are reused
+        const size_t list_bytes = spans.size() * sizeof(CopySpan);
+        auto* d_items = static_cast<CopySpan*>(near_scatter_meta_.reserve(list_bytes));
+        cudaStream_t cs = near_copy_stream();
+        if (near_scatter_done_ == nullptr) near_scatter_done_ = make_event();
+        check_cuda(cudaMemcpyAsync(d_items, spans.data(), list_bytes, cudaMemcpyHostToDevice, cs),
+                   "near blocks stored");  // (pageable source: staged before the call returns)
+        launch_copy_spans(d_items, static_cast<int>(spans.size()), max_words, cs);
+        check_cuda(cudaEventRecord(near_scatter_done_, cs), "near scatter event");
+        ++near_scatter_seq_;
+        fill_compressor_.hold_staging(near_scatter_done_);
+    }
+    void wait_near_scatter_host() {
+        if (near_scatter_synced_ == near_scatter_seq_) return;
+        check_cuda(cudaEventSynchronize(near_scatter_done_), "near scatter");
+        near_scatter_synced_ = near_scatter_seq_;
+    }
+    // `stream` is about to read blocks last written by scatter `need`
+    void wait_near_scatter(cudaStream_t stream, uint32_t need) {
+        if (need == 0 || need <= near_scatter_synced_ || near_scatter_done_ == nullptr) return;
+        check_cuda(cudaStreamWaitEvent(stream, near_scatter_done_, 0), "near scatter");
+    }
     DeviceBuffer t2t_meta_device_;   // transpose lists of the fill-source sub-groups
 
     int64_t wave_stamp_ = 0;
@@ -4755,7 +4828,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // Each group stages its own image, because a slot list is an offset into
     // the image it was appended to (current_slots_in) and so cannot be shared
     // across uploads; the stamp is bumped per group to force the re-append.
-    for (const auto& [first, last] : owner_groups) {
+    std::optional<GatherPlan> next_plan;   // the next group's gather, run under this group's GEMMs
+    for (size_t gi = 0; gi < owner_groups.size(); ++gi) {
+        const auto [first, last] = owner_groups[gi];
         if (env::check("fillsrc")) {
             // What this group distinctly needs of temp2 and X_NR.  A slot is
             // named by its address, which is unique per (source, neighbor), so
@@ -4805,7 +4880,15 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 t.fresh = true;
                 ++stats.new_targets;
             }
-            materialize_adopted(want, stream, MatGroup);
+            if (next_plan) {   // gathered already, under the previous group's GEMMs
+                bool same = next_plan->want.size() == want.size();
+                for (size_t i = 0; same && i < want.size(); ++i) same = next_plan->want[i].m == want[i].m;
+                if (!same) throw std::runtime_error("LevelEliminator: the prefetched gather does not match its group");
+                materialize_from_gather(*next_plan, stream, MatGroup);
+                next_plan.reset();
+            } else {
+                materialize_adopted(want, stream, MatGroup);
+            }
         }
         // The group's source slots, decompressed into a window of their own.
         // This is what replaces holding the wave's two n_tot x r outputs raw:
@@ -4918,6 +5001,30 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             stats.owner_gemms += static_cast<int64_t>(b.count());
             for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
             ++stats.owner_batches;
+        }
+        // The next group's packed blocks gathered now, on the near copy
+        // stream, while this group's GEMMs run.  A wave's groups partition
+        // its targets, so nothing this group writes is among them.
+        if (gi + 1 < owner_groups.size() && kHoldNearBlocksPacked && compress_factors_ >= 1) {
+            const auto [nf, nl] = owner_groups[gi + 1];
+            GatherPlan np;
+            for (size_t i = nf; i < nl; ++i) {
+                Target& t = targets[i];
+                if (t.block->ptr != nullptr) continue;
+                const bool schur = static_cast<int64_t>(t.key) < 0;
+                const int64_t morton = schur ? static_cast<int64_t>(~t.key) : 0;
+                if (!(schur ? is_packed_schur(morton) : is_packed_edge(t.key))) continue;
+                t.block->rows = t.rows;
+                t.block->cols = t.cols;
+                np.want.push_back(AdoptedBlock{schur, schur ? static_cast<uint64_t>(morton) : t.key, t.block});
+            }
+            if (!np.want.empty()) {
+                if (near_prefetch_done_ == nullptr) near_prefetch_done_ = make_event();
+                check_cuda(cudaEventSynchronize(near_prefetch_done_), "prefetched gather");  // (its list is reused)
+                plan_gather(np, near_copy_stream(), near_prefetch_done_);
+                next_plan = std::move(np);
+                ++stats.mat_prefetched;
+            }
         }
         check_cuda(cudaStreamSynchronize(stream), "owner group");  // the image is reused
         heap_.free(window);
@@ -6372,6 +6479,24 @@ template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
     const std::vector<AdoptedBlock>& want, cudaStream_t stream, MatSite site) {
     if (want.empty()) return;
+    GatherPlan g;
+    g.want = want;
+    plan_gather(g, stream, nullptr);
+    materialize_from_gather(g, stream, site);
+}
+
+// The gather half.  A block written by build_parent is one contiguous run
+// (in the parent level's host region), which bitcomp reads in place.  A
+// near block is a run of chunk homes - each a piece in B_compact plus an
+// optional tail in B_newtail, both host memory - so its bytes are gathered
+// into one device scratch first, by the span copy on `stream`.  On the near
+// copy stream (a prefetch) the copy waits for the compute stream to pass
+// its last decompression, whose scratch the heap may have handed out again,
+// and `done` is recorded after it.  Nothing is allocated for the raw blocks
+// here, so a prefetched plan costs only the packed bytes.
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::plan_gather(GatherPlan& g, cudaStream_t stream,
+                                                                     cudaEvent_t done) {
     auto& stats = eliminator_stats();
     const auto t0 = std::chrono::steady_clock::now();
     auto packed_of = [&](const AdoptedBlock& w) -> const PackedBlock* {
@@ -6382,9 +6507,98 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
         auto it = packed_edges_.find(w.key);
         return it == packed_edges_.end() ? nullptr : &it->second;
     };
+    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
+    size_t gather_bytes = 0;
+    uint32_t need = 0;   // the last scatter that wrote any of them
+    for (const AdoptedBlock& w : g.want) {
+        if (w.m->ptr != nullptr) continue;
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || pb->packed != nullptr || pb->nchunks == 0) continue;
+        for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
+        need = std::max(need, pb->written_seq);
+    }
+    g.gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes), ResidentKind::Gather) : nullptr;
+    std::vector<CopySpan> gspans;
+    int64_t gmax = 0;
+    size_t gat = 0;
+    for (uint32_t bi = 0; bi < g.want.size(); ++bi) {
+        const AdoptedBlock& w = g.want[bi];
+        if (w.m->ptr != nullptr) continue;
+        const PackedBlock* pb = packed_of(w);
+        if (pb == nullptr || (pb->packed == nullptr && pb->nchunks == 0)) continue;
+        if (pb->packed != nullptr) {          // build_parent's contiguous run: read in place
+            const char* at = pb->packed;
+            for (uint32_t c = 0; c < pb->nchunks; ++c) {
+                g.src.push_back(at);
+                g.dst_block.push_back(bi);
+                g.dst_chunk.push_back(c);
+                at += packed_strides_[pb->chunk0 + c];
+            }
+            continue;
+        }
+        if (g.gathered == nullptr) continue;
+        for (uint32_t c = 0; c < pb->nchunks; ++c) {
+            const ChunkHome& h = chunk_homes_[pb->home0 + c];
+            char* dst = g.gathered + gat;
+            const uint32_t in_home = std::min(h.here, h.total);
+            gspans.push_back(CopySpan{h.at, dst, static_cast<int64_t>(in_home / 4)});
+            gmax = std::max(gmax, static_cast<int64_t>(in_home / 4));
+            if (h.total > in_home) {
+                const uint32_t rest = h.total - in_home;
+                gspans.push_back(CopySpan{tail_at(h.tail), dst + in_home, static_cast<int64_t>(rest / 4)});
+                gmax = std::max(gmax, static_cast<int64_t>(rest / 4));
+            }
+            g.src.push_back(dst);
+            g.dst_block.push_back(bi);
+            g.dst_chunk.push_back(c);
+            gat += h.total;
+        }
+    }
+    (void)chunk_elems;
+    if (!gspans.empty()) {
+        const bool prefetch = done != nullptr;
+        DeviceBuffer& meta = prefetch ? near_prefetch_meta_ : fill_meta_device_;
+        const size_t list_bytes = gspans.size() * sizeof(CopySpan);
+        if (!prefetch && list_bytes > fill_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
+        }
+        auto* d_items = static_cast<CopySpan*>(meta.reserve(list_bytes));
+        if (prefetch && near_reuse_ != nullptr) {
+            check_cuda(cudaStreamWaitEvent(stream, near_reuse_, 0), "near blocks gathered");
+        }
+        wait_near_scatter(stream, need);
+        check_cuda(cudaMemcpyAsync(d_items, gspans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
+                   "near blocks gathered");
+        launch_copy_spans(d_items, static_cast<int>(gspans.size()), gmax, stream);
+        if (prefetch) {
+            check_cuda(cudaEventRecord(done, stream), "near blocks gathered");
+            g.done = done;
+        } else {
+            check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
+        }
+    }
+    stats.mat_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// The decompression half: the raw blocks allocated, the batch run from the
+// gathered pieces and the in-place runs, the scratch returned.
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::materialize_from_gather(GatherPlan& g, cudaStream_t stream,
+                                                                                 MatSite site) {
+    auto& stats = eliminator_stats();
+    const auto t0 = std::chrono::steady_clock::now();
+    auto packed_of = [&](const AdoptedBlock& w) -> const PackedBlock* {
+        if (w.schur) {
+            auto it = packed_schur_.find(static_cast<int64_t>(w.key));
+            return it == packed_schur_.end() ? nullptr : &it->second;
+        }
+        auto it = packed_edges_.find(w.key);
+        return it == packed_edges_.end() ? nullptr : &it->second;
+    };
+    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
     // 1. every block allocated first: alloc_resident can run the reclaimer,
     //    so no block address may be held across an allocation
-    for (const AdoptedBlock& w : want) {
+    for (const AdoptedBlock& w : g.want) {
         if (w.m->ptr != nullptr) continue;
         const PackedBlock* pb = packed_of(w);
         // `packed == nullptr` used to mean "no bytes".  In the near-block
@@ -6399,86 +6613,30 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
         }
         w.m->ptr = heap_.alloc_resident<S>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S),
                                            ResidentKind::Adopted);
-    }
-    // 2. then their chunks.  A block written by build_parent is one
-    //    contiguous run.  A near block is a run of chunk homes - each a piece
-    //    in B_compact plus an optional tail in B_newtail - so its bytes are
-    //    not contiguous and bitcomp cannot read them in place; those are
-    //    gathered into one scratch buffer first.
-    std::vector<const void*> h_src;
-    std::vector<void*> h_dst;
-    const size_t chunk_elems = std::max<size_t>(1, kXnrChunkBytes / sizeof(S));
-    size_t gather_bytes = 0;
-    for (const AdoptedBlock& w : want) {
-        const PackedBlock* pb = packed_of(w);
-        if (pb == nullptr || pb->packed != nullptr || w.m->ptr == nullptr) continue;
-        for (uint32_t c = 0; c < pb->nchunks; ++c) gather_bytes += chunk_homes_[pb->home0 + c].total;
-    }
-    char* gathered = gather_bytes > 0 ? heap_.alloc(align_up(gather_bytes), ResidentKind::Gather) : nullptr;
-    std::vector<CopySpan> gspans;
-    int64_t gmax = 0;
-    size_t gat = 0;
-    for (const AdoptedBlock& w : want) {
-        const PackedBlock* pb = packed_of(w);
-        if (pb == nullptr || pb->packed != nullptr || w.m->ptr == nullptr || gathered == nullptr) continue;
-        for (uint32_t c = 0; c < pb->nchunks; ++c) {
-            const ChunkHome& h = chunk_homes_[pb->home0 + c];
-            char* dst = gathered + gat;
-            const uint32_t in_home = std::min(h.here, h.total);
-            gspans.push_back(CopySpan{h.at, dst, static_cast<int64_t>(in_home / 4)});
-            gmax = std::max(gmax, static_cast<int64_t>(in_home / 4));
-            if (h.total > in_home) {
-                const uint32_t rest = h.total - in_home;
-                gspans.push_back(CopySpan{tail_at(h.tail), dst + in_home, static_cast<int64_t>(rest / 4)});
-                gmax = std::max(gmax, static_cast<int64_t>(rest / 4));
-            }
-            h_src.push_back(dst);
-            h_dst.push_back(reinterpret_cast<S*>(w.m->ptr) + static_cast<size_t>(c) * chunk_elems);
-            gat += h.total;
-        }
-        // counted here too: the increments used to sit only in the contiguous
-        // branch below, so every near block went unreported and the leaf
-        // looked as if it decompressed nothing while doing 276756 of them
         const double bytes = static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
         stats.mat_bytes += bytes;
         if (site < MatSiteCount) stats.mat_site_bytes[site] += bytes;
         ++stats.mat_blocks;
     }
-    if (!gspans.empty()) {
-        const size_t list_bytes = gspans.size() * sizeof(CopySpan);
-        if (list_bytes > fill_meta_device_.capacity()) {
-            check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
-            fill_meta_device_.reserve(list_bytes);
-        }
-        auto* d_items = static_cast<CopySpan*>(fill_meta_device_.reserve(list_bytes));
-        check_cuda(cudaMemcpyAsync(d_items, gspans.data(), list_bytes, cudaMemcpyHostToDevice, stream),
-                   "near blocks gathered");
-        launch_copy_spans(d_items, static_cast<int>(gspans.size()), gmax, stream);
-        check_cuda(cudaStreamSynchronize(stream), "near blocks gathered");
+    // 2. their chunks' destinations
+    std::vector<void*> h_dst(g.src.size());
+    for (size_t i = 0; i < g.src.size(); ++i) {
+        const AdoptedBlock& w = g.want[g.dst_block[i]];
+        if (w.m->ptr == nullptr) throw std::runtime_error("LevelEliminator: a gathered block has no raw memory");
+        h_dst[i] = reinterpret_cast<S*>(w.m->ptr) + static_cast<size_t>(g.dst_chunk[i]) * chunk_elems;
     }
-    for (const AdoptedBlock& w : want) {
-        const PackedBlock* pb = packed_of(w);
-        if (pb == nullptr || pb->packed == nullptr || w.m->ptr == nullptr) continue;
-        const char* at = pb->packed;
-        for (uint32_t c = 0; c < pb->nchunks; ++c) {
-            h_src.push_back(at);
-            h_dst.push_back(reinterpret_cast<S*>(w.m->ptr) + static_cast<size_t>(c) * chunk_elems);
-            at += packed_strides_[pb->chunk0 + c];
-        }
-        stats.mat_bytes += static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
-        if (site < MatSiteCount) {
-            stats.mat_site_bytes[site] += static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
-        }
-        ++stats.mat_blocks;
-    }
-    // 3. and one batch for all of them
-    if (!h_src.empty()) {
-        run_fill_batch(h_src, h_dst, stream);
+    // 3. one batch for all of them, after the gather if it ran elsewhere
+    if (g.done != nullptr) check_cuda(cudaStreamWaitEvent(stream, g.done, 0), "prefetched gather");
+    if (!g.src.empty()) {
+        run_fill_batch(g.src, h_dst, stream);
         ++stats.mat_batches;
         if (site < MatSiteCount) ++stats.mat_site_calls[site];
+        if (near_reuse_ == nullptr) near_reuse_ = make_event();
+        check_cuda(cudaEventRecord(near_reuse_, stream), "near blocks gathered");
     }
-    heap_.free(gathered);
-    for (const AdoptedBlock& w : want) {
+    heap_.free(g.gathered);
+    g.gathered = nullptr;
+    for (const AdoptedBlock& w : g.want) {
         PackedBlock* pb = w.schur ? (packed_schur_.count(static_cast<int64_t>(w.key))
                                          ? &packed_schur_[static_cast<int64_t>(w.key)] : nullptr)
                                   : (packed_edges_.count(w.key) ? &packed_edges_[w.key] : nullptr);

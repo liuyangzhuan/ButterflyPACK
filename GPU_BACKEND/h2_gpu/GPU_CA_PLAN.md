@@ -3756,6 +3756,48 @@ GEMMs on a side stream, the rest precedes what reads it), and the rest the
 plan site's and the transition's reads and writes; +0.27 / +0.36 / +0.50 s
 at 96^3.  Solve unchanged.
 
+#### Asynchronous host staging, (c) (2026-10-09): the scatter under the next group, the gather prefetched
+
+Built as proposed.  The near store's scatter (device staging -> host homes)
+runs on a near copy stream of its own: the compression synchronizes the
+compute stream, so the staging is complete; the scatter is issued with its
+own span list and the raw blocks go back at once; the compressor holds its
+staging (hold_staging) until the scatter's event, so the next compress
+cannot free it under the copy.  A reader waits only for the scatter that
+last wrote one of its blocks (PackedBlock::written_seq against the
+scatters the host knows complete), which inside a wave is never - a wave's
+groups partition its targets - and across a wave boundary is one GPU-side
+event wait.  The group loop prefetches the next group's gather (host homes
+-> device scratch) on the near copy stream under the current group's
+GEMMs, after the compute stream passes its last decompression (an event,
+so scratch the heap hands out again is safe), and decompresses from it
+when the group's turn comes; materialize_adopted is now plan_gather +
+materialize_from_gather, the other sites unchanged.  The level's end waits
+for the last scatter before its region resets.
+
+Gate: six runs, logdets, accuracies and every level's peak identical to
+(c2), 0 errors; at the 192^3 leaf 166 of 189 group gathers were prefetched
+on Color (160 of 204 CA3, 256 of 288 CA0), 50 of 75 at level 4.
+
+| (c2) -> async | Factor 192^3 | Factor 96^3 | leaf "held packed" | leaf "materialized" | leaf group loop |
+|---|---|---|---|---|---|
+| Color | 14.3 -> 14.1 s | 2.51 -> 2.47 | 1.24 -> 0.87 s | 0.557 -> 0.500 s | 2.59 -> 2.33 s |
+| CA3 | 14.0 -> 13.7 | 3.03 -> 3.00 | 1.28 -> 0.91 | 0.586 -> 0.536 | 2.61 -> 2.32 |
+| CA0 | 14.9 -> 14.5 | 3.33 -> 3.28 | 1.66 -> 1.11 | 0.736 -> 0.762 | 3.51 -> 3.26 |
+
+The scatter is off the critical path entirely: the packing fell by 0.37 /
+0.37 / 0.55 s where (c)'s estimate of its PCIe time was 0.40 / 0.40 / 0.57,
+and what it still costs over (b)'s 0.47 / 0.51 / 0.56 is the arenas'
+pinning waits (0.37-0.52 s by the leaf's end).  The gather prefetch bought
+0.06 s of the 0.25 expected.  The likely reason: the gather is a kernel
+(copy_spans), not a copy-engine transfer, and under a batched GEMM that
+fills the SMs its blocks are scheduled only as GEMM blocks retire, so it
+runs slowly until the GEMMs are done and the next group waits for it
+anyway.  Two things to try, in order: the near copy stream at the highest
+priority (its blocks go ahead of the GEMMs' as SMs free up; one line), and
+cudaMemcpyBatchAsync (CUDA 13.2) for the gather and the scatter, which uses
+the copy engines and no SMs at all.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
