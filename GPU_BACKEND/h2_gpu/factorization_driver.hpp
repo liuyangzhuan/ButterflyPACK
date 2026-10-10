@@ -879,9 +879,11 @@ public:
                             100.0 * e.nl_bin[0] / tot, 100.0 * e.nl_bin[1] / tot, 100.0 * e.nl_bin[2] / tot,
                             100.0 * e.nl_bin[3] / tot, 100.0 * e.nl_bin[4] / tot);
             }
-            if (e.np_gen_blocks > 0) {
-                std::printf("  [gpu] level %d adopted blocks re-packed after the generator passes: %lld blocks, "
-                            "%.2f GB raw\n", level.level, static_cast<long long>(e.np_gen_blocks), e.np_gen_raw / 1e9);
+            if (e.np_gen_blocks > 0 || e.np_gen_fresh_blocks > 0) {
+                std::printf("  [gpu] level %d packed after the generator passes: %lld adopted blocks (%.2f GB raw), "
+                            "%lld targets made from the kernel (%.2f GB raw)\n", level.level,
+                            static_cast<long long>(e.np_gen_blocks), e.np_gen_raw / 1e9,
+                            static_cast<long long>(e.np_gen_fresh_blocks), e.np_gen_fresh_raw / 1e9);
             }
             if (e.np_groups > 0 || e.np_groups_plain > 0) {
                 std::printf("  [gpu] level %d near blocks held packed: %.2f -> %.2f GB (%.1fx) over %lld blocks "

@@ -235,6 +235,9 @@ struct EliminatorStats {
     // re-packed right after each pass rather than left raw for a later reader
     int64_t np_gen_blocks = 0;
     double np_gen_raw = 0.0;
+    // ... and the targets those passes made from the kernel, packed with them
+    int64_t np_gen_fresh_blocks = 0;
+    double np_gen_fresh_raw = 0.0;
     // ... of which step 5's fresh blocks, packed as soon as add_store has
     // written them rather than waiting for an owner group to come by
     double np5_raw = 0.0, np5_stored = 0.0, np5_seconds = 0.0;
@@ -5959,11 +5962,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     std::vector<char*> retired;
     size_t work_bytes = 0;
 
-    auto ensure_schur = [&](BoxState& st) -> DeviceMatrix& {
+    // The targets a chunk makes from the kernel (no stored block yet): packed
+    // at the chunk's end with the adopted ones, so they live in the store
+    // from the start.  Left raw, they were 2.95 GB of the Color leaf's peak
+    // at 192^3 (34987 targets of 7.75 GB over the level) and 0.59 of CA3's.
+    std::vector<AdoptedBlock> fresh_made;
+    auto ensure_schur = [&](int64_t morton, BoxState& st) -> DeviceMatrix& {
         if (st.schur.ptr == nullptr) {
             const int c = current_size(st);
             st.schur = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(c) * c * D, ResidentKind::LevelSchur), c, c};
             add_eval(st.schur.ptr, c, c, c, current_slots(st), current_slots(st));
+            fresh_made.push_back(AdoptedBlock{true, static_cast<uint64_t>(morton), &st.schur});
         }
         return st.schur;
     };
@@ -5980,6 +5989,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         DeviceMatrix& e = edges_[key];
         e = DeviceMatrix{heap_.alloc_resident<S>(static_cast<size_t>(rows) * cols * D, ResidentKind::LevelSchur), rows, cols};
         add_eval(e.ptr, rows, rows, cols, current_slots(hs), current_slots(ls));
+        fresh_made.push_back(AdoptedBlock{false, key, &e});
         return e;
     };
     auto accumulate = [&](uint64_t key, const DeviceMatrix& target, int rows, int cols, const S* a, int lda,
@@ -6142,6 +6152,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                     rep_nn.entries.push_back({t2_l, g.xrs, fresh, c_l, g.k, g.r, g.ntot, g.r, rows});
                 }
                 edges_[key] = DeviceMatrix{fresh, rows, cols};
+                fresh_made.push_back(AdoptedBlock{false, key, &edges_[key]});
                 note_write(&edges_[key], static_cast<size_t>(rows) * cols * D);
                 replaced.insert(key);
             };
@@ -6166,7 +6177,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
                 // ptr, so an adopted block still packed here is a wrong answer
                 // rather than an error
                 if (ls.schur.ptr == nullptr) assert_not_packed(true, static_cast<uint64_t>(lm), "ensure_schur");
-                accumulate(~static_cast<uint64_t>(lm), ensure_schur(ls), c_l, c_l, t2_l, g.ntot, x_l, g.xnr_ld, g.r);
+                accumulate(~static_cast<uint64_t>(lm), ensure_schur(lm, ls), c_l, c_l, t2_l, g.ntot, x_l, g.xnr_ld, g.r);
             }
             if (g.k > 0 && pair_read_here(g.morton)) replace_edge(false);
 
@@ -6350,6 +6361,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         accum_of.clear();
         rep_tt.entries.clear();
         rep_nn.entries.clear();
+        fresh_made.clear();
         max_ev_m = max_ev_n = max_ga_m = max_ga_n = 0;
         work_bytes = 0;
         for (size_t gi = g0; gi < g1; ++gi) process_gen(gens[gi]);
@@ -6405,15 +6417,22 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         // union (GPU_CA_PLAN.md, piece 4).  The map slots are what the pass
         // wrote into, whether it accumulated into the adopted block or replaced
         // it with a fresh one, so the slot's current block is what goes back.
-        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !adopted_read.empty()) {
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !(adopted_read.empty() && fresh_made.empty())) {
             struct PackItem { DeviceMatrix* block; uint64_t key; int rows, cols; };
             std::vector<PackItem> items;
-            items.reserve(adopted_read.size());
+            items.reserve(adopted_read.size() + fresh_made.size());
+            std::unordered_set<const DeviceMatrix*> slots;   // (a replaced block is in both lists)
             for (const AdoptedBlock& w : adopted_read) {
-                if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0) continue;
+                if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0 || !slots.insert(w.m).second) continue;
                 items.push_back(PackItem{w.m, w.schur ? ~w.key : w.key, w.m->rows, w.m->cols});
                 ++stats.np_gen_blocks;
                 stats.np_gen_raw += static_cast<double>(static_cast<size_t>(w.m->rows) * w.m->cols * D);
+            }
+            for (const AdoptedBlock& w : fresh_made) {
+                if (w.m->ptr == nullptr || w.m->rows <= 0 || w.m->cols <= 0 || !slots.insert(w.m).second) continue;
+                items.push_back(PackItem{w.m, w.schur ? ~w.key : w.key, w.m->rows, w.m->cols});
+                ++stats.np_gen_fresh_blocks;
+                stats.np_gen_fresh_raw += static_cast<double>(static_cast<size_t>(w.m->rows) * w.m->cols * D);
             }
             size_t at = 0;
             while (at < items.size()) {
