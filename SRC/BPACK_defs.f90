@@ -206,6 +206,7 @@ module BPACK_DEFS
         integer:: Ndim=0
         integer:: nproc=0
         integer:: compact_slots=0
+        integer:: round=0 !< D1: 0 = all slots, r>0 = only the slots streamed in round r
         type(vec_redist_peer_MD), allocatable:: send(:)
         type(vec_redist_peer_MD), allocatable:: recv(:)
     end type vec_redist_plan_MD
@@ -251,6 +252,11 @@ module BPACK_DEFS
         integer:: nuniq = 0
         integer, allocatable:: slot_map(:)
         integer, allocatable:: owner_slot(:)
+        !>**** D1 (slot streaming): the unique input slots of a level are gathered and
+        ! applied in rounds so that only one round's vectors, and the receive staging that
+        ! fills them, are live at a time. round(u) in 1..nround; nround==1 means off.
+        integer:: nround = 1
+        integer, allocatable:: round(:)
     end type vec_redist_groupmap_MD
 
     !>**** cached local MD MVP work vectors, used to avoid repeated allocation churn

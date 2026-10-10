@@ -136,6 +136,23 @@ module Bplus_Utilities
    ! The high-water mark reached inside a level minus what was already live at entry, i.e.
    ! what that level alone allocates and frees.
    real(kind=8), save:: BP_MD_lev_memdelta(0:LplusMax) = 0d0
+   !>**** DIAGNOSTIC: the same per-level transient measured by the kernel instead of by
+   ! LogMemory: VmHWM at level exit minus VmRSS at level entry, with the high-water mark
+   ! reset at entry (5 -> /proc/self/clear_refs), i.e. the resident memory this level alone
+   ! added, whether or not the allocation was logged. BP_MD_lev_rssentry is VmRSS at entry,
+   ! what was actually resident before the level ran. BP_MD_rss_life_max tracks the largest
+   ! VmHWM ever read; its first reading precedes any reset, so it includes construction. MB.
+   real(kind=8), save:: BP_MD_lev_rssdelta(0:LplusMax) = 0d0
+   real(kind=8), save:: BP_MD_lev_rssentry(0:LplusMax) = 0d0
+   real(kind=8), save:: BP_MD_rss_life_max = 0d0
+   !>**** D1 (slot streaming): per-rank byte budget for the live unique input slots of one
+   ! matvec level, read once from BPACK_MD_SLOT_BUDGET_MB (unset or 0: off, every slot live
+   ! at once as before). A slot counts twice, because the redistribution stages what it
+   ! receives before unpacking into the slot. The round count is the max over the ranks of
+   ! the exchange (it is collective) and over the levels of a batch.
+   integer(kind=8), save:: BP_MD_slot_budget_bytes = -1_8
+   integer, parameter:: BP_MD_max_rounds = 64
+   integer, save:: BP_MD_last_nround = 1
 
 contains
 
@@ -370,6 +387,60 @@ contains
 
    end subroutine Bplus_MD_struct_diag
 
+   !>**** Resident memory of this process from /proc/self/status, in MB: rss = VmRSS now,
+   ! hwm = VmHWM, the high-water mark since process start or since the last reset. -1 where
+   ! /proc is unavailable. The kernel flushes per-thread RSS counters lazily, so a single
+   ! reading can be low by a few hundred kB per thread; irrelevant at the GB scale here.
+   subroutine BP_MD_proc_rss(rss, hwm, anon, shm, huge)
+      implicit none
+      real(kind=8), intent(out)::rss, hwm
+      !>**** breakdown of what VmRSS counts (RssAnon, RssShmem) and what it does NOT: hugetlbfs
+      ! pages (HugetlbPages) sit outside VmRSS entirely, so a hugepage-backed heap would hide
+      ! from rss/hwm and show up only here.
+      real(kind=8), intent(out), optional::anon, shm, huge
+      character(len=256)::line
+      integer::u, ios
+      integer(kind=8)::kb
+      rss = -1d0; hwm = -1d0
+      if (present(anon)) anon = -1d0
+      if (present(shm)) shm = -1d0
+      if (present(huge)) huge = -1d0
+      open (newunit=u, file='/proc/self/status', status='old', action='read', iostat=ios)
+      if (ios /= 0) return
+      do
+         read (u, '(A)', iostat=ios) line
+         if (ios /= 0) exit
+         if (line(1:6) == 'VmRSS:') then
+            read (line(7:), *, iostat=ios) kb
+            if (ios == 0) rss = dble(kb)/1024d0
+         elseif (line(1:6) == 'VmHWM:') then
+            read (line(7:), *, iostat=ios) kb
+            if (ios == 0) hwm = dble(kb)/1024d0
+         elseif (line(1:8) == 'RssAnon:' .and. present(anon)) then
+            read (line(9:), *, iostat=ios) kb
+            if (ios == 0) anon = dble(kb)/1024d0
+         elseif (line(1:9) == 'RssShmem:' .and. present(shm)) then
+            read (line(10:), *, iostat=ios) kb
+            if (ios == 0) shm = dble(kb)/1024d0
+         elseif (line(1:13) == 'HugetlbPages:' .and. present(huge)) then
+            read (line(14:), *, iostat=ios) kb
+            if (ios == 0) huge = dble(kb)/1024d0
+         endif
+      enddo
+      close (u)
+   end subroutine BP_MD_proc_rss
+
+   !>**** Reset VmHWM to the current VmRSS (Linux >= 4.0: write 5 to /proc/self/clear_refs)
+   ! so that VmHWM measures the peak from here on. A silent no-op where unsupported.
+   subroutine BP_MD_proc_hwm_reset()
+      implicit none
+      integer::u, ios
+      open (newunit=u, file='/proc/self/clear_refs', status='old', action='write', iostat=ios)
+      if (ios /= 0) return
+      write (u, '(A)', iostat=ios) '5'
+      close (u)
+   end subroutine BP_MD_proc_hwm_reset
+
    subroutine Bplus_MD_MVP_diag(BP, ptree, stats, phase)
 
       implicit none
@@ -382,14 +453,40 @@ contains
       real(kind=8)::vmin(0:LplusMax), vsum(0:LplusMax)
       real(kind=8)::tot_pair(2), tot_pmax(2), summax, curmax, pkmax, pksum
       integer, save:: nmvp = 0
+      !>**** kernel-measured counterparts: per-rank resident now, lifetime high-water mark,
+      ! and the per-node resident sum (ranks sharing a node, via MPI_COMM_TYPE_SHARED), which
+      ! is what has to fit in a node's memory.
+      real(kind=8)::rss_now, hwm_now, rss_max, life_max, node_sum, node_max
+      real(kind=8)::anon_now, shm_now, huge_now, anon_max, shm_max, huge_max
+      real(kind=8)::lev_node(0:LplusMax), lev_node_sum(0:LplusMax), lev_node_max(0:LplusMax)
+      real(kind=8)::ventry_max(0:LplusMax)
+      integer, save:: node_comm = MPI_COMM_NULL
+
+      if (node_comm == MPI_COMM_NULL) &
+         call MPI_Comm_split_type(ptree%Comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, node_comm, ierr)
+      call BP_MD_proc_rss(rss_now, hwm_now, anon_now, shm_now, huge_now)
+      BP_MD_rss_life_max = max(BP_MD_rss_life_max, hwm_now)
+      call MPI_ALLREDUCE(anon_now, anon_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(shm_now, shm_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(huge_now, huge_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rss_now, rss_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_rss_life_max, life_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rss_now, node_sum, 1, MPI_DOUBLE_PRECISION, MPI_SUM, node_comm, ierr)
+      call MPI_ALLREDUCE(node_sum, node_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
 
       call MPI_ALLREDUCE(stats%Mem_Current, curmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       call MPI_ALLREDUCE(stats%Mem_Peak, pkmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       call MPI_ALLREDUCE(stats%Mem_Peak, pksum, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
 
       if (phase == 0) then
-         if (ptree%MyID == Main_ID) write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp + 1, &
-            ' entry: cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+         if (ptree%MyID == Main_ID) then
+            write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp + 1, &
+               ' entry: cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+            write (*, '(A,I4,3(A,Es11.4))') ' MDRSS mvp', nmvp + 1, &
+               ' entry: rss_max=', rss_max, ' MB life_hwm_max=', life_max, ' MB node_rss_max=', node_max
+            write (*, '(A,I4,3(A,Es11.4))') ' MDRSSKIND mvp', nmvp + 1, &
+               ' entry: anon_max=', anon_max, ' MB shmem_max=', shm_max, ' MB hugetlb_max=', huge_max
+         endif
          return
       endif
 
@@ -440,6 +537,37 @@ contains
          enddo
       endif
       BP_MD_lev_memdelta = 0d0
+
+      !>**** the kernel's version of the same table, plus what was resident at level entry
+      ! and the busiest node's resident total during the level (entry + transient, summed
+      ! over the node's ranks: the ranks under one parent are consecutive and co-located, so
+      ! their transients are simultaneous)
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_rssdelta(ll)
+         pair(2, ll) = dble(ptree%MyID)
+         lev_node(ll) = BP_MD_lev_rssentry(ll) + max(BP_MD_lev_rssdelta(ll), 0d0)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssdelta, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssdelta, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssentry, ventry_max, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(lev_node, lev_node_sum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, node_comm, ierr)
+      call MPI_ALLREDUCE(lev_node_sum, lev_node_max, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) then
+         do ll = 0, nl
+            if (ventry_max(ll) > 0d0) write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2,2(A,Es11.4))') ' MDRSSLEV mvp', nmvp, &
+               ' lev', ll, ' transientMB min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), &
+               ' max=', pmax(1, ll), ' @rank=', nint(pmax(2, ll)), &
+               ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12), &
+               ' entry_max=', ventry_max(ll), ' node_peak_max=', lev_node_max(ll)
+         enddo
+         write (*, '(A,I4,3(A,Es11.4))') ' MDRSS mvp', nmvp, &
+            ' exit : rss_max=', rss_max, ' MB life_hwm_max=', life_max, ' MB node_rss_max=', node_max
+         write (*, '(A,I4,3(A,Es11.4))') ' MDRSSKIND mvp', nmvp, &
+            ' exit : anon_max=', anon_max, ' MB shmem_max=', shm_max, ' MB hugetlb_max=', huge_max
+      endif
+      BP_MD_lev_rssdelta = 0d0
+      BP_MD_lev_rssentry = 0d0
 
       BP_MD_lev_time = 0d0
 
@@ -1354,6 +1482,137 @@ contains
    end function BP_MD_vec_slot_key_hash
 
 
+   !>**** D1: the slot-streaming budget in bytes, read once from the environment (0 = off)
+   integer(kind=8) function BP_MD_slot_budget()
+      implicit none
+      character(len=64)::str
+      integer::ios, ln, mb
+      if (BP_MD_slot_budget_bytes < 0_8) then
+         BP_MD_slot_budget_bytes = 0_8
+         call get_environment_variable('BPACK_MD_SLOT_BUDGET_MB', str, length=ln, status=ios)
+         if (ios == 0 .and. ln > 0) then
+            read (str, *, iostat=ios) mb
+            if (ios == 0 .and. mb > 0) BP_MD_slot_budget_bytes = int(mb, kind=8)*1048576_8
+         endif
+      endif
+      BP_MD_slot_budget = BP_MD_slot_budget_bytes
+   end function BP_MD_slot_budget
+
+   !>**** D1: rounds this rank needs at level ll so that one round's live input slots plus
+   ! their receive staging fit the budget; 1 when the budget is off
+   subroutine BP_MD_vec_round_need(Ndim, BP, ll, Nrnd, msh, map, elem_bytes, budget, need)
+      implicit none
+      integer Ndim, ll, Nrnd, need
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::map
+      integer(kind=8)::elem_bytes, budget, tot
+      integer::uu, dims_md(Ndim)
+      need = 1
+      if (budget <= 0_8 .or. map%nuniq <= 0) return
+      tot = 0_8
+      do uu = 1, map%nuniq
+         call BP_MD_vec_slot_dims(Ndim, BP, ll, map%owner_slot(uu), 0, msh, dims_md)
+         tot = tot + 2_8*elem_bytes*int(Nrnd, kind=8)*int(product(dims_md), kind=8)
+      enddo
+      need = int(min(int(BP_MD_max_rounds - 1, kind=8), max(1_8, (tot + budget - 1_8)/budget)))
+   end subroutine BP_MD_vec_round_need
+
+   !>**** D1: give each unique input slot of level ll a round. Representatives are dealt
+   ! round-robin over the rounds and each one brings the slots of its duplicates along, so
+   ! (a) the duplicates of one representative share a round and Bplus_MD_compact_dup_MVP_local_N
+   ! still batches them with one ZFP decompression (the batch is what amortises reading the
+   ! representative's factors), and (b) every round holds a similar mix of representatives,
+   ! i.e. similar compute, not merely similar bytes -- a contiguous fill was measured to leave
+   ! heavy ranks lopsided across rounds, which the per-round exchange then waits for. Only
+   ! balance depends on this order, never results.
+   subroutine BP_MD_vec_assign_rounds(Ndim, BP, ll, Nrnd, msh, map, elem_bytes, nround)
+      implicit none
+      integer Ndim, ll, Nrnd, nround
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::map
+      integer(kind=8)::elem_bytes, tot, acc, target
+      integer::uu, bb, mm, slot, r, dims_md(Ndim)
+      integer(kind=8), allocatable::sbytes(:)
+      map%nround = max(1, nround)
+      if (allocated(map%round)) deallocate (map%round)
+      if (map%nuniq <= 0) return
+      allocate (map%round(map%nuniq))
+      map%round = 1
+      if (map%nround == 1) return
+      map%round = 0
+      allocate (sbytes(map%nuniq))
+      tot = 0_8
+      do uu = 1, map%nuniq
+         call BP_MD_vec_slot_dims(Ndim, BP, ll, map%owner_slot(uu), 0, msh, dims_md)
+         sbytes(uu) = elem_bytes*int(Nrnd, kind=8)*int(product(dims_md), kind=8)
+         tot = tot + sbytes(uu)
+      enddo
+      target = (tot + int(map%nround, kind=8) - 1_8)/int(map%nround, kind=8)
+      r = 1
+      acc = 0_8
+      do bb = 1, BP%LL(ll)%Nbound_loc
+         r = mod(bb - 1, map%nround) + 1
+         if (bb <= map%nslot) call BP_MD_vec_round_place(map, map%slot_map(bb), sbytes, target, r, acc)
+         if (allocated(BP%LL(ll)%trans_dup_member_offset)) then
+            if (size(BP%LL(ll)%trans_dup_member_offset) >= bb + 1) then
+               do mm = BP%LL(ll)%trans_dup_member_offset(bb), BP%LL(ll)%trans_dup_member_offset(bb + 1) - 1
+                  slot = BP%LL(ll)%Nbound_loc + BP%LL(ll)%trans_dup_member_list(mm)
+                  if (slot >= 1 .and. slot <= map%nslot) &
+                     call BP_MD_vec_round_place(map, map%slot_map(slot), sbytes, target, r, acc)
+               enddo
+            endif
+         endif
+      enddo
+      do uu = 1, map%nuniq
+         if (map%round(uu) == 0) map%round(uu) = map%nround
+      enddo
+      deallocate (sbytes)
+   end subroutine BP_MD_vec_assign_rounds
+
+   subroutine BP_MD_vec_round_place(map, uu, sbytes, target, r, acc)
+      implicit none
+      type(vec_redist_groupmap_MD)::map
+      integer::uu, r
+      integer(kind=8)::sbytes(:), target, acc
+      if (uu < 1 .or. uu > map%nuniq) return
+      if (map%round(uu) /= 0) return
+      map%round(uu) = r
+      acc = acc + sbytes(uu)
+   end subroutine BP_MD_vec_round_place
+
+   !>**** D1: allocate (sign>0) or free (sign<0) the unique input slot vectors of round
+   ! iround at levels level_s..level_e. With one round that is every slot, i.e. what the
+   ! matvec held before streaming.
+   subroutine BP_MD_vec_round_vectors(Ndim, BP, level_s, level_e, Nrnd, msh, maps, locs, iround, sign, stats)
+      implicit none
+      integer Ndim, level_s, level_e, Nrnd, iround, sign
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::maps(level_s:level_e)
+      type(vectorsblock_oneL)::locs(level_s:level_e)
+      type(Hstat)::stats
+      integer::ll, uu, dims_md(Ndim)
+      do ll = level_s, level_e
+         do uu = 1, maps(ll)%nuniq
+            if (maps(ll)%nround > 1) then
+               if (maps(ll)%round(uu) /= iround) cycle
+            endif
+            if (sign > 0) then
+               if (allocated(locs(ll)%vs(uu)%vector)) cycle
+               call BP_MD_vec_slot_dims(Ndim, BP, ll, maps(ll)%owner_slot(uu), 0, msh, dims_md)
+               allocate (locs(ll)%vs(uu)%vector(product(dims_md), Nrnd))
+               call LogMemory(stats, SIZEOF(locs(ll)%vs(uu)%vector)/1024.0d3)
+            else
+               if (.not. allocated(locs(ll)%vs(uu)%vector)) cycle
+               call LogMemory(stats, -SIZEOF(locs(ll)%vs(uu)%vector)/1024.0d3)
+               deallocate (locs(ll)%vs(uu)%vector)
+            endif
+         enddo
+      enddo
+   end subroutine BP_MD_vec_round_vectors
+
    subroutine BP_MD_vec_build_unique_map(Ndim, BP, ll, rowcol, one2all, ptree, msh, map)
 
       implicit none
@@ -1545,7 +1804,11 @@ contains
       real(kind=8)::t_prep0, t_prep1, t_call0, t_call1
       real(kind=8)::prof0(10), prof1(10)
       integer::nslot_prof, nuniq_prof
-      real(kind=8)::mem_peak_save, mem_entry_loc
+      real(kind=8)::mem_peak_save, mem_entry_loc, rss_entry_loc, rss_dummy, rss_hwm_exit
+      !>**** D1 slot streaming
+      integer::iround, nround, kneed_r, kloc_r, ierr_r
+      integer(kind=8)::elem_bytes_r, budget_r
+      real(kind=8)::t_lev_acc
 
       t_call0 = MPI_Wtime()
       t_prep0 = t_call0
@@ -1555,6 +1818,14 @@ contains
       mem_peak_save = stats%Mem_Peak
       mem_entry_loc = stats%Mem_Current
       stats%Mem_Peak = stats%Mem_Current
+      !>**** same again from the kernel: reset VmHWM so it measures this level
+      rss_entry_loc = -1d0
+      if (option%verbosity >= 2) then
+         call BP_MD_proc_rss(rss_dummy, rss_hwm_exit)
+         BP_MD_rss_life_max = max(BP_MD_rss_life_max, rss_hwm_exit)
+         call BP_MD_proc_hwm_reset()
+         call BP_MD_proc_rss(rss_entry_loc, rss_dummy)
+      endif
       prof0(1) = stats%Time_C_Mult_RedistSetup
       prof0(2) = stats%Time_C_Mult_RedistMPI
       prof0(3) = stats%Time_C_Mult_RedistPack
@@ -1622,12 +1893,7 @@ contains
 		            allocate(Vout_locs(ll)%vs(total_slots))
 		            call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
 		            if (use_unique_vecs) then
-		               do slot = 1, Vin_maps(ll)%nuniq
-		                  owner_slot = Vin_maps(ll)%owner_slot(slot)
-		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 0, msh, dim_in)
-		                  allocate (Vin_locs(ll)%vs(slot)%vector(product(dim_in), Nrnd))
-		                  call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(slot)%vector)/1024.0d3)
-		               enddo
+		               !>**** D1: the input slot vectors are allocated per streaming round, below
 		               do slot = 1, Vout_maps(ll)%nuniq
 		                  owner_slot = Vout_maps(ll)%owner_slot(slot)
 		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 1, msh, dim_out)
@@ -1661,6 +1927,26 @@ contains
 		         enddo
 		      endif
 
+      !>**** D1: how many rounds the unique input slots are streamed in. The exchange is
+      ! collective, so every rank of this process group runs the same number of rounds.
+      nround = 1
+      if (use_unique_vecs) then
+         budget_r = BP_MD_slot_budget()
+         elem_bytes_r = int(storage_size(ctemp1), kind=8)/8_8
+         kloc_r = 1
+         if (budget_r > 0_8) then
+            do ll = level_s, level_e
+               call BP_MD_vec_round_need(Ndim, bplus, ll, Nrnd, msh, Vin_maps(ll), elem_bytes_r, budget_r, kneed_r)
+               kloc_r = max(kloc_r, kneed_r)
+            enddo
+            call MPI_ALLREDUCE(kloc_r, nround, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks_1%pgno)%Comm, ierr_r)
+         endif
+         do ll = level_s, level_e
+            call BP_MD_vec_assign_rounds(Ndim, bplus, ll, Nrnd, msh, Vin_maps(ll), elem_bytes_r, nround)
+         enddo
+         BP_MD_last_nround = nround
+      endif
+
       t_prep1 = MPI_Wtime()
       if (use_unique_vecs) then
          do ll = level_s, level_e
@@ -1669,11 +1955,17 @@ contains
          enddo
       endif
 
+      t_lev_acc = 0d0
+      !>**** D1: stream the unique input slots in rounds: gather one round's slots, apply
+      ! every local block and duplicate that reads them, accumulate into the output slots,
+      ! free them, next round. One round is the pre-streaming behaviour.
+      do iround = 1, nround
+         if (use_unique_vecs) call BP_MD_vec_round_vectors(Ndim, bplus, level_s, level_e, Nrnd, msh, Vin_maps, Vin_locs, iround, 1, stats)
       n1 = MPI_Wtime()
 	      if (chara == 'N') then
 	         if (option%trans_invariant /= 0) then
 	            if (use_unique_vecs) then
-	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vin_maps)
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vin_maps, iround)
 	            else
 	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
 	            endif
@@ -1706,6 +1998,9 @@ contains
 			            out_slot = bb
 			            if (use_unique_vecs) then
 			               in_slot = Vin_maps(ll)%slot_map(bb)
+			               if (nround > 1) then
+			                  if (Vin_maps(ll)%round(in_slot) /= iround) cycle
+			               endif
 			               out_slot = Vout_maps(ll)%slot_map(bb)
 			               if (allocated(Vout_loc)) then
 			                  if (size(Vout_loc,1) /= product(dim_out) .or. size(Vout_loc,2) /= Nrnd) then
@@ -1751,7 +2046,7 @@ contains
 	               if(chara == 'N')then
 	                  if (use_unique_vecs) then
 	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-	                        Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
+	                        Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps, iround)
 	                  else
 	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
 	                        Vin_locs, Vout_locs, ptree, stats, msh, option)
@@ -1766,9 +2061,12 @@ contains
 	            endif
 		      n4 = MPI_Wtime()
 		      stats%Time_C_Mult_Level = stats%Time_C_Mult_Level + n4-n3
-            if (level_s >= 0 .and. level_s <= LplusMax) BP_MD_lev_time(level_s) = n4 - n3
+         t_lev_acc = t_lev_acc + (n4 - n3)
+         if (use_unique_vecs) call BP_MD_vec_round_vectors(Ndim, bplus, level_s, level_e, Nrnd, msh, Vin_maps, Vin_locs, iround, -1, stats)
+      enddo
+            if (level_s >= 0 .and. level_s <= LplusMax) BP_MD_lev_time(level_s) = t_lev_acc
             if(ptree%MyID==0)then
-            write(*,*)n4-n3," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
+            write(*,*)t_lev_acc," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
             endif
             prof1(5) = stats%Time_C_Mult_Block - prof0(5)
             prof1(6) = stats%Time_C_Mult_Pack - prof0(6)
@@ -1807,8 +2105,10 @@ contains
 	      else
 		         do ll = level_s, level_e
 		            do bb = 1, size(Vin_locs(ll)%vs)
-		               call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
-	               deallocate (Vin_locs(ll)%vs(bb)%vector)
+		               if (allocated(Vin_locs(ll)%vs(bb)%vector)) then
+		                  call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+		                  deallocate (Vin_locs(ll)%vs(bb)%vector)
+		               endif
 	            end do
 	            do bb = 1, size(Vout_locs(ll)%vs)
 	               call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
@@ -1840,6 +2140,14 @@ contains
       if (level_s >= 0 .and. level_s <= LplusMax) &
          BP_MD_lev_memdelta(level_s) = stats%Mem_Peak - mem_entry_loc
       stats%Mem_Peak = max(mem_peak_save, stats%Mem_Peak)
+      if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+         call BP_MD_proc_rss(rss_dummy, rss_hwm_exit)
+         if (rss_entry_loc >= 0d0 .and. rss_hwm_exit >= 0d0) then
+            BP_MD_lev_rssdelta(level_s) = rss_hwm_exit - rss_entry_loc
+            BP_MD_lev_rssentry(level_s) = rss_entry_loc
+            BP_MD_rss_life_max = max(BP_MD_rss_life_max, rss_hwm_exit)
+         endif
+      endif
 
       if (ptree%MyID == 0 .and. option%verbosity >= 2) then
          prof1(1) = stats%Time_C_Mult_RedistSetup - prof0(1)
@@ -1848,7 +2156,7 @@ contains
          prof1(4) = stats%Time_C_Mult_RedistUnpack - prof0(4)
          prof1(10) = stats%Time_C_Mult_RedistSetupLocal - prof0(10)
          t_call1 = MPI_Wtime()
-         write(*,'(A,I3,A,I3,A,11(A,Es10.3),2(A,I9))') &
+         write(*,'(A,I3,A,I3,A,11(A,Es10.3),3(A,I9))') &
             ' MVPPROF lev', level_s, '-', level_e, ':', &
             ' tot=', t_call1 - t_call0, &
             ' prep=', t_prep1 - t_prep0, &
@@ -1856,20 +2164,21 @@ contains
             ' planloc=', prof1(10), &
             ' rmpi=', prof1(2), &
             ' rpack=', prof1(3) + prof1(4), &
-            ' lev=', n4 - n3, &
+            ' lev=', t_lev_acc, &
             ' blk=', prof1(5), &
             ' gemm=', prof1(8), &
             ' dup=', prof1(6) + prof1(7), &
             ' fin=', n2 - n1, &
             ' nslot=', nslot_prof, &
-            ' nuniq=', nuniq_prof
+            ' nuniq=', nuniq_prof, &
+            ' nround=', nround
       endif
 
 	   end subroutine Bplus_MD_block_MVP_dat
 
 
    subroutine Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-      Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
+      Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps, round)
 
       implicit none
       integer Ndim, level_s, level_e, Nrnd
@@ -1880,6 +2189,9 @@ contains
       type(mesh)::msh(Ndim)
       type(Hoption)::option
       type(vec_redist_groupmap_MD), optional::Vin_maps(level_s:level_e), Vout_maps(level_s:level_e)
+      integer, optional::round !< D1: apply only the duplicates whose input slot is live in this round
+      integer::nsel, mm_sel, slot_sel, bs_sel
+      integer, allocatable::mem_sel(:)
       type(matrixblock_MD), pointer::rep
       integer ll, rep_bb, member, dup_idx, rr, batch_count, batch_start, batch_end
       integer stack_limit, col_s, col_e, slot
@@ -1904,6 +2216,10 @@ contains
       use_unique_vecs = present(Vin_maps) .and. present(Vout_maps)
       do ll = level_s, level_e
          if (bplus%LL(ll)%trans_ndup == 0) cycle
+         !>**** D1: this round's duplicate members of one representative
+         if (allocated(mem_sel)) deallocate (mem_sel)
+         allocate (mem_sel(max(1, bplus%LL(ll)%trans_dup_member_offset(bplus%LL(ll)%Nbound_loc + 1) - &
+            bplus%LL(ll)%trans_dup_member_offset(1))))
 #ifdef HAVE_OPENMP
          if (use_unique_vecs) then
             allocate(out_locks(size(Vout_locs(ll)%vs)))
@@ -1947,10 +2263,23 @@ contains
                   stack_limit = max(stack_limit, nthreads_dup)
                endif
             endif
-            do batch_start = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
-               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, stack_limit
-               batch_end = min(bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, &
-                  batch_start + stack_limit - 1)
+            !>**** D1: with slot streaming only the members whose input slot is live in this
+            ! round are applied now; mem_sel lists them (every member when not streaming)
+            nsel = 0
+            do mm_sel = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
+               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1
+               if (present(round) .and. use_unique_vecs) then
+                  if (Vin_maps(ll)%nround > 1) then
+                     slot_sel = Vin_maps(ll)%slot_map(bplus%LL(ll)%Nbound_loc + bplus%LL(ll)%trans_dup_member_list(mm_sel))
+                     if (Vin_maps(ll)%round(slot_sel) /= round) cycle
+                  endif
+               endif
+               nsel = nsel + 1
+               mem_sel(nsel) = mm_sel
+            enddo
+            do bs_sel = 1, nsel, stack_limit
+               batch_start = bs_sel
+               batch_end = min(nsel, bs_sel + stack_limit - 1)
                batch_count = batch_end - batch_start + 1
                allocate(Vin_stack(product(dim_in),Nrnd*batch_count))
                allocate(Vout_stack(product(dim_out),Nrnd*batch_count))
@@ -1962,7 +2291,7 @@ contains
 !$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_in, head_tmp) schedule(static)
 	               do rr = 1, batch_count
-		                  member = batch_start + rr - 1
+		                  member = mem_sel(batch_start + rr - 1)
 		                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                  if (use_unique_vecs) slot = Vin_maps(ll)%slot_map(slot)
@@ -1984,12 +2313,12 @@ contains
                zfp_mvp_mode = 0
 #if HAVE_ZFP
                if (option%use_zfp >= 1) then
-                  if (batch_start == bplus%LL(ll)%trans_dup_member_offset(rep_bb) .and. &
-                      batch_end == bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1) then
+                  if (batch_start == 1 .and. &
+                      batch_end == nsel) then
                      zfp_mvp_mode = 0
-                  elseif (batch_start == bplus%LL(ll)%trans_dup_member_offset(rep_bb)) then
+                  elseif (batch_start == 1) then
                      zfp_mvp_mode = 1
-                  elseif (batch_end == bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1) then
+                  elseif (batch_end == nsel) then
                      zfp_mvp_mode = 3
                   else
                      zfp_mvp_mode = 2
@@ -2021,7 +2350,7 @@ contains
 !$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 #endif
 		                  do rr = 1, batch_count
-		                     member = batch_start + rr - 1
+		                     member = mem_sel(batch_start + rr - 1)
 		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                     slot = Vout_maps(ll)%slot_map(slot)
@@ -2049,7 +2378,7 @@ contains
 	!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 	!$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 		                  do rr = 1, batch_count
-		                     member = batch_start + rr - 1
+		                     member = mem_sel(batch_start + rr - 1)
 		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                     col_s = (rr-1)*Nrnd + 1
@@ -2080,6 +2409,7 @@ contains
             deallocate(out_locks)
          endif
 #endif
+            if (allocated(mem_sel)) deallocate (mem_sel)
       enddo
 
    end subroutine Bplus_MD_compact_dup_MVP_local_N
@@ -10105,7 +10435,7 @@ contains
 
 
    subroutine BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, ptree, msh, nproc, plan, &
-      time_setup_local, slot_maps)
+      time_setup_local, slot_maps, round)
 
       implicit none
       integer Ndim, rowcol, one2all, level_s, level_e, nproc
@@ -10115,6 +10445,7 @@ contains
       type(vec_redist_plan_MD)::plan
       real(kind=8), optional::time_setup_local
       type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
+      integer, optional::round !< D1: build the plan for this streaming round only
 
       integer ll, bb_loc, bb_owner, dim_i, ii, jj, pp, ipass, nslot, compact_slots
       integer nproc_i, nproc_o, meta_nint, ierr, tag
@@ -10163,6 +10494,12 @@ contains
                   nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
                endif
                do bb_loc = 1, nslot
+                  !>**** D1: a streamed round carries only its own slots
+                  if (present(round) .and. present(slot_maps)) then
+                     if (slot_maps(ll)%nround > 1) then
+                        if (slot_maps(ll)%round(bb_loc) /= round) cycle
+                     endif
+                  endif
                   bb_owner = bb_loc
                   if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
                   call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
@@ -10205,6 +10542,12 @@ contains
                   nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
                endif
                do bb_loc = 1, nslot
+                  !>**** D1: a streamed round carries only its own slots
+                  if (present(round) .and. present(slot_maps)) then
+                     if (slot_maps(ll)%nround > 1) then
+                        if (slot_maps(ll)%round(bb_loc) /= round) cycle
+                     endif
+                  endif
                   bb_owner = bb_loc
                   if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
                   call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
@@ -10493,7 +10836,7 @@ contains
 
    end subroutine BP_MD_ensure_matrix_ptr
 
-   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc, slot_maps)
+   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc, slot_maps, round)
 
       implicit none
       integer Ndim
@@ -10509,6 +10852,8 @@ contains
       type(Hstat)::stats
       integer nproc
       type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
+      integer, optional::round !< D1: streaming round; plans are cached per round
+      integer::round_idx
 
       type(matrixblock_MD), pointer::blocks, blocks_1
       type(commquant1D)::sendquant(nproc), recvquant(nproc)
@@ -10533,12 +10878,15 @@ contains
       ! the plan ends up rebuilt once per level per direction per MVP
       call assert(level_s >= 1 .and. level_s <= LplusMax, &
          'level_s out of range for the MD vector redistribution plan cache')
-      slot = 4*level_s + 1 + rowcol + 2*one2all
+      round_idx = 0
+      if (present(round)) round_idx = max(0, round)
+      call assert(round_idx < BP_MD_max_rounds, 'too many MD slot-streaming rounds for the plan cache')
+      slot = (4*level_s + rowcol + 2*one2all)*BP_MD_max_rounds + round_idx + 1
       mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
       compact_slots = 0
       if (present(slot_maps)) compact_slots = 1
 
-      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4*(LplusMax + 1)))
+      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4*(LplusMax + 1)*BP_MD_max_rounds))
       if (BP%vec_redist_plans(slot)%ready /= 1 .or. &
           BP%vec_redist_plans(slot)%rowcol /= rowcol .or. &
           BP%vec_redist_plans(slot)%one2all /= one2all .or. &
@@ -10546,13 +10894,16 @@ contains
           BP%vec_redist_plans(slot)%level_e /= level_e .or. &
           BP%vec_redist_plans(slot)%Ndim /= Ndim .or. &
           BP%vec_redist_plans(slot)%nproc /= nproc .or. &
-          BP%vec_redist_plans(slot)%compact_slots /= compact_slots) then
+          BP%vec_redist_plans(slot)%compact_slots /= compact_slots .or. &
+          BP%vec_redist_plans(slot)%round /= round_idx) then
          if (present(slot_maps)) then
             call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
-               ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal, slot_maps)
+               ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal, slot_maps, round)
+            BP%vec_redist_plans(slot)%round = round_idx
          else
             call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
                ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal)
+            BP%vec_redist_plans(slot)%round = round_idx
          endif
       endif
 
