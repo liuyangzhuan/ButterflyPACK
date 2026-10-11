@@ -22948,6 +22948,50 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine BP_MD_fft_circulant_reset
 
 
+   !>**** smallest length >= n whose prime factors are all <= 7: FFTW runs several times faster on such
+   !> lengths than on a prime one (the leaf blocks of 10^3 points gave 19^3 transforms)
+   integer function BP_fft_friendly_size(n)
+      implicit none
+      integer n, m, r
+      m = max(1, n)
+      do
+         r = m
+         do while (mod(r, 2) == 0)
+            r = r/2
+         enddo
+         do while (mod(r, 3) == 0)
+            r = r/3
+         enddo
+         do while (mod(r, 5) == 0)
+            r = r/5
+         enddo
+         do while (mod(r, 7) == 0)
+            r = r/7
+         enddo
+         if (r == 1) exit
+         m = m + 1
+      enddo
+      BP_fft_friendly_size = m
+   end function BP_fft_friendly_size
+
+   !>**** padded circulant extents of a block: the smallest FFTW-friendly length >= M+N-1 per dimension
+   subroutine BP_MD_fft_circulant_pad_dims(Ndim, M_loc, N_loc, dims_pad)
+      implicit none
+      integer Ndim, M_loc(Ndim), N_loc(Ndim), dims_pad(Ndim), dim_i
+      do dim_i = 1, Ndim
+         dims_pad(dim_i) = BP_fft_friendly_size(M_loc(dim_i) + N_loc(dim_i) - 1)
+      enddo
+   end subroutine BP_MD_fft_circulant_pad_dims
+
+   !>**** number of points of that padded circulant
+   integer function BP_MD_fft_circulant_npad(Ndim, M_loc, N_loc)
+      implicit none
+      integer Ndim, M_loc(Ndim), N_loc(Ndim)
+      integer dims_pad(Ndim)
+      call BP_MD_fft_circulant_pad_dims(Ndim, M_loc, N_loc, dims_pad)
+      BP_MD_fft_circulant_npad = product(dims_pad)
+   end function BP_MD_fft_circulant_npad
+
    subroutine BP_MD_fft_circulant_build_maps(fftq)
 
       implicit none
@@ -23148,7 +23192,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       allocate(cache_block%FullmatFFT%dims_pad(Ndim))
       cache_block%FullmatFFT%dims_in = source_block%N_loc
       cache_block%FullmatFFT%dims_out = source_block%M_loc
-      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      ! at least M+N-1 points per dimension, rounded up to a length FFTW is fast on (extra lags carry zero kernel)
+      call BP_MD_fft_circulant_pad_dims(Ndim, source_block%M_loc, source_block%N_loc, cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%plan_mode = fftw_plan_mode_loc
       call BP_MD_fft_circulant_build_maps(cache_block%FullmatFFT)
@@ -23181,18 +23226,26 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT::kernel_values(kernel_len)
       integer kk, dim_i, offset_i
       integer, allocatable::dims_pad(:), idx_pad(:), rows(:,:), cols(:,:)
+      logical, allocatable::outside(:)
 
       allocate(dims_pad(Ndim), idx_pad(Ndim))
-      dims_pad = blocks%M_loc + blocks%N_loc - 1
+      call BP_MD_fft_circulant_pad_dims(Ndim, blocks%M_loc, blocks%N_loc, dims_pad)
       call assert(kernel_len == product(dims_pad), 'FFT circulant kernel length mismatch')
       allocate(rows(Ndim, kernel_len))
       allocate(cols(Ndim, kernel_len))
+      allocate(outside(kernel_len))
 
       do kk = 1, kernel_len
          call SingleIndexToMultiIndex(Ndim, dims_pad, kk, idx_pad)
+         outside(kk) = .false.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - blocks%N_loc(dim_i)
-            if(offset_i >= 0)then
+            if(offset_i > blocks%M_loc(dim_i) - 1)then
+               ! padding beyond M+N-1: no lag of the block lands here; the entry is zeroed after extraction
+               outside(kk) = .true.
+               rows(dim_i, kk) = blocks%headm(dim_i)
+               cols(dim_i, kk) = blocks%headn(dim_i)
+            else if(offset_i >= 0)then
                rows(dim_i, kk) = blocks%headm(dim_i) + offset_i
                cols(dim_i, kk) = blocks%headn(dim_i)
             else
@@ -23204,8 +23257,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       call element_Zmn_pairlist_user(Ndim, kernel_len, rows, cols, kernel_values, msh, &
          option, ker, passflag, ptree, stats)
+      do kk = 1, kernel_len
+         if (outside(kk)) kernel_values(kk) = 0
+      enddo
 
-      deallocate(rows, cols, dims_pad, idx_pad)
+      deallocate(rows, cols, dims_pad, idx_pad, outside)
 
    end subroutine BP_MD_fft_circulant_fill_kernel_entries
 
@@ -23352,7 +23408,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
       endif
 
-      if (kernel_len /= product(source_block%M_loc + source_block%N_loc - 1)) return
+      if (kernel_len /= BP_MD_fft_circulant_npad(Ndim, source_block%M_loc, source_block%N_loc)) return
 
       call BP_MD_fft_circulant_reset(cache_block%FullmatFFT)
       cache_block%FullmatFFT%Ndim = Ndim
@@ -23361,7 +23417,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       allocate(cache_block%FullmatFFT%dims_pad(Ndim))
       cache_block%FullmatFFT%dims_in = source_block%N_loc
       cache_block%FullmatFFT%dims_out = source_block%M_loc
-      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      call BP_MD_fft_circulant_pad_dims(Ndim, source_block%M_loc, source_block%N_loc, cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%plan_mode = fftw_plan_mode_loc
       call BP_MD_fft_circulant_build_maps(cache_block%FullmatFFT)
@@ -23482,7 +23538,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer(c_int), allocatable::nrev(:)
       DTC, allocatable::kernel(:)
       type(c_ptr)::plan
-      logical built_plan
+      logical built_plan, inside
 
       built_fft = .false.
       Ndim = fftq%Ndim
@@ -23498,8 +23554,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       do idx_k = 1, fftq%npad
          call SingleIndexToMultiIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+         inside = .true.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - fftq%dims_in(dim_i)
+            if (offset_i > fftq%dims_out(dim_i) - 1) inside = .false.
             if(offset_i >= 0)then
                idx_out(dim_i) = offset_i + 1
                idx_in(dim_i) = 1
@@ -23508,6 +23566,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                idx_in(dim_i) = 1 - offset_i
             endif
          enddo
+         if (.not. inside) then
+            kernel(idx_k) = 0   ! padding beyond M+N-1: no lag of the block lands here
+            cycle
+         endif
          call MultiIndexToSingleIndex(Ndim, fftq%dims_out, ii, idx_out)
          call MultiIndexToSingleIndex(Ndim, fftq%dims_in, jj, idx_in)
          kernel(idx_k) = source_block%fullmat(ii, jj)
@@ -23750,7 +23812,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer(c_int), allocatable::nrev(:)
       DTR, allocatable::kernel(:)
       type(c_ptr)::plan
-      logical built_plan
+      logical built_plan, inside
 
       built_fft = .false.
       Ndim = fftq%Ndim
@@ -23766,8 +23828,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       do idx_k = 1, fftq%npad
          call SingleIndexToMultiIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+         inside = .true.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - fftq%dims_in(dim_i)
+            if (offset_i > fftq%dims_out(dim_i) - 1) inside = .false.
             if(offset_i >= 0)then
                idx_out(dim_i) = offset_i + 1
                idx_in(dim_i) = 1
@@ -23776,6 +23840,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                idx_in(dim_i) = 1 - offset_i
             endif
          enddo
+         if (.not. inside) then
+            kernel(idx_k) = 0   ! padding beyond M+N-1: no lag of the block lands here
+            cycle
+         endif
          call MultiIndexToSingleIndex(Ndim, fftq%dims_out, ii, idx_out)
          call MultiIndexToSingleIndex(Ndim, fftq%dims_in, jj, idx_in)
          kernel(idx_k) = source_block%fullmat(ii, jj)
