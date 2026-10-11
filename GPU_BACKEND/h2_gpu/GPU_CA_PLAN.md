@@ -4640,6 +4640,19 @@ node's memory is fragmented.  Compare factor times only within one job,
 and read the "pinning N s so far" line first.  The pool's cap and its
 trim policy are the lever if this recurs (open).
 
+**CA under the rule (2026-10-11, same day):** unchanged.  384^3 on 8
+ranks at 8x: CA0's leaf runs (60.7 s against Color's 56.8) and the level
+above dies on the same blocks as before ("near block shape (hi): block
+278 x 357, box 16384, neighbor 2343 c 356" on rank 4, identical to the
+2026-10-10 run), so the ghost/owner skeleton mismatch is deterministic
+and not the packing noise; CA3 exhausts the heap in the leaf's owner
+pass (2-3.6 GB requests).  768^3 on 64 ranks: CA0's leaf runs (73.9 s
+against Color's 65.6, no leaf speedup at this size) and dies at the
+hand-over as before; CA3 exhausts the heap in the owner pass (1-7 GB
+requests).  The CA items stand as listed: ghosts' skeletons from their
+owners, the owner pass chunked to the room, the interior ranks' host
+memory.
+
 Left open, measured: the kept X_NR packed finer where it is cheap.  At
 384^3 on 64 ranks, the kept X_NR of levels <= 5 at 0.002 (lib_dg) against
 0.2 (lib_dgf), both with the fine fill store, read acc_mvp 5.1e-4 against
