@@ -4292,6 +4292,59 @@ rebuilt X_RR_full now counted against a 2 GB cap the free room would
 allow to be 4x larger; the cap can follow the room if the chunk count
 ever matters.
 
+#### The solve at 8x (2026-10-10): streamed kept factors, and waves in segments
+
+After the 384^3 factorization the run was OOM-killed on the host.  The
+solve's set-up (prepare_device_solve) wants every Color level's kept
+factors resident for the sweeps; at 384^3 that is 27 GB a rank (leaf
+18.7, level 5 6.3, level 4 1.8, level 3 0.5) against a budget of 24.2
+GB, so it declared the device solve off and materialized the factors on
+the host - the X_NR uncompressed, 146 GB a rank.  Two changes, both
+decided by room and collectively, no new options:
+
+1. **Streamed levels.**  The staged levels that do not fit beside the
+   rest are streamed, largest first: their box pointers are rebased at
+   the set-up to one device home (the largest streamed level, 19.6 GB
+   here), and at each sweep step the level's bytes come into it from
+   their pinned chunks (stream_kept_in, 26.8 GB/s), ahead of the step's
+   kernels on the same stream.  A solve streams each level twice (both
+   sweeps), the multiply too.  The set-up streams a level once while it
+   plans its tables (the planner reads the compressed headers).  The
+   pinned chunks of a streamed level stay (they are its factors now);
+   release_prepared puts the pointers back and frees the home.
+2. **Waves in segments.**  The sweeps decompress a wave's X_NR into a
+   scratch before its kernels, and the scratch was sized by the widest
+   wave: 9 GB raw at the 384^3 leaf.  A wave is now cut into segments
+   whose raw bytes fit one buffer of a scratch all levels share (two
+   buffers of a segment; a segment at most 2 GB, an eighth of the room
+   when that is less), and a segment is the unit the sweeps decompress
+   and launch - the kernels take an order range, so a wave's segments
+   run one after another with the wave's accumulation and messages
+   unchanged after the last.  The scratch is counted in the solve's
+   budget up front.
+
+**384^3 on 8 ranks, end to end** (st5 run): Factor 91.8 s; solve
+3.89 s (rank 0: forward 0.82, backward 0.92; the streaming
+54 GB in 2.02 s at 26.8 GB/s, 4 levels twice); multiply 4.17 s; H2_CheckError acc_mvp 1.27e-3,
+acc_forward ACC0.82, acc_backward ACC0.92.  Host RSS high-water
+51.6 GB a rank.  192^3 unchanged on the three paths (Color
+7.96 s, logdet identical, solve 0.371 s, multiply 0.442; CA0 8.23 s with
+the reference logdet -89253593.818 and acc_forward 8.15e-3; CA3 8.57 s,
+logdet -89253593.484 and acc_forward 7.97e-3, its leaf transition
+packing 4 of 37 chunks now where it packed 3 of 9).  The 4.3 GB scratch
+is reserved on every card now, which the 33 GB card does not notice.
+
+**What the per-rank accounting showed.**  Ranks 1-7 had 8.8 GB of kept
+factors resident at the set-up where rank 0 had none: the kept-factor
+staging at a level's start is decided per rank (a level that packed or
+chunked, or a card above the hold limit), and only rank 0's level 5 had
+seen pressure, so levels 3-5 stayed on the cards of the other ranks.
+Each rank streams what it has on the host and sizes its home by that,
+so the decision is consistent; it also makes the budget tight (planned
+4.4 + home 19.6 against 24.2 GB on the tightest rank).  At 64x a level
+would not fit the home either: the next step there is streaming by
+segment (a wave's share of the kept store), not by level.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

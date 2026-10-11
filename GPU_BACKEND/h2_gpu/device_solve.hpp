@@ -135,6 +135,13 @@ struct DeviceSolveLevel {
     struct Wave {
         int order0 = 0, count = 0;           // its boxes (forward order; reversed for the backward sweep)
         int max_ntot = 0;                    // largest X_NR row count of its boxes
+        // H2 8x (2026-10-10): the wave's boxes in segments whose raw X_NR
+        // fits one buffer of the solve's scratch (first, count in the wave's
+        // forward order; one segment when the wave fits), seg0 indexing
+        // L.xnr_waves - at the 384^3 leaf a wave's X_NR is 9 GB raw
+        struct Seg { int first = 0, count = 0; };
+        std::vector<Seg> segs;
+        size_t seg0 = 0;
         int item0 = 0, nitems = 0, max_count = 0;        // forward accumulation (local, outbox)
         int in_item0 = 0, in_nitems = 0, in_max_count = 0;  // updates from other ranks
         std::vector<int64_t> out, in;        // forward messages
@@ -231,10 +238,17 @@ struct KeptSolveLevel {
     // memory before, as pinning anew ran at 1.9 GB/s)
     std::unique_ptr<PinnedArena> host;
     size_t staged_bytes = 0;
+    // H2 8x (2026-10-10): a staged level the solve streams instead of
+    // keeping resident - its boxes' pointers are rebased to this device
+    // home at the set-up and the bytes copied in from the host chunks at
+    // each sweep step (stream_kept_in); null: resident or on the host
+    char* stream_base = nullptr;
     std::vector<double> logdet_per_box;  // (log|det|, arg) per kept LU, in local box order
     int64_t logdet_boxes = -1;        // -1: not summed yet
     bool on_host() const { return host != nullptr; }
 };
+
+inline void rebase_kept_level(KeptSolveLevel& kl, char* to);  // (below: a streamed level's pointers)
 
 struct DeviceSolveStore {
     std::map<int, KeptSolveLevel> kept;  // level -> factors kept during the factorization
@@ -248,6 +262,16 @@ struct DeviceSolveStore {
     bool usable = false;
     std::vector<DeviceSolveLevel> levels;
     double bytes = 0.0;
+    // H2 8x: the device home the streamed levels share (the largest of
+    // them), and what the last sweeps streamed
+    char* stream_block = nullptr;
+    size_t stream_bytes = 0;
+    int stream_levels = 0;
+    // H2 8x: one X_NR scratch for every level's sweeps, kXnrBuffers buffers
+    // of a segment each (the levels sweep one at a time)
+    char* xnr_scratch = nullptr;
+    size_t xnr_scratch_bytes = 0, xnr_segment_bytes = 0;
+    double stream_seconds = 0.0, stream_gb = 0.0;
     PinnedBuffer host_vec, host_out, host_in;  // staging of the solves (kept: pinning is slow)
     bool empty() const { return levels.empty() && kept.empty(); }
 
@@ -258,6 +282,16 @@ struct DeviceSolveStore {
             for (char* b : lv.blocks) heap.free(b);
         }
         levels.clear();
+        for (auto& [level, kl] : kept) {
+            if (kl.stream_base != nullptr) rebase_kept_level(kl, nullptr);  // (its pointers back to the staged form)
+        }
+        if (stream_block != nullptr) heap.free(stream_block);
+        stream_block = nullptr;
+        stream_bytes = 0;
+        stream_levels = 0;
+        if (xnr_scratch != nullptr) heap.free(xnr_scratch);
+        xnr_scratch = nullptr;
+        xnr_scratch_bytes = xnr_segment_bytes = 0;
         tree = nullptr;
         decided = false;
         usable = false;
@@ -301,6 +335,16 @@ inline void kept_fetch(const KeptSolveLevel& kl, const void* src, size_t bytes, 
     if (!kl.on_host()) {
         check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost), what);
         return;
+    }
+    if (kl.stream_base != nullptr) {  // (a streamed level: `src` is in its device home)
+        const uintptr_t a = reinterpret_cast<uintptr_t>(src), base = reinterpret_cast<uintptr_t>(kl.stream_base);
+        for (const KeptSolveLevel::StagedBlock& b : kl.staged) {
+            if (a >= base + b.off && a + bytes <= base + b.off + b.bytes) {
+                std::memcpy(dst, b.host + (a - (base + b.off)), bytes);
+                return;
+            }
+        }
+        throw std::runtime_error(std::string("H2 GPU: ") + what + ": not in the level's streamed kept store");
     }
     const KeptSolveLevel::StagedBlock* b = staged_block_of(kl, src);
     if (b == nullptr || reinterpret_cast<uintptr_t>(src) + bytes > b->was + b->bytes) {
@@ -394,6 +438,55 @@ inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& al
     kl.staged = std::move(by_was);
     kl.host = std::move(host);
     kl.staged_bytes = total;
+}
+
+// H2 8x: a staged level's box pointers moved between the staged form (the
+// device addresses the blocks had, `was`) and a device home `to` (null:
+// back to the staged form), by the block each pointer falls in.  The
+// bytes are not moved: stream_kept_in copies them at each sweep step.
+inline void rebase_kept_level(KeptSolveLevel& kl, char* to) {
+    const char* from = kl.stream_base;
+    auto block_of = [&](const void* p) -> const KeptSolveLevel::StagedBlock* {
+        if (from == nullptr) return staged_block_of(kl, p);
+        const uintptr_t a = reinterpret_cast<uintptr_t>(p), base = reinterpret_cast<uintptr_t>(from);
+        for (const KeptSolveLevel::StagedBlock& b : kl.staged) {
+            if (a >= base + b.off && a < base + b.off + b.bytes) return &b;
+        }
+        return nullptr;
+    };
+    auto move = [&](const void* p) -> const char* {
+        if (p == nullptr) return nullptr;
+        const KeptSolveLevel::StagedBlock* b = block_of(p);
+        if (b == nullptr) throw std::runtime_error("H2 GPU: a kept factor is outside its level's staged blocks (stream)");
+        const uintptr_t start = from == nullptr ? b->was : reinterpret_cast<uintptr_t>(from) + b->off;
+        const uintptr_t off = reinterpret_cast<uintptr_t>(p) - start;
+        return to == nullptr ? reinterpret_cast<const char*>(b->was + off) : to + b->off + off;
+    };
+    for (auto& [morton, kb] : kl.boxes) {
+        kb.T = move(kb.T);
+        kb.xsr = move(kb.xsr);
+        kb.xnr = move(kb.xnr);
+        kb.lu = move(kb.lu);
+        kb.ipiv = reinterpret_cast<const int*>(move(kb.ipiv));
+    }
+    kl.stream_base = to;
+}
+
+// A streamed level's bytes into its device home, on `stream` ahead of the
+// sweep step that reads them (the previous step's kernels are on the same
+// stream).  Pinned chunks: 26 GB/s.
+inline void stream_kept_in(DeviceSolveStore& store, int level, cudaStream_t stream) {
+    auto it = store.kept.find(level);
+    if (it == store.kept.end() || it->second.stream_base == nullptr) return;
+    KeptSolveLevel& kl = it->second;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const KeptSolveLevel::StagedBlock& b : kl.staged) {
+        check_cuda(cudaMemcpyAsync(kl.stream_base + b.off, b.host, b.bytes, cudaMemcpyHostToDevice, stream),
+                   "streamed kept factors");
+    }
+    check_cuda(cudaStreamSynchronize(stream), "streamed kept factors");
+    store.stream_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    store.stream_gb += static_cast<double>(kl.staged_bytes) / 1e9;
 }
 
 // A staged level back on the device, in one block; every box's pointers
@@ -616,6 +709,10 @@ inline void report_xnr_wave_sizes(const DeviceSolveLevel& L, int level) {
 inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& order, cudaStream_t stream,
                                   int level) {
 #ifdef H2_HAVE_NVCOMP
+    for (size_t w = 0; w < L.waves.size(); ++w) {   // (one segment a wave unless cut below)
+        L.waves[w].segs.assign(1, {0, L.waves[w].count});
+        L.waves[w].seg0 = w;
+    }
     if (!L.xnr_compressed) {
         if (env::trace("wave")) {
             int rank = 0;
@@ -645,67 +742,98 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
     // then X_NR, each at its own offset (kNone: that factor is read in place
     // and its pointer is left alone); the box's entry for the pointer patch
     // is each factor's first chunk.
-    L.xnr_waves.assign(L.waves.size(), SolveXnrWave{});
+    // H2 8x: a wave is cut into segments whose raw bytes fit one buffer of
+    // the store's shared scratch (store.xnr_segment_bytes); a segment is the
+    // unit the sweeps decompress and launch.
+    DeviceSolveStore& store = device_solve_store();
+    if (store.xnr_scratch == nullptr || store.xnr_segment_bytes == 0) {
+        throw std::runtime_error("H2 GPU solve: the X_NR scratch was not set up before the level's waves");
+    }
+    const size_t seg_cap = store.xnr_segment_bytes;
+    L.xnr_waves.clear();
     const size_t chunk_bytes_raw = kXnrChunkBytes;
     constexpr size_t kNone = static_cast<size_t>(-1);
     struct BoxOffsets { size_t xnr, t, xsr; };
-    std::vector<std::vector<BoxOffsets>> offsets(L.waves.size());
+    std::vector<std::vector<BoxOffsets>> offsets;   // per segment
     size_t widest = 0;
-    for (size_t w = 0; w < L.waves.size(); ++w) {
-        const auto& W = L.waves[w];
-        auto& xw = L.xnr_waves[w];
-        size_t bytes = 0;
-        auto place = [&](const DeviceSolveLevel::PackedPart& part, const char* what) {
-            if (part.src == nullptr) return kNone;
-            if (part.strides == nullptr || part.nchunks == 0) {
-                throw std::runtime_error(std::string("device solve: compressed ") + what +
-                                         " without its chunk lengths");
-            }
-            const size_t at = bytes;
-            const char* src = static_cast<const char*>(part.src);
-            for (size_t c = 0; c < part.nchunks; ++c) {
-                xw.h_srcs.push_back(src);
-                xw.h_dsts.push_back(reinterpret_cast<void*>(at + c * chunk_bytes_raw));  // offset for now
-                src += part.strides[c];
-            }
-            bytes = align_up(bytes + part.raw_bytes);
-            return at;
-        };
-        for (int i = 0; i < W.count; ++i) {
-            const size_t b = static_cast<size_t>(order[static_cast<size_t>(W.order0 + i)]);
-            if (L.pending_xnr[b].src == nullptr && L.pending_t[b].src == nullptr &&
-                L.pending_xsr[b].src == nullptr) {
-                continue;
-            }
-            xw.boxes.push_back(static_cast<int>(b));
-            BoxOffsets o{};
-            o.t = place(L.pending_t[b], "T");
-            o.xsr = place(L.pending_xsr[b], "X_SR");
-            o.xnr = place(L.pending_xnr[b], "X_NR");
-            offsets[w].push_back(o);
+    auto raw_of = [&](size_t b) {
+        size_t r = 0;
+        for (const DeviceSolveLevel::PackedPart* part : {&L.pending_t[b], &L.pending_xsr[b], &L.pending_xnr[b]}) {
+            if (part->src != nullptr) r += align_up(part->raw_bytes);
         }
-        xw.raw_bytes = bytes;
-        widest = std::max(widest, bytes);
+        return r;
+    };
+    for (size_t w = 0; w < L.waves.size(); ++w) {
+        auto& W = L.waves[w];
+        W.segs.clear();
+        W.seg0 = L.xnr_waves.size();
+        int first = 0;
+        while (first < W.count) {
+            int last = first;
+            size_t seg_bytes = 0;
+            while (last < W.count) {
+                const size_t rb = raw_of(static_cast<size_t>(order[static_cast<size_t>(W.order0 + last)]));
+                if (last > first && seg_bytes + rb > seg_cap) break;
+                seg_bytes += rb;
+                ++last;
+            }
+            SolveXnrWave xw;
+            std::vector<BoxOffsets> segoff;
+            size_t bytes = 0;
+            auto place = [&](const DeviceSolveLevel::PackedPart& part, const char* what) {
+                if (part.src == nullptr) return kNone;
+                if (part.strides == nullptr || part.nchunks == 0) {
+                    throw std::runtime_error(std::string("device solve: compressed ") + what +
+                                             " without its chunk lengths");
+                }
+                const size_t at = bytes;
+                const char* src = static_cast<const char*>(part.src);
+                for (size_t c = 0; c < part.nchunks; ++c) {
+                    xw.h_srcs.push_back(src);
+                    xw.h_dsts.push_back(reinterpret_cast<void*>(at + c * chunk_bytes_raw));  // offset for now
+                    src += part.strides[c];
+                }
+                bytes = align_up(bytes + part.raw_bytes);
+                return at;
+            };
+            for (int i = first; i < last; ++i) {
+                const size_t b = static_cast<size_t>(order[static_cast<size_t>(W.order0 + i)]);
+                if (L.pending_xnr[b].src == nullptr && L.pending_t[b].src == nullptr &&
+                    L.pending_xsr[b].src == nullptr) {
+                    continue;
+                }
+                xw.boxes.push_back(static_cast<int>(b));
+                BoxOffsets o{};
+                o.t = place(L.pending_t[b], "T");
+                o.xsr = place(L.pending_xsr[b], "X_SR");
+                o.xnr = place(L.pending_xnr[b], "X_NR");
+                segoff.push_back(o);
+            }
+            xw.raw_bytes = bytes;
+            widest = std::max(widest, bytes);
+            W.segs.push_back({first, last - first});
+            L.xnr_waves.push_back(std::move(xw));
+            offsets.push_back(std::move(segoff));
+            first = last;
+        }
     }
     if (widest == 0) { L.xnr_compressed = false; return; }
-    // Two buffers, each sized for the widest wave: the sweeps decompress a
-    // wave into the buffer of its parity while the previous wave's kernels and
-    // messages are still using the other one (prepare_wave_xnr).  One buffer
-    // where the second would leave the heap short - the sweeps then wait for
-    // each wave in turn, as they did before the buffers were doubled.
-    DeviceHeap& heap = DeviceHeap::instance();
-    const size_t room = static_cast<size_t>((1.0 - kXnrSecondBufferHeadroom) * static_cast<double>(heap.capacity()));
-    L.xnr_buffers = heap.used() + widest * kXnrBuffers <= room && heap.largest_free() >= widest * kXnrBuffers
-                        ? kXnrBuffers
-                        : 1;
-    L.xnr_buffer_bytes = widest;
-    L.xnr_scratch = heap.alloc_resident(widest * L.xnr_buffers);
-    L.xnr_scratch_bytes = widest * L.xnr_buffers;
-    L.blocks.push_back(L.xnr_scratch);
+    if (widest > seg_cap) {
+        throw std::runtime_error("H2 GPU solve: a box's compressed factors (" + std::to_string(widest >> 20) +
+                                 " MB raw) exceed the X_NR scratch's buffer (" + std::to_string(seg_cap >> 20) + " MB)");
+    }
+    // The shared scratch: kXnrBuffers buffers of a segment each; a segment is
+    // decompressed into the buffer of its parity while the previous one's
+    // kernels and messages are still using the other (prepare_wave_xnr).
+    L.xnr_buffers = kXnrBuffers;
+    L.xnr_buffer_bytes = seg_cap;
+    L.xnr_scratch = store.xnr_scratch;
+    L.xnr_scratch_bytes = store.xnr_scratch_bytes;
     if (env::trace("wave")) report_xnr_wave_sizes(L, level);
-    for (size_t w = 0; w < L.xnr_waves.size(); ++w) {
-        auto& xw = L.xnr_waves[w];
-        char* base = L.xnr_scratch + (w % L.xnr_buffers) * widest;
+    for (size_t g = 0; g < L.xnr_waves.size(); ++g) {
+        auto& xw = L.xnr_waves[g];
+        if (xw.empty()) continue;
+        char* base = L.xnr_scratch + (g % L.xnr_buffers) * L.xnr_buffer_bytes;
         for (auto& d : xw.h_dsts) {
             d = base + reinterpret_cast<size_t>(d);  // offset -> address
         }
@@ -714,13 +842,13 @@ inline void build_solve_xnr_waves(DeviceSolveLevel& L, const std::vector<int>& o
         xw.h_box_t_dsts.resize(xw.boxes.size());
         xw.h_box_xsr_dsts.resize(xw.boxes.size());
         for (size_t i = 0; i < xw.boxes.size(); ++i) {
-            xw.h_box_dsts[i] = address(offsets[w][i].xnr);
-            xw.h_box_t_dsts[i] = address(offsets[w][i].t);
-            xw.h_box_xsr_dsts[i] = address(offsets[w][i].xsr);
+            xw.h_box_dsts[i] = address(offsets[g][i].xnr);
+            xw.h_box_t_dsts[i] = address(offsets[g][i].t);
+            xw.h_box_xsr_dsts[i] = address(offsets[g][i].xsr);
         }
         int code = 0;
         if (!build_solve_xnr_wave(xw, DeviceHeap::instance(), stream, &code)) {
-            throw std::runtime_error("H2 GPU solve: could not plan wave " + std::to_string(w) + "'s X_NR decompression (" +
+            throw std::runtime_error("H2 GPU solve: could not plan segment " + std::to_string(g) + "'s X_NR decompression (" +
                                      std::to_string(xw.h_srcs.size()) + " chunks of " + std::to_string(xw.boxes.size()) +
                                      " boxes, bitcomp " + std::to_string(code) + ")");
         }
@@ -1508,6 +1636,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         // ---- eligibility and size, on every rank
         std::string reason;
         std::vector<double> level_need(static_cast<size_t>(leaf + 1), 0.0);
+        std::vector<double> level_staged(static_cast<size_t>(leaf + 1), 0.0);  // ... of which staged kept factors (H2 8x)
         std::vector<int> host_only(static_cast<size_t>(leaf + 1), 0);  // CA levels factored on the host
         for (int level = 2; level <= leaf && reason.empty(); ++level) {
             auto& lvl = tree->levels[static_cast<size_t>(level)];
@@ -1523,8 +1652,9 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 break;
             }
             const bool kept_level = store.kept.count(level) != 0;
-            if (kept_level && store.kept.at(level).on_host()) {  // (uploaded again at the setup)
+            if (kept_level && store.kept.at(level).on_host()) {  // (uploaded again at the setup, or streamed)
                 need += static_cast<double>(store.kept.at(level).staged_bytes);
+                level_staged[static_cast<size_t>(level)] = static_cast<double>(store.kept.at(level).staged_bytes);
             }
             auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
                 const int64_t n = box.num_points, k = static_cast<int64_t>(box.skeleton_indices.size()),
@@ -1564,13 +1694,44 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         MPI_Allreduce(MPI_IN_PLACE, need_max.data(), leaf + 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, host_only.data(), leaf + 1, MPI_INT, MPI_MAX, tree->comm);
         MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_DOUBLE, MPI_MIN, tree->comm);
+        std::vector<double> staged_max = level_staged;
+        MPI_Allreduce(MPI_IN_PLACE, staged_max.data(), leaf + 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         const double budget = room - static_cast<double>(size_t{256} << 20);
-        double planned = 0.0;
+        // H2 8x: the X_NR scratch every level's sweeps share - kXnrBuffers
+        // buffers of one segment, a segment at most 2 GB (an eighth of the
+        // room when that is less), so a level's widest wave no longer sets it
+        const size_t segment = std::min<size_t>(size_t{2} << 30,
+                                                std::max<size_t>(size_t{256} << 20, static_cast<size_t>(budget / 8)));
+        const double scratch = static_cast<double>(kXnrBuffers * segment);
+        double planned = scratch;
         for (int level = 2; level <= leaf; ++level) {
             if (!replicated(level)) planned += 1.05 * need_max[static_cast<size_t>(level)];
         }
-        std::set<int> host_levels;
+        // H2 8x (2026-10-10): the Color levels whose staged kept factors do
+        // not fit beside the rest are streamed - their factors come into one
+        // device home (the largest of them) at each sweep step instead of
+        // staying resident - largest first until the rest fits.  The same
+        // on every rank (allreduced sizes).  At 384^3 on 8 ranks the kept
+        // factors are 27 GB a rank against a 24 GB budget.
+        std::set<int> streamed;
+        double stream_home = 0.0;
         if (!bad && planned > budget) {
+            std::vector<std::pair<double, int>> cand;
+            for (int level = 2; level <= leaf; ++level) {
+                if (!replicated(level) && staged_max[static_cast<size_t>(level)] > 0.0) {
+                    cand.emplace_back(staged_max[static_cast<size_t>(level)], level);
+                }
+            }
+            std::sort(cand.begin(), cand.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (const auto& [bytes, level] : cand) {
+                if (planned + stream_home <= budget) break;
+                streamed.insert(level);
+                planned -= 1.05 * bytes;
+                stream_home = std::max(stream_home, 1.05 * bytes + static_cast<double>(kStagedAlign));
+            }
+        }
+        std::set<int> host_levels;
+        if (!bad && planned + stream_home > budget) {
             bad = 1;
             if (reason.empty()) reason = "not enough device memory";
         }
@@ -1589,6 +1750,36 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             }
         }
         const int all_ok = bad ? 0 : 1;
+        if (rank == 0) {   // the residency decision, with its numbers (H2 8x, 2026-10-10)
+            std::string needs;
+            for (int level = 2; level <= leaf; ++level) {
+                char b[64];
+                std::snprintf(b, sizeof b, "%s%d: %.2f", needs.empty() ? "" : ", ", level, need_max[static_cast<size_t>(level)] / 1e9);
+                needs += b;
+            }
+            std::string streams;
+            for (int level : streamed) streams += (streams.empty() ? "" : ",") + std::to_string(level);
+            {
+                const DeviceHeap& h = DeviceHeap::instance();
+                std::string held;
+                for (size_t k = 0; k < static_cast<size_t>(ResidentKind::Count); ++k) {
+                    const size_t bytes = h.resident_now(static_cast<ResidentKind>(k));
+                    if (bytes < (size_t{64} << 20)) continue;
+                    char b[96];
+                    std::snprintf(b, sizeof b, "%s%s %.2f", held.empty() ? "" : ", ", resident_kind_name(static_cast<ResidentKind>(k)),
+                                  static_cast<double>(bytes) / 1e9);
+                    held += b;
+                }
+                std::printf("GPU solve: the card at the set-up (rank 0): %.2f GB in use of %.2f; by kind (GB): %s\n",
+                            static_cast<double>(h.used()) / 1e9, static_cast<double>(h.capacity()) / 1e9, held.c_str());
+            }
+            std::printf("GPU solve: residency: planned %.2f GB (X_NR scratch %.2f) against a budget of %.2f (room %.2f GB on "
+                        "the tightest rank); needs by level (GB): %s%s%s%s%s%s\n", planned / 1e9, scratch / 1e9, budget / 1e9,
+                        room / 1e9, needs.c_str(),
+                        streams.empty() ? "" : "; streamed through a ", streams.empty() ? "" : (std::to_string(stream_home / 1e9).substr(0, 5) + " GB home: levels ").c_str(),
+                        streams.c_str(), all_ok ? "" : "; off: ", all_ok ? "" : (reason.empty() ? "another rank" : reason.c_str()));
+            std::fflush(stdout);
+        }
         if (!all_ok) {
             materialize_host_factors(tree);  // (the host solve reads them)
             store.release();  // the kept factors too
@@ -1605,17 +1796,38 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         ctx.activate();
         cudaStream_t stream = ctx.stream();
         store.levels.resize(static_cast<size_t>(leaf + 1));
+        store.xnr_segment_bytes = segment;
+        store.xnr_scratch_bytes = kXnrBuffers * segment;
+        store.xnr_scratch = DeviceHeap::instance().alloc_resident(store.xnr_scratch_bytes);
         double upload_seconds = 0.0, register_seconds = 0.0, pack_seconds = 0.0, wait_seconds = 0.0;
         double kept_bytes = 0.0, staged_bytes = 0.0;
         for (const auto& [level, kl] : store.kept) kept_bytes += kl.bytes;
         cudaEvent_t staged[2] = {nullptr, nullptr};
         int turn = 0;
 
+        auto card_line = [&](const char* when, int level) {   // (H2 8x: every rank's card, per level of the set-up; BPACK_TRACE=wave)
+            if (!env::trace("wave")) return;
+            const DeviceHeap& h = DeviceHeap::instance();
+            std::string held;
+            for (size_t k = 0; k < static_cast<size_t>(ResidentKind::Count); ++k) {
+                const size_t bytes = h.resident_now(static_cast<ResidentKind>(k));
+                if (bytes < (size_t{256} << 20)) continue;
+                char b[96];
+                std::snprintf(b, sizeof b, "%s%s %.2f", held.empty() ? "" : ", ", resident_kind_name(static_cast<ResidentKind>(k)),
+                              static_cast<double>(bytes) / 1e9);
+                held += b;
+            }
+            std::printf("GPU solve: rank %d %s level %d: %.2f GB in use (largest free %.2f); %s\n", rank, when, level,
+                        static_cast<double>(h.used()) / 1e9, static_cast<double>(h.largest_free()) / 1e9, held.c_str());
+            std::fflush(stdout);
+        };
+        card_line("before", 0);
         for (int level = 2; level <= leaf; ++level) {
             auto& lvl = tree->levels[static_cast<size_t>(level)];
             DeviceSolveLevel& L = store.levels[static_cast<size_t>(level)];
             if (!lvl.is_process_active) continue;
             L.active = true;
+            card_line("at", level);
             if (host_levels.count(level)) {  // (no factors, no tables)
                 L.ca = true;
                 L.host = true;
@@ -1626,11 +1838,29 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 continue;
             }
             if (auto kit = store.kept.find(level); kit != store.kept.end() && kit->second.on_host()) {
-                // staged to the host after its level: back on the device for the sweeps
-                const auto tu = clock::now();
-                staged_bytes += static_cast<double>(kit->second.staged_bytes);
-                upload_kept_level(kit->second, Context::instance().stream());
-                upload_seconds += std::chrono::duration<double>(clock::now() - tu).count();
+                if (streamed.count(level) != 0) {
+                    // streamed: its pointers to the shared device home now, its
+                    // bytes at each sweep step (H2 8x)
+                    if (store.stream_block == nullptr) {
+                        size_t largest = 0;
+                        for (int l : streamed) {
+                            if (auto k2 = store.kept.find(l); k2 != store.kept.end()) largest = std::max(largest, k2->second.staged_bytes);
+                        }
+                        store.stream_bytes = largest + kStagedAlign;
+                        store.stream_block = DeviceHeap::instance().alloc_resident(std::max<size_t>(store.stream_bytes, 1),
+                                                                                     ResidentKind::KeptFactors);
+                    }
+                    char* home = reinterpret_cast<char*>(align_up(reinterpret_cast<uintptr_t>(store.stream_block), kStagedAlign));
+                    rebase_kept_level(kit->second, home);
+                    ++store.stream_levels;
+                    stream_kept_in(store, level, Context::instance().stream());  // (the table planner reads them)
+                } else {
+                    // staged to the host after its level: back on the device for the sweeps
+                    const auto tu = clock::now();
+                    staged_bytes += static_cast<double>(kit->second.staged_bytes);
+                    upload_kept_level(kit->second, Context::instance().stream());
+                    upload_seconds += std::chrono::duration<double>(clock::now() - tu).count();
+                }
             }
             const size_t nb = lvl.local_boxes.size();
             auto is_local = [&](int64_t m) {
@@ -2270,8 +2500,10 @@ public:
         S* inbox = alloc_message(L.in_max);
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
-            prepare_wave_xnr(L, wi, +1);
-            launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+            for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
+                prepare_wave_xnr(L, W.seg0 + s, +1);
+                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+            }
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
             if (L.peers.empty()) continue;
@@ -2301,9 +2533,11 @@ public:
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
             if (!L.peers.empty()) refresh(L, W.ref[0], vec, ghost, sendbox, inbox);
-            prepare_wave_xnr(L, static_cast<size_t>(w), -1);
-            launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0, W.count, vec, ghost, work, nrhs_, L.max_n,
+            for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
+                prepare_wave_xnr(L, W.seg0 + s, -1);
+                launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
                                   W.max_ntot, stream_);
+            }
         }
         check_cuda(cudaStreamSynchronize(stream_), "backward sweep");
         free_points(work);
@@ -2325,9 +2559,11 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (!L.peers.empty()) refresh(L, W.ref[1], vec, ghost, sendbox, inbox);
-            prepare_wave_xnr(L, wi, +1);
-            launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, ghost, work, nrhs_, L.max_n,
+            for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
+                prepare_wave_xnr(L, W.seg0 + s, +1);
+                launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
                                W.max_ntot, stream_);
+            }
         }
         check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
         free_points(work);
@@ -2350,8 +2586,10 @@ public:
         S* inbox = alloc_message(L.in_max);
         for (int w = static_cast<int>(L.waves.size()) - 1; w >= 0; --w) {
             const auto& W = L.waves[static_cast<size_t>(w)];
-            prepare_wave_xnr(L, static_cast<size_t>(w), -1);
-            launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+            for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
+                prepare_wave_xnr(L, W.seg0 + s, -1);
+                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+            }
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
             if (L.peers.empty()) continue;
@@ -2487,8 +2725,10 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (W.count == 0) continue;
-            prepare_wave_xnr(L, wi, +1);
-            launch_solve_forward(L.d_boxes, L.d_order + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+            for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
+                prepare_wave_xnr(L, W.seg0 + s, +1);
+                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+            }
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                static_cast<const S*>(nullptr), stream_);
         }
@@ -2517,9 +2757,11 @@ public:
             for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
                 const auto& W = L.waves[static_cast<size_t>(w)];
                 if (W.count == 0) continue;
-                prepare_wave_xnr(L, static_cast<size_t>(w), -1);
-                launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0, W.count, vec, area, work, nrhs_,
+                for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
+                    prepare_wave_xnr(L, W.seg0 + s, -1);
+                    launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, area, work, nrhs_,
                                       L.max_n, W.max_ntot, stream_);
+                }
             }
             if (lvl.num_active_processes > 1 && ++done < groups) {
                 if (L.device_halo) {
@@ -2555,9 +2797,11 @@ public:
         for (size_t wi = 0; wi < L.waves.size(); ++wi) {
             const auto& W = L.waves[wi];
             if (W.count == 0) continue;
-            prepare_wave_xnr(L, wi, +1);
-            launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0, W.count, vec, area, work, nrhs_, L.max_n,
+            for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
+                prepare_wave_xnr(L, W.seg0 + s, +1);
+                launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, area, work, nrhs_, L.max_n,
                                W.max_ntot, stream_);
+            }
         }
         check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
         free_points(work);
@@ -2591,8 +2835,10 @@ public:
             for (int w = L.group_end[static_cast<size_t>(g)] - 1; w >= w0; --w) {
                 const auto& W = L.waves[static_cast<size_t>(w)];
                 if (W.count == 0) continue;
-                prepare_wave_xnr(L, static_cast<size_t>(w), -1);
-                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0, W.count, vec, work, nrhs_, L.max_n, stream_);
+                for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
+                    prepare_wave_xnr(L, W.seg0 + s, -1);
+                    launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+                }
                 launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, static_cast<S*>(nullptr),
                                    static_cast<const S*>(nullptr), stream_);
             }
@@ -2765,6 +3011,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
     MPI_Comm_rank(tree->comm, &rank);
     DeviceSolveRun<CoordType, DataType> run(tree, nrhs);
     double host_seconds = 0.0;
+    store.stream_seconds = store.stream_gb = 0.0;
     // forward (with each level's diagonal solves)
     for (int level = leaf; level >= 1; --level) {
         auto& lvl = tree->levels[static_cast<size_t>(level)];
@@ -2777,6 +3024,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
             } else if (L.ca) {
                 run.ca_forward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
                 run.forward(L, vec);
                 run.download(L, vec, solve_data[static_cast<size_t>(level)]);
@@ -2810,6 +3058,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
             } else if (L.ca) {
                 run.ca_backward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 auto* vec = run.upload(L, solve_data[static_cast<size_t>(level)]);
                 run.backward(L, vec);
                 run.download(L, vec, solve_data[static_cast<size_t>(level)]);
@@ -2831,6 +3080,11 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                         static_cast<long long>(t.xnr_calls), t.xnr_bytes / 1e9,
                         t.xnr > 0.0 ? t.xnr_bytes / t.xnr / 1e9 : 0.0);
         }
+        if (store.stream_levels > 0) {
+            std::printf("  streamed kept factors: %d levels, %.2f GB in %.3f s (%.1f GB/s)\n", store.stream_levels,
+                        store.stream_gb, store.stream_seconds,
+                        store.stream_seconds > 0.0 ? store.stream_gb / store.stream_seconds : 0.0);
+        }
         std::fflush(stdout);
     }
 }
@@ -2850,6 +3104,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
     MPI_Comm_rank(tree->comm, &rank);
     DeviceSolveRun<CoordType, DataType> run(tree, nrhs);
     double host_seconds = 0.0;
+    store.stream_seconds = store.stream_gb = 0.0;
     // forward W (with each level's diagonal multiplies)
     for (int level = leaf; level >= 1; --level) {
         auto& lvl = tree->levels[static_cast<size_t>(level)];
@@ -2862,6 +3117,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
             } else if (L.ca) {
                 run.ca_mul_forward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
                 run.mul_forward(L, vec);
                 run.download(L, vec, data[static_cast<size_t>(level)]);
@@ -2895,6 +3151,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
             } else if (L.ca) {
                 run.ca_mul_backward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 auto* vec = run.upload(L, data[static_cast<size_t>(level)]);
                 run.mul_backward(L, vec);
                 run.download(L, vec, data[static_cast<size_t>(level)]);
@@ -2915,6 +3172,11 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
             std::printf("  X_NR decompression: %.3f s in %lld calls, %.2f GB uncompressed, %.1f GB/s\n", t.xnr,
                         static_cast<long long>(t.xnr_calls), t.xnr_bytes / 1e9,
                         t.xnr > 0.0 ? t.xnr_bytes / t.xnr / 1e9 : 0.0);
+        }
+        if (store.stream_levels > 0) {
+            std::printf("  streamed kept factors: %d levels, %.2f GB in %.3f s (%.1f GB/s)\n", store.stream_levels,
+                        store.stream_gb, store.stream_seconds,
+                        store.stream_seconds > 0.0 ? store.stream_gb / store.stream_seconds : 0.0);
         }
         std::fflush(stdout);
     }
