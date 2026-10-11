@@ -137,6 +137,10 @@ struct EliminatorStats {
     double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
     int64_t xr_dropped = 0;           // boxes whose X_RR_full is rebuilt from their LU instead of stored
     int64_t xr_rebuilt = 0;           // ... and the rebuilds that cost
+    // H2 host memory (2026-10-10): the fill sources freed without a host
+    // copy made, the X_RR_full the transition took from the host for them,
+    // and the X_RR_full rebuilt from the LU when a keep failed
+    int64_t rc_sources = 0, tr_xrr_host = 0, xr_restored = 0;
     // apply_remote_generators: the partial products of other ranks' generators,
     // all staged before they are summed into their targets
     double gw_bytes = 0.0;            // the staging that costs
@@ -578,6 +582,19 @@ public:
         if (owner_mode_ && !device_exchange_) {
             throw std::runtime_error("LevelEliminator: owner levels need the device exchange (CUDA-aware MPI)");
         }
+#ifdef H2_HAVE_NVCOMP
+        // H2 host memory (2026-10-10): with the fill sources stored compressed
+        // and the device sketch, the transition puts a freed source back from
+        // its packed temp2^T (collect_fill_source) and rebuilds X_RR_full from
+        // the kept LU, so the host copies that served that restore are not
+        // made: the remote generators' temp2 (4.94 GB a rank at the 192^3
+        // leaf, x4-8 at 384^3) and the kept boxes' X_RR_full (0.99 GB).  No
+        // run had read them (0 reclaims in every pressure run).  Where
+        // neither device form is there, the restore reads the X_RR_full a
+        // remote generator still keeps on the host, or rebuilds it from the
+        // LU a failed keep rescued (host_xrr_full_from_lu).
+        packed_restore_ = gpu_sketch_ && compress_factors_ >= 1;
+#endif
     }
     void set_owner_plan(const OwnerPlanView* plan) override {
         if (!owner_mode_) throw std::runtime_error("LevelEliminator: a plan for a level that is not an owner level");
@@ -611,7 +628,7 @@ public:
                 std::fflush(stdout);
             }
         }
-        drop_kept();
+        drop_kept(false, "teardown");
         release_level_data();
         if (near_copy_stream_ != nullptr) {   // (release_level_data waited for the last scatter)
             fill_compressor_.hold_staging(nullptr);
@@ -657,12 +674,12 @@ public:
             skipped_factors_.clear();  // (read from the store from now on)
         } else {
             rescue_skipped_xnr(true);  // (another rank did not keep its factors)
-            drop_kept();
+            drop_kept(true, "commit: another rank did not keep");
         }
     }
     void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) override {
         if (!keep) {
-            drop_kept();
+            drop_kept(true, "keep declined at the level's start");
             keep_solve_ = false;
         }
         keep_budgeted_ = keep_solve_;
@@ -1112,6 +1129,43 @@ private:
     static bool xrr_rebuilt(const BoxState& st) {
         return st.xrr_full == nullptr && st.xrr_lu != nullptr && st.xrr_piv != nullptr && st.r > 0;
     }
+    // H2 host memory: whether the host can supply a source's X_RR_full to the
+    // transition - its copy, or the LU and pivots a failed keep rescued.
+    static bool host_xrr_available(const Box& b, int r) {
+        if (b.X_RR_full.is_allocated() && b.X_RR_full.rows == r && b.X_RR_full.cols == r) return true;
+        return b.X_RR.is_allocated() && b.X_RR.format == MatrixStorage<DataType>::LU_FACTORED && b.X_RR.rows == r &&
+               b.X_RR.cols == r && b.X_RR_pivots.size() >= static_cast<size_t>(r);
+    }
+    // X_RR_full = P L U from getrf's one block (unit lower L, upper U, 1-based
+    // pivots undone on the rows last to first, as launch_row_swaps does):
+    // r x r, ld r.  r^3/3 flops a box, on the rare paths only.
+    static std::vector<DataType> xrr_full_from_lu(const DataType* lu, int64_t ld, const int* piv, int r) {
+        using Hs = std::conditional_t<std::is_same_v<DataType, double>, double, std::complex<double>>;
+        static_assert(sizeof(Hs) == sizeof(DataType), "host scalar shares the layout");
+        std::vector<DataType> out(static_cast<size_t>(r) * static_cast<size_t>(r));
+        Hs* o = reinterpret_cast<Hs*>(out.data());
+        const Hs* a = reinterpret_cast<const Hs*>(lu);
+        for (int j = 0; j < r; ++j) {
+            for (int i = 0; i < r; ++i) {
+                Hs sum{};
+                const int kmax = std::min(i, j);
+                for (int k = 0; k <= kmax; ++k) {
+                    const Hs l = k < i ? a[i + static_cast<size_t>(k) * ld] : Hs{1.0};
+                    sum += l * a[k + static_cast<size_t>(j) * ld];
+                }
+                o[i + static_cast<size_t>(j) * r] = sum;
+            }
+        }
+        for (int i = r - 1; i >= 0; --i) {
+            const int p = piv[i] - 1;
+            if (p == i) continue;
+            for (int j = 0; j < r; ++j) std::swap(o[i + static_cast<size_t>(j) * r], o[p + static_cast<size_t>(j) * r]);
+        }
+        return out;
+    }
+    static std::vector<DataType> host_xrr_full_from_lu(const Box& b) {
+        return xrr_full_from_lu(b.X_RR.data.data(), b.X_RR.lda, b.X_RR_pivots.data(), static_cast<int>(b.X_RR.rows));
+    }
     // The host does not need this box's X_NR: its factors are kept on the
     // device, and rescue_skipped_xnr reads them back if the host ever asks.
     // The download and the early free of temp2 have to agree about this, so
@@ -1120,6 +1174,14 @@ private:
         return skip_xnr_ && !keep_failed_ && wb.ntot > 0 &&
                kept_.boxes.count(wb.box->morton_index) != 0 &&
                !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
+    }
+    // H2 host memory: nor its X_RR_full - the transition rebuilds it from the
+    // kept LU.  Not on a level whose generators go through the host
+    // (emit_generators reads the copy).
+    bool host_skips_xrr(const WaveBox& wb) const {
+        return packed_restore_ && skip_xnr_ && !keep_failed_ && kept_.boxes.count(wb.box->morton_index) != 0 &&
+               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) &&
+               !(wb.has_remote && !device_exchange_);
     }
     // The slot a neighbor position holds in the two stores, or -1.
     static int32_t slot_at(const WaveBox& wb, size_t pos) {
@@ -2017,9 +2079,53 @@ private:
         }
         return bytes;
     }
-    void drop_kept() {
+    // The boxes that dropped X_RR_full for their kept LU get it back as a
+    // block of their own before the LU goes (drop_kept): rebuilt on the host
+    // from the LU, r x r a box, on this rare path only.  Without it the
+    // transition (and the sketches still to come) would read the freed LU.
+    void restore_dropped_xrr(const char* who) {
+        std::vector<BoxState*> todo;
+        for (BoxState& st : states_) if (xrr_rebuilt(st)) todo.push_back(&st);
+        for (BoxState& st : remote_states_) if (xrr_rebuilt(st)) todo.push_back(&st);
+        if (todo.empty()) return;
+        {   // (a rare path by design: said whenever it runs)
+            int rk = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+            std::printf("  [gpu] level %d rank %d: X_RR_full of %zu boxes rebuilt from the kept LU before it goes (%s)\n",
+                        level_index_, rk, todo.size(), who);
+            std::fflush(stdout);
+        }
+        check_cuda(cudaStreamSynchronize(Context::instance().stream()), "X_RR_full from the kept LU");
+        auto& stats = eliminator_stats();
+        const size_t D = sizeof(DataType);
+        for (BoxState* st : todo) {
+            const size_t r = static_cast<size_t>(st->r), rr = r * r;
+            std::vector<DataType> lu(rr);
+            std::vector<int> piv(r);
+            check_cuda(cudaMemcpy(lu.data(), st->xrr_lu, rr * D, cudaMemcpyDeviceToHost), "X_RR_full from the kept LU");
+            check_cuda(cudaMemcpy(piv.data(), st->xrr_piv, r * sizeof(int), cudaMemcpyDeviceToHost), "X_RR_full from the kept LU");
+            const std::vector<DataType> full = xrr_full_from_lu(lu.data(), static_cast<int64_t>(r), piv.data(), st->r);
+            char* blk = heap_.alloc_resident(rr * D, ResidentKind::FillXrr);
+            check_cuda(cudaMemcpy(blk, full.data(), rr * D, cudaMemcpyHostToDevice), "X_RR_full from the kept LU");
+            st->xrr_full = reinterpret_cast<const S*>(blk);
+            if (early_free_sources_ && st->persist == nullptr) {
+                st->persist = blk;
+                st->persist_bytes = rr * D;
+            } else {
+                level_allocs_.push_back(blk);
+            }
+            stats.persist_bytes += static_cast<double>(rr * D);
+            stats.persist_xrr_bytes += static_cast<double>(rr * D);
+            ++stats.xr_restored;
+        }
+    }
+    // `restore_xrr`: false at the teardown, where nothing reads X_RR_full again.
+    void drop_kept(bool restore_xrr, const char* who) {
+        if (restore_xrr) restore_dropped_xrr(who);
         for (char* b : kept_.blocks) heap_.free(b);
         kept_ = KeptSolveLevel{};
+        for (BoxState& st : states_) { st.xrr_lu = nullptr; st.xrr_piv = nullptr; }   // (they pointed into the blocks)
+        for (BoxState& st : remote_states_) { st.xrr_lu = nullptr; st.xrr_piv = nullptr; }
         // nothing is kept, so a pledged box owns its compressed temp2^T again
         // and release_level_data() frees it with the rest
         for (PledgedXnr& p : pledged_xnr_) {
@@ -2109,14 +2215,44 @@ private:
     // Fill sources whose local readers have all sketched, oldest first.  They
     // stay on the device for the transition (which otherwise restores them
     // from their host copies) until the heap needs their memory.
-    std::deque<BoxState*> released_sources_;
+    std::deque<std::pair<BoxState*, int64_t>> released_sources_;  // (state, Morton)
     bool reclaim_released_source() {
         while (!released_sources_.empty()) {
-            BoxState* es = released_sources_.front();
+            auto [es, morton] = released_sources_.front();
             released_sources_.pop_front();
             // (a box whose X_RR_full was dropped for its LU has no persist
             // block, but its temp2^T is still there to retire)
             if ((es->persist == nullptr && !xrr_rebuilt(*es)) || es->readers > 0) continue;
+#ifdef H2_HAVE_NVCOMP
+            if (packed_restore_) {
+                // H2 host memory: no host copy is made.  The transition puts
+                // the temp2^T back from its packed form, and X_RR_full from
+                // the kept LU or the copy a remote generator keeps on the
+                // host; what it could not put back stays on the device.
+                auto& stats = eliminator_stats();
+                const Box* hb = es->remote ? level_.find_generator_box(morton) : held_box(morton);
+                const bool xrr_ok = xrr_rebuilt(*es) || (hb != nullptr && host_xrr_available(*hb, es->r));
+                bool freed = false;
+                if (es->persist != nullptr && xrr_ok) {
+                    stats.persist_bytes -= static_cast<double>(es->persist_bytes);
+                    heap_.free(es->persist);  // its readers' launches are all ordered before later ones
+                    es->persist = nullptr;
+                    es->xrr_full = nullptr;
+                    freed = true;
+                }
+                if (es->persist_t2t != nullptr && packed_of(*es) != nullptr) {
+                    stats.persist_bytes -= static_cast<double>(es->persist_t2t_bytes);
+                    heap_.free(es->persist_t2t);
+                    es->persist_t2t = nullptr;
+                    es->persist_t2t_bytes = 0;
+                    es->temp2t = nullptr;  // the readers take the packed form now
+                    freed = true;
+                }
+                if (!freed) continue;
+                ++stats.rc_sources;
+                return true;
+            }
+#endif
             rescue_skipped_xnr();  // (a restore reads the host copies)
             eliminator_stats().persist_bytes -= static_cast<double>(es->persist_bytes);
             heap_.free(es->persist);  // its readers' launches are all ordered before later ones
@@ -2155,6 +2291,10 @@ private:
 
     // device exchange (multi-rank levels, CUDA-aware MPI)
     bool device_exchange_ = false;
+    // H2 host memory: a freed fill source is put back from its packed
+    // temp2^T and the kept LU, so no temp2 of a remote generator and no
+    // X_RR_full of a kept box is copied to the host (see the constructor)
+    bool packed_restore_ = false;
     int level_index_ = 0;
     struct PeerOut { std::vector<int64_t> header; size_t offset = 0, bytes = 0; };
     // An owner level's transport (owner_progress): an owned wave's payloads
@@ -5316,7 +5456,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             HostCopier::Job t2job;
             t2job.device = d_temp2[g];
             t2job.bytes = temp2_group_bytes[g];
-            struct Shape { Box* box; int ntot, r; };
+            struct Shape { Box* box; int ntot, r; bool xrr; };
             auto shapes = std::make_shared<std::vector<Shape>>();
             for (int i : active) {
                 const WaveBox& wb = boxes[static_cast<size_t>(i)];
@@ -5329,6 +5469,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 // transition may restore, not a solve factor here)
                 const bool skip = host_skips_xnr(wb);
                 if (skip) skipped_xnr_.push_back(wb.box);
+                const bool skip_xrr = host_skips_xrr(wb);  // (H2 host memory: rebuilt from the kept LU instead)
                 if (nt > 0 && !skip) {
                     if (d_temp2[g] == nullptr) {
                         // its chunk gave the raw form back before the keep
@@ -5338,11 +5479,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                         t2job.segments.push_back(Seg{&wb.box->X_NR.data, nullptr, wb.off_temp2, nt * r * D});
                     }
                 }
-                job.segments.push_back(Seg{&wb.box->X_RR_full.data, nullptr, wb.off_xrr_full, r * r * D});
+                if (!skip_xrr) job.segments.push_back(Seg{&wb.box->X_RR_full.data, nullptr, wb.off_xrr_full, r * r * D});
                 if (wb.has_remote && nt > 0 && !device_exchange_) {
                     job.segments.push_back(Seg{&wb.box->lazy_original_x_nr, nullptr, wb.off_xnr_orig, nt * r * D});
                 }
-                shapes->push_back({wb.box, skip ? 0 : wb.ntot, wb.r});
+                shapes->push_back({wb.box, skip ? 0 : wb.ntot, wb.r, !skip_xrr});
             }
             job.finalize = [shapes] {
                 for (const Shape& sh : *shapes) {
@@ -5352,6 +5493,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                         sh.box->X_NR.lda = sh.ntot;
                         sh.box->X_NR.format = MatrixStorage<DataType>::FULL;
                     }
+                    if (!sh.xrr) continue;
                     sh.box->X_RR_full.rows = sh.r;
                     sh.box->X_RR_full.cols = sh.r;
                     sh.box->X_RR_full.lda = sh.r;
@@ -5441,7 +5583,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (const WaveBox& wb : boxes) {
             for (int64_t m : wb.box->one_hop) {
                 BoxState& es = state_of(m);
-                if (es.persist != nullptr && --es.readers == 0) released_sources_.push_back(&es);
+                if (es.persist != nullptr && --es.readers == 0) released_sources_.push_back({&es, m});
             }
         }
     }
@@ -5460,9 +5602,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     if (env::trace("wave")) {   // the host side, wave by wave (BPACK_TRACE=wave)
         double rss = 0.0, hwm = 0.0;
         host_memory_gb(rss, hwm);
-        std::printf("  [gpu] level %d wave %d: host RSS %.2f GB (high-water %.2f), heap used %.2f GB, pinned arenas %.2f GB\n",
-                    level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
-                    static_cast<double>(fill_host_arena().pinned() + near_host_arena(0).pinned() + near_host_arena(1).pinned()) / 1e9);
+        std::printf("  [gpu] level %d wave %d: host RSS %.2f GB (high-water %.2f), heap used %.2f GB, pinned chunks %.2f GB "
+                    "(%.2f idle)\n", level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
+                    static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, static_cast<double>(pinned_chunk_pool().idle()) / 1e9);
         std::fflush(stdout);
     }
     if (heap_.peak() > stats.heap_peak) {
@@ -5663,12 +5805,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::finish() {
         // host copies of the remote generators (restored fill sources, host transition)
         for (auto& [m, rh] : remote_host_) {
             Box* gb = level_.find_generator_box(m);
-            if (gb == nullptr || rh->temp2.size() != static_cast<size_t>(rh->ntot) * rh->r ||
+            if (gb == nullptr || (!packed_restore_ && rh->temp2.size() != static_cast<size_t>(rh->ntot) * rh->r) ||
                 rh->xrr.size() != static_cast<size_t>(rh->r) * rh->r) {
                 throw std::runtime_error("LevelEliminator::finish: host copy of generator " + std::to_string(m) +
                                          " incomplete");
             }
-            gb->X_NR.set_owned(rh->ntot, rh->r, std::move(rh->temp2), MatrixStorage<DataType>::FULL);
+            if (!packed_restore_) gb->X_NR.set_owned(rh->ntot, rh->r, std::move(rh->temp2), MatrixStorage<DataType>::FULL);
             gb->X_RR_full.set_owned(rh->r, rh->r, std::move(rh->xrr), MatrixStorage<DataType>::FULL);
         }
         remote_host_.clear();
@@ -7501,7 +7643,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         if (compressed) xnr_compressor_.release();
 #endif
         rescue_skipped_xnr(true);
-        drop_kept();
+        drop_kept(true, "keep failed mid-level");
         keep_failed_ = true;
         keep_failure_ = over ? 1 : 2;
         return false;
@@ -8330,7 +8472,9 @@ std::chrono::high_resolution_clock::duration LevelEliminator<CoordType, DataType
     apply_remote_generators(installed, &incoming);
     for (size_t i = 0; i < np; ++i) {
         if (d_recv[i] == nullptr) continue;
-        // host copies of temp2 and X_RR_full; the copier releases the buffer
+        // host copies of X_RR_full, and of temp2 unless the transition puts a
+        // freed generator back from the packed store (packed_restore_, H2
+        // host memory); the copier releases the buffer
         HostCopier::Job job;
         job.device = d_recv[i];
         job.bytes = bulk_in[i];
@@ -8346,7 +8490,7 @@ std::chrono::high_resolution_clock::duration LevelEliminator<CoordType, DataType
             rh->r = in.r;
             const size_t base = static_cast<size_t>(in.bulk - d_recv[i]);
             const size_t nr = static_cast<size_t>(in.ntot) * in.r * D;
-            if (nr > 0) job.segments.push_back(HostCopier::Segment{&rh->temp2, nullptr, base, nr});
+            if (nr > 0 && !packed_restore_) job.segments.push_back(HostCopier::Segment{&rh->temp2, nullptr, base, nr});
             job.segments.push_back(HostCopier::Segment{&rh->xrr, nullptr, base + lay.xrr, static_cast<size_t>(in.r) * in.r * D});
             remote_host_[m] = std::move(rh);
         }
@@ -9261,6 +9405,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         const S* xrr = nullptr;
         std::unordered_map<int64_t, int> col_of;  // neighbor -> first column of its G
         char* block = nullptr;
+        char* xrr_block = nullptr;   // (H2 host memory) its X_RR_full alone, restored from the host
         size_t last_parent = 0;
     };
     std::unordered_map<int64_t, Restored> restored;
@@ -9319,7 +9464,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         VBatch<S> xrr_gemm;
         int max_xrr_r = 0;
         // restored in this chunk, at increasing offsets of the staging buffer
-        struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; };
+        struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; bool xrr_only = false; };
         std::vector<Pending> pending;
         std::unordered_map<int64_t, std::unordered_map<int64_t, int>> pending_cols;
         size_t restore_bytes = 0;
@@ -9385,6 +9530,30 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         rs.last_parent = p0;  // freed at the end of this chunk (p0 < p1)
                         s.t2t = reinterpret_cast<const S*>(blk);
                         s.xrr = xrr_of_es;
+                        if (s.xrr == nullptr) {
+                            // H2 host memory: its X_RR_full left the device and
+                            // no LU rebuilds it (a remote generator; a box whose
+                            // keep failed): the host copy, or the rescued host
+                            // LU, through this chunk's restore block as a
+                            // source with no temp2 rows.
+                            if (!host_xrr_available(*s.box, s.r)) {
+                                throw std::runtime_error("LevelEliminator::build_parent: X_RR_full of fill source " +
+                                                         std::to_string(em) + " is neither on the device nor on the host");
+                            }
+                            Pending pd;
+                            pd.morton = em;
+                            pd.box = s.box;
+                            pd.r = s.r;
+                            pd.xrr_only = true;
+                            pd.gall_off = restore_bytes;
+                            pd.xrr_off = restore_bytes;
+                            restore_bytes = align_up(pd.xrr_off + static_cast<size_t>(s.r) * s.r * D);
+                            pd.end = restore_bytes;
+                            pd.last_parent = p0;
+                            s.xrr_off = pd.xrr_off;
+                            pending.push_back(std::move(pd));
+                            ++eliminator_stats().tr_xrr_host;
+                        }
                         return s;
                     }
                     heap_.free(blk);
@@ -9395,7 +9564,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             // restore in this chunk: the skeleton rows of each neighbor with
             // point data here (the only ones a pair of this rank can read)
             Box* sb = s.box;
-            if (sb->X_NR.rows != es.ntot || sb->X_NR.cols != s.r || sb->X_RR_full.rows != s.r) {
+            if (sb->X_NR.rows != es.ntot || sb->X_NR.cols != s.r || !host_xrr_available(*sb, s.r)) {
                 throw std::runtime_error("LevelEliminator::build_parent: host copy of fill source " +
                                          std::to_string(em) + " missing");
             }
@@ -9670,6 +9839,11 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 max_rs_m = std::max(max_rs_m, L);
                 max_rs_n = std::max(max_rs_n, pd.r);
                 Restored& rs = restored[pd.morton];
+                if (pd.xrr_only) {  // (the packed restore's record: only X_RR_full comes from here)
+                    rs.xrr = restore_ptr(pd.xrr_off);
+                    rs.xrr_block = d_restore[q];
+                    continue;
+                }
                 rs.gall = restore_ptr(pd.gall_off);
                 rs.xrr = restore_ptr(pd.xrr_off);
                 rs.col_of = std::move(pending_cols[pd.morton]);
@@ -9693,8 +9867,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     const Pending& pd = pending[static_cast<size_t>(q)];
                     const DataType* temp2 = pd.box->X_NR.data.data();
                     const int64_t ld = pd.box->X_NR.lda;
-                    const DataType* xrr = pd.box->X_RR_full.data.data();
-                    const int64_t ldx = pd.box->X_RR_full.lda;
+                    std::vector<DataType> rebuilt;  // (H2 host memory: from the host LU when the copy is not there)
+                    if (!pd.box->X_RR_full.is_allocated()) rebuilt = host_xrr_full_from_lu(*pd.box);
+                    const DataType* xrr = rebuilt.empty() ? pd.box->X_RR_full.data.data() : rebuilt.data();
+                    const int64_t ldx = rebuilt.empty() ? pd.box->X_RR_full.lda : static_cast<int64_t>(pd.r);
                     const size_t nrows = pd.rows.size();
                     const size_t L = nrows + static_cast<size_t>(pd.r);
                     DataType* h = reinterpret_cast<DataType*>(h_stage + (pd.gall_off - base));
@@ -9927,6 +10103,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         for (auto it = restored.begin(); it != restored.end();) {
             if (it->second.last_parent < p1) {
                 heap_.free(it->second.block);
+                if (it->second.xrr_block != nullptr) heap_.free(it->second.xrr_block);
                 it = restored.erase(it);
             } else {
                 ++it;
@@ -9939,7 +10116,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     }
         p0 = p1;
     }
-    for (auto& kv : restored) heap_.free(kv.second.block);
+    for (auto& kv : restored) {
+        heap_.free(kv.second.block);
+        if (kv.second.xrr_block != nullptr) heap_.free(kv.second.xrr_block);
+    }
     for (char* b : xrr_exp_blocks) heap_.free(b);
     for (cudaEvent_t e : staged) {
         if (e != nullptr) cudaEventDestroy(e);

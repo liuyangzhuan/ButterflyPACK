@@ -301,12 +301,51 @@ public:
     // logdet is summed here first), so at the start of a level the deeper
     // levels' stores go to pinned host memory, and come back at the first
     // solve.  What it buys is the store's bytes under every later level.
+    // The bytes every level's host boxes still hold, by field, at a level's
+    // end: the host side of 8x the boxes a rank (2026-10-10).
+    void report_host_boxes(int at_level) {
+        auto mat = [](const MatrixStorage<DataType>& m) { return static_cast<double>(m.data.size()) * sizeof(DataType); };
+        auto vec = [](const auto& v) { return static_cast<double>(v.size()) * sizeof(v[0]); };
+        struct Sum {
+            double T = 0, xrr = 0, piv = 0, xrs = 0, xsr = 0, schur = 0, xrn = 0, xnr = 0, xrrf = 0, xrse = 0, t2 = 0,
+                   orig = 0, pts = 0, lists = 0;
+            int64_t n = 0;
+            double total() const { return T + xrr + piv + xrs + xsr + schur + xrn + xnr + xrrf + xrse + t2 + orig + pts + lists; }
+        };
+        auto add = [&](Sum& s, const Box& b) {
+            ++s.n;
+            s.T += mat(b.interpolation_matrix); s.xrr += mat(b.X_RR); s.piv += vec(b.X_RR_pivots);
+            s.xrs += mat(b.X_RS); s.xsr += mat(b.X_SR); s.schur += mat(b.schur_complement); s.xrn += mat(b.X_RN);
+            s.xnr += mat(b.X_NR); s.xrrf += mat(b.X_RR_full); s.xrse += mat(b.X_RS_entry);
+            s.t2 += vec(b.deferred_xnn_temp2); s.orig += vec(b.lazy_original_x_nr);
+            s.pts += vec(b.point_coords) + vec(b.point_indices);
+            s.lists += vec(b.redundant_indices) + vec(b.skeleton_indices) + vec(b.one_hop) + vec(b.two_hop) +
+                       vec(b.use_full_set) + vec(b.deferred_xnn_neighbor_point_counts);
+        };
+        auto print = [&](int lvl, const char* what, const Sum& s) {
+            if (s.n == 0 || s.total() < 1e6) return;
+            std::printf("  [gpu] at level %d end, level %d host %s (%lld): %.2f GB = T %.2f, LU %.2f, piv %.2f, X_RS %.2f, "
+                        "X_SR %.2f, Schur %.2f, X_RN %.2f, X_NR %.2f, X_RR_full %.2f, X_RS_entry %.2f, temp2 %.2f, "
+                        "orig X_NR %.2f, points %.2f, lists %.2f\n", at_level, lvl, what, static_cast<long long>(s.n),
+                        s.total() / 1e9, s.T / 1e9, s.xrr / 1e9, s.piv / 1e9, s.xrs / 1e9, s.xsr / 1e9, s.schur / 1e9,
+                        s.xrn / 1e9, s.xnr / 1e9, s.xrrf / 1e9, s.xrse / 1e9, s.t2 / 1e9, s.orig / 1e9, s.pts / 1e9,
+                        s.lists / 1e9);
+        };
+        for (size_t lvl = 0; lvl < tree_->levels.size(); ++lvl) {
+            const Level& L = tree_->levels[lvl];
+            Sum l, g, r;
+            for (const Box& b : L.local_boxes) add(l, b);
+            for (const Box& b : L.ghost_boxes) add(g, b);
+            for (const Box& b : L.generator_boxes) add(r, b);
+            print(static_cast<int>(lvl), "local boxes", l);
+            print(static_cast<int>(lvl), "ghost boxes", g);
+            print(static_cast<int>(lvl), "generator boxes", r);
+        }
+    }
     bool pressure_seen_ = false;   // a level packed or chunked for room: memory is tight from here on
     void stage_solve_factors(int lvl, bool announce) {
         // the host arenas' next chunks pin while the level sketches (H2 host staging (c2))
-        fill_host_arena().pin_ahead();
-        near_host_arena(0).pin_ahead();
-        near_host_arena(1).pin_ahead();
+        pinned_chunk_pool().pin_ahead();
         DeviceSolveStore& store = device_solve_store();
         double pin_s = 0.0, copy_s = 0.0, bytes = 0.0;
         std::string which;
@@ -327,6 +366,20 @@ public:
     }
     void start_level(int lvl, bool use_streamed_level, MPI_Comm level_comm, bool announce) {
         stage_solve_factors(lvl, announce);
+        {
+            // H2 host memory: the pinned chunks the level above gave back, now
+            // that the kept factors took what they could, unpinned beyond half
+            // of what is idle (the next level's stores are smaller than this
+            // one's, by 3-4x a level at 192^3)
+            PinnedChunkPool& pool = pinned_chunk_pool();
+            double s = 0.0;
+            const size_t bytes = pool.trim(std::max(PinnedChunkPool::kIdleKeep, pool.idle() / 2), &s);
+            if (announce && bytes > 0) {
+                std::printf("  [gpu] level %d start: %.2f GB of idle pinned chunks unpinned (%.2f s), %.2f GB pinned now "
+                            "(%.2f idle)\n", lvl, static_cast<double>(bytes) / 1e9, s,
+                            static_cast<double>(pool.pinned()) / 1e9, static_cast<double>(pool.idle()) / 1e9);
+            }
+        }
         if (!(color_gpu_enabled() && use_streamed_level && lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
               opt_.is_symmetric && !opt_.is_hermitian)) {
             return;
@@ -875,6 +928,12 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.rc_sources > 0 || e.tr_xrr_host > 0 || e.xr_restored > 0) {
+                std::printf("  [gpu] level %d fill sources without host copies: %lld freed during the waves, X_RR_full of "
+                            "%lld restored from the host at the transition, %lld rebuilt from the LU at a keep's failure\n",
+                            level.level, static_cast<long long>(e.rc_sources), static_cast<long long>(e.tr_xrr_host),
+                            static_cast<long long>(e.xr_restored));
+            }
             if (e.nl_blocks > 0) {
                 const double tot = e.nl_bin[0] + e.nl_bin[1] + e.nl_bin[2] + e.nl_bin[3] + e.nl_bin[4];
                 std::printf("  [gpu] level %d compressed length over the level, %lld blocks: raw %.2f GB, "
@@ -914,6 +973,7 @@ public:
                 double rss = 0.0, hwm = 0.0;
                 host_memory_gb(rss, hwm);
                 std::printf("  [gpu] level %d host memory: RSS %.2f GB, high-water %.2f GB\n", level.level, rss, hwm);
+                if (wave_trace_enabled()) report_host_boxes(level.level);
             }
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
@@ -1286,13 +1346,13 @@ public:
                             e.persist_xrr_bytes / 1e9, e.persist_gen_bytes / 1e9);
             }
             if (e.fs_host_bytes > 0.0 || e.ns_host_bytes > 0.0) {
-                std::printf("  [gpu] level %d on the host: fill store %.2f GB, near store %.2f GB at most (pinned arenas "
-                            "%.2f GB; pinning %.2f s so far, of which the levels waited %.2f s)\n", lvl,
-                            e.fs_host_bytes / 1e9, e.ns_host_bytes / 1e9,
-                            (fill_host_arena().pinned() + near_host_arena(0).pinned() + near_host_arena(1).pinned()) / 1e9,
-                            fill_host_arena().pin_seconds() + near_host_arena(0).pin_seconds() + near_host_arena(1).pin_seconds(),
-                            fill_host_arena().pin_wait_seconds() + near_host_arena(0).pin_wait_seconds() +
-                                near_host_arena(1).pin_wait_seconds());
+                const PinnedChunkPool& pool = pinned_chunk_pool();
+                std::printf("  [gpu] level %d on the host: fill store %.2f GB, near store %.2f GB at most (pinned chunks "
+                            "%.2f GB, %.2f idle; pinning %.2f s so far, of which the levels waited %.2f s; %.2f GB "
+                            "unpinned in %.2f s)\n", lvl, e.fs_host_bytes / 1e9, e.ns_host_bytes / 1e9,
+                            static_cast<double>(pool.pinned()) / 1e9, static_cast<double>(pool.idle()) / 1e9,
+                            pool.pin_seconds(), pool.pin_wait_seconds(), static_cast<double>(pool.unpinned()) / 1e9,
+                            pool.unpin_seconds());
                 if (wave_trace_enabled()) {  // which reader takes the host copies (the window must not)
                     std::printf("  [gpu] level %d fill store read as slots (device / host): window %lld / %lld, sketch %lld / "
                                 "%lld, transition %lld / %lld\n", lvl, static_cast<long long>(e.fs_read_dev[0]),

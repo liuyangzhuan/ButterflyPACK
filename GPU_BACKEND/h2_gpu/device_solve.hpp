@@ -224,9 +224,12 @@ struct KeptSolveLevel {
     // addresses the blocks had and are rebased on the upload; a read in
     // between goes through kept_fetch.  The kept-LU logdet is summed before
     // the LU leaves (device_logdet_kept_level keeps it here).
-    struct StagedBlock { uintptr_t was = 0; size_t off = 0, bytes = 0; };
+    struct StagedBlock { uintptr_t was = 0; size_t off = 0, bytes = 0; char* host = nullptr; };
     std::vector<StagedBlock> staged;  // by `was`; empty: the blocks are on the device
-    void* host = nullptr;             // staged_bytes long (pageable: pinning ran at 1.9 GB/s)
+    // the staged bytes: chunks of the pinned pool, as a rule the ones the
+    // level's stores just gave back (H2 host memory, 2026-10-10; pageable
+    // memory before, as pinning anew ran at 1.9 GB/s)
+    std::unique_ptr<PinnedArena> host;
     size_t staged_bytes = 0;
     std::vector<double> logdet_per_box;  // (log|det|, arg) per kept LU, in local box order
     int64_t logdet_boxes = -1;        // -1: not summed yet
@@ -265,7 +268,7 @@ struct DeviceSolveStore {
         DeviceHeap& heap = DeviceHeap::instance();
         for (auto& [level, kl] : kept) {
             for (char* b : kl.blocks) heap.free(b);
-            if (kl.host != nullptr) std::free(kl.host);
+            kl.host.reset();
         }
         kept.clear();
         ca_levels.clear();
@@ -303,13 +306,14 @@ inline void kept_fetch(const KeptSolveLevel& kl, const void* src, size_t bytes, 
     if (b == nullptr || reinterpret_cast<uintptr_t>(src) + bytes > b->was + b->bytes) {
         throw std::runtime_error(std::string("H2 GPU: ") + what + ": not in the level's staged kept store");
     }
-    std::memcpy(dst, static_cast<const char*>(kl.host) + b->off + (reinterpret_cast<uintptr_t>(src) - b->was), bytes);
+    std::memcpy(dst, b->host + (reinterpret_cast<uintptr_t>(src) - b->was), bytes);
 }
 
-// A level's kept blocks to host memory, and off the device.  Pageable memory
-// and synchronous copies: pinning 2.3 GB took 1.2 s where the copy took 0.09,
-// and a pageable copy stages through the driver at a few GB/s, which is
-// cheaper for a copy made once.  The allocation and the copy are timed apart.
+// A level's kept blocks to host memory, and off the device: chunks of the
+// pinned pool, which as a rule are the ones the level's stores gave back
+// (pinned already; pinning anew took 1.2 s for 2.3 GB where the copy took
+// 0.09, so pageable memory was used before the pool).  The allocation and
+// the copy are timed apart.
 // Every box's pointers are checked to fall in a block, and the first bytes
 // of each block are compared after the copy, so a wrong length or offset
 // fails here and not in the solve.
@@ -357,16 +361,17 @@ inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& al
         }
     }
     auto t0 = clock::now();
-    void* host = nullptr;
-    if (posix_memalign(&host, kStagedAlign, std::max<size_t>(total, kStagedAlign)) != 0 || host == nullptr) {
-        throw std::runtime_error("H2 GPU: no host memory for the staged kept factors");
-    }
+    auto host = std::make_unique<PinnedArena>();
+    for (KeptSolveLevel::StagedBlock& b : staged) b.host = host->alloc(std::max<size_t>(b.bytes, 1));
+    by_was = staged;
+    std::sort(by_was.begin(), by_was.end(),
+              [](const KeptSolveLevel::StagedBlock& a, const KeptSolveLevel::StagedBlock& b) { return a.was < b.was; });
     alloc_seconds += std::chrono::duration<double>(clock::now() - t0).count();
     t0 = clock::now();
     check_cuda(cudaStreamSynchronize(stream), "kept factors: to the host");  // (the last writes of the blocks)
     for (size_t i = 0; i < kl.blocks.size(); ++i) {
-        check_cuda(cudaMemcpy(static_cast<char*>(host) + staged[i].off, kl.blocks[i], staged[i].bytes,
-                              cudaMemcpyDeviceToHost), "kept factors: to the host");
+        check_cuda(cudaMemcpy(staged[i].host, kl.blocks[i], staged[i].bytes, cudaMemcpyDeviceToHost),
+                   "kept factors: to the host");
     }
     copy_seconds += std::chrono::duration<double>(clock::now() - t0).count();
     {   // the copy against the device at each block's start, and the bytes against the store's accounting
@@ -376,7 +381,7 @@ inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& al
             char head[256];
             const size_t n = std::min<size_t>(256, staged[i].bytes);
             check_cuda(cudaMemcpy(head, kl.blocks[i], n, cudaMemcpyDeviceToHost), "kept factors: check");
-            if (std::memcmp(head, static_cast<const char*>(host) + staged[i].off, n) != 0) {
+            if (std::memcmp(head, staged[i].host, n) != 0) {
                 throw std::runtime_error("H2 GPU: staged kept block " + std::to_string(i) + " differs from the device's");
             }
         }
@@ -387,7 +392,7 @@ inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& al
     for (char* b : kl.blocks) heap.free(b);
     kl.blocks.clear();
     kl.staged = std::move(by_was);
-    kl.host = host;
+    kl.host = std::move(host);
     kl.staged_bytes = total;
 }
 
@@ -399,7 +404,9 @@ inline void upload_kept_level(KeptSolveLevel& kl, cudaStream_t stream) {
     char* raw = heap.alloc_resident(std::max<size_t>(kl.staged_bytes + kStagedAlign, 1), ResidentKind::KeptFactors);
     char* dev = reinterpret_cast<char*>(align_up(reinterpret_cast<uintptr_t>(raw), kStagedAlign));
     check_cuda(cudaStreamSynchronize(stream), "kept factors: upload");
-    check_cuda(cudaMemcpy(dev, kl.host, kl.staged_bytes, cudaMemcpyHostToDevice), "kept factors: upload");
+    for (const KeptSolveLevel::StagedBlock& b : kl.staged) {
+        check_cuda(cudaMemcpy(dev + b.off, b.host, b.bytes, cudaMemcpyHostToDevice), "kept factors: upload");
+    }
     auto rebase = [&](const void* p) -> const char* {
         if (p == nullptr) return nullptr;
         const KeptSolveLevel::StagedBlock* b = staged_block_of(kl, p);
@@ -413,8 +420,8 @@ inline void upload_kept_level(KeptSolveLevel& kl, cudaStream_t stream) {
         kb.lu = rebase(kb.lu);
         kb.ipiv = reinterpret_cast<const int*>(rebase(kb.ipiv));
     }
-    std::free(kl.host);
-    kl.host = nullptr;
+    kl.host.reset();   // its chunks back to the pinned pool
+    pinned_chunk_pool().trim();
     kl.staged.clear();
     kl.staged_bytes = 0;
     kl.blocks.push_back(raw);

@@ -4132,6 +4132,120 @@ by itself when the card is short, at the costs measured before (the near
 store 5x, staging, 11-14 s at this size), and in between the two mix per
 group, per wave and per transition chunk.
 
+#### Toward 8x boxes a rank (2026-10-10): the keep estimate, the hold limit, chunks by bytes
+
+Three device-side edits (e624528) ahead of the 384^3 probe: the keep
+decision compares the *compressed* size of a level's factors (the first
+level at an assumed 8x, every later one at the ratio the previous level
+measured, allreduced as the least compression of any rank) instead of the
+raw bound / 4, since at 8x the boxes the raw bound exceeds 80% of the heap
+and the leaf would decline on the full card; the hold limit reserves the
+kept store it expects (`kept_expected_`), so the packing starts early
+enough to leave it room; and the wave's production chunks are counted by
+bytes (kWaveChunkBytes 2 GB) rather than a fixed four, so a 8x wave gets
+8x the chunks.  192^3 unchanged on the three paths (logdets, acc, peaks,
+Factor 8.3-8.8 s).  The 384^3 probe (8 ranks, 32768 leaf boxes a rank)
+then died in the leaf's interior waves at ~60 GB of host RSS a rank, not
+at level 4's start as expected: the host, not the card, was the limit.
+
+#### Host memory (2026-10-10): the copies the restore never read, and the pinned pool
+
+**What the host held.**  A per-field count of every host box at each
+level's end (report_host_boxes, BPACK_TRACE=wave), 192^3 Color, rank 0:
+
+| at the leaf's end | boxes | GB | of which |
+|---|---|---|---|
+| leaf local boxes | 4096 | 1.27 | X_RR_full 0.99, T 0.24, points and lists 0.04 |
+| leaf generator boxes (other ranks') | 817 | 5.15 | X_NR (temp2) 4.94, X_RR_full 0.21 |
+| level 4 (at its end) | 512 + 217 | 0.40 + 3.47 | X_RR_full 0.32, temp2 3.32 |
+
+The pinned arenas (near store, fill store) were 4.3-5.9 GB at 35% of the
+heap; RSS 8.4 GB at the leaf's end on the full card.  So the host side of
+a level was 6.4 GB of box copies and 5 GB of stores, and at 384^3 (the
+generator set grows with the surface, x4; the local boxes x8) the probe's
+RSS reached 44 GB at the leaf's end plus 34 GB of arenas that never
+shrank - the arenas kept every level's peak, and the kept factors of the
+leaf (pageable, 18 GB at 384^3) came on top at the next level's start.
+
+**What read the copies.**  The remote generators' temp2 and the local
+boxes' X_RR_full are the host side of the transition's restore: a fill
+source freed during the waves (early_free_sources_, multi-rank levels) is
+put back from them.  But with the fill sources stored compressed the
+transition puts a source back from its packed temp2^T
+(collect_fill_source, decompression at 365 GB/s) and rebuilds X_RR_full
+from the kept LU (xrr_rebuilt); the host copies were a fallback that no
+run has read: 0 reclaims and "restore 0.00 GB" in every run, pressure runs
+included.  T stays (the matvec reads it on the host).
+
+**What changed.**
+1. `packed_restore_` (= device sketch and H2_compress_factors): the
+   exchange no longer copies a received generator's temp2 to the host
+   (its X_RR_full, r x r, still comes), and the wave download skips a
+   kept box's X_RR_full (host_skips_xrr; not on a level whose generators
+   go through the host, where emit_generators reads it).  A reclaim under
+   it frees a source's X_RR_full only when the LU or a host copy can
+   rebuild it, frees the raw temp2^T only when the packed form exists,
+   and makes no host copy (it used to materialize the whole level's X_NR
+   on the host first - at 8x that alone would be the raw X_NR again).
+2. The transition's packed put-back, when the source's X_RR_full is on
+   neither side of the card (a remote generator whose block was reclaimed;
+   a box whose keep failed), takes it from the host copy or rebuilds it on
+   the host from the rescued LU (host_xrr_full_from_lu: P L U with the
+   pivots undone last to first, as launch_row_swaps does) through the
+   chunk's restore block as a source with no temp2 rows (`xrr_only`).
+   drop_kept nulls the states' LU pointers (they pointed into the freed
+   blocks: a latent read of freed memory after a mid-level keep failure)
+   and first gives every box that dropped X_RR_full for its LU the block
+   back (restore_dropped_xrr, host rebuild, the rare path only).
+3. One PinnedChunkPool for the process: the arenas (fill store, the two
+   near stores) and now the staged kept factors take 256 MB chunks from
+   it and give them back at their reset; the driver trims the idle set at
+   each level's start, after the kept factors took what they could, to
+   half of what is idle (floor 1 GB).  So the leaf's near-store chunks
+   serve the leaf's kept factors at the next level's start (no pinning,
+   and the kept staging is a pinned copy now: 26 GB/s instead of 13),
+   and the host holds the live bytes plus one cache.  Unpinning runs at
+   1.6 GB in 0.03 s.
+
+**Gate (192^3, 8 ranks, the corrected build).**
+
+| default heap | Factor before -> now | logdet | acc_forward | host RSS at the leaf's end | leaf download |
+|---|---|---|---|---|---|
+| Color | 8.55 -> **7.88 s** (bitcomp off 7.54) | -89253593.152662069, identical | 8.0039e-3, identical | 8.40 -> **2.16 GB** | 6.38 -> 0.45 GB |
+| CA0 | 8.33 -> 8.96 | -89253606.998565048, as e624528 left it | 9.07e-3, as e624528 | 2.33 GB | |
+| CA3 | 8.65 -> 8.59 | -89253625.765752852, as e624528 left it | 8.93e-3, as e624528 | 4.77 GB | |
+| Color at 35% | 12.1 -> **10.9** | -89253779.87903136, identical | 1.5442e-2, identical | 8.47 GB | |
+| CA3 at 35% | 15.6 -> 11.4 | -89253762.743 (packed band) | | 10.8 GB | |
+
+The leaf's download is what the time was: 6.38 GB a rank of host copies
+through the copier, 0.45 GB now, and Color is within 4.5% of the
+uncompressed run (7.88 against 7.54).  The host RSS at every level's end
+is the tree and T: 2.16 GB.  The CA logdets are the ones e624528 produced
+(its lower hold limit - the kept store reserved - packs 2 of CA0's and 4
+of CA3's transition chunks where the reference packed 0 and 3), unchanged
+by this step; CA0 stages its leaf factors now for the same reason.
+
+**Two stale-object lessons** that cost an afternoon: an object whose
+compile had started before a header edit and finished after it carries
+the old source with a new timestamp, so make keeps it; and two
+`*BPACK_gpu_wrapper` objects do not list the eliminator's header in their
+dependencies at all.  Both now show as a run that "rebuilt X_RR_full from
+the kept LU" at every level (that path announces itself).
+
+**The 384^3 probe after this.**  The leaf's 16 waves run to the end (57
+s of elimination; kept factors 18.6 GB a rank: X_NR 145.9 -> 9.7 GB at
+15.1x, T and X_SR 3.9 -> 1.1, the LU and pivots 7.8 uncompressed) with
+host RSS at most 44.3 GB a rank and 37-38 GB of pinned chunks at the last
+wave (the near store and the fill store, 8x their 192^3 size).  It then
+died in the leaf's transition: the heap exhausted at 33.1 of 33.4 GB with
+a 236 KB largest free range.  The chunk budget (2 GB, or a quarter of
+the free room) counted the G/P buffers, the host-path restores and the
+parents' blocks but not the packed put-backs - and at this size every
+source is packed and they are the level's raw temp2^T, 146 GB a rank, so
+a chunk sized by its parents alone decompressed far more than the room
+it had.  Next: count them (packed_restore_bytes), a per-chunk trace,
+and the probe again.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
