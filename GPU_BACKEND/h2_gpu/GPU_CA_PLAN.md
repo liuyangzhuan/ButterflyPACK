@@ -4513,6 +4513,114 @@ per-parent buffer floor (10.7 GB for one parent here; fits once the
 cards are empty, but it is the next limit up).  CA3 and CA0 at 768^3
 fail as before, in their leaves.
 
+#### The rank growth and the sign of the determinant (2026-10-11): the fill store's quantization
+
+The three 768^3 Color runs disagreed above level 5 and nowhere else:
+
+| 768^3, 64 ranks | level 7 | 6 | 5 | 4 | 3 | 2 | logdet |
+|---|---|---|---|---|---|---|---|
+| first run (host sketches at 3 and 2) | 44.27 | 72.02 | 123.86 | 178.72 | 196.01 | 83.75 | +1, -6968679026.42 |
+| rerun (level 3 on the device) | 44.27 | 72.02 | 123.86 | 178.34 | 313.13 | - | - |
+| end to end (A_l768c) | 44.27 | 72.02 | 123.96 | 166.95 | 219.96 | 219.81 | -1, -6968677636.29 |
+| end to end again (A_dg768o, same library) | 44.27 | 72.02 | 123.76 | 167.00 | 220.40 | 221.06 | -1, -6968677635.06 |
+
+The skeleton count was run-to-run noise that grew by a decade a level (0.1%
+at level 5, 7% at 4, 40% at 3), and within a level it grew with the colour:
+at level 3 the first colour kept 2.4% of its points and the last 39%
+(per-rank box lines, `BPACK_TRACE=wave`).  The only lossy input the top
+levels have is the fill store - the memory-pressure packs (owner groups,
+parents, near blocks) all read 0 at levels 5 and above - and it is packed
+at 2 * 0.2 * tol_comp * max|temp2^T of the box|.  A later box's sketch is
+its kernel rows less W_E P_E over its eliminated neighbours E, with both
+factors built from E's packed temp2^T, so the quantization noise lands in
+Y at a fraction of the fill, and the fill is of the order of the kernel
+rows for the late colours; the ID at tol keeps whatever noise stands above
+tol |R_00|.  Hence the growth with the colour, the sensitivity to which
+blocks happened to be packed, and a determinant whose approximate
+factorization is no longer positive definite.
+
+**Measured** (lib_dg: the fill store and the kept X_NR 100x finer at
+levels <= 5, nothing else changed; two runs):
+
+| 768^3, 64 ranks | 5 | 4 | 3 | 2 | logdet | acc_mvp | acc_forward | factor | solve |
+|---|---|---|---|---|---|---|---|---|---|
+| committed (A_dg768o) | 123.76 | 167.00 | 220.40 | 221.06 | -1, -6968677635.06 | 1.21e-3 | 1.98e-2 | 140.2 s | 3.53 s |
+| finer at <= 5, run a | 101.95 | 109.00 | 111.09 | 76.19 | +1, -6968677260.85 | 5.60e-4 | 1.40e-2 | 134.2 s | 2.78 s |
+| finer at <= 5, run b | 101.91 | 109.08 | 110.79 | 76.47 | +1, -6968677256.72 | 5.76e-4 | 1.40e-2 | | 2.67 s |
+
+Levels 4, 3 and 2 took 3.69 / 1.27 / 0.94 s against 5.78 / 3.03 / 3.87.  The
+per-level logdet lines (new under `BPACK_TRACE=wave`) show the sign is the
+parity of 180k sign flips (negative pivots and row swaps) over the levels;
+the -1 was that parity, not one level.
+
+**The rule, against the uncompressed run** (192^3 on 8 ranks; the lossless
+Color figures are the 2026-10-06 `A_v192off` log; `BPACK_DG` was a
+run-time knob of the sweep library only):
+
+| fill store step | level 5 | 4 | 3 | 2 | logdet | acc_mvp | acc_forward |
+|---|---|---|---|---|---|---|---|
+| uncompressed (2026-10-06) | 42.533 | 61.540 | 76.025 | 65.313 | -89253588.194 | 8.1e-4 | 4.2e-3 |
+| a box, 0.2 (committed) | 42.550 | 62.409 | 87.283 | 114.641 | -89253593.153 | 1.89e-3 | 8.00e-3 |
+| a slot, 0.2 | 42.531 | 61.755 | 79.266 | 86.000 | -89253589.701 | 2.30e-3 | 7.97e-3 |
+| a box, 0.002 | 42.517 | 61.511 | 75.842 | 64.594 | -89253588.235 | 1.96e-3 | 7.46e-3 |
+| a slot, 0.002 | 42.521 | 61.542 | 75.834 | 65.563 | -89253588.208 | 1.90e-3 | 7.48e-3 |
+| a box, 0.0002 | 42.531 | 61.502 | 75.873 | 65.281 | -89253588.202 | 1.80e-3 | 7.25e-3 |
+
+The fraction matters, the grouping much less: 0.002 brings the skeletons
+back to the uncompressed ones within 1% at level 2 and 0.2% below it, and
+the logdet to 5e-10 (0.2: 5e-8).  The remaining acc gap to the uncompressed
+run (acc_mvp 1.9e-3 against 8.1e-4) is the kept X_NR's own step, which the
+sweep did not touch.
+
+The leaf's fill store does not need it: at 384^3 on 64 ranks, the leaf
+packed finer or not gave the leaf 43.449 / 43.475 and level 5 65.603 /
+65.600, and the leaf's store is the one that costs memory (packed 100x
+finer at every level, the 768^3 run was OOM-killed on the host at the
+leaf).  Nor can every level above it have it at 8x: with the rule "fine
+above the leaf" (lib_fix) 768^3 was OOM-killed on the host in level 6,
+whose fill store is packed under pressure and goes to the host - its
+pinned chunks read 47-50 GB a rank at waves 8-14 against 42-43, the RSS
+63 GB against 60, four ranks a 256 GB node.  The same rule at 384^3 on 8
+ranks (the same level geometry, less of it interior) fitted: level 5's
+store 60.4 -> 10.4 GB (5.8x) against 3.9 (15.3x), host +1 GB, the level
++0.85 s; the levels above it 43.83 67.86 98.86 92.21 71.69 against 43.83
+69.84 111.57 140.54 164.03, factor 91.1 s against 93.9, solve 1.70 s
+against 2.60, acc_forward 1.58e-2 both.  192^3 under it, all three paths:
+Color 42.55 61.55 75.86 65.00 (logdet -89253588.46, acc_forward 7.8e-3),
+CA0 42.28 59.87 75.93 65.16, CA3 42.21 59.22 75.53 65.20, every sign +1.
+
+So the step is decided a level at a time (`decide_fill_precision`, at
+the level's first pack, when the keep rule's estimate is in the hold
+limit): `kFillToleranceFraction = 0.002` when the store's bound at the
+fine step (27 n^2 an n-point box, over `kFillFineRatio` = 6) fits in
+half the room under the hold limit, else the kept X_NR's 0.2; the leaf
+never; the kept X_NR unchanged.  At 768^3 on 64 ranks that is coarse at
+levels 7 and 6 (bounds 55 and 18 GB at the fine step against rooms of
+1.3 and 14 GB) and fine from level 5 up (5.9 against 12); at 1x
+everything above the leaf is fine.  Under it:
+
+| | level 7 | 6 | 5 | 4 | 3 | 2 | logdet | acc_mvp | acc_forward | solve |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 768^3, 64 ranks, committed | 44.27 | 72.02 | 123.76 | 167.00 | 220.40 | 221.06 | -1, -6968677635.06 | 1.21e-3 | 1.98e-2 | 3.53 s |
+| 768^3, 64 ranks, the rule | 44.27 | 72.02 | 123.57 | 128.27 | 107.90 | 76.59 | +1, -6968677341.91 | 1.04e-3 | 1.71e-2 | 2.98 s |
+| 384^3, 8 ranks, committed | 43.83 | 69.84 | 111.57 | 140.54 | 164.03 | | +1, -792567616.16 | 1.27e-3 | 1.58e-2 | 2.60 s |
+| 384^3, 8 ranks, the rule | 43.83 | 69.84 | 109.14 | 91.88 | 71.86 | | +1, -792567587.49 | 1.14e-3 | 1.50e-2 | 2.42 s |
+
+(The 384^3 rows list levels 6 to 2.)  192^3 on 8 ranks under the rule is
+the "fine above the leaf" result above, all three paths.  Level 5 of
+768^3 stays at 123.6 because level 6's store is coarse, as level 5 of
+384^3 at 8x (69.84 against 65.60 at 1x); the level above a coarse store
+pays a few percent, the ones above that converge.
+
+Left open, measured: the kept X_NR packed finer where it is cheap.  At
+384^3 on 64 ranks, the kept X_NR of levels <= 5 at 0.002 (lib_dg) against
+0.2 (lib_dgf), both with the fine fill store, read acc_mvp 5.1e-4 against
+1.97e-3 and acc_forward 7.5e-3 against 1.36e-2; at 768^3 the levels above
+the leaf and the one under it hold 4.6 GB of the 30 GB kept, so it would
+cost about 4 GB of host memory a rank at 8x.  Also open: whether the
+leaf's pressure packs (parents at 0.2, owner groups at 0.05) inflate level
+6 - 72.02 at 768^3 on 8x against 65.6 for the same box size at 384^3 on 1x.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

@@ -66,6 +66,25 @@ inline double xnr_magnitude(const T& v) { return std::sqrt(v.re * v.re + v.im * 
 // 23x at tol_comp, 12-15x here) and keeps the error well below the
 // approximation's.
 inline constexpr double kXnrToleranceFraction = 0.2;
+// The fill store (temp2^T by slot, read by the sketches of the boxes eliminated
+// later in the level and put back at the transition): above the leaf, 100x
+// finer than the kept X_NR.  A later box's sketch is its kernel rows less the
+// fill of its eliminated neighbours, and the quantization noise of that fill
+// (relative to a box's largest temp2^T entry) is what the ID then keeps: at 0.2
+// the skeletons of the top levels were set by the noise and grew with the
+// colour (192^3 on 8 ranks, level 2: 114.6 against 65.3 uncompressed; 768^3 on
+// 64 ranks, level 2: 221 against 76), run to run they varied by 40%, and the
+// sign of the determinant flipped.  Against the uncompressed run, 0.2 / 0.002 /
+// 0.0002 give level 2 of 192^3 as 114.6 / 64.6 / 65.3 and its logdet to 5e-8 /
+// 5e-10 / 1e-10; one step a slot instead of a box helps less (86.0 at 0.2).
+// The leaf keeps 0.2: its own skeletons do not depend on its fill store (0.06%
+// measured) and its store is the one that costs memory; so does a level whose
+// store would not fit (LevelEliminator::decide_fill_precision).
+inline constexpr double kFillToleranceFraction = 0.002;
+// What the fill store compresses by at kFillToleranceFraction (measured 5.8x
+// to 7.9x by level at 384^3, against 15x to 30x at 0.2): the decision's
+// estimate of the fine store's bytes from the raw bound.
+inline constexpr double kFillFineRatio = 6.0;
 // T and X_SR (k x r each, kept with X_NR): their quantization step relative
 // to tol_comp.  At X_NR's 0.2 they cost acc_forward +34% where X_NR costs
 // 3%, and they are 2.5% of the raw bytes, so a tighter step is nearly free:

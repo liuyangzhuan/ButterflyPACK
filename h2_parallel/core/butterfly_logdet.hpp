@@ -14,6 +14,10 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mpi.h>
 
 #include "tree.hpp"
 
@@ -129,11 +133,21 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
     double logabs_local = 0.0;   // Σ log|det|
     double arg_local    = 0.0;   // Σ arg(det)
 
+    // (per-level trace, 2026-10-11): each level's log|det| and its sign flips (negative
+    // pivots and row swaps, whose parity is the sign), under BPACK_TRACE=wave
+    const bool trace_levels = [] {
+        const char* t = std::getenv("BPACK_TRACE");
+        return t != nullptr && std::strstr(t, "wave") != nullptr;
+    }();
+    int trace_rank = 0;
+    MPI_Comm_rank(tree->comm, &trace_rank);
+    const double pi = std::acos(-1.0);
     // iterate through all the levels
     for (int level = leaf_level; level >= 2; level--) {
 
         auto& tree_level = tree->levels[level];
-        if (!tree_level.is_process_active) continue;
+        const double level_logabs0 = logabs_local, level_arg0 = arg_local;
+        if (tree_level.is_process_active) {
 
         // boxes whose LU stayed on the device without a host copy (the
         // factors kept there): summed there
@@ -218,9 +232,20 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
                                      std::to_string(device_only.load()) + " boxes without a host LU, " +
                                      std::to_string(device_boxes) + " covered by the device");
         }
+        }  // active
+        if (trace_levels) {
+            double lv[2] = {logabs_local - level_logabs0, arg_local - level_arg0};
+            MPI_Allreduce(MPI_IN_PLACE, lv, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
+            if (trace_rank == 0) {
+                std::printf("  [logdet] level %d: log|det| %.6f, sign flips %lld\n", level, lv[0],
+                            static_cast<long long>(std::llround(lv[1] / pi)));
+                std::fflush(stdout);
+            }
+        }
     }
 
     // handle root level
+    const double root_logabs0 = logabs_local, root_arg0 = arg_local;
     auto& root_level = tree->levels[0];
     if (root_level.is_process_active && !root_level.local_boxes.empty()) {
         auto& rb = root_level.local_boxes[0];
@@ -236,6 +261,11 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
         }
     }
 
+    if (trace_levels && root_level.is_process_active && !root_level.local_boxes.empty()) {
+        std::printf("  [logdet] root (rank %d): log|det| %.6f, sign flips %lld\n", trace_rank, logabs_local - root_logabs0,
+                    static_cast<long long>(std::llround((arg_local - root_arg0) / pi)));
+        std::fflush(stdout);
+    }
     // accumulate logabsdet and phase
     double buf[2] = { logabs_local, arg_local };
     MPI_Allreduce(MPI_IN_PLACE, buf, 2, MPI_DOUBLE, MPI_SUM, tree->comm);

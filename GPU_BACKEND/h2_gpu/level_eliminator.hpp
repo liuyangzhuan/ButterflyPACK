@@ -2296,6 +2296,41 @@ private:
     // X_RR_full of a kept box is copied to the host (see the constructor)
     bool packed_restore_ = false;
     int level_index_ = 0;
+    double fill_frac_ = 0.2;   // the fill store's quantization step as a fraction of tol_comp (decide_fill_precision)
+    bool fill_frac_decided_ = false;
+    // The fill store's step (2026-10-11): kFillToleranceFraction where the
+    // level can afford it, else the kept X_NR's.  Decided at the level's first
+    // pack, when the keep rule's estimate is in the hold limit and the level's
+    // working set is on the card: the store's bound at the fine step (27 n^2
+    // an n-point box, over kFillFineRatio) must fit in half the room under the
+    // hold limit.  The leaf never: its own skeletons do not depend on its fill
+    // store (0.06% measured) and its store is the largest.  What the rule
+    // protects is the host: under pressure the store goes to the host, and
+    // at 768^3 on 64 ranks the level above the leaf packed fine put 6 GB a rank
+    // more there and the node ran out (the level's bound 110 GB, the room 10).
+    void decide_fill_precision() {
+        if (fill_frac_decided_) return;
+        fill_frac_decided_ = true;
+        fill_frac_ = kXnrToleranceFraction;
+        const bool leaf = level_index_ == static_cast<int>(tree_->levels.size()) - 1;
+        double bound = 0.0;
+        for (const Box& b : level_.local_boxes) {
+            bound += 27.0 * static_cast<double>(b.num_points) * static_cast<double>(b.num_points) * sizeof(S);
+        }
+        const size_t limit = hold_limit();
+        const size_t used = heap_.used();
+        const double room = limit > used ? static_cast<double>(limit - used) : 0.0;
+        const bool fine = !leaf && bound / kFillFineRatio < room / 2.0;
+        if (fine) fill_frac_ = kFillToleranceFraction;
+        int rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        if (rk == 0) {
+            std::printf("  [gpu] level %d fill store: packed at %.2g of tol_comp (%s; bound %.1f GB at the fine step, room %.1f GB under the hold limit)\n",
+                        level_index_, fill_frac_, leaf ? "the leaf" : fine ? "fits" : "does not fit",
+                        bound / kFillFineRatio / 1e9, room / 1e9);
+            std::fflush(stdout);
+        }
+    }
     struct PeerOut { std::vector<int64_t> header; size_t offset = 0, bytes = 0; };
     // An owner level's transport (owner_progress): an owned wave's payloads
     // are one block of the exchange arena with a segment per recipient,
@@ -3777,6 +3812,43 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         const auto tw = clock::now();
         check_cuda(cudaStreamSynchronize(stream), "device sketch");
         stats.sk_wait += std::chrono::duration<double>(clock::now() - tw).count();
+    }
+    // BPACK_TRACE=wave at the top levels: the ID's R diagonal per box, which
+    // tells a rank set by the matrix (the diagonal falls through the tolerance)
+    // from one set by noise (it sits within a few multiples of it; see the
+    // fill store's quantization, 2026-10-11)
+    if (!adaptive && level_index_ <= 4 && env::trace("wave")) {
+        const int* ranks0 = reinterpret_cast<const int*>(h_id + id_rank);
+        int rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        auto mag = [](const S& v) -> double {
+            if constexpr (std::is_same_v<S, double>) return std::fabs(v);
+            else return std::sqrt(v.re * v.re + v.im * v.im);
+        };
+        std::vector<S> diag;
+        for (size_t bi = 0; bi < plans.size(); ++bi) {
+            const Plan& p = plans[bi];
+            const int K = ranks0[bi];
+            if (K <= 0) continue;
+            diag.resize(static_cast<size_t>(K));
+            check_cuda(cudaMemcpy2D(diag.data(), sizeof(S), p.Y, (static_cast<size_t>(p.d) + 1) * sizeof(S), sizeof(S),
+                                    static_cast<size_t>(K), cudaMemcpyDeviceToHost), "ID diagonal");
+            const double r00 = mag(diag[0]);
+            int below10 = 0, below3 = 0, first_1e1 = -1, first_1e2 = -1;
+            double last = 0.0;
+            for (int i = 0; i < K; ++i) {
+                const double q = r00 > 0.0 ? mag(diag[static_cast<size_t>(i)]) / r00 : 0.0;
+                if (q < 10.0 * tolerance_) ++below10;
+                if (q < 3.0 * tolerance_) ++below3;
+                if (first_1e1 < 0 && q < 0.1) first_1e1 = i;
+                if (first_1e2 < 0 && q < 0.01) first_1e2 = i;
+                if (i == K - 1) last = q;
+            }
+            std::printf("  [gpu] level %d rank %d id box %lld: n %d d %d rank %d (%.0f%%) | R_ii/R_00 below 0.1 from %d, below 0.01 from %d, last %.2e"
+                        " | kept within 10 tol %d, within 3 tol %d | sources %zu\n", level_index_, rk, static_cast<long long>(wave[bi]),
+                        p.n, p.d, K, 100.0 * K / p.n, first_1e1, first_1e2, last, below10, below3, p.sources.size());
+        }
+        std::fflush(stdout);
     }
     stats.sk_upload += marks.seconds(0);
     stats.sk_rows += marks.seconds(1);
@@ -7227,6 +7299,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     const bool check = env::check("fillsrc");
     auto& stats = eliminator_stats();
 
+    decide_fill_precision();
     std::vector<const S*> srcs;
     std::vector<size_t> elems;
     std::vector<int> slot_rows;  // per block, its uncompressed rows
@@ -7408,7 +7481,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
     auto flush = [&]() {
         if (!srcs.empty()) {
             std::vector<CompressedXnr> comp;
-            if (fill_compressor_.compress(srcs, elems, tolerance_ * kXnrToleranceFraction, comp, stream,
+            if (fill_compressor_.compress(srcs, elems, tolerance_ * fill_frac_, comp, stream,
                                           &slot_box)) {
                 size_t raw = 0, stored = 0;
                 for (size_t i = 0; i < srcs.size(); ++i) {
