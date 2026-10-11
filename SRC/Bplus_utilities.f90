@@ -18204,6 +18204,11 @@ end subroutine BF_block_MVP_dat_batch_magma
       real(kind=8)::time_reshape, time_reshape_init, time_reshape_right
       real(kind=8)::time_reshape_middle, time_reshape_left, time_reshape_final
       real(kind=8)::time_gemm, flops
+      integer dims_v(Ndim), dims_u(Ndim), Kv, Mu, r_s, r_e, dim_i
+      DT, allocatable::mid_in(:, :), mid_out(:, :)
+      real(kind=8)::tr0, tr1   !< wall of the threaded region, reported as the MDSPLIT 'full' column for the leaf levels
+      real(kind=8)::tr_init, tr_right, tr_middle, tr_left, tr_cleanup, tr_reshape, tr_reshape_init
+      real(kind=8)::tr_reshape_right, tr_reshape_middle, tr_reshape_left, tr_reshape_final, tr_gemm
 
       call assert(chara == 'N', 'BF_MD_block_mvp_level_butterfly0 only supports chara=N')
       call assert(blocks%level_butterfly == 0, 'BF_MD_block_mvp_level_butterfly0 expects level_butterfly=0')
@@ -18250,29 +18255,75 @@ end subroutine BF_block_MVP_dat_batch_magma
       t2 = MPI_Wtime()
       time_init = time_init + t2 - t1
 
+      !>**** the middle product is done once for all batch columns, split by rows over the threads, so the
+      ! middle matrix streams from memory once per batch instead of once per column (8.5 MB at rank 9);
+      ! the factor products on either side stay per thread on its own columns
+      do dim_i = 1, Ndim
+         dims_v(dim_i) = size(blocks%ButterflyV(1)%blocks(1,dim_i)%matrix, 2)
+      enddo
+      dims_u = blocks%ButterflyMiddle(1)%dims_m
+      Kv = product(dims_v)
+      Mu = product(dims_u)
+      call assert(product(blocks%ButterflyMiddle(1)%dims_n) == Kv, 'BF_MD_block_mvp_level_butterfly0 middle/V dimension mismatch')
+      allocate(mid_in(Kv, Nvec), mid_out(Mu, Nvec))
+      tr0 = MPI_Wtime()
 #ifdef HAVE_OPENMP
-!$omp parallel default(shared) private(tid,nth,col_s,col_e) &
+!$omp parallel default(shared) private(tid,nth,col_s,col_e,r_s,r_e,t1,t2, &
+!$omp& tr_init,tr_right,tr_middle,tr_left,tr_cleanup,tr_reshape,tr_reshape_init,tr_reshape_right, &
+!$omp& tr_reshape_middle,tr_reshape_left,tr_reshape_final,tr_gemm) &
 !$omp& reduction(max:time_init,time_right,time_middle,time_left,time_cleanup,time_reshape, &
 !$omp& time_reshape_init,time_reshape_right,time_reshape_middle,time_reshape_left,time_reshape_final,time_gemm) &
 !$omp& reduction(+:flops)
+      ! per-thread phase times start from zero and are handed to the max reduction at the end: the private
+      ! copies of a max reduction start at -huge, so accumulating into them directly reported zero
+      tr_init = 0d0; tr_right = 0d0; tr_middle = 0d0; tr_left = 0d0; tr_cleanup = 0d0; tr_reshape = 0d0
+      tr_reshape_init = 0d0; tr_reshape_right = 0d0; tr_reshape_middle = 0d0; tr_reshape_left = 0d0
+      tr_reshape_final = 0d0; tr_gemm = 0d0
       tid = omp_get_thread_num()
       nth = omp_get_num_threads()
       col_s = (tid*Nvec)/nth + 1
       col_e = ((tid + 1)*Nvec)/nth
       if (col_s <= col_e) then
-         call BF_MD_block_mvp_level_butterfly0_chunk(xin(:,col_s:col_e), Ninloc, &
-            xout(:,col_s:col_e), Noutloc, col_e-col_s+1, blocks, Ndim, time_init, &
-            time_right, time_middle, time_left, time_cleanup, time_reshape, &
-            time_reshape_init, time_reshape_right, time_reshape_middle, time_reshape_left, &
-            time_reshape_final, time_gemm, flops)
+         call BF_MD_block_mvp_level_butterfly0_vside(xin(:,col_s:col_e), Ninloc, mid_in(:,col_s:col_e), &
+            col_e-col_s+1, blocks, Ndim, tr_right, tr_reshape, tr_reshape_right, tr_gemm, flops)
       endif
+!$omp barrier
+      r_s = (tid*Mu)/nth + 1
+      r_e = ((tid + 1)*Mu)/nth
+      if (r_s <= r_e) then
+         t1 = MPI_Wtime()
+         call gemmf77('N', 'N', r_e-r_s+1, Nvec, Kv, BPACK_cone, blocks%ButterflyMiddle(1)%matrix(r_s,1), Mu, &
+            mid_in, Kv, BPACK_czero, mid_out(r_s,1), Mu)
+         t2 = MPI_Wtime()
+         tr_middle = tr_middle + t2 - t1
+         tr_gemm = tr_gemm + t2 - t1
+         flops = flops + flops_gemm(r_e-r_s+1, Nvec, Kv)
+      endif
+!$omp barrier
+      if (col_s <= col_e) then
+         call BF_MD_block_mvp_level_butterfly0_uside(mid_out(:,col_s:col_e), dims_u, xout(:,col_s:col_e), Noutloc, &
+            col_e-col_s+1, blocks, Ndim, tr_left, tr_cleanup, tr_reshape, tr_reshape_left, tr_reshape_final, tr_gemm, flops)
+      endif
+      time_init = tr_init; time_right = tr_right; time_middle = tr_middle; time_left = tr_left; time_cleanup = tr_cleanup
+      time_reshape = tr_reshape; time_reshape_init = tr_reshape_init; time_reshape_right = tr_reshape_right
+      time_reshape_middle = tr_reshape_middle; time_reshape_left = tr_reshape_left; time_reshape_final = tr_reshape_final
+      time_gemm = tr_gemm
 !$omp end parallel
 #else
-      call BF_MD_block_mvp_level_butterfly0_chunk(xin, Ninloc, xout, Noutloc, Nvec, &
-         blocks, Ndim, time_init, time_right, time_middle, time_left, time_cleanup, &
-         time_reshape, time_reshape_init, time_reshape_right, time_reshape_middle, &
-         time_reshape_left, time_reshape_final, time_gemm, flops)
+      call BF_MD_block_mvp_level_butterfly0_vside(xin, Ninloc, mid_in, Nvec, blocks, Ndim, time_right, time_reshape, &
+         time_reshape_right, time_gemm, flops)
+      t1 = MPI_Wtime()
+      call gemmf77('N', 'N', Mu, Nvec, Kv, BPACK_cone, blocks%ButterflyMiddle(1)%matrix, Mu, mid_in, Kv, BPACK_czero, mid_out, Mu)
+      t2 = MPI_Wtime()
+      time_middle = time_middle + t2 - t1
+      time_gemm = time_gemm + t2 - t1
+      flops = flops + flops_gemm(Mu, Nvec, Kv)
+      call BF_MD_block_mvp_level_butterfly0_uside(mid_out, dims_u, xout, Noutloc, Nvec, blocks, Ndim, time_left, time_cleanup, &
+         time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops)
 #endif
+      tr1 = MPI_Wtime()
+      stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + tr1 - tr0
+      deallocate(mid_in, mid_out)
 
       t1 = MPI_Wtime()
 #if HAVE_ZFP
@@ -18309,25 +18360,20 @@ end subroutine BF_block_MVP_dat_batch_magma
    end subroutine BF_MD_block_mvp_level_butterfly0
 
 
-   subroutine BF_MD_block_mvp_level_butterfly0_chunk(xin, Ninloc, xout, Noutloc, Nvec, &
-      blocks, Ndim, time_init, time_right, time_middle, time_left, time_cleanup, &
-      time_reshape, time_reshape_init, time_reshape_right, time_reshape_middle, &
-      time_reshape_left, time_reshape_final, time_gemm, flops)
-
+   !>**** V side of a level_butterfly==0 block for the calling thread's columns: the three mode products with
+   !> V^T, result into the shared middle input (one column block of it)
+   subroutine BF_MD_block_mvp_level_butterfly0_vside(xin, Ninloc, mid_in, Nvec, blocks, Ndim, time_right, &
+      time_reshape, time_reshape_right, time_gemm, flops)
       implicit none
       integer Ndim, Nvec
-      integer Ninloc(Ndim), Noutloc(Ndim)
-      DT::xin(:, :), xout(:, :)
+      integer Ninloc(Ndim)
+      DT::xin(:, :), mid_in(:, :)
       type(matrixblock_MD)::blocks
-      real(kind=8)::time_init, time_right, time_middle, time_left, time_cleanup
-      real(kind=8)::time_reshape, time_reshape_init, time_reshape_right
-      real(kind=8)::time_reshape_middle, time_reshape_left, time_reshape_final
-      real(kind=8)::time_gemm, flops
+      real(kind=8)::time_right, time_reshape, time_reshape_right, time_gemm, flops
       integer dim_i
-      integer dims_cur(Ndim), dims_next(Ndim), dims_v(Ndim), dims_u(Ndim)
+      integer dims_cur(Ndim), dims_next(Ndim)
       DT, allocatable::mat_in(:, :), mat_out(:, :)
-      real(kind=8)::t1, t2, flop
-
+      real(kind=8)::t1, t2
       dims_cur = Ninloc
       do dim_i = 1, Ndim
          t1 = MPI_Wtime()
@@ -18346,34 +18392,48 @@ end subroutine BF_block_MVP_dat_batch_magma
          call move_alloc(mat_out, mat_in)
          dims_cur = dims_next
       enddo
-      dims_v = dims_cur
-
-      dims_u = blocks%ButterflyMiddle(1)%dims_m
-      allocate(mat_out(product(dims_u), Nvec))
+      call assert(product(dims_cur) == size(mid_in,1), 'BF_MD_block_mvp_level_butterfly0 V-side dimension mismatch')
       t1 = MPI_Wtime()
-      call gemmf90(blocks%ButterflyMiddle(1)%matrix, product(dims_u), mat_in, &
-         product(dims_v), mat_out, product(dims_u), 'N', 'N', product(dims_u), &
-         Nvec, product(dims_v), BPACK_cone, BPACK_czero, flop)
+      mid_in = mat_in
       t2 = MPI_Wtime()
-      time_middle = time_middle + t2 - t1
-      time_gemm = time_gemm + t2 - t1
-      flops = flops + flop
-      if (allocated(mat_in)) deallocate(mat_in)
-      call move_alloc(mat_out, mat_in)
+      time_right = time_right + t2 - t1
+      time_reshape = time_reshape + t2 - t1
+      time_reshape_right = time_reshape_right + t2 - t1
+      deallocate(mat_in)
+   end subroutine BF_MD_block_mvp_level_butterfly0_vside
 
+   !>**** U side of a level_butterfly==0 block for the calling thread's columns: the three mode products with U
+   !> from its column block of the shared middle output into xout
+   subroutine BF_MD_block_mvp_level_butterfly0_uside(mid_out, dims_u, xout, Noutloc, Nvec, blocks, Ndim, time_left, &
+      time_cleanup, time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops)
+      implicit none
+      integer Ndim, Nvec
+      integer dims_u(Ndim), Noutloc(Ndim)
+      DT::mid_out(:, :), xout(:, :)
+      type(matrixblock_MD)::blocks
+      real(kind=8)::time_left, time_cleanup, time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops
+      integer dim_i
+      integer dims_cur(Ndim), dims_next(Ndim)
+      DT, allocatable::mat_in(:, :), mat_out(:, :)
+      real(kind=8)::t1, t2
       dims_cur = dims_u
       do dim_i = 1, Ndim
          t1 = MPI_Wtime()
-         call BF_MD_level0_apply_mode_flat(mat_in, dims_cur, Ndim, Nvec, dim_i, &
-            blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
-            time_reshape, time_reshape_left, time_gemm, flops)
-         if (allocated(mat_in)) deallocate(mat_in)
+         if (dim_i == 1) then
+            call BF_MD_level0_apply_mode_flat(mid_out, dims_cur, Ndim, Nvec, dim_i, &
+               blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
+               time_reshape, time_reshape_left, time_gemm, flops)
+         else
+            call BF_MD_level0_apply_mode_flat(mat_in, dims_cur, Ndim, Nvec, dim_i, &
+               blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
+               time_reshape, time_reshape_left, time_gemm, flops)
+            if (allocated(mat_in)) deallocate(mat_in)
+         endif
          t2 = MPI_Wtime()
          time_left = time_left + t2 - t1
          call move_alloc(mat_out, mat_in)
          dims_cur = dims_next
       enddo
-
       t1 = MPI_Wtime()
       call assert(all(dims_cur == Noutloc), 'BF_MD_block_mvp_level_butterfly0 output dimensions mismatch')
       xout = mat_in
@@ -18381,13 +18441,11 @@ end subroutine BF_block_MVP_dat_batch_magma
       time_left = time_left + t2 - t1
       time_reshape = time_reshape + t2 - t1
       time_reshape_final = time_reshape_final + t2 - t1
-
       t1 = MPI_Wtime()
       if (allocated(mat_in)) deallocate(mat_in)
       t2 = MPI_Wtime()
       time_cleanup = time_cleanup + t2 - t1
-
-   end subroutine BF_MD_block_mvp_level_butterfly0_chunk
+   end subroutine BF_MD_block_mvp_level_butterfly0_uside
 
 
    subroutine BF_MD_level0_apply_mode_flat(data_in, dims_in, Ndim, Nvec, dim_apply, &
