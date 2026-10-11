@@ -4709,6 +4709,33 @@ not 41%.
 stalls as the morning's: "after the transition" 69 s at the leaf on a
 rank other than 0, level 6 26 s.)
 
+**The 80 GB comparison redone with the size-class take (2026-10-11):**
+
+| leaf, 768^3 / 64 ranks, 80 GB | Color | CA0 |
+|---|---|---|
+| elimination | 52.1 s | **49.0 s** |
+| exchange | 15.0 s | 0.1 s |
+| boxes a rank (min / median / max) | 32768 | 36594 / 39512 / 41176 |
+| waves' host time over ranks (min / median / max) | 33.4 / 35.9 / 39.0 s | 36.3 / 41.5 / 48.8 s |
+| device elimination over ranks | 20.6 / 21.7 / 23.9 s | 22.9 / 26.8 / 32.7 s |
+| wave buffers' allocation | 6.2 s | 6.8 s |
+| owner groups packed / left raw, waves chunked | 367 / 409, 7 of 16 | 408 / 515, 11 of 32 |
+| ranges the allocator visited | 2.1e7 | 8.5e6 |
+
+With the allocator out of the way, CA0's leaf beats Color's by 6%: its
+slowest rank (an interior brick, 26% more boxes than Color's) takes
+48.8 s of compute where Color's slowest takes 39.0 s and then 15.0 s of
+exchange, i.e. the ghost layer's 26% costs less than Color's waiting
+(41% of its compute here, 20% on the 40 GB cards where the leaf's
+packing evens the ranks out).  That is the result expected on
+2026-10-11 05:03 and it holds only where neither path packs: on the 40
+GB cards CA0 loses by 7-13%.  Color's whole factorization on 80 GB is
+93.0 s against 119.7 at 40 GB (the leaf 52.1 against 65.6, level 6 13.7
+against 16.2), solve 1.85 s, acc_forward 1.46e-2, host 30 GB.  CA0
+still dies one level up (the ghost mismatch) and CA3 in its owner pass
+(5.2 GB requests, 31-36 GB in use), so the leaf is the only level the
+comparison covers.
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box
