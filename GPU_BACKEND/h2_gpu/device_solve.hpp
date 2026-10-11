@@ -1738,10 +1738,19 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         for (int level = leaf; level >= 2 && !bad; --level) {
             if (!replicated(level)) continue;
             const double n = 1.05 * need_max[static_cast<size_t>(level)];
+            const double st = 1.05 * staged_max[static_cast<size_t>(level)];
+            const double home = std::max(stream_home, st + static_cast<double>(kStagedAlign));
             if (host_only[static_cast<size_t>(level)]) {
                 host_levels.insert(level);
-            } else if (planned + n <= budget) {
+            } else if (planned + n + stream_home <= budget) {
                 planned += n;
+            } else if (st > 0.0 && planned + (n - st) + home <= budget) {
+                // H2 8x: a replicated level streams its staged factors like a
+                // Color one before it goes to the host (whose fallback
+                // uncompresses the X_NR there)
+                streamed.insert(level);
+                planned += n - st;
+                stream_home = home;
             } else if (host_levels_allowed) {
                 host_levels.insert(level);
             } else {
@@ -3022,6 +3031,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                 (*host_level)(level, HostStep::SolveForward);
                 host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
             } else if (L.ca) {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 run.ca_forward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
                 stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
@@ -3056,6 +3066,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                 (*host_level)(level, HostStep::SolveBackward);
                 host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
             } else if (L.ca) {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 run.ca_backward(L, lvl, level, solve_data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
                 stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
@@ -3115,6 +3126,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
                 (*host_level)(level, HostStep::MulForward);
                 host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
             } else if (L.ca) {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 run.ca_mul_forward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
                 stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
@@ -3149,6 +3161,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
                 (*host_level)(level, HostStep::MulBackward);
                 host_seconds += std::chrono::duration<double>(clock::now() - tl).count();
             } else if (L.ca) {
+                stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
                 run.ca_mul_backward(L, lvl, level, data[static_cast<size_t>(level)], ca_comm(level_comms, level));
             } else {
                 stream_kept_in(store, level, Context::instance().stream());  // (H2 8x: a streamed level's factors)
