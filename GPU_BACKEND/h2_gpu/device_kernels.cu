@@ -142,6 +142,42 @@ __global__ void column_swap_kernel(const ColumnSwapItemT<T>* items) {
     }
 }
 
+// L (unit lower) and U (upper) out of the one block getrf left them in, so a
+// batched GEMM can multiply them.
+template<typename T>
+__global__ void lu_split_kernel(const LuSplitItemT<T>* items) {
+    const LuSplitItemT<T> item = items[blockIdx.x];
+    const int r = item.r;
+    const int i = blockIdx.y * kTile + threadIdx.x;
+    if (i >= r) return;
+    for (int jj = threadIdx.y; jj < kTile; jj += kTileRows) {
+        const int j = blockIdx.z * kTile + jj;
+        if (j >= r) break;
+        const T v = item.lu[i + static_cast<int64_t>(j) * item.ldlu];
+        const int64_t at = i + static_cast<int64_t>(j) * r;
+        item.l[at] = i > j ? v : (i == j ? T{1.0} : T{});
+        item.u[at] = i <= j ? v : T{};
+    }
+}
+
+// The pivots, undone on the rows.  A thread owns whole columns, so the
+// sequential swaps need no barrier - column_swap_kernel does the same the
+// other way round.
+template<typename T>
+__global__ void row_swap_kernel(const RowSwapItemT<T>* items) {
+    const RowSwapItemT<T> item = items[blockIdx.x];
+    for (int col = threadIdx.x; col < item.cols; col += blockDim.x) {
+        T* c = item.a + static_cast<int64_t>(col) * item.lda;
+        for (int i = item.r - 1; i >= 0; --i) {
+            const int p = item.piv[i] - 1;
+            if (p == i) continue;
+            const T t = c[i];
+            c[i] = c[p];
+            c[p] = t;
+        }
+    }
+}
+
 template<typename T>
 __global__ void transpose_kernel(const TransposeItemT<T>* items) {
     __shared__ T tile[kTile][kTile + 1];
@@ -221,6 +257,20 @@ void launch_identity(const IdentityItemT<T>* items, int count, int max_n, cudaSt
 }
 
 template<typename T>
+void launch_lu_split(const LuSplitItemT<T>* items, int count, int max_r, cudaStream_t stream) {
+    if (count <= 0 || max_r <= 0) return;
+    lu_split_kernel<T><<<tile_grid(count, max_r, max_r), dim3(kTile, kTileRows), 0, stream>>>(items);
+    check_launch("lu_split_kernel");
+}
+
+template<typename T>
+void launch_row_swaps(const RowSwapItemT<T>* items, int count, cudaStream_t stream) {
+    if (count <= 0) return;
+    row_swap_kernel<T><<<static_cast<unsigned>(count), 128, 0, stream>>>(items);
+    check_launch("row_swap_kernel");
+}
+
+template<typename T>
 void launch_transpose(const TransposeItemT<T>* items, int count, int max_m, int max_n, cudaStream_t stream) {
     if (count <= 0 || max_m <= 0 || max_n <= 0) return;
     transpose_kernel<T><<<tile_grid(count, max_m, max_n), dim3(kTile, kTileRows), 0, stream>>>(items);
@@ -234,6 +284,35 @@ void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_
     check_launch("column_swap_kernel");
 }
 
+namespace {
+constexpr int kAbsMaxThreads = 256;
+}
+
+__global__ void abs_max_kernel(const AbsMaxItem* items) {
+    const AbsMaxItem item = items[blockIdx.x];
+    double m = 0.0;
+    for (int64_t i = threadIdx.x; i < item.n; i += kAbsMaxThreads) {
+        const double v = fabs(item.a[i]);
+        if (v > m) m = v;
+    }
+    __shared__ double shared[kAbsMaxThreads];
+    shared[threadIdx.x] = m;
+    __syncthreads();
+    for (int stride = kAbsMaxThreads / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride && shared[threadIdx.x + stride] > shared[threadIdx.x]) {
+            shared[threadIdx.x] = shared[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) *item.out = shared[0];
+}
+
+void launch_abs_max(const AbsMaxItem* items, int count, cudaStream_t stream) {
+    if (count <= 0) return;
+    abs_max_kernel<<<static_cast<unsigned>(count), kAbsMaxThreads, 0, stream>>>(items);
+    check_launch("abs_max_kernel");
+}
+
 #define H2_ELEMENT_LAUNCHES(T)                                                                                     \
     template void launch_gather<T>(const GatherItemT<T>*, int, int, int, const char*, cudaStream_t);               \
     template void launch_add_store<T>(const AddStoreItemT<T>*, int, int, int, cudaStream_t);                       \
@@ -243,6 +322,8 @@ void launch_column_swaps(const ColumnSwapItemT<T>* items, int count, cudaStream_
     template void launch_sum_add<T>(const SumAddItemT<T>*, int, int, int, const char*, cudaStream_t);              \
     template void launch_identity<T>(const IdentityItemT<T>*, int, int, cudaStream_t);                             \
     template void launch_transpose<T>(const TransposeItemT<T>*, int, int, int, cudaStream_t);                      \
+    template void launch_lu_split<T>(const LuSplitItemT<T>*, int, int, cudaStream_t);                              \
+    template void launch_row_swaps<T>(const RowSwapItemT<T>*, int, cudaStream_t);                                  \
     template void launch_column_swaps<T>(const ColumnSwapItemT<T>*, int, cudaStream_t);
 H2_ELEMENT_LAUNCHES(double)
 H2_ELEMENT_LAUNCHES(dcomplex)

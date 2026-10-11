@@ -5,6 +5,12 @@
 
 #ifdef H2_HAVE_GPU
 
+#include <chrono>
+#include <cstdlib>
+#include <cstdio>
+#include <deque>
+#include <future>
+#include <sys/mman.h>
 #include <cuda_runtime.h>
 #include "magma_v2.h"
 #include "device_kernels.hpp"
@@ -115,6 +121,8 @@ public:
     PinnedBuffer(const PinnedBuffer&) = delete;
     PinnedBuffer& operator=(const PinnedBuffer&) = delete;
     ~PinnedBuffer() { release(); }
+    // Pinned host bytes held (part of the process RSS).
+    size_t capacity() const { return capacity_; }
 
     void* reserve(size_t bytes) {
         if (bytes > capacity_) {
@@ -141,6 +149,217 @@ private:
 
 inline size_t align_up(size_t bytes, size_t alignment = 256) {
     return (bytes + alignment - 1) / alignment * alignment;
+}
+
+// Grow-only pinned host arena with bump allocation: chunks of kChunk (or a
+// request when larger), used in order, reset() keeps them for the next
+// level, and they live as long as the process.  The chunks are malloc'd,
+// touched and registered rather than cudaMallocHost'd: with transparent
+// huge pages (always on the Perlmutter nodes) 1.6 GB registers in 0.07 s
+// where cudaMallocHost pinned it at 1.9 GB/s, 0.81 s, with the same 26 GB/s
+// copies.  Registered mapped, the memory is device-visible at its host
+// address (UVA, checked): a kernel reads it over PCIe, which is what the
+// fill store's readers do with their compressed input.
+//
+// The chunks come from the pinned pool below.
+// The pinned host chunks of the backend, one pool for the process (H2
+// host memory, 2026-10-10).  The arenas below (fill store, near stores) and
+// the staged kept factors take chunks here and give them back when their
+// level is done, so a chunk the leaf's near store filled serves the next
+// level's kept factors without pinning again, and idle chunks beyond what
+// the driver asks to keep are unpinned at trim() - the host holds the live
+// bytes plus one cache, not every store's peak.  At 384^3 the arenas had
+// pinned 34 GB a rank by the middle of the leaf and kept it to the end.
+//
+// Chunks are pinned ahead of demand on worker threads (std::async) while
+// the idle set is empty: a new chunk is taken from those pinned ahead, and
+// whenever the one taken is not ready yet - the demand outran the pinning -
+// the pool pins twice as far ahead from then on, up to kAheadMax chunks.
+// Pinning runs at 0.15 s a GB (THP fault-in and cudaHostRegister); done
+// synchronously inside the owner pass's packing it cost 0.95 s of a 192^3
+// factorization (host staging (c), 2026-10-09).
+class PinnedChunkPool {
+public:
+    // 256 MB, not the near store's largest extent (512 MB): with 512 MB chunks
+    // the levels waited less but pinned 0.7 s more in all, and Factor time did
+    // not move at 192^3 and rose 0.2-0.3 s at 96^3 (GPU_CA_PLAN.md, (c3)).
+    static constexpr size_t kChunk = size_t{256} << 20;
+    static constexpr int kAheadMax = 4;   // 1 GB pinning ahead at most
+    static constexpr size_t kIdleKeep = size_t{1} << 30;   // idle bytes trim() keeps at least
+    struct Chunk { char* ptr = nullptr; size_t bytes = 0, used = 0; double seconds = 0.0; };
+    PinnedChunkPool() = default;
+    PinnedChunkPool(const PinnedChunkPool&) = delete;
+    PinnedChunkPool& operator=(const PinnedChunkPool&) = delete;
+    // A chunk of at least `bytes`: the smallest idle one that fits, else the
+    // one pinned ahead (waited for if it is still pinning, and then the pool
+    // pins further ahead), else one pinned here and now.
+    Chunk take(size_t bytes) {
+        bytes = std::max<size_t>(bytes, 1);
+        size_t best = idle_.size();
+        for (size_t i = 0; i < idle_.size(); ++i) {
+            if (idle_[i].bytes >= bytes && (best == idle_.size() || idle_[i].bytes < idle_[best].bytes)) best = i;
+        }
+        if (best != idle_.size()) {
+            Chunk c = idle_[best];
+            idle_.erase(idle_.begin() + static_cast<std::ptrdiff_t>(best));
+            idle_bytes_ -= c.bytes;
+            c.used = 0;
+            return c;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        Chunk c;
+        if (bytes <= kChunk && !ahead_.empty()) {
+            const bool ready = ahead_.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+            c = ahead_.front().get();
+            ahead_.pop_front();
+            if (!ready) ahead_count_ = std::min(ahead_count_ * 2, kAheadMax);
+        } else {
+            if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned pool: device");
+            c = pin_chunk(std::max(kChunk, bytes), device_);
+        }
+        pin_wait_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        pin_seconds_ += c.seconds;
+        pinned_ += c.bytes;
+        c.used = 0;
+        return c;
+    }
+    void give(Chunk c) {
+        if (c.ptr == nullptr) return;
+        c.used = 0;
+        idle_bytes_ += c.bytes;
+        idle_.push_back(c);
+    }
+    // Start pinning the chunks handed out next, unless idle ones wait.
+    // Called by the arenas' alloc, and by the driver at each level's start.
+    void pin_ahead() {
+        if (!idle_.empty()) return;
+        if (device_ < 0) check_cuda(cudaGetDevice(&device_), "pinned pool: device");
+        while (static_cast<int>(ahead_.size()) < ahead_count_) {
+            ahead_.push_back(std::async(std::launch::async, &PinnedChunkPool::pin_chunk, kChunk, device_));
+        }
+    }
+    // Idle chunks beyond `keep` bytes unpinned, largest first; returns the
+    // bytes unpinned (and adds the seconds it took to *seconds).
+    size_t trim(size_t keep = kIdleKeep, double* seconds = nullptr) {
+        if (idle_bytes_ <= keep) return 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        std::sort(idle_.begin(), idle_.end(), [](const Chunk& a, const Chunk& b) { return a.bytes > b.bytes; });
+        size_t freed = 0;
+        while (!idle_.empty() && idle_bytes_ > keep) {
+            const Chunk c = idle_.front();
+            idle_.erase(idle_.begin());
+            idle_bytes_ -= c.bytes;
+            pinned_ -= c.bytes;
+            freed += c.bytes;
+            unpin(c);
+        }
+        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        unpin_seconds_ += s;
+        unpinned_ += freed;
+        if (seconds != nullptr) *seconds += s;
+        return freed;
+    }
+    size_t pinned() const { return pinned_; }        // bytes pinned now, out or idle
+    size_t idle() const { return idle_bytes_; }      // ... of which idle
+    size_t unpinned() const { return unpinned_; }    // bytes trim() gave back in all
+    double pin_seconds() const { return pin_seconds_; }    // the pinning work, wherever it ran
+    double pin_wait_seconds() const { return pin_wait_; }  // what take() waited for it
+    double unpin_seconds() const { return unpin_seconds_; }
+
+private:
+    static Chunk pin_chunk(size_t bytes, int device) {
+        const auto t0 = std::chrono::steady_clock::now();
+        check_cuda(cudaSetDevice(device), "pinned pool: device");   // (a fresh thread: no current device)
+        Chunk c;
+        c.bytes = bytes;
+        void* p = nullptr;
+        if (posix_memalign(&p, size_t{2} << 20, bytes) != 0 || p == nullptr) {
+            throw std::runtime_error("H2 GPU: no host memory for a pinned chunk");
+        }
+        madvise(p, bytes, MADV_HUGEPAGE);
+        for (size_t off = 0; off < bytes; off += 4096) static_cast<volatile char*>(p)[off] = 0;  // faulted in first
+        check_cuda(cudaHostRegister(p, bytes, cudaHostRegisterMapped), "pinned pool: register");
+        void* dp = nullptr;
+        check_cuda(cudaHostGetDevicePointer(&dp, p, 0), "pinned pool: device pointer");
+        if (dp != p) {
+            throw std::runtime_error("H2 GPU: a pinned chunk has different host and device addresses (no UVA)");
+        }
+        c.ptr = static_cast<char*>(p);
+        c.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return c;
+    }
+    static void unpin(const Chunk& c) {
+        if (c.ptr == nullptr) return;
+        cudaHostUnregister(c.ptr);
+        std::free(c.ptr);
+    }
+    std::vector<Chunk> idle_;
+    std::deque<std::future<Chunk>> ahead_;
+    int ahead_count_ = 1;
+    int device_ = -1;
+    size_t pinned_ = 0, idle_bytes_ = 0, unpinned_ = 0;
+    double pin_seconds_ = 0.0, pin_wait_ = 0.0, unpin_seconds_ = 0.0;
+};
+
+inline PinnedChunkPool& pinned_chunk_pool() {
+    static PinnedChunkPool* const pool = new PinnedChunkPool;  // (lives to the process's end, as the heap does)
+    return *pool;
+}
+
+// A bump allocator over chunks of the pinned pool: alloc() hands out
+// pieces, reset() gives every chunk back.  A piece is never freed on its
+// own (the stores' records point into them for the level).
+class PinnedArena {
+public:
+    using Chunk = PinnedChunkPool::Chunk;
+    PinnedArena() = default;
+    PinnedArena(const PinnedArena&) = delete;
+    PinnedArena& operator=(const PinnedArena&) = delete;
+    ~PinnedArena() { release(); }
+    char* alloc(size_t bytes) {
+        bytes = align_up(std::max<size_t>(bytes, 1));
+        while (at_ < chunks_.size() && chunks_[at_].used + bytes > chunks_[at_].bytes) ++at_;
+        if (at_ == chunks_.size()) chunks_.push_back(pinned_chunk_pool().take(bytes));
+        pinned_chunk_pool().pin_ahead();
+        Chunk& c = chunks_[at_];
+        char* p = c.ptr + c.used;
+        c.used += bytes;
+        used_ += bytes;
+        return p;
+    }
+    void pin_ahead() { pinned_chunk_pool().pin_ahead(); }
+    void reset() {
+        for (Chunk& c : chunks_) pinned_chunk_pool().give(c);
+        chunks_.clear();
+        at_ = 0;
+        used_ = 0;
+    }
+    void release() { reset(); }
+    size_t used() const { return used_; }      // bytes handed out since the last reset
+    size_t held() const {                      // bytes of the chunks it holds
+        size_t b = 0;
+        for (const Chunk& c : chunks_) b += c.bytes;
+        return b;
+    }
+
+private:
+    std::vector<Chunk> chunks_;
+    size_t at_ = 0, used_ = 0;
+};
+
+// The process's resident set and its high-water mark, from /proc (GB):
+// the host side of the memory question, per level and per wave.
+inline void host_memory_gb(double& rss, double& hwm) {
+    rss = hwm = 0.0;
+    if (FILE* f = std::fopen("/proc/self/status", "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof line, f) != nullptr) {
+            long kb = 0;
+            if (std::sscanf(line, "VmRSS: %ld kB", &kb) == 1) rss = static_cast<double>(kb) / 1e6;
+            else if (std::sscanf(line, "VmHWM: %ld kB", &kb) == 1) hwm = static_cast<double>(kb) / 1e6;
+        }
+        std::fclose(f);
+    }
 }
 
 // Scalar type MAGMA uses for DataType (std::complex<double> and
@@ -312,6 +531,7 @@ public:
     void synchronize() const {
         if (!events_.empty()) check_cuda(cudaEventSynchronize(events_.back()), "cudaEventSynchronize");
     }
+    size_t count() const { return events_.size(); }
     // seconds from mark i to mark i + 1
     double seconds(size_t i) const {
         float ms = 0.0f;
@@ -352,6 +572,11 @@ public:
         size_ = 0;
     }
     size_t size() const { return size_; }
+    // Pinned host bytes held (part of the process RSS).
+    size_t capacity() const { return capacity_; }
+    // Page-lock room for an image of `bytes` now (the warm-up: the first
+    // image otherwise pins its buffer inside a wave).
+    void reserve(size_t bytes) { ensure(bytes); }
 
     // Reserve `bytes` at a 16-byte aligned offset, to be filled via host().
     size_t alloc(size_t bytes) {
@@ -447,6 +672,18 @@ struct PinnedPool {
 inline PinnedPool& pinned_pool() {
     static PinnedPool* pool = new PinnedPool;
     return *pool;
+}
+
+// Pinned host bytes the backend holds.  They are part of the process RSS but
+// live outside every tree structure, so BPACK_TRACE=memory reports them on
+// their own through the host-staging probe of core/memory_diagnostics.hpp.
+inline size_t pinned_pool_host_bytes() {
+    PinnedPool& p = pinned_pool();
+    size_t bytes = p.meta.capacity() + p.owner_meta.capacity() +
+                   p.result.capacity();
+    for (const PinnedBuffer& b : p.ring) bytes += b.capacity();
+    for (const PinnedBuffer& b : p.staging) bytes += b.capacity();
+    return bytes;
 }
 
 // A variable-size MAGMA batch described on the host; its six size arrays and

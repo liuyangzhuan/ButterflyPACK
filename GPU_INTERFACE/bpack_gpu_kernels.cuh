@@ -101,8 +101,12 @@ struct EvalItemT {
 // Sketch list entries pack (row, destination, sign): row in the low
 // kEntryRowBits bits, destination above, sign in bit 31 (set = negative).
 // The draws of a box are partitioned by owner warp: destination mod
-// kSketchOwners.
-constexpr int kEntryRowBits = 20;
+// kSketchOwners.  18 row bits (262143 rows) and 13 destination bits (8191
+// points a box) since 2026-10-11: with 20/11 a box of over 2047 points sent
+// its whole level to host sketches and the host exchange, which at 768^3 on
+// 64 ranks made levels 3 and 2 cost 153 s of 386.  A box's rows are its
+// neighbours' points, at most 27 times its own, so the two bounds agree.
+constexpr int kEntryRowBits = 18;
 constexpr int kEntryRowMask = (1 << kEntryRowBits) - 1;
 constexpr int kEntryDestMask = (1 << (31 - kEntryRowBits)) - 1;
 constexpr int kSketchOwners = 16;

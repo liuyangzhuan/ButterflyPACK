@@ -10,9 +10,237 @@
 #include "core/memory_diagnostics.hpp"
 #include "h2_gpu/owner_pass_gpu.hpp"
 #include "h2_gpu/factorization_driver.hpp"
+#include "h2_gpu/ca_owner.hpp"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace butterfly {
 using namespace fmm;
+
+// ---------------------------------------------------------------------------
+// BPACK_TRACE=skew (doc/environment_variables.md): where a level's waits for
+// the neighbours come from.  Every rank records the elimination's wall time
+// and the part of it spent waiting for or receiving neighbour data (the
+// transports' `sizes` and `payload` timers, serialization excluded), per
+// wave of the Color loop as well.  At the level's end the level's first rank
+// gathers them and replays the Color waves with zero latency: a wave that
+// begins with a transport starts on a rank when its own and its
+// neighbours' previous waves are done (the data that transport carries),
+// any other wave when its own previous one is, and takes the rank's
+// measured busy time (wall minus wait); a wave's transport first does its
+// send-side work (the last wave's device tail, the headers: the send-ready
+// time), and the neighbours wait for that too, so a neighbour's data is
+// ready at the end of its previous wave plus its send-ready time.  The model's level time, against the
+// average busy time and against the measured level time, splits the level
+// into compute, work skew (ranks with more work, and the chains of waits
+// they cause) and latency (the messages, the transfers and the
+// synchronisation itself, on the critical path).  The per-rank data go to
+// skew_<job>.<step>_level<L>.csv in the working directory.
+// ---------------------------------------------------------------------------
+struct LevelSkewProbe {
+    using clock = std::chrono::steady_clock;
+    bool on = false;
+    clock::time_point t_level, t_wave;
+    double wait_level0 = 0.0, wait_wave0 = 0.0, bytes0 = 0.0, presend_wave0 = 0.0;
+    double pre_ms = -1.0;              // level start to the first wave (-1: no wave loop)
+    std::vector<double> wave_wall;     // ms, per iteration of the wave loop, then the final transport
+    std::vector<double> wave_wait;     // ms, the part waiting for or receiving neighbour data
+    std::vector<char> wave_dep;        // the iteration began with a transport
+    std::vector<double> wave_presend;  // ms, its transport's send-ready time
+
+    static double waited_ms() {
+        const auto& t = transport_timers();
+        return (t.sizes + t.payload - t.serialize) * 1e3;
+    }
+    static double ms_since(clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(clock::now() - t).count();
+    }
+    void level_begin(bool enabled) {
+        on = enabled;
+        pre_ms = -1.0;
+        wave_wall.clear();
+        wave_wait.clear();
+        wave_dep.clear();
+        wave_presend.clear();
+        if (!on) return;
+        t_level = clock::now();
+        wait_level0 = waited_ms();
+        bytes0 = transport_timers().bytes_received;
+    }
+    void loop_begin() {
+        if (on) pre_ms = ms_since(t_level);
+    }
+    void wave_begin(bool dep) {
+        if (!on) return;
+        t_wave = clock::now();
+        wait_wave0 = waited_ms();
+        presend_wave0 = transport_timers().presend * 1e3;
+        wave_dep.push_back(dep ? 1 : 0);
+    }
+    void wave_end() {
+        if (!on) return;
+        wave_wall.push_back(ms_since(t_wave));
+        wave_wait.push_back(waited_ms() - wait_wave0);
+        wave_presend.push_back(transport_timers().presend * 1e3 - presend_wave0);
+    }
+    // the wave loop's iterations end on every path (`continue` included)
+    struct WaveScope {
+        LevelSkewProbe& p;
+        WaveScope(LevelSkewProbe& probe, bool dep) : p(probe) { p.wave_begin(dep); }
+        ~WaveScope() { p.wave_end(); }
+    };
+};
+
+// The level's report (collective over level_comm; `elim_ms` this rank's
+// elimination wall time).
+template<typename CoordType, typename DataType>
+void level_skew_report(const LevelSkewProbe& p, fmm::ParallelTree<CoordType, DataType>* tree,
+                       const fmm::TreeLevel<CoordType, DataType>& level, int lvl, MPI_Comm level_comm, double elim_ms) {
+    int P = 1, me = 0;
+    MPI_Comm_size(level_comm, &P);
+    MPI_Comm_rank(level_comm, &me);
+    std::vector<int> nbrs = compute_one_hop_neighbor_ranks(tree, level, lvl);
+    nbrs.erase(std::remove(nbrs.begin(), nbrs.end(), tree->mpi_rank), nbrs.end());
+    int dims[2] = {static_cast<int>(p.wave_wall.size()), static_cast<int>(nbrs.size())};
+    int maxd[2] = {0, 0};
+    MPI_Allreduce(dims, maxd, 2, MPI_INT, MPI_MAX, level_comm);
+    const int NW = maxd[0], NN = maxd[1];
+    // [tree rank, neighbours, elim, wait, MB received, pre, waves, (wall, wait, dep, send-ready) x NW, neighbour ranks x NN]
+    const int H = 7, K = 4, REC = H + K * NW + NN;
+    std::vector<double> rec(static_cast<size_t>(REC), -1.0);
+    rec[0] = tree->mpi_rank;
+    rec[1] = static_cast<double>(nbrs.size());
+    rec[2] = elim_ms;
+    rec[3] = LevelSkewProbe::waited_ms() - p.wait_level0;
+    rec[4] = (transport_timers().bytes_received - p.bytes0) / 1e6;
+    rec[5] = p.pre_ms;
+    rec[6] = static_cast<double>(p.wave_wall.size());
+    for (size_t w = 0; w < p.wave_wall.size(); ++w) {
+        rec[static_cast<size_t>(H + K * w)] = p.wave_wall[w];
+        rec[static_cast<size_t>(H + K * w + 1)] = p.wave_wait[w];
+        rec[static_cast<size_t>(H + K * w + 2)] = p.wave_dep[w];
+        rec[static_cast<size_t>(H + K * w + 3)] = p.wave_presend[w];
+    }
+    for (size_t i = 0; i < nbrs.size(); ++i) rec[static_cast<size_t>(H + K * NW) + i] = nbrs[i];
+    std::vector<double> all(me == 0 ? static_cast<size_t>(REC) * static_cast<size_t>(P) : 0);
+    MPI_Gather(rec.data(), REC, MPI_DOUBLE, all.data(), REC, MPI_DOUBLE, 0, level_comm);
+    if (me != 0) return;
+    auto at = [&](int r, int i) { return all[static_cast<size_t>(r) * static_cast<size_t>(REC) + static_cast<size_t>(i)]; };
+    // per-rank totals
+    double T = 0, c_sum = 0, c_min = 1e300, c_max = -1, w_sum = 0, w_of_busiest = 0, mb_sum = 0;
+    int busiest = 0;
+    for (int r = 0; r < P; ++r) {
+        const double t = at(r, 2), w = at(r, 3), c = t - w;
+        T = std::max(T, t);
+        c_sum += c;
+        w_sum += w;
+        mb_sum += at(r, 4);
+        c_min = std::min(c_min, c);
+        if (c > c_max) {
+            c_max = c;
+            busiest = r;
+            w_of_busiest = w;
+        }
+    }
+    const double c_avg = c_sum / P;
+    // by number of neighbour ranks
+    std::map<int, std::array<double, 4>> cls;   // count, busy, wait, MB
+    for (int r = 0; r < P; ++r) {
+        auto& a = cls[static_cast<int>(at(r, 1))];
+        a[0] += 1;
+        a[1] += at(r, 2) - at(r, 3);
+        a[2] += at(r, 3);
+        a[3] += at(r, 4);
+    }
+    std::string by;
+    for (const auto& [n, a] : cls) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), " | %d neighbours: %d ranks, busy %.0f, wait %.0f ms, %.0f MB in", n,
+                      static_cast<int>(a[0]), a[1] / a[0], a[2] / a[0], a[3] / a[0]);
+        by += buf;
+    }
+    std::printf("  [skew] level %d (%d ranks): elimination %.0f ms (slowest rank); busy min/avg/max %.0f/%.0f/%.0f ms "
+                "(the busiest: tree rank %d, %d neighbours, waits %.0f ms); waits avg %.0f ms\n",
+                lvl, P, T, c_min, c_avg, c_max, static_cast<int>(at(busiest, 0)), static_cast<int>(at(busiest, 1)),
+                w_of_busiest, w_sum / P);
+    std::printf("  [skew] level %d by neighbour ranks:%s\n", lvl, by.c_str());
+    // the zero-latency replay of the waves
+    if (NW > 0 && at(0, 5) >= 0.0) {
+        std::unordered_map<int, int> index_of;   // tree rank -> gathered index
+        for (int r = 0; r < P; ++r) index_of[static_cast<int>(at(r, 0))] = r;
+        std::vector<double> E(static_cast<size_t>(P)), next(static_cast<size_t>(P)), measured(static_cast<size_t>(P));
+        for (int r = 0; r < P; ++r) {
+            E[static_cast<size_t>(r)] = std::max(0.0, at(r, 5));
+            measured[static_cast<size_t>(r)] = std::max(0.0, at(r, 5));
+        }
+        double busy_sum = 0;
+        for (int r = 0; r < P; ++r) busy_sum += std::max(0.0, at(r, 5));
+        for (int w = 0; w < NW; ++w) {
+            for (int r = 0; r < P; ++r) {
+                if (w >= static_cast<int>(at(r, 6))) {
+                    next[static_cast<size_t>(r)] = E[static_cast<size_t>(r)];
+                    continue;
+                }
+                const double wall = at(r, H + K * w), wait = at(r, H + K * w + 1);
+                const bool dep = at(r, H + K * w + 2) > 0.5;
+                const double ready = std::max(0.0, at(r, H + K * w + 3));   // send-ready time (busy)
+                double start = E[static_cast<size_t>(r)] + ready;          // its own send side
+                if (dep) {
+                    for (int i = 0; i < static_cast<int>(at(r, 1)); ++i) {
+                        const auto it = index_of.find(static_cast<int>(at(r, H + K * NW + i)));
+                        if (it == index_of.end()) continue;
+                        const int q = it->second;
+                        const double q_ready = w < static_cast<int>(at(q, 6)) ? std::max(0.0, at(q, H + K * w + 3)) : 0.0;
+                        start = std::max(start, E[static_cast<size_t>(q)] + q_ready);
+                    }
+                }
+                next[static_cast<size_t>(r)] = start + std::max(0.0, wall - wait - ready);
+                measured[static_cast<size_t>(r)] += wall;
+                busy_sum += std::max(0.0, wall - wait);
+            }
+            E.swap(next);
+        }
+        const double model = *std::max_element(E.begin(), E.end());
+        const double meas = *std::max_element(measured.begin(), measured.end());
+        const double busy_avg = busy_sum / P;
+        double end_avg = 0, end_max = 0;
+        for (int r = 0; r < P; ++r) {
+            const double end = at(r, 2) - measured[static_cast<size_t>(r)];
+            end_avg += end / P;
+            end_max = std::max(end_max, end);
+        }
+        std::printf("  [skew] level %d waves (%d, the last the final transport): measured %.0f ms to the final transport's end, "
+                    "zero-latency replay %.0f ms, average busy %.0f ms => compute %.0f, work skew %.0f, latency %.0f ms "
+                    "(then the level's end: avg %.0f, max %.0f ms)\n",
+                    lvl, NW, meas, model, busy_avg, busy_avg, model - busy_avg, meas - model, end_avg, end_max);
+    }
+    // the raw data
+    const char* job = std::getenv("SLURM_JOB_ID");
+    const char* step = std::getenv("SLURM_STEP_ID");
+    const std::string name = std::string("skew_") + (job ? job : "run") + "." + (step ? step : "0") + "_level" +
+                             std::to_string(lvl) + ".csv";
+    if (FILE* f = std::fopen(name.c_str(), "w")) {
+        std::fprintf(f, "tree_rank,neighbours,elim_ms,wait_ms,mb_in,pre_ms,waves");
+        for (int w = 0; w < NW; ++w) std::fprintf(f, ",wall%d,wait%d,dep%d,ready%d", w, w, w, w);
+        for (int i = 0; i < NN; ++i) std::fprintf(f, ",nbr%d", i);
+        std::fprintf(f, "\n");
+        for (int r = 0; r < P; ++r) {
+            for (int i = 0; i < REC; ++i) std::fprintf(f, i == 0 ? "%.6g" : ",%.6g", at(r, i));
+            std::fprintf(f, "\n");
+        }
+        std::fclose(f);
+    }
+    std::fflush(stdout);
+}
+
 
 #ifdef H2_HAVE_GPU
 // A replicated CA level on the device (h2_gpu/GPU_CA_PLAN.md, M1): the
@@ -148,7 +376,10 @@ void hierarchical_factorization_parallel(
     int ca_staged_halo,
     int ca_owner_component,
     int ca_owner_serial,
-    int verbosity = 1) {
+    int verbosity = 1,
+    // H2_compress_factors: lossy compression of the kept factors at
+    // `tolerance` (0 off, 1 the retained X_NR, 2 also the fill sources).
+    int compress_factors = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
@@ -160,7 +391,14 @@ void hierarchical_factorization_parallel(
     const bool print_trace = verbosity >= 2;
     H2FactorizationMemoryDiagnostics memory_diagnostics;
 #ifdef H2_HAVE_GPU
-    if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm);
+    // The backend's pinned staging is part of the RSS but sits outside every
+    // tree structure: report it instead of leaving it in `unattributed`.
+    if (memory_diagnostics.enabled()) {
+        h2_diag_host_staging_probe() = [] { return gpu::pinned_pool_host_bytes(); };
+    }
+    // (a component-owner CA level needs a larger exchange arena: a fifth of
+    // the GPU, 8 GB of 40; a colour's arrivals stay in it until its end)
+    if (color_gpu_enabled()) gpu::begin_operator_build(tree, tree->comm, ca_owner_component == 3 ? 0.2 : 0.0);
     gpu::invalidate_device_solve();  // the device copies of the previous factors
 #endif
     DynamicThreadingContext dynamic_threading =
@@ -268,19 +506,21 @@ void hierarchical_factorization_parallel(
     gpu_options.method = factorization_method;
     gpu_options.use_sketch = use_sketch;
     gpu_options.lazy_schur = lazy_schur;
+    gpu_options.compress_factors = compress_factors;
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.ca_owner_component = ca_owner_component;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         const double kernels = gpu_driver.warm_up();
+        const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
         const double evaluator = gpu_driver.warm_up_evaluator();
-        h2_warmup_seconds() = kernels + exchanges + evaluator;
+        h2_warmup_seconds() = kernels + buffers + exchanges + evaluator;
         if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
-            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, evaluator %.2f s, before the levels (not "
-                        "in the factor time)\n",
-                        kernels, exchanges, evaluator);
+            std::printf("  [gpu] warm-up: kernels %.2f s, buffers %.2f s, exchanges %.2f s, evaluator %.2f s, before "
+                        "the levels (not in the factor time)\n",
+                        kernels, buffers, exchanges, evaluator);
             std::fflush(stdout);
         }
     }
@@ -290,6 +530,14 @@ void hierarchical_factorization_parallel(
         auto level_start = std::chrono::high_resolution_clock::now();
         clock::duration level_data_exchange{};
         clock::duration level_reduction{};
+        // the level's host phases outside the elimination and transition
+        // timers (ms): the owner schedule's setup, from the level's start to
+        // the elimination, from the elimination to the transition, after it
+        double host_phase_ms[4] = {0.0, 0.0, 0.0, 0.0};
+        auto host_phase_since = [](std::chrono::high_resolution_clock::time_point t) {
+            return std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t).count();
+        };
+        auto elim_end_level = level_start;
         
         auto& level = tree->levels[current_level];
         auto& parent_level = tree->levels[current_level - 1];
@@ -343,9 +591,11 @@ void hierarchical_factorization_parallel(
         // overlap); start_ca_level confirms it after the gather.
         bool gpu_ca_candidate = false;
         bool ca_on_device = false;  // the device eliminates this CA level
+        level.ca_home_factors = false;
 #ifdef H2_HAVE_GPU
         gpu_ca_candidate = level.is_process_active && current_level > 1 &&
                            gpu_driver.ca_level_runs(current_level, ca_owner_component);
+        gpu::OwnerPlanView owner_view;  // a component-owner level on the device (h2_gpu/ca_owner.hpp)
 #endif
         if (level.is_process_active && use_CA_level &&
             current_level > 1 && level.num_active_processes > 1 &&
@@ -359,8 +609,11 @@ void hierarchical_factorization_parallel(
                 throw std::runtime_error(
                     "H2_CA_owner_component=3 requires streamed sketching and lazy Schur updates");
             }
+            const auto t_setup = std::chrono::high_resolution_clock::now();
             owner_schedule_setup(
-                tree, current_level, level_comm, owner_schedule);
+                tree, current_level, level_comm, owner_schedule,
+                /*sync_colors=*/gpu_ca_candidate);  // (a device level: per-colour balancing)
+            host_phase_ms[0] = host_phase_since(t_setup);
         }
 
         if (level.is_process_active && use_CA_level) {
@@ -422,6 +675,11 @@ void hierarchical_factorization_parallel(
             }
             const auto gather_duration = clock::now() - segment_start;
             level_data_exchange += gather_duration;
+            // (the messages wait for the slowest rank's plan and packing)
+            double gather_prepare_max = gather_times.plan + gather_times.serialize;
+            if (print_detail && ca_staged_halo != 2) {
+                MPI_Allreduce(MPI_IN_PLACE, &gather_prepare_max, 1, MPI_DOUBLE, MPI_MAX, level_comm);
+            }
             if (print_detail && rank == level_print_rank) {
                 std::cout << "  CA initial ghost/assisting gather time: "
                           << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -429,11 +687,19 @@ void hierarchical_factorization_parallel(
                           << " ms";
                 if (ca_staged_halo != 2) {
                     auto ms = [](double s) { return static_cast<long long>(s * 1e3 + 0.5); };
-                    std::cout << " (plan " << ms(gather_times.plan) << " [first collective "
-                              << ms(gather_times.first_collective) << "], request sets "
-                              << ms(gather_times.request_sets) << ", payloads " << ms(gather_times.payloads)
-                              << ", symmetric halo " << ms(gather_times.reconstruct) << ", assisting "
-                              << ms(gather_times.assisting) << ")";
+                    if (gather_times.geometric) {
+                        std::cout << " (geometric plan " << ms(gather_times.plan) << ", serialize "
+                                  << ms(gather_times.serialize) << " [both, slowest rank: "
+                                  << ms(gather_prepare_max) << "], messages " << ms(gather_times.mpi)
+                                  << ", unpack " << ms(gather_times.unpack) << ", symmetric halo "
+                                  << ms(gather_times.reconstruct) << ")";
+                    } else {
+                        std::cout << " (plan " << ms(gather_times.plan) << " [first collective "
+                                  << ms(gather_times.first_collective) << "], request sets "
+                                  << ms(gather_times.request_sets) << ", payloads " << ms(gather_times.payloads)
+                                  << ", symmetric halo " << ms(gather_times.reconstruct) << ", assisting "
+                                  << ms(gather_times.assisting) << ")";
+                    }
                 }
                 std::cout << std::endl;
             }
@@ -515,10 +781,28 @@ void hierarchical_factorization_parallel(
             // Regular levels: do ID and elimination in colored order
 
             auto elim_start = std::chrono::high_resolution_clock::now();
+            host_phase_ms[1] = std::chrono::duration<double, std::milli>(elim_start - level_start).count();
+            static const bool skew_trace = fmm::env::trace("skew");
+            LevelSkewProbe skew_probe;
+            skew_probe.level_begin(skew_trace);
 
 #ifdef H2_HAVE_GPU
-            if (use_CA_level && gpu_ca_candidate &&
-                gpu_driver.start_ca_level(current_level, level_comm, print_detail && rank == level_print_rank)) {
+            if (use_CA_level && gpu_ca_candidate && ca_owner_component == 3 && owner_schedule.active &&
+                gpu::start_owner_level_gpu(tree, current_level, gpu_driver, owner_schedule, owner_view, level_comm,
+                                           print_detail && rank == level_print_rank)) {
+                // a component-owner level on the device: its factors land at
+                // their home ranks, so the solves run it as a Color level
+                gpu::factorize_owner_level_gpu(
+                    tree, current_level, gpu_driver, owner_schedule, owner_view,
+                    total_skeleton, total_redundant, local_max_skel,
+                    print_detail, level_print_rank);
+                PendingFactorUpdates<DataType> no_updates;
+                gpu_driver.finish_level(current_level, no_updates, level_comm,
+                                        print_detail && rank == level_print_rank);
+                level.ca_home_factors = true;
+                ca_on_device = true;
+            } else if (use_CA_level && gpu_ca_candidate && ca_owner_component == 0 &&
+                       gpu_driver.start_ca_level(current_level, level_comm, print_detail && rank == level_print_rank)) {
                 factorize_CA_level_gpu(
                     tree, current_level, gpu_driver,
                     total_skeleton, total_redundant, local_max_skel,
@@ -602,10 +886,13 @@ void hierarchical_factorization_parallel(
             const bool gpu_level_local = false;
 #endif
 
+            skew_probe.loop_begin();
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
 
                 const int  color_id_mod    = counter % num_colors;
                 const bool is_interior     = (counter >= interior_start_loc);
+                const LevelSkewProbe::WaveScope skew_wave(
+                    skew_probe, (!is_interior || counter == interior_start_loc) && !gpu_level_local);
                 FMM_PHASE_LAP_BEGIN(wave_lap);  // master-thread wall laps of this wave
 
                 // ----------------------------------------------------------------
@@ -1145,6 +1432,7 @@ void hierarchical_factorization_parallel(
                     };
             }
             if (!gpu_level_local) {
+                const LevelSkewProbe::WaveScope skew_wave(skew_probe, true);
                 std::chrono::high_resolution_clock::duration final_comm_duration{};
 #ifdef H2_HAVE_GPU
                 if (gpu_driver.on()) {
@@ -1186,6 +1474,11 @@ void hierarchical_factorization_parallel(
             const auto elim_end = std::chrono::high_resolution_clock::now();
             elim_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 elim_end - elim_start);
+            elim_end_level = elim_end;
+            if (skew_probe.on) {
+                level_skew_report(skew_probe, tree, level, current_level, level_comm,
+                                  std::chrono::duration<double, std::milli>(elim_end - elim_start).count());
+            }
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
             if (print_detail && rank == level_print_rank) {
@@ -1271,9 +1564,10 @@ void hierarchical_factorization_parallel(
         }
 
         if (current_level > 1) {
+            // (a device owner level: its factors are at home, no owner solve)
             const bool owner_engine_level =
                 use_CA_level && ca_owner_component == 3 &&
-                level.num_active_processes > 1;
+                level.num_active_processes > 1 && !ca_on_device;
             owner_solve_record_level(
                 owner_schedule, current_level, owner_engine_level);
             if (level.is_process_active) {
@@ -1394,6 +1688,7 @@ void hierarchical_factorization_parallel(
         }
 #endif
         auto transition_start = std::chrono::high_resolution_clock::now();
+        host_phase_ms[2] = std::chrono::duration<double, std::milli>(transition_start - elim_end_level).count();
         // if(rank == 1)
         // {
         //     build_parent_level_interactions<CoordType, DataType, KernelType>(
@@ -1419,7 +1714,7 @@ void hierarchical_factorization_parallel(
                 return build_parent_level_structure(
                     level, tree->levels[current_level - 1], dimension, tree->global_bounds);
             },
-            print_detail && rank == level_print_rank, level_comm);
+            print_detail && rank == level_print_rank, level_comm, transition_comm);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes = build_parent_level_interactions<CoordType, DataType, KernelType>(
@@ -1651,9 +1946,21 @@ void hierarchical_factorization_parallel(
 
         auto level_end = std::chrono::high_resolution_clock::now();
         auto level_duration = std::chrono::duration_cast<std::chrono::milliseconds>(level_end - level_start);
+        host_phase_ms[3] = std::chrono::duration<double, std::milli>(level_end - transition_end).count();
         
         if (print_detail && rank == level_print_rank) {
             std::cout << "  Total level time: " << level_duration.count() << " ms" << std::endl;
+        }
+        if (print_detail && current_level > 1 && level.is_process_active) {
+            double host_phase_max[4];
+            MPI_Allreduce(host_phase_ms, host_phase_max, 4, MPI_DOUBLE, MPI_MAX, level_comm);
+            if (rank == level_print_rank) {
+                std::printf("  level host phases (ms, this rank / slowest): schedule setup %.0f / %.0f, start to elimination %.0f / %.0f, "
+                            "elimination to transition %.0f / %.0f, after the transition %.0f / %.0f\n",
+                            host_phase_ms[0], host_phase_max[0], host_phase_ms[1], host_phase_max[1], host_phase_ms[2], host_phase_max[2],
+                            host_phase_ms[3], host_phase_max[3]);
+                std::fflush(stdout);
+            }
         }
 
         if (dynamic_threading.enabled &&
@@ -1929,7 +2236,8 @@ void hierarchical_factorization_parallel_if_supported(
     int ca_staged_halo = 0,
     int ca_owner_component = 0,
     int ca_owner_serial = 0,
-    int verbosity = 1) {
+    int verbosity = 1,
+    int compress_factors = 0) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
         hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
@@ -1950,7 +2258,8 @@ void hierarchical_factorization_parallel_if_supported(
             ca_staged_halo,
             ca_owner_component,
             ca_owner_serial,
-            verbosity);   // instantiated ONLY for double types
+            verbosity,
+            compress_factors);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
     }
@@ -2018,7 +2327,8 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_staged_halo,
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
-    solver->options.verbosity);
+    solver->options.verbosity,
+    solver->options.compress_factors);
   // the logdet and quick verification that end the call, and the GPU
   // kernel warm-up before its first level, are not factorization
   double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds() - butterfly::h2_warmup_seconds();

@@ -319,6 +319,19 @@ if(enable_h2_gpu)
   set(CMAKE_CXX_FLAGS "-DH2_HAVE_GPU -DADD_ ${CMAKE_CXX_FLAGS}")
   include_directories(${TPL_H2_MAGMA_INCLUDE_DIRS} ${CUDAToolkit_INCLUDE_DIRS})
   set(H2_GPU_LIB ${TPL_H2_MAGMA_LIBRARIES} CUDA::cudart CUDA::cusolver CUDA::nvrtc CUDA::cuda_driver)
+  #--------------------- nvCOMP (optional) ---------------------
+  # Lossy Bitcomp compression of the H2 factors (X_NR is 86-88% of the factor
+  # bytes).  Optional: without it the factors are stored uncompressed, as
+  # before.  Both libraries are linked, so the host paths
+  # (bitcompHost*) are available as well as the device ones.
+  if(TPL_H2_NVCOMP_LIBRARIES AND TPL_H2_NVCOMP_INCLUDE_DIRS)
+    message("-- Using nvCOMP for H2 factor compression: '${TPL_H2_NVCOMP_LIBRARIES}'")
+    set(CMAKE_CXX_FLAGS "-DH2_HAVE_NVCOMP ${CMAKE_CXX_FLAGS}")
+    include_directories(${TPL_H2_NVCOMP_INCLUDE_DIRS})
+    list(APPEND H2_GPU_LIB ${TPL_H2_NVCOMP_LIBRARIES})
+  else()
+    message("-- H2 factor compression off (set TPL_H2_NVCOMP_LIBRARIES and TPL_H2_NVCOMP_INCLUDE_DIRS to enable)")
+  endif()
 endif()
 
 #--------------------- ARPACK ---------------------
@@ -634,6 +647,15 @@ if (enable_h2_gpu)
   target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_batch_determinism butterflypack)
 endif()
+# Self-test of the CA halo geometry (h2_parallel/core/halo_geometry.hpp, the
+# ghost and assisting sets by region against their enumeration; GPU_BACKEND/
+# h2_gpu/GPU_CA_PLAN.md, M7b); not built by default: make h2_halo_geometry_test
+add_executable(h2_halo_geometry_test EXCLUDE_FROM_ALL h2_parallel/tests/halo_geometry_test.cpp)
+target_include_directories(h2_halo_geometry_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
+# Test and timing of the component-owner schedule's graph of the process grid (the local
+# construction against the global one; h2_gpu/GPU_CA_PLAN.md, M5e); not built by default: make h2_owner_graph_test
+add_executable(h2_owner_graph_test EXCLUDE_FROM_ALL h2_parallel/tests/owner_graph_test.cpp)
+target_include_directories(h2_owner_graph_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
 
 set_target_properties(butterflypack PROPERTIES
   VERSION ${PROJECT_VERSION}

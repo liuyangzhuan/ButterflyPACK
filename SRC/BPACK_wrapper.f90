@@ -1029,6 +1029,10 @@ contains
          val_d = option%H2_lazy_schur
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_compress_factors' .or. trim(str) == 'h2_compress_factors') then
+         val_d = option%H2_compress_factors
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_GEMM_split' .or. trim(str) == 'h2_gemm_split') then
          val_d = option%H2_GEMM_split
          valid_opt = 1
@@ -1365,6 +1369,11 @@ contains
       if (trim(str) == 'H2_lazy_schur' .or. trim(str) == 'h2_lazy_schur') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_lazy_schur = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_compress_factors' .or. trim(str) == 'h2_compress_factors') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_compress_factors = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_GEMM_split' .or. trim(str) == 'h2_gemm_split') then

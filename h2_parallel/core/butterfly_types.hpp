@@ -135,6 +135,10 @@ struct ProgramOptions {
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
     int use_sketch = 1;         // 0: full workspace, 1: materialized sketch, 2: streamed sketch
     int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
+    // GPU: lossy compression of the kept factors at tol_comp (X_NR is
+    // 86-88% of the factor bytes).  0 off, 1 the retained X_NR, 2 also
+    // the fill sources.  Needs a build with nvCOMP.
+    int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
     int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)

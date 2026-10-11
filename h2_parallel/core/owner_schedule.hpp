@@ -940,6 +940,8 @@ struct OwnerScheduleState {
     bool interest_of(uint32_t pid, int64_t n) const {
         if (grid.proc_of_box(n) == pid) return true;
         const int32_t c = comp_of(n);
+        if (c < 0 && grid.on_brick_boundary(n))
+            throw std::runtime_error("owner_schedule: boundary box " + std::to_string(n) + " has no component here");
         return c >= 0 && graph.comps[static_cast<size_t>(c)].owner == static_cast<int32_t>(pid);
     }
     /// Recipients of box m's state (see dataflow::payload_recipients).
@@ -968,14 +970,26 @@ struct OwnerScheduleState {
 // Components never share a wave's box region with each other (they are
 // non-adjacent), so classes are local to a component and the global wave
 // count is just the largest class count over all components (<= 8).
+// `only`: the components to partition (the ones this rank eliminates or
+// installs; every component when null).  num_waves is the parity class
+// count (8 in 3D, 4 in 2D), the bound every candidate respects, so it is
+// the same on every rank whatever subset it partitions (the sequence
+// numbers colour * num_waves + wave must agree across ranks).
 inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow::ComponentGraph& graph,
-                                                                 const dataflow::ProcessGrid& grid, int& num_waves) {
+                                                                 const dataflow::ProcessGrid& grid, int& num_waves,
+                                                                 const std::vector<int32_t>* only = nullptr) {
     std::unordered_map<int64_t, int32_t> wave;
+    std::vector<int32_t> all_ids;
+    if (only == nullptr) {
+        all_ids.reserve(graph.comps.size());
+        for (const auto& k : graph.comps) all_ids.push_back(k.id);
+    }
+    const std::vector<int32_t>& ids = only != nullptr ? *only : all_ids;
     size_t total = 0;
-    for (const auto& k : graph.comps) total += k.boxes.size();
+    for (int32_t id : ids) total += graph.comps[static_cast<size_t>(id)].boxes.size();
     wave.reserve(total);
-    num_waves = 1;
     const int parity_classes = grid.dimension == 2 ? 4 : 8;
+    num_waves = parity_classes;
     // Three candidate partitions per component; the one with the fewest
     // classes wins (ties: the flattest).  Morton parity is always valid and
     // optimal for dense clumps (blue+orange: 8) and for sheets (4) and edges
@@ -986,15 +1000,16 @@ inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow:
     // code uses, so mode 3 can be diffed box by box against mode 0.  Must be
     // set identically on every rank.
     if (fmm::env::check("parity")) {
-        for (const auto& k : graph.comps)
-            for (int64_t m : k.boxes) wave.emplace(m, static_cast<int32_t>(m % parity_classes));
-        num_waves = parity_classes;
+        for (int32_t id : ids)
+            for (int64_t m : graph.comps[static_cast<size_t>(id)].boxes) wave.emplace(m, static_cast<int32_t>(m % parity_classes));
         return wave;
     }
     std::vector<int64_t> boxes;
     std::vector<int32_t> cls;   // class of boxes[i] in the candidate being built
     std::unordered_map<int64_t, size_t> index_of;
-    for (const auto& k : graph.comps) {
+    for (int32_t id : ids) {
+        const auto& k = graph.comps[static_cast<size_t>(id)];
+        if (!k.boxes_complete) throw std::runtime_error("owner_wave_partition: component " + std::to_string(id) + " without its complete box list");
         boxes.assign(k.boxes.begin(), k.boxes.end());
         std::sort(boxes.begin(), boxes.end());
         index_of.clear();
@@ -1069,7 +1084,7 @@ inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow:
             consider(cls);
         }
         for (size_t i = 0; i < boxes.size(); ++i) wave.emplace(boxes[i], best[i]);
-        num_waves = std::max(num_waves, best_classes);
+        if (best_classes > parity_classes) throw std::runtime_error("owner_wave_partition: more classes than the parity bound");
     }
     return wave;
 }
@@ -1078,12 +1093,16 @@ inline std::unordered_map<int64_t, int32_t> owner_wave_partition(const dataflow:
 // Setup
 // ===========================================================================
 
+// `sync_colors`: the level runs the synchronous colour schedule whatever
+// its size (the device level, h2_gpu/ca_owner.hpp), so the owners are
+// balanced per colour.
 template<typename CoordType, typename DataType>
 void owner_schedule_setup(
                           ParallelTree<CoordType, DataType>* tree,
                           int32_t level_index,
                           MPI_Comm level_comm,
-                          OwnerScheduleState<CoordType, DataType>& st) {
+                          OwnerScheduleState<CoordType, DataType>& st,
+                          bool sync_colors = false) {
     using namespace dataflow;
     st = OwnerScheduleState<CoordType, DataType>{};
     if (tree == nullptr) return;
@@ -1100,6 +1119,12 @@ void owner_schedule_setup(
     st.num_boundary_colors = num_boundary_colors(dimension);
     st.level_index = level_index;
     st.serial = owner_serial_enabled();
+    using setup_clock = std::chrono::steady_clock;
+    const auto t_setup0 = setup_clock::now();
+    double setup_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // parts, gather, assemble, validate, assign, waves, aux+runtime, rest
+    auto setup_ms_since = [](setup_clock::time_point t) {
+        return std::chrono::duration<double, std::milli>(setup_clock::now() - t).count();
+    };
     st.grid = ProcessGrid(dimension, 1u << level_index, static_cast<uint32_t>(level.num_active_processes));
     ColorOf color_of = make_ca_classifier(
         st.grid, level_index,
@@ -1112,7 +1137,55 @@ void owner_schedule_setup(
         [](int64_t m, int32_t lvl, uint32_t gs, uint32_t lgs, const uint32_t* off) {
             return is_purple_box(m, lvl, gs, lgs, off);
         });
-    st.graph = build_component_graph(st.grid, color_of);
+    {
+        // the component graph from this rank's neighbourhood and one
+        // allgather of the parts' descriptors (dataflow.hpp, the local
+        // construction), instead of the whole grid's flood fill on every
+        // rank (GPU_CA_PLAN.md, M5e)
+        auto allgather = [level_comm](const std::vector<int64_t>& mine) {
+            int P = 0;
+            MPI_Comm_size(level_comm, &P);
+            std::vector<int> counts(static_cast<size_t>(P), 0), displs(static_cast<size_t>(P), 0);
+            const int n = static_cast<int>(mine.size());
+            MPI_Allgather(&n, 1, MPI_INT, counts.data(), 1, MPI_INT, level_comm);
+            size_t total = 0;
+            for (int p = 0; p < P; ++p) {
+                displs[static_cast<size_t>(p)] = static_cast<int>(total);
+                total += static_cast<size_t>(counts[static_cast<size_t>(p)]);
+            }
+            std::vector<int64_t> all(total);
+            MPI_Allgatherv(mine.data(), n, MPI_INT64_T, all.data(), counts.data(), displs.data(), MPI_INT64_T,
+                           level_comm);
+            return all;
+        };
+        auto t = setup_clock::now();
+        const LocalParts lp = local_component_parts(st.grid, color_of, static_cast<uint32_t>(level.my_morton_id));
+        setup_ms[0] = setup_ms_since(t);
+        t = setup_clock::now();
+        const std::vector<int64_t> all = allgather(lp.stream);
+        setup_ms[1] = setup_ms_since(t);
+        t = setup_clock::now();
+        st.graph = assemble_component_graph(st.grid, static_cast<uint32_t>(level.my_morton_id), lp, all);
+        setup_ms[2] = setup_ms_since(t);
+        // BPACK_CHECK=globalgraph: the whole grid's build instead (the
+        // reference); graphcheck: both, compared box by box, owner by owner
+        if (fmm::env::check("globalgraph") || fmm::env::check("graphcheck")) {
+            ComponentGraph global = build_component_graph(st.grid, color_of);
+            if (fmm::env::check("graphcheck")) {
+                for (AssignPolicy pol : {AssignPolicy::LPT_PER_COLOR, AssignPolicy::LPT_CUMULATIVE}) {
+                    ComponentGraph gl = global, ll = st.graph;
+                    assign_owners(gl, pol);
+                    assign_owners(ll, pol);
+                    const std::string d = compare_component_graphs(gl, ll, static_cast<uint32_t>(level.my_morton_id));
+                    if (!d.empty())
+                        throw std::runtime_error("owner_schedule_setup: the local graph differs from the global one on rank " +
+                                                 std::to_string(tree->mpi_rank) + " (" +
+                                                 (pol == AssignPolicy::LPT_PER_COLOR ? "per colour" : "cumulative") + "): " + d);
+                }
+            }
+            if (fmm::env::check("globalgraph")) st.graph = std::move(global);
+        }
+    }
     // Schedule and balancing objective are decided together, before the
     // assignment (ledger 33).  A coarse level — fewer than 8 local boundary
     // boxes per thread — runs the synchronous colour batches, whose level
@@ -1134,16 +1207,22 @@ void owner_schedule_setup(
         // batches, but it must own exactly what the fast schedule owns, or
         // the accumulating side of a pair (interest rule) differs and the
         // checksums with it (ledger 46).  `coarse` decides both.
-        const bool coarse = local_boundary < 8 * static_cast<int64_t>(std::max(1, omp_get_max_threads()));
+        const bool coarse = sync_colors || local_boundary < 8 * static_cast<int64_t>(std::max(1, omp_get_max_threads()));
         st.sync_colors = !st.serial && coarse;
         st.coarse_level = coarse;
     }
-    assign_owners(st.graph, st.coarse_level ? AssignPolicy::LPT_PER_COLOR : AssignPolicy::LPT_CUMULATIVE);
     {
+        const auto t = setup_clock::now();
+        assign_owners(st.graph, st.coarse_level ? AssignPolicy::LPT_PER_COLOR : AssignPolicy::LPT_CUMULATIVE);
+        setup_ms[4] = setup_ms_since(t);
+    }
+    {
+        const auto t = setup_clock::now();
         const std::string e = validate_graph(st.graph);
         if (!e.empty()) throw std::runtime_error("owner_schedule_setup: invalid graph: " + e);
         const std::string l = validate_against_lists(st.graph, level.blue, level.orange, level.purple, level.green);
         if (!l.empty()) throw std::runtime_error("owner_schedule_setup: graph disagrees with level lists: " + l);
+        setup_ms[3] = setup_ms_since(t);
     }
     st.my_pid = static_cast<uint32_t>(level.my_morton_id);
     st.comm = level_comm;
@@ -1166,10 +1245,7 @@ void owner_schedule_setup(
         auto it = std::find(order.begin(), order.end(), k.color);
         st.comp_seq_color[static_cast<size_t>(k.id)] = static_cast<int32_t>(it - order.begin());
     }
-    // waves: component-aware partition (replaces morton % 8); num_waves is
-    // the largest class count of any component and is the same on every rank
-    st.box_wave = owner_wave_partition(st.graph, st.grid, st.num_waves);
-
+    const auto t_aux = setup_clock::now();
     RuntimeOptions opts;
     opts.entry_state_prefetched = true;
     opts.factors_with_generators = true;
@@ -1178,6 +1254,21 @@ void owner_schedule_setup(
     opts.aux_comps = auxiliary_components(st.graph, st.my_pid);
     st.rt.reset(&st.graph, st.my_pid, opts);
     st.rt.restamp_ready(omp_get_wtime());
+    setup_ms[6] = setup_ms_since(t_aux);
+    {
+        // waves: component-aware partition (replaces morton % 8) of every
+        // component whose box list is complete here (the ones touching the
+        // rank's neighbourhood entirely: every box the rank can see, in the
+        // halo, the host schedule's pair order and the owner solve, belongs
+        // to one; a truncated component's boxes are at least a brick away)
+        const auto t = setup_clock::now();
+        std::vector<int32_t> seen;
+        for (const auto& k : st.graph.comps)
+            if (k.boxes_complete) seen.push_back(k.id);
+        st.box_wave = owner_wave_partition(st.graph, st.grid, st.num_waves, &seen);
+        setup_ms[5] = setup_ms_since(t);
+    }
+    const auto t_rest = setup_clock::now();
 
     for (const auto& box : level.local_boxes) st.interest_boxes.insert(box.morton_index);
     for (int32_t id : st.rt.owned()) {
@@ -1219,6 +1310,14 @@ void owner_schedule_setup(
         return st.comp_seq_color[static_cast<size_t>(c)] < batch_color;
     };
     st.active = true;
+    setup_ms[7] = setup_ms_since(t_rest);
+    if (tree->mpi_rank == 0 && fmm::env::trace("phase")) {
+        std::printf("  [owner-schedule] level %d setup %.1f ms: parts %.1f, gather %.1f, assemble %.1f, validate %.1f, "
+                    "assign %.1f, waves %.1f, auxiliary+runtime %.1f, filters %.1f\n",
+                    level_index, setup_ms_since(t_setup0), setup_ms[0], setup_ms[1], setup_ms[2], setup_ms[3], setup_ms[4],
+                    setup_ms[5], setup_ms[6], setup_ms[7]);
+        std::fflush(stdout);
+    }
 }
 
 /// After the halo (stage 0 at least): every owned or shared box must be held

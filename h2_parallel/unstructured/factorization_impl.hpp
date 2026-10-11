@@ -197,13 +197,14 @@ void hierarchical_factorization_unstructured(
         // exchanges of the process's first factorization, the application's
         // evaluator before its first use), and not in the factor time
         const double kernels = gpu_driver.warm_up();
+        const double buffers = gpu_driver.warm_up_buffers();
         const double exchanges = gpu_driver.warm_up_exchange();
         const double evaluator = gpu_driver.warm_up_evaluator();
-        h2_warmup_seconds() = kernels + exchanges + evaluator;
+        h2_warmup_seconds() = kernels + buffers + exchanges + evaluator;
         if (h2_warmup_seconds() > 0.0 && print_summary && rank == 0) {
-            std::printf("  [gpu] warm-up: kernels %.2f s, exchanges %.2f s, evaluator %.2f s, before the levels (not "
-                        "in the factor time)\n",
-                        kernels, exchanges, evaluator);
+            std::printf("  [gpu] warm-up: kernels %.2f s, buffers %.2f s, exchanges %.2f s, evaluator %.2f s, before "
+                        "the levels (not in the factor time)\n",
+                        kernels, buffers, exchanges, evaluator);
             std::fflush(stdout);
         }
     }
@@ -1554,7 +1555,7 @@ void hierarchical_factorization_unstructured(
                     level, tree->levels[current_level - 1], dimension,
                     tree->global_bounds, occupied_topology);
             },
-            print_detail && rank == level_print_rank);
+            print_detail && rank == level_print_rank, level_comm, transition_comm);
 #endif
         if (level.is_process_active && !transition_on_device) {
             parent_boxes =

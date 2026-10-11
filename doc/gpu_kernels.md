@@ -290,7 +290,7 @@ rank's points and its sketch, before the first level that uses it, and
 reports that time apart from the factorization, compression and
 construction times:
 
-- H2: `[gpu] warm-up: kernels X s, exchanges Y s, evaluator Z s, before the levels (not in the factor time)`
+- H2: `[gpu] warm-up: kernels X s, buffers B s, exchanges Y s, evaluator Z s, before the levels (not in the factor time)`
   (and `[gpu] warm-up: evaluator Z s` before a compression).
 - HODLR: `HODLR GPU warm-up: kernels X s, evaluator Z s (not in the construction time)`.
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <cstdlib>
 #include <string>
 #include <sys/resource.h>
@@ -34,6 +35,7 @@ struct H2MemoryCategories {
     size_t scratch = 0;
     size_t staged_parent = 0;
     size_t communication = 0;
+    size_t gpu_host_staging = 0;
 
     // A breakdown of local_factors / halo_factors by the role each block plays
     // in the solve, reported on its own H2_MEM_FACTOR line.  These are already
@@ -48,12 +50,22 @@ struct H2MemoryCategories {
     size_t halo_factor_near_coupling = 0;
     size_t local_factor_schur = 0;
     size_t halo_factor_schur = 0;
+    // Which array the near coupling sits in, and whether the box is a ghost
+    // (a replica of another rank's box) or a lazy generator (regeneration
+    // state, which may be for the rank's own boxes).  Already counted above.
+    size_t near_x_nr = 0;
+    size_t near_x_rn = 0;
+    size_t near_lazy_original = 0;
+    size_t ghost_factors_only = 0;
+    size_t generator_factors_only = 0;
+    size_t generator_near_coupling = 0;
 
     size_t total() const {
         return local_metadata + halo_metadata + local_factors + halo_factors +
                local_near + halo_near + local_far + halo_far +
                local_deferred + halo_deferred + h2_blocks + assisting + solve +
-               level_metadata + pending + scratch + staged_parent + communication;
+               level_metadata + pending + scratch + staged_parent +
+               communication + gpu_host_staging;
     }
 };
 
@@ -65,6 +77,14 @@ struct H2MemorySnapshot {
     size_t current_rss = 0;
     size_t high_water_rss = 0;
 };
+
+// Pinned host bytes of the GPU backend, which live outside every tree
+// structure.  The GPU path installs this once (core must not include the
+// backend's headers); without it the bytes land in `unattributed`.
+inline std::function<size_t()>& h2_diag_host_staging_probe() {
+    static std::function<size_t()> probe;
+    return probe;
+}
 
 template<typename VectorType>
 inline size_t h2_diag_vector_bytes(const VectorType& values) {
@@ -108,7 +128,8 @@ template<typename CoordType, typename DataType>
 inline void h2_diag_accumulate_box(
     const fmm::BoxData<CoordType, DataType>& box,
     bool halo,
-    H2MemoryCategories& categories) {
+    H2MemoryCategories& categories,
+    bool is_generator = false) {
     size_t metadata = sizeof(box);
     metadata += h2_diag_vector_bytes(box.point_indices);
     metadata += h2_diag_vector_bytes(box.point_coords);
@@ -130,12 +151,26 @@ inline void h2_diag_accumulate_box(
         h2_diag_matrix_bytes(box.X_RS) +
         h2_diag_matrix_bytes(box.X_SR) +
         h2_diag_matrix_bytes(box.X_RS_entry);
+    const size_t near_x_rn = h2_diag_matrix_bytes(box.X_RN);
+    const size_t near_x_nr = h2_diag_matrix_bytes(box.X_NR);
+    // The lazy generator's copy of the pre-finalize X_NR.
+    const size_t near_lazy_original =
+        h2_diag_vector_bytes(box.lazy_original_x_nr);
     const size_t factor_near_coupling =
-        h2_diag_matrix_bytes(box.X_RN) +
-        h2_diag_matrix_bytes(box.X_NR);
+        near_x_rn + near_x_nr + near_lazy_original;
     const size_t factor_schur = h2_diag_matrix_bytes(box.schur_complement);
     const size_t factors = factor_pivot + factor_basis + factor_skeleton +
                            factor_near_coupling + factor_schur;
+
+    categories.near_x_rn += near_x_rn;
+    categories.near_x_nr += near_x_nr;
+    categories.near_lazy_original += near_lazy_original;
+    if (is_generator) {
+        categories.generator_factors_only += factors;
+        categories.generator_near_coupling += factor_near_coupling;
+    } else if (halo) {
+        categories.ghost_factors_only += factors;
+    }
 
     size_t near = h2_diag_modified_block_bytes(
         box.near_field_modified_interactions);
@@ -409,9 +444,13 @@ public:
                 h2_diag_accumulate_box(box, true, snapshot.categories);
             }
             for (const auto& box : tree_level.generator_boxes) {
-                h2_diag_accumulate_box(box, true, snapshot.categories);
+                h2_diag_accumulate_box(box, true, snapshot.categories, true);
             }
         }
+
+        const auto& host_staging_probe = h2_diag_host_staging_probe();
+        snapshot.categories.gpu_host_staging =
+            host_staging_probe ? host_staging_probe() : 0;
 
         snapshot.current_rss = h2_diag_current_rss_bytes();
         snapshot.high_water_rss = h2_diag_high_water_rss_bytes();
@@ -440,7 +479,8 @@ public:
                     "local_near=%.6f halo_near=%.6f local_far=%.6f halo_far=%.6f "
                     "local_deferred=%.6f halo_deferred=%.6f h2_blocks=%.6f "
                     "assisting=%.6f solve=%.6f level_meta=%.6f pending=%.6f "
-                    "scratch=%.6f staged_parent=%.6f communication=%.6f\n",
+                    "scratch=%.6f staged_parent=%.6f communication=%.6f "
+                    "gpu_host_staging=%.6f\n",
                     rank, sequence, snapshot.level,
                     snapshot.algorithm.c_str(), snapshot.phase.c_str(),
                     snapshot.current_rss / gib, snapshot.high_water_rss / gib,
@@ -452,14 +492,18 @@ public:
                     c.local_deferred / gib, c.halo_deferred / gib,
                     c.h2_blocks / gib, c.assisting / gib, c.solve / gib,
                     c.level_metadata / gib, c.pending / gib, c.scratch / gib,
-                    c.staged_parent / gib, c.communication / gib);
+                    c.staged_parent / gib, c.communication / gib,
+                    c.gpu_host_staging / gib);
                 // How local_factors / halo_factors above split by solve role.
                 std::printf(
                     "H2_MEM_FACTOR rank=%d seq=%zu level=%d algorithm=%s phase=%s "
                     "local_pivot=%.6f local_basis=%.6f local_skeleton=%.6f "
                     "local_near_coupling=%.6f local_schur=%.6f "
                     "halo_pivot=%.6f halo_basis=%.6f halo_skeleton=%.6f "
-                    "halo_near_coupling=%.6f halo_schur=%.6f\n",
+                    "halo_near_coupling=%.6f halo_schur=%.6f "
+                    "near_x_nr=%.6f near_x_rn=%.6f near_lazy_original=%.6f "
+                    "ghost_factors_only=%.6f generator_factors_only=%.6f "
+                    "generator_near_coupling=%.6f\n",
                     rank, sequence, snapshot.level,
                     snapshot.algorithm.c_str(), snapshot.phase.c_str(),
                     c.local_factor_pivot / gib, c.local_factor_basis / gib,
@@ -467,7 +511,11 @@ public:
                     c.local_factor_near_coupling / gib, c.local_factor_schur / gib,
                     c.halo_factor_pivot / gib, c.halo_factor_basis / gib,
                     c.halo_factor_skeleton / gib,
-                    c.halo_factor_near_coupling / gib, c.halo_factor_schur / gib);
+                    c.halo_factor_near_coupling / gib, c.halo_factor_schur / gib,
+                    c.near_x_nr / gib, c.near_x_rn / gib,
+                    c.near_lazy_original / gib, c.ghost_factors_only / gib,
+                    c.generator_factors_only / gib,
+                    c.generator_near_coupling / gib);
             }
             std::fflush(stdout);
         }

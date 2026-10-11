@@ -8,6 +8,27 @@
 #endif
 
 namespace butterfly {
+
+// A component-owner CA level factored on the device with its factors at
+// home (TreeLevel::ca_home_factors): the solves and multiplies run it as a
+// Color level, in the level's own elimination order (the schedule's
+// sequence numbers) instead of the Morton parities.
+template<typename CoordType, typename DataType>
+void owner_level_solve_bins(const fmm::TreeLevel<CoordType, DataType>& tree_level,
+                            std::vector<std::vector<int64_t>>& bins) {
+    if (!tree_level.ca_home_factors) return;
+    bins.clear();
+    for (size_t b = 0; b < tree_level.local_boxes.size(); ++b) {
+        const int64_t morton = tree_level.local_morton_start + static_cast<int64_t>(b);
+        const auto it = tree_level.ca_home_order.find(morton);
+        if (it == tree_level.ca_home_order.end()) {
+            throw std::runtime_error("solve: box " + std::to_string(morton) + " of an owner level has no wave");
+        }
+        const size_t w = static_cast<size_t>(it->second);
+        if (bins.size() <= w) bins.resize(w + 1);
+        bins[w].push_back(morton);
+    }
+}
 using namespace fmm;
 
 // Gather local solution for both solve and mult
@@ -806,7 +827,7 @@ void hierarchical_solve_parallel(
         // }
 
         if (level >= 2 && tree_level.is_process_active &&
-            tree->level_uses_CA(level)) {
+            tree->level_uses_CA(level) && !tree_level.ca_home_factors) {
             communication_total_forward += CA_level_solve_forward(
                 tree, level, solve_data[level],
                 solve_comms.level[static_cast<size_t>(level)],
@@ -838,6 +859,7 @@ void hierarchical_solve_parallel(
             for (int c = 0; c < num_colors; ++c) {
                 color_bins.push_back(std::move(interior_sub_bins[c]));
             }
+            owner_level_solve_bins(tree_level, color_bins);
             // color_bins layout:
             //   [0,           num_colors-1]: boundary waves
             //   [num_colors, 2*num_colors-1]: interior sub-waves
@@ -1018,7 +1040,7 @@ void hierarchical_solve_parallel(
         }
         
         if (level >= 2 && tree_level.is_process_active &&
-            tree->level_uses_CA(level)) {
+            tree->level_uses_CA(level) && !tree_level.ca_home_factors) {
             communication_total_backward += CA_level_solve_backward(
                 tree, level, solve_data[level],
                 solve_comms.level[static_cast<size_t>(level)],
@@ -1050,6 +1072,7 @@ void hierarchical_solve_parallel(
             for (int c = 0; c < num_colors; ++c) {
                 color_bins.push_back(std::move(interior_sub_bins[c]));
             }
+            owner_level_solve_bins(tree_level, color_bins);
             // color_bins layout (same as forward):
             //   [0,           num_colors-1]: boundary waves
             //   [num_colors, 2*num_colors-1]: interior sub-waves
@@ -1349,7 +1372,7 @@ void hierarchical_mul_parallel(
         }
 
         if (level >= 2 && tree_level.is_process_active &&
-            tree->level_uses_CA(level)) {
+            tree->level_uses_CA(level) && !tree_level.ca_home_factors) {
             communication_total_forward += CA_level_mul_forward(
                 tree, level, solve_data[level],
                 solve_comms.level[static_cast<size_t>(level)],
@@ -1375,6 +1398,7 @@ void hierarchical_mul_parallel(
             for (int c = 0; c < num_colors; ++c) {
                 color_bins.push_back(std::move(interior_sub_bins[c]));
             }
+            owner_level_solve_bins(tree_level, color_bins);
 
             // Apply W in forward color order (reversed of solve backward which
             // applies W^{-1}). Within each wave, gather fresh neighbor data
@@ -1506,7 +1530,7 @@ void hierarchical_mul_parallel(
         }
 
         if (level >= 2 && tree_level.is_process_active &&
-            tree->level_uses_CA(level)) {
+            tree->level_uses_CA(level) && !tree_level.ca_home_factors) {
             communication_total_backward += CA_level_mul_backward(
                 tree, level, solve_data[level],
                 solve_comms.level[static_cast<size_t>(level)],
@@ -1531,6 +1555,7 @@ void hierarchical_mul_parallel(
             for (int c = 0; c < num_colors; ++c) {
                 color_bins.push_back(std::move(interior_sub_bins[c]));
             }
+            owner_level_solve_bins(tree_level, color_bins);
 
             // Apply V in REVERSE wave order (mirror of solve forward's V^{-1}).
             // V is a scatter: generate pending updates, then transport.

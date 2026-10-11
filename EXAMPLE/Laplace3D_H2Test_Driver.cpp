@@ -35,6 +35,7 @@ struct DriverOptions {
   int ca_level = 0;
   int h2_use_sketch = 1;
   int h2_lazy_schur = 0;
+  int h2_compress_factors = 0;
   int h2_gemm_split = 16;
   int h2_xrr_factor = 0;
   int h2_use_gpu = 0;
@@ -193,6 +194,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_use_sketch = parse_int(value, "H2_use_sketch");
     } else if (name == "h2_lazy_schur") {
       options.h2_lazy_schur = parse_int(value, "H2_lazy_schur");
+    } else if (name == "h2_compress_factors") {
+      options.h2_compress_factors = parse_int(value, "H2_compress_factors");
     } else if (name == "h2_gemm_split") {
       options.h2_gemm_split = parse_int(value, "H2_GEMM_split");
     } else if (name == "h2_xrr_factor") {
@@ -286,6 +289,9 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "color_unstructured supports H2_lazy_schur=0 or 2 only");
   }
+  if (options.h2_compress_factors < 0 || options.h2_compress_factors > 2) {
+    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+  }
   if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
   }
@@ -376,6 +382,8 @@ void print_usage(const char* executable) {
       << "  --CA_level <level>\n"
       << "  --H2_use_sketch <0|1|2>\n"
       << "  --H2_lazy_schur <0|1|2>\n"
+      << "  --H2_compress_factors <0|1|2>  (GPU: lossy compression of the\n"
+         "                                  kept factors at tol_comp)\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
       << "  --H2_use_gpu <0|1|2>\n"
@@ -669,6 +677,7 @@ int main(int argc, char** argv) {
                 << "CA_level: " << driver_options.ca_level << "\n"
                 << "H2_use_sketch: " << driver_options.h2_use_sketch << "\n"
                 << "H2_lazy_schur: " << driver_options.h2_lazy_schur << "\n"
+                << "H2_compress_factors: " << driver_options.h2_compress_factors << "\n"
                 << "H2_GEMM_split: " << driver_options.h2_gemm_split << "\n"
                 << "H2_XRR_factor: " << driver_options.h2_xrr_factor << "\n"
                 << "H2_use_gpu: " << driver_options.h2_use_gpu << "\n"
@@ -721,6 +730,8 @@ int main(int argc, char** argv) {
         &resources.option, "H2_use_sketch", driver_options.h2_use_sketch);
     d_c_bpack_set_I_option(
         &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
+    d_c_bpack_set_I_option(
+        &resources.option, "H2_compress_factors", driver_options.h2_compress_factors);
     d_c_bpack_set_I_option(
         &resources.option, "H2_GEMM_split", driver_options.h2_gemm_split);
     d_c_bpack_set_I_option(

@@ -145,7 +145,7 @@ public:
         const size_t nb = states_.size();
         status_ints_ = align_up(kStatusDoubles * nb * sizeof(double), 16);
         status_bytes_ = align_up(status_ints_ + kStatusInts * nb * sizeof(int), 16);
-        d_status_ = heap_.alloc(std::max<size_t>(status_bytes_, 16));
+        d_status_ = heap_.alloc(std::max<size_t>(status_bytes_, 16), ResidentKind::Adaptive);
         rounds_ = 0;
     }
 
@@ -211,7 +211,7 @@ public:
         int frame_block = -1;
         char* frame = nullptr;
         if (frame_bytes > 0) {
-            frame = heap_.alloc(frame_bytes);
+            frame = heap_.alloc(frame_bytes, ResidentKind::Adaptive);
             frame_block = static_cast<int>(frame_blocks_.size());
             frame_blocks_.push_back(FrameBlock{frame, 0});
         }
@@ -331,7 +331,7 @@ public:
                 case Step::Extra: {
                     // ID of the residual, to the tolerance that keeps the absolute threshold
                     const size_t bytes = align_up(static_cast<size_t>(st.s) * n * D);
-                    char* block = heap_.alloc(bytes + align_up(static_cast<size_t>(n) * I));
+                    char* block = heap_.alloc(bytes + align_up(static_cast<size_t>(n) * I), ResidentKind::Adaptive);
                     transient_.push_back(block);
                     st.extra_f = reinterpret_cast<S*>(block);
                     st.extra_jpvt = reinterpret_cast<int*>(block + bytes);
@@ -371,7 +371,7 @@ public:
         auto qrcp = [&](const std::vector<QrcpItemT<S>>& items, size_t offset, int max_n) {
             if (items.empty()) return;
             char* work = nullptr;
-            if (const size_t w = qrcp_work_bytes<S>(count(items), max_n)) work = heap_.alloc(w);
+            if (const size_t w = qrcp_work_bytes<S>(count(items), max_n)) work = heap_.alloc(w, ResidentKind::Adaptive);
             launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_, work,
                         stream);
             heap_.free(work);  // later launches are ordered after it

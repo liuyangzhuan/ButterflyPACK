@@ -16,24 +16,27 @@
 //   - X is also a ghost of the peer and X < G: the pair comes with X.
 // Both sides derive the same list, in the same order (G in the request
 // order, its Schur block, then X ascending), from data they share: the
-// request sets (exchanged by the host gather's helpers), the one-hop lists
-// and the box sizes.  Blocks keep the device layout (rows = the higher box).
+// ghost sets of the regions (from the level's layout, halo_geometry.hpp),
+// the one-hop lists and the box sizes.  Blocks keep the device layout (rows = the higher box).
 // The ghosts' blocks are allocated first (added to the level's blocks for
 // the eliminator to adopt); the messages then move in rounds of one chunk
 // per message, packed straight from the blocks into slots (the exchange
 // arena with CUDA-aware MPI, else small heap slots staged through the host)
-// and unpacked straight into the new blocks: no message-sized buffers, which
-// a fragmented heap may not hold.
+// and unpacked straight into the new blocks (device_pieces.hpp): no
+// message-sized buffers, which a fragmented heap may not hold.
 
 #ifdef H2_HAVE_GPU
 
-#include "level_eliminator.hpp"
+#include "device_pieces.hpp"
 
 #include <mpi.h>
 
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <functional>
+#include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -60,12 +63,26 @@ struct Piece {
     size_t elems() const { return static_cast<size_t>(rows) * static_cast<size_t>(cols); }
 };
 
-// Messages in chunks under MPI's int count.
-constexpr size_t kChunk = size_t{1} << 30;
-
-inline int count_of(size_t bytes) { return static_cast<int>(std::min(bytes, kChunk)); }
-
 }  // namespace ca_halo_detail
+
+// A peer of the block exchange: the ghosts it needs from this rank, the
+// ghosts of this rank it holds, and (sent) which boxes it fetches itself.
+struct CaHaloPeer {
+    int rank = -1;
+    std::vector<int64_t> requested;  // ghosts of this rank it needs (their blocks go to it)
+    std::vector<int64_t> mine;       // this rank's ghosts it owns (their blocks come from it)
+    std::function<bool(int64_t)> fetches;  // whether it fetches box x too (the pair (g, x) then comes with the lower one)
+};
+
+// The exchange over caller-supplied lists (the replicated halo below, the
+// owner-level fetch in ca_owner.hpp): `peers` by rank, every rank's lists
+// derived from data the ranks share, so both sides of a message compute
+// the same pieces in the same order.
+template<typename CoordType, typename DataType>
+CaHaloStats exchange_ca_blocks_for(ParallelTree<CoordType, DataType>* tree, int lvl,
+                                   DeviceLevelBlocks<DataType>& blocks, MPI_Comm level_comm,
+                                   std::map<int, CaHaloPeer>& peer_of, const std::function<bool(int64_t)>& i_fetch,
+                                   const char* what);
 
 template<typename CoordType, typename DataType>
 CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, int lvl,
@@ -73,6 +90,47 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
   if constexpr (!gpu_data_type<DataType>) {
     (void)tree; (void)lvl; (void)blocks; (void)level_comm;
     throw std::runtime_error("exchange_ca_ghost_blocks: data type not run on the GPU");
+  } else {
+    auto& level = tree->levels[static_cast<size_t>(lvl)];
+    const RegionLayout L = RegionLayout::of(tree->dimension, lvl, level.num_active_processes);
+    if (!L.uniform || level.my_morton_id < 0) {
+        throw std::runtime_error("CA device halo: the level's regions are not uniform cubes");
+    }
+    const uint32_t my_region = static_cast<uint32_t>(level.my_morton_id);
+    auto rank_of_region = [&](uint32_t q) { return level.morton_to_rank.at(static_cast<int>(q)); };
+    auto owner_rank = [&](int64_t m) { return rank_of_region(L.region_of(m)); };
+    // the peers: ranks this one sends ghosts to (their ghost sets within
+    // this region) or receives its ghosts from
+    std::map<int, CaHaloPeer> peer_of;
+    for_each_region_within(L, my_region, halo_region_radius(L), [&](uint32_t q) {
+        std::vector<int64_t> requested = ghosts_of_region_in(L, q, my_region);
+        if (requested.empty()) return;
+        CaHaloPeer& p = peer_of[rank_of_region(q)];
+        p.rank = rank_of_region(q);
+        p.requested = std::move(requested);
+        const RegionGhosts rg = ghosts_of_region(L, q);
+        auto ghost_set = std::make_shared<std::unordered_set<int64_t>>(rg.ghosts.begin(), rg.ghosts.end());
+        p.fetches = [ghost_set](int64_t x) { return ghost_set->count(x) != 0; };
+    });
+    for (int64_t g : level.ghost_id) {
+        CaHaloPeer& p = peer_of[owner_rank(g)];
+        p.rank = owner_rank(g);
+        p.mine.push_back(g);
+    }
+    auto my_requests = std::make_shared<std::unordered_set<int64_t>>(level.ghost_id.begin(), level.ghost_id.end());
+    return exchange_ca_blocks_for(tree, lvl, blocks, level_comm, peer_of,
+                                  [my_requests](int64_t x) { return my_requests->count(x) != 0; }, "CA device halo");
+  }
+}
+
+template<typename CoordType, typename DataType>
+CaHaloStats exchange_ca_blocks_for(ParallelTree<CoordType, DataType>* tree, int lvl,
+                                   DeviceLevelBlocks<DataType>& blocks, MPI_Comm level_comm,
+                                   std::map<int, CaHaloPeer>& peer_of, const std::function<bool(int64_t)>& i_fetch,
+                                   const char* what) {
+  if constexpr (!gpu_data_type<DataType>) {
+    (void)tree; (void)lvl; (void)blocks; (void)level_comm; (void)peer_of; (void)i_fetch; (void)what;
+    throw std::runtime_error("exchange_ca_blocks_for: data type not run on the GPU");
   } else {
     using S = typename DeviceScalar<DataType>::type;
     using ca_halo_detail::Piece;
@@ -86,27 +144,21 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
     DeviceHeap& heap = DeviceHeap::instance();
     const size_t D = sizeof(S);
 
-    // ---- who sends which ghosts to whom (the host gather's plan), and the
-    //      peers' request sets
-    const auto plan = make_CA_request_plan(tree, lvl, level.ghost_id, level_comm);
-    int comm_size = 0, comm_rank = 0;
-    MPI_Comm_size(level_comm, &comm_size);
-    MPI_Comm_rank(level_comm, &comm_rank);
-    const auto peer_sets = exchange_CA_full_requested_ghost_sets(plan, level.ghost_id, level_comm);
-    std::unordered_map<int, int> comm_of_global;
-    for (int c = 0; c < comm_size; ++c) comm_of_global.emplace(plan.global_rank_by_comm[static_cast<size_t>(c)], c);
-    std::unordered_map<int64_t, int> owner_cache;
-    auto owner_comm = [&](int64_t m) {
-        auto it = owner_cache.find(m);
-        if (it != owner_cache.end()) return it->second;
-        const std::vector<uint64_t> one = {static_cast<uint64_t>(m)};
-        const auto region = morton::assign_to_processes_nd(tree->dimension, one, level.num_active_processes,
-                                                           uint32_t{1} << lvl);
-        const int owner = comm_of_global.at(level.morton_to_rank.at(static_cast<int>(region.front())));
-        owner_cache.emplace(m, owner);
-        return owner;
+    // ---- who sends which ghosts to whom: the caller's lists (derived on
+    //      every rank from data the ranks share); messages over the tree's
+    //      communicator
+    MPI_Comm comm = tree->comm;
+    const int comm_rank = tree->mpi_rank;
+    auto owner_rank = [&](int64_t m) {
+        const std::vector<uint64_t> single = {static_cast<uint64_t>(m)};
+        const std::vector<uint32_t> region = morton::assign_to_processes_nd(
+            tree->dimension, single, level.num_active_processes, 1u << lvl);
+        return level.morton_to_rank.at(static_cast<int>(region[0]));
     };
-    const std::unordered_set<int64_t> my_requests(level.ghost_id.begin(), level.ghost_id.end());
+    using Peer = CaHaloPeer;
+    std::vector<Peer*> peers;
+    for (auto& kv : peer_of) peers.push_back(&kv.second);
+    const int np = static_cast<int>(peers.size());
 
     // the payload of ghost g for receiver `peer`, from the neighbors' sizes
     auto payload = [](int64_t g, int n_g, std::vector<int64_t> hop, auto&& peer_has, auto&& also_requested,
@@ -122,21 +174,20 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
         }
     };
 
-    // sent: the ghosts peers requested from this rank (their shapes from the
+    // sent: the ghosts the peers need from this rank (their shapes from the
     // device blocks)
-    std::vector<std::vector<Piece>> sends(static_cast<size_t>(comm_size));
-    std::vector<size_t> send_elems(static_cast<size_t>(comm_size), 0);
-    for (int peer = 0; peer < comm_size; ++peer) {
-        const auto& requested = plan.incoming[static_cast<size_t>(peer)];
-        if (requested.empty()) continue;
-        const auto& peer_set = peer_sets[static_cast<size_t>(peer)];
-        for (int64_t g : requested) {
+    std::vector<std::vector<Piece>> sends(static_cast<size_t>(np));
+    std::vector<size_t> send_elems(static_cast<size_t>(np), 0);
+    for (int peer = 0; peer < np; ++peer) {
+        const Peer& p = *peers[static_cast<size_t>(peer)];
+        if (p.requested.empty()) continue;
+        for (int64_t g : p.requested) {
             const auto* box = level.find_local_box(g);
             if (box == nullptr) throw std::runtime_error("CA device halo: requested ghost " + std::to_string(g) + " is not local");
             payload(
                 g, static_cast<int>(box->num_points), box->one_hop,
-                [&](int64_t x) { return owner_comm(x) == peer; },
-                [&](int64_t x) { return peer_set.count(x) != 0; },
+                [&](int64_t x) { return owner_rank(x) == p.rank; },
+                [&](int64_t x) { return p.fetches && p.fetches(x); },
                 [&](int64_t x) -> int {
                     const auto it = blocks.edges.find((static_cast<uint64_t>(std::min(g, x)) << 32) |
                                                       static_cast<uint64_t>(std::max(g, x)));
@@ -148,7 +199,7 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
                 },
                 sends[static_cast<size_t>(peer)]);
         }
-        for (const Piece& p : sends[static_cast<size_t>(peer)]) send_elems[static_cast<size_t>(peer)] += p.elems();
+        for (const Piece& p2 : sends[static_cast<size_t>(peer)]) send_elems[static_cast<size_t>(peer)] += p2.elems();
     }
     // received: this rank's ghosts, from their owners (shapes from the
     // gathered metadata)
@@ -160,31 +211,46 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
         }
         return static_cast<int>(level.assisting_boxes[static_cast<size_t>(it->second)].indices.size());
     };
-    std::vector<std::vector<Piece>> recvs(static_cast<size_t>(comm_size));
-    std::vector<size_t> recv_elems(static_cast<size_t>(comm_size), 0);
-    for (int peer = 0; peer < comm_size; ++peer) {
-        const auto& requested = plan.outgoing[static_cast<size_t>(peer)];
-        for (int64_t g : requested) {
+    std::vector<std::vector<Piece>> recvs(static_cast<size_t>(np));
+    std::vector<size_t> recv_elems(static_cast<size_t>(np), 0);
+    for (int peer = 0; peer < np; ++peer) {
+        const Peer& p = *peers[static_cast<size_t>(peer)];
+        for (int64_t g : p.mine) {
             const auto* gb = level.find_ghost_box(g);
             if (gb == nullptr) throw std::runtime_error("CA device halo: ghost " + std::to_string(g) + " has no metadata");
             payload(
                 g, static_cast<int>(gb->num_points), gb->one_hop,
                 [&](int64_t x) { return level.find_local_box(x) != nullptr; },
-                [&](int64_t x) { return my_requests.count(x) != 0; }, size_on_this_rank,
+                [&](int64_t x) { return i_fetch(x); }, size_on_this_rank,
                 recvs[static_cast<size_t>(peer)]);
         }
-        for (const Piece& p : recvs[static_cast<size_t>(peer)]) recv_elems[static_cast<size_t>(peer)] += p.elems();
+        for (const Piece& p2 : recvs[static_cast<size_t>(peer)]) recv_elems[static_cast<size_t>(peer)] += p2.elems();
     }
-    // both sides must agree on every message's size
+    // both sides must agree on every message's size (point to point with
+    // the peers: a message's receiver expects it exactly when its sender
+    // computed it, from the same layout)
     {
-        std::vector<int64_t> out(send_elems.begin(), send_elems.end()), in(static_cast<size_t>(comm_size), 0);
-        MPI_Alltoall(out.data(), 1, MPI_INT64_T, in.data(), 1, MPI_INT64_T, level_comm);
-        for (int peer = 0; peer < comm_size; ++peer) {
+        std::vector<int64_t> out(send_elems.begin(), send_elems.end()), in(static_cast<size_t>(np), 0);
+        std::vector<MPI_Request> requests;
+        for (int peer = 0; peer < np; ++peer) {
+            if (recv_elems[static_cast<size_t>(peer)] == 0) continue;
+            requests.emplace_back();
+            MPI_Irecv(&in[static_cast<size_t>(peer)], 1, MPI_INT64_T, peers[static_cast<size_t>(peer)]->rank, 4699, comm,
+                      &requests.back());
+        }
+        for (int peer = 0; peer < np; ++peer) {
+            if (send_elems[static_cast<size_t>(peer)] == 0) continue;
+            requests.emplace_back();
+            MPI_Isend(&out[static_cast<size_t>(peer)], 1, MPI_INT64_T, peers[static_cast<size_t>(peer)]->rank, 4699, comm,
+                      &requests.back());
+        }
+        MPI_Waitall(static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
+        for (int peer = 0; peer < np; ++peer) {
             if (static_cast<size_t>(in[static_cast<size_t>(peer)]) != recv_elems[static_cast<size_t>(peer)]) {
                 throw std::runtime_error("CA device halo: rank " + std::to_string(comm_rank) + " expects " +
                                          std::to_string(recv_elems[static_cast<size_t>(peer)]) +
-                                         " elements from rank " + std::to_string(peer) + ", which sends " +
-                                         std::to_string(in[static_cast<size_t>(peer)]));
+                                         " elements from rank " + std::to_string(peers[static_cast<size_t>(peer)]->rank) +
+                                         ", which sends " + std::to_string(in[static_cast<size_t>(peer)]));
             }
         }
     }
@@ -192,8 +258,8 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
 
     // ---- the device blocks of the messages; the ghosts' new blocks
     auto t = clock::now();
-    std::vector<std::vector<S*>> send_src(static_cast<size_t>(comm_size)), recv_dst(static_cast<size_t>(comm_size));
-    for (int peer = 0; peer < comm_size; ++peer) {
+    std::vector<std::vector<S*>> send_src(static_cast<size_t>(np)), recv_dst(static_cast<size_t>(np));
+    for (int peer = 0; peer < np; ++peer) {
         for (const Piece& p : sends[static_cast<size_t>(peer)]) {
             const DeviceMatrixT<S>* src = nullptr;
             if (p.lo == p.hi) {
@@ -208,9 +274,9 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
             stats.bytes_sent += static_cast<double>(p.elems() * D);
         }
     }
-    for (int peer = 0; peer < comm_size; ++peer) {
+    for (int peer = 0; peer < np; ++peer) {
         for (const Piece& p : recvs[static_cast<size_t>(peer)]) {
-            DeviceMatrixT<S> m{heap.alloc_resident<S>(p.elems() * D), p.rows, p.cols};
+            DeviceMatrixT<S> m{heap.alloc_resident<S>(p.elems() * D, ResidentKind::CaHalo), p.rows, p.cols};
             const bool fresh = p.lo == p.hi
                 ? blocks.schur.emplace(p.lo, m).second
                 : blocks.edges.emplace((static_cast<uint64_t>(p.lo) << 32) | static_cast<uint64_t>(p.hi), m).second;
@@ -225,168 +291,21 @@ CaHaloStats exchange_ca_ghost_blocks(ParallelTree<CoordType, DataType>* tree, in
     }
     stats.plan += std::chrono::duration<double>(clock::now() - t).count();
 
-    // ---- rounds: each moves one chunk of every message (a message is its
-    //      blocks back to back), packed straight from the blocks into a slot
-    //      and unpacked from the slot into the ghosts' blocks.  Slots: the
-    //      exchange arena with CUDA-aware MPI (registered once for MPI;
-    //      buffers of the main heap made the transfers ~30x slower), else
-    //      small heap slots staged through the host.  Every rank runs the
-    //      same number of rounds, so each send meets its receive.
-    DeviceHeap& arena = DeviceHeap::exchange_arena();
-    const bool device_mpi = device_exchange_enabled() && arena.initialized();
-    stats.staged = !device_mpi;
-    int messages = 0;
-    for (int peer = 0; peer < comm_size; ++peer) {
-        messages += (send_elems[static_cast<size_t>(peer)] > 0) + (recv_elems[static_cast<size_t>(peer)] > 0);
+    // ---- the payloads: rounds of one chunk per message through the
+    //      exchange arena (device_pieces.hpp)
+    std::vector<int> peer_ranks;
+    std::vector<std::vector<DevicePiece>> send_shapes(static_cast<size_t>(np)), recv_shapes(static_cast<size_t>(np));
+    for (int peer = 0; peer < np; ++peer) {
+        peer_ranks.push_back(peers[static_cast<size_t>(peer)]->rank);
+        for (const Piece& p : sends[static_cast<size_t>(peer)]) send_shapes[static_cast<size_t>(peer)].push_back({p.rows, p.cols});
+        for (const Piece& p : recvs[static_cast<size_t>(peer)]) recv_shapes[static_cast<size_t>(peer)].push_back({p.rows, p.cols});
     }
-    // (one chunk size on every rank: a message's pieces must match on both ends)
-    unsigned long long chunk_all = size_t{64} << 20;
-    if (device_mpi) {
-        chunk_all = std::min((arena.capacity() - arena.used()) / static_cast<size_t>(std::max(messages, 1)),
-                             ca_halo_detail::kChunk) / 256 * 256;
-    }
-    MPI_Allreduce(MPI_IN_PLACE, &chunk_all, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, level_comm);
-    const size_t chunk = static_cast<size_t>(chunk_all);
-    if (chunk < (size_t{1} << 20)) {
-        throw std::runtime_error("CA device halo: the exchange arena has no room (BPACK_GPU_EXCHANGE_MB)");
-    }
-    const size_t chunk_elems = chunk / D;
-    int rounds = 0;
-    for (int peer = 0; peer < comm_size; ++peer) {
-        const size_t most = std::max(send_elems[static_cast<size_t>(peer)], recv_elems[static_cast<size_t>(peer)]);
-        rounds = std::max(rounds, static_cast<int>((most + chunk_elems - 1) / chunk_elems));
-    }
-    MPI_Allreduce(MPI_IN_PLACE, &rounds, 1, MPI_INT, MPI_MAX, level_comm);
-    std::vector<S*> send_slot(static_cast<size_t>(comm_size), nullptr), recv_slot(static_cast<size_t>(comm_size), nullptr);
-    std::vector<std::vector<char>> host_send(static_cast<size_t>(comm_size)), host_recv(static_cast<size_t>(comm_size));
-    for (int peer = 0; peer < comm_size; ++peer) {
-        auto slot = [&]() -> S* { return reinterpret_cast<S*>(device_mpi ? arena.alloc(chunk) : heap.alloc(chunk)); };
-        if (send_elems[static_cast<size_t>(peer)] > 0) {
-            send_slot[static_cast<size_t>(peer)] = slot();
-            if (!device_mpi) host_send[static_cast<size_t>(peer)].resize(chunk);
-        }
-        if (recv_elems[static_cast<size_t>(peer)] > 0) {
-            recv_slot[static_cast<size_t>(peer)] = slot();
-            if (!device_mpi) host_recv[static_cast<size_t>(peer)].resize(chunk);
-        }
-    }
-    // Copies between the elements [e0, e1) of a message and its slot: per
-    // block, its partial first column, whole columns, and partial last column
-    // (items no wider than the block, as the gather kernel's grid needs).
-    MetaBuilder& meta = pinned_pool().meta;  // (no eliminator runs now)
-    DeviceBuffer meta_device;
-    std::vector<GatherItemT<S>> copies;
-    int max_m = 0, max_n = 0;
-    auto add_copies = [&](const std::vector<Piece>& pieces, const std::vector<S*>& ptrs, size_t e0, size_t e1, S* slot,
-                          bool to_slot) {
-        size_t off = 0;
-        for (size_t i = 0; i < pieces.size() && off < e1; ++i) {
-            const size_t e = pieces[i].elems();
-            const size_t u0 = std::max(off, e0), u1 = std::min(off + e, e1);
-            if (u0 < u1) {
-                const int R = pieces[i].rows;
-                const size_t l0 = u0 - off, l1 = u1 - off;  // within the block
-                auto part = [&](size_t first, int m, int n) {
-                    S* block_at = ptrs[i] + first;
-                    S* slot_at = slot + (first + off - e0);
-                    copies.push_back(to_slot ? GatherItemT<S>{slot_at, R, m, n, block_at, 1, R, IndexList{}, IndexList{}}
-                                             : GatherItemT<S>{block_at, R, m, n, slot_at, 1, R, IndexList{}, IndexList{}});
-                    max_m = std::max(max_m, m);
-                    max_n = std::max(max_n, n);
-                };
-                const size_t c0 = l0 / static_cast<size_t>(R), r0 = l0 % static_cast<size_t>(R);
-                const size_t c1 = l1 / static_cast<size_t>(R), r1 = l1 % static_cast<size_t>(R);
-                if (c0 == c1) {
-                    part(l0, static_cast<int>(r1 - r0), 1);
-                } else {
-                    size_t c = c0;
-                    if (r0 > 0) {
-                        part(l0, static_cast<int>(R - static_cast<int>(r0)), 1);
-                        ++c;
-                    }
-                    if (c1 > c) part(c * static_cast<size_t>(R), R, static_cast<int>(c1 - c));
-                    if (r1 > 0) part(c1 * static_cast<size_t>(R), static_cast<int>(r1), 1);
-                }
-            }
-            off += e;
-        }
-    };
-    auto run_copies = [&] {
-        if (!copies.empty()) {
-            meta.clear();
-            const size_t o = meta.append(copies);
-            char* md = meta.upload(meta_device, stream);
-            launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + o), static_cast<int>(copies.size()), max_m,
-                          max_n, md, stream);
-        }
-        check_cuda(cudaStreamSynchronize(stream), "CA device halo copies");
-        copies.clear();
-        max_m = max_n = 0;
-    };
-    auto span = [&](size_t total, int round) -> std::pair<size_t, size_t> {
-        const size_t e0 = std::min(total, static_cast<size_t>(round) * chunk_elems);
-        return {e0, std::min(total, e0 + chunk_elems)};
-    };
-    constexpr int kTag = 4700;
-    for (int round = 0; round < rounds; ++round) {
-        t = clock::now();
-        for (int peer = 0; peer < comm_size; ++peer) {
-            const auto [e0, e1] = span(send_elems[static_cast<size_t>(peer)], round);
-            if (e0 < e1) add_copies(sends[static_cast<size_t>(peer)], send_src[static_cast<size_t>(peer)], e0, e1,
-                                    send_slot[static_cast<size_t>(peer)], true);
-        }
-        run_copies();
-        stats.pack += std::chrono::duration<double>(clock::now() - t).count();
-        t = clock::now();
-        std::vector<MPI_Request> requests;
-        for (int peer = 0; peer < comm_size; ++peer) {
-            const auto [e0, e1] = span(recv_elems[static_cast<size_t>(peer)], round);
-            if (e0 == e1) continue;
-            void* at = device_mpi ? static_cast<void*>(recv_slot[static_cast<size_t>(peer)])
-                                  : static_cast<void*>(host_recv[static_cast<size_t>(peer)].data());
-            requests.emplace_back();
-            MPI_Irecv(at, static_cast<int>((e1 - e0) * D), MPI_BYTE, peer, kTag, level_comm, &requests.back());
-        }
-        for (int peer = 0; peer < comm_size; ++peer) {
-            const auto [e0, e1] = span(send_elems[static_cast<size_t>(peer)], round);
-            if (e0 == e1) continue;
-            void* at = send_slot[static_cast<size_t>(peer)];
-            if (!device_mpi) {
-                check_cuda(cudaMemcpy(host_send[static_cast<size_t>(peer)].data(), at, (e1 - e0) * D,
-                                      cudaMemcpyDeviceToHost),
-                           "CA device halo staging");
-                at = host_send[static_cast<size_t>(peer)].data();
-            }
-            requests.emplace_back();
-            MPI_Isend(at, static_cast<int>((e1 - e0) * D), MPI_BYTE, peer, kTag, level_comm, &requests.back());
-        }
-        MPI_Waitall(static_cast<int>(requests.size()), requests.data(), MPI_STATUSES_IGNORE);
-        if (!device_mpi) {
-            for (int peer = 0; peer < comm_size; ++peer) {
-                const auto [e0, e1] = span(recv_elems[static_cast<size_t>(peer)], round);
-                if (e0 == e1) continue;
-                check_cuda(cudaMemcpy(recv_slot[static_cast<size_t>(peer)], host_recv[static_cast<size_t>(peer)].data(),
-                                      (e1 - e0) * D, cudaMemcpyHostToDevice),
-                           "CA device halo staging");
-            }
-        }
-        stats.mpi += std::chrono::duration<double>(clock::now() - t).count();
-        t = clock::now();
-        for (int peer = 0; peer < comm_size; ++peer) {
-            const auto [e0, e1] = span(recv_elems[static_cast<size_t>(peer)], round);
-            if (e0 < e1) add_copies(recvs[static_cast<size_t>(peer)], recv_dst[static_cast<size_t>(peer)], e0, e1,
-                                    recv_slot[static_cast<size_t>(peer)], false);
-        }
-        run_copies();
-        stats.unpack += std::chrono::duration<double>(clock::now() - t).count();
-    }
-    meta.clear();
-    for (S* slot : send_slot) {
-        if (slot != nullptr) (device_mpi ? arena : heap).free(slot);
-    }
-    for (S* slot : recv_slot) {
-        if (slot != nullptr) (device_mpi ? arena : heap).free(slot);
-    }
+    const PieceExchangeStats x = exchange_device_pieces<S>(comm, level_comm, peer_ranks, send_shapes, send_src,
+                                                          recv_shapes, recv_dst, 4700, stream, what);
+    stats.pack = x.pack;
+    stats.mpi = x.mpi;
+    stats.unpack = x.unpack;
+    stats.staged = x.staged;
     stats.total = std::chrono::duration<double>(clock::now() - t0).count();
     return stats;
   }

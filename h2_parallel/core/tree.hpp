@@ -1149,11 +1149,32 @@ struct TreeLevel {
     std::vector<std::vector<int64_t>> solve_neighbor_size; ///< solve neighbor size
     std::vector<BoxData<CoordType, DataType>> ghost_boxes;  ///< Ghost boxes (1-hop neighbors)
     std::vector<PointDataRequest<CoordType>> assisting_boxes;
-    // The request plan of the level's assisting gather (Mortons per peer of
-    // assisting_plan_comm: asked of it, asked by it), kept so that after the
-    // elimination only the skeletons move (refresh_CA_assisting_skeletons).
-    std::vector<std::vector<int64_t>> assisting_plan_outgoing, assisting_plan_incoming;
-    MPI_Comm assisting_plan_comm = MPI_COMM_NULL;
+    // The plan of the level's assisting gather: per peer (a rank of the
+    // tree's communicator) the assisting boxes sent to it and received from
+    // it, kept so that after the elimination only the skeletons move
+    // (refresh_CA_assisting_skeletons).
+    struct CAPeerPlan {
+        bool valid = false;
+        std::vector<int> peers;
+        std::vector<std::vector<int64_t>> to_peer, from_peer;
+    };
+    CAPeerPlan assisting_plan;
+    // A CA level with uniform regions: what each region around this one
+    // needs from it at the level-entry halo gather (its ghosts and its
+    // assisting boxes among this rank's boxes, sorted; halo_geometry.hpp),
+    // computed with the tree (compute_assisting_boxes) so the gather only
+    // serializes.  Regions that need nothing are left out.
+    struct CAHaloSend {
+        uint32_t region = 0;
+        std::vector<int64_t> ghosts, assisting;
+    };
+    std::vector<CAHaloSend> ca_halo_sends;
+    bool ca_halo_sends_valid = false;
+    // A component-owner CA level factored on the device with its factors at
+    // their home ranks (h2_gpu/ca_owner.hpp): the solves and multiplies run
+    // it as a Color level (no replicated ghosts).
+    bool ca_home_factors = false;
+    std::unordered_map<int64_t, int32_t> ca_home_order;  ///< its local boxes' elimination sequence numbers
 
     // for shared memory sync
     std::unordered_map<int64_t, omp_lock_t*> box_locks;
