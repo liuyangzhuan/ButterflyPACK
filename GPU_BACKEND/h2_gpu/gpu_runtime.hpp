@@ -554,6 +554,18 @@ public:
     MetaBuilder() = default;
     MetaBuilder(const MetaBuilder&) = delete;
     MetaBuilder& operator=(const MetaBuilder&) = delete;
+    // A builder that belongs to a matrix (the HODLR construction, its device
+    // blocks and its factors) is destroyed with the matrix, so its pinned
+    // image and event are released here.  Those of PinnedPool are never
+    // destroyed (pinned_pool leaks it on purpose), so this does not run while
+    // the CUDA runtime shuts down.
+    ~MetaBuilder() {
+        if (uploaded_ != nullptr) {
+            cudaEventSynchronize(uploaded_);  // a copy may still read the image
+            cudaEventDestroy(uploaded_);
+        }
+        if (base_ != nullptr) cudaFreeHost(base_);
+    }
 
     void clear() {
         wait_upload();
@@ -624,7 +636,7 @@ private:
     char* base_ = nullptr;
     size_t size_ = 0;
     size_t capacity_ = 0;
-    cudaEvent_t uploaded_ = nullptr;  // after the last upload (never destroyed: see PinnedPool)
+    cudaEvent_t uploaded_ = nullptr;  // after the last upload
     bool pending_ = false;
 };
 
