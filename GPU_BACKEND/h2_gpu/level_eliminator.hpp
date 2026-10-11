@@ -3901,6 +3901,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     const std::vector<int64_t>& wave, int wave_index) {
     using clock = std::chrono::steady_clock;
     auto& stats = eliminator_stats();
+    // (BPACK_TRACE=wave: the wave's own host time by phase, printed at its end)
+    const auto t_wave0 = clock::now();
+    const double w_sketch0 = stats.sketch, w_plan0 = stats.plan, w_launch0 = stats.launch, w_store0 = stats.store,
+                 w_wait0 = stats.sk_wait;
     Context& ctx = Context::instance();
     ctx.activate();
     cudaStream_t stream = ctx.stream();
@@ -5605,6 +5609,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::printf("  [gpu] level %d wave %d: host RSS %.2f GB (high-water %.2f), heap used %.2f GB, pinned chunks %.2f GB "
                     "(%.2f idle)\n", level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
                     static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, static_cast<double>(pinned_chunk_pool().idle()) / 1e9);
+        std::printf("  [gpu] level %d wave %d: %zu boxes in %.3f s of host time: sketch %.3f (of which waiting %.3f), plan %.3f, "
+                    "launch %.3f, store %.3f\n", level_index_, wave_index, wave.size(),
+                    std::chrono::duration<double>(clock::now() - t_wave0).count(), stats.sketch - w_sketch0,
+                    stats.sk_wait - w_wait0, stats.plan - w_plan0, stats.launch - w_launch0, stats.store - w_store0);
         std::fflush(stdout);
     }
     if (heap_.peak() > stats.heap_peak) {
