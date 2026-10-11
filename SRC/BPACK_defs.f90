@@ -887,6 +887,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistSetupLocal, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
+        real(kind=8) :: Cnt_C_Mult_Gemm_Group = 0d0, Cnt_C_Mult_Gemm_Task = 0d0, Flop_C_Mult_Gemm = 0d0, Time_C_Mult_Gemm_Task = 0d0   !< MD matvec block GEMMs: passes, tasks, flops, in-task time (MDSPLIT diagnostics)
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
         real(kind=8) Time_C_Mult_FFT_Total, Time_C_Mult_FFT_Check, Time_C_Mult_FFT_Apply, Time_C_Mult_FFT_Alloc
         real(kind=8) Time_C_Mult_FFT_Input, Time_C_Mult_FFT_Forward, Time_C_Mult_FFT_Multiply, Time_C_Mult_FFT_Backward, Time_C_Mult_FFT_Output
