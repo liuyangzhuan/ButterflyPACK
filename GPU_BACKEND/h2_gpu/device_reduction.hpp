@@ -201,6 +201,12 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
             for (size_t j = 0; j + 5 <= h.size(); j += 5) {
                 const int64_t kind = h[j], lo = h[j + 1], hi = h[j + 2];
                 const int rows = static_cast<int>(h[j + 3]), cols = static_cast<int>(h[j + 4]);
+                if (static_cast<double>(rows) * cols * D > 1.0e9) {   // (8x diagnostics)
+                    std::printf("  [gpu] device reduction: rank %d receives a %d x %d block (%.2f GB, kind %lld, %lld-%lld) from rank %d\n",
+                                rank, rows, cols, static_cast<double>(rows) * cols * D / 1e9, static_cast<long long>(kind),
+                                static_cast<long long>(lo), static_cast<long long>(hi), peers[i]);
+                    std::fflush(stdout);
+                }
                 DeviceMatrixT<S> m{heap.alloc_resident<S>(std::max<size_t>(static_cast<size_t>(rows) * cols, 1) * D, ResidentKind::Reduction),
                                    rows, cols};
                 const bool fresh = kind == 0 ? blocks->schur.emplace(lo, m).second

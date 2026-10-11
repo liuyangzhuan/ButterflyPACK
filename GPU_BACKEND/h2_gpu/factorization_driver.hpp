@@ -343,15 +343,22 @@ public:
         }
     }
     bool pressure_seen_ = false;   // a level packed or chunked for room: memory is tight from here on
-    void stage_solve_factors(int lvl, bool announce) {
+    void stage_solve_factors(int lvl, bool announce, MPI_Comm level_comm) {
         // the host arenas' next chunks pin while the level sketches (H2 host staging (c2))
         pinned_chunk_pool().pin_ahead();
         DeviceSolveStore& store = device_solve_store();
         double pin_s = 0.0, copy_s = 0.0, bytes = 0.0;
         std::string which;
+        // The decision is the level's, not the rank's (2026-10-11): a rank
+        // that saw no pressure kept its upper levels' factors on the card
+        // while its neighbours staged theirs, and at 768^3 on 64 ranks it
+        // then met the level-3 transition and the 64 -> 8 reduction with 27
+        // GB less room than they had.
+        int want = pressure_seen_ || device_under_pressure() ? 1 : 0;
+        if (level_comm != MPI_COMM_NULL) MPI_Allreduce(MPI_IN_PLACE, &want, 1, MPI_INT, MPI_MAX, level_comm);
         for (auto& [level, kl] : store.kept) {
             if (level <= lvl || kl.on_host() || kl.blocks.empty()) continue;
-            if (!(pressure_seen_ || device_under_pressure())) continue;   // room enough: the factors stay
+            if (want == 0) continue;   // room enough on every rank: the factors stay
             double la = 0.0, ar = 0.0;
             device_logdet_kept_level(tree_, level, la, ar);  // (kept in the store before the LU leaves)
             stage_kept_level(kl, Context::instance().stream(), pin_s, copy_s);
@@ -364,8 +371,29 @@ public:
                         which.c_str(), bytes / 1e9, pin_s, copy_s);
         }
     }
+    // (8x diagnostics) every rank's card at a level's start, the small levels
+    void card_at_level_start(int lvl) {
+        if (lvl > 4 || !wave_trace_enabled()) return;
+        const DeviceHeap& h = DeviceHeap::instance();
+        if (!h.initialized()) return;
+        int rank = 0;
+        MPI_Comm_rank(tree_->comm, &rank);
+        std::string held;
+        for (size_t k = 0; k < static_cast<size_t>(ResidentKind::Count); ++k) {
+            const size_t bytes = h.resident_now(static_cast<ResidentKind>(k));
+            if (bytes < (size_t{256} << 20)) continue;
+            char b[96];
+            std::snprintf(b, sizeof b, "%s%s %.2f", held.empty() ? "" : ", ", resident_kind_name(static_cast<ResidentKind>(k)),
+                          static_cast<double>(bytes) / 1e9);
+            held += b;
+        }
+        std::printf("  [gpu] level %d rank %d card at start: %.2f of %.2f GB in use; %s\n", lvl, rank,
+                    static_cast<double>(h.used()) / 1e9, static_cast<double>(h.capacity()) / 1e9, held.c_str());
+        std::fflush(stdout);
+    }
     void start_level(int lvl, bool use_streamed_level, MPI_Comm level_comm, bool announce) {
-        stage_solve_factors(lvl, announce);
+        stage_solve_factors(lvl, announce, level_comm);
+        card_at_level_start(lvl);
         {
             // H2 host memory: the pinned chunks the level above gave back, now
             // that the kept factors took what they could, unpinned beyond half
@@ -430,7 +458,7 @@ public:
     // Returns whether the device runs the level (every box fits the device
     // sketch's packed lists on every rank, and the eliminator supports it).
     bool start_owner_level(int lvl, MPI_Comm level_comm, const OwnerPlanView* view, bool announce) {
-        stage_solve_factors(lvl, announce);
+        stage_solve_factors(lvl, announce, level_comm);
         if (wave_trace_enabled()) trace_.start_begin();
         const Level& level = tree_->levels[static_cast<size_t>(lvl)];
         int fits = 1;
@@ -488,7 +516,7 @@ public:
     // Returns whether the device runs the level: every box fits the device
     // sketch's packed lists on every rank, and the eliminator supports it.
     bool start_ca_level(int lvl, MPI_Comm level_comm, bool announce) {
-        stage_solve_factors(lvl, announce);
+        stage_solve_factors(lvl, announce, level_comm);
         if (wave_trace_enabled()) trace_.start_begin();
         const Level& level = tree_->levels[static_cast<size_t>(lvl)];
         int fits = 1;
@@ -728,6 +756,24 @@ public:
                 trace_.finish_end();
                 print_wave_trace(lvl, level_comm, announce);
             }
+            if (const Level& level = tree_->levels[static_cast<size_t>(lvl)]; lvl <= 3 && level.is_process_active && wave_trace_enabled()) {   // (8x diagnostics, BPACK_TRACE=wave) every rank's boxes at the small levels
+                int rank = 0;
+                MPI_Comm_rank(tree_->comm, &rank);
+                std::string boxes;
+                int64_t maxn = 0;
+                int full = 0;
+                for (const Box& b : level.local_boxes) {
+                    maxn = std::max<int64_t>(maxn, b.num_points);
+                    if (b.redundant_indices.empty() && b.num_points > 0) ++full;
+                    if (boxes.size() < 400) {
+                        boxes += (boxes.empty() ? "" : " ") + std::to_string(b.num_points) + "/" +
+                                 std::to_string(b.skeleton_indices.size());
+                    }
+                }
+                std::printf("  [gpu] level %d rank %d boxes (points/skeleton): %s; largest %lld points, %d kept whole\n", lvl, rank,
+                            boxes.c_str(), static_cast<long long>(maxn), full);
+                std::fflush(stdout);
+            }
             if (local() && (!pending.replace_blocks.empty() || !pending.accumulated_deltas.empty() ||
                             !pending.generators.empty())) {
                 throw std::runtime_error("device level left updates for other ranks");
@@ -873,6 +919,26 @@ public:
                             !opt_.is_hermitian;
         if (builds) {
             parents = build_structure();
+            {   // (8x diagnostics) a parent wider than the device sketch takes, with its children's sizes
+                int rank = 0;
+                MPI_Comm_rank(tree_->comm, &rank);
+                for (const Box& p : parents) {
+                    if (p.num_points <= kEntryDestMask) continue;
+                    std::string kids;
+                    for (int c = 0; c < 8; ++c) {
+                        const int64_t cm = p.children_morton[c];
+                        if (cm < 0) continue;
+                        const int64_t ci = cm - level.local_morton_start;
+                        const Box* cb = ci >= 0 && ci < static_cast<int64_t>(level.local_boxes.size()) ? &level.local_boxes[static_cast<size_t>(ci)] : nullptr;
+                        kids += (kids.empty() ? "" : ", ") + std::to_string(cm) + ":" +
+                                (cb ? std::to_string(cb->skeleton_indices.size()) + "/" + std::to_string(cb->num_points) : "?");
+                    }
+                    std::printf("  [gpu] level %d rank %d: parent %lld has %lld points (children skeleton/points: %s)\n",
+                                level.level, rank, static_cast<long long>(p.morton_index),
+                                static_cast<long long>(p.num_points), kids.c_str());
+                }
+                std::fflush(stdout);
+            }
             // The parent blocks may be stored compressed only where the next
             // level's eliminator adopts them from this device and reads them
             // through begin()'s restore.  A process reduction sends them to
@@ -896,6 +962,66 @@ public:
             // their blocks, the owners as receivers
             const bool mine = level.is_process_active ? (builds && blocks_ != nullptr) : parent_level.is_process_active;
             int ok = mine && device_reduction_possible(level.level, parent_lvl, parents) ? 1 : 0;
+            {
+                // H2 8x (2026-10-11): the receivers' room.  A receiver holds the
+                // merged parent blocks raw; when what its senders hold would not
+                // fit beside what its card has, every rank takes the host
+                // reduction instead (download_level_blocks below).  At 768^3 on
+                // 64 ranks the 64 -> 8 reduction into level 2 exhausted the
+                // receivers' cards.
+                int rank = 0, tsize = 0, trank = 0;
+                MPI_Comm_rank(tree_->comm, &rank);
+                MPI_Comm_size(transition_comm, &tsize);
+                MPI_Comm_rank(transition_comm, &trank);
+                const int owner = level.parent_level_owner;
+                const bool sender = level.is_process_active && owner != rank && blocks_ != nullptr;
+                const bool receiver = parent_level.is_process_active;
+                double my_bytes = 0.0;
+                int my_blocks = 0, largest_r = 0, largest_c = 0;
+                if (blocks_ != nullptr) {
+                    auto take = [&](int rows, int cols) {
+                        const double b = static_cast<double>(rows) * static_cast<double>(cols) * sizeof(DataType);
+                        my_bytes += b;
+                        ++my_blocks;
+                        if (static_cast<double>(largest_r) * largest_c < static_cast<double>(rows) * cols) { largest_r = rows; largest_c = cols; }
+                    };
+                    for (const auto& kv : blocks_->schur) take(kv.second.rows, kv.second.cols);
+                    for (const auto& kv : blocks_->edges) take(kv.second.rows, kv.second.cols);
+                }
+                std::vector<double> to_owner(static_cast<size_t>(tsize), 0.0);
+                if (sender) {
+                    MPI_Group wg, tg;
+                    MPI_Comm_group(tree_->comm, &wg);
+                    MPI_Comm_group(transition_comm, &tg);
+                    int owner_t = MPI_UNDEFINED;
+                    MPI_Group_translate_ranks(wg, 1, &owner, tg, &owner_t);
+                    MPI_Group_free(&wg);
+                    MPI_Group_free(&tg);
+                    if (owner_t != MPI_UNDEFINED) to_owner[static_cast<size_t>(owner_t)] += my_bytes;
+                }
+                MPI_Allreduce(MPI_IN_PLACE, to_owner.data(), tsize, MPI_DOUBLE, MPI_SUM, transition_comm);
+                int fits = 1;
+                const DeviceHeap& heap = DeviceHeap::instance();
+                const double incoming = to_owner[static_cast<size_t>(trank)];
+                if (receiver && heap.initialized()) {
+                    const double room = static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
+                    const double margin = std::max(2.0e9, 0.1 * static_cast<double>(heap.capacity()));
+                    if (incoming + margin > room) fits = 0;
+                }
+                if (sender && my_bytes > 1.0e9) {
+                    std::printf("  [gpu] level %d rank %d reduction: sends %.2f GB in %d blocks to rank %d, largest %d x %d\n",
+                                level.level, rank, my_bytes / 1e9, my_blocks, owner, largest_r, largest_c);
+                }
+                if (receiver) {
+                    std::printf("  [gpu] level %d rank %d reduction: receives %.2f GB beside its own %.2f GB; card %.2f of %.2f GB in use; %s\n",
+                                level.level, rank, incoming / 1e9, my_bytes / 1e9,
+                                heap.initialized() ? static_cast<double>(heap.used()) / 1e9 : 0.0,
+                                heap.initialized() ? static_cast<double>(heap.capacity()) / 1e9 : 0.0,
+                                fits ? "on the device" : "through the host (no room)");
+                }
+                std::fflush(stdout);
+                if (!fits) ok = 0;
+            }
             MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, transition_comm);
             if (ok != 0) {
                 red = reduce_parent_blocks(tree_, level, parent_level, blocks_, transition_comm);

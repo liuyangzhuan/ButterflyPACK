@@ -4464,6 +4464,55 @@ leaves was mis-sized (an octree's box sizes step by 8x: 216, 1728,
 13824 points; a box between 2048 and 8191 points exists only at the
 upper levels of a large problem) and timed out on host sketches.
 
+#### 768^3 on 64 ranks runs end to end (2026-10-11): the staging decision made collective
+
+The diagnostics of the rerun said three things.  Every rank's eight
+level-3 boxes have 600-2130 points and the device sketch keeps very
+large skeletons on the late boxes (k up to 1475 of 2001 points; the
+level's average 311 against the host sketch's 196 in the first run),
+monotone in the elimination order - so an accuracy difference, not a
+corrupt sketch; the rule is the same on both sides (d = the box's
+points, 4 nonzeros a column).  The 10.7 GB allocations on the ranks
+that failed were not the reduction's: they came before it, in those
+ranks' own level-3 transition - the G and P buffers of one parent's fill
+GEMMs (r x k a pair, with r and k both ~1000-1500 at these skeletons),
+which the chunk loop takes whole for its first parent.  And those ranks'
+cards held ~27 GB of kept factors that rank 0 had staged: the staging
+at a level's start was each rank's own decision (its pressure or its
+card above the hold limit), and the ranks that saw none kept levels 6-4
+resident.
+
+**The decision is the level's now** (an allreduce of the flag over the
+level's ranks in stage_solve_factors), the reduction tests the receivers'
+room (what its senders hold against the card, with a margin) and takes
+the host reduction otherwise, and the per-rank card and box lines are
+under BPACK_TRACE=wave.  With that, 768^3 Color on 64 ranks runs to the
+end:
+
+| 768^3, 64 ranks, Color | first run (host sketches at 3, 2) | now |
+|---|---|---|
+| factorization | 386 s (exchange 176) | **119.7 s** (exchange 37.6) |
+| levels 7 / 6 / 5 / 4 / 3 / 2 | 66.7 / 30.0 / 8.0 / 5.9 / 70.7 / 82.5 s | 65.6 / 16.2 / 7.5 / 5.5 / 2.9 / 3.8 s |
+| 64 -> 8 reduction into level 2 | through the host | on the device: receivers get 3.0-3.6 GB with 0.2-0.7 GB in use |
+| cards at level 3's start, heaviest ranks | 33 GB in use | 3.7 GB (parent blocks) |
+| solve / multiply | OOM-killed at the set-up | 3.39 / 3.81 s, the leaf through a 10.2 GB ring |
+| accuracy | - | acc_mvp 1.25e-3, acc_forward 2.14e-2, acc_backward 1.3e-15 |
+| host RSS high-water | | 51.6 GB a rank (54.3 at level 1) |
+
+The logdet of this run is reported with a negative sign (-1,
+log|det| 6968677636.29) where the first run's, with host sketches at
+levels 3 and 2, had +1 and 6968679026.42: the two approximations differ
+by 2e-7 in log|det| and in the inertia's parity, which makes the
+level-3 skeleton question one of correctness, not cost.
+
+Open on this path: the level-3 skeleton inflation (a 2.5x larger
+level-2 block set and 1.6x more solve work at those levels than the host
+sketch would give; the cause - the lossy fill rows, or the device
+sketch's sampling of them - is not established), and the transition's
+per-parent buffer floor (10.7 GB for one parent here; fits once the
+cards are empty, but it is the next limit up).  CA3 and CA0 at 768^3
+fail as before, in their leaves.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
