@@ -4612,6 +4612,34 @@ the "fine above the leaf" result above, all three paths.  Level 5 of
 384^3 at 8x (69.84 against 65.60 at 1x); the level above a coarse store
 pays a few percent, the ones above that converge.
 
+**The lossless 384^3 reference** (64 ranks, `H2_compress_factors 0`, on
+80 GB cards - the leaf's raw kept factors do not fit a 40 GB card even
+at 1x): 43.449 65.607 88.071 97.268 71.906, logdet +1 -792566483.68,
+acc_mvp 5.2e-4, acc_forward 7.25e-3.  The fine-packed 64-rank run
+(lib_dg: fill store and kept X_NR at 0.002 above the leaf) reads 43.475
+65.600 88.04 97.34 72.00, -792566485.70, 5.1e-4, 7.5e-3 - within 0.1%
+at every level and 3e-9 in the logdet; the committed packing read
+43.475 66.50 101.80 153.95 168.53 and -792566539.70.  So the fine step
+is the uncompressed elimination to the digits the quick verification
+resolves, and the kept X_NR's step is what is left of the accuracy gap.
+
+**Factor time, and a caution.**  The rule's clean 768^3 run took 137.7 s
+against the committed night run's 119.7, and three repeats in one job
+took 226 / 193 / 193 s - none of it in the levels' work: the per-level
+eliminations, exchanges and transitions equal the night run's within
+noise, and the rest is one rank at a time stalled in `cudaHostRegister`
+(the pool's pin-ahead): "pinning 62.25 s so far" at level 6 against
+6.1 s, the leaf's "after the transition" 60-97 s against 1.9, level 6's
+waves 8-10 (where 11 chunks are pinned) 4-14 s of launch on one rank
+against 0.9.  The committed library's own morning run shows it too
+(leaf transition 24 s on rank 0, max over ranks 28.5 s against 8.1 /
+9.9 at night), on different ranks every job, so it is the host memory
+state of the nodes, not the code: with 37-50 GB a rank pinned (150-200
+GB of a 256 GB node) the kernel's page-pinning slows by 10x when the
+node's memory is fragmented.  Compare factor times only within one job,
+and read the "pinning N s so far" line first.  The pool's cap and its
+trim policy are the lever if this recurs (open).
+
 Left open, measured: the kept X_NR packed finer where it is cheap.  At
 384^3 on 64 ranks, the kept X_NR of levels <= 5 at 0.002 (lib_dg) against
 0.2 (lib_dgf), both with the fine fill store, read acc_mvp 5.1e-4 against
