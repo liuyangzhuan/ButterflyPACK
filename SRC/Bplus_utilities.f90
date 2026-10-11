@@ -2389,6 +2389,7 @@ contains
       !>**** cap on the stacked duplicate batch, so widening it to feed the threads can
       ! never blow up the working set at the coarse levels
       integer(kind=8), parameter::dup_stack_budget = 67108864_8
+      integer ncols, ncols_max
 #ifdef HAVE_OPENMP
       integer(kind=omp_lock_kind), allocatable::out_locks(:)
 #endif
@@ -2462,15 +2463,30 @@ contains
                nsel = nsel + 1
                mem_sel(nsel) = mm_sel
             enddo
+            !>**** the two stacks live across batches and representatives and only grow: a fresh pair per batch
+            ! was a malloc (an mmap above 128 KB), first-touch page faults and a free for every batch -- 13.6k
+            ! batches per matvec at the leaf level of 1280^3, 130 MB a batch at level 4
+            ncols_max = Nrnd*min(stack_limit, max(1, nsel))
+            if (allocated(Vin_stack)) then
+               if (size(Vin_stack,1) /= product(dim_in) .or. size(Vin_stack,2) < ncols_max .or. &
+                   size(Vout_stack,1) /= product(dim_out) .or. size(Vout_stack,2) < ncols_max) then
+                  call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
+                  call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+                  deallocate(Vin_stack, Vout_stack)
+               endif
+            endif
+            if (.not. allocated(Vin_stack)) then
+               allocate(Vin_stack(product(dim_in), ncols_max))
+               allocate(Vout_stack(product(dim_out), ncols_max))
+               call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
+               call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
+            endif
             do bs_sel = 1, nsel, stack_limit
                batch_start = bs_sel
                batch_end = min(nsel, bs_sel + stack_limit - 1)
                batch_count = batch_end - batch_start + 1
-               allocate(Vin_stack(product(dim_in),Nrnd*batch_count))
-               allocate(Vout_stack(product(dim_out),Nrnd*batch_count))
-               call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
-               call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
-               Vout_stack = 0
+               ncols = Nrnd*batch_count
+               Vout_stack(:,1:ncols) = 0
 
 	               t1 = MPI_Wtime()
 !$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
@@ -2520,10 +2536,10 @@ contains
                   if (rep%level_butterfly == 0 .and. product(rep%nc_m) == 1 .and. &
                       product(rep%nr_m) == 1 .and. ptree%pgrp(rep%pgno)%nproc == 1 .and. &
                       .not. allocated(rep%MiddleQTT)) then
-                     call BF_MD_block_mvp_level_butterfly0('N', Vin_stack, dim_in, Vout_stack, dim_out, &
+                     call BF_MD_block_mvp_level_butterfly0('N', Vin_stack(:,1:ncols), dim_in, Vout_stack(:,1:ncols), dim_out, &
                         Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option, zfp_mvp_mode)
                   else
-                     call BF_MD_block_mvp('N', Vin_stack, dim_in, Vout_stack, dim_out, &
+                     call BF_MD_block_mvp('N', Vin_stack(:,1:ncols), dim_in, Vout_stack(:,1:ncols), dim_out, &
                         Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option, zfp_mvp_mode)
                   endif
                endif
@@ -2581,9 +2597,6 @@ contains
 	               endif
 		               t2 = MPI_Wtime()
 	               stats%Time_C_Mult_Unpack = stats%Time_C_Mult_Unpack + t2 - t1
-               call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
-               call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
-               deallocate(Vin_stack, Vout_stack)
             enddo
          enddo
 #ifdef HAVE_OPENMP
@@ -2594,6 +2607,11 @@ contains
             deallocate(out_locks)
          endif
 #endif
+            if (allocated(Vin_stack)) then
+               call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
+               call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+               deallocate(Vin_stack, Vout_stack)
+            endif
             if (allocated(mem_sel)) deallocate (mem_sel)
       enddo
 
