@@ -4703,7 +4703,8 @@ plan phase was the allocator's variance: the waves' host time over the
 ranks 39.9 / 42.7 / 53.5 s against 41.3 / 50.4 / 58.3 before) and the
 wave buffers' allocation 11.1 -> 8.4 s.  So even on the 40 GB cards the
 walk had cost about 3 s of compute and 9 s of waiting at the leaf, and
-Color's exchange wait at 64 ranks is 17% of its compute, not 41%.
+Color's exchange wait at 64 ranks is 20% of its compute (10.6 of 52.5 s),
+not 41%.
 (The afternoon's 40 GB total stayed at 190.8 s on the same pinning
 stalls as the morning's: "after the transition" 69 s at the leaf on a
 rank other than 0, level 6 26 s.)
