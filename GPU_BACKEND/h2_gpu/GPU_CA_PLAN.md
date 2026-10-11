@@ -4439,6 +4439,31 @@ built here disagrees with the owner's by a column.  CA with packing needs
 the ghosts' skeletons taken from their owners (as the assisting boxes'
 already are), which is a CA-path change, not a memory one.
 
+#### 768^3 on 64 ranks, the rerun (2026-10-11): one level fixed, the next one blocks
+
+With the 13-bit destinations, Color's levels 3 and 2 take the device
+path: level 3 eliminates in 4.6 s where it took 71 s, level 6 in 18 s
+(30 before; its exchange 5.3 s).  The run then dies in the 64 -> 8
+process reduction from level 3 into level 2, which now runs on the
+device as well (the first run's went through the host because those
+levels had no device sketch): the eight receivers (ranks 7, 14, ...,
+56) allocate the merged level-2 blocks raw, one resident block a piece,
+on cards already full - rank 7's own level-3 transition found 31.1 of
+31.9 GB in use, and ranks 28 and 56 asked for single blocks of 10.4-10.9
+GB, which matches no level-2 dimension (a parent of eight 313-point
+skeletons gives 50 MB blocks).  Two things to settle before the next
+run: what those blocks are, and whether the device sketch is right for
+boxes over 2047 points - at level 3 it kept 313 skeleton points on
+average where the host sketch kept 196 on the same level-4 input (the
+destination-range split, parts of ~557 against the shared memory, is
+exercised from 557 points on at every size, so the difference is not the
+split as such).  CA3 and CA0 fail as in the first run (the owner pass's
+2.5-7.4 GB requests; the kept X_NR hand-over on 13 ranks and the host
+OOM on the interior brick of rank 35).  A 192^3 test with 2744-point
+leaves was mis-sized (an octree's box sizes step by 8x: 216, 1728,
+13824 points; a box between 2048 and 8191 points exists only at the
+upper levels of a large problem) and timed out on host sketches.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
