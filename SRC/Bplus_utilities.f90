@@ -18468,7 +18468,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       character chara
       integer Ninloc(Ndim), Noutloc(Ndim), Nvec
       DT::xin(:, :), xout(:, :)
-      DT,allocatable::xout1(:, :),data_buffer(:)
+      DT,allocatable::data_buffer(:)
       type(matrixblock_MD)::blocks
       type(proctree)::ptree
       type(Hstat)::stats
@@ -18933,8 +18933,9 @@ end subroutine BF_block_MVP_dat_batch_magma
          n5 = MPI_Wtime()
 
 	         !>**** Step 4: multiply the factor matrices out from middle level to the outtermost level along each dimension
-	         allocate(xout1(size(xout,1),size(xout,2)))
-	         xout1 = 0
+	         ! Each row sub-tensor's result is scattered straight into xout, which the caller owns and
+	         ! has zeroed; the former xout1 staging (zero, scatter, copy, free -- single-threaded) moved
+	         ! ~1 GB per call at the 160^3 level.
             time_reshape_phase = 0d0
             time_reshape_final_phase = 0d0
 #ifdef HAVE_TASKLOOP
@@ -18963,7 +18964,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             offsets_ref(Ndim+1) = 0
 
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape_FinalScatter(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout1)
+	            call TensorUnfoldingReshape_FinalScatter(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_final_phase = time_reshape_final_phase + t_end - t_start
@@ -18976,8 +18977,6 @@ end subroutine BF_block_MVP_dat_batch_magma
 #endif
             time_reshape = time_reshape + time_reshape_phase
             time_reshape_final = time_reshape_final + time_reshape_final_phase
-	         xout=xout1
-         deallocate(xout1)
 
          n6 = MPI_Wtime()
 

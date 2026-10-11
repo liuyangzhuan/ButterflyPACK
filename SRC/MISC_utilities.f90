@@ -4769,12 +4769,16 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
 end subroutine TensorUnfoldingReshape
 
 
+!>**** Scatter one row sub-tensor's result (data_in, columns = front x rhs) into its box of the
+! full output data_out, which the caller owns and has already zeroed; entries outside the box
+! are not touched. Called from inside a task of BF_MD_block_mvp's row-side taskloop, so the
+! loops are spread over the team as tasks (a nested parallel do would run on one thread).
 subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,offsets_ref,data_in,data_out)
    implicit none
    integer Ndim
    integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim)
    DT::data_in(:,:)
-   DT,allocatable::data_out(:,:)
+   DT::data_out(:,:)
    integer idx_front(Ndim), stride_out(Ndim-1)
    integer dim_i, front, prod_front, rhs_old, rhs_out, in_col
    integer idx_old_scalar, out_row, base_out, carry_dim, out_dim1, out_dim2
@@ -4783,10 +4787,6 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
 
    out_dim1 = product(dims_ref_new(1:Ndim-1))
    out_dim2 = dims_ref_new(Ndim)
-   if(.not. allocated(data_out))then
-      allocate(data_out(out_dim1,out_dim2))
-      data_out=0
-   endif
 
    stride_out(1) = 1
    do dim_i=2,Ndim-1
@@ -4800,9 +4800,17 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
 
    full_front = all(offsets_ref(1:Ndim-2)==0) .and. all(dims_ref_old(1:Ndim-2)==dims_ref_new(1:Ndim-2))
    if(full_front)then
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs_old,rhs_out,idx_old_scalar,base_out,in_col,front) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs_old,rhs_out,idx_old_scalar,base_out,in_col,front) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
       do rhs_old=1,dims_ref_old(Ndim)
-         rhs_out = rhs_old + offsets_ref(Ndim)
          do idx_old_scalar=1,dims_ref_old(Ndim-1)
+         rhs_out = rhs_old + offsets_ref(Ndim)
             base_out = 1 + (idx_old_scalar + offsets_ref(Ndim-1) - 1)*stride_out(Ndim-1)
             in_col = 1 + (rhs_old-1)*prod_front
             do front=1,prod_front
@@ -4810,6 +4818,14 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
             enddo
          enddo
       enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
       return
    endif
 
@@ -4829,9 +4845,17 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
       enddo
    enddo
 
+#ifdef HAVE_TASKLOOP
+   !$omp taskgroup
+   !$omp taskloop default(shared) private(rhs_old,rhs_out,front,base_out,in_col,idx_old_scalar,out_row) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+   !$omp parallel do default(shared) private(rhs_old,rhs_out,front,base_out,in_col,idx_old_scalar,out_row) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
    do rhs_old=1,dims_ref_old(Ndim)
-      rhs_out = rhs_old + offsets_ref(Ndim)
       do front=1,prod_front
+      rhs_out = rhs_old + offsets_ref(Ndim)
          base_out = front_out(front)
 
          in_col = front + (rhs_old-1)*prod_front
@@ -4841,6 +4865,14 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
          enddo
       enddo
    enddo
+#ifdef HAVE_TASKLOOP
+   !$omp end taskloop
+   !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+   !$omp end parallel do
+#endif
+#endif
    deallocate(front_out)
 
 end subroutine TensorUnfoldingReshape_FinalScatter
