@@ -9410,7 +9410,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     };
     std::unordered_map<int64_t, Restored> restored;
     // X_RR_full of the sources that dropped it for their LU, rebuilt once a
-    // chunk into blocks of its own (r x r, so one small block a source).
+    // chunk into blocks of its own (3 r x r: the product and its L and U),
+    // freed with the chunk.  Freed at the transition's end before (H2 8x,
+    // 2026-10-10): over the 384^3 leaf's 100+ chunks they came to 14 GB
+    // and starved the chunk budget to 50 MB.
     std::vector<char*> xrr_exp_blocks;
     cudaEvent_t staged[2] = {nullptr, nullptr};
     int stage_turn = 0;
@@ -9468,6 +9471,12 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         std::vector<Pending> pending;
         std::unordered_map<int64_t, std::unordered_map<int64_t, int>> pending_cols;
         size_t restore_bytes = 0;
+        // the packed sources put back whole in this chunk (H2 8x, 2026-10-10):
+        // counted against the budget like the host restores - at the 384^3
+        // leaf every source is packed and they are the level's raw temp2^T,
+        // 146 GB a rank, so a chunk sized by its parents alone filled the card
+        size_t packed_restore_bytes = 0;
+        size_t xrr_rebuild_bytes = 0;    // ... and the X_RR_full rebuilt from the LU for this chunk
         std::vector<int64_t> rows_of;
         auto source = [&](int64_t em) -> Source& {
             auto it = source_of.find(em);
@@ -9486,6 +9495,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                                              std::to_string(em));
                 }
                 xrr_exp_blocks.push_back(blk);
+                xrr_rebuild_bytes += 3 * rr * sizeof(S);
                 S* dst = reinterpret_cast<S*>(blk);
                 S* l = dst + rr;
                 S* u = l + rr;
@@ -9523,6 +9533,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     // collected now, decompressed in one batch before the
                     // chunk's launches (the pointer is only read there)
                     if (collect_fill_source(es, reinterpret_cast<S*>(blk), packed_src, packed_dst)) {
+                        packed_restore_bytes += elems * sizeof(S);
                         Restored& rs = restored[em];
                         rs.block = blk;
                         rs.gall = nullptr;
@@ -9565,6 +9576,19 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             // point data here (the only ones a pair of this rank can read)
             Box* sb = s.box;
             if (sb->X_NR.rows != es.ntot || sb->X_NR.cols != s.r || !host_xrr_available(*sb, s.r)) {
+#ifdef H2_HAVE_NVCOMP
+                if (packed_of(es) != nullptr && es.ntot > 0 && es.r > 0 && !sb->X_NR.is_allocated()) {
+                    // (no host copy under packed_restore_: the packed put-back
+                    // above found no room, which is the chunking's problem)
+                    throw std::runtime_error("LevelEliminator::build_parent: no room to put back fill source " +
+                                             std::to_string(em) + " from the packed store (" +
+                                             std::to_string(static_cast<size_t>(es.ntot) * es.r * sizeof(S)) +
+                                             " bytes wanted; heap used " + std::to_string(heap_.used() >> 20) + " of " +
+                                             std::to_string(heap_.capacity() >> 20) + " MB, largest free " +
+                                             std::to_string(heap_.largest_free() >> 20) + " MB, chunk budget " +
+                                             std::to_string(budget >> 20) + " MB)");
+                }
+#endif
                 throw std::runtime_error("LevelEliminator::build_parent: host copy of fill source " +
                                          std::to_string(em) + " missing");
             }
@@ -9692,7 +9716,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         struct ChunkRef { bool schur; int64_t morton; uint64_t key; const DeviceMatrix* m; };
         std::vector<ChunkRef> chunk_refs;
         size_t p1 = p0;
-        while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes + chunk_block_bytes < budget)) {
+        while (p1 < np && (p1 == p0 || buffer_bytes + 2 * restore_bytes + packed_restore_bytes + xrr_rebuild_bytes +
+                                              chunk_block_bytes < budget)) {
             const size_t p = p1++;
             for (const Pair& pr : pairs_of[p]) {
                 DeviceMatrix& M = *pr.block;
@@ -10099,6 +10124,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
 #endif
         heap_.free(d_buffers);  // later launches are ordered after this chunk
         heap_.free(d_raw);
+        for (char* b : xrr_exp_blocks) heap_.free(b);  // (the chunk's P products read them; the next chunk rebuilds its own)
+        xrr_exp_blocks.clear();
         // restored sources whose last reader was in this chunk or before
         for (auto it = restored.begin(); it != restored.end();) {
             if (it->second.last_parent < p1) {
@@ -10114,6 +10141,21 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         stats.heap_peak_resident = heap_.resident_at_peak();
         stats.heap_peak_transient = heap_.transient_at_peak();
     }
+        if (env::trace("wave")) {   // the chunk against its budget (BPACK_TRACE=wave)
+            std::printf("  [gpu] level %d transition chunk %zu: parents %zu..%zu of %zu, budget %.2f GB = buffers %.2f + "
+                        "host restore %.2f + packed restore %.2f + X_RR_full rebuilt %.2f + parent blocks %.2f; heap used "
+                        "%.2f GB (restored %.2f, parents %.2f, kept %.2f), largest free %.2f\n", level_index_,
+                        chunk_marks.size(), p0, p1, np,
+                        static_cast<double>(budget) / 1e9, static_cast<double>(buffer_bytes) / 1e9,
+                        static_cast<double>(restore_bytes) / 1e9, static_cast<double>(packed_restore_bytes) / 1e9,
+                        static_cast<double>(xrr_rebuild_bytes) / 1e9,
+                        static_cast<double>(chunk_block_bytes) / 1e9, static_cast<double>(heap_.used()) / 1e9,
+                        static_cast<double>(heap_.resident_now(ResidentKind::Restore)) / 1e9,
+                        static_cast<double>(heap_.resident_now(ResidentKind::Transition)) / 1e9,
+                        static_cast<double>(heap_.resident_now(ResidentKind::KeptFactors)) / 1e9,
+                        static_cast<double>(heap_.largest_free()) / 1e9);
+            std::fflush(stdout);
+        }
         p0 = p1;
     }
     for (auto& kv : restored) {

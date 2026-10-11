@@ -4243,8 +4243,54 @@ the free room) counted the G/P buffers, the host-path restores and the
 parents' blocks but not the packed put-backs - and at this size every
 source is packed and they are the level's raw temp2^T, 146 GB a rank, so
 a chunk sized by its parents alone decompressed far more than the room
-it had.  Next: count them (packed_restore_bytes), a per-chunk trace,
-and the probe again.
+it had.
+
+#### The leaf's transition at 8x (2026-10-10): the chunk budget, and a leak the chunks exposed
+
+Counting the packed put-backs (packed_restore_bytes) in the chunk
+budget was not enough: the 35% runs at 192^3 then died in the transition
+too ("no room to put back fill source ... heap used 11922 of 13115 MB,
+largest free 5 MB, chunk budget 24 MB"), and the per-chunk trace at
+384^3 (BPACK_TRACE=wave) showed why.  The X_RR_full rebuilt from the
+kept LU for a chunk's sources (3 r x r a source: the product and its L
+and U) went into blocks freed only when the whole transition was done,
+so over the leaf's chunks they accumulated - "restored" 0.14 GB after
+chunk 1, 14.1 GB after chunk 100 - and the budget, a quarter of the free
+room, collapsed to 50 MB and the chunks to one parent each.  At 192^3
+the leaf's 10 chunks never showed it.  They are freed with the chunk now
+(the chunk's P products are their only reader) and counted in the budget
+(xrr_rebuild_bytes).
+
+| 192^3, 8 ranks | Factor | logdet | acc_forward | leaf transition |
+|---|---|---|---|---|
+| Color | 7.94 s | -89253593.152662069, identical | 8.0039e-3, identical | 0.53 s, 38 chunks (was 10) |
+| Color at 35% | 11.0 | -89253771.650 (packed band) | 1.59e-2 | 0.86 s, 38 chunks |
+| CA3 at 35% | 11.6 | -89253759.096 (packed band) | 1.54e-2 | 0.96 s, 37 chunks |
+
+**384^3 on 8 ranks (32768 leaf boxes a rank, 8x the 192^3 run) factors
+to the end.**  Per rank: leaf elimination 57.1 s and transition 8.2 s
+(334 chunks of ~12 parents: budget 2.15 GB = buffers 0.57 + packed
+put-backs 1.33 + X_RR_full rebuilt 0.14 + parent blocks 0.24; the heap
+at 17 GB with the kept factors 8.9 GB of it); level 5 12.7 + 2.0 s;
+level 4 5.1 + 0.7; level 3 2.8 + 0.3; level 2 1.2; the root LU on the
+device.  Factorization total 92.3 s, of which the data exchange 17.5 s.
+Memory: the heap under its hold limit throughout (leaf limit 11.9 GB:
+718 of 776 owner groups packed, 15 of 16 waves chunked, every transition
+chunk's parents packed); host RSS high-water 51.5 GB a rank, pinned
+chunks at most 38.1 GB (the near store and the fill store at the leaf;
+30 GB of staged kept factors at level 3, 18.4 of them the leaf's); the
+trims gave back 8.6, 4.3 and 1.6 GB at the starts of levels 5, 4 and 3
+(0.41, 0.07, 0.05 s).  The kept factors: leaf 18.6 GB a rank (X_NR
+145.9 -> 9.7 GB, 15.1x), level 5 6.1, level 4 1.7, level 3 0.5.  logdet
+-792567616.26243639.  The run was then OOM-killed on the host in the
+solve's set-up, after the factorization: the solve at 8x is the next
+item (the kept factors alone are 27 GB a rank compressed, and a host
+fall-back decompresses the X_NR).
+
+The 38 chunks at 192^3 on the full card (10 before, +0.04 s) are the
+rebuilt X_RR_full now counted against a 2 GB cap the free room would
+allow to be 4x larger; the cap can follow the room if the chunk count
+ever matters.
 
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
