@@ -4736,6 +4736,31 @@ still dies one level up (the ghost mismatch) and CA3 in its owner pass
 (5.2 GB requests, 31-36 GB in use), so the leaf is the only level the
 comparison covers.
 
+#### Why CA0 dies above its leaf (2026-10-11): the replicas are not the owners' copies
+
+`BPACK_CHECK=replica` at 192^3 on 8 ranks, CA0 at the leaf, the
+committed library: at the default heap 6217 of 9488 ghost copies at
+level 5 and 3179 of 3536 at level 4 differ bitwise from their owners'
+(in T, LU, X_SR, X_RS, X_NR and X_RR_full, a few in X_NR alone; the
+skeleton the same), and the run completes; at a 35% heap 6671 of 9488
+differ, one of them (ghost 623 on rank 1) in the skeleton itself with
+the same count, and the next level's halo dies ("rank 0 expects
+177212535 elements from rank 1, which sends 177200035").  The 384^3
+check OOM-killed the host (the check keeps the X_NR host copies).  So
+the replicated elimination was never bit-reproducible across ranks -
+192^3 passed because no ghost's rank decision flipped - and the
+quantization bins turn last-bit differences into whole-delta ones,
+which is where the flips come from (one ghost in thousands, in the
+skeleton's count or its set).  The flips are not the fill store's
+step: the same blocks fail at 0.2 and 0.002.  Two ways out: make every
+reduction a ghost's elimination performs rank-independent (the sketch's
+fill groups, the partial sums into near blocks, the batched GEMMs'
+kernel choice by batch composition - hard to guarantee), or have the
+ghosts take their skeleton (indices and count) and T from their owners
+in a per-wave payload, pipelined behind the owner's own boxes, and
+tolerate last-bit differences in the factors, which the 192^3 runs
+already do.
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box
