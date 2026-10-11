@@ -553,6 +553,16 @@ public:
         }
         level_index_ = lvl;
         decide_solve_keep(lvl, level_comm, true);
+        if (level_) {   // (every rank of the level: fits was decided together)
+            int pack = level_->shared_packing_expected() ? 1 : 0;
+            MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
+            level_->set_pack_shared(pack != 0);
+            if (announce && pack != 0) {
+                std::printf("  [gpu] level %d: the blocks on more than one rank held packed (a rank's near set "
+                            "would not fit raw)\n", lvl);
+                std::fflush(stdout);
+            }
+        }
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU CA level: "
@@ -1090,6 +1100,11 @@ public:
                             static_cast<long long>(e.np_waves_chunked), static_cast<long long>(e.np_waves),
                             static_cast<long long>(e.tr_pack_chunks_packed), static_cast<long long>(e.tr_pack_chunks),
                             static_cast<long long>(e.fs_staged_late));
+                if (e.np_shared_blocks > 0) {
+                    std::printf("  [gpu] level %d near blocks on more than one rank, held packed always: %lld "
+                                "writes, %.2f GB raw (replicated CA)\n", level.level,
+                                static_cast<long long>(e.np_shared_blocks), e.np_shared_raw / 1e9);
+                }
                 if (e.fw_no_window > 0) {
                     std::printf("  [gpu] level %d gather window: %lld chunks got none, %lld blocks put back one by one\n",
                                 level.level, static_cast<long long>(e.fw_no_window), static_cast<long long>(e.fw_fallbacks));

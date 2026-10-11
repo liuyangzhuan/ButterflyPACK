@@ -4765,6 +4765,46 @@ leaf free of any exchange; taking the ghosts' skeletons from their
 owners instead would add a per-wave dependency on the neighbours, the
 thing CA0 exists to avoid.
 
+#### CA0's replicas bitwise again (2026-10-11): two rank-dependent paths the compression added
+
+1. **The sketch's fill.**  The fill sources a wave reads are decompressed
+   in groups cut by a scratch budget over the whole wave, and Y -= W P was
+   one product a (group, box): a box's sources fell into groups by what
+   else its wave held, so its fill was summed in a different order on a
+   ghost's replica than on its owner.  Now, with compression, a term a
+   source in Morton order (the groups are Morton ranges; raw sources are
+   placed by Morton too), a box's terms in one group as passes.  96^3
+   CA0: 1948 of 3536 ghost copies differed, now 0; 192^3: 6217 of 9488
+   and 3179 of 3536, now 0 and 0.  Uncompressed is unchanged (one group,
+   one product a box).
+2. **Holding near blocks packed under pressure.**  Decided by each rank
+   from its own heap for every block, so a ghost's blocks were quantized on
+   one rank and raw on its owner (192^3 at a 35% heap: 5219 of 9488 differ,
+   skeletons among them - the crash).  Now a block that exists on more
+   than one rank (both its boxes ghosts here or held by another rank as
+   ghosts or assisting boxes, from `ca_halo_sends`) is held packed after
+   every write when the level decides so at its start (every rank alike: a
+   MAX of "my near set would not fit raw" - at the leaf half the full-size
+   blocks of the rank's boxes and their one-hop pairs, above it a tenth of
+   the card beyond what is used), and a block private to the rank under the
+   rank's own pressure, as before.  A private block cannot reach a
+   replicated box's elimination: the other copy's rank does not have it.
+   Measured on the way: a level-wide decision taken a wave late (a
+   non-blocking MAX at every wave) could not follow the green group's first
+   wave, which grows the near set by ~20 GB at 8x (the heap went 6 -> 32
+   GB, out of memory); packing the shared blocks always cost 1.65 s of a
+   4.05 s leaf at 192^3, where nothing needs packing.
+
+| CA0 at the leaf | before | now |
+|---|---|---|
+| 192^3, 8 ranks: replica check | 6217 / 3179 differ | 0 / 0 |
+| 192^3, 8 ranks, 35% heap: the leaf | 5219 differ, halo count mismatch above | 0 differ (level 4 then out of device memory at its start: the 35% heap's limit) |
+| 192^3, 8 ranks: levels, total | 4.05 2.28 0.65 0.28 s, 9.04 s | 4.11 2.28 0.67 0.29 s, 9.12 s |
+| 384^3, 8 ranks (8x) | dies above the leaf (near block shape) | **end to end**: leaf 46.2 s (Color 48.3), total 83.6 s (Color 81.2), acc_forward 1.50e-2 |
+
+At 384^3 the Color level above CA0's leaf takes 15.3 s against 11.9 in
+the Color run, its exchange 4.3 s against 1.1: open.
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box

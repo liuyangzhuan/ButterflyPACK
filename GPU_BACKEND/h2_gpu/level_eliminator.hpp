@@ -213,6 +213,8 @@ struct EliminatorStats {
     int64_t ow_slots = 0;
     int64_t fs_waves_plain = 0;   // a wave whose staging did not fit
     int64_t fs_packed_short = 0;  // a box whose packed block did not fit (it stays raw)
+    int64_t np_shared_blocks = 0;  // replicated CA levels: near blocks on more than one rank, held packed always
+    double np_shared_raw = 0.0;    // ... their raw bytes
     // the scratch a wave's sketch needs for the slots it reads, and what it
     // decompressed in all
     double fs_host_bytes = 0.0;    // the packed temp2^T on the host, at most (H2 host staging)
@@ -466,6 +468,11 @@ public:
     // decide_solve_keep) and its budget: a level that keeps them skips the
     // host copies of their X_NR, and its waves keep factors while they stay
     // within `budget` bytes (else the level's keep fails).
+    // Replicated CA levels: whether this rank expects its near set not to fit
+    // raw (asked after set_solve_keep), and the level's decision, taken on
+    // every rank alike, to hold the blocks on more than one rank packed
+    virtual bool shared_packing_expected() { return false; }
+    virtual void set_pack_shared(bool /*pack*/) {}
     virtual void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) {
         (void)keep;
         (void)budget;
@@ -594,6 +601,7 @@ public:
         // remote generator still keeps on the host, or rebuilds it from the
         // LU a failed keep rescued (host_xrr_full_from_lu).
         packed_restore_ = gpu_sketch_ && compress_factors_ >= 1;
+        replicated_ = ca_ && !owner_mode_ && compress_factors_ >= 1;
 #endif
     }
     void set_owner_plan(const OwnerPlanView* plan) override {
@@ -1623,6 +1631,25 @@ private:
             release_packed(owner);
         }
     }
+    // Which of a group's blocks to pack (replicated CA levels; see block_shared)
+    enum class PackOnly { All, Shared, Private };
+    // Replicated CA levels: the blocks on more than one rank by the level's
+    // decision (pack_shared_), this rank's own under its pressure.  Should
+    // the rank still be short with its own packed on a level that decided
+    // otherwise, it packs the shared ones too and says so: its ghost copies
+    // may then differ from their owners' (a skeleton among them would stop
+    // the level above), which beats running out of memory here.
+    template<typename TargetT>
+    void pack_near_by_rule(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream,
+                           bool pressure) {
+        if (pack_shared_) pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
+        if (!pressure) return;
+        pack_near_group(targets, first, last, stream, 1.0, PackOnly::Private);
+        if (!pack_shared_ && under_pressure()) {
+            warn_replica_fallback("short of room with its own blocks packed, the shared ones packed too");
+            pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
+        }
+    }
     // A finished group's near blocks, compressed into the packed store, their
     // raw memory returned.  The tolerance is the tighter one: these feed the
     // fill GEMMs, where the factors only feed the solve, and four times
@@ -1631,13 +1658,18 @@ private:
     // form - less saving, same answer - so a failure here is not fatal.
     template<typename TargetT>
     void pack_near_group(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream,
-                         double tol_scale = 1.0) {
+                         double tol_scale = 1.0, PackOnly only = PackOnly::All) {
         std::vector<const S*> srcs;
         std::vector<size_t> elems;
         std::vector<size_t> which;
         for (size_t i = first; i < last; ++i) {
             const TargetT& t = targets[i];
             if (t.block == nullptr || t.block->ptr == nullptr || t.rows <= 0 || t.cols <= 0) continue;
+            if (only != PackOnly::All && block_shared(static_cast<uint64_t>(t.key)) != (only == PackOnly::Shared)) continue;
+            if (only == PackOnly::Shared) {
+                ++eliminator_stats().np_shared_blocks;
+                eliminator_stats().np_shared_raw += static_cast<double>(static_cast<size_t>(t.rows) * t.cols * sizeof(S));
+            }
             srcs.push_back(t.block->ptr);
             elems.push_back(static_cast<size_t>(t.rows) * t.cols);
             which.push_back(i);
@@ -1652,6 +1684,7 @@ private:
         const double tol = tolerance_ * kXnrToleranceFraction * 0.25 * tol_scale;
         if (!fill_compressor_.compress(srcs, elems, tol, comp, stream)) {
             ++stats.np_groups_plain;
+            if (only == PackOnly::Shared) warn_replica_fallback("a group of near blocks stayed raw (no staging)");
             return;
         }
         const auto& cks = fill_compressor_.chunks();
@@ -2297,6 +2330,81 @@ private:
     bool packed_restore_ = false;
     int level_index_ = 0;
     double fill_frac_ = 0.2;   // the fill store's quantization step as a fraction of tol_comp (decide_fill_precision)
+    // Replicated CA levels with compression (2026-10-11): a near block that
+    // exists on more than one rank - both its boxes are ghosts here or held
+    // by another rank (its ghosts or assisting boxes) - is held packed after
+    // every write, whatever the rank's room, and one private to this rank
+    // only under this rank's pressure.  Taken by each rank from its own heap
+    // for every block, the decision packed a ghost's blocks on one rank and
+    // left the owner's raw, and the quantization made the copies differ
+    // (192^3 CA0 at a 35% heap: 5219 of 9488 ghost copies, skeletons among
+    // them) - the crash of CA0 above its leaf at 8x.  A level-wide decision
+    // taken a wave late could not follow the green group's first wave, which
+    // grows the near set by ~20 GB at 8x.  A private block cannot reach a
+    // replicated box's elimination: the other copy's rank does not have it.
+    bool replicated_ = false;
+    // Whether this level holds its shared blocks packed: decided at the level's
+    // start on every rank alike (the driver's MAX of shared_packing_expected),
+    // because packing them after every write costs ~1.6 s of a 4 s leaf at
+    // 192^3 on 8 ranks, where nothing needs packing.
+    bool pack_shared_ = false;
+    bool shared_packing_expected() override {
+        if (!replicated_) return false;
+        // Above the leaf the level's blocks are on the card already (adopted from
+        // the transition or uploaded here) and the owner pass makes few new
+        // ones, so the room it needs is a wave's working set.  At the leaf they
+        // are made during the level: the near set raw at its peak, estimated as
+        // half the full-size blocks of the rank's boxes and their one-hop pairs
+        // (192^3 CA0 leaf on 8 ranks: 29 GB by this count, 22 GB at the blocks'
+        // largest, ~10 GB at the peak).
+        const bool leaf = level_index_ == static_cast<int>(tree_->levels.size()) - 1;
+        double grow = 0.1 * static_cast<double>(heap_.capacity());
+        if (leaf) {
+            double full = 0.0;
+            for (const Box& b : level_.local_boxes) {
+                const double n = static_cast<double>(b.num_points);
+                full += n * n * (1.0 + 0.5 * static_cast<double>(b.one_hop.size()));
+            }
+            const double boxes = static_cast<double>(states_.size() + remote_states_.size());
+            full *= static_cast<double>(sizeof(S)) * boxes / std::max(1.0, static_cast<double>(states_.size()));
+            grow = 0.5 * full;
+        }
+        return static_cast<double>(heap_.used()) + grow > static_cast<double>(hold_limit());
+    }
+    void set_pack_shared(bool pack) override { pack_shared_ = replicated_ && pack; }
+    std::vector<char> local_shared_;   // by local index: on another rank too
+    bool local_shared_ready_ = false, local_shared_all_ = false;
+    bool box_shared(int64_t m) {
+        if (!is_local(m)) return true;
+        if (!local_shared_ready_) {
+            local_shared_ready_ = true;
+            local_shared_.assign(states_.size(), 0);
+            local_shared_all_ = !level_.ca_halo_sends_valid;   // (unknown: every block shared)
+            for (const auto& send : level_.ca_halo_sends) {
+                for (const auto* list : {&send.ghosts, &send.assisting}) {
+                    for (int64_t b : *list) {
+                        if (is_local(b)) local_shared_[static_cast<size_t>(b - level_.local_morton_start)] = 1;
+                    }
+                }
+            }
+        }
+        return local_shared_all_ || local_shared_[static_cast<size_t>(m - level_.local_morton_start)] != 0;
+    }
+    bool block_shared(uint64_t key) {
+        const int64_t sk = static_cast<int64_t>(key);
+        if (sk < 0) return box_shared(~sk);   // a Schur block
+        return box_shared(static_cast<int64_t>(key >> 32)) && box_shared(static_cast<int64_t>(key & 0xffffffffu));
+    }
+    bool replica_warned_ = false;
+    void warn_replica_fallback(const char* what) {
+        if (!replicated_ || replica_warned_) return;
+        replica_warned_ = true;
+        int rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        std::printf("[gpu] level %d rank %d: %s on a replicated CA level; its ghost copies may differ from "
+                    "their owners'\n", level_index_, rk, what);
+        std::fflush(stdout);
+    }
     bool fill_frac_decided_ = false;
     // The fill store's step (2026-10-11): kFillToleranceFraction where the
     // level can afford it, else the kept X_NR's.  Decided at the level's first
@@ -3405,7 +3513,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 const BoxState& ss = *src.state;
                 if (packed_of(ss) == nullptr) {
                     src.t2t_base = ss.temp2t;  // raw, as before
-                    src.group = 0;
+                    // the group of the packed source just below it in Morton
+                    // order, so a box's terms run in Morton order whatever
+                    // the groups (see the fill passes below)
+                    auto below = regions.lower_bound(src.morton);
+                    src.group = below == regions.begin() ? 0 : std::prev(below)->second.group;
                     continue;
                 }
                 const Region& rg = regions.at(src.morton);
@@ -3513,7 +3625,20 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const size_t num_groups = std::max<size_t>(fill_groups.size(), 1);
     std::vector<std::vector<OrderedSketchItem>> stored_by_group(num_groups);
     std::vector<VBatch<S>> p_by_group(num_groups);
-    std::vector<VBatch<S>> fill_by_group(num_groups);
+    // per group, its fill passes (see below)
+    std::vector<std::vector<VBatch<S>>> fill_by_group(num_groups);
+    // With the fill sources compressed, one term a source in Morton order
+    // (2026-10-11).  The groups are cut by a scratch budget over the whole
+    // wave, so a box's sources fell into groups by what else its wave held,
+    // and one product a (group, box) summed them in a different order on a
+    // ghost's replica than on its owner: the replicated CA levels' ghost
+    // copies stopped being their owners' (96^3 CA0, BPACK_CHECK=replica: 1948
+    // of 3536 differed, 0 uncompressed), and the rank decisions that flipped
+    // with it killed CA0 at the level above its leaf.  A term a source, the
+    // terms of a box in Morton order (the groups are Morton ranges, raw
+    // sources placed by Morton too), is the same sequence on every rank.  A
+    // box's terms in one group are passes: pass j holds every box's j-th.
+    const bool per_source_fill = compress_factors_ >= 1;
     int max_d = 0, max_n = 0, max_r = 0;
     // Y -= sum_E W_E P_E is a sum over the box's fill sources, so a group's
     // terms can be accumulated into Y and the scratch reused.  Stacking every
@@ -3625,6 +3750,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             max_n = std::max(max_n, p.n);
             if (p.fill_rank == 0) continue;
             const size_t bi = static_cast<size_t>(&p - plans.data());
+            struct Term { size_t g; int64_t morton; int off; int r; };
+            std::vector<Term> terms;
             for (Source& src : p.sources) {
                 const BoxState& ss = *src.state;
                 const int r = ss.r;
@@ -3660,14 +3787,36 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 w.row_index = src.row_index;
                 stored_by_group[gi].push_back(w);
                 max_r = std::max(max_r, r);
+                terms.push_back(Term{gi, src.morton, off_g, r});
             }
-            // Y -= [W_E1 ...] [P_E1; ...] over the group's sources, added to
-            // what the other groups contribute
-            for (size_t g = 0; g < num_groups; ++g) {
-                const int rank_g = g_rank[g][bi];
-                if (rank_g == 0) continue;
-                fill_by_group[g].entries.push_back({pw + g_woff[g][bi], pw + g_poff[g][bi], p.Y,
-                                                    p.d, p.n, rank_g, p.d, rank_g, p.ldy});
+            if (per_source_fill) {
+                // Y -= W_E P_E a source at a time, in Morton order
+                std::sort(terms.begin(), terms.end(), [](const Term& a, const Term& b) {
+                    return a.g != b.g ? a.g < b.g : a.morton < b.morton;
+                });
+                size_t pass = 0, cur = num_groups;
+                for (const Term& tm : terms) {
+                    if (tm.g != cur) {
+                        cur = tm.g;
+                        pass = 0;
+                    }
+                    std::vector<VBatch<S>>& passes = fill_by_group[tm.g];
+                    if (passes.size() <= pass) passes.resize(pass + 1);
+                    passes[pass].entries.push_back({pw + g_woff[tm.g][bi] + static_cast<size_t>(tm.off) * p.d,
+                                                    pw + g_poff[tm.g][bi] + tm.off, p.Y, p.d, p.n, tm.r, p.d,
+                                                    g_rank[tm.g][bi], p.ldy});
+                    ++pass;
+                }
+            } else {
+                // Y -= [W_E1 ...] [P_E1; ...]: uncompressed there is one group,
+                // so this is one product a box on every rank
+                for (size_t g = 0; g < num_groups; ++g) {
+                    const int rank_g = g_rank[g][bi];
+                    if (rank_g == 0) continue;
+                    if (fill_by_group[g].empty()) fill_by_group[g].resize(1);
+                    fill_by_group[g][0].entries.push_back({pw + g_woff[g][bi], pw + g_poff[g][bi], p.Y,
+                                                           p.d, p.n, rank_g, p.d, rank_g, p.ldy});
+                }
             }
         }
     }
@@ -3733,7 +3882,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     for (VBatch<S>& b : xrr_gemm) b.stage(meta_);
     const size_t off_id = meta_.append(id_items);
     for (VBatch<S>& b : p_by_group) b.stage(meta_);
-    for (VBatch<S>& b : fill_by_group) b.stage(meta_);
+    for (std::vector<VBatch<S>>& passes : fill_by_group) {
+        for (VBatch<S>& b : passes) b.stage(meta_);
+    }
     if (adaptive) selector->plan(meta_);  // its first round: the IDs of the sketches, the root nodes
 
     // ---- launches, then Y to the host
@@ -3780,8 +3931,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
         // and collapsed into Y before the next group reuses the scratch (both
         // are on this stream, so the ordering is the stream's)
-        if (!fill_by_group[g].entries.empty()) {
-            fill_by_group[g].gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
+        for (VBatch<S>& b : fill_by_group[g]) {
+            if (!b.entries.empty()) b.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
         }
     }
     marks.mark(stream);
@@ -4837,7 +4988,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // the owner pass writes pairs of a source's neighbours, and these are
         // the source's own.  A later wave's owner group puts one back exactly
         // as it puts back any other packed target.
-        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !fresh_near.empty() && under_pressure()) {
+        const bool np5_pressure = under_pressure();
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !fresh_near.empty() && (np5_pressure || pack_shared_)) {
             const auto t_np5 = std::chrono::steady_clock::now();
             const double raw0 = stats.np_raw, stored0 = stats.np_stored;
             const int64_t blocks0 = stats.np_blocks;
@@ -4848,7 +5000,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     bytes += static_cast<size_t>(fresh_near[end].rows) * fresh_near[end].cols * D;
                     ++end;
                 }
-                pack_near_group(fresh_near, at, end, stream);
+                if (replicated_) pack_near_by_rule(fresh_near, at, end, stream, np5_pressure);
+                else pack_near_group(fresh_near, at, end, stream);
                 ++stats.np5_groups;
                 at = end;
             }
@@ -5405,7 +5558,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // once per writing wave, 8.9 times on average: 70-83% of the bytes
         // have their last write in the final quarter of the waves, so
         // compressing once per block is not available.
-        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && under_pressure()) {
+        const bool og_pressure = under_pressure();
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1 && replicated_) {
+            pack_near_by_rule(targets, first, last, stream, og_pressure);
+            ++(og_pressure ? stats.np_pressure_groups : stats.np_raw_groups);
+        } else if (kHoldNearBlocksPacked && compress_factors_ >= 1 && og_pressure) {
             pack_near_group(targets, first, last, stream);
             ++stats.np_pressure_groups;
         } else if (kHoldNearBlocksPacked && compress_factors_ >= 1) {
@@ -7342,6 +7499,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
             char* packed = heap_.try_alloc_resident(total, dest_kind);
             if (packed == nullptr) {  // no room: this box stays raw
                 ++stats.fs_packed_short;
+                warn_replica_fallback("a fill source stayed raw (no room for its packed block)");
                 continue;
             }
             if (dst.packed != nullptr) {  // (a box compressed again drops the old one)
@@ -7502,6 +7660,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::compress_fill_source_set(
                 pack(comp);
             } else {
                 ++stats.fs_waves_plain;
+                warn_replica_fallback("a group of fill sources stayed raw (no staging)");
             }
             fill_compressor_.release();
         }
