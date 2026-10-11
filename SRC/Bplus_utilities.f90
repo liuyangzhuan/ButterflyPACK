@@ -162,6 +162,15 @@ module Bplus_Utilities
    integer, parameter:: BP_MD_init_par_min = 262144   !< sub-tensor size (entries x vectors) from which the Init gather is spread over tasks
    integer, parameter:: BP_MD_gemm_cols_min = 128      !< a block GEMM of the MD matvec is split into column chunks of at least this many columns ...
    integer, parameter:: BP_MD_gemm_chunks_max = 32     !< ... and at most this many chunks (tasks) per row block
+   !>**** one block of the block-diagonal factor along a tensor mode, for BF_MD_mode_product_strided
+   type BP_MD_mode_factor
+      DT, pointer :: F(:, :) => null()   !< the factor block
+      character :: transA = 'N'          !< 'N': F is (m x k); 'T': F is stored (k x m)
+      integer :: in_off = 0, k = 0       !< rows [in_off+1, in_off+k] of the mode index in the input
+      integer :: out_off = 0, m = 0      !< rows [out_off+1, out_off+m] of the mode index in the output
+      logical :: accumulate = .false.    !< add to what an earlier block of the list wrote in those rows
+   end type BP_MD_mode_factor
+   integer, save :: BP_MD_mode_check = -1   !< BPACK_MD_MODE_CHECK=1: recompute every strided mode product the old way and compare
    !>**** BPACK_MD_PACK_CHECK=1: run the element-wise reference pack/unpack beside the affine
    ! one on every call and report any difference (first 20 reports)
    integer, save:: BP_MD_pack_check = -1
@@ -461,6 +470,226 @@ contains
       integer ncol
       BP_MD_gemm_nchunk = max(1, min(ncol/BP_MD_gemm_cols_min, BP_MD_gemm_chunks_max))
    end function BP_MD_gemm_nchunk
+
+   logical function BP_MD_mode_check_on()
+      implicit none
+      character(len=16) :: str
+      integer ierr
+      if (BP_MD_mode_check < 0) then
+         BP_MD_mode_check = 0
+         call get_environment_variable('BPACK_MD_MODE_CHECK', str, status=ierr)
+         if (ierr == 0) then
+            if (trim(str) == '1') BP_MD_mode_check = 1
+         endif
+      endif
+      BP_MD_mode_check_on = BP_MD_mode_check == 1
+   end function BP_MD_mode_check_on
+
+   !>**** Mode product on an unfolded tensor without reshaping it.
+   !> X is the mode-ld_old unfolding of a tensor with spatial extents dims(1:Ndim) and Nvec vectors (its rows are the
+   !> index ld_old, its columns all other indices in increasing order, the vector index last), so size(X,1) =
+   !> dims(ld_old). C is allocated here as the mode-ld_new unfolding of the result, whose extent along ld_new is nrow_c.
+   !> The factor along mode ld_new is block-diagonal: block b maps rows [in_off+1, in_off+k] of the mode index in X to
+   !> rows [out_off+1, out_off+m] in C, accumulating onto an earlier block's result where `accumulate` is set.
+   !> For ld_old /= ld_new fix all indices except ld_old and ld_new: the slab of X is an (n_old x k) matrix with unit
+   !> stride along ld_old and leading dimension ldx, the slab of C an (m x n_old) matrix with leading dimension ldc, and
+   !> C_slab = F * X_slab^T is one GEMM with transB = 'T' -- the tensor is read once and written once instead of being
+   !> permuted first (read + write) and multiplied afterwards (read + write). For ld_old == ld_new it is one GEMM over
+   !> all columns per block, in column chunks.
+   subroutine BF_MD_mode_product_strided(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk, par, ntask, stats, time_gemm, flops)
+      implicit none
+      integer Ndim, ld_old, nrow_c, ld_new, Nvec, nblk, ntask
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      logical par
+      type(Hstat) :: stats
+      real(kind=8) :: time_gemm, flops
+      integer nrow_x, ncol, ncol_c, n_old, ldx, ldc, nslab, islab, b, kk, tmp, idx, ic, c0, c1, nchunk, rx, cx, rc, cc, ngemm
+      integer dimsx(Ndim+1), dimsc(Ndim+1), csx(Ndim+1), csc(Ndim+1)
+      integer(kind=8) bx, bc, ox, oc
+      integer(kind=8), allocatable :: basex(:), basec(:)
+      DT beta
+      real(kind=8) t_start, t_end, tt0, tt1, flop_pass
+
+      nrow_x = size(X, 1)
+      call assert(nrow_x == dims(ld_old), 'BF_MD_mode_product_strided: rows of X do not match dims(ld_old)')
+      ncol = size(X, 2)
+      dimsx(1:Ndim) = dims
+      dimsx(Ndim+1) = Nvec
+      dimsc = dimsx
+      dimsc(ld_new) = nrow_c
+      ncol_c = product(dimsc)/nrow_c   ! columns of the output unfolding: all indices but ld_new
+      allocate(C(nrow_c, ncol_c))   ! every row block of C is written by its first, non-accumulating factor block
+      flop_pass = 0d0
+      do b = 1, nblk
+         flop_pass = flop_pass + flops_gemm(fblk(b)%m, ncol_c, fblk(b)%k)
+      enddo
+      t_start = MPI_Wtime()
+      if (ld_old == ld_new) then
+         nchunk = BP_MD_gemm_nchunk(ncol)
+         ngemm = nblk*nchunk
+         ! tasks over column chunks only: accumulating blocks of one chunk must run in order
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do ic = 1, nchunk
+            c0 = ((ic-1)*ncol)/nchunk + 1
+            c1 = (ic*ncol)/nchunk
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, c1-c0+1, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(fblk(b)%in_off+1, c0), nrow_x, beta, C(fblk(b)%out_off+1, c0), nrow_c)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+      else
+         ! strides of each index (the vector index is Ndim+1) in the two unfoldings
+         tmp = 1
+         do kk = 1, Ndim+1
+            csx(kk) = 0
+            if (kk /= ld_old) then
+               csx(kk) = tmp
+               tmp = tmp*dimsx(kk)
+            endif
+         enddo
+         tmp = 1
+         do kk = 1, Ndim+1
+            csc(kk) = 0
+            if (kk /= ld_new) then
+               csc(kk) = tmp
+               tmp = tmp*dimsc(kk)
+            endif
+         enddo
+         ldx = nrow_x*csx(ld_new)   ! stride of the product-mode index in X
+         ldc = nrow_c*csc(ld_old)   ! stride of the old leading index in C
+         n_old = dims(ld_old)
+         nslab = 1
+         do kk = 1, Ndim+1
+            if (kk /= ld_old .and. kk /= ld_new) nslab = nslab*dimsx(kk)
+         enddo
+         allocate(basex(nslab), basec(nslab))
+         do islab = 1, nslab
+            tmp = islab - 1
+            bx = 0
+            bc = 0
+            do kk = 1, Ndim+1
+               if (kk == ld_old .or. kk == ld_new) cycle
+               idx = mod(tmp, dimsx(kk))
+               tmp = tmp/dimsx(kk)
+               bx = bx + int(idx, 8)*int(nrow_x, 8)*int(csx(kk), 8)
+               bc = bc + int(idx, 8)*int(nrow_c, 8)*int(csc(kk), 8)
+            enddo
+            basex(islab) = bx
+            basec(islab) = bc
+         enddo
+         ngemm = nslab*nblk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(islab,b,beta,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(islab,b,beta,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do islab = 1, nslab
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               ox = basex(islab) + int(fblk(b)%in_off, 8)*int(ldx, 8)
+               oc = basec(islab) + int(fblk(b)%out_off, 8)
+               rx = int(mod(ox, int(nrow_x, 8))) + 1
+               cx = int(ox/int(nrow_x, 8)) + 1
+               rc = int(mod(oc, int(nrow_c, 8))) + 1
+               cc = int(oc/int(nrow_c, 8)) + 1
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'T', fblk(b)%m, n_old, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(rx, cx), ldx, beta, C(rc, cc), ldc)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+         deallocate(basex, basec)
+         if (BP_MD_mode_check_on()) call BF_MD_mode_product_check(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk)
+      endif
+      t_end = MPI_Wtime()
+      time_gemm = time_gemm + t_end - t_start
+      flops = flops + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + ngemm
+   end subroutine BF_MD_mode_product_strided
+
+   !>**** reference for BF_MD_mode_product_strided (BPACK_MD_MODE_CHECK=1): permute first, multiply afterwards, compare
+   subroutine BF_MD_mode_product_check(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk)
+      implicit none
+      integer Ndim, ld_old, nrow_c, ld_new, Nvec, nblk
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      integer dims_ref(Ndim+1), offsets_ref(Ndim+1), b
+      DT, allocatable :: mat(:, :), cref(:, :)
+      DT beta
+      real(kind=8) :: err, nrm
+      dims_ref(1:Ndim) = dims
+      dims_ref(Ndim+1) = Nvec
+      offsets_ref = 0
+      call TensorUnfoldingReshape(Ndim+1, dims_ref, dims_ref, offsets_ref, ld_old, ld_new, X, 'N', mat, 'N', 1)
+      allocate(cref(nrow_c, size(C, 2)))
+      cref = 0
+      do b = 1, nblk
+         beta = BPACK_czero
+         if (fblk(b)%accumulate) beta = BPACK_cone
+         call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, size(mat, 2), fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F, 1), &
+            mat(fblk(b)%in_off+1, 1), size(mat, 1), beta, cref(fblk(b)%out_off+1, 1), nrow_c)
+      enddo
+      err = maxval(abs(C - cref))
+      nrm = max(maxval(abs(cref)), tiny(1d0))
+      if (err > 1d-10*nrm) then
+         write(*, '(A,I3,A,I3,A,I8,A,I8,A,Es10.3)') ' MODECHECK MISMATCH ld_old=', ld_old, ' ld_new=', ld_new, ' rows=', nrow_c, &
+            ' cols=', size(C, 2), ' maxrel=', err/nrm
+      endif
+      deallocate(mat, cref)
+   end subroutine BF_MD_mode_product_check
 
    !>**** Reorient a 3-D tensor: for every target entry in natural order over (d1,d2,d3), read
    ! the source entry at base + (i1-1)*s1 + (i2-1)*s2 + (i3-1)*s3. An axis permutation with
@@ -18504,50 +18733,26 @@ end subroutine BF_block_MVP_dat_batch_magma
          time_gemm = time_gemm + t2 - t1
          flops = flops + flop
       else
-         allocate(mat_pack(old_dim, prefix*suffix_all))
-         allocate(mat_gemm(new_dim, prefix*suffix_all))
-
+         ! mode dim_apply sits at stride `prefix` in the natural layout: for every (suffix, vector) index the slab
+         ! X(prefix x old_dim) with leading dimension prefix times the factor gives the slab C(prefix x new_dim) --
+         ! one GEMM each, nothing packed or unpacked
          t1 = MPI_Wtime()
          do vv = 1, Nvec
             do ss = 1, suffix_spatial
-               in_base = (ss-1)*prefix*old_dim
-               col = ((vv-1)*suffix_spatial + ss - 1)*prefix
-               do ii = 1, old_dim
-                  do pp = 1, prefix
-                     mat_pack(ii, col + pp) = data_in(in_base + (ii-1)*prefix + pp, vv)
-                  enddo
-               enddo
+               in_base = (ss-1)*prefix*old_dim + 1
+               out_base = (ss-1)*prefix*new_dim + 1
+               if (trans_factor == 'T') then
+                  call gemmf77('N', 'N', prefix, new_dim, old_dim, BPACK_cone, data_in(in_base, vv), prefix, factor, size(factor,1), &
+                     BPACK_czero, data_out(out_base, vv), prefix)
+               else
+                  call gemmf77('N', 'T', prefix, new_dim, old_dim, BPACK_cone, data_in(in_base, vv), prefix, factor, size(factor,1), &
+                     BPACK_czero, data_out(out_base, vv), prefix)
+               endif
             enddo
          enddo
-         t2 = MPI_Wtime()
-         time_pack = time_pack + t2 - t1
-         time_pack_stage = time_pack_stage + t2 - t1
-
-         t1 = MPI_Wtime()
-         call gemmf90(factor, size(factor, 1), mat_pack, old_dim, mat_gemm, new_dim, &
-            trans_factor, 'N', new_dim, prefix*suffix_all, old_dim, BPACK_cone, BPACK_czero, flop)
          t2 = MPI_Wtime()
          time_gemm = time_gemm + t2 - t1
-         flops = flops + flop
-
-         t1 = MPI_Wtime()
-         do vv = 1, Nvec
-            do ss = 1, suffix_spatial
-               out_base = (ss-1)*prefix*new_dim
-               col = ((vv-1)*suffix_spatial + ss - 1)*prefix
-               do jj = 1, new_dim
-                  do pp = 1, prefix
-                     data_out(out_base + (jj-1)*prefix + pp, vv) = mat_gemm(jj, col + pp)
-                  enddo
-               enddo
-            enddo
-         enddo
-         t2 = MPI_Wtime()
-         time_pack = time_pack + t2 - t1
-         time_pack_stage = time_pack_stage + t2 - t1
-
-         deallocate(mat_pack)
-         deallocate(mat_gemm)
+         flops = flops + flops_gemm(prefix, new_dim, old_dim)*dble(suffix_spatial*Nvec)
       endif
 
    end subroutine BF_MD_level0_apply_mode_flat
@@ -20132,6 +20337,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
     real(kind=8) tt0, tt1
     logical par_inner
     integer ntask_pass
+    integer dims_cur(Ndim), ld_old, nrow_c, nblk, ntask_u
+    logical replace_input
+    DT, pointer :: xp(:, :), cnew(:, :)
+    type(BP_MD_mode_factor), allocatable :: fblk(:)
     DT, allocatable::mat1(:, :), mat2(:, :)
     DT, allocatable, target::mat(:, :)
     DT, pointer::matp(:, :)
@@ -20151,6 +20360,10 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 #else
     par_inner = .false.
 #endif
+    ntask_u = 1
+#ifdef HAVE_OPENMP
+    if (par_inner) ntask_u = omp_get_num_threads()
+#endif
 
     call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb_m, idx_c_m)
     group_n = blocks%col_group
@@ -20158,90 +20371,40 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 
    if (level == 0) then
       do dim_ii=1,Ndim
+         ! extents of the tensor at this pass: modes already done carry their output size
+         do dim_i=1,Ndim
+            if(dim_i<dim_ii)then
+               dims_cur(dim_i) = BFvec%vec(1)%index_MD(dim_i,1,BFvec%vec(1)%num_col+1)
+            else
+               dims_cur(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
+            endif
+         enddo
          if(dim_ii==1)then
-            do dim_i=1,Ndim
-               dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            matp => BFvec%vec(level)%blocks(1,1)%matrix
+            ld_old = 1                                     ! the gathered input is in natural (mode-1) layout, not ours to free
+            xp => BFvec%vec(0)%blocks(1,1)%matrix
+            replace_input = .false.
          else
-            do dim_i=1,Ndim
-               if(dim_i<dim_ii)then
-                  dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,1,BFvec%vec(1)%num_col+1)
-               else
-                  dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
-               endif
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,1)%matrix, 'N', mat, 'N',1,par_inner)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
-            matp => mat
+            ld_old = dim_ii-1                              ! our previous pass
+            xp => BFvec%vec(1)%blocks(1,1)%matrix
+            replace_input = .true.
          endif
-
-         call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1), size(matp,2))
-
-         flops=0
-         nvec1 = size(matp,2)
-         nchunk = BP_MD_gemm_nchunk(nvec1)
-         do index_j_s=1,BFvec%vec(level+1)%nc
-            index_j_k = index_j_s
-            mm = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,2)
-            nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
-            flops = flops + flops_gemm(mm, nvec1, nn1)
+         nrow_c = BFvec%vec(1)%index_MD(dim_ii,1,BFvec%vec(1)%num_col+1)
+         nblk = BFvec%vec(1)%nc
+         allocate(fblk(nblk))
+         do index_j_s=1,nblk
+            fblk(index_j_s)%F => blocks%ButterflyV(bb_m)%blocks(index_j_s,dim_ii)%matrix
+            fblk(index_j_s)%transA = 'T'
+            fblk(index_j_s)%m = size(fblk(index_j_s)%F,2)
+            fblk(index_j_s)%k = size(fblk(index_j_s)%F,1)
+            fblk(index_j_s)%in_off = BFvec%vec(0)%index_MD(dim_ii,1,index_j_s)
+            fblk(index_j_s)%out_off = BFvec%vec(1)%index_MD(dim_ii,1,index_j_s)
+            fblk(index_j_s)%accumulate = .false.
          enddo
-         t_start = MPI_Wtime()
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + (BFvec%vec(level+1)%nc)*nchunk
-         ! all (row block, column chunk) GEMMs of this pass go out as one taskloop: creating tasks one at a time
-         ! costs as much as these small GEMMs and left the group running on two or three threads
-#ifdef HAVE_TASKLOOP
-         !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,ic,c0,c1,tt0,tt1) collapse(2) if(par_inner) num_tasks(merge(omp_get_num_threads(),1,par_inner))
-#else
-#ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,ic,c0,c1,tt0,tt1) collapse(2)
-#endif
-#endif
-         do index_j_s=1,BFvec%vec(level+1)%nc
-            do ic=1,nchunk
-               index_j_k = index_j_s
-               mm = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,2)
-               nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
-               c0 = ((ic-1)*nvec1)/nchunk + 1
-               c1 = (ic*nvec1)/nchunk
-               tt0 = MPI_Wtime()
-               call gemmf77('T', 'N', mm, c1-c0+1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, matp(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,c0), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,c0), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
-               tt1 = MPI_Wtime()
-#ifdef HAVE_OPENMP
-               !$omp atomic
-#endif
-               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
-            enddo
-         enddo
-#ifdef HAVE_TASKLOOP
-         !$omp end taskloop
-#else
-#ifdef HAVE_OPENMP
-         !$omp end parallel do
-#endif
-#endif
-         t_end = MPI_Wtime()
-         time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-         !$omp atomic
-#endif
-         stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flops
+         call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         deallocate(fblk)
+         if(replace_input) deallocate(xp)
+         BFvec%vec(1)%blocks(1,1)%matrix => cnew
+         cnew => null()
       enddo
    else
       nr=2**(level)
@@ -20296,102 +20459,54 @@ subroutine BF_MD_block_mvp_multiply_right_child(blocks, bb_m, Ndim, BFvec, Nvec,
    integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
    integer dim_i, dim_ii, index_j_s, index_j_k, mm, nn1, nn2, nvec1, ic, c0, c1, nchunk
    real(kind=8)::flops, t_start, t_end, tt0, tt1
+   integer dims_cur(Ndim), ld_old, nrow_c, nblk, b, kk
+   logical replace_input
+   DT, pointer :: xp(:, :), cnew(:, :)
+   type(BP_MD_mode_factor), allocatable :: fblk(:)
    DT, allocatable, target::mat(:, :)
    DT, pointer::matp(:, :)
 
    offsets_ref = 0
    do dim_ii=1,Ndim
+      ! extents of this row block's tensor at this pass: modes already done carry their output size
+      do dim_i=1,Ndim
+         if(dim_i<dim_ii)then
+            dims_cur(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,index_i_s,BFvec%vec(level+1)%num_col+1)
+         else
+            dims_cur(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
+         endif
+      enddo
       if(dim_ii==1)then
-         do dim_i=1,Ndim
-            dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
-         enddo
-         dims_ref(Ndim+1)=Nvec
-         t_start = MPI_Wtime()
-         call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level)%blocks(index_ii_s,1)%matrix, 'N', mat, 'N',1,.false.)
-         t_end = MPI_Wtime()
-         time_reshape = time_reshape + t_end - t_start
-         matp => mat
+         ld_old = Ndim                                     ! the parent block, shared with the sibling row blocks
+         xp => BFvec%vec(level)%blocks(index_ii_s,1)%matrix
+         replace_input = .false.
       else
-         do dim_i=1,Ndim
-            if(dim_i<dim_ii)then
-               dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,index_i_s,BFvec%vec(level+1)%num_col+1)
-            else
-               dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
-            endif
-         enddo
-         dims_ref(Ndim+1)=Nvec
-         t_start = MPI_Wtime()
-         call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, 'N', mat, 'N',1,.false.)
-         t_end = MPI_Wtime()
-         time_reshape = time_reshape + t_end - t_start
-         matp => mat
+         ld_old = dim_ii-1                                 ! our previous pass
+         xp => BFvec%vec(level+1)%blocks(index_i_s,1)%matrix
+         replace_input = .true.
       endif
-
-      call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1), size(matp,2))
-
-      flops=0
-      nvec1 = size(matp,2)
-      nchunk = BP_MD_gemm_nchunk(nvec1)
+      nrow_c = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1)
+      nblk = 2*BFvec%vec(level+1)%nc
+      allocate(fblk(nblk))
+      ! the two input column blocks 2j-1, 2j merge into output block j: the second accumulates onto the first
       do index_j_s=1,BFvec%vec(level+1)%nc
-         index_j_k = 2*index_j_s - 1
-         nn1 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 2)
-         nn2 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, 2)
-         mm = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 1)
-         flops = flops + flops_gemm(mm, nvec1, nn1)
-         flops = flops + flops_gemm(mm, nvec1, nn2)
-      enddo
-      t_start = MPI_Wtime()
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + (BFvec%vec(level+1)%nc)*nchunk
-      ! the GEMMs of this pass share the child's one or two cores (ntask_pass tasks); its blocks then stay in their caches
-#ifdef HAVE_TASKLOOP
-      !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,ic,c0,c1,tt0,tt1) collapse(2) if(ntask_pass>1) num_tasks(ntask_pass)
-#else
-#ifdef HAVE_OPENMP
-      !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,ic,c0,c1,tt0,tt1) collapse(2)
-#endif
-#endif
-      do index_j_s=1,BFvec%vec(level+1)%nc
-         do ic=1,nchunk
-            index_j_k = 2*index_j_s - 1
-            nn1 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 2)
-            nn2 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, 2)
-            mm = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 1)
-            c0 = ((ic-1)*nvec1)/nchunk + 1
-            c1 = (ic*nvec1)/nchunk
-            tt0 = MPI_Wtime()
-            call gemmf77('N', 'N', mm, c1-c0+1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,c0), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,c0), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
-            call gemmf77('N', 'N', mm, c1-c0+1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,c0), size(matp,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,c0), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
-            tt1 = MPI_Wtime()
-#ifdef HAVE_OPENMP
-            !$omp atomic
-#endif
-            stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+         do kk=0,1
+            b = 2*(index_j_s-1) + kk + 1
+            index_j_k = 2*index_j_s - 1 + kk
+            fblk(b)%F => blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix
+            fblk(b)%transA = 'N'
+            fblk(b)%m = size(fblk(b)%F,1)
+            fblk(b)%k = size(fblk(b)%F,2)
+            fblk(b)%in_off = BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)
+            fblk(b)%out_off = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)
+            fblk(b)%accumulate = (kk == 1)
          enddo
       enddo
-#ifdef HAVE_TASKLOOP
-      !$omp end taskloop
-#else
-#ifdef HAVE_OPENMP
-      !$omp end parallel do
-#endif
-#endif
-      t_end = MPI_Wtime()
-      time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-      !$omp atomic
-#endif
-      stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flops
+      call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      deallocate(fblk)
+      if(replace_input) deallocate(xp)
+      BFvec%vec(level+1)%blocks(index_i_s,1)%matrix => cnew
+      cnew => null()
    enddo
 end subroutine BF_MD_block_mvp_multiply_right_child
 
@@ -20415,6 +20530,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
     real(kind=8) tt0, tt1
     logical par_inner
     integer ntask_pass
+    integer dims_cur(Ndim), ld_old, nrow_c, nblk, ntask_u
+    logical replace_input
+    DT, pointer :: xp(:, :), cnew(:, :)
+    type(BP_MD_mode_factor), allocatable :: fblk(:)
     integer nchild
     integer, allocatable::jj_list(:)
     DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
@@ -20433,6 +20552,10 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 #else
     par_inner = .false.
 #endif
+    ntask_u = 1
+#ifdef HAVE_OPENMP
+    if (par_inner) ntask_u = omp_get_num_threads()
+#endif
 
     call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb_m, idx_r_m)
     group_m = blocks%row_group
@@ -20440,92 +20563,40 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 
    if (level == 0) then
       do dim_ii=1,Ndim
+         ! extents of the tensor at this pass: modes already done carry their output size
+         do dim_i=1,Ndim
+            if(dim_i<dim_ii)then
+               dims_cur(dim_i) = BFvec%vec(0)%index_MD(dim_i,BFvec%vec(0)%num_row+1,1)
+            else
+               dims_cur(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
+            endif
+         enddo
          if(dim_ii==1)then
-            do dim_i=1,Ndim
-               dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(1)%blocks(1,1)%matrix, 'N', mat, 'N',1,par_inner)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
+            ld_old = Ndim                                  ! the middle output (mode-Ndim unfolding), not ours to free
+            xp => BFvec%vec(1)%blocks(1,1)%matrix
+            replace_input = .false.
          else
-            do dim_i=1,Ndim
-               if(dim_i<dim_ii)then
-                  dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,BFvec%vec(0)%num_row+1,1)
-               else
-                  dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
-               endif
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(0)%blocks(1,1)%matrix, 'N', mat, 'N',1,par_inner)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
+            ld_old = dim_ii-1                              ! our previous pass
+            xp => BFvec%vec(0)%blocks(1,1)%matrix
+            replace_input = .true.
          endif
-
-         call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,1)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1), size(mat,2))
-
-         flops=0
-         nvec1 = size(mat,2)
-         nchunk = BP_MD_gemm_nchunk(nvec1)
-         do index_i_s=1,BFvec%vec(level)%num_row
-            index_i_k = index_i_s
-            mm = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,1)
-            nn1 = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,2)
-            flops = flops + flops_gemm(mm, nvec1, nn1)
+         nrow_c = BFvec%vec(0)%index_MD(dim_ii,BFvec%vec(0)%num_row+1,1)
+         nblk = BFvec%vec(0)%num_row
+         allocate(fblk(nblk))
+         do index_i_s=1,nblk
+            fblk(index_i_s)%F => blocks%ButterflyU(bb_m)%blocks(index_i_s,dim_ii)%matrix
+            fblk(index_i_s)%transA = 'N'
+            fblk(index_i_s)%m = size(fblk(index_i_s)%F,1)
+            fblk(index_i_s)%k = size(fblk(index_i_s)%F,2)
+            fblk(index_i_s)%in_off = BFvec%vec(1)%index_MD(dim_ii,index_i_s,1)
+            fblk(index_i_s)%out_off = BFvec%vec(0)%index_MD(dim_ii,index_i_s,1)
+            fblk(index_i_s)%accumulate = .false.
          enddo
-         t_start = MPI_Wtime()
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + (BFvec%vec(level)%num_row)*nchunk
-         ! all (row block, column chunk) GEMMs of this pass go out as one taskloop: creating tasks one at a time
-         ! costs as much as these small GEMMs and left the group running on two or three threads
-#ifdef HAVE_TASKLOOP
-         !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,ic,c0,c1,tt0,tt1) collapse(2) if(par_inner) num_tasks(merge(omp_get_num_threads(),1,par_inner))
-#else
-#ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_i_s,index_i_k,mm,nn1,ic,c0,c1,tt0,tt1) collapse(2)
-#endif
-#endif
-         do index_i_s=1,BFvec%vec(level)%num_row
-            do ic=1,nchunk
-               index_i_k = index_i_s
-               mm = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,1)
-               nn1 = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,2)
-               c0 = ((ic-1)*nvec1)/nchunk + 1
-               c1 = (ic*nvec1)/nchunk
-               tt0 = MPI_Wtime()
-               call gemmf77('N', 'N', mm, c1-c0+1, nn1, BPACK_cone, blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix, mm, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,1)+1,c0), size(mat,1), BPACK_czero, BFvec%vec(level)%blocks(1,1)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_s,1)+1,c0), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level+1)%num_row+1,1))
-               tt1 = MPI_Wtime()
-#ifdef HAVE_OPENMP
-               !$omp atomic
-#endif
-               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
-            enddo
-         enddo
-#ifdef HAVE_TASKLOOP
-         !$omp end taskloop
-#else
-#ifdef HAVE_OPENMP
-         !$omp end parallel do
-#endif
-#endif
-         t_end = MPI_Wtime()
-         time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-            !$omp atomic
-#endif
-            stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_OPENMP
-         !$omp atomic
-#endif
-         stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flops
+         call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         deallocate(fblk)
+         if(replace_input) deallocate(xp)
+         BFvec%vec(0)%blocks(1,1)%matrix => cnew
+         cnew => null()
       enddo
    else
       nc=2**(level-1)
@@ -20605,99 +20676,51 @@ subroutine BF_MD_block_mvp_multiply_left_child(blocks, bb_m, Ndim, BFvec, Nvec, 
    integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
    integer level_butterfly, dim_i, dim_ii, index_i_s, index_i_k, mm1, mm2, nn, nvec1, ic, c0, c1, nchunk
    real(kind=8)::flops, t_start, t_end, tt0, tt1
+   integer dims_cur(Ndim), ld_old, nrow_c, nblk, b, kk
+   logical replace_input
+   DT, pointer :: xp(:, :), cnew(:, :)
+   type(BP_MD_mode_factor), allocatable :: fblk(:)
    DT, allocatable::mat(:, :)
 
    level_butterfly = blocks%level_butterfly
    offsets_ref = 0
    do dim_ii=1,Ndim
+      ! extents of this child's tensor at this pass: modes already done carry their output size
+      do dim_i=1,Ndim
+         if(dim_i<dim_ii)then
+            dims_cur(dim_i) = BFvec%vec(level)%index_MD(dim_i,BFvec%vec(level)%num_row+1,index_j_s)
+         else
+            dims_cur(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
+         endif
+      enddo
       if(dim_ii==1)then
-         do dim_i=1,Ndim
-            dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
-         enddo
-         dims_ref(Ndim+1)=Nvec
-         t_start = MPI_Wtime()
-         call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1,.false.)
-         t_end = MPI_Wtime()
-         time_reshape = time_reshape + t_end - t_start
+         ld_old = Ndim                                     ! the previous level's output for this child (mode-Ndim unfolding)
       else
-         do dim_i=1,Ndim
-            if(dim_i<dim_ii)then
-               dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,BFvec%vec(level)%num_row+1,index_j_s)
-            else
-               dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
-            endif
-         enddo
-         dims_ref(Ndim+1)=Nvec
-         t_start = MPI_Wtime()
-         call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1,.false.)
-         t_end = MPI_Wtime()
-         time_reshape = time_reshape + t_end - t_start
+         ld_old = dim_ii-1                                 ! our previous pass
       endif
-      call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s), size(mat,2))
-
-      flops=0
-      nvec1 = size(mat,2)
-      nchunk = BP_MD_gemm_nchunk(nvec1)
+      xp => BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix   ! this child's block, replaced by the pass output below
+      nrow_c = BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s)
+      nblk = 2*BFvec%vec(level+1)%num_row
+      allocate(fblk(nblk))
+      ! input row block i splits into the output row blocks 2i-1 and 2i
       do index_i_s=1,BFvec%vec(level+1)%num_row
-         index_i_k = 2*index_i_s - 1
-         mm1 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 1)
-         mm2 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, 1)
-         nn = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 2)
-         flops = flops + flops_gemm(mm1, nvec1, nn)
-         flops = flops + flops_gemm(mm2, nvec1, nn)
-      enddo
-      t_start = MPI_Wtime()
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + (BFvec%vec(level+1)%num_row)*nchunk
-      ! the GEMMs of this pass share the child's one or two cores (ntask_pass tasks); its blocks then stay in their caches
-#ifdef HAVE_TASKLOOP
-      !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,ic,c0,c1,tt0,tt1) collapse(2) if(ntask_pass>1) num_tasks(ntask_pass)
-#else
-#ifdef HAVE_OPENMP
-      !$omp parallel do default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,ic,c0,c1,tt0,tt1) collapse(2)
-#endif
-#endif
-      do index_i_s=1,BFvec%vec(level+1)%num_row
-         do ic=1,nchunk
-            index_i_k = 2*index_i_s - 1
-            mm1 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 1)
-            mm2 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, 1)
-            nn = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 2)
-            c0 = ((ic-1)*nvec1)/nchunk + 1
-            c1 = (ic*nvec1)/nchunk
-            tt0 = MPI_Wtime()
-            call gemmf77('N', 'N', mm1, c1-c0+1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, mm1, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,c0), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)+1,c0), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
-            call gemmf77('N', 'N', mm2, c1-c0+1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, mm2, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,c0), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k+1,index_j_s)+1,c0), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
-            tt1 = MPI_Wtime()
-#ifdef HAVE_OPENMP
-            !$omp atomic
-#endif
-            stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+         do kk=0,1
+            b = 2*(index_i_s-1) + kk + 1
+            index_i_k = 2*index_i_s - 1 + kk
+            fblk(b)%F => blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix
+            fblk(b)%transA = 'N'
+            fblk(b)%m = size(fblk(b)%F,1)
+            fblk(b)%k = size(fblk(b)%F,2)
+            fblk(b)%in_off = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)
+            fblk(b)%out_off = BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)
+            fblk(b)%accumulate = .false.
          enddo
       enddo
-#ifdef HAVE_TASKLOOP
-      !$omp end taskloop
-#else
-#ifdef HAVE_OPENMP
-      !$omp end parallel do
-#endif
-#endif
-      t_end = MPI_Wtime()
-      time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-      !$omp atomic
-#endif
-      stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_OPENMP
-      !$omp atomic
-#endif
-      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flops
+      call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      deallocate(fblk)
+      deallocate(xp)
+      BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix => cnew
+      cnew => null()
    enddo
 end subroutine BF_MD_block_mvp_multiply_left_child
 
