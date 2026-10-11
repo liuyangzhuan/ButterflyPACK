@@ -4653,6 +4653,50 @@ requests).  The CA items stand as listed: ghosts' skeletons from their
 owners, the owner pass chunked to the room, the interior ranks' host
 memory.
 
+#### 768^3 on 80 GB cards (2026-10-11): the leaf comparison is confounded by the heap
+
+The one configuration where the analysis says CA0 should win the leaf -
+8x a rank with nothing packed - run on 16 hbm80g nodes (57.5 GB heap,
+hold limit 44.6 GB at the leaf against 11.9 on the 40 GB cards):
+
+| leaf, 768^3 / 64 ranks | Color, 40 GB (night) | Color, 80 GB | CA0, 40 GB | CA0, 80 GB |
+|---|---|---|---|---|
+| elimination | 65.6 s | **144.2 s** | 73.9 s | 89.4 s |
+| exchange | 19.4 s | 57.3 s | 0.1 s | 0.1 s |
+| host plan boxes [buffers] | 11.6 [11.1] s | 40.2 [39.7] s | 21.4 [20.8] s | 33.9 [33.4] s |
+| sketch meta build | 1.0 s | 11.4 s | 3.8 s | 9.3 s |
+| owner groups packed / left raw | 718 / 58 | 367 / 409 | 822 / 101 | 408 / 515 |
+| waves chunked | 15 of 16 | 7 of 16 | 23 of 32 | 11 of 32 |
+| heap free ranges at the level end | 81 | **8224** | 97 | 6046 |
+| transient takes, ranges scanned from the top | 145k, 3.7e8 | 142k, **2.5e9** | 161k, 1.1e9 | 159k, 2.1e9 |
+| wave time over ranks min / median / max | | 75 / 120 / 132 s | 47 / 62 / 74 s | 54 / 68 / 89 s |
+
+Both leaves got slower on the bigger card, Color's by 2.2x, and the
+numbers say why: with the hold limit at 44.6 GB the level packs less
+(409 groups left raw against 58), the raw blocks fragment the heap
+(8224 free ranges against 81), and a transient take walks the free
+ranges from the top - 2.5 billion range visits over the leaf's 142k
+takes, 17500 a take.  That is host time in the allocator: "plan boxes
+[buffers]" 39.7 s against 11.1, the sketch's meta build 11.4 against
+1.0, and the device phases stretched over the launch gaps.  Color pays
+it twice, because its waves then wait for the slowest rank's allocator
+(exchange 57 s, the plan phase 35 / 69 / 79 s over ranks); CA0's leaf
+has no such wait and so "wins" the leaf, 89 against 144 s, for a reason
+that has nothing to do with the ghost layer or the exchange.  The
+comparison is not meaningful until the allocator's take is not O(free
+ranges); the heap already keeps a size index (best fit) for the
+resident blocks, and the transient takes should not scan.
+
+Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
+kept factors staged), and it dies one level up with the same ghost
+mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box
+147528, neighbor 133486 c 356 (raw)"), so that is CA0's blocker at
+every size now; CA3 exhausts even the 57.5 GB heap in the owner pass
+(3-6 GB requests with 34-39 GB in use).  Color ran end to end: 190.7 s,
+levels 6-2 in 14.1 / 7.0 / 3.1 / 1.3 / 0.9 s (14.1 against 16.2 on 40
+GB: level 6 packs nothing there), solve 1.85 s, acc_forward 1.43e-2,
+host RSS 30.3 GB.
+
 Left open, measured: the kept X_NR packed finer where it is cheap.  At
 384^3 on 64 ranks, the kept X_NR of levels <= 5 at 0.002 (lib_dg) against
 0.2 (lib_dgf), both with the fine fill store, read acc_mvp 5.1e-4 against
