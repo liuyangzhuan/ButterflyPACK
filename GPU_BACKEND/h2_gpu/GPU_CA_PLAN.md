@@ -4746,20 +4746,24 @@ skeleton the same), and the run completes; at a 35% heap 6671 of 9488
 differ, one of them (ghost 623 on rank 1) in the skeleton itself with
 the same count, and the next level's halo dies ("rank 0 expects
 177212535 elements from rank 1, which sends 177200035").  The 384^3
-check OOM-killed the host (the check keeps the X_NR host copies).  So
-the replicated elimination was never bit-reproducible across ranks -
-192^3 passed because no ghost's rank decision flipped - and the
-quantization bins turn last-bit differences into whole-delta ones,
-which is where the flips come from (one ghost in thousands, in the
-skeleton's count or its set).  The flips are not the fill store's
-step: the same blocks fail at 0.2 and 0.002.  Two ways out: make every
-reduction a ghost's elimination performs rank-independent (the sketch's
-fill groups, the partial sums into near blocks, the batched GEMMs'
-kernel choice by batch composition - hard to guarantee), or have the
-ghosts take their skeleton (indices and count) and T from their owners
-in a per-wave payload, pipelined behind the owner's own boxes, and
-tolerate last-bit differences in the factors, which the 192^3 runs
-already do.
+check OOM-killed the host (the check keeps the X_NR host copies).
+
+**Correction, same day: a regression from the compression, not a
+property of the design.**  The check read 0 differ on every CA level up
+to 2026-10-02 (the batch-independence harness covers every batched
+kernel), and it had not been run with `H2_compress_factors 1` since.  At
+96^3 on 8 ranks, CA0, the same library: compression off, 0 of 3536
+ghost copies differ; on, 1948 of 3536 differ, already at the leaf, in T,
+LU, X_SR, X_RS, X_NR and X_RR_full.  Some path the compression added
+depends on a wave's or a rank's composition (candidates: the sketch's
+fill groups formed by a scratch budget over the wave, which can split a
+box's sources over different GEMMs on its owner and its replica; the
+production chunks and source groups formed by the room; a quantization
+step shared by a group).  The fix is to make each of those a function of
+the box alone and re-verify with the check (0 differ), which keeps CA0's
+leaf free of any exchange; taking the ghosts' skeletons from their
+owners instead would add a per-wave dependency on the neighbours, the
+thing CA0 exists to avoid.
 
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
