@@ -162,6 +162,7 @@ module Bplus_Utilities
    integer, parameter:: BP_MD_init_par_min = 262144   !< sub-tensor size (entries x vectors) from which the Init gather is spread over tasks
    integer, parameter:: BP_MD_gemm_cols_min = 128      !< a block GEMM of the MD matvec is split into column chunks of at least this many columns ...
    integer, parameter:: BP_MD_gemm_chunks_max = 32     !< ... and at most this many chunks (tasks) per row block
+   integer, parameter:: BP_MD_leaf_slab_min = 16   !< leaf mode products use slab GEMMs from this many slab rows on
    !>**** one block of the block-diagonal factor along a tensor mode, for BF_MD_mode_product_strided
    type BP_MD_mode_factor
       DT, pointer :: F(:, :) => null()   !< the factor block
@@ -690,6 +691,233 @@ contains
       endif
       deallocate(mat, cref)
    end subroutine BF_MD_mode_product_check
+
+   !>**** Mode product on a tensor kept in natural layout (its mode-1 unfolding), result in the same layout.
+   !> X has spatial extents dims(1:Ndim) and Nvec vectors, stored as (dims(1), product(dims(2:Ndim))*Nvec); mode d, of
+   !> extent dims(d), becomes nrow_c in C (allocated here). The factor along mode d is a block list as in
+   !> BF_MD_mode_product_strided. For d = 1 the factor multiplies from the left over all columns. For d > 1 every
+   !> (suffix, vector) slab of X is a (prefix x k) matrix with leading dimension prefix = dims(1)*...*dims(d-1), and the
+   !> factor multiplies it from the right: C_slab = X_slab * F^T (transA 'N') or X_slab * F (transA 'T') -- the GEMM
+   !> rows are the whole leading part of the tensor, so the GEMMs are large for the later modes, and no unfolding is
+   !> ever permuted.
+   subroutine BF_MD_mode_product_natural(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, par, ntask, stats, time_gemm, flops)
+      implicit none
+      integer Ndim, d, nrow_c, Nvec, nblk, ntask
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      logical par
+      type(Hstat) :: stats
+      real(kind=8) :: time_gemm, flops
+      integer nrow_x, ncol_x, ncol_c, prefix, suffix, n_d, b, is, ic, c0, c1, nchunk, ngemm, kk, rx, cx, rc, cc
+      integer(kind=8) ox, oc
+      character transB
+      DT beta
+      real(kind=8) t_start, t_end, tt0, tt1, flop_pass
+
+      nrow_x = size(X, 1)
+      ncol_x = size(X, 2)
+      call assert(nrow_x == dims(1), 'BF_MD_mode_product_natural: rows of X do not match dims(1)')
+      prefix = 1
+      do kk = 1, d-1
+         prefix = prefix*dims(kk)
+      enddo
+      n_d = dims(d)
+      suffix = Nvec
+      do kk = d+1, Ndim
+         suffix = suffix*dims(kk)
+      enddo
+      call assert(prefix*n_d*suffix == nrow_x*ncol_x, 'BF_MD_mode_product_natural: extents do not match the array')
+      flop_pass = 0d0
+      do b = 1, nblk
+         flop_pass = flop_pass + flops_gemm(fblk(b)%m, prefix*suffix, fblk(b)%k)
+      enddo
+      t_start = MPI_Wtime()
+      if (d == 1) then
+         allocate(C(nrow_c, ncol_x))
+         nchunk = BP_MD_gemm_nchunk(ncol_x)
+         ngemm = nblk*nchunk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do ic = 1, nchunk
+            c0 = ((ic-1)*ncol_x)/nchunk + 1
+            c1 = (ic*ncol_x)/nchunk
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, c1-c0+1, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(fblk(b)%in_off+1, c0), nrow_x, beta, C(fblk(b)%out_off+1, c0), nrow_c)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+      else
+         ncol_c = (ncol_x/n_d)*nrow_c
+         allocate(C(nrow_x, ncol_c))
+         ngemm = suffix*nblk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(is,b,beta,transB,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(is,b,beta,transB,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do is = 1, suffix
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               transB = 'T'
+               if (fblk(b)%transA == 'T') transB = 'N'
+               ox = int(is-1, 8)*int(prefix, 8)*int(n_d, 8) + int(fblk(b)%in_off, 8)*int(prefix, 8)
+               oc = int(is-1, 8)*int(prefix, 8)*int(nrow_c, 8) + int(fblk(b)%out_off, 8)*int(prefix, 8)
+               rx = int(mod(ox, int(nrow_x, 8))) + 1
+               cx = int(ox/int(nrow_x, 8)) + 1
+               rc = int(mod(oc, int(nrow_x, 8))) + 1
+               cc = int(oc/int(nrow_x, 8)) + 1
+               tt0 = MPI_Wtime()
+               call gemmf77('N', transB, prefix, fblk(b)%m, fblk(b)%k, BPACK_cone, X(rx, cx), prefix, fblk(b)%F, size(fblk(b)%F,1), &
+                  beta, C(rc, cc), prefix)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+         if (BP_MD_mode_check_on()) call BF_MD_mode_product_natural_check(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, stats)
+      endif
+      t_end = MPI_Wtime()
+      time_gemm = time_gemm + t_end - t_start
+      flops = flops + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + ngemm
+   end subroutine BF_MD_mode_product_natural
+
+   !>**** reference for BF_MD_mode_product_natural (BPACK_MD_MODE_CHECK=1): the verified strided product from the
+   !> mode-1 unfolding into the mode-d unfolding, permuted back to natural layout, compared with C
+   subroutine BF_MD_mode_product_natural_check(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, stats)
+      implicit none
+      integer Ndim, d, nrow_c, Nvec, nblk
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      type(Hstat) :: stats
+      DT, pointer :: cmd(:, :)
+      DT, allocatable :: cnat(:, :)
+      integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
+      real(kind=8) :: err, nrm, tg, fl
+      tg = 0d0
+      fl = 0d0
+      cmd => null()
+      call BF_MD_mode_product_strided(Ndim, dims, 1, nrow_c, d, Nvec, X, cmd, nblk, fblk, .false., 1, stats, tg, fl)
+      dims_ref(1:Ndim) = dims
+      dims_ref(d) = nrow_c
+      dims_ref(Ndim+1) = Nvec
+      offsets_ref = 0
+      call TensorUnfoldingReshape(Ndim+1, dims_ref, dims_ref, offsets_ref, d, 1, cmd, 'N', cnat, 'N', 1)
+      err = maxval(abs(C - cnat))
+      nrm = max(maxval(abs(cnat)), tiny(1d0))
+      if (err > 1d-10*nrm) then
+         write(*, '(A,I3,A,I8,A,I8,A,Es10.3)') ' MODECHECK(natural) MISMATCH d=', d, ' rows=', size(C, 1), ' cols=', size(C, 2), &
+            ' maxrel=', err/nrm
+      endif
+      deallocate(cmd, cnat)
+   end subroutine BF_MD_mode_product_natural_check
+
+   !>**** Scatter of a row sub-tensor's result in natural layout (extents dims_sub(1:Ndim), Nvec vectors, stored as
+   !> (dims_sub(1), rest)) into the caller's natural-layout output (extents dims_out(1:Ndim), the same Nvec vectors,
+   !> stored as (product(dims_out), Nvec)) at offsets offs(1:Ndim): one contiguous run of dims_sub(1) entries per
+   !> (tail, vector), spread over tasks
+   subroutine BF_MD_final_scatter_natural(Ndim, dims_sub, dims_out, offs, Nvec, data_in, data_out)
+      implicit none
+      integer Ndim, Nvec
+      integer dims_sub(Ndim), dims_out(Ndim), offs(Ndim)
+      DT::data_in(:, :)
+      DT::data_out(:, :)
+      integer stride_out(Ndim), tail_prod, dim_i, tail, rhs, i, tmp_idx, idx, n1
+      integer, allocatable::tail_base(:), tail_col(:)
+      stride_out(1) = 1
+      do dim_i = 2, Ndim
+         stride_out(dim_i) = stride_out(dim_i-1)*dims_out(dim_i-1)
+      enddo
+      n1 = dims_sub(1)
+      tail_prod = 1
+      do dim_i = 2, Ndim
+         tail_prod = tail_prod*dims_sub(dim_i)
+      enddo
+      allocate(tail_base(tail_prod), tail_col(tail_prod))
+      do tail = 1, tail_prod
+         tmp_idx = tail - 1
+         tail_base(tail) = 1 + offs(1)
+         do dim_i = 2, Ndim
+            idx = mod(tmp_idx, dims_sub(dim_i)) + 1
+            tmp_idx = tmp_idx/dims_sub(dim_i)
+            tail_base(tail) = tail_base(tail) + (idx + offs(dim_i) - 1)*stride_out(dim_i)
+         enddo
+         tail_col(tail) = tail
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs,tail,i) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs,tail,i) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
+      do rhs = 1, Nvec
+         do tail = 1, tail_prod
+            do i = 1, n1
+               data_out(tail_base(tail) + i - 1, rhs) = data_in(i, tail + (rhs-1)*tail_prod)
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
+      deallocate(tail_base, tail_col)
+   end subroutine BF_MD_final_scatter_natural
 
    !>**** Reorient a 3-D tensor: for every target entry in natural order over (d1,d2,d3), read
    ! the source entry at base + (i1-1)*s1 + (i2-1)*s2 + (i3-1)*s3. An axis permutation with
@@ -18732,7 +18960,7 @@ end subroutine BF_block_MVP_dat_batch_magma
          t2 = MPI_Wtime()
          time_gemm = time_gemm + t2 - t1
          flops = flops + flop
-      else
+      else if (prefix >= BP_MD_leaf_slab_min) then
          ! mode dim_apply sits at stride `prefix` in the natural layout: for every (suffix, vector) index the slab
          ! X(prefix x old_dim) with leading dimension prefix times the factor gives the slab C(prefix x new_dim) --
          ! one GEMM each, nothing packed or unpacked
@@ -18753,6 +18981,53 @@ end subroutine BF_block_MVP_dat_batch_magma
          t2 = MPI_Wtime()
          time_gemm = time_gemm + t2 - t1
          flops = flops + flops_gemm(prefix, new_dim, old_dim)*dble(suffix_spatial*Nvec)
+      else
+         ! slabs of fewer than BP_MD_leaf_slab_min rows (the 10^3 leaf's second mode): the GEMM call overhead
+         ! outweighs the copies, so pack the mode to the front, multiply once and unpack
+         allocate(mat_pack(old_dim, prefix*suffix_all))
+         allocate(mat_gemm(new_dim, prefix*suffix_all))
+
+         t1 = MPI_Wtime()
+         do vv = 1, Nvec
+            do ss = 1, suffix_spatial
+               in_base = (ss-1)*prefix*old_dim
+               col = ((vv-1)*suffix_spatial + ss - 1)*prefix
+               do ii = 1, old_dim
+                  do pp = 1, prefix
+                     mat_pack(ii, col + pp) = data_in(in_base + (ii-1)*prefix + pp, vv)
+                  enddo
+               enddo
+            enddo
+         enddo
+         t2 = MPI_Wtime()
+         time_pack = time_pack + t2 - t1
+         time_pack_stage = time_pack_stage + t2 - t1
+
+         t1 = MPI_Wtime()
+         call gemmf90(factor, size(factor, 1), mat_pack, old_dim, mat_gemm, new_dim, &
+            trans_factor, 'N', new_dim, prefix*suffix_all, old_dim, BPACK_cone, BPACK_czero, flop)
+         t2 = MPI_Wtime()
+         time_gemm = time_gemm + t2 - t1
+         flops = flops + flop
+
+         t1 = MPI_Wtime()
+         do vv = 1, Nvec
+            do ss = 1, suffix_spatial
+               out_base = (ss-1)*prefix*new_dim
+               col = ((vv-1)*suffix_spatial + ss - 1)*prefix
+               do jj = 1, new_dim
+                  do pp = 1, prefix
+                     data_out(out_base + (jj-1)*prefix + pp, vv) = mat_gemm(jj, col + pp)
+                  enddo
+               enddo
+            enddo
+         enddo
+         t2 = MPI_Wtime()
+         time_pack = time_pack + t2 - t1
+         time_pack_stage = time_pack_stage + t2 - t1
+
+         deallocate(mat_pack)
+         deallocate(mat_gemm)
       endif
 
    end subroutine BF_MD_level0_apply_mode_flat
@@ -19137,7 +19412,12 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,Ndim+1,BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, 'N', mats(my_tid+1)%vector, 'T',1)
+	            ! the right-side result arrives in natural layout: as a (prod(dims_n) x Nvec) matrix it is the middle's input as is
+	            if (allocated(mats(my_tid+1)%vector)) then
+	               if (size(mats(my_tid+1)%vector, 1) /= product(dims_ref(1:Ndim)) .or. size(mats(my_tid+1)%vector, 2) /= Nvec) deallocate(mats(my_tid+1)%vector)
+	            endif
+	            if (.not. allocated(mats(my_tid+1)%vector)) allocate(mats(my_tid+1)%vector(product(dims_ref(1:Ndim)), Nvec))
+	            mats(my_tid+1)%vector = reshape(BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, [product(dims_ref(1:Ndim)), Nvec])
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_middle_phase = time_reshape_middle_phase + t_end - t_start
@@ -19204,12 +19484,13 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim+1,Ndim,mats1(my_tid+1)%vector, 'T', mats(my_tid+1)%vector, 'N',1)
+	            ! (no permutation: the natural layout is kept)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_middle_phase = time_reshape_middle_phase + t_end - t_start
-            allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(size(mats(my_tid+1)%vector,1),size(mats(my_tid+1)%vector,2)))
-            BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = mats(my_tid+1)%vector
+            ! the middle's (prod(dims_m) x Nvec) result is the left side's input in natural layout, stored as (dims_m(1), rest)
+            allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(dims_ref(1), product(dims_ref(2:Ndim))*Nvec))
+            BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = reshape(mats1(my_tid+1)%vector, [dims_ref(1), product(dims_ref(2:Ndim))*Nvec])
          enddo
 #ifdef HAVE_TASKLOOP
          !$omp end taskloop
@@ -19262,7 +19543,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             offsets_ref(Ndim+1) = 0
 
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape_FinalScatter(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout)
+	            call BF_MD_final_scatter_natural(Ndim,dims_ref_old(1:Ndim),dims_ref_new(1:Ndim),offsets_ref(1:Ndim),Nvec,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_final_phase = time_reshape_final_phase + t_end - t_start
@@ -20380,11 +20661,9 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             endif
          enddo
          if(dim_ii==1)then
-            ld_old = 1                                     ! the gathered input is in natural (mode-1) layout, not ours to free
             xp => BFvec%vec(0)%blocks(1,1)%matrix
             replace_input = .false.
          else
-            ld_old = dim_ii-1                              ! our previous pass
             xp => BFvec%vec(1)%blocks(1,1)%matrix
             replace_input = .true.
          endif
@@ -20400,7 +20679,7 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
             fblk(index_j_s)%out_off = BFvec%vec(1)%index_MD(dim_ii,1,index_j_s)
             fblk(index_j_s)%accumulate = .false.
          enddo
-         call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
          deallocate(fblk)
          if(replace_input) deallocate(xp)
          BFvec%vec(1)%blocks(1,1)%matrix => cnew
@@ -20477,11 +20756,9 @@ subroutine BF_MD_block_mvp_multiply_right_child(blocks, bb_m, Ndim, BFvec, Nvec,
          endif
       enddo
       if(dim_ii==1)then
-         ld_old = Ndim                                     ! the parent block, shared with the sibling row blocks
          xp => BFvec%vec(level)%blocks(index_ii_s,1)%matrix
          replace_input = .false.
       else
-         ld_old = dim_ii-1                                 ! our previous pass
          xp => BFvec%vec(level+1)%blocks(index_i_s,1)%matrix
          replace_input = .true.
       endif
@@ -20502,7 +20779,7 @@ subroutine BF_MD_block_mvp_multiply_right_child(blocks, bb_m, Ndim, BFvec, Nvec,
             fblk(b)%accumulate = (kk == 1)
          enddo
       enddo
-      call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
       deallocate(fblk)
       if(replace_input) deallocate(xp)
       BFvec%vec(level+1)%blocks(index_i_s,1)%matrix => cnew
@@ -20572,11 +20849,9 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             endif
          enddo
          if(dim_ii==1)then
-            ld_old = Ndim                                  ! the middle output (mode-Ndim unfolding), not ours to free
             xp => BFvec%vec(1)%blocks(1,1)%matrix
             replace_input = .false.
          else
-            ld_old = dim_ii-1                              ! our previous pass
             xp => BFvec%vec(0)%blocks(1,1)%matrix
             replace_input = .true.
          endif
@@ -20592,7 +20867,7 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
             fblk(index_i_s)%out_off = BFvec%vec(0)%index_MD(dim_ii,index_i_s,1)
             fblk(index_i_s)%accumulate = .false.
          enddo
-         call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
          deallocate(fblk)
          if(replace_input) deallocate(xp)
          BFvec%vec(0)%blocks(1,1)%matrix => cnew
@@ -20693,11 +20968,6 @@ subroutine BF_MD_block_mvp_multiply_left_child(blocks, bb_m, Ndim, BFvec, Nvec, 
             dims_cur(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
          endif
       enddo
-      if(dim_ii==1)then
-         ld_old = Ndim                                     ! the previous level's output for this child (mode-Ndim unfolding)
-      else
-         ld_old = dim_ii-1                                 ! our previous pass
-      endif
       xp => BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix   ! this child's block, replaced by the pass output below
       nrow_c = BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s)
       nblk = 2*BFvec%vec(level+1)%num_row
@@ -20716,7 +20986,7 @@ subroutine BF_MD_block_mvp_multiply_left_child(blocks, bb_m, Ndim, BFvec, Nvec, 
             fblk(b)%accumulate = .false.
          enddo
       enddo
-      call BF_MD_mode_product_strided(Ndim, dims_cur, ld_old, nrow_c, dim_ii, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
       deallocate(fblk)
       deallocate(xp)
       BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix => cnew
