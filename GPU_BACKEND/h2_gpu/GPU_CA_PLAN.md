@@ -4687,6 +4687,27 @@ comparison is not meaningful until the allocator's take is not O(free
 ranges); the heap already keeps a size index (best fit) for the
 resident blocks, and the transient takes should not scan.
 
+**The heap's transient take through size classes (2026-10-11).**  The
+free ranges are now also indexed by size class (floor of log2), and a
+per-wave take looks at the request's own class for the highest range of
+at least the size and at the top of each larger class, where every
+range fits: the same placement (the highest range that fits), bounded by
+one class's population instead of the free-range count.  192^3 is
+bit-identical on all three paths (logdet -89253588.461341903), its leaf
+4.41 -> 3.64 s and the scan 3.4e7 -> 8e5 ranges; 384^3 on 8 ranks at 8x
+within its run-to-run band (logdet -792567587.529 against .486), its
+leaf 57.3 -> 48.3 s (plan boxes 11.8 -> 8.8 s, the scan 3.7e8 -> 7.5e6),
+the factorization 91.3 -> 81.2 s; 768^3 on 64 ranks at 40 GB: the leaf
+65.6 -> 63.1 s with the exchange wait 19.4 -> 10.6 s (the slowest rank's
+plan phase was the allocator's variance: the waves' host time over the
+ranks 39.9 / 42.7 / 53.5 s against 41.3 / 50.4 / 58.3 before) and the
+wave buffers' allocation 11.1 -> 8.4 s.  So even on the 40 GB cards the
+walk had cost about 3 s of compute and 9 s of waiting at the leaf, and
+Color's exchange wait at 64 ranks is 17% of its compute, not 41%.
+(The afternoon's 40 GB total stayed at 190.8 s on the same pinning
+stalls as the morning's: "after the transition" 69 s at the leaf on a
+rank other than 0, level 6 26 s.)
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box

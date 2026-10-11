@@ -12,7 +12,8 @@
 // fits.  Holes left by freed resident blocks are then refilled by later
 // resident blocks, which grow from the bottom, and the wave buffers find
 // contiguous space at the top instead of the gaps between long-lived blocks.
-// Free ranges are indexed by address (coalescing) and by size (best fit).
+// Free ranges are indexed by address (coalescing), by size (best fit) and by
+// size class (the highest range that fits, without a walk: see take).
 
 #ifdef H2_HAVE_GPU
 
@@ -375,6 +376,7 @@ public:
     void reset() {
         free_.clear();
         by_size_.clear();
+        for (auto& b : top_bins_) b.clear();
         allocated_.clear();
         used_ = 0;
         resident_used_ = 0;
@@ -537,11 +539,15 @@ private:
     void add_free(size_t offset, size_t length) {
         free_.emplace(offset, length);
         by_size_.emplace(length, offset);
+        top_bins_[bin_of(length)].insert(offset);
     }
     void remove_free(std::map<size_t, size_t>::iterator it) {
         by_size_.erase({it->second, it->first});
+        top_bins_[bin_of(it->second)].erase(it->first);
         free_.erase(it);
     }
+    // The size class of a length: floor(log2), so a class spans a factor of two.
+    static int bin_of(size_t length) { return 63 - __builtin_clzll(length | 1); }
 
     // Best fit (lowest address among equal sizes), cut from the start of the
     // range (resident), or the highest range that fits, cut from its end
@@ -557,16 +563,42 @@ private:
             return true;
         }
         ++take_calls_;
-        for (auto it = free_.rbegin(); it != free_.rend(); ++it) {
+        // The highest range that fits, found through the size classes: in the
+        // request's own class the highest range of at least the size (a class
+        // spans a factor of two, so some of it may be too short), in the
+        // classes above every range fits and the highest is the class's last.
+        // The work is bounded by one class's population, not the free range
+        // count: a walk from the top visited 2.5e9 ranges over the 142k takes
+        // of the 768^3 leaf on 80 GB cards, where the level packs less and the
+        // raw blocks leave 8224 free ranges (39.7 s of host time in the wave
+        // buffers' allocation alone, the leaf 2.2x slower than on 40 GB).
+        const int k = bin_of(size);
+        bool found = false;
+        size_t best = 0;
+        for (auto it = top_bins_[static_cast<size_t>(k)].rbegin(); it != top_bins_[static_cast<size_t>(k)].rend(); ++it) {
             ++take_scans_;
-            if (it->second < size) continue;
-            const size_t start = it->first, length = it->second;
-            remove_free(free_.find(start));
-            offset = start + length - size;
-            if (length > size) add_free(start, length - size);
-            return true;
+            if (free_.find(*it)->second >= size) {
+                best = *it;
+                found = true;
+                break;
+            }
         }
-        return false;
+        for (size_t b = static_cast<size_t>(k) + 1; b < top_bins_.size(); ++b) {
+            if (top_bins_[b].empty()) continue;
+            ++take_scans_;
+            const size_t off = *top_bins_[b].rbegin();
+            if (!found || off > best) {
+                best = off;
+                found = true;
+            }
+        }
+        if (!found) return false;
+        auto it = free_.find(best);
+        const size_t start = it->first, length = it->second;
+        remove_free(it);
+        offset = start + length - size;
+        if (length > size) add_free(start, length - size);
+        return true;
     }
 
     int share_ranks_ = 1;
@@ -592,6 +624,7 @@ private:
     size_t transient_at_peak_ = 0;
     std::map<size_t, size_t> free_;                  // offset -> length, address order
     std::set<std::pair<size_t, size_t>> by_size_;    // (length, offset) of the same ranges
+    std::array<std::set<size_t>, 64> top_bins_;      // offsets of the same ranges by size class
     // offset -> (length, resident)
     // BPACK_CHECK=heap: who allocated each live block, and who last freed each
     // offset.  A double free then names both sites instead of only the second,
