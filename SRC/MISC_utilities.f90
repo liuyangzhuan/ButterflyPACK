@@ -4877,6 +4877,87 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
 
 end subroutine TensorUnfoldingReshape_FinalScatter
 
+!>**** Mode-1 unfolding of a sub-tensor of data_in, written straight into the preallocated data_out.
+!> data_in(prod(dims_old),Nvec) holds Nvec tensors of extents dims_old(1:Ndim); the sub-tensor starts at offsets(1:Ndim)
+!> and has extents dims_new(1:Ndim). data_out(dims_new(1), prod(dims_new(2:Ndim))*Nvec) receives, for right-hand side rhs
+!> and tail index tail (column-major over dims_new(2:Ndim)), the contiguous run data_in(base:base+dims_new(1)-1, rhs) in
+!> column tail + (rhs-1)*prod(dims_new(2:Ndim)). Every element of data_out is written, so it need not be zeroed.
+!> par=.true. spreads the runs over tasks so the idle threads of an enclosing parallel region take part; the caller
+!> keeps small sub-tensors serial so that their data stays in the cache of the thread that consumes it next.
+subroutine TensorUnfoldingReshape_InitGather(Ndim,dims_old,dims_new,offsets,Nvec,data_in,data_out,par)
+   implicit none
+   integer Ndim, Nvec
+   integer dims_old(Ndim), dims_new(Ndim), offsets(Ndim)
+   DT::data_in(:,:)
+   DT::data_out(:,:)
+   logical par
+   integer stride_old(Ndim)
+   integer n1, tail_prod, rhs, tail, i, j, old_base, dim_i, tmp_idx, idx
+   integer, allocatable::tail_base(:)
+
+   stride_old(1) = 1
+   do dim_i=2,Ndim
+      stride_old(dim_i) = stride_old(dim_i-1)*dims_old(dim_i-1)
+   enddo
+   n1 = dims_new(1)
+   tail_prod = 1
+   do dim_i=2,Ndim
+      tail_prod = tail_prod*dims_new(dim_i)
+   enddo
+
+   ! source position of each tail's run (one per column of a right-hand side)
+   allocate(tail_base(tail_prod))
+   do tail=1,tail_prod
+      tmp_idx = tail - 1
+      old_base = 1 + offsets(1)
+      do dim_i=2,Ndim
+         idx = mod(tmp_idx,dims_new(dim_i)) + 1
+         tmp_idx = tmp_idx/dims_new(dim_i)
+         old_base = old_base + (idx + offsets(dim_i) - 1)*stride_old(dim_i)
+      enddo
+      tail_base(tail) = old_base
+   enddo
+
+   if(par)then
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs,tail,i,j) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs,tail,i,j) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
+      do rhs=1,Nvec
+         do tail=1,tail_prod
+            j = tail + (rhs - 1)*tail_prod
+            do i=1,n1
+               data_out(i,j) = data_in(tail_base(tail) + i - 1,rhs)
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
+   else
+      do rhs=1,Nvec
+         do tail=1,tail_prod
+            j = tail + (rhs - 1)*tail_prod
+            do i=1,n1
+               data_out(i,j) = data_in(tail_base(tail) + i - 1,rhs)
+            enddo
+         enddo
+      enddo
+   endif
+   deallocate(tail_base)
+
+end subroutine TensorUnfoldingReshape_InitGather
+
+
 
 
 

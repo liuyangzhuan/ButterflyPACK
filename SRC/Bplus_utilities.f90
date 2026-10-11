@@ -159,6 +159,7 @@ module Bplus_Utilities
    ! 65 MB vectors gained 2x inside, 8 MB vectors lost 50% (fork/join and wake-up on ~0.2 ms of
    ! work per thread, twice per duplicate). 2^21 entries = 32 MB keeps the 160^3 level inside.
    integer, parameter:: BP_MD_par_inside_min = 2097152
+   integer, parameter:: BP_MD_init_par_min = 262144   !< sub-tensor size (entries x vectors) from which the Init gather is spread over tasks
    !>**** BPACK_MD_PACK_CHECK=1: run the element-wise reference pack/unpack beside the affine
    ! one on every call and report any difference (first 20 reports)
    integer, save:: BP_MD_pack_check = -1
@@ -18490,7 +18491,8 @@ end subroutine BF_block_MVP_dat_batch_magma
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(ipair):: p
-      DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
+      DT, allocatable::mat1(:, :), mat2(:, :)
+      logical par_init
       DT, allocatable::Vpartial(:, :)
       DT::val
       type(vectorsblock),allocatable::mats(:),mats1(:)
@@ -18567,7 +18569,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 	         ! write(*,*)ptree%MyID,blocks%idx_r_m,blocks%idx_c_m,'wogan'
 #ifdef HAVE_OPENMP
 !$omp parallel do default(shared) private(nn,idx_c_m,group_n,num_blocks,dim_i,k1,i,nnn, &
-!$omp& dims_ref_old,dims_ref_new,offsets_ref,t_start,t_end,mat,level,nr,j) &
+!$omp& dims_ref_old,dims_ref_new,offsets_ref,t_start,t_end,level,nr,j,par_init) &
 !$omp& reduction(max:time_reshape_phase,time_reshape_init_phase) schedule(static)
 #endif
 	         do nn=1,product(blocks%nc_m)
@@ -18608,14 +18610,14 @@ end subroutine BF_block_MVP_dat_batch_magma
             enddo
             dims_ref_new(Ndim+1) = Nvec
             offsets_ref(Ndim+1) = 0
+            ! gather the sub-tensor's mode-1 unfolding straight into the level-0 vector (no staging copy)
+            allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(dims_ref_new(1),product(dims_ref_new(2:Ndim))*Nvec))
+            par_init = size(BFvec(nn)%vec(0)%blocks(1,1)%matrix) >= BP_MD_init_par_min
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim+1,1,xin, 'T', mat,'N',1)
+	            call TensorUnfoldingReshape_InitGather(Ndim,dims_ref_old(1:Ndim),dims_ref_new(1:Ndim),offsets_ref(1:Ndim),Nvec,xin,BFvec(nn)%vec(0)%blocks(1,1)%matrix,par_init)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_init_phase = time_reshape_init_phase + t_end - t_start
-            allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(size(mat,1),size(mat,2)))
-            BFvec(nn)%vec(0)%blocks(1,1)%matrix = mat
-            deallocate(mat)
 
             allocate (BFvec(nn)%vec(1)%blocks(1, 1))
             allocate (BFvec(nn)%vec(1)%index_MD(Ndim,1,num_blocks+1))
