@@ -4345,6 +4345,100 @@ so the decision is consistent; it also makes the budget tight (planned
 would not fit the home either: the next step there is streaming by
 segment (a wave's share of the kept store), not by level.
 
+#### 768^3 on 64 ranks, the first run (2026-10-11): what each path hit
+
+16 nodes, 64 ranks, 32768 leaf boxes a rank (8x the 192^3 run; CA at the
+leaf, level 7).  Color factored in 386 s with the data exchange 176 s of
+it; levels 3 and 2 took 71 and 82 s: both ran "host sketches (boxes over
+2047 points)" - a sketch list entry packed 20 row bits and 11 destination
+bits, so a box of over 2047 points (level-4 skeletons average 179, eight
+of them a level-3 box) sent the whole level to host sketches, and with
+no device sketch the generators went through the host (level 3: 62 s of
+exchange, 26.6 s of size handshakes and 30.9 s assisting; level 2: 53 s;
+the ID on the host 6.4 and 25.5 s).  Its solve set-up then wanted the
+leaf's 19.7 GB home beside 9.9 GB the two unkept reduced levels and the
+scratch need, against 23.3 GB on the tightest rank (which still held 9.9
+GB of kept factors: the staging decision is per rank), declared the
+device solve off and was OOM-killed materializing the factors on the
+host.  CA3 exhausted the 28.4 GB heap in the leaf's owner pass (green
+colour, requests of 2.5-7.4 GB against 2.4-6.9 GB largest free).  CA0's
+leaf ran (74.3 s against Color's 66.4; 36594 boxes a rank on a corner
+brick, +11.7%) and its transition too; then one rank found no room for
+the kept X_NR hand-over and another was OOM-killed at 52.3 GB.
+
+#### Three fixes for 768^3 (2026-10-11): the entry width, the ring, and a diagnosis retracted
+
+**Sketch entries: 18 row bits, 13 destination bits** (8191 points a box,
+262143 rows; a box's rows are its neighbours' points, at most 27 times
+its own, so the bounds agree).  One constant in bpack_gpu_kernels.cuh;
+the kernels and the host bounds follow the masks.  192^3 bit-identical.
+
+**The solve streams by wave through a byte ring.**  Streaming a level
+through a level-sized home (19.7 GB at the 384^3 leaf) was the budget
+blocker.  Now a staged level is planned over the solve's waves (the
+Color binning, or the CA groups x parities): the blocks each wave reads,
+the blocks numbered by first use and placed whole in a ring grown until
+no two blocks of a wave or of two consecutive waves overlap (the prefetch
+is one wave deep); a box's pointers are rebased to its blocks' places
+once at the set-up (the staged form kept for the host readers); a wave's
+blocks are copied in on the decompression stream ahead of its step, the
+next wave's under this one's kernels, and the ring remembers what it
+holds.  The diagonal solves of a streamed level run with each wave (its
+LU is only in the ring then; legal, since a box's redundant part is
+updated only by earlier waves - the first version ran every level's
+diagonal per wave and cost 10% of the 192^3 solve on the small kernels,
+so the other levels keep the one-shot diagonal).  The set-up streams a
+wave in while it plans the wave's segments: bitcomp's batch plan reads
+the compressed headers.  A first version sized the ring by block count
+times the largest block and came to 25.7 GB at the 384^3 leaf (a wave
+reads ~26 blocks: its keep groups and the X_NR hand-over groups); by
+bytes it is 10.2 GB.
+
+| | before | now |
+|---|---|---|
+| 384^3 / 8 ranks: streamed levels, home | 3,4,5,6 through 19.6 GB | the leaf only, through a 10.2 GB ring (levels 3-5 resident) |
+| solve / multiply | 3.89 / 4.17 s (2.0 s of copies in each) | **2.55 / 2.77 s** (16.5 GB streamed a solve, hidden) |
+| acc_forward / acc_backward | 1.58e-2 / 1.0e-15 | identical |
+| 192^3 three paths | | bit-identical; solves 0.37-0.41 s as before |
+
+**The CA leaf's "per-wave tail": measured and retracted.**  The
+768^3 numbers read as a fixed cost per wave (the chunk tails 21.4 s over
+CA0's 32 waves against 12.0 s over Color's 16), and batching the small
+boundary waves' compression tails was proposed.  A per-wave host-time
+line (BPACK_TRACE=wave) at the 384^3 CA0 leaf on 8 ranks says otherwise:
+
+| rank 0, 384^3 CA0 leaf | boxes a wave | host time a wave | per box |
+|---|---|---|---|
+| blue/orange, 8 waves | 34-61 | 0.03-0.04 s | ~0.9 ms |
+| purple, 8 waves | 195-286 | 0.16-0.22 s | 0.8 ms |
+| green, 8 waves | 588-980 | 1.09-1.35 s | 1.4 ms |
+| interior, 8 waves | 3375 | 8.1 then 4.1-5.8 s | 1.5 ms |
+
+The small waves are the cheaper ones per box.  The leaf: 61.0 s for
+36594 boxes (1.67 ms a box) against Color's 56.7 s for 32768 (1.73 ms,
+of which the exchange 11.7 s; 1.37 ms of compute).  So the CA leaf's
+extra cost is the ghost layer itself - 11.7% more boxes on a corner
+brick, ~20% on an interior one, with 23% more near-block targets
+(392762 against 320341) and 26% more device time - not the wave count,
+and no tail batching is built.  CA0's leaf beats Color's only where
+Color's exchange wait is over ~45% of its compute; at 64 ranks it is 41%
+(19.4 of 47 s) and the level time follows the interior bricks.
+
+**CA0 at 8x fails in the normal path.**  The 384^3 CA0 run (8 ranks,
+its leaf kept and staged) died at level 5's start with "near block shape
+(hi): block 359 x 350, box 4256 n 359, neighbor 749 c 349 (windowed),
+packed entry live" on every rank but 0: an adopted block one column
+short of a remote neighbour's current size.  The same message was
+recorded at 192^3 only with the keep declined at 35% of the heap, and
+read as a keep-declined path; at 8x the packing is always on, and this
+is where it shows.  The replicated elimination of a ghost box has to pick
+the same skeleton on every rank that holds it; the lossy quantization of
+its inputs (a whole delta where the raw values straddle a bin) makes the
+ID's rank decision flip for one box in thousands, and the parent block
+built here disagrees with the owner's by a column.  CA with packing needs
+the ghosts' skeletons taken from their owners (as the assisting boxes'
+already are), which is a CA-path change, not a memory one.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
