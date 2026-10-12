@@ -355,6 +355,20 @@ public:
         // then met the level-3 transition and the 64 -> 8 reduction with 27
         // GB less room than they had.
         int want = pressure_seen_ || device_under_pressure() ? 1 : 0;
+        const bool host_trace = lvl <= 7 && wave_trace_enabled();   // (8x diagnostics: every rank's host memory around the staging)
+        auto host_line = [&](const char* when, double staged) {
+            if (!host_trace) return;
+            double rss = 0.0, hwm = 0.0;
+            host_memory_gb(rss, hwm);
+            int rank = 0;
+            MPI_Comm_rank(tree_->comm, &rank);
+            const PinnedChunkPool& pool = pinned_chunk_pool();
+            std::printf("  [gpu] level %d start, rank %d, %s: staged %.2f GB, host RSS %.2f GB (high-water %.2f), pinned %.2f GB (%.2f idle)\n",
+                        lvl, rank, when, staged / 1e9, rss, hwm, static_cast<double>(pool.pinned()) / 1e9,
+                        static_cast<double>(pool.idle()) / 1e9);
+            std::fflush(stdout);
+        };
+        host_line("before staging", 0.0);
         if (level_comm != MPI_COMM_NULL) MPI_Allreduce(MPI_IN_PLACE, &want, 1, MPI_INT, MPI_MAX, level_comm);
         for (auto& [level, kl] : store.kept) {
             if (level <= lvl || kl.on_host() || kl.blocks.empty()) continue;
@@ -365,6 +379,7 @@ public:
             bytes += static_cast<double>(kl.staged_bytes);
             which += (which.empty() ? "" : ",") + std::to_string(level);
         }
+        host_line("after staging", bytes);
         if (announce && bytes > 0.0) {
             std::printf("  [gpu] level %d start: the solve factors of level%s %s staged to the host, %.2f GB "
                         "(allocation %.2f s, copy %.2f s)\n", lvl, which.find(',') != std::string::npos ? "s" : "",
@@ -1271,6 +1286,7 @@ public:
                         e.pb_stored_bytes > 0.0 ? e.pb_raw_bytes / e.pb_stored_bytes : 1.0,
                         static_cast<long long>(e.pb_blocks));
                 if (e.pb_packed_short > 0) std::printf(", %lld did not fit", static_cast<long long>(e.pb_packed_short));
+                if (e.pb_host_short > 0) std::printf(", %lld groups left raw for want of host room", static_cast<long long>(e.pb_host_short));
             if (e.pb_check_tol > 0.0) {
                 std::printf("; round trip %.3e against %.3e allowed%s", e.pb_check_err, e.pb_check_tol,
                             e.pb_check_err <= e.pb_check_tol ? " (ok)" : "  *** OVER TOLERANCE ***");
@@ -1494,6 +1510,10 @@ public:
                             static_cast<double>(pool.pinned()) / 1e9, static_cast<double>(pool.idle()) / 1e9,
                             pool.pin_seconds(), pool.pin_wait_seconds(), static_cast<double>(pool.unpinned()) / 1e9,
                             pool.unpin_seconds());
+                if (e.ns_compact_held > 0.0) {
+                    std::printf("  [gpu] level %d near store compacted at the level end: %.2f GB live of %.2f GB held "
+                                "(%.2f s)\n", lvl, e.ns_compact_live / 1e9, e.ns_compact_held / 1e9, e.ns_compact_s);
+                }
                 if (wave_trace_enabled()) {  // which reader takes the host copies (the window must not)
                     std::printf("  [gpu] level %d fill store read as slots (device / host): window %lld / %lld, sketch %lld / "
                                 "%lld, transition %lld / %lld\n", lvl, static_cast<long long>(e.fs_read_dev[0]),

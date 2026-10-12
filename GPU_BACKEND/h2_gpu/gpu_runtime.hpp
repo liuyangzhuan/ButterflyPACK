@@ -362,6 +362,66 @@ inline void host_memory_gb(double& rss, double& hwm) {
     }
 }
 
+// The host memory still free to this process's job on its node (bytes): the
+// nearest enclosing cgroup with a memory limit - under Slurm the job's, which
+// the node's ranks share (a 256 GB GPU node gives 241 GB of it) - less what
+// that cgroup holds; MemAvailable where no limit is set.  /proc/meminfo
+// alone overstates it by the node's system reserve (27 GB on Perlmutter), so
+// a rank could be killed for memory the node still showed free.
+inline double host_room_bytes() {
+    static const std::string limited = [] {
+        std::string path;
+        if (FILE* f = std::fopen("/proc/self/cgroup", "r")) {
+            char line[1024];
+            while (std::fgets(line, sizeof line, f) != nullptr) {
+                if (std::strncmp(line, "0::", 3) == 0) {
+                    path = line + 3;
+                    while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) path.pop_back();
+                }
+            }
+            std::fclose(f);
+        }
+        const std::string root = "/sys/fs/cgroup";
+        std::string d = root + path;
+        while (d.size() > root.size()) {
+            if (FILE* f = std::fopen((d + "/memory.max").c_str(), "r")) {
+                char v[64] = {0};
+                const bool got = std::fgets(v, sizeof v, f) != nullptr;
+                std::fclose(f);
+                if (got && std::strncmp(v, "max", 3) != 0) return d;
+            }
+            d = d.substr(0, d.rfind('/'));
+        }
+        return std::string();
+    }();
+    auto read_num = [](const std::string& file) {
+        double v = -1.0;
+        if (FILE* f = std::fopen(file.c_str(), "r")) {
+            unsigned long long x = 0;
+            if (std::fscanf(f, "%llu", &x) == 1) v = static_cast<double>(x);
+            std::fclose(f);
+        }
+        return v;
+    };
+    if (!limited.empty()) {
+        const double mx = read_num(limited + "/memory.max"), cur = read_num(limited + "/memory.current");
+        if (mx > 0.0 && cur >= 0.0) return std::max(0.0, mx - cur);
+    }
+    double avail = 0.0;
+    if (FILE* f = std::fopen("/proc/meminfo", "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof line, f) != nullptr) {
+            long kb = 0;
+            if (std::sscanf(line, "MemAvailable: %ld kB", &kb) == 1) avail = static_cast<double>(kb) * 1024.0;
+        }
+        std::fclose(f);
+    }
+    return avail;
+}
+// What the node's job keeps free of host memory before an optional pinned
+// allocation (one that only saves device memory later) is declined.
+inline constexpr double kHostReserveBytes = 12e9;
+
 // Scalar type MAGMA uses for DataType (std::complex<double> and
 // magmaDoubleComplex share their layout).
 template<typename DataType> struct MagmaScalar;

@@ -4805,6 +4805,45 @@ thing CA0 exists to avoid.
 At 384^3 the Color level above CA0's leaf takes 15.3 s against 11.9 in
 the Color run, its exchange 4.3 s against 1.1: open.
 
+#### CA0 at 768^3 on 40 GB: three memory steps after the leaf (2026-10-11)
+
+With the replicas fixed, CA0 at 768^3 on 64 ranks got past its leaf
+(53.8 s against Color's 63.1) and lost an interior rank to the node's
+memory during the leaf's transition: the job gets 241 GB a node (the
+cgroup limit; MemTotal shows 263), ~60 GB a rank, and CA0's interior
+ranks (41176 boxes against 32768) held 49 GB pinned at the leaf's end and
+grew 7 GB more while the transition packed the parents into the next
+level's host region (the per-chunk trace now prints each rank's RSS).
+
+1. **The near store compacted at the level end.**  A block's chunk homes
+   keep the length of its first compressed write, when it was largest,
+   and the blocks shrink to their skeletons as their boxes go, so the
+   store held 28.09 GB with 2.15 GB live at the 384^3 CA0 leaf (25.40 /
+   1.70 Color; 12.69 / 2.16 at level 5).  finish() copies the live
+   blocks out as contiguous runs (build_parent's form, which every reader
+   takes) through pageable memory and back into the region's freed
+   chunks, in 0.5 s; a first version copied into a freshly pinned region
+   and a slow-pinning rank held the level end 21 s.  Results bitwise
+   unchanged (384^3 CA0 logdet, 192^3 replica check).
+2. **The parents' host copies check the job's room.**  `host_room_bytes()`
+   reads the nearest cgroup with a memory limit (Slurm's job, shared by
+   the node's ranks) less its usage, plus the pinned pool's idle chunks;
+   below a 12 GB reserve a group of parents stays raw on the device.  It
+   no longer triggers at 768^3 once (1) frees the store.
+3. **The kept X_NR hand-over after the level's blocks are freed.**  It
+   needs room for the boxes' compressed X_NR (12 GB on an interior rank)
+   and ran first in release_level_data, with 8.4 GB free; the near and
+   Schur blocks, the sketch buffers and the adopted blocks now go before
+   it (it reads only the fill sources).
+
+768^3 CA0 on 64 ranks, 40 GB, end to end: factor 109.0 s (leaf 56.2,
+then 19.8 / 7.6 / 5.6 / 2.7 / 0.9 s), logdet +1 -6968676797.12, acc_mvp
+1.05e-3, acc_forward 1.68e-2, acc_backward 6.6e-16, solve 3.44 s,
+multiply 3.67 s.  Run to run the pressure decisions follow the heap's
+state, which the background copier's frees make timing-dependent, so
+the logdet of the same configuration moves in the ninth digit (384^3
+Color: -792567588.01 three times, -792567590.66 once).
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box

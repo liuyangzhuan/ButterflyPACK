@@ -93,6 +93,12 @@ inline PinnedArena& near_host_arena(int level) {
     static PinnedArena* const arenas[2] = {new PinnedArena, new PinnedArena};  // (live to the process's end)
     return *arenas[level & 1];
 }
+// A level's near store compacted at its end (compact_near_store): its live
+// blocks, out of the store's region, until the level's eliminator goes.
+inline PinnedArena& near_compact_arena() {
+    static PinnedArena* const arena = new PinnedArena;  // (lives to the process's end)
+    return *arena;
+}
 // The eliminator's hold limit (memory pressure), published for the driver.
 inline size_t g_hold_limit_bytes = 0;
 inline bool device_under_pressure() {
@@ -219,6 +225,7 @@ struct EliminatorStats {
     // decompressed in all
     double fs_host_bytes = 0.0;    // the packed temp2^T on the host, at most (H2 host staging)
     double ns_host_bytes = 0.0;    // the near store on the host, at most
+    double ns_compact_live = 0.0, ns_compact_held = 0.0, ns_compact_s = 0.0;  // compacted at the level end
     int64_t fs_read_dev[3] = {0, 0, 0}, fs_read_host[3] = {0, 0, 0};  // slot chunks read by the window, the sketch, the transition: from the device / the host
     double fs_wave_scratch = 0.0;
     double fs_wave_bytes = 0.0;
@@ -294,6 +301,7 @@ struct EliminatorStats {
     double pb_stored_bytes = 0.0;
     int64_t pb_blocks = 0;
     int64_t pb_packed_short = 0;  // a block whose packed copy did not fit
+    int64_t pb_host_short = 0;    // a group of parent blocks left raw for want of host room
     double pb_check_err = 0.0;
     double pb_check_tol = 0.0;
     double lsch_union_max_wave = 0.0;
@@ -1540,6 +1548,116 @@ private:
     char* tail_at(uint32_t slot) const {
         return tail_extents_[slot / kTailSlotsPerExtent] + (slot % kTailSlotsPerExtent) * kTailSlot;
     }
+    // The near store at a level's end (2026-10-11): a block's chunk homes keep
+    // the length of its first compressed write, when it was largest, and the
+    // blocks shrink to their skeletons as their boxes are eliminated, so the
+    // store's region held 28 GB at the 384^3 CA0 leaf with 2.2 GB live (25 / 1.7
+    // for Color) - pinned host memory the transition then sat on while it
+    // packed the parents beside it, which killed CA0's interior ranks at
+    // 768^3.  The live blocks go into a region of their own as contiguous
+    // runs (the form build_parent writes, which every reader takes) and the
+    // store's region back to the pinned pool, for the parents and the staged
+    // factors to reuse.  A stale entry (its block raw again) restarts fresh.
+    void compact_near_store() {
+        if (chunk_homes_.empty()) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        struct Move { PackedBlock* pb; bool store; size_t bytes; };
+        std::vector<Move> moves;
+        double live = 0.0;
+        auto consider = [&](PackedBlock& pb) {
+            if (pb.packed == nullptr && pb.nchunks > 0 && !pb.live) {   // stale: its homes go with the region
+                pb = PackedBlock{};
+                return;
+            }
+            if (!pb.live) return;
+            size_t bytes = 0;
+            if (pb.packed == nullptr) {
+                for (uint32_t c = 0; c < pb.nchunks; ++c) bytes += chunk_homes_[pb.home0 + c].total;
+                moves.push_back(Move{&pb, true, bytes});
+            } else if (!heap_.owns(pb.packed)) {   // a run adopted into this level's host region
+                for (uint32_t c = 0; c < pb.nchunks; ++c) bytes += packed_strides_[pb.chunk0 + c];
+                moves.push_back(Move{&pb, false, bytes});
+            }
+            live += static_cast<double>(bytes);
+        };
+        const double held = static_cast<double>(near_host_arena(level_index_).used());
+        // (a pass over the entries first: a stale one must not be read below)
+        for (auto& kv : packed_schur_) consider(kv.second);
+        for (auto& kv : packed_edges_) consider(kv.second);
+        if (held < 2.0 * live + 512e6) {   // not worth the copy: leave the store as it is
+            return;
+        }
+        wait_near_scatter_host();
+        if (near_copy_stream_ != nullptr) check_cuda(cudaStreamSynchronize(near_copy_stream_), "near store compaction");
+        check_cuda(cudaStreamSynchronize(Context::instance().stream()), "near store compaction");
+        // Through pageable memory, so the region's own chunks take the live
+        // bytes back: copying straight into a new region pinned 2 GB more on a
+        // full node, and a rank that pinned slowly held the level end 21 s
+        // (768^3 CA0; pinning slows 10x on a fragmented node).
+        std::vector<size_t> at(moves.size() + 1, 0);
+        for (size_t i = 0; i < moves.size(); ++i) at[i + 1] = at[i] + moves[i].bytes;
+        std::vector<char> staged(at.back());
+        #pragma omp parallel for schedule(dynamic, 64)
+        for (int64_t i = 0; i < static_cast<int64_t>(moves.size()); ++i) {
+            const Move& mv = moves[static_cast<size_t>(i)];
+            char* o = staged.data() + at[static_cast<size_t>(i)];
+            if (!mv.store) {
+                std::memcpy(o, mv.pb->packed, mv.bytes);
+                continue;
+            }
+            for (uint32_t c = 0; c < mv.pb->nchunks; ++c) {
+                const ChunkHome& h = chunk_homes_[mv.pb->home0 + c];
+                const uint32_t in_home = std::min(h.here, h.total);
+                std::memcpy(o, h.at, in_home);
+                if (h.total > in_home) std::memcpy(o + in_home, tail_at(h.tail), h.total - in_home);
+                o += h.total;
+            }
+        }
+        std::vector<uint32_t> chunk0(moves.size(), 0);
+        for (size_t i = 0; i < moves.size(); ++i) {
+            if (!moves[i].store) continue;
+            const PackedBlock& pb = *moves[i].pb;
+            chunk0[i] = static_cast<uint32_t>(packed_strides_.size());
+            for (uint32_t c = 0; c < pb.nchunks; ++c) packed_strides_.push_back(chunk_homes_[pb.home0 + c].total);
+        }
+        compact_extents_.clear();
+        compact_base_ = nullptr;
+        compact_at_ = compact_end_ = 0;
+        compact_total_ = 0;
+        tail_extents_.clear();
+        tail_free_.clear();
+        chunk_homes_.clear();
+        near_host_arena(level_index_).reset();   // its chunks idle in the pool, for the region below
+        PinnedArena& dst = near_compact_arena();
+        std::vector<char*> to(moves.size());
+        for (size_t i = 0; i < moves.size(); ++i) to[i] = dst.alloc(moves[i].bytes);
+        #pragma omp parallel for schedule(dynamic, 64)
+        for (int64_t i = 0; i < static_cast<int64_t>(moves.size()); ++i) {
+            std::memcpy(to[static_cast<size_t>(i)], staged.data() + at[static_cast<size_t>(i)], moves[static_cast<size_t>(i)].bytes);
+        }
+        for (size_t i = 0; i < moves.size(); ++i) {
+            PackedBlock& pb = *moves[i].pb;
+            if (moves[i].store) {
+                pb.chunk0 = chunk0[i];
+                pb.home0 = 0;
+            }
+            pb.packed = to[i];
+            pb.bytes = moves[i].bytes;
+            pb.owner = nullptr;   // (its region resets with the level)
+            pb.written_seq = 0;
+        }
+        // the host owners of the adopted runs went with them
+        for (auto it = packed_live_.begin(); it != packed_live_.end();) {
+            if (!heap_.owns(it->first)) it = packed_live_.erase(it); else ++it;
+        }
+        packed_owned_.erase(std::remove_if(packed_owned_.begin(), packed_owned_.end(),
+                                           [&](char* p) { return !heap_.owns(p); }),
+                            packed_owned_.end());
+        auto& ns = eliminator_stats();
+        ns.ns_compact_live = live;
+        ns.ns_compact_held = held;
+        ns.ns_compact_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    }
     void release_near_store() {
         wait_near_scatter_host();   // the last group's scatter, before its region resets
         // (the extents are the level's host region, reset below, as are the
@@ -1552,6 +1670,7 @@ private:
         tail_free_.clear();
         chunk_homes_.clear();
         near_host_arena(level_index_).reset();
+        near_compact_arena().reset();
     }
     // l_first, l_max and l_last of each near-field block's compressed length,
     // over the waves that write it.  A slot allocator would give each block
@@ -2396,6 +2515,8 @@ private:
         return box_shared(static_cast<int64_t>(key >> 32)) && box_shared(static_cast<int64_t>(key & 0xffffffffu));
     }
     bool replica_warned_ = false;
+    static double tr_rss_gb() { double rss = 0.0, hwm = 0.0; host_memory_gb(rss, hwm); return rss; }
+    static int tr_rank() { int r = 0; MPI_Comm_rank(MPI_COMM_WORLD, &r); return r; }
     void warn_replica_fallback(const char* what) {
         if (!replicated_ || replica_warned_) return;
         replica_warned_ = true;
@@ -6020,6 +6141,27 @@ void LevelEliminator<CoordType, DataType, KernelType>::finish() {
         if (!st.eliminated) throw std::runtime_error("LevelEliminator::finish: a box was not eliminated");
     }
     auto& stats = eliminator_stats();
+    if (env::trace("wave")) {   // (8x diagnostics) the near store's live bytes against what its host region holds
+        double live = 0.0, runs = 0.0;
+        size_t blocks = 0;
+        auto count = [&](const PackedBlock& pb) {
+            if (!pb.live) return;
+            ++blocks;
+            if (pb.packed != nullptr) { runs += static_cast<double>(pb.bytes); return; }
+            for (uint32_t c = 0; c < pb.nchunks; ++c) live += static_cast<double>(chunk_homes_[pb.home0 + c].total);
+        };
+        for (const auto& kv : packed_schur_) count(kv.second);
+        for (const auto& kv : packed_edges_) count(kv.second);
+        double held = 0.0;
+        for (const ChunkHome& h : chunk_homes_) held += static_cast<double>(h.here);
+        int rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        std::printf("  [gpu] level %d rank %d near store at the level end: %zu live blocks, %.2f GB live in the store "
+                    "(+%.2f GB in runs) against %.2f GB of homes, %.2f GB compact extents, %zu tail extents; host region %.2f GB\n",
+                    level_index_, rk, blocks, live / 1e9, runs / 1e9, held / 1e9, static_cast<double>(compact_total_) / 1e9,
+                    tail_extents_.size(), static_cast<double>(near_host_arena(level_index_).used()) / 1e9);
+        std::fflush(stdout);
+    }
     if (owner_ != nullptr) {  // the last payloads out, the receive buffers back
         check_cuda(cudaStreamSynchronize(Context::instance().stream()), "owner level: last sends");
         owner_progress();
@@ -6066,6 +6208,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::finish() {
         stats.heap_peak_resident = heap_.resident_at_peak();
         stats.heap_peak_transient = heap_.transient_at_peak();
     }
+    compact_near_store();   // before the transition packs the parents beside it
     stats.finish += std::chrono::duration<double>(clock::now() - t0).count();
 }
 
@@ -10270,7 +10413,16 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     size_t group_packed = 0;
                     for (size_t j = 0; j < srcs.size(); ++j) group_packed += comp[j].bytes;
                     // (the level below adopts these: its host region)
-                    char* owned = group_packed > 0 ? near_host_arena(level_index_ - 1).alloc(group_packed) : nullptr;
+                    // the host's room first: these copies only save device memory
+                    // at the next level, and here the level's own near and fill
+                    // stores are still on the host (768^3 CA0 on 64 ranks: 7 GB
+                    // more a rank over the transition, the interior ranks
+                    // killed at 62 GB of a 60 GB share)
+                    const bool host_room = group_packed == 0 ||
+                                           host_room_bytes() + static_cast<double>(pinned_chunk_pool().idle()) >
+                                               kHostReserveBytes + static_cast<double>(group_packed);
+                    if (!host_room) ++stats.pb_host_short;
+                    char* owned = group_packed > 0 && host_room ? near_host_arena(level_index_ - 1).alloc(group_packed) : nullptr;
                     if (owned != nullptr) out->packed_owned.push_back(owned);
                     size_t owned_at = 0;
                     for (size_t j = 0; j < srcs.size(); ++j) {
@@ -10384,7 +10536,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         if (env::trace("wave")) {   // the chunk against its budget (BPACK_TRACE=wave)
             std::printf("  [gpu] level %d transition chunk %zu: parents %zu..%zu of %zu, budget %.2f GB = buffers %.2f + "
                         "host restore %.2f + packed restore %.2f + X_RR_full rebuilt %.2f + parent blocks %.2f; heap used "
-                        "%.2f GB (restored %.2f, parents %.2f, kept %.2f), largest free %.2f\n", level_index_,
+                        "%.2f GB (restored %.2f, parents %.2f, kept %.2f), largest free %.2f; host RSS %.2f GB, pinned %.2f, rank %d\n", level_index_,
                         chunk_marks.size(), p0, p1, np,
                         static_cast<double>(budget) / 1e9, static_cast<double>(buffer_bytes) / 1e9,
                         static_cast<double>(restore_bytes) / 1e9, static_cast<double>(packed_restore_bytes) / 1e9,
@@ -10393,7 +10545,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         static_cast<double>(heap_.resident_now(ResidentKind::Restore)) / 1e9,
                         static_cast<double>(heap_.resident_now(ResidentKind::Transition)) / 1e9,
                         static_cast<double>(heap_.resident_now(ResidentKind::KeptFactors)) / 1e9,
-                        static_cast<double>(heap_.largest_free()) / 1e9);
+                        static_cast<double>(heap_.largest_free()) / 1e9,
+                        tr_rss_gb(), static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, tr_rank());
             std::fflush(stdout);
         }
         p0 = p1;
@@ -10426,7 +10579,11 @@ template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     released_sources_.clear();  // their blocks are freed with the states below
     if (!heap_initialized_) return;
-    transpose_kept_xnr();  // the kept X_NR, while the fill sources are still here
+    // The kept X_NR hand-over (transpose_kept_xnr) reads only the fill
+    // sources and needs room for the boxes' compressed X_NR, so the level's
+    // blocks go first (2026-10-11: at 768^3 CA0 an interior rank came to it
+    // with 8.4 GB free and 12 GB to place, the near and Schur blocks, the
+    // sketch buffers and the adopted blocks still on the card).
     evict_fill_copies(true);
     release_owner_sources();
     if (outbox_ != nullptr) free_block(outbox_);
@@ -10478,6 +10635,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
         heap_.free(st.schur.ptr);
         st.schur = DeviceMatrix{};
     }
+    if (wave_sketch_ != nullptr) {
+        heap_.free(wave_sketch_);
+        wave_sketch_ = nullptr;
+    }
+    for (char* p : wave_sketch_extra_) heap_.free(p);
+    wave_sketch_extra_.clear();
+    if (adopt_) {
+        for (auto& kv : adopt_->schur) heap_.free(kv.second.ptr);
+        for (auto& kv : adopt_->edges) heap_.free(kv.second.ptr);
+        adopt_.reset();
+    }
+    transpose_kept_xnr();  // the kept X_NR, while the fill sources are still here
     for (BoxState& st : states_) {
         heap_.free(st.persist);
         st.persist = nullptr;
@@ -10495,17 +10664,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::release_level_data() {
     heap_.free(d_ids_);
     d_xyz_ = nullptr;
     d_ids_ = nullptr;
-    if (wave_sketch_ != nullptr) {
-        heap_.free(wave_sketch_);
-        wave_sketch_ = nullptr;
-    }
-    for (char* p : wave_sketch_extra_) heap_.free(p);
-    wave_sketch_extra_.clear();
-    if (adopt_) {
-        for (auto& kv : adopt_->schur) heap_.free(kv.second.ptr);
-        for (auto& kv : adopt_->edges) heap_.free(kv.second.ptr);
-        adopt_.reset();
-    }
     heap_initialized_ = false;
 }
 
