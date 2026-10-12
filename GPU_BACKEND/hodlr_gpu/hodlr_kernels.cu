@@ -581,6 +581,26 @@ void launch_zero_lower(const TriuItem<T>* items, int count, int max_n, cudaStrea
 }
 
 template<typename T>
+__global__ void lower_to_upper_kernel(const TriuItem<T>* items) {
+    const TriuItem<T> it = items[blockIdx.x];
+    const int j = blockIdx.y;
+    if (j >= it.n) return;
+    T* col = it.a + static_cast<long long>(j) * it.lda;
+    // (element (i, j), i > j, to (j, i): only this thread reads the one and writes the other)
+    for (int i = j + 1 + threadIdx.x; i < it.n; i += blockDim.x) {
+        it.a[j + static_cast<long long>(i) * it.lda] = conj_of(col[i]);
+        col[i] = T(0.0);
+    }
+}
+
+template<typename T>
+void launch_lower_to_upper(const TriuItem<T>* items, int count, int max_n, cudaStream_t stream) {
+    if (count <= 0 || max_n <= 0) return;
+    lower_to_upper_kernel<T><<<dim3(static_cast<unsigned>(count), static_cast<unsigned>(max_n)), kThreads, 0, stream>>>(items);
+    check_launch("lower_to_upper_kernel");
+}
+
+template<typename T>
 __global__ void col_scale_kernel(const ColScaleItem<T>* items) {
     const ColScaleItem<T> it = items[blockIdx.x];
     const long long total = static_cast<long long>(it.m) * it.n;
@@ -652,6 +672,7 @@ void launch_gather_rows(const T* a, int lda, int k, const int* rows, int n, T* o
     template void launch_copy_diagonal<T>(const DiagCopyItem<T>*, int, int, cudaStream_t);             \
     template void launch_fnorm<T>(const NormItem<T>*, int, cudaStream_t);                             \
     template void launch_zero_lower<T>(const TriuItem<T>*, int, int, cudaStream_t);                   \
+    template void launch_lower_to_upper<T>(const TriuItem<T>*, int, int, cudaStream_t);               \
     template void launch_col_scale<T>(const ColScaleItem<T>*, int, int, int, cudaStream_t);           \
     template void launch_tinv<T>(const TinvItem<T>*, int, int, cudaStream_t);                          \
     template void launch_gather_rows<T>(const T*, int, int, const int*, int, T*, cudaStream_t);

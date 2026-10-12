@@ -658,13 +658,15 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Ranks sharing a GPU.  Collective over comm, once per process: the ranks of
-// a node that use the same GPU (by device UUID) split its memory, the
-// device pool of each taking an equal part (DeviceHeap::set_device_share,
-// before the pool is reserved).  Returns how many ranks use this rank's GPU.
+// Ranks sharing a GPU.  Collective over comm, at every call (a process may
+// build matrices on several communicators, a sub-communicator first, and
+// every rank of each must take part): the ranks of comm on a node that use
+// the same GPU (by device UUID).  The first call sets the split of the GPU's
+// memory, the device pool of each rank taking an equal part
+// (DeviceHeap::set_device_share, before the pool is reserved).  Returns how
+// many ranks of comm use this rank's GPU.
 inline int share_device(MPI_Comm comm) {
-    static int share = 0;
-    if (share > 0) return share;
+    static bool applied = false;
     int rank = 0;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm node = MPI_COMM_NULL;
@@ -692,11 +694,11 @@ inline int share_device(MPI_Comm comm) {
     check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
     unsigned long long f = free_bytes, fmin = free_bytes;
     MPI_Allreduce(&f, &fmin, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN, dev_comm);
-    if (count > 1) DeviceHeap::instance().set_device_share(count, static_cast<size_t>(fmin));
+    if (count > 1 && !applied) DeviceHeap::instance().set_device_share(count, static_cast<size_t>(fmin));
+    applied = true;
     MPI_Comm_free(&dev_comm);
     MPI_Comm_free(&node);
-    share = count;
-    return share;
+    return count;
 }
 
 // The exchange arena (DeviceHeap::exchange_arena()) of a run of nproc ranks

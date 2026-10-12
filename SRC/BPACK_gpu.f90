@@ -159,6 +159,21 @@ module BPACK_GPU
          integer(c_int) :: rows(*)
       end subroutine c_bpack_hodlr_gpu_gather_rows
 
+      subroutine c_bpack_hodlr_gpu_block_rank(gpu, idx, k) bind(c, name="c_bpack_hodlr_gpu_block_rank")
+         import :: c_ptr, c_int
+         type(c_ptr), value :: gpu
+         integer(c_int) :: idx, k
+      end subroutine c_bpack_hodlr_gpu_block_rank
+
+      subroutine c_bpack_hodlr_gpu_extract_products(gpu, np, idx, role, nbig, nsmall, small_first, big_rows, small, &
+                                                    out, flops) bind(c, name="c_bpack_hodlr_gpu_extract_products")
+         import :: c_ptr, c_int, c_double
+         type(c_ptr), value :: gpu, small, out
+         integer(c_int) :: np
+         integer(c_int) :: idx(*), role(*), nbig(*), nsmall(*), small_first(*), big_rows(*)
+         real(c_double) :: flops
+      end subroutine c_bpack_hodlr_gpu_extract_products
+
       subroutine c_bpack_hodlr_gpu_block_v_dm(gpu, idx, id) bind(c, name="c_bpack_hodlr_gpu_block_v_dm")
          import :: c_ptr, c_int
          type(c_ptr), value :: gpu
@@ -263,10 +278,13 @@ module BPACK_GPU
          type(c_ptr) :: out(*)
       end subroutine c_bpack_hodlr_gpu_eval_dense
 
-      subroutine c_bpack_hodlr_gpu_baca_begin(gpu, scale, mode, variant, nb, r0, m, c0, n, r_est) &
+      ! (host_fn, host_ctx: the entries through the host when the matrix has no GPU evaluator,
+      ! c_bpack_hodlr_gpu_host_entries; c_null_funptr otherwise)
+      subroutine c_bpack_hodlr_gpu_baca_begin(gpu, scale, mode, variant, nb, r0, m, c0, n, r_est, host_fn, host_ctx) &
          bind(c, name="c_bpack_hodlr_gpu_baca_begin")
-         import :: c_ptr, c_int, c_int64_t, c_double
-         type(c_ptr), value :: gpu
+         import :: c_ptr, c_funptr, c_int, c_int64_t, c_double
+         type(c_ptr), value :: gpu, host_ctx
+         type(c_funptr), value :: host_fn
          real(c_double) :: scale
          integer(c_int) :: mode, variant, nb, m(*), n(*), r_est(*)
          integer(c_int64_t) :: r0(*), c0(*)
@@ -374,14 +392,14 @@ contains
       type(Hoption)::option
       type(proctree)::ptree
 
-      call assert(option%HODLR_use_gpu >= 0 .and. option%HODLR_use_gpu <= 2, 'HODLR_use_gpu must be 0, 1 or 2')
+      call BPACK_require(option%HODLR_use_gpu >= 0 .and. option%HODLR_use_gpu <= 2, 'HODLR_use_gpu must be 0, 1 or 2')
       if (option%HODLR_use_gpu == 0) return
-      call assert(BPACK_gpu_available(), &
+      call BPACK_require(BPACK_gpu_available(), &
          'HODLR_use_gpu>0 requires the double or double complex library of a build with enable_h2_gpu=ON')
-      call assert(option%format == HODLR, 'HODLR_use_gpu>0 requires format=1 (HODLR)')
-      call assert(option%LRlevel == 0, 'HODLR_use_gpu>0 requires LRlevel=0 (HODBF has no GPU path)')
-      call assert(option%use_zfp /= 1, 'HODLR_use_gpu>0 does not support ZFP-compressed dense blocks')
-      call assert(option%HODLR_gpu_pieces >= 1, 'HODLR_gpu_pieces must be at least 1')
+      call BPACK_require(option%format == HODLR, 'HODLR_use_gpu>0 requires format=1 (HODLR)')
+      call BPACK_require(option%LRlevel == 0, 'HODLR_use_gpu>0 requires LRlevel=0 (HODBF has no GPU path)')
+      call BPACK_require(option%use_zfp /= 1, 'HODLR_use_gpu>0 does not support ZFP-compressed dense blocks')
+      call BPACK_require(option%HODLR_gpu_pieces >= 1, 'HODLR_gpu_pieces must be at least 1')
    end subroutine HODLR_gpu_check_options
 
    !> Give bmat a GPU state for a HODLR GPU run (HODLR_use_gpu > 0) and let
@@ -1336,27 +1354,20 @@ contains
       type(intersect)::inters(:)
       type(Hoption)::option
       type(proctree)::ptree
-      type(matrixblock), pointer::blocks, root
+      type(matrixblock), pointer::blocks
       type(nod), pointer::cur, curr, curc
       class(*), pointer::ptrr, ptrc
       type(block_ptr), allocatable :: blist(:)
       type(hodlr_gpu_itab), allocatable :: tab(:)
-      integer, allocatable :: q_owner(:), q_int(:, :), q_blk(:), q_hrole(:), q_row(:), order(:)
-      integer, allocatable :: scount(:), rcount(:), sdisp(:), rdisp(:), svcount(:), rvcount(:), svdisp(:), rvdisp(:)
-      integer, allocatable :: r_int(:, :), sbuf(:), rbuf(:)
-      integer(c_int), allocatable :: grows(:)
+      integer, allocatable :: q_owner(:), q_int(:, :), q_blk(:), q_hrole(:), q_row(:)
       integer, allocatable :: rmap(:)
-      DT, allocatable, target :: vsend(:), vrecv(:), gout(:)
-      integer nblk, nq, nqmax, b, nn, t, g, r, lc, ii, iis, role, hrole, pp, lo, hi, mid, np, nproc, ierr, q, k, nrecv
+      DT, allocatable :: vals(:)
+      integer(kind=8), allocatable :: voff(:)
+      integer nblk, nq, nqmax, b, nn, t, g, r, lc, ii, iis, role, hrole, pp, k
       integer ncache
-      integer nloc, idx_start_glo, run0, run1, pos, c, m
-      integer(c_int) :: idx_c, role_c, n_c, k_c
-      integer(c_int64_t) :: n_loc
+      integer nloc
       logical view
 
-      nproc = ptree%nproc
-      root => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
-      np = size(root%N_p, 1)
       ! this rank's low-rank blocks and an upper bound of the rows they need
       allocate (blist(max(1, lstblk%num_nods)))
       nblk = 0
@@ -1439,19 +1450,8 @@ contains
                      if (rmap(r) > 0) cycle
                      ncache = ncache + 1
                      rmap(r) = ncache
-                     ! the rank owning row g of the matrix
-                     lo = 1
-                     hi = np
-                     do while (lo < hi)
-                        mid = (lo + hi)/2
-                        if (root%N_p(mid, 2) < g - root%headn + 1) then
-                           lo = mid + 1
-                        else
-                           hi = mid
-                        endif
-                     enddo
                      nq = nq + 1
-                     q_owner(nq) = ptree%pgrp(root%pgno)%head + lo - 1
+                     q_owner(nq) = HODLR_gpu_row_owner(ho_bf1, ptree, g)
                      q_int(:, nq) = (/lc, iis, role, g, k/)
                      q_blk(nq) = b
                      q_hrole(nq) = hrole
@@ -1475,6 +1475,70 @@ contains
             endif
          enddo
       enddo
+      ! the rows from the devices of their owners
+      call HODLR_gpu_fetch_rows(ho_bf1, option, ptree, nq, q_owner, q_int, vals, voff)
+      do t = 1, nq
+         blocks => blist(q_blk(t))%ptr
+         k = q_int(5, t)
+         if (q_hrole(t) == 0) then
+            blocks%gpu_u(q_row(t), 1:k) = vals(voff(t) + 1:voff(t) + k)
+         else
+            blocks%gpu_v(q_row(t), 1:k) = vals(voff(t) + 1:voff(t) + k)
+         endif
+      enddo
+      deallocate (blist, q_owner, q_int, q_blk, q_hrole, q_row, vals, voff)
+   end subroutine HODLR_gpu_fill_rows
+
+   !> The rank that owns row g of the matrix (the layout of the vectors, where
+   !> the rows of the forward blocks are on the devices)
+   integer function HODLR_gpu_row_owner(ho_bf1, ptree, g)
+      type(hobf), target::ho_bf1
+      type(proctree)::ptree
+      integer g
+      type(matrixblock), pointer::root
+      integer lo, hi, mid
+
+      root => ho_bf1%levels(1)%BP_inverse(1)%LL(1)%matrices_block(1)
+      lo = 1
+      hi = size(root%N_p, 1)
+      do while (lo < hi)
+         mid = (lo + hi)/2
+         if (root%N_p(mid, 2) < g - root%headn + 1) then
+            lo = mid + 1
+         else
+            hi = mid
+         endif
+      enddo
+      HODLR_gpu_row_owner = ptree%pgrp(root%pgno)%head + lo - 1
+   end function HODLR_gpu_row_owner
+
+   !> Rows of the forward blocks on the GPUs, from the ranks that hold them:
+   !> request t (q_int(:, t): the level, the block in the level, its role on
+   !> the device (0: U, 1: V), the row of the matrix, the block's rank k) to
+   !> q_owner(t), the rank that owns that row (HODLR_gpu_row_owner), which
+   !> gathers it from its device; vals(voff(t) + 1:voff(t) + k) its k values.
+   !> Collective over ptree%Comm
+   subroutine HODLR_gpu_fetch_rows(ho_bf1, option, ptree, nq, q_owner, q_int, vals, voff)
+      type(hobf), target::ho_bf1
+      type(Hoption)::option
+      type(proctree)::ptree
+      integer nq
+      integer :: q_owner(:), q_int(:, :)
+      DT, allocatable :: vals(:)
+      integer(kind=8), allocatable :: voff(:)
+      type(hodlr_gpu_itab), allocatable :: tab(:)
+      integer, allocatable :: order(:)
+      integer, allocatable :: scount(:), rcount(:), sdisp(:), rdisp(:), svcount(:), rvcount(:), svdisp(:), rvdisp(:)
+      integer, allocatable :: r_int(:, :), sbuf(:), rbuf(:)
+      integer(c_int), allocatable :: grows(:)
+      DT, allocatable, target :: vsend(:), vrecv(:), gout(:)
+      integer t, lc, iis, nproc, ierr, q, k, nrecv
+      integer idx_start_glo, run0, run1, pos, c, m
+      integer(kind=8) :: ntot
+      integer(c_int) :: idx_c, role_c, n_c, k_c
+      integer(c_int64_t) :: n_loc
+
+      nproc = ptree%nproc
       ! the requests to their owners (in the order of the owners, stable)
       allocate (scount(nproc), rcount(nproc), sdisp(nproc), rdisp(nproc), order(max(1, nq)))
       scount = 0
@@ -1528,11 +1592,11 @@ contains
          enddo
          lc = r_int(1, run0)
          iis = r_int(2, run0)
-         call assert(lc >= 1 .and. lc <= ho_bf1%Maxlevel, 'HODLR_gpu_fill_rows: a request outside the low-rank levels')
+         call assert(lc >= 1 .and. lc <= ho_bf1%Maxlevel, 'HODLR_gpu_fetch_rows: a request outside the low-rank levels')
          call assert(iis >= lbound(tab(lc)%i, 1) .and. iis <= ubound(tab(lc)%i, 1), &
-                     'HODLR_gpu_fill_rows: a request for a block of another rank')
+                     'HODLR_gpu_fetch_rows: a request for a block of another rank')
          idx_c = tab(lc)%i(iis)
-         call assert(idx_c >= 0, 'HODLR_gpu_fill_rows: a request for a block not on this device')
+         call assert(idx_c >= 0, 'HODLR_gpu_fetch_rows: a request for a block not on this device')
          role_c = r_int(3, run0)
          n_c = run1 - run0 + 1
          allocate (grows(n_c))
@@ -1542,7 +1606,7 @@ contains
          k = r_int(5, run0)
          allocate (gout(max(1, n_c*k)))
          call c_bpack_hodlr_gpu_gather_rows(ho_bf1%gpu, idx_c, role_c, n_c, grows, c_loc(gout(1)), k_c)
-         call assert(k_c == k, 'HODLR_gpu_fill_rows: a block of another rank on the host than on the device')
+         call assert(k_c == k, 'HODLR_gpu_fetch_rows: a block of another rank on the host than on the device')
          do t = 1, n_c  ! (row t of gout, n_c x k: the k values of request run0 + t - 1)
             do c = 1, k
                vsend(pos + c) = gout(t + (c - 1)*n_c)
@@ -1552,7 +1616,7 @@ contains
          deallocate (grows, gout)
          run0 = run1 + 1
       enddo
-      ! the rows back to the requesters, into the host arrays
+      ! the rows back to the requesters
       svcount = 0
       do t = 1, nq
          svcount(q_owner(t) + 1) = svcount(q_owner(t) + 1) + q_int(5, t)
@@ -1563,21 +1627,334 @@ contains
       enddo
       allocate (vrecv(max(1, sum(svcount))))
       call MPI_ALLTOALLV(vsend, rvcount, rvdisp, MPI_DT, vrecv, svcount, svdisp, MPI_DT, ptree%Comm, ierr)
+      ! (in the order of the requests)
+      allocate (voff(max(1, nq)))
+      ntot = 0
+      do t = 1, nq
+         voff(t) = ntot
+         ntot = ntot + q_int(5, t)
+      enddo
+      allocate (vals(max(1_8, ntot)))
       pos = 0
       do t = 1, nq
          m = order(t)
-         blocks => blist(q_blk(m))%ptr
          k = q_int(5, m)
-         if (q_hrole(m) == 0) then
-            blocks%gpu_u(q_row(m), 1:k) = vrecv(pos + 1:pos + k)
-         else
-            blocks%gpu_v(q_row(m), 1:k) = vrecv(pos + 1:pos + k)
-         endif
+         vals(voff(m) + 1:voff(m) + k) = vrecv(pos + 1:pos + k)
          pos = pos + k
       enddo
-      deallocate (blist, q_owner, q_int, q_blk, q_hrole, q_row, order, scount, rcount, sdisp, rdisp, sbuf, rbuf, r_int)
+      deallocate (order, scount, rcount, sdisp, rdisp, sbuf, rbuf, r_int)
       deallocate (svcount, rvcount, svdisp, rvdisp, vsend, vrecv, tab)
-   end subroutine HODLR_gpu_fill_rows
+   end subroutine HODLR_gpu_fetch_rows
+
+   !> BPACK_ExtractElement of a HODLR built on the GPU whose host copies of the
+   !> factors are unfilled (HODLR_gpu_defer_host), every intersection on one
+   !> rank (pmaps of 1 x 1 grids): the products where the factors are.  lstblk
+   !> holds the blocks of the intersections of every node this rank belongs to
+   !> (HODLR_MapIntersec2Block with members), with the positions of their rows
+   !> and columns in the intersections.  The piece of an intersection in a
+   !> low-rank block U V^T, rows R and columns C, is computed by the ranks
+   !> holding the rows of its larger side on their devices: with R >= C the
+   !> owners of the rows of R, U(R_d, :) V(C, :)^T; else the owners of C,
+   !> U(R, :) V(C_d, :)^T.  Only the rows of the smaller side move (from their
+   !> owners' devices, HODLR_gpu_fetch_rows), the products run on the devices
+   !> (c_bpack_hodlr_gpu_extract_products), and the entries go to the rank of
+   !> the intersection.  A piece in a dense leaf is computed on the host by the
+   !> leaf's rank.  Collective over ptree%Comm
+   subroutine HODLR_gpu_extract_blocks(ho_bf1, lstblk, inters, Npmap, pmaps, option, stats, ptree)
+      type(hobf), target::ho_bf1
+      type(list)::lstblk
+      type(intersect)::inters(:)
+      integer Npmap, pmaps(Npmap, 3)
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree)::ptree
+      type(matrixblock), pointer::blocks
+      type(nod), pointer::cur, curr, curc
+      class(*), pointer::ptrr, ptrc
+      type(hodlr_gpu_itab), allocatable :: tab(:)
+      ! the pieces this rank computes, the low-rank ones (on the device) first, then the leaves'
+      integer, allocatable :: p_nn(:), p_nrow(:), p_ncol(:), p_q0(:), pos(:)
+      integer(kind=8), allocatable :: p_pos(:), p_val(:)
+      integer(c_int), allocatable :: d_idx(:), d_role(:), d_nbig(:), d_nsmall(:), d_first(:), d_rows(:)
+      integer, allocatable :: q_owner(:), q_int(:, :)
+      integer, allocatable :: scount(:), rcount(:), sdisp(:), rdisp(:), svcount(:), rvcount(:), svdisp(:), rvdisp(:)
+      integer, allocatable :: sbuf(:), rbuf(:)
+      DT, allocatable, target :: small(:), outv(:), vals(:), svals(:), rvals(:)
+      integer(kind=8), allocatable :: voff(:), ipos_d(:), ival_d(:)
+      integer pass, b, it, nn, nR, nC, nb, ns, t, s, c, g, lc, ii, iis, urole, k, nlr, nlf, ilr, ilf, iq, nq, p, np
+      integer dest, nproc, ierr, i, j, idx_start_glo, ge  ! (nr, nc below: nR, nC)
+      integer(kind=8) :: npos, nbig_tot, nout, nout_lr, nsmallv, ipos, ibig, ival, ism, nis, nvs, ip, iv
+      integer(c_int) :: idx_c, k_c, np_c
+      integer(c_int64_t) :: n_loc
+      real(c_double) :: flops
+      logical view, rowmode, leaf
+
+      nproc = ptree%nproc
+      call HODLR_gpu_local_rows(ho_bf1, ptree, idx_start_glo, n_loc)
+      ge = idx_start_glo + int(n_loc) - 1
+      call HODLR_gpu_block_table(ho_bf1, option, ptree, tab)
+      nlr = 0
+      nlf = 0
+      nq = 0
+      npos = 0
+      nbig_tot = 0
+      nout_lr = 0
+      nout = 0
+      nsmallv = 0
+      do pass = 1, 2  ! (count, then record)
+         if (pass == 2) then
+            np = nlr + nlf
+            allocate (p_nn(max(1, np)), p_nrow(max(1, np)), p_ncol(max(1, np)), p_q0(max(1, np)), p_pos(max(1, np)), &
+                      p_val(max(1, np)), pos(max(1_8, npos)))
+            allocate (d_idx(max(1, nlr)), d_role(max(1, nlr)), d_nbig(max(1, nlr)), d_nsmall(max(1, nlr)), &
+                      d_first(max(1, nlr)), d_rows(max(1_8, nbig_tot)))
+            allocate (q_owner(max(1, nq)), q_int(5, max(1, nq)), outv(max(1_8, nout)), small(max(1_8, nsmallv)))
+         endif
+         ilr = 0
+         ilf = nlr
+         iq = 0
+         ipos = 0
+         ibig = 0
+         ival = nout_lr  ! (the leaves' values after the products')
+         cur => lstblk%head
+         do b = 1, lstblk%num_nods
+            select type (ptr => cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               leaf = blocks%style == 1
+               if (.not. leaf) then
+                  call assert(blocks%level_butterfly == 0, 'HODLR_gpu_extract_blocks: a block is not low rank')
+                  lc = GetTreelevel(blocks%row_group) - 1
+                  ii = blocks%row_group - 2**lc + 1
+                  view = blocks%is_transpose_view == 1
+                  iis = ii
+                  if (view) iis = ii + 1  ! (A12 = A21^T: its U is A21's V, its V A21's U)
+                  idx_c = tab(lc)%i(iis)
+                  call assert(idx_c >= 0, 'HODLR_gpu_extract_blocks: a block not on this device')
+                  call c_bpack_hodlr_gpu_block_rank(ho_bf1%gpu, idx_c, k_c)
+                  k = k_c
+                  urole = 0
+                  if (view) urole = 1
+               endif
+               curr => blocks%lstr%head
+               curc => blocks%lstc%head
+               do it = 1, blocks%lstr%num_nods
+                  ptrr => curr%item
+                  ptrc => curc%item
+                  select type (ptrr)
+                  type is (iarray)
+                     select type (ptrc)
+                     type is (iarray)
+                        nn = ptrr%idx
+                        nR = ptrr%num_nods
+                        nC = ptrc%num_nods
+                        if (leaf) then
+                           if (ptree%MyID == ptree%pgrp(blocks%pgno)%head .and. nR > 0 .and. nC > 0) then
+                              if (pass == 1) then
+                                 nlf = nlf + 1
+                                 npos = npos + nR + nC
+                                 nout = nout + int(nR, 8)*nC
+                              else
+                                 ilf = ilf + 1
+                                 p_nn(ilf) = nn
+                                 p_nrow(ilf) = nR
+                                 p_ncol(ilf) = nC
+                                 p_pos(ilf) = ipos
+                                 pos(ipos + 1:ipos + nR) = ptrr%dat(1:nR)
+                                 pos(ipos + nR + 1:ipos + nR + nC) = ptrc%dat(1:nC)
+                                 ipos = ipos + nR + nC
+                                 p_val(ilf) = ival
+                                 do j = 1, nC
+                                    c = inters(nn)%cols(ptrc%dat(j)) - blocks%headn + 1
+                                    do i = 1, nR
+                                       outv(ival + i + int(j - 1, 8)*nR) = &
+                                          blocks%fullmat(inters(nn)%rows(ptrr%dat(i)) - blocks%headm + 1, c)
+                                    enddo
+                                 enddo
+                                 ival = ival + int(nR, 8)*nC
+                              endif
+                           endif
+                        else
+                           ! the rows of the larger side on this rank's device
+                           rowmode = nR >= nC
+                           nb = 0
+                           if (rowmode) then
+                              do t = 1, nR
+                                 g = inters(nn)%rows(ptrr%dat(t))
+                                 if (g >= idx_start_glo .and. g <= ge) nb = nb + 1
+                              enddo
+                              ns = nC
+                           else
+                              do t = 1, nC
+                                 g = inters(nn)%cols(ptrc%dat(t))
+                                 if (g >= idx_start_glo .and. g <= ge) nb = nb + 1
+                              enddo
+                              ns = nR
+                           endif
+                           if (nb > 0 .and. ns > 0) then
+                              if (pass == 1) then
+                                 nlr = nlr + 1
+                                 npos = npos + nb + ns
+                                 nbig_tot = nbig_tot + nb
+                                 nq = nq + ns
+                                 nout_lr = nout_lr + int(nb, 8)*ns
+                                 nout = nout + int(nb, 8)*ns
+                                 nsmallv = nsmallv + int(ns, 8)*k
+                              else
+                                 ilr = ilr + 1
+                                 p_nn(ilr) = nn
+                                 p_pos(ilr) = ipos
+                                 p_q0(ilr) = iq
+                                 d_idx(ilr) = idx_c
+                                 d_nbig(ilr) = nb
+                                 d_nsmall(ilr) = ns
+                                 if (rowmode) then  ! U(R_d, :) V(C, :)^T: rows R_d, columns C
+                                    p_nrow(ilr) = nb
+                                    p_ncol(ilr) = ns
+                                    d_role(ilr) = urole
+                                    d_first(ilr) = 0
+                                    do t = 1, nR
+                                       g = inters(nn)%rows(ptrr%dat(t))
+                                       if (g < idx_start_glo .or. g > ge) cycle
+                                       ipos = ipos + 1
+                                       pos(ipos) = ptrr%dat(t)
+                                       ibig = ibig + 1
+                                       d_rows(ibig) = g - idx_start_glo
+                                    enddo
+                                    do t = 1, nC
+                                       g = inters(nn)%cols(ptrc%dat(t))
+                                       ipos = ipos + 1
+                                       pos(ipos) = ptrc%dat(t)
+                                       iq = iq + 1
+                                       q_owner(iq) = HODLR_gpu_row_owner(ho_bf1, ptree, g)
+                                       q_int(:, iq) = (/lc, iis, 1 - urole, g, k/)
+                                    enddo
+                                 else  ! U(R, :) V(C_d, :)^T: rows R, columns C_d
+                                    p_nrow(ilr) = ns
+                                    p_ncol(ilr) = nb
+                                    d_role(ilr) = 1 - urole
+                                    d_first(ilr) = 1
+                                    do t = 1, nR
+                                       g = inters(nn)%rows(ptrr%dat(t))
+                                       ipos = ipos + 1
+                                       pos(ipos) = ptrr%dat(t)
+                                       iq = iq + 1
+                                       q_owner(iq) = HODLR_gpu_row_owner(ho_bf1, ptree, g)
+                                       q_int(:, iq) = (/lc, iis, urole, g, k/)
+                                    enddo
+                                    do t = 1, nC
+                                       g = inters(nn)%cols(ptrc%dat(t))
+                                       if (g < idx_start_glo .or. g > ge) cycle
+                                       ipos = ipos + 1
+                                       pos(ipos) = ptrc%dat(t)
+                                       ibig = ibig + 1
+                                       d_rows(ibig) = g - idx_start_glo
+                                    enddo
+                                 endif
+                              endif
+                           endif
+                        endif
+                     end select
+                  end select
+                  curr => curr%next
+                  curc => curc%next
+               enddo
+            end select
+            cur => cur%next
+         enddo
+      enddo
+
+      ! the smaller sides from the devices that hold them, then the products on this rank's device
+      call HODLR_gpu_fetch_rows(ho_bf1, option, ptree, nq, q_owner, q_int, vals, voff)
+      ism = 0
+      ival = 0
+      do p = 1, nlr
+         ns = d_nsmall(p)
+         k = q_int(5, p_q0(p) + 1)
+         do s = 1, ns
+            iq = p_q0(p) + s
+            do c = 1, k
+               small(ism + s + int(c - 1, 8)*ns) = vals(voff(iq) + c)
+            enddo
+         enddo
+         ism = ism + int(ns, 8)*k
+         p_val(p) = ival
+         ival = ival + int(d_nbig(p), 8)*ns
+      enddo
+      flops = 0
+      if (nlr > 0) then
+         np_c = nlr
+         call c_bpack_hodlr_gpu_extract_products(ho_bf1%gpu, np_c, d_idx, d_role, d_nbig, d_nsmall, d_first, d_rows, &
+                                                 c_loc(small(1)), c_loc(outv(1)), flops)
+      endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flops
+
+      ! the entries to the ranks of their intersections: per piece its intersection, its numbers of rows and
+      ! columns and their positions in the intersection, then its values (column-major)
+      allocate (scount(nproc), rcount(nproc), sdisp(nproc), rdisp(nproc), svcount(nproc), rvcount(nproc), &
+                svdisp(nproc), rvdisp(nproc), ipos_d(nproc), ival_d(nproc))
+      scount = 0
+      svcount = 0
+      nis = 0
+      nvs = 0
+      do p = 1, np
+         dest = pmaps(inters(p_nn(p))%pg, 3) + 1
+         scount(dest) = scount(dest) + 3 + p_nrow(p) + p_ncol(p)
+         svcount(dest) = svcount(dest) + p_nrow(p)*p_ncol(p)
+         nis = nis + 3 + p_nrow(p) + p_ncol(p)
+         nvs = nvs + int(p_nrow(p), 8)*p_ncol(p)
+      enddo
+      call assert(nis < 2_8**31 .and. nvs < 2_8**31, 'HODLR_gpu_extract_blocks: more than 2^31 entries to send')
+      sdisp(1) = 0
+      svdisp(1) = 0
+      do dest = 2, nproc
+         sdisp(dest) = sdisp(dest - 1) + scount(dest - 1)
+         svdisp(dest) = svdisp(dest - 1) + svcount(dest - 1)
+      enddo
+      allocate (sbuf(max(1_8, nis)), svals(max(1_8, nvs)))
+      ipos_d = sdisp
+      ival_d = svdisp
+      do p = 1, np
+         dest = pmaps(inters(p_nn(p))%pg, 3) + 1
+         nr = p_nrow(p)
+         nc = p_ncol(p)
+         sbuf(ipos_d(dest) + 1:ipos_d(dest) + 3) = (/p_nn(p), nr, nc/)
+         sbuf(ipos_d(dest) + 4:ipos_d(dest) + 3 + nr + nc) = pos(p_pos(p) + 1:p_pos(p) + nr + nc)
+         ipos_d(dest) = ipos_d(dest) + 3 + nr + nc
+         svals(ival_d(dest) + 1:ival_d(dest) + int(nr, 8)*nc) = outv(p_val(p) + 1:p_val(p) + int(nr, 8)*nc)
+         ival_d(dest) = ival_d(dest) + int(nr, 8)*nc
+      enddo
+      call MPI_ALLTOALL(scount, 1, MPI_INTEGER, rcount, 1, MPI_INTEGER, ptree%Comm, ierr)
+      call MPI_ALLTOALL(svcount, 1, MPI_INTEGER, rvcount, 1, MPI_INTEGER, ptree%Comm, ierr)
+      rdisp(1) = 0
+      rvdisp(1) = 0
+      do dest = 2, nproc
+         rdisp(dest) = rdisp(dest - 1) + rcount(dest - 1)
+         rvdisp(dest) = rvdisp(dest - 1) + rvcount(dest - 1)
+      enddo
+      allocate (rbuf(max(1, sum(rcount))), rvals(max(1, sum(rvcount))))
+      call MPI_ALLTOALLV(sbuf, scount, sdisp, MPI_INTEGER, rbuf, rcount, rdisp, MPI_INTEGER, ptree%Comm, ierr)
+      call MPI_ALLTOALLV(svals, svcount, svdisp, MPI_DT, rvals, rvcount, rvdisp, MPI_DT, ptree%Comm, ierr)
+      ip = 0
+      iv = 0
+      do while (ip < sum(rcount))
+         nn = rbuf(ip + 1)
+         nr = rbuf(ip + 2)
+         nc = rbuf(ip + 3)
+         call assert(associated(inters(nn)%dat_loc), 'HODLR_gpu_extract_blocks: entries of an intersection of another rank')
+         do j = 1, nc
+            c = rbuf(ip + 3 + nr + j)
+            do i = 1, nr
+               inters(nn)%dat_loc(rbuf(ip + 3 + i), c) = rvals(iv + i + int(j - 1, 8)*nr)
+            enddo
+         enddo
+         ip = ip + 3 + nr + nc
+         iv = iv + int(nr, 8)*nc
+      enddo
+      deallocate (p_nn, p_nrow, p_ncol, p_q0, p_pos, p_val, pos, d_idx, d_role, d_nbig, d_nsmall, d_first, d_rows)
+      deallocate (q_owner, q_int, outv, small, vals, voff, tab)
+      deallocate (scount, rcount, sdisp, rdisp, svcount, rvcount, svdisp, rvdisp, ipos_d, ival_d, sbuf, svals, rbuf, rvals)
+   end subroutine HODLR_gpu_extract_blocks
 
    !> BPACK_CHECK=hodlr: the host factors of the low-rank blocks of this rank
    !> overwritten by a sentinel and marked unfilled, so that an extraction
@@ -1612,7 +1989,7 @@ contains
       character(len=*) :: what
 
       if (.not. ho_bf1%gpu_host_stale) return
-      call assert(.false., 'HODLR GPU: '//what//' reads the host copies of the factors, which stay on the GPU. '// &
+      call BPACK_require(.false., 'HODLR GPU: '//what//' reads the host copies of the factors, which stay on the GPU. '// &
                   'TODO: not supported yet; BPACK_CHECK=hodlr or ErrFillFull=1 keep the host copies')
    end subroutine HODLR_gpu_require_host
 

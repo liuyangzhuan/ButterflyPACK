@@ -63,12 +63,7 @@ private:
         if (count <= 0) {
             throw std::runtime_error("H2 GPU backend: no CUDA device visible to this rank");
         }
-        MPI_Comm node_comm;
-        MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node_comm);
-        int local_rank = 0;
-        MPI_Comm_rank(node_comm, &local_rank);
-        MPI_Comm_free(&node_comm);
-        device_ = local_rank % count;
+        device_ = count == 1 ? 0 : node_local_rank() % count;
         activate();
         magma_init();
         magma_queue_create(device_, &queue_);
@@ -76,6 +71,29 @@ private:
     // The queue and MAGMA state live until process exit: tearing them down
     // from a static destructor would race the CUDA runtime's own shutdown.
     ~Context() = default;
+
+    // This rank's place among the ranks of its node, for the device of a rank
+    // that sees several.  From the launcher (Slurm, Cray PALS, Open MPI,
+    // MPICH/Hydra, MVAPICH) when it says, because the first GPU use of a
+    // process need not be collective over MPI_COMM_WORLD (an application may
+    // build a matrix on a sub-communicator first); else the ranks of
+    // MPI_COMM_WORLD on the node, which is collective.
+    static int node_local_rank() {
+        for (const char* name : {"SLURM_LOCALID", "PALS_LOCAL_RANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MPI_LOCALRANKID",
+                                 "MV2_COMM_WORLD_LOCAL_RANK", "PMI_LOCAL_RANK"}) {
+            if (const char* v = std::getenv(name)) {
+                char* end = nullptr;
+                const long r = std::strtol(v, &end, 10);
+                if (end != v && r >= 0) return static_cast<int>(r);
+            }
+        }
+        MPI_Comm node_comm;
+        MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node_comm);
+        int local_rank = 0;
+        MPI_Comm_rank(node_comm, &local_rank);
+        MPI_Comm_free(&node_comm);
+        return local_rank;
+    }
 
     int device_ = 0;
     magma_queue_t queue_ = nullptr;

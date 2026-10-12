@@ -118,6 +118,10 @@ void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc,
 void c_bpack_logdet_fortran(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+//------------------------------------------------------------------------------
+// The same extraction from a Bmat matrix built on a subset of the caller's ranks (collective over ptree_caller, the caller's
+// process tree; the source's handles bmat, option, msh, stats and ptree point to nullptr outside the subset)
+void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
 void c_bpack_get_comm(F2Cptr* ptree, int* fcomm);

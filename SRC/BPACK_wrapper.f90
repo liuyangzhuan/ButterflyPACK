@@ -4253,6 +4253,65 @@ contains
 
    end subroutine C_BPACK_ExtractElement
 
+!>**** C interface of parallel extraction of a list of intersections from a Bmat matrix built on a subset of the caller's ranks
+   !> The arguments as in C_BPACK_ExtractElement (a call of the block extraction callback with elem_extract=1, each
+   !> intersection owned by one rank), collective over the caller's process tree ptree_caller_Cptr; bmat_Cptr,
+   !> option_Cptr, msh_Cptr, stats_Cptr and ptree_Cptr are the source matrix's, null on the caller's ranks outside it
+   !> (BPACK_ExtractElement_Bridge)
+   subroutine C_BPACK_ExtractElement_Bridge(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, ptree_caller_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_bridge")
+      implicit none
+      type(c_ptr), intent(in) :: bmat_Cptr
+      type(c_ptr), intent(in) :: ptree_Cptr
+      type(c_ptr), intent(in) :: option_Cptr
+      type(c_ptr), intent(in) :: msh_Cptr
+      type(c_ptr), intent(in) :: stats_Cptr
+      type(c_ptr), intent(in) :: ptree_caller_Cptr
+
+      type(Hoption), pointer::option
+      type(Hstat), pointer::stats
+      type(Bmatrix), pointer::bmat
+      type(proctree), pointer::ptree, ptree_caller
+      type(mesh), pointer::msh
+      integer*8 Nalldat_loc
+      integer Nallrows, Nallcols
+      integer:: allrows(Nallrows), allcols(Nallcols)
+      integer, allocatable:: pgidx1(:)
+      integer:: Ninter
+      DT,target::alldat_loc(Nalldat_loc)
+      integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
+      integer::Npmap, pmaps(Npmap, 3)
+      real(kind=8) t1, t2
+
+      t1 = MPI_Wtime()
+
+      nullify (bmat, option, stats, ptree, msh)
+      if (c_associated(bmat_Cptr)) then
+         call c_f_pointer(bmat_Cptr, bmat)
+         call c_f_pointer(option_Cptr, option)
+         call c_f_pointer(stats_Cptr, stats)
+         call c_f_pointer(ptree_Cptr, ptree)
+         call c_f_pointer(msh_Cptr, msh)
+         stats%Flop_C_Extract = 0
+         stats%Time_C_Extract = 0
+      endif
+      call c_f_pointer(ptree_caller_Cptr, ptree_caller)
+
+      allocate (pgidx1(Ninter))
+      pgidx1 = pgidx + 1
+
+      call BPACK_ExtractElement_Bridge(bmat, option, msh, stats, ptree, ptree_caller, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx1, Npmap, pmaps)
+
+      deallocate (pgidx1)
+
+      t2 = MPI_Wtime()
+
+      if (associated(stats)) then
+         stats%Time_C_Extract = stats%Time_C_Extract + t2 - t1
+         stats%Flop_C_Extract = stats%Flop_C_Extract + stats%Flop_Tmp
+      endif
+
+   end subroutine C_BPACK_ExtractElement_Bridge
+
 !>**** C interface of BPACK-vector multiplication
    !> @param xin: input vector
    !> @param Ninloc: size of local input vectors

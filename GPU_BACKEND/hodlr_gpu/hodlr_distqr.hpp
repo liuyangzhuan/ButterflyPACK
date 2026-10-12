@@ -60,6 +60,10 @@ public:
     // tsec (5): seconds of the local QR, up the tree, the root's SVD, down
     // the tree, the local product
     int tsqr(MPI_Comm comm, int l, int r, T* x, double tol, double underflow, double* tsec) {
+        if (gram_truncation(tol)) {
+            const int rn = tsqr_gram(comm, l, r, x, tol, underflow, tsec);
+            if (rn > 0) return rn;
+        }
         using clock = std::chrono::steady_clock;
         using fmm::gpu::check_cuda;
         constexpr int tag_up = 7501, tag_down = 7502;
@@ -218,6 +222,166 @@ public:
             heap.free(loc.tau);
         }
         msg_free(B);
+        sw_.resize(nb);
+        for (int j = 0; j < r; ++j) {
+            for (int i = 0; i < rn; ++i) {
+                const size_t k = static_cast<size_t>(i) + static_cast<size_t>(j) * rn;
+                sw_[k] = s[static_cast<size_t>(i)] * w[k];
+            }
+        }
+        l_ = l;
+        rn_ = rn;
+        r_ = r;
+        lap(4);
+        return rn;
+    }
+
+    // tsqr() by Gram matrices (hodlr_svd.hpp): G = X^H X summed over the ranks
+    // of comm on its rank 0, there R the upper Cholesky factor of G + s I, the
+    // SVD of R and the rank by the rule of tsqr(), and c = R^-1 Us(:, 0 .. rn -
+    // 1) to every rank, whose rows of the left singular vectors kept are then
+    // xnew = x c.  x stays as it is; returns -1 (nothing kept) when the
+    // Cholesky factorization fails.  tsec (5): seconds of the local Gram
+    // matrix and the sum, -, rank 0's factorization and SVD, the broadcasts,
+    // the local product
+    int tsqr_gram(MPI_Comm comm, int l, int r, T* x, double tol, double underflow, double* tsec) {
+        using clock = std::chrono::steady_clock;
+        using fmm::gpu::check_cuda;
+        fmm::gpu::Context& ctx = fmm::gpu::Context::instance();
+        ctx.activate();
+        const cudaStream_t stream = ctx.stream();
+        const magma_queue_t queue = ctx.queue();
+        fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
+        if (r <= 0) throw std::invalid_argument("DistQr::tsqr: no columns");
+        if (xnew_ != nullptr) heap.free(xnew_);
+        xnew_ = nullptr;
+        int crank = 0;
+        MPI_Comm_rank(comm, &crank);
+        auto t0 = clock::now();
+        auto lap = [&](int i) {
+            const auto t = clock::now();
+            tsec[i] = std::chrono::duration<double>(t - t0).count();
+            t0 = t;
+        };
+        const size_t rr = static_cast<size_t>(r) * r;
+
+        // this rank's X^H X and its number of rows, their sums on rank 0
+        std::vector<T> g(rr + 1, T(0.0)), gs(crank == 0 ? rr + 1 : 1, T(0.0));
+        g[rr] = T(static_cast<double>(l));
+        if (l > 0) {
+            T* dg = heap.alloc<T>(rr * sizeof(T));
+            gemm(MagmaConjTrans, MagmaNoTrans, r, r, l, x, l, x, l, dg, r);
+            flops_ += kFlopScale * 2.0 * l * static_cast<double>(r) * r;
+            check_cuda(cudaMemcpyAsync(g.data(), dg, rr * sizeof(T), cudaMemcpyDeviceToHost, stream), "Gram TSQR G");
+            check_cuda(cudaStreamSynchronize(stream), "Gram TSQR G");
+            heap.free(dg);
+        }
+        MPI_Reduce(g.data(), gs.data(), doubles(rr + 1), MPI_DOUBLE, MPI_SUM, 0, comm);  // (complex values as pairs)
+        lap(0);
+        tsec[1] = 0.0;
+
+        // rank 0: R, the SVD of R, the rank, c = R^-1 b (r x rn) and w = Vs(:, 0 .. rn - 1)^H (rn x r)
+        int failed = 0, rn = 1;
+        std::vector<double> s(static_cast<size_t>(r), 0.0);
+        std::vector<T> w, c;
+        if (crank == 0) {
+            double tr = 0.0;
+            for (int i = 0; i < r; ++i) tr += fmm::gpu::real_part(gs[static_cast<size_t>(i) * (r + 1)]);
+            bool zero = !(tr > 0.0);
+            T* dr = nullptr;
+            T* du = nullptr;
+            T* dv = nullptr;
+            double* ds = nullptr;
+            if (!zero) {
+                const double m = fmm::gpu::real_part(gs[rr]);
+                for (int i = 0; i < r; ++i) gs[static_cast<size_t>(i) * (r + 1)] += T(gram_shift(r, m) * tr);
+                dr = heap.alloc<T>(2 * rr * sizeof(T));  // R, then a copy for the SVD
+                check_cuda(cudaMemcpyAsync(dr, gs.data(), rr * sizeof(T), cudaMemcpyHostToDevice, stream), "Gram TSQR R");
+                flops_ += kFlopScale * static_cast<double>(r) * r * r / 3.0;
+                failed = svd_.potrf_device(r, dr, r) != 0 ? 1 : 0;
+            }
+            if (!zero && !failed) {
+                if (r > 1) laset_lower(r - 1, r - 1, dr + 1, r);
+                check_cuda(cudaMemcpyAsync(dr + rr, dr, rr * sizeof(T), cudaMemcpyDeviceToDevice, stream), "Gram TSQR R");
+                du = heap.alloc<T>(rr * sizeof(T));
+                dv = heap.alloc<T>(rr * sizeof(T));
+                ds = heap.alloc<double>(static_cast<size_t>(r) * sizeof(double));
+                svd_.svd_device(r, r, dr + rr, ds, du, dv);
+                flops_ += kFlopScale * (8.0 + 4.0 / 3.0) * r * static_cast<double>(r) * r;  // (as the CPU counts gesdd)
+                check_cuda(cudaMemcpy(s.data(), ds, static_cast<size_t>(r) * sizeof(double), cudaMemcpyDeviceToHost),
+                           "Gram TSQR s");
+                zero = !(s[0] > underflow);
+                if (!zero) {
+                    rn = r;
+                    for (int i = 0; i < r; ++i) {
+                        if (s[i] / s[0] <= tol || s[i] <= underflow) {
+                            rn = i + 1;
+                            if (s[i] <= underflow) break;
+                            if (s[i] < s[0] * tol / 10) rn = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            const size_t nb = static_cast<size_t>(r) * rn;
+            c.assign(nb, T(0.0));
+            w.assign(nb, T(0.0));
+            if (zero || failed) {  // (zero factors of rank 1; or the QR's tsqr)
+                std::fill(s.begin(), s.end(), 0.0);
+            } else {
+                trsm_left_upper(r, rn, dr, r, du, r);
+                flops_ += kFlopScale * static_cast<double>(r) * r * rn;
+                std::vector<T> vt(nb);
+                check_cuda(cudaMemcpyAsync(c.data(), du, nb * sizeof(T), cudaMemcpyDeviceToHost, stream), "Gram TSQR c");
+                check_cuda(cudaMemcpyAsync(vt.data(), dv, nb * sizeof(T), cudaMemcpyDeviceToHost, stream), "Gram TSQR v");
+                check_cuda(cudaStreamSynchronize(stream), "Gram TSQR root");
+                for (int i = 0; i < rn; ++i) {
+                    for (int j = 0; j < r; ++j) {
+                        const T v = vt[static_cast<size_t>(j) + static_cast<size_t>(i) * r];
+                        if constexpr (fmm::gpu::is_complex_scalar<T>) {
+                            w[static_cast<size_t>(i) + static_cast<size_t>(j) * rn] = T{v.re, -v.im};
+                        } else {
+                            w[static_cast<size_t>(i) + static_cast<size_t>(j) * rn] = v;
+                        }
+                    }
+                }
+            }
+            if (ds != nullptr) heap.free(ds);
+            if (dv != nullptr) heap.free(dv);
+            if (du != nullptr) heap.free(du);
+            if (dr != nullptr) heap.free(dr);
+        }
+        lap(2);
+        MPI_Bcast(&failed, 1, MPI_INT, 0, comm);
+        if (failed) {
+            if (crank == 0 && fmm::env::trace("hodlr-qr")) {
+                std::printf(" HODLR GPU merge: the Cholesky factorization of a %d-column Gram matrix failed, by TSQR\n", r);
+                std::fflush(stdout);
+            }
+            return -1;
+        }
+        MPI_Bcast(&rn, 1, MPI_INT, 0, comm);
+        MPI_Bcast(s.data(), r, MPI_DOUBLE, 0, comm);
+        const size_t nb = static_cast<size_t>(r) * rn;
+        if (crank != 0) {
+            w.resize(nb);
+            c.resize(nb);
+        }
+        bcast_host(comm, w.data(), nb);
+        bcast_host(comm, c.data(), nb);
+        lap(3);
+
+        // this rank's rows: xnew = x c, and sw = diag(s) w
+        if (l > 0) {
+            T* dc = heap.alloc<T>(nb * sizeof(T));
+            check_cuda(cudaMemcpyAsync(dc, c.data(), nb * sizeof(T), cudaMemcpyHostToDevice, stream), "Gram TSQR c");
+            xnew_ = heap.alloc<T>(static_cast<size_t>(l) * rn * sizeof(T));
+            gemm(MagmaNoTrans, MagmaNoTrans, l, rn, r, x, l, dc, r, xnew_, l);
+            flops_ += kFlopScale * 2.0 * l * static_cast<double>(r) * rn;
+            check_cuda(cudaStreamSynchronize(stream), "Gram TSQR xnew");
+            heap.free(dc);
+        }
+        (void)queue;
         sw_.resize(nb);
         for (int j = 0; j < r; ++j) {
             for (int i = 0; i < rn; ++i) {
@@ -607,6 +771,38 @@ private:
             magmablas_dlaset(MagmaFull, m, n, 0.0, 0.0, a, ld, q);
         } else {
             magmablas_zlaset(MagmaFull, m, n, MAGMA_Z_ZERO, MAGMA_Z_ZERO, reinterpret_cast<magmaDoubleComplex*>(a), ld, q);
+        }
+    }
+    // the lower triangle (diagonal included) of a (m x n, leading dimension ld) = 0
+    static void laset_lower(int m, int n, T* a, int ld) {
+        if (m <= 0 || n <= 0) return;
+        const magma_queue_t q = fmm::gpu::Context::instance().queue();
+        if constexpr (std::is_same_v<T, double>) {
+            magmablas_dlaset(MagmaLower, m, n, 0.0, 0.0, a, ld, q);
+        } else {
+            magmablas_zlaset(MagmaLower, m, n, MAGMA_Z_ZERO, MAGMA_Z_ZERO, reinterpret_cast<magmaDoubleComplex*>(a), ld, q);
+        }
+    }
+    // c (m x n, leading dimension ldc) = op_a(a) op_b(b) (k inner), on the stream
+    static void gemm(magma_trans_t ta, magma_trans_t tb, int m, int n, int k, const T* a, int lda, const T* b, int ldb, T* c,
+                     int ldc) {
+        const magma_queue_t q = fmm::gpu::Context::instance().queue();
+        if constexpr (std::is_same_v<T, double>) {
+            magma_dgemm(ta, tb, m, n, k, 1.0, a, lda, b, ldb, 0.0, c, ldc, q);
+        } else {
+            magma_zgemm(ta, tb, m, n, k, MAGMA_Z_MAKE(1.0, 0.0), reinterpret_cast<const magmaDoubleComplex*>(a), lda,
+                        reinterpret_cast<const magmaDoubleComplex*>(b), ldb, MAGMA_Z_MAKE(0.0, 0.0),
+                        reinterpret_cast<magmaDoubleComplex*>(c), ldc, q);
+        }
+    }
+    // b (m x n, leading dimension ldb) = a^-1 b, a (m x m, leading dimension lda) upper triangular
+    static void trsm_left_upper(int m, int n, const T* a, int lda, T* b, int ldb) {
+        const magma_queue_t q = fmm::gpu::Context::instance().queue();
+        if constexpr (std::is_same_v<T, double>) {
+            magma_dtrsm(MagmaLeft, MagmaUpper, MagmaNoTrans, MagmaNonUnit, m, n, 1.0, a, lda, b, ldb, q);
+        } else {
+            magma_ztrsm(MagmaLeft, MagmaUpper, MagmaNoTrans, MagmaNonUnit, m, n, MAGMA_Z_MAKE(1.0, 0.0),
+                        reinterpret_cast<const magmaDoubleComplex*>(a), lda, reinterpret_cast<magmaDoubleComplex*>(b), ldb, q);
         }
     }
     // the upper trapezoid of a (m x n, leading dimension lda) into b (leading dimension ldb)

@@ -52,8 +52,10 @@ struct DriverOptions {
   int precon = 1;
   int nrhs = 1;
   int verbosity = 1;
-  int elem_extract = 2;
+  int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
   int lrlevel = 0;
+  int hodlr_extract_ranks = 0;
+  int gpu_evaluator = 1;
   int format = 7;
   int sym = 1;
   int distributed64 = 0;
@@ -231,6 +233,10 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
       options.elem_extract = parse_int(value, "elem_extract");
+    } else if (name == "hodlr_extract_ranks") {
+      options.hodlr_extract_ranks = parse_int(value, "hodlr_extract_ranks");
+    } else if (name == "gpu_evaluator") {
+      options.gpu_evaluator = parse_int(value, "gpu_evaluator");
     } else if (name == "lrlevel") {
       options.lrlevel = parse_int(value, "lrlevel");
     } else if (name == "distributed64") {
@@ -270,8 +276,27 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.nmin_leaf <= 0 || options.reduction_threshold <= 0) {
     throw std::invalid_argument("Nmin_leaf and reduction_threshold must be positive");
   }
-  if (options.elem_extract != 0 && options.elem_extract != 2) {
-    throw std::invalid_argument("elem_extract must be 0 or 2 for this driver");
+  if (options.hodlr_extract_ranks < 0) {
+    throw std::invalid_argument("hodlr_extract_ranks must be nonnegative");
+  }
+  if (options.hodlr_extract_ranks > 0 &&
+      (options.format != 1 || options.distributed64 != 0)) {
+    throw std::invalid_argument(
+        "hodlr_extract_ranks requires format=1 and distributed64=0");
+  }
+  if (options.gpu_evaluator != 0 && options.gpu_evaluator != 1) {
+    throw std::invalid_argument("gpu_evaluator must be 0 or 1");
+  }
+  if (options.elem_extract == -1) {
+    options.elem_extract = options.hodlr_extract_ranks > 0 ? 1 : 2;
+  }
+  if (options.elem_extract < 0 || options.elem_extract > 2) {
+    throw std::invalid_argument("elem_extract must be 0, 1, or 2");
+  }
+  if (options.hodlr_extract_ranks > 0 && options.elem_extract == 2) {
+    // (the extraction from the source is collective over all ranks)
+    throw std::invalid_argument(
+        "with hodlr_extract_ranks, elem_extract must be 1 (or 0)");
   }
   if (options.precon < 1 || options.precon > 3) {
     throw std::invalid_argument("precon must be 1, 2, or 3");
@@ -402,7 +427,14 @@ void print_usage(const char* executable) {
       << "  --format <1|7>\n"
       << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
       << "  --distributed64 <0|1>\n"
-      << "  --elem_extract <0|2>\n"
+      << "  --elem_extract <0|1|2>   (default 2; with --hodlr_extract_ranks: of\n"
+         "                            the HODLR from the entries, default 1)\n"
+      << "  --hodlr_extract_ranks <P>   (format=1: build the HODLR from the kernel on\n"
+         "                            the first P ranks, then the one factored and\n"
+         "                            solved on all ranks from its entries)\n"
+      << "  --gpu_evaluator <0|1>   (0: no GPU evaluator of the kernel; the GPU\n"
+         "                            HODLR construction takes the entries through\n"
+         "                            the block callback)\n"
       << "  --verbosity <-1|0|1>\n";
 }
 
@@ -612,6 +644,41 @@ DistributedInput make_distributed_input(
 void distance_callback(int*, int*, double* value, C2Fptr) { *value = 0.0; }
 void near_far_callback(int*, int*, int* value, C2Fptr) { *value = 0; }
 
+// The source of the entries of the HODLR under test with
+// --hodlr_extract_ranks: the HODLR built from the kernel on the first ranks
+// (its handles null on the others), and the process tree of the HODLR under
+// test, over all ranks
+struct ExtractionSource {
+  F2Cptr matrix = nullptr;
+  F2Cptr option = nullptr;
+  F2Cptr mesh = nullptr;
+  F2Cptr stats = nullptr;
+  F2Cptr process_tree = nullptr;
+  F2Cptr caller_tree = nullptr;
+};
+
+void extraction_entry_callback(int*, int*, double*, C2Fptr) {
+  std::cerr << "the HODLR from another one's entries takes them by blocks "
+               "(elem_extract=1)"
+            << std::endl;
+  MPI_Abort(MPI_COMM_WORLD, 2);
+}
+
+// The entries of the HODLR under test (its intersections, in its natural
+// order: the source's tree order) from the source, collective over all ranks
+// (elem_extract=1)
+void extraction_block_callback(
+    int* ninter, int* nallrows, int* nallcols, int64_t* nalldat_loc,
+    int* allrows, int* allcols, double* alldat_loc, int* rowidx,
+    int* colidx, int* pgidx, int* npmap, int* pmaps, C2Fptr quant) {
+  auto* source = static_cast<ExtractionSource*>(quant);
+  d_c_bpack_extractelement_bridge(
+      &source->matrix, &source->option, &source->mesh, &source->stats,
+      &source->process_tree, &source->caller_tree, ninter, nallrows,
+      nallcols, nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx,
+      pgidx, npmap, pmaps);
+}
+
 struct ButterflyResources {
   F2Cptr option = nullptr;
   F2Cptr stats = nullptr;
@@ -641,6 +708,7 @@ int main(int argc, char** argv) {
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
   int return_code = 0;
+  MPI_Comm source_comm = MPI_COMM_NULL;
   try {
     const DriverOptions driver_options = parse_driver_options(argc, argv);
     if (driver_options.show_help) {
@@ -682,6 +750,13 @@ int main(int argc, char** argv) {
                 << "H2_XRR_factor: " << driver_options.h2_xrr_factor << "\n"
                 << "H2_use_gpu: " << driver_options.h2_use_gpu << "\n"
                 << "HODLR_use_gpu: " << driver_options.hodlr_use_gpu << "\n"
+                << "GPU evaluator: " << driver_options.gpu_evaluator << "\n"
+                << "elem_extract: " << driver_options.elem_extract << "\n"
+                << "HODLR from the entries of one on ranks: "
+                << (driver_options.hodlr_extract_ranks > 0
+                        ? std::to_string(driver_options.hodlr_extract_ranks)
+                        : std::string("no"))
+                << "\n"
                 << "H2_CA_staged_halo: "
                 << driver_options.h2_ca_staged_halo << "\n"
                 << "H2_CA_owner_component: "
@@ -705,84 +780,157 @@ int main(int argc, char** argv) {
     d_c_bpack_createptree(
         &mpi_size, groups.data(), &fortran_comm, &resources.process_tree);
 
-    d_c_bpack_set_D_option(
-        &resources.option, "tol_comp", driver_options.tolerance);
-    d_c_bpack_set_I_option(
-        &resources.option, "format", driver_options.format);
-    d_c_bpack_set_I_option(&resources.option, "sym", driver_options.sym);
-    if (driver_options.format == 1) {
-      // Keep the forward HODLR blocks after factorization (the unsymmetric
-      // factorization frees them otherwise) for the solution check below,
-      // and run the library's solve-error test.
-      d_c_bpack_set_I_option(&resources.option, "ErrSol", 1);
-    }
-    d_c_bpack_set_I_option(
-        &resources.option, "Nmin_leaf", static_cast<int>(driver_options.nmin_leaf));
-    d_c_bpack_set_I_option(
-        &resources.option, "reduction_threshold",
-        static_cast<int>(driver_options.reduction_threshold));
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_unstructured",
-        driver_options.h2_unstructured);
-    d_c_bpack_set_I_option(
-        &resources.option, "CA_level", driver_options.ca_level);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_use_sketch", driver_options.h2_use_sketch);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_lazy_schur", driver_options.h2_lazy_schur);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_compress_factors", driver_options.h2_compress_factors);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_GEMM_split", driver_options.h2_gemm_split);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_XRR_factor", driver_options.h2_xrr_factor);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_use_gpu", driver_options.h2_use_gpu);
-    d_c_bpack_set_I_option(
-        &resources.option, "HODLR_use_gpu", driver_options.hodlr_use_gpu);
-    if (driver_options.hodlr_gpu_pieces >= 1) {
+    // the options of a matrix built here (with --hodlr_extract_ranks the
+    // source and the HODLR under test alike)
+    auto set_options = [&](F2Cptr* option_handle) {
+      d_c_bpack_set_D_option(
+          option_handle, "tol_comp", driver_options.tolerance);
       d_c_bpack_set_I_option(
-          &resources.option, "HODLR_gpu_pieces", driver_options.hodlr_gpu_pieces);
-    }
-    if (driver_options.reclr_leaf >= 0) {
+          option_handle, "format", driver_options.format);
+      d_c_bpack_set_I_option(option_handle, "sym", driver_options.sym);
+      if (driver_options.format == 1) {
+        // Keep the forward HODLR blocks after factorization (the unsymmetric
+        // factorization frees them otherwise) for the solution check below,
+        // and run the library's solve-error test.
+        d_c_bpack_set_I_option(option_handle, "ErrSol", 1);
+      }
       d_c_bpack_set_I_option(
-          &resources.option, "RecLR_leaf", driver_options.reclr_leaf);
-    }
-    if (driver_options.baca_batch > 0) {
+          option_handle, "Nmin_leaf", static_cast<int>(driver_options.nmin_leaf));
       d_c_bpack_set_I_option(
-          &resources.option, "BACA_Batch", driver_options.baca_batch);
-    }
-    if (driver_options.h2_id_radius >= 0) {
+          option_handle, "reduction_threshold",
+          static_cast<int>(driver_options.reduction_threshold));
       d_c_bpack_set_I_option(
-          &resources.option, "H2_ID_radius", driver_options.h2_id_radius);
-    }
-    if (driver_options.h2_id_proxy >= 0) {
+          option_handle, "H2_unstructured",
+          driver_options.h2_unstructured);
       d_c_bpack_set_I_option(
-          &resources.option, "H2_ID_proxy", driver_options.h2_id_proxy);
-    }
-    if (driver_options.h2_id_proxy_points >= 0) {
+          option_handle, "CA_level", driver_options.ca_level);
       d_c_bpack_set_I_option(
-          &resources.option, "H2_ID_proxy_points",
-          driver_options.h2_id_proxy_points);
+          option_handle, "H2_use_sketch", driver_options.h2_use_sketch);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_lazy_schur", driver_options.h2_lazy_schur);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_compress_factors", driver_options.h2_compress_factors);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_GEMM_split", driver_options.h2_gemm_split);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_XRR_factor", driver_options.h2_xrr_factor);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_use_gpu", driver_options.h2_use_gpu);
+      d_c_bpack_set_I_option(
+          option_handle, "HODLR_use_gpu", driver_options.hodlr_use_gpu);
+      if (driver_options.hodlr_gpu_pieces >= 1) {
+        d_c_bpack_set_I_option(
+            option_handle, "HODLR_gpu_pieces", driver_options.hodlr_gpu_pieces);
+      }
+      if (driver_options.reclr_leaf >= 0) {
+        d_c_bpack_set_I_option(
+            option_handle, "RecLR_leaf", driver_options.reclr_leaf);
+      }
+      if (driver_options.baca_batch > 0) {
+        d_c_bpack_set_I_option(
+            option_handle, "BACA_Batch", driver_options.baca_batch);
+      }
+      if (driver_options.h2_id_radius >= 0) {
+        d_c_bpack_set_I_option(
+            option_handle, "H2_ID_radius", driver_options.h2_id_radius);
+      }
+      if (driver_options.h2_id_proxy >= 0) {
+        d_c_bpack_set_I_option(
+            option_handle, "H2_ID_proxy", driver_options.h2_id_proxy);
+      }
+      if (driver_options.h2_id_proxy_points >= 0) {
+        d_c_bpack_set_I_option(
+            option_handle, "H2_ID_proxy_points",
+            driver_options.h2_id_proxy_points);
+      }
+      d_c_bpack_set_I_option(
+          option_handle, "H2_CA_staged_halo",
+          driver_options.h2_ca_staged_halo);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_CA_owner_component",
+          driver_options.h2_ca_owner_component);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_CA_owner_serial",
+          driver_options.h2_ca_owner_serial);
+      d_c_bpack_set_I_option(option_handle, "precon", driver_options.precon);
+      d_c_bpack_set_I_option(
+          option_handle, "verbosity", driver_options.verbosity);
+      d_c_bpack_set_I_option(
+          option_handle, "elem_extract", driver_options.elem_extract);
+      d_c_bpack_set_I_option(
+          option_handle, "LRlevel", driver_options.lrlevel);
+      d_c_bpack_set_I_option(option_handle, "cpp", 1);
+      d_c_bpack_set_I_option(option_handle, "nogeo", 0);
+    };
+
+    // with --hodlr_extract_ranks: the source of the entries, a HODLR of the
+    // kernel on the first ranks
+    ExtractionSource extraction;
+    ButterflyResources source;
+    F2Cptr source_kernel_quantities = nullptr;
+    const int source_ranks = driver_options.hodlr_extract_ranks;
+    if (source_ranks > mpi_size) {
+      throw std::invalid_argument("hodlr_extract_ranks exceeds the number of ranks");
     }
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_CA_staged_halo",
-        driver_options.h2_ca_staged_halo);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_CA_owner_component",
-        driver_options.h2_ca_owner_component);
-    d_c_bpack_set_I_option(
-        &resources.option, "H2_CA_owner_serial",
-        driver_options.h2_ca_owner_serial);
-    d_c_bpack_set_I_option(&resources.option, "precon", driver_options.precon);
-    d_c_bpack_set_I_option(
-        &resources.option, "verbosity", driver_options.verbosity);
-    d_c_bpack_set_I_option(
-        &resources.option, "elem_extract", driver_options.elem_extract);
-    d_c_bpack_set_I_option(
-        &resources.option, "LRlevel", driver_options.lrlevel);
-    d_c_bpack_set_I_option(&resources.option, "cpp", 1);
-    d_c_bpack_set_I_option(&resources.option, "nogeo", 0);
+    if (source_ranks > 0) {
+      MPI_Comm_split(MPI_COMM_WORLD, rank < source_ranks ? 0 : MPI_UNDEFINED,
+                     rank, &source_comm);
+    }
+    if (source_ranks > 0 && rank < source_ranks) {
+      d_c_bpack_createoption(&source.option);
+      d_c_bpack_createstats(&source.stats);
+      std::vector<int> source_groups(static_cast<size_t>(source_ranks));
+      std::iota(source_groups.begin(), source_groups.end(), 0);
+      MPI_Fint source_fortran_comm = MPI_Comm_c2f(source_comm);
+      int source_size = source_ranks;
+      d_c_bpack_createptree(&source_size, source_groups.data(),
+                            &source_fortran_comm, &source.process_tree);
+      set_options(&source.option);
+      // (not factored; the Laplace block callback on its own ranks)
+      d_c_bpack_set_I_option(&source.option, "ErrSol", 0);
+      d_c_bpack_set_I_option(&source.option, "elem_extract", 2);
+      int point_count = static_cast<int>(point_count_64);
+      int nlevel = 0;
+      int user_tree = point_count;
+      int source_local_points = 0;
+      std::vector<int> permutation(static_cast<size_t>(point_count));
+      d_c_bpack_construct_init(
+          &point_count, &dimension, application.locations(), nullptr,
+          &nlevel, &user_tree, permutation.data(), &source_local_points,
+          &source.matrix, &source.option, &source.stats, &source.mesh,
+          &source_kernel_quantities, &source.process_tree,
+          &distance_callback, &near_far_callback, &application);
+#ifdef BPACK_EXAMPLE_GPU
+      if (driver_options.hodlr_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
+        laplace3d_gpu_register(&source.matrix, application.inverse_4pi_n(),
+                               application.diagonal());
+      }
+#endif
+      d_c_bpack_construct_element_compute(
+          &source.matrix, &source.option, &source.stats, &source.mesh,
+          &source_kernel_quantities, &source.process_tree,
+          &laplace_entry_callback, &laplace_block_callback, &application);
+      extraction.matrix = source.matrix;
+      extraction.option = source.option;
+      extraction.mesh = source.mesh;
+      extraction.stats = source.stats;
+      extraction.process_tree = source.process_tree;
+      if (rank == 0) {
+        std::cout << "\nBuilt the source HODLR on " << source_ranks
+                  << " ranks; the HODLR under test from its entries on "
+                  << mpi_size << " ranks:" << std::endl;
+      }
+    }
+
+    set_options(&resources.option);
+    if (source_ranks > 0) {
+      // the HODLR under test in the source's tree order (natural order, no
+      // geometry), its entries by blocks from the source
+      d_c_bpack_set_I_option(&resources.option, "nogeo", 1);
+      d_c_bpack_set_I_option(&resources.option, "xyzsort", 0);
+      d_c_bpack_set_I_option(&resources.option, "knn", 0);
+      extraction.caller_tree = resources.process_tree;
+    }
 
     int local_points = 0;
     F2Cptr kernel_quantities = nullptr;
@@ -820,7 +968,7 @@ int main(int argc, char** argv) {
 
     d_c_bpack_printoption(&resources.option, &resources.process_tree);
 #ifdef BPACK_EXAMPLE_GPU
-    {
+    if (source_ranks == 0 && driver_options.gpu_evaluator == 1) {
       // GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
       // (gpu/laplace3d_gpu.cu): 1 / (4 pi N r), with the self-cell integral
       // on the diagonal
@@ -838,6 +986,12 @@ int main(int argc, char** argv) {
           &resources.matrix, &resources.option, &resources.stats,
           &resources.mesh, &kernel_quantities, &resources.process_tree,
           &laplace_entry_callback64, &laplace_block_callback64, &application);
+    } else if (source_ranks > 0) {
+      d_c_bpack_construct_element_compute(
+          &resources.matrix, &resources.option, &resources.stats,
+          &resources.mesh, &kernel_quantities, &resources.process_tree,
+          &extraction_entry_callback, &extraction_block_callback,
+          &extraction);
     } else {
       d_c_bpack_construct_element_compute(
           &resources.matrix, &resources.option, &resources.stats,
@@ -941,6 +1095,7 @@ int main(int argc, char** argv) {
     MPI_Abort(MPI_COMM_WORLD, return_code);
   }
 
+  if (source_comm != MPI_COMM_NULL) MPI_Comm_free(&source_comm);
   Cblacs_exit(1);
   MPI_Finalize();
   return return_code;

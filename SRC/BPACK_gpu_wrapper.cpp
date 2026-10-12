@@ -252,6 +252,53 @@ void c_bpack_hodlr_gpu_gather_rows(void* gpu, const int* idx, const int* role, c
 #endif
 }
 
+// The rank of forward block idx on the device (after the commit)
+void c_bpack_hodlr_gpu_block_rank(void* gpu, const int* idx, int* k) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    *k = state_of(gpu, "c_bpack_hodlr_gpu_block_rank")->hodlr_device().committed_block(*idx).k;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_block_rank", e.what());
+  }
+#else
+  (void)gpu;
+  (void)idx;
+  (void)k;
+  gpu_fail("c_bpack_hodlr_gpu_block_rank", "this library has no GPU backend");
+#endif
+}
+
+// The products of entry extraction on the device (HodlrDevice::extract_products):
+// np pieces, each rows of U (role 0) or V (role 1) of forward block idx times a
+// smaller factor block from the host; flops: their flops
+void c_bpack_hodlr_gpu_extract_products(void* gpu, const int* np, const int* idx, const int* role, const int* nbig,
+                                        const int* nsmall, const int* small_first, const int* big_rows,
+                                        const void* small, void* out, double* flops) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    *flops = state_of(gpu, "c_bpack_hodlr_gpu_extract_products")
+                 ->hodlr_device()
+                 .extract_products(*np, idx, role, nbig, nsmall, small_first, big_rows,
+                                   static_cast<const Scalar*>(small), static_cast<Scalar*>(out));
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_extract_products", e.what());
+  }
+#else
+  (void)gpu;
+  (void)np;
+  (void)idx;
+  (void)role;
+  (void)nbig;
+  (void)nsmall;
+  (void)small_first;
+  (void)big_rows;
+  (void)small;
+  (void)out;
+  (void)flops;
+  gpu_fail("c_bpack_hodlr_gpu_extract_products", "this library has no GPU backend");
+#endif
+}
+
 // a device matrix id (DistQr::dm_wrap) viewing V of forward block idx on the
 // device (n x k), 0 when it has no entries
 void c_bpack_hodlr_gpu_block_v_dm(void* gpu, const int* idx, int* id) {
@@ -578,7 +625,9 @@ void c_bpack_hodlr_gpu_warm_up(void* gpu, const int* construct, const int* evalu
 #endif
 }
 
-// 1 if the matrix has a GPU evaluator of the entries and its points
+// 1 if the matrix has a GPU evaluator of the entries and its points; 2 if it
+// has its points but no GPU evaluator (the GPU construction then takes the
+// entries through the host: c_bpack_hodlr_gpu_baca_begin with host_fn)
 void c_bpack_hodlr_gpu_construct_ready(void* gpu, int* ready) {
   *ready = 0;
 #ifdef BPACK_GPU_ENABLED
@@ -594,6 +643,8 @@ void c_bpack_hodlr_gpu_construct_ready(void* gpu, int* ready) {
                  "the GPU evaluator reads coordinates (BPACK_GPU_COORDINATES) but the matrix has none");
       }
       *ready = 1;
+    } else if (!st->evaluator && st->construct && st->construct->has_points()) {
+      *ready = 2;
     }
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_construct_ready", e.what());
@@ -647,17 +698,21 @@ void c_bpack_hodlr_gpu_eval_dense(void* gpu, const double* scale, const int* cou
 #endif
 }
 
-// variant: option%RecLR_leaf, 4 (BACA) or 5 (BACA without overlap)
+// variant: option%RecLR_leaf, 4 (BACA) or 5 (BACA without overlap).  The
+// entries from the matrix's GPU evaluator, or without one through the host:
+// host_fn (c_bpack_hodlr_gpu_host_entries, HodlrConstruct::HostEntryFn) with
+// host_ctx
 void c_bpack_hodlr_gpu_baca_begin(void* gpu, const double* scale, const int* mode, const int* variant,
                                   const int* nb, const int64_t* r0, const int* m, const int64_t* c0, const int* n,
-                                  const int* r_est) {
+                                  const int* r_est, void* host_fn, void* host_ctx) {
 #ifdef BPACK_GPU_ENABLED
   try {
     State* st = state_of(gpu, "c_bpack_hodlr_gpu_baca_begin");
-    if (!st->evaluator) throw std::logic_error("no GPU evaluator registered");
+    const auto fn = reinterpret_cast<bpack::gpu::HodlrConstruct<Scalar>::HostEntryFn>(host_fn);
+    if (!st->evaluator && fn == nullptr) throw std::logic_error("no GPU evaluator registered and no host entries");
     fmm::gpu::tensor_core_gemm() = (*mode == 2);
-    st->hodlr_construct().begin(*st->evaluator, *scale, *variant, *nb, r0, m, c0, n,
-                                r_est);
+    st->hodlr_construct().begin(st->evaluator ? st->evaluator.get() : nullptr, fn, host_ctx, *scale, *variant, *nb, r0,
+                                m, c0, n, r_est);
   } catch (const std::exception& e) {
     gpu_fail("c_bpack_hodlr_gpu_baca_begin", e.what());
   }
@@ -672,6 +727,8 @@ void c_bpack_hodlr_gpu_baca_begin(void* gpu, const double* scale, const int* mod
   (void)c0;
   (void)n;
   (void)r_est;
+  (void)host_fn;
+  (void)host_ctx;
   gpu_fail("c_bpack_hodlr_gpu_baca_begin", "this library has no GPU backend");
 #endif
 }

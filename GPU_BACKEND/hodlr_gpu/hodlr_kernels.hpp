@@ -81,6 +81,10 @@ struct TriuItem {
 };
 template<typename T>
 void launch_zero_lower(const TriuItem<T>* items, int count, int max_n, cudaStream_t stream);
+// a (n x n): its lower triangle conjugate transposed into the upper one, zero
+// below the diagonal (R = L^H of a lower Cholesky factor L, in place)
+template<typename T>
+void launch_lower_to_upper(const TriuItem<T>* items, int count, int max_n, cudaStream_t stream);
 
 // c(:, j) = a(:, j) s[j] (m x n; s may be null: 1), conjugated if conj
 template<typename T>

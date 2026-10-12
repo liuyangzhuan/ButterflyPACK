@@ -970,6 +970,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(Hstat), pointer::stats !< Use this metadata in blocked element extraction
         type(Hoption), pointer::option !< Use this metadata in blocked element extraction
         type(kernelquant), pointer::ker !< Use this metadata in blocked element extraction
+        type(proctree), pointer::ptree_caller => null() !< The caller's process tree when bmat is built on a subset of its ranks (BPACK_ExtractElement_Bridge; bmat, msh, ptree, stats and option then null outside the subset)
     end type quant_bmat
 
     !>**** a derived type containing a pointer to a block

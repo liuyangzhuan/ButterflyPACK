@@ -1834,6 +1834,20 @@ contains
 #endif
    end subroutine assert
 
+   !> Stop the run (every rank) with msg unless statement holds, in every
+   !> build: for the checks of the user's settings and calls, which assert
+   !> skips in the builds with NDEBUG (Release)
+   subroutine BPACK_require(statement, msg)
+      logical::statement
+      character(*)::msg
+      integer ierr
+
+      if (statement) return
+      write (*, '(A)') msg
+      flush (6)
+      call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+   end subroutine BPACK_require
+
    function floor_safe(input)
       real(kind=8)::input
       integer floor_safe
