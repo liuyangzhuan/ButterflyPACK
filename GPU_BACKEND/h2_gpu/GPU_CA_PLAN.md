@@ -5149,6 +5149,43 @@ leaf: each step of the size-class walk looks the range up again in the
 address map) and the per-call bookkeeping (five or six node containers):
 fix 2, not done.
 
+#### CA0's boundary phase at 768^3 on 64 ranks, measured by rank and wave (2026-10-12)
+
+BPACK_TRACE=wave now prints a line per wave on every rank ([wave-row]: boxes
+and ghosts, host phases, the owner pass's host parts, device times, the
+shared-block writes it packed); h2_c1_work/wave_rows.py sums them by phase.
+One job, 80 GB cards, 768^3 on 64 ranks (lib_det32); "CA0 np" is a
+measurement-only build in which the blocks on more than one rank are never
+packed (no level rule, no fallback).
+
+The leaf's slowest rank (35, interior: 5,768 own boundary boxes and 8,408
+ghosts) and a corner rank (0: 3,826 ghosts):
+
+| rank 35 | boundary phase | of which waiting | owner GEMMs (dev) | owner host mat + pack | interior phase |
+|---|---|---|---|---|---|
+| Color (8 waves) | 5.12 s | +4.75 s between waves | 1.42 s | 0.07 s | 31.6 s |
+| CA0 (24 waves) | 18.64 s | 0 | 9.91 s | 5.30 s | 30.1 s |
+| CA0 np | 12.30 s | 0 | 3.43 s | 0.14 s | 31.4 s |
+
+| rank 0 | boundary phase | of which waiting | interior phase |
+|---|---|---|---|
+| Color | 3.95 s | +5.67 s | 29.6 s |
+| CA0 | 10.50 s | 0 | 28.9 s |
+| CA0 np | 6.76 s | 0 | 29.8 s |
+
+So the slowest rank's 18.6 s is: its own boundary boxes ~5 s (as Color's),
+the ghosts ~7.2 s (0.80-0.86 ms each, as an own box), and packing the
+blocks on more than one rank ~6.3 s (1.66M packed writes, 276 GB raw).  The
+wave count costs nothing measurable: a fit over 1,536 boundary waves gives
+no per-wave constant (wall = 0.865 ms per own box + 0.804 ms per ghost,
+CA0 np).  Leaves: Color 44.1 s, CA0 50.6 s, CA0 np 45.1 s; factor time
+84.8 / 93.1 / 87.5 s.  CA0 np completed every level (no rank packs a
+shared block, so the copies cannot differ; quick verification passes) and
+held at most 53.2 GB at a wave end, against 40.0 GB packed and a 43.3 GB
+hold limit.  Without the packing CA0 is 2.9 s ahead of Color on a corner
+rank's boundary phase and 2.4 s behind on an interior one; the leaf ends
+with the interior ranks.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

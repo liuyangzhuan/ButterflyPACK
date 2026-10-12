@@ -804,7 +804,13 @@ public:
         if (!wave_trace_enabled()) return level_->eliminate_wave(wave, counter);
         trace_.wave_begin();
         const int boundary = level_->eliminate_wave(wave, counter);
-        trace_.wave_end(counter, wave.size());
+        size_t ghosts = 0;   // (a replicated CA level's: boxes of other ranks eliminated here too)
+        if (level_index_ >= 0) {
+            const auto& L = tree_->levels[static_cast<size_t>(level_index_)];
+            const int64_t lo = L.local_morton_start, hi = lo + static_cast<int64_t>(L.local_boxes.size());
+            for (int64_t m : wave) ghosts += (m < lo || m >= hi) ? 1 : 0;
+        }
+        trace_.wave_end(counter, wave.size(), ghosts);
         return boundary;
     }
 
@@ -945,6 +951,7 @@ public:
         MPI_Barrier(level_comm);
         if (rank == slowest.r && !announce) trace_.print(lvl, rank);
         MPI_Barrier(level_comm);
+        trace_.print_rows(lvl, rank);   // (every rank, a line a wave)
     }
 
     // Level 1 (active, not eliminated) adopts the blocks of the level-2

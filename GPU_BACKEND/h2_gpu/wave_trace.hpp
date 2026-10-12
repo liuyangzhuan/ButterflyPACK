@@ -45,10 +45,11 @@ public:
         t_wave_ = clock::now();
         gap_ = seconds(last_end_, t_wave_);
     }
-    void wave_end(int seq, size_t boxes) {
+    void wave_end(int seq, size_t boxes, size_t ghosts = 0) {
         Record r;
         r.seq = seq;
         r.boxes = static_cast<int>(boxes);
+        r.ghosts = static_cast<int>(ghosts);
         r.gap = gap_;
         r.wall = seconds(t_wave_, clock::now());
         r.d = Delta::of(eliminator_stats(), before_);
@@ -117,6 +118,32 @@ public:
         std::fflush(stdout);
     }
 
+    // One line a wave, every rank, its rank first (the tables of several
+    // ranks interleave by line): the wave's boxes and ghosts (a replicated CA
+    // level's), host phases, the owner pass's host parts, the device times
+    // (a wave's elimination is collected by the next record, so the
+    // elimination columns are the next record's), the blocks on more than
+    // one rank it packed, and the near-block packing and put-back host times.
+    void print_rows(int lvl, int rank) const {
+        if (records_.empty()) return;
+        auto ms = [](double s) { return 1e3 * s; };
+        for (size_t i = 0; i < records_.size(); ++i) {
+            const Record& r = records_[i];
+            const Delta& e = i + 1 < records_.size() ? records_[i + 1].d : finish_d_;
+            std::printf("  [wave-row] level %d rank %d wave %zu seq %d boxes %d ghosts %d | wall %.1f gap %.1f | "
+                        "sketch %.1f plan %.1f launch %.1f store %.1f | owner mat %.1f win %.1f stage %.1f launch %.1f "
+                        "pack %.1f | dev sketch %.1f elim %.1f [%.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f] | shared %.0f "
+                        "%.3f GB | np %.1f mat %.1f ms %.3f GB\n",
+                        lvl, rank, i, r.seq, r.boxes, r.ghosts, ms(r.wall), ms(i > 0 ? r.gap : 0.0),
+                        ms(r.d.sketch_plan + r.d.sketch_gpu), ms(r.d.plan), ms(r.d.launch), ms(r.d.store),
+                        ms(r.d.og[0]), ms(r.d.og[1]), ms(r.d.og[2]), ms(r.d.og[3]), ms(r.d.og[4]),
+                        ms(r.d.sk_device()), ms(e.el_sum()), ms(e.el[0]), ms(e.el[1]), ms(e.el[2]), ms(e.el[3]),
+                        ms(e.el[4]), ms(e.el[5]), ms(e.el[6]), ms(e.el[7]), r.d.np_shared_blocks, r.d.np_shared_raw / 1e9,
+                        ms(r.d.np_seconds), ms(r.d.mat_seconds), r.d.mat_bytes / 1e9);
+        }
+        std::fflush(stdout);
+    }
+
 private:
     // the eliminator totals a wave adds (seconds)
     struct Delta {
@@ -124,8 +151,20 @@ private:
         double sk_upload = 0, sk_rows = 0, sk_stored = 0, sk_p = 0, sk_fill = 0, sk_id = 0, sk_download = 0;
         double el[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         double id = 0, id_loop = 0, plan = 0, launch = 0, store = 0;
+        double og[5] = {0, 0, 0, 0, 0};   // owner pass host: materialize, window, stage, launch, pack
+        double np_shared_blocks = 0, np_shared_raw = 0, np_seconds = 0, mat_seconds = 0, mat_bytes = 0;
         static Delta of(const EliminatorStats& a, const EliminatorStats& b) {
             Delta d;
+            d.og[0] = a.og_mat - b.og_mat;
+            d.og[1] = a.og_win - b.og_win;
+            d.og[2] = a.og_stage - b.og_stage;
+            d.og[3] = a.og_launch - b.og_launch;
+            d.og[4] = a.og_pack - b.og_pack;
+            d.np_shared_blocks = static_cast<double>(a.np_shared_blocks - b.np_shared_blocks);
+            d.np_shared_raw = a.np_shared_raw - b.np_shared_raw;
+            d.np_seconds = a.np_seconds - b.np_seconds;
+            d.mat_seconds = a.mat_seconds - b.mat_seconds;
+            d.mat_bytes = a.mat_bytes - b.mat_bytes;
             d.sketch = a.sketch - b.sketch;
             d.sketch_plan = a.sketch_plan - b.sketch_plan;
             d.sketch_gpu = a.sketch_gpu - b.sketch_gpu;
@@ -174,7 +213,7 @@ private:
         }
     };
     struct Record {
-        int seq = 0, boxes = 0;
+        int seq = 0, boxes = 0, ghosts = 0;
         double gap = 0, wall = 0;
         Delta d;
     };
