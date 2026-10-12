@@ -5186,6 +5186,42 @@ hold limit.  Without the packing CA0 is 2.9 s ahead of Color on a corner
 rank's boundary phase and 2.4 s behind on an interior one; the leaf ends
 with the interior ranks.
 
+#### FLOP rates of CA0's colour groups (2026-10-12)
+
+The trace rows now carry each wave's floating-point work by device phase
+(the sketch's GEMMs and stored-block products, the ID's pivoted QR at its
+full size - an upper bound -, the box region's GEMMs, LU and solves, the
+owner GEMMs; kernel values, gathers and adds count none);
+h2_c1_work/flop_groups.py sums them by colour group.  768^3 on 64 ranks, 80
+GB, one job; the slowest rank (interior), GFLOP/s per GPU-busy second and
+per wall second:
+
+| run | group | waves (boxes) | GFLOP | busy / wall | rate busy | rate wall | owner pass | sketch |
+|---|---|---|---|---|---|---|---|---|
+| CA0 | blue/orange | 8 x 128 | 5,324 | 1.25 / 1.36 s | 4,257 | 3,906 | 1,610 | 17,004 |
+| CA0 | purple | 8 x 468 | 19,690 | 4.46 / 4.90 s | 4,413 | 4,021 | 1,663 | 17,773 |
+| CA0 | green | 8 x 1,176 | 49,877 | 11.18 / 12.33 s | 4,462 | 4,045 | 1,739 | 17,981 |
+| CA0 | interior | 8 x 3,375 | 135,364 | 25.25 / 30.17 s | 5,362 | 4,486 | 2,223 | 16,935 |
+| CA0 np | blue/orange | 8 x 128 | 5,324 | 0.69 / 0.80 s | 7,667 | 6,643 | 5,017 | 17,019 |
+| CA0 np | purple | 8 x 468 | 19,690 | 2.54 / 2.99 s | 7,743 | 6,587 | 4,923 | 17,794 |
+| CA0 np | green | 8 x 1,176 | 49,878 | 6.80 / 8.43 s | 7,339 | 5,915 | 4,879 | 17,244 |
+| CA0 np | interior | 8 x 3,375 | 135,365 | 26.55 / 31.30 s | 5,098 | 4,325 | 2,093 | 16,923 |
+| Color | boundary | 8 x 721 | 28,388 | 3.95 / 4.76 s | 7,184 | 5,966 | 5,245 | 18,573 |
+| Color | interior | 8 x 3,375 | 135,009 | 25.34 / 31.87 s | 5,327 | 4,236 | 2,297 | 16,967 |
+
+The interior is not the efficient phase.  Every box costs ~5 GFLOP (ghosts
+5.2-5.3, interior 5.0), even the 128-box waves keep the GPU as busy as the
+3,375-box ones (idle 14-19% of the wall in every group), and with no
+packing the boundary groups run at 7.3-7.7 TFLOP/s busy against the
+interior's 5.1-5.4.  The difference is the owner pass's interval: ~5
+TFLOP/s in the boundary groups, 2.1-2.4 in the interior, where the heap is
+past the hold limit and the near blocks are put back and packed again
+inside it (the same in Color), plus ~5 s a rank of kernels with no
+floating-point work (kernel values, gathers, near-block adds).  The shared
+packing takes CA0's boundary owner pass from ~5 down to 1.6-1.7 TFLOP/s.
+The sketch's GEMMs run at 17-18.6 TFLOP/s (FP64 tensor cores, peak 19.5),
+the box region's at 6-7, the ID's QR at ~1.1.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

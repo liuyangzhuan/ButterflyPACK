@@ -133,13 +133,18 @@ public:
             std::printf("  [wave-row] level %d rank %d wave %zu seq %d boxes %d ghosts %d | wall %.1f gap %.1f | "
                         "sketch %.1f plan %.1f launch %.1f store %.1f | owner mat %.1f win %.1f stage %.1f launch %.1f "
                         "pack %.1f | dev sketch %.1f elim %.1f [%.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f] | shared %.0f "
-                        "%.3f GB | np %.1f mat %.1f ms %.3f GB\n",
+                        "%.3f GB | np %.1f mat %.1f ms %.3f GB | gflop sketch %.2f id %.2f box [%.2f %.2f %.2f %.2f %.2f "
+                        "%.2f %.2f %.2f] | dev sketch parts [%.1f %.1f %.1f %.1f]\n",
                         lvl, rank, i, r.seq, r.boxes, r.ghosts, ms(r.wall), ms(i > 0 ? r.gap : 0.0),
                         ms(r.d.sketch_plan + r.d.sketch_gpu), ms(r.d.plan), ms(r.d.launch), ms(r.d.store),
                         ms(r.d.og[0]), ms(r.d.og[1]), ms(r.d.og[2]), ms(r.d.og[3]), ms(r.d.og[4]),
                         ms(r.d.sk_device()), ms(e.el_sum()), ms(e.el[0]), ms(e.el[1]), ms(e.el[2]), ms(e.el[3]),
                         ms(e.el[4]), ms(e.el[5]), ms(e.el[6]), ms(e.el[7]), r.d.np_shared_blocks, r.d.np_shared_raw / 1e9,
-                        ms(r.d.np_seconds), ms(r.d.mat_seconds), r.d.mat_bytes / 1e9);
+                        ms(r.d.np_seconds), ms(r.d.mat_seconds), r.d.mat_bytes / 1e9, r.d.fl_sketch / 1e9,
+                        r.d.fl_sketch_id / 1e9, r.d.fl_box[0] / 1e9, r.d.fl_box[1] / 1e9, r.d.fl_box[2] / 1e9,
+                        r.d.fl_box[3] / 1e9, r.d.fl_box[4] / 1e9, r.d.fl_box[5] / 1e9, r.d.fl_box[6] / 1e9,
+                        r.d.fl_box[7] / 1e9, ms(r.d.sk_rows), ms(r.d.sk_stored + r.d.sk_p + r.d.sk_fill), ms(r.d.sk_id),
+                        ms(r.d.sk_upload + r.d.sk_download));
         }
         std::fflush(stdout);
     }
@@ -152,9 +157,13 @@ private:
         double el[8] = {0, 0, 0, 0, 0, 0, 0, 0};
         double id = 0, id_loop = 0, plan = 0, launch = 0, store = 0;
         double og[5] = {0, 0, 0, 0, 0};   // owner pass host: materialize, window, stage, launch, pack
+        double fl_sketch = 0, fl_sketch_id = 0, fl_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // floating-point work
         double np_shared_blocks = 0, np_shared_raw = 0, np_seconds = 0, mat_seconds = 0, mat_bytes = 0;
         static Delta of(const EliminatorStats& a, const EliminatorStats& b) {
             Delta d;
+            d.fl_sketch = a.fl_sketch - b.fl_sketch;
+            d.fl_sketch_id = a.fl_sketch_id - b.fl_sketch_id;
+            for (int i = 0; i < 8; ++i) d.fl_box[i] = a.fl_box[i] - b.fl_box[i];
             d.og[0] = a.og_mat - b.og_mat;
             d.og[1] = a.og_win - b.og_win;
             d.og[2] = a.og_stage - b.og_stage;

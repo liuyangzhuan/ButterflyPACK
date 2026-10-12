@@ -341,6 +341,12 @@ struct EliminatorStats {
     int64_t tr_blocks_max_chunk = 0;
     int64_t transition_fill_gemms = 0;
     double owner_flops = 0.0, transition_flops = 0.0, solve_flops = 0.0;
+    // BPACK_TRACE=wave: the floating-point work by device phase, for rates per
+    // wave - the sketch (rows and stored blocks, its GEMMs, the ID's QR with
+    // pivoting at its full size, an upper bound) and the box region by the
+    // marks el[] is timed with (kernel values, gathers and adds count none)
+    double fl_sketch = 0.0, fl_sketch_id = 0.0;
+    double fl_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     double bytes_up = 0.0;
     double bytes_down = 0.0;
     int64_t boxes = 0;
@@ -4108,6 +4114,30 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     }
     if (adaptive) selector->plan(meta_);  // its first round: the IDs of the sketches, the root nodes
 
+    {   // (the sketch's floating-point work, for BPACK_TRACE=wave)
+        auto vb = [](const VBatch<S>& b) {
+            double f = 0.0;
+            for (const auto& e : b.entries) f += 2.0 * e.m * e.n * e.k;
+            return f;
+        };
+        double f = 0.0;
+        for (const OrderedSketchItem& it : row_items) f += 2.0 * it.d * static_cast<double>(it.rows) * it.ncols;
+        for (const auto& grp : stored_by_group) {
+            for (const OrderedSketchItem& it : grp) f += 2.0 * it.d * static_cast<double>(it.rows) * it.ncols;
+        }
+        for (const VBatch<S>& b : xrr_gemm) f += vb(b);
+        for (const VBatch<S>& b : p_by_group) f += vb(b);
+        for (const auto& passes : fill_by_group) {
+            for (const VBatch<S>& b : passes) f += vb(b);
+        }
+        double fid = 0.0;
+        for (const QrcpItem& it : id_items) {
+            const double m = it.m, n = it.n, k = std::min(m, n);
+            fid += 4.0 * m * n * k - 4.0 / 3.0 * k * k * k;
+        }
+        stats.fl_sketch += kFlopScale * f;
+        stats.fl_sketch_id += kFlopScale * fid;
+    }
     // ---- launches, then Y to the host
     stats.sk_meta += std::chrono::duration<double>(clock::now() - t_gpu).count();
     StreamMarks marks;
@@ -5099,6 +5129,19 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         marks.mark(stream);  // 4: temp1, temp2
         for (const auto& e : trsm.entries) stats.solve_flops += kFlopScale * 2.0 * e.m * e.n * e.n;  // two triangular solves
         for (const auto& e : gsolve.entries) stats.solve_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+        {   // (the box region's work by the marks it is timed with, BPACK_TRACE=wave)
+            auto vb = [](const VBatch<S>& b) {
+                double f = 0.0;
+                for (const auto& e : b.entries) f += 2.0 * e.m * e.n * e.k;
+                return f;
+            };
+            stats.fl_box[1] += kFlopScale * (vb(g1) + vb(g2) + vb(g3) + vb(g4));
+            for (const auto& e : getrf.entries) stats.fl_box[2] += kFlopScale * 2.0 / 3.0 * e.m * e.m * e.m;
+            stats.fl_box[3] += kFlopScale * vb(g5);
+            for (const auto& e : trsm.entries) stats.fl_box[4] += kFlopScale * 2.0 * e.m * e.n * e.n;
+            stats.fl_box[4] += kFlopScale * vb(gsolve);
+            stats.fl_box[5] += kFlopScale * (vb(g6) + vb(g7));
+        }
         launch_transpose(reinterpret_cast<const TransposeItem*>(items(off_transposes)), static_cast<int>(transposes.size()),
                          max_tr_m, max_tr_n, stream);
         g6.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
@@ -5825,7 +5868,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans, from_store ? MagmaNoTrans : MagmaTrans,
                    1.0, 1.0, queue);
             stats.owner_gemms += static_cast<int64_t>(b.count());
-            for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+            for (const auto& e : b.entries) {
+                stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+                stats.fl_box[7] += kFlopScale * 2.0 * e.m * e.n * e.k;
+            }
             ++stats.owner_batches;
         }
         // The next group's packed blocks gathered now, on the near copy
