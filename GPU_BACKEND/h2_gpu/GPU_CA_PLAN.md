@@ -4921,6 +4921,58 @@ cost about 4 GB of host memory a rank at 8x.  Also open: whether the
 leaf's pressure packs (parents at 0.2, owner groups at 0.05) inflate level
 6 - 72.02 at 768^3 on 8x against 65.6 for the same box size at 384^3 on 1x.
 
+#### CA3 at 384^3 on 40 GB end to end (2026-10-11, night)
+
+Three changes, after which CA3 at 8x runs the factorization and the solve:
+
+1. *The payloads installed at each wave boundary* (owner_install_arrived,
+   called from eliminate_wave; install_owner_messages is the former
+   colour-end install, now shared).  A wave boundary installs the payloads
+   of the current colour that have arrived; the colour's end installs the
+   rest.  The GPU sketch filter keeps the colour-end meaning: a box counts
+   as eliminated when its component's colour is done, or when this rank
+   eliminated it (colour_now, done_here in factorize_owner_level_gpu).  With
+   this the leaf no longer holds a colour's ~18 GB of received payloads, and
+   the factorization completed (90.9 s).  CA3 at 192^3 is unchanged in
+   accuracy: logdet -89253589.36 / .37 against .359 before, acc_forward 7.4e-3.
+2. *The owned ghosts' host copies freed after the transition*
+   (FactorizationDriver::transition).  An owner level's owned ghosts kept
+   their X_NR (temp2) and X_RR_full on the host as fill sources the
+   transition may restore.  Nothing read them afterwards, yet they stayed
+   through every later level: 6.2 GB a rank at the 384^3 leaf.  With ranks
+   4-7 at 57-59 GB, the second node's job had no room for the level-5
+   parents' packed host copies, so the parents stayed raw on the card and
+   the transition's heap fragmented (4.3 GB free, the largest range 157 MB,
+   a 235 MB request).  This only showed under CUDA_LAUNCH_BLOCKING; without
+   it the run got through.  With the copies freed, level 6's ghosts hold
+   0.04 GB at level 5's end and the RSS there drops from 53.9 to 46.5 GB.
+3. *The streamed solve over the waves that read blocks*.  The solve then
+   died with an illegal access, reported by the next sync ("solve
+   messages").  The leaf's kept factors are streamed (18.75 GB through a
+   10.17 GB ring).  CA3's solve waves are the level's global elimination
+   sequence (ca_home_order), so a rank has waves with none of its boxes.
+   Such a wave has no X_NR segments, and the decompression's prefetch of
+   "the next segment" then reached a wave whose blocks were not in the ring
+   yet.  It read stale bytes; under CUDA_LAUNCH_BLOCKING: "H2 GPU solve:
+   decompressing a wave's X_NR failed".  The kept-block prefetch
+   (prepare_wave_kept) now goes to the next wave that reads blocks, and the
+   ring plan (plan_kept_streaming) keeps consecutive reading waves apart,
+   not just w and w + 1.  Color's and CA0's waves are never empty, so they
+   are unchanged: Color's logdet is bitwise the earlier runs'.
+
+Same job, 2 nodes, 8 ranks, 384^3 (lib_det22):
+
+| | total | levels 6 / 5 / 4 / 3 / 2 (s) | logdet | acc_mvp | acc_forward | acc_backward | solve |
+|---|---|---|---|---|---|---|---|
+| Color | 81.4 s | 49.0 / 12.3 / 5.1 / 2.6 / 0.4 | -792567588.01 | 1.38e-3 | 1.57e-2 | 1.2e-15 | 2.39 s |
+| CA3 | 85.8 s | 50.2 / 13.7 / 5.1 / 3.0 / 0.4 | -792567667.82 | 1.23e-3 | 1.54e-2 | 8.2e-16 | 2.49 s |
+
+CA3's logdet moves by ~4 in the 9th digit from run to run (-663.4, -665.4,
+-667.8): payloads now install in arrival order.  CA0 in an earlier job of
+the day: 82.8 s, leaf 46.6 s.  So at 384^3 CA3 runs but is not faster
+than Color.  Its leaf spends 45.0 s in the owner schedule's waves and 3.1
+s in colour transports, and sends 25.5 GB a rank.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

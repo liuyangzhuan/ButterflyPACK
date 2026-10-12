@@ -216,11 +216,28 @@ void factorize_owner_level_gpu(ParallelTree<CoordType, DataType>* tree, int lvl,
         std::snprintf(buf, sizeof(buf), " %s %.2f", what, std::chrono::duration<double>(clock::now() - t_level).count());
         marks += buf;
     };
-    level.sketch_eliminated_filter = &st.sketch_filter;
+    // What the sketch counts as eliminated (2026-10-11): this rank's own
+    // eliminations at once, another owner's from the end of its colour on.
+    // The device level installs other owners' payloads as they arrive, at
+    // every wave boundary (so a colour's payloads are not all held to its end),
+    // and without this a box of the running colour installed mid-colour would
+    // turn a later wave's ring rows to its skeleton - an order that follows
+    // the arrival times.  With it the sketch sees what the colour-end install
+    // showed it.
+    int32_t colour_now = 0;
+    std::unordered_set<int64_t> done_here;
+    const std::function<bool(int64_t)> gpu_filter = [&st, &colour_now, &done_here](int64_t m) -> bool {
+        if (done_here.count(m) != 0) return true;
+        const int32_t comp = st.comp_of(m);
+        if (comp < 0) return true;
+        return st.comp_seq_color[static_cast<size_t>(comp)] < colour_now;
+    };
+    level.sketch_eliminated_filter = &gpu_filter;
     owner_current_sketch_comp = -1;
     auto run_wave = [&](const std::vector<int64_t>& wave, int32_t seq) {
         if (wave.empty()) return;
         driver.eliminate_wave(wave, static_cast<int>(seq));
+        done_here.insert(wave.begin(), wave.end());
         for (int64_t m : wave) {
             level.eliminated_boxes.insert(m);
             level.elimination_wave[m] = seq;
@@ -230,6 +247,7 @@ void factorize_owner_level_gpu(ParallelTree<CoordType, DataType>* tree, int lvl,
     double t_waves = 0.0, t_exchange = 0.0;
     size_t owned_boxes = 0;
     for (int c = 0; c < view.num_boundary_colors; ++c) {
+        colour_now = c;
         const OwnerPlanView::Colour& col = view.colours[static_cast<size_t>(c)];
         size_t boxes = 0, waves = 0;
         for (const auto& w : col.owned_waves) {
@@ -258,6 +276,7 @@ void factorize_owner_level_gpu(ParallelTree<CoordType, DataType>* tree, int lvl,
             std::fflush(stdout);
         }
     }
+    colour_now = view.num_boundary_colors;   // every boundary colour installed: all count
     {
         size_t boxes = 0;
         for (const auto& w : view.interior_waves) boxes += w.size();

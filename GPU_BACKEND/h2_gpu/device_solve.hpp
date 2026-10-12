@@ -566,6 +566,8 @@ std::vector<std::vector<int64_t>> solve_wave_mortons(ParallelTree<CoordType, Dat
 // each wave reads, the blocks numbered by first use, a slot each (number
 // mod slots) with the ring grown until no two blocks of a wave or of two
 // consecutive waves share a slot (the prefetch is one wave deep).
+// Consecutive among the waves that read blocks: an owner level's home order
+// leaves a rank waves without boxes, and the prefetch passes over them.
 inline void plan_kept_streaming(KeptSolveLevel& kl, const std::vector<std::vector<int64_t>>& waves) {
     const size_t nb = kl.staged.size();
     std::vector<int> first_use(nb, -1);
@@ -604,11 +606,15 @@ inline void plan_kept_streaming(KeptSolveLevel& kl, const std::vector<std::vecto
     // cross the end starts over at 0); the ring grows until no two distinct
     // blocks of a wave or of two consecutive waves overlap (the prefetch is
     // one wave deep).  The first try is twice the largest pair.
-    size_t largest_pair = 0, largest_block = 0;
+    std::vector<size_t> reading;   // the waves that read blocks, in order
     for (size_t w = 0; w < wave_blocks.size(); ++w) {
+        if (!wave_blocks[w].empty()) reading.push_back(w);
+    }
+    size_t largest_pair = 0, largest_block = 0;
+    for (size_t i = 0; i < reading.size(); ++i) {
         std::vector<int> blocks;
-        for (size_t v = w; v < std::min(w + 2, wave_blocks.size()); ++v) {
-            for (int b : wave_blocks[v]) blocks.push_back(b);
+        for (size_t j = i; j < std::min(i + 2, reading.size()); ++j) {
+            for (int b : wave_blocks[reading[j]]) blocks.push_back(b);
         }
         std::sort(blocks.begin(), blocks.end());
         blocks.erase(std::unique(blocks.begin(), blocks.end()), blocks.end());
@@ -629,10 +635,10 @@ inline void plan_kept_streaming(KeptSolveLevel& kl, const std::vector<std::vecto
         }
     };
     auto overlaps = [&]() {
-        for (size_t w = 0; w < wave_blocks.size(); ++w) {
+        for (size_t i = 0; i < reading.size(); ++i) {
             std::vector<int> blocks;
-            for (size_t v = w; v < std::min(w + 2, wave_blocks.size()); ++v) {
-                for (int b : wave_blocks[v]) blocks.push_back(b);
+            for (size_t j = i; j < std::min(i + 2, reading.size()); ++j) {
+                for (int b : wave_blocks[reading[j]]) blocks.push_back(b);
             }
             std::sort(blocks.begin(), blocks.end());
             blocks.erase(std::unique(blocks.begin(), blocks.end()), blocks.end());
@@ -2687,9 +2693,21 @@ public:
         }
         check_cuda(cudaStreamWaitEvent(stream_, kept_ready_[w % 2], 0), "kept ready");
         check_cuda(cudaEventRecord(kept_done_, stream_), "kept done");
-        const bool has_next = step > 0 ? w + 1 < L.waves.size() : w > 0;
-        if (has_next) {
-            const size_t next = step > 0 ? w + 1 : w - 1;
+        // the next wave that reads blocks: an owner level's home order leaves
+        // a rank waves without boxes, whose neighbours the X_NR prefetch
+        // reads across (its segments skip them), and the ring keeps the
+        // reading waves apart (plan_kept_streaming)
+        size_t next = kNoWave;
+        if (step > 0) {
+            for (size_t v = w + 1; v < kl.wave_blocks.size() && next == kNoWave; ++v) {
+                if (!kl.wave_blocks[v].empty()) next = v;
+            }
+        } else {
+            for (size_t v = std::min(w, kl.wave_blocks.size()); v-- > 0 && next == kNoWave;) {
+                if (!kl.wave_blocks[v].empty()) next = v;
+            }
+        }
+        if (next != kNoWave) {
             check_cuda(cudaStreamWaitEvent(xnr_stream_, kept_done_, 0), "kept done");
             kept_wave_resident(store, L.level, kl, next, xnr_stream_, false);
             check_cuda(cudaEventRecord(kept_ready_[next % 2], xnr_stream_), "kept ready");

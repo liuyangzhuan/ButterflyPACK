@@ -346,6 +346,7 @@ struct EliminatorStats {
     int64_t exchange_fallbacks = 0;     // MPI buffers the exchange arena could not hold
     int64_t exchange_host = 0;          // ... nor the main heap: in pinned host memory
     int64_t keep_splits = 0;            // keep groups split for want of one range
+    int64_t owner_early_installs = 0;   // owner payloads installed at a wave boundary, before their colour's end
     double exchange_host_bytes = 0.0;
     int64_t remote_generators = 0;
     // H2_compress_factors: waves whose X_NR was compressed, waves that fell
@@ -2619,6 +2620,9 @@ private:
     bool owner_mode_ = false;
     std::list<OwnerWaveSend> owner_sends_;
     std::list<OwnerWaveRecv> owner_recvs_;
+    void install_owner_messages(int colour, const std::vector<OwnerWaveRecv*>& msgs, double t_wait, size_t sent_to,
+                                size_t from_ranks);
+    void owner_install_arrived(int colour);
     std::list<OwnerPendingFree> owner_pending_free_;
     std::map<std::pair<int, int>, int> owner_sent_count_;  // (peer, colour) -> wave messages sent
     std::map<std::pair<int, int>, int> owner_recv_count_;  // (source, colour) -> wave messages received
@@ -4299,7 +4303,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     last_wave_ = wave;  // their generators go out at the next transport
     last_wave_index_ = wave_index;
     since_transport_.insert(since_transport_.end(), wave.begin(), wave.end());
-    if (owner_ != nullptr) owner_progress();  // (an owner level: other owners' payloads, this rank's completed sends)
+    if (owner_ != nullptr) {
+        owner_progress();  // (an owner level: other owners' payloads, this rank's completed sends)
+        owner_install_arrived(wave_index / std::max(owner_->num_waves, 1));
+    }
 
     // ---- 1. sketch and ID (device, or host where the device sketch is not supported)
     auto t0 = clock::now();
@@ -9314,93 +9321,33 @@ void LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(
     }
 }
 
+// Received owner payloads installed (2026-10-11: split out of owner_exchange):
+// their boxes' headers, the FULL factors of this rank's boxes, the skeleton
+// marks and the generators' updates, wave by wave in the global order, then
+// their receive buffers released.  owner_exchange installs a colour's
+// remaining payloads at its end; owner_install_arrived those that have fully
+// arrived at every wave boundary of the colour, so a colour's payloads are not
+// all held to its end (~18 GB a rank for the green colour of CA3 at 8x).
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour) {
+void LevelEliminator<CoordType, DataType, KernelType>::install_owner_messages(
+    int colour, const std::vector<OwnerWaveRecv*>& msgs, double t_wait, size_t sent_to, size_t from_ranks) {
     using hclock = std::chrono::high_resolution_clock;
-    const auto t_start = hclock::now();
     auto& stats = eliminator_stats();
     auto& timers = transport_timers();
     auto seconds_since = [](hclock::time_point t) { return std::chrono::duration<double>(hclock::now() - t).count(); };
-    if (owner_ == nullptr) throw std::runtime_error("LevelEliminator::owner_exchange: no plan");
-    const OwnerPlanView::Colour& col = owner_->colours.at(static_cast<size_t>(colour));
-    Context& ctx = Context::instance();
-    ctx.activate();
-    cudaStream_t stream = ctx.stream();
-    MPI_Comm comm = tree_->comm;
-    auto check_mpi = [](int err, const char* what) {
-        if (err != MPI_SUCCESS) throw std::runtime_error(std::string("LevelEliminator::owner_exchange: ") + what + " failed");
-    };
-    constexpr int kTagMark = 735;
-    const std::vector<int>& send_peers = col.send_peers;
-    const std::vector<int>& recv_peers = col.recv_peers;
-    const size_t ns = send_peers.size();
-    // ---- this colour's remaining payloads out (their copies are done once
-    //      the stream is), then every recipient's colour-end marker: how
-    //      many wave messages it got from this rank this colour
-    check_cuda(cudaStreamSynchronize(stream), "owner exchange: payloads");
-    owner_progress();
-    for (const auto& [key, count] : owner_sent_count_) {
-        if (key.second == colour && !std::binary_search(send_peers.begin(), send_peers.end(), key.first)) {
-            throw std::runtime_error("LevelEliminator::owner_exchange: a payload for rank " + std::to_string(key.first) +
-                                     ", not a recipient of colour " + std::to_string(colour));
-        }
-    }
-    std::vector<int64_t> marks_out(2 * ns, 0);
-    std::vector<MPI_Request> mark_reqs(ns, MPI_REQUEST_NULL);
-    for (size_t i = 0; i < ns; ++i) {
-        marks_out[2 * i] = colour;
-        const auto it = owner_sent_count_.find({send_peers[i], colour});
-        marks_out[2 * i + 1] = it == owner_sent_count_.end() ? 0 : it->second;
-        check_mpi(MPI_Isend(&marks_out[2 * i], 2, MPI_INT64_T, send_peers[i], kTagMark, comm, &mark_reqs[i]), "marker Isend");
-    }
-    // ---- the colour's arrivals: every receive peer's marker, as many wave
-    //      messages, their bulk landed
-    const auto t_comm = hclock::now();
-    while (true) {
-        owner_progress();
-        bool done = true;
-        for (int peer : recv_peers) {
-            const auto mk = owner_marks_.find({peer, colour});
-            if (mk == owner_marks_.end()) { done = false; break; }
-            const auto rc = owner_recv_count_.find({peer, colour});
-            const int got = rc == owner_recv_count_.end() ? 0 : rc->second;
-            if (got < mk->second) { done = false; break; }
-            if (got > mk->second) {
-                throw std::runtime_error("LevelEliminator::owner_exchange: more wave messages from rank " + std::to_string(peer) +
-                                         " than its marker says");
-            }
-        }
-        for (auto it = owner_recvs_.begin(); done && it != owner_recvs_.end(); ++it) {
-            if (it->colour != colour || it->reqs.empty()) continue;
-            int ok = 0;
-            check_mpi(MPI_Testall(static_cast<int>(it->reqs.size()), it->reqs.data(), &ok, MPI_STATUSES_IGNORE), "bulk Testall");
-            if (!ok) done = false;
-        }
-        if (done) break;
-    }
-    check_mpi(MPI_Waitall(static_cast<int>(mark_reqs.size()), mark_reqs.data(), MPI_STATUSES_IGNORE), "marker Waitall");
-    const double t_wait = seconds_since(t_comm);
-    timers.payload += t_wait;
-    for (const auto& [key, count] : owner_recv_count_) {
-        if (key.second == colour && !std::binary_search(recv_peers.begin(), recv_peers.end(), key.first)) {
-            throw std::runtime_error("LevelEliminator::owner_exchange: a payload from rank " + std::to_string(key.first) +
-                                     ", not a sender of colour " + std::to_string(colour));
-        }
-    }
+    cudaStream_t stream = Context::instance().stream();
+    if (msgs.empty()) return;
     // the colour's messages in arrival order (the bulk pointers are theirs)
-    std::vector<OwnerWaveRecv*> msgs;
     uint64_t bytes_in_total = 0;
-    for (OwnerWaveRecv& r : owner_recvs_) {
-        if (r.colour != colour) continue;
-        msgs.push_back(&r);
-        bytes_in_total += r.bytes;
-        timers.bytes_received += static_cast<double>(r.header.size() * sizeof(int64_t) + r.bytes);
+    for (OwnerWaveRecv* r : msgs) {
+        bytes_in_total += r->bytes;
+        timers.bytes_received += static_cast<double>(r->header.size() * sizeof(int64_t) + r->bytes);
     }
     if (env::trace("exchange")) {
         const auto ob = owner_sent_bytes_.find(colour);
         std::printf("[exchange] rank %d level %d colour %d: wait %.3f s, out %.3f GB to %zu ranks, in %.3f GB in %zu wave messages from %zu ranks\n",
-                    tree_->mpi_rank, level_index_, colour, t_wait, (ob == owner_sent_bytes_.end() ? 0 : ob->second) / 1e9, ns,
-                    bytes_in_total / 1e9, msgs.size(), recv_peers.size());
+                    tree_->mpi_rank, level_index_, colour, t_wait, (ob == owner_sent_bytes_.end() ? 0 : ob->second) / 1e9, sent_to,
+                    bytes_in_total / 1e9, msgs.size(), from_ranks);
         std::fflush(stdout);
     }
     // ---- the headers: the installed boxes' metadata
@@ -9559,8 +9506,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour
     }
     {
         OwnerPendingFree pf;
+        const std::unordered_set<const OwnerWaveRecv*> here(msgs.begin(), msgs.end());
         for (auto it = owner_recvs_.begin(); it != owner_recvs_.end();) {
-            if (it->colour != colour) { ++it; continue; }
+            if (here.count(&*it) == 0) { ++it; continue; }
             if (it->buf != nullptr) pf.blocks.push_back(it->buf);
             it = owner_recvs_.erase(it);
         }
@@ -9570,6 +9518,110 @@ void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour
             owner_pending_free_.push_back(std::move(pf));
         }
     }
+    stats.remote += seconds_since(t_apply);
+}
+
+// At a wave boundary of an owner level: this colour's payloads whose bulk
+// has fully arrived, installed now (see install_owner_messages).
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::owner_install_arrived(int colour) {
+    std::vector<OwnerWaveRecv*> msgs;
+    for (OwnerWaveRecv& r : owner_recvs_) {
+        if (r.colour != colour) continue;
+        if (!r.reqs.empty()) {
+            int ok = 0;
+            if (MPI_Testall(static_cast<int>(r.reqs.size()), r.reqs.data(), &ok, MPI_STATUSES_IGNORE) != MPI_SUCCESS) {
+                throw std::runtime_error("LevelEliminator::owner_install_arrived: bulk Testall failed");
+            }
+            if (!ok) continue;
+        }
+        msgs.push_back(&r);
+    }
+    if (msgs.empty()) return;
+    ++eliminator_stats().owner_early_installs;
+    install_owner_messages(colour, msgs, 0.0, 0, 0);
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour) {
+    using hclock = std::chrono::high_resolution_clock;
+    const auto t_start = hclock::now();
+    auto& stats = eliminator_stats();
+    auto& timers = transport_timers();
+    auto seconds_since = [](hclock::time_point t) { return std::chrono::duration<double>(hclock::now() - t).count(); };
+    if (owner_ == nullptr) throw std::runtime_error("LevelEliminator::owner_exchange: no plan");
+    const OwnerPlanView::Colour& col = owner_->colours.at(static_cast<size_t>(colour));
+    Context& ctx = Context::instance();
+    ctx.activate();
+    cudaStream_t stream = ctx.stream();
+    MPI_Comm comm = tree_->comm;
+    auto check_mpi = [](int err, const char* what) {
+        if (err != MPI_SUCCESS) throw std::runtime_error(std::string("LevelEliminator::owner_exchange: ") + what + " failed");
+    };
+    constexpr int kTagMark = 735;
+    const std::vector<int>& send_peers = col.send_peers;
+    const std::vector<int>& recv_peers = col.recv_peers;
+    const size_t ns = send_peers.size();
+    // ---- this colour's remaining payloads out (their copies are done once
+    //      the stream is), then every recipient's colour-end marker: how
+    //      many wave messages it got from this rank this colour
+    check_cuda(cudaStreamSynchronize(stream), "owner exchange: payloads");
+    owner_progress();
+    for (const auto& [key, count] : owner_sent_count_) {
+        if (key.second == colour && !std::binary_search(send_peers.begin(), send_peers.end(), key.first)) {
+            throw std::runtime_error("LevelEliminator::owner_exchange: a payload for rank " + std::to_string(key.first) +
+                                     ", not a recipient of colour " + std::to_string(colour));
+        }
+    }
+    std::vector<int64_t> marks_out(2 * ns, 0);
+    std::vector<MPI_Request> mark_reqs(ns, MPI_REQUEST_NULL);
+    for (size_t i = 0; i < ns; ++i) {
+        marks_out[2 * i] = colour;
+        const auto it = owner_sent_count_.find({send_peers[i], colour});
+        marks_out[2 * i + 1] = it == owner_sent_count_.end() ? 0 : it->second;
+        check_mpi(MPI_Isend(&marks_out[2 * i], 2, MPI_INT64_T, send_peers[i], kTagMark, comm, &mark_reqs[i]), "marker Isend");
+    }
+    // ---- the colour's arrivals: every receive peer's marker, as many wave
+    //      messages, their bulk landed
+    const auto t_comm = hclock::now();
+    while (true) {
+        owner_progress();
+        bool done = true;
+        for (int peer : recv_peers) {
+            const auto mk = owner_marks_.find({peer, colour});
+            if (mk == owner_marks_.end()) { done = false; break; }
+            const auto rc = owner_recv_count_.find({peer, colour});
+            const int got = rc == owner_recv_count_.end() ? 0 : rc->second;
+            if (got < mk->second) { done = false; break; }
+            if (got > mk->second) {
+                throw std::runtime_error("LevelEliminator::owner_exchange: more wave messages from rank " + std::to_string(peer) +
+                                         " than its marker says");
+            }
+        }
+        for (auto it = owner_recvs_.begin(); done && it != owner_recvs_.end(); ++it) {
+            if (it->colour != colour || it->reqs.empty()) continue;
+            int ok = 0;
+            check_mpi(MPI_Testall(static_cast<int>(it->reqs.size()), it->reqs.data(), &ok, MPI_STATUSES_IGNORE), "bulk Testall");
+            if (!ok) done = false;
+        }
+        if (done) break;
+    }
+    check_mpi(MPI_Waitall(static_cast<int>(mark_reqs.size()), mark_reqs.data(), MPI_STATUSES_IGNORE), "marker Waitall");
+    const double t_wait = seconds_since(t_comm);
+    timers.payload += t_wait;
+    for (const auto& [key, count] : owner_recv_count_) {
+        if (key.second == colour && !std::binary_search(recv_peers.begin(), recv_peers.end(), key.first)) {
+            throw std::runtime_error("LevelEliminator::owner_exchange: a payload from rank " + std::to_string(key.first) +
+                                     ", not a sender of colour " + std::to_string(colour));
+        }
+    }
+    // the colour's messages not yet installed, in arrival order
+    std::vector<OwnerWaveRecv*> msgs;
+    for (OwnerWaveRecv& r : owner_recvs_) {
+        if (r.colour == colour) msgs.push_back(&r);
+    }
+    const auto t_apply = hclock::now();
+    install_owner_messages(colour, msgs, t_wait, ns, recv_peers.size());
     for (auto it = owner_marks_.begin(); it != owner_marks_.end();) {
         it = it->first.second == colour ? owner_marks_.erase(it) : std::next(it);
     }
@@ -9577,7 +9629,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::owner_exchange(int colour
         it = it->first.second == colour ? owner_recv_count_.erase(it) : std::next(it);
     }
     ++owner_seq_;
-    stats.remote += seconds_since(t_apply);
     stats.exchange += std::chrono::duration<double>(t_apply - t_start).count();
     stats.device_exchange = true;
     if (heap_.peak() > stats.heap_peak) {

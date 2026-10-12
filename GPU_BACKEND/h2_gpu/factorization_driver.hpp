@@ -982,6 +982,19 @@ public:
             blocks_ = level_->build_parent(parents);
             level_.reset();
             on_device = true;
+            // H2 8x (2026-10-11): a component-owner level's owned ghosts keep
+            // host copies of their X_NR and X_RR_full only as fill sources the
+            // transition may restore; their factors went home with the FULL
+            // payload, and the solves run the level from its home boxes.  At
+            // the 384^3 leaf on 8 ranks they were 6.2 GB a rank, held under
+            // every later level, and the node's room for the parents' packed
+            // copies ran out.
+            if (Level& lv = tree_->levels[static_cast<size_t>(level.level)]; lv.ca_home_factors) {
+                for (Box& g : lv.ghost_boxes) {
+                    g.X_NR = MatrixStorage<DataType>{};
+                    g.X_RR_full = MatrixStorage<DataType>{};
+                }
+            }
         }
         const int parent_lvl = level.level - 1;
         bool keep = false;
