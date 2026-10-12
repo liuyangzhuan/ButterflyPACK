@@ -1195,6 +1195,14 @@ public:
                 std::printf("  [gpu] level %d host memory: RSS %.2f GB, high-water %.2f GB\n", level.level, rss, hwm);
                 if (wave_trace_enabled()) report_host_boxes(level.level);
             }
+            if (e.dead_pair_tasks + e.dead_schur_tasks + e.dead_beyond_tasks > 0) {
+                std::printf("  [gpu] level %d owner pass, updates read nowhere on this rank and not made: pairs of two "
+                            "eliminated ghosts %.0f GFLOP (%lld), eliminated ghosts' Schur blocks %.0f GFLOP (%lld), their "
+                            "pairs with boxes beyond the halo %.0f GFLOP (%lld); made: %.0f GFLOP\n", level.level,
+                            e.dead_pair_flops / 1e9, static_cast<long long>(e.dead_pair_tasks), e.dead_schur_flops / 1e9,
+                            static_cast<long long>(e.dead_schur_tasks), e.dead_beyond_flops / 1e9,
+                            static_cast<long long>(e.dead_beyond_tasks), e.owner_flops / 1e9);
+            }
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
                             "pack %.2f s\n", level.level, e.og_mat, e.og_win, e.og_stage, e.og_launch, e.og_pack);

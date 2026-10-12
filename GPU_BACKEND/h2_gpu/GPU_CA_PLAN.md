@@ -5222,6 +5222,23 @@ packing takes CA0's boundary owner pass from ~5 down to 1.6-1.7 TFLOP/s.
 The sketch's GEMMs run at 17-18.6 TFLOP/s (FP64 tensor cores, peak 19.5),
 the box region's at 6-7, the ID's QR at ~1.1.
 
+#### Owner-pass updates read nowhere on the rank (2026-10-12): ~1%, not 1-2 s
+
+The idea: on a replicated level a rank updates near blocks that only the
+other ranks' copies need.  The owner pass already skipped pairs of two
+eliminated ghosts.  Now also an eliminated ghost's own Schur block (its
+parent is another rank's; build_parent reads only pairs with a box of this
+rank) and its pairs with boxes beyond the halo (never eliminated here).
+Counted at the 384^3 leaf on rank 0 (8 ranks, 40 GB): pairs of two
+eliminated ghosts 59 GFLOP, the Schur blocks 16, the pairs beyond the halo
+394, against 38,141 GFLOP made - 1.2% in all, 1.1% newly skipped.  CA0's
+leaf 45.40 / 45.38 s before, 45.58 / 45.52 s after (factor time 78.1-78.2 s
+in all four).  192^3 replica check (CA at the leaf; and at levels 4 and 5):
+0 differ, logdet bitwise unchanged; Color bitwise unchanged.  The estimate
+of 1-2 s that proposed it assumed the dead updates were a large share;
+they are not - once two ghosts are both eliminated, few later
+eliminations touch their pair.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

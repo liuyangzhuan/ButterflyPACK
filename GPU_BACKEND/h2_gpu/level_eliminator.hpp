@@ -347,6 +347,12 @@ struct EliminatorStats {
     // marks el[] is timed with (kernel values, gathers and adds count none)
     double fl_sketch = 0.0, fl_sketch_id = 0.0;
     double fl_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    // replicated CA levels: owner-pass updates read nowhere on this rank, not
+    // made - pairs of two eliminated ghosts (since before 2026-10-12), an
+    // eliminated ghost's own Schur block and its pairs with boxes beyond the
+    // halo (2026-10-12) - their floating-point work and counts
+    double dead_pair_flops = 0.0, dead_schur_flops = 0.0, dead_beyond_flops = 0.0;
+    int64_t dead_pair_tasks = 0, dead_schur_tasks = 0, dead_beyond_tasks = 0;
     double bytes_up = 0.0;
     double bytes_down = 0.0;
     int64_t boxes = 0;
@@ -5410,6 +5416,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::vector<SrcSlot> src_slots;               // ... and their slots
     };
     std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
+    // (per candidate, summed after the loop: the dead updates not made, by kind
+    // - two eliminated ghosts, an eliminated ghost's Schur block, with a box
+    // beyond the halo - flops and tasks)
+    std::vector<std::array<double, 6>> dead_by_candidate(candidates.size(), std::array<double, 6>{});
     std::exception_ptr owner_failure;
     std::mutex owner_failure_mutex;
     #pragma omp parallel for schedule(dynamic, 4)
@@ -5462,9 +5472,26 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     const int64_t am = src_hop[a];
                     const int n_a = static_cast<int>(src.counts[a]);
                     if (n_a == 0) continue;
+                    auto& dead = dead_by_candidate[static_cast<size_t>(ci)];
+                    const double task_flops = 2.0 * n_c * n_a * src.r;
                     if (eliminated_ghost && am != cm) {
                         const BoxState& as = state_of(am);
-                        if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) continue;
+                        if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) {
+                            if (cm < am || !is_interest(am)) { dead[0] += task_flops; dead[1] += 1; }  // (once a pair)
+                            continue;
+                        }
+                    }
+                    // A replicated level: nor an eliminated ghost's own Schur block,
+                    // nor its pairs with boxes beyond this rank's halo.  Its
+                    // parent is another rank's, and the transition builds only
+                    // this rank's parents (pairs with a box of this rank); the
+                    // box beyond the halo is never eliminated here.  The owner
+                    // makes both for real.
+                    if (eliminated_ghost && owner_ == nullptr && ca_ && (am == cm || !is_interest(am))) {
+                        const int k = am == cm ? 2 : 4;
+                        dead[k] += task_flops;
+                        dead[k + 1] += 1;
+                        continue;
                     }
                     CandidateTarget* target = nullptr;
                     // (an owner level: a block is updated here only if it is read
@@ -5541,6 +5568,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
     }
     if (owner_failure) std::rethrow_exception(owner_failure);
+    for (const auto& d : dead_by_candidate) {
+        stats.dead_pair_flops += kFlopScale * d[0];
+        stats.dead_pair_tasks += static_cast<int64_t>(d[1]);
+        stats.dead_schur_flops += kFlopScale * d[2];
+        stats.dead_schur_tasks += static_cast<int64_t>(d[3]);
+        stats.dead_beyond_flops += kFlopScale * d[4];
+        stats.dead_beyond_tasks += static_cast<int64_t>(d[5]);
+    }
     owner_lap(stats.po_pairs);
     // the join: blocks of new targets (their kernel values first), in the
     // sequential loop's order
