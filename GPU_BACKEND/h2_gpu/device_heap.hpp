@@ -29,6 +29,7 @@
 #include <set>
 #include <dlfcn.h>
 #include <sstream>
+#include <iomanip>
 #include <string>
 
 #include "../gpu_common/bpack_env.hpp"
@@ -273,9 +274,22 @@ public:
         while (!take(size, resident, offset)) {
             if (!(reclaimer_ && reclaimer_())) {
                 std::ostringstream oss;
-                oss << "H2 GPU heap exhausted: request " << size << " bytes, in use " << used_ << " of "
+                oss << "H2 GPU heap exhausted: request " << size << " bytes (" << resident_kind_name(kind)
+                    << (resident ? ", resident" : ", transient") << "), in use " << used_ << " of "
                     << capacity_ << " bytes (largest free block " << largest_free()
                     << "); use more ranks or a smaller problem per GPU";
+                // what holds it, the largest kinds first (a failure is the time to know)
+                std::vector<std::pair<size_t, size_t>> kinds;
+                for (size_t k = 0; k < by_kind_.size(); ++k) if (by_kind_[k] + by_tkind_[k] > (size_t{64} << 20)) kinds.push_back({by_kind_[k] + by_tkind_[k], k});
+                std::sort(kinds.rbegin(), kinds.rend());
+                oss << "; held: ";
+                for (size_t i = 0; i < kinds.size() && i < 8; ++i) {
+                    const size_t k = kinds[i].second;
+                    oss << (i ? ", " : "") << resident_kind_name(static_cast<ResidentKind>(k)) << " " << std::fixed
+                        << std::setprecision(2) << static_cast<double>(by_kind_[k]) / 1e9 << "+"
+                        << static_cast<double>(by_tkind_[k]) / 1e9 << " GB";
+                }
+                oss << " (resident+transient); " << free_.size() << " free ranges";
                 throw std::runtime_error(oss.str());
             }
             ++reclaims_;

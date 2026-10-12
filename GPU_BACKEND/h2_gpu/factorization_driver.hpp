@@ -411,12 +411,17 @@ public:
         card_at_level_start(lvl);
         {
             // H2 host memory: the pinned chunks the level above gave back, now
-            // that the kept factors took what they could, unpinned beyond half
-            // of what is idle (the next level's stores are smaller than this
-            // one's, by 3-4x a level at 192^3)
+            // that the kept factors took what they could, stay pinned for the
+            // levels below unless the job is short of host memory on its node
+            // (2026-10-11).  Unpinning half of them at every level start made
+            // the next level's stores pin again, and pinning runs 10x slower on
+            // a node whose memory is fragmented (6 s against 62 s a rank at
+            // 768^3, the level waiting on the slowest rank); short of room they
+            // all go but one chunk's worth.
             PinnedChunkPool& pool = pinned_chunk_pool();
             double s = 0.0;
-            const size_t bytes = pool.trim(std::max(PinnedChunkPool::kIdleKeep, pool.idle() / 2), &s);
+            const bool short_host = host_room_bytes() < kHostReserveBytes;
+            const size_t bytes = short_host ? pool.trim(PinnedChunkPool::kIdleKeep, &s) : 0;
             if (announce && bytes > 0) {
                 std::printf("  [gpu] level %d start: %.2f GB of idle pinned chunks unpinned (%.2f s), %.2f GB pinned now "
                             "(%.2f idle)\n", lvl, static_cast<double>(bytes) / 1e9, s,
@@ -1605,6 +1610,10 @@ public:
                         tt.deserialize, tt.assisting, tt.install, tt.bytes_sent / 1e9,
                         tt.bytes_received / 1e9, e.remote, static_cast<long long>(e.remote_generators),
                         static_cast<long long>(e.exchange_fallbacks));
+            if (e.exchange_host > 0) {
+                std::printf("  [gpu] level %d exchange buffers in pinned host memory (no device range fitted): %lld, %.2f GB\n",
+                            lvl, static_cast<long long>(e.exchange_host), e.exchange_host_bytes / 1e9);
+            }
         }
         std::fflush(stdout);
         return true;

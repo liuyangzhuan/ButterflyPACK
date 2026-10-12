@@ -273,7 +273,12 @@ private:
         Chunk c;
         c.bytes = bytes;
         void* p = nullptr;
-        if (posix_memalign(&p, size_t{2} << 20, bytes) != 0 || p == nullptr) {
+        // mapped, not malloc'd (2026-10-11): an unpinned chunk then goes back to
+        // the system at once.  Freed through malloc (tcmalloc under the job
+        // scripts) it stayed in the process - trimming 24 GB of idle chunks
+        // left the RSS where it was, against a node limit the job shares.
+        p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED || p == nullptr) {
             throw std::runtime_error("H2 GPU: no host memory for a pinned chunk");
         }
         madvise(p, bytes, MADV_HUGEPAGE);
@@ -291,7 +296,7 @@ private:
     static void unpin(const Chunk& c) {
         if (c.ptr == nullptr) return;
         cudaHostUnregister(c.ptr);
-        std::free(c.ptr);
+        munmap(c.ptr, c.bytes);
     }
     std::vector<Chunk> idle_;
     std::deque<std::future<Chunk>> ahead_;

@@ -344,6 +344,9 @@ struct EliminatorStats {
     double emit = 0.0, exchange = 0.0;  // generator emission, transport between ranks
     bool device_exchange = false;       // generators sent from device memory
     int64_t exchange_fallbacks = 0;     // MPI buffers the exchange arena could not hold
+    int64_t exchange_host = 0;          // ... nor the main heap: in pinned host memory
+    int64_t keep_splits = 0;            // keep groups split for want of one range
+    double exchange_host_bytes = 0.0;
     int64_t remote_generators = 0;
     // H2_compress_factors: waves whose X_NR was compressed, waves that fell
     // back to storing it uncompressed, and why.
@@ -1103,12 +1106,28 @@ private:
         }
         waited();
         ++eliminator_stats().exchange_fallbacks;
-        return heap_.alloc(bytes, ResidentKind::Exchange);
+        if (char* p = heap_.try_alloc(bytes, ResidentKind::Exchange)) return p;
+        // No range of the main heap holds it either: pinned host memory, which
+        // the device reads and writes at the same address (2026-10-11: CA3's
+        // owner-wave payloads at 8x are 2-7 GB, one block a wave, and a heap
+        // with 8-12 GB free in pieces had no range for one).  Slower to read
+        // than device memory, and only where nothing else fits.
+        PinnedChunkPool::Chunk c = pinned_chunk_pool().take(bytes);
+        exchange_host_[c.ptr] = c;
+        ++eliminator_stats().exchange_host;
+        eliminator_stats().exchange_host_bytes += static_cast<double>(bytes);
+        return c.ptr;
     }
+    std::unordered_map<const void*, PinnedChunkPool::Chunk> exchange_host_;
     void free_block(const void* ptr) {
         DeviceHeap& arena = DeviceHeap::exchange_arena();
         if (arena.owns(ptr)) {
             arena.free(ptr);
+        } else if (auto h = exchange_host_.find(ptr); h != exchange_host_.end()) {
+            // (the pool is not stream-ordered: what still reads it finishes first)
+            check_cuda(cudaStreamSynchronize(Context::instance().stream()), "host exchange buffer");
+            pinned_chunk_pool().give(h->second);
+            exchange_host_.erase(h);
         } else {
             heap_.free(ptr);
         }
@@ -1117,6 +1136,8 @@ private:
                             const std::vector<char*>& d_temp2, cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_temp2, cudaStream_t stream);
+    bool keep_retry_smaller_ = false;
+    bool keep_may_split_ = false;   // (only a wave's own keep groups split; landed factors do not)
     // H2_compress_factors: a box whose kept X_NR is still the fill source's
     // compressed temp2^T.  The two are one matrix - temp2, and temp2
     // transposed - so only one is stored, and the transition transposes it
@@ -1130,6 +1151,7 @@ private:
                         const char* xnr = nullptr; const char* lu = nullptr; const char* piv = nullptr;
                         int k = 0, r = 0, ntot = 0; bool pledge = false; };
     bool keep_factor_sources(const std::vector<KeptSource>& srcs, cudaStream_t stream);
+    bool keep_sources_or_halves(const std::vector<KeptSource>& srcs, cudaStream_t stream);
     struct PledgedXnr { int64_t morton = 0; BoxState* st = nullptr; int ntot = 0; int r = 0;
                         size_t bytes = 0; };  // what its fill source stores now
     bool can_pledge_fill_source(const WaveBox& wb) const {
@@ -4387,8 +4409,13 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             const size_t bytes = align_up(nt * r * D) + align_up(r * r * D) +
                                  (wb.has_remote && !device_exchange_ ? align_up(nt * r * D) : 0);
             const int my_chunk = static_cast<int>((active.size() - 1) / chunk_boxes);
+            // (both blocks bounded: with the device exchange a box adds only its
+            // X_RR_full to the source block, so a bound on that alone let one temp2
+            // block take an unchunked wave's whole temp2 - 7.3 GB, CA3 at 8x)
+            const size_t t2_add = align_up(nt * r * D);
             if (source_group_bytes.empty() || group_chunk_of.back() != my_chunk ||
-                (source_group_bytes.back() > 0 && source_group_bytes.back() + bytes > kSourceGroup)) {
+                (source_group_bytes.back() > 0 && source_group_bytes.back() + bytes > kSourceGroup) ||
+                (temp2_group_bytes.back() > 0 && temp2_group_bytes.back() + t2_add > kSourceGroup)) {
                 source_group_bytes.push_back(0);
                 temp2_group_bytes.push_back(0);
                 group_chunk_of.push_back(my_chunk);
@@ -6208,7 +6235,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::finish() {
         stats.heap_peak_resident = heap_.resident_at_peak();
         stats.heap_peak_transient = heap_.transient_at_peak();
     }
-    compact_near_store();   // before the transition packs the parents beside it
+    compact_near_store();   // before the transition packs the parents beside it (into the freed chunks)
     stats.finish += std::chrono::duration<double>(clock::now() - t0).count();
 }
 
@@ -7880,7 +7907,7 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         s.pledge = can_pledge_fill_source(*wb);
         srcs.push_back(s);
     }
-    return keep_factor_sources(srcs, stream);
+    return keep_sources_or_halves(srcs, stream);
 }
 
 // One kept block for `srcs_in`: per box T and X_SR, X_NR (unless pledged),
@@ -8011,6 +8038,16 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
     const bool over = keep_budgeted_ ? kept_.bytes + static_cast<double>(total) > keep_budget_
                                      : static_cast<double>(heap_.used() + total) >
                                            kSolveKeepFraction * static_cast<double>(heap_.capacity());
+    if (keep_may_split_ && !over && heap_.largest_free() < total && srcs_in.size() > 1) {
+        // within the budget, short only of one range for the whole group:
+        // the caller tries its halves, each in a block of its own
+#ifdef H2_HAVE_NVCOMP
+        if (compressed) xnr_compressor_.release();
+#endif
+        keep_retry_smaller_ = true;
+        ++eliminator_stats().keep_splits;
+        return false;
+    }
     if (over || heap_.largest_free() < total) {
         if (env::trace("wave")) {  // what the wave asked for against what the heap had
             int r = 0;
@@ -8460,6 +8497,27 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     }
 }
 
+// Kept factors, else their halves (2026-10-11): a group's kept factors are
+// one block, and on a fragmented heap there was no range for 1.1 GB with 6
+// GB free (CA3 at 8x, the landed owners' factors).  The keep then failed for
+// the level, and with it the chunked production, so the next wave asked for
+// its outputs whole.
+template<typename CoordType, typename DataType, typename KernelType>
+bool LevelEliminator<CoordType, DataType, KernelType>::keep_sources_or_halves(
+    const std::vector<KeptSource>& srcs, cudaStream_t stream) {
+    keep_retry_smaller_ = false;
+    keep_may_split_ = true;
+    const bool kept = keep_factor_sources(srcs, stream);
+    keep_may_split_ = false;
+    if (kept) return true;
+    if (!keep_retry_smaller_) return false;   // the keep failed (and said so)
+    keep_retry_smaller_ = false;
+    const size_t half = srcs.size() / 2;
+    const std::vector<KeptSource> a(srcs.begin(), srcs.begin() + static_cast<std::ptrdiff_t>(half));
+    const std::vector<KeptSource> b(srcs.begin() + static_cast<std::ptrdiff_t>(half), srcs.end());
+    return keep_sources_or_halves(a, stream) && keep_sources_or_halves(b, stream);
+}
+
 
 // ---------------------------------------------------------------------------
 // Device exchange (multi-rank levels, CUDA-aware MPI).
@@ -8558,7 +8616,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::copy_generators(
     std::unordered_set<const WaveBox*> mine;
     for (int i : active) mine.insert(&boxes[static_cast<size_t>(i)]);
     auto copy = [&](char* to, const char* from, size_t bytes, const char* what) {
-        if (bytes > 0) check_cuda(cudaMemcpyAsync(to, from, bytes, cudaMemcpyDeviceToDevice, stream), what);
+        if (bytes > 0) check_cuda(cudaMemcpyAsync(to, from, bytes, cudaMemcpyDefault, stream), what);
     };
     for (const GenPiece& pc : gen_pieces_) {
         if (mine.count(pc.wb) == 0) continue;
@@ -8573,7 +8631,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::copy_generators(
         size_t row = 0;
         for (const GenRun& run : pc.runs) {  // the destination's rows of every column
             check_cuda(cudaMemcpy2DAsync(dst + lay.xnr + row * D, nx * D, xnr + wb.off_xnr_orig + run.row * D, nt * D,
-                                         static_cast<size_t>(run.len) * D, r, cudaMemcpyDeviceToDevice, stream),
+                                         static_cast<size_t>(run.len) * D, r, cudaMemcpyDefault, stream),
                        "pack X_NR");
             row += static_cast<size_t>(run.len);
         }
@@ -9021,7 +9079,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::copy_owner_generators(
     std::unordered_set<const WaveBox*> mine;
     for (int i : active) mine.insert(&boxes[static_cast<size_t>(i)]);
     auto copy = [&](char* to, const char* from, size_t bytes, const char* what) {
-        if (bytes > 0) check_cuda(cudaMemcpyAsync(to, from, bytes, cudaMemcpyDeviceToDevice, stream), what);
+        if (bytes > 0) check_cuda(cudaMemcpyAsync(to, from, bytes, cudaMemcpyDefault, stream), what);
     };
     for (const OwnerPiece& pc : owner_plan_.pieces) {
         if (mine.count(pc.wb) == 0) continue;
@@ -9036,7 +9094,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::copy_owner_generators(
         size_t row = 0;
         for (const OwnerRun& run : pc.runs) {  // the recipient's rows of every column
             check_cuda(cudaMemcpy2DAsync(dst + lay.xnr + row * D, nx * D, xnr + wb.off_xnr_orig + run.row * D, nt * D,
-                                         static_cast<size_t>(run.len) * D, r, cudaMemcpyDeviceToDevice, stream),
+                                         static_cast<size_t>(run.len) * D, r, cudaMemcpyDefault, stream),
                        "pack X_NR");
             row += static_cast<size_t>(run.len);
         }
@@ -9169,7 +9227,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(
     cudaStream_t stream = Context::instance().stream();
     auto host = [&](const char* src, size_t count, const char* what) {
         std::vector<DataType> v(count);
-        if (count > 0) check_cuda(cudaMemcpy(v.data(), src, count * D, cudaMemcpyDeviceToHost), what);
+        if (count > 0) check_cuda(cudaMemcpy(v.data(), src, count * D, cudaMemcpyDefault), what);
         return v;
     };
     struct Landed { const OwnerEntry* e; Box* box; OwnerLayout lay; size_t k, r, nt; };
@@ -9222,7 +9280,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(
             raw += bytes;
             ++at;
         }
-        if (!keep_factor_sources(srcs, stream)) break;  // (keep_failed_ is set: the rest go to the host)
+        if (!keep_sources_or_halves(srcs, stream)) break;  // (keep_failed_ is set: the rest go to the host)
         for (size_t i = first; i < at; ++i) kept[i] = 1;
     }
     for (size_t i = 0; i < landed.size(); ++i) {
@@ -9238,7 +9296,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(
         } else {
             box->X_RR.set_owned(e.r, e.r, host(e.bulk + lay.lu, r * r, "landed LU"), MatrixStorage<DataType>::LU_FACTORED);
             box->X_RR_pivots.resize(r);
-            if (r > 0) check_cuda(cudaMemcpy(box->X_RR_pivots.data(), e.bulk + lay.piv, r * I, cudaMemcpyDeviceToHost), "landed pivots");
+            if (r > 0) check_cuda(cudaMemcpy(box->X_RR_pivots.data(), e.bulk + lay.piv, r * I, cudaMemcpyDefault), "landed pivots");
             box->X_SR.set_owned(e.k, e.r, host(e.bulk + lay.xsr, k * r, "landed X_SR"), MatrixStorage<DataType>::FULL);
             box->X_NR = MatrixStorage<DataType>{};
             if (nt > 0) box->X_NR.set_owned(e.ntot, e.r, host(e.bulk, nt * r, "landed X_NR"), MatrixStorage<DataType>::FULL);
@@ -9249,7 +9307,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::land_full_factors(
         {
             BoxState& st = state_of(e.morton);
             S* blk = heap_.alloc_resident<S>(std::max<size_t>(k * k * D, 1), ResidentKind::Near);
-            if (k > 0) check_cuda(cudaMemcpyAsync(blk, e.bulk + lay.schur, k * k * D, cudaMemcpyDeviceToDevice, stream), "landed Schur");
+            if (k > 0) check_cuda(cudaMemcpyAsync(blk, e.bulk + lay.schur, k * k * D, cudaMemcpyDefault, stream), "landed Schur");
             if (st.schur.ptr != nullptr) heap_.free(st.schur.ptr);  // (later launches are ordered after its reads)
             st.schur = DeviceMatrix{blk, e.k, e.k};
         }

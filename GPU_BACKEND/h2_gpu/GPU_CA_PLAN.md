@@ -4844,6 +4844,64 @@ state, which the background copier's frees make timing-dependent, so
 the logdet of the same configuration moves in the ninth digit (384^3
 Color: -792567588.01 three times, -792567590.66 once).
 
+**Color and CA0 at 768^3 in one job (40 GB, 16 nodes, the same nodes):**
+
+| 768^3, 64 ranks | Color | CA0 |
+|---|---|---|
+| leaf | 53.1 s (waves 40.1 / 43.0 / 44.5 s over ranks, exchange 10.0) | 56.0 s (waves 45.4 / 50.4 / 53.8, no exchange) |
+| levels 6 / 5 / 4 / 3 / 2 | 17.1 / 7.6 / 5.7 / 2.7 / 0.9 s | 19.8 / 7.7 / 5.6 / 2.6 / 0.9 s |
+| factor | **102.2 s** | 108.2 s |
+| acc_forward / solve | 1.66e-2 / 2.84 s | 1.73e-2 / 3.44 s |
+
+With the heap's walk gone and no pinning stall in either run, Color's
+leaf is the faster on the 40 GB cards: its slowest rank waits 10 s in
+the exchange, CA0's interior brick computes 9 s longer than Color's
+slowest (26% more boxes).  The earlier "CA0 53.8 against Color 63.1"
+compared runs on different nodes, Color's with a pinning stall.  On the
+80 GB cards (above) CA0 won its leaf by 6%.
+
+#### CA3 at 8x on 40 GB, and the pinned pool (2026-10-11, evening)
+
+The heap-exhausted message now names the request's kind and lists what
+holds the heap.  CA3 at 384^3 on 8 ranks, step by step:
+
+1. *Exchange overflow, 2-7 GB single requests*: an owner-wave payload too
+   large for the exchange arena fell back to one main-heap block.  Now a
+   main-heap block if a range fits, else pinned host memory (the device
+   reads it at the same address; the copies that read payloads take
+   cudaMemcpyDefault).
+2. *Wave outputs, 7.3 GB*: the temp2 blocks were grouped by a bound on the
+   source block, which with the device exchange grows by only X_RR_full a
+   box, so one temp2 block took a whole unchunked wave.  Both bounded.
+3. *Keep failed, no contiguous range* (1.1 GB with 6 GB free in 9000
+   ranges): a keep group that finds no single range now splits in halves
+   (keep_sources_or_halves) - with the keep failed, the chunked
+   production stopped and the next wave asked for 17 GB of outputs.
+
+With these CA3's leaf ran (50.6 s; Color 49.0, CA0 47.0), its transition
+and the next level, then the node's host memory ran out (ranks at 57-59
+GB of a ~60 GB share).  In the next run the received payloads waiting for
+their install took 17.8 GB of the main heap and the leaf's own blocks
+found no room; bounding the payloads to the hold limit sent them to the
+host instead (and the node ran out) and sent 33 GB of Color's leaf
+buffers to the host too (leaf 48.9 -> 64.2 s), so that bound is not in.
+**What blocks CA3 at 8x is its install at the colour's end**: every
+payload of a colour is held until the colour ends, ~18 GB a rank for the
+green colour at 8x, and neither the 40 GB card nor the host share has
+it.  Installing the received payloads at each wave boundary (they touch
+only other owners' boxes of the current colour, which no wave of the
+colour on this rank reads) would bound them to about a wave's worth
+(~2 GB); owner_exchange's install is ~270 lines entangled with the
+colour's bookkeeping.  Not done.
+
+**The pinned pool.**  Idle chunks now stay pinned between levels and are
+unpinned only when the job is short of host memory on its node
+(`host_room_bytes() < kHostReserveBytes`); unpinning half at every level
+start made the next level pin again, the step that runs 10x slower on a
+fragmented node.  The chunks are mmap'd rather than malloc'd: trimming
+24 GB of idle chunks had left the RSS unchanged (the allocator kept the
+freed memory).  Color and CA0 at 384^3 unchanged bitwise (81.3 / 82.8 s).
+
 Also on 80 GB: CA0's leaf hand-over and transition now fit (20.76 GB of
 kept factors staged), and it dies one level up with the same ghost
 mismatch as at 384^3 ("near block shape (hi): block 300 x 357, box
