@@ -1659,6 +1659,10 @@ public:
                         lvl, hp.alloc_calls(), hp.alloc_seconds(), hp.free_calls(), hp.free_seconds(), e.pb_heap,
                         static_cast<long long>(e.pb_heap_ops), static_cast<long long>(e.pb_idle_chunks),
                         static_cast<long long>(e.pb_chunks), e.pb_idle_plan);
+            std::printf("  [gpu] level %d owner groups' raw blocks in one heap block a group: %lld groups, %lld blocks; "
+                        "%lld groups found no range for it, %lld blocks moved out raw\n", lvl,
+                        static_cast<long long>(e.og_arena_groups), static_cast<long long>(e.og_arena_blocks),
+                        static_cast<long long>(e.og_arena_declined), static_cast<long long>(e.og_arena_moved));
         }
         if (e.remote_generators > 0 || e.exchange > 0.0) {
             const auto& tt = transport_timers();

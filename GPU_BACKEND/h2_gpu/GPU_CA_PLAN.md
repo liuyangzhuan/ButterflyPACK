@@ -5105,6 +5105,50 @@ the slowest Color rank's 37.4 s (80 GB), and 53.6 s against 44.3 s on
 64 ranks the replication costs more than the communication it saves, on
 both cards.
 
+#### The heap's host time, and an owner group's raw blocks in one block (2026-10-12)
+
+The box region's "buffers" timer was not restarted per production chunk, so
+from the second chunk on it also counted the previous chunk's launches,
+compressions and keeps: 6-8.5 s a leaf, of which 0.26-0.56 s is buffers
+(fixed in 39b9fa6, which also times the heap under BPACK_TRACE=wave).
+Measured at the 384^3 leaf on 8 ranks (the same 32,768 boxes a rank as
+768^3 on 64): the heap does 3.8M allocations and 3.9M frees, 5.3 s of
+host time, on 40 GB cards (2.1M and 1.7M, 5.0 s, on 80 GB).  Most are the
+owner pass's: each group puts its packed near blocks back raw, a heap
+block each (~105 KB), and under pressure packs them again and frees them
+(2.85M blocks a leaf on 40 GB, 0.66M on 80 GB).  The GPU idles 5.4-5.8 s
+inside the leaf's waves.
+
+Fix 1: an owner group allocates one heap block for the raw blocks its pack
+will take back, foreseen by the pack's own rule (pressure from what the
+group adds; on a replicated level's ghost groups the shared-block rule),
+and cuts them out with a bump pointer.  The pack's decision stays where it
+was, after the GEMMs; a block it leaves raw after all is copied to a block
+of its own before the group's goes back.  Sizes round as the heap's do, so
+the heap's count at every decision is unchanged and the results are
+bitwise the same.
+
+384^3 on 8 ranks, alternating builds on the same nodes (Color, two runs
+each):
+
+| card | | heap allocations / frees | heap host time | leaf | factor time |
+|---|---|---|---|---|---|
+| 40 GB | before | 3.81M / 3.91M | 5.26 s | 47.35 / 47.17 s | 79.7 / 79.3 s |
+| 40 GB | fix 1 | 1.28M / 1.38M | 2.31 s | 45.15 / 45.12 s | 77.5 / 77.3 s |
+| 80 GB | before | 2.06M / 1.68M | 4.87 s | 39.10 / 39.10 s | 68.7 / 68.6 s |
+| 80 GB | fix 1 | 1.44M / 1.06M | 4.03 s | 38.94 / 38.67 s | 68.6 / 68.4 s |
+
+On 40 GB 716 groups took 2.53M blocks this way, none moved out; on 80 GB
+(where 409 of 776 groups stay raw) 369 groups took 0.63M blocks, 11,892
+moved out.  Color, CA0 at 384^3 and CA0 at 192^3 bitwise unchanged; the
+192^3 replica check: 0 of 9488 / 3536 ghost copies differ.  CA0's leaf
+took 3.0M blocks this way, CA3's 2.6M.
+
+What is left on 80 GB is the transient search (19.8M range look-ups a
+leaf: each step of the size-class walk looks the range up again in the
+address map) and the per-call bookkeeping (five or six node containers):
+fix 2, not done.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

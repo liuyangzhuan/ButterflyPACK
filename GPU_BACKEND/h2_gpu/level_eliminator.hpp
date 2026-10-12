@@ -134,6 +134,9 @@ struct EliminatorStats {
     // GPU waits for the host there)
     double pb_heap = 0.0, pb_idle_plan = 0.0;
     int64_t pb_heap_ops = 0, pb_idle_chunks = 0, pb_chunks = 0;
+    // the owner groups' raw blocks in one heap block a group (group_arena_):
+    // groups, blocks, groups with no range for it, blocks moved out raw
+    int64_t og_arena_groups = 0, og_arena_blocks = 0, og_arena_declined = 0, og_arena_moved = 0;
     // the owner pass's host time by part of the group loop
     double og_mat = 0.0, og_win = 0.0, og_stage = 0.0, og_launch = 0.0, og_pack = 0.0;
     double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
@@ -1301,8 +1304,11 @@ private:
     struct AdoptedBlock { bool schur; uint64_t key; DeviceMatrix* m; };
     enum MatSite { MatBeginSchur = 0, MatOwnerJoin, MatGroup, MatDownload, MatGenerator,
                    MatBuildParent, MatSiteCount };
+    // `take`: where a block's raw memory comes from instead of a heap block of
+    // its own (null from it: the heap)
+    using RawTake = std::function<char*(const AdoptedBlock&, size_t)>;
     void materialize_adopted(const std::vector<AdoptedBlock>& want, cudaStream_t stream,
-                             MatSite site = MatSiteCount);
+                             MatSite site = MatSiteCount, const RawTake* take = nullptr);
     // H2 host staging (c), asynchronous: the gather half of a materialization
     // kept apart, so a group's gather can run on the near copy stream under
     // the previous group's GEMMs and be decompressed when its turn comes.
@@ -1315,7 +1321,30 @@ private:
         cudaEvent_t done = nullptr;        // recorded after a gather on another stream
     };
     void plan_gather(GatherPlan& g, cudaStream_t stream, cudaEvent_t done);
-    void materialize_from_gather(GatherPlan& g, cudaStream_t stream, MatSite site);
+    void materialize_from_gather(GatherPlan& g, cudaStream_t stream, MatSite site, const RawTake* take = nullptr);
+    // An owner group's raw blocks that its pack takes back, in one heap block
+    // cut by a bump pointer (2026-10-12): the leaf's owner pass made a heap
+    // block for each of them and gave it back after the pack - 2.85M blocks
+    // of ~105 KB a leaf, 5.3 s of the heap's host time with the frees (384^3
+    // on 8 ranks, 40 GB cards).  Sizes round as the heap's do, so what the
+    // heap counts at every decision is unchanged.
+    struct GroupArena { char* base = nullptr; size_t bytes = 0, used = 0; };
+    GroupArena group_arena_;
+    bool in_group_arena(const void* p) const {
+        const char* c = static_cast<const char*>(p);
+        return group_arena_.base != nullptr && c >= group_arena_.base && c < group_arena_.base + group_arena_.bytes;
+    }
+    static size_t arena_round(size_t bytes) {
+        const size_t a = DeviceHeap::block_alignment();
+        return std::max<size_t>(a, (bytes + a - 1) / a * a);
+    }
+    char* group_arena_take(size_t bytes) {
+        const size_t size = arena_round(bytes);
+        if (group_arena_.base == nullptr || group_arena_.used + size > group_arena_.bytes) return nullptr;
+        char* p = group_arena_.base + group_arena_.used;
+        group_arena_.used += size;
+        return p;
+    }
     // Everywhere outside the wave materialization a null ptr means "no block
     // here", and the reader answers from the kernel or makes a fresh block.
     // It must not also mean "adopted and still packed": that reads as the
@@ -1950,7 +1979,7 @@ private:
             if (!ok[j]) continue;
             TargetT& t = targets[which[j]];
             if (t.block->ptr == nullptr) continue;
-            heap_.free(t.block->ptr);
+            if (!in_group_arena(t.block->ptr)) heap_.free(t.block->ptr);   // (the group's block: at its end)
             t.block->ptr = nullptr;
         }
         ++stats.np_groups;
@@ -5609,6 +5638,47 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             st.os_slots += static_cast<int64_t>(slots.size());
             ++st.os_groups;
         }
+        // The blocks this group's pack will take back - by the rule the pack
+        // applies after the GEMMs, with the pressure foreseen from what the
+        // group adds to the heap - in one heap block (group_arena_).  A block
+        // the pack leaves raw after all moves to a block of its own before
+        // that one goes back, so the decision itself stays where it was.
+        std::unordered_set<const DeviceMatrix*> arena_set;
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1) {
+            size_t group_raw = 0;
+            for (size_t i = first; i < last; ++i) {
+                const Target& t = targets[i];
+                if (t.block->ptr == nullptr) group_raw += arena_round(static_cast<size_t>(t.rows) * t.cols * D);
+            }
+            const bool pressure = heap_.used() + group_raw > hold_limit();
+            size_t arena_bytes = 0;
+            for (size_t i = first; i < last; ++i) {
+                const Target& t = targets[i];
+                if (t.block->ptr != nullptr || t.rows <= 0 || t.cols <= 0) continue;
+                bool packs = pressure;
+                if (replicated_ && !replicas_done_) {
+                    packs = block_shared(static_cast<uint64_t>(t.key)) ? pack_shared_ : pressure;
+                }
+                if (!packs) continue;
+                arena_set.insert(t.block);
+                arena_bytes += arena_round(static_cast<size_t>(t.rows) * t.cols * D);
+            }
+            if (arena_bytes > 0) {
+                group_arena_.base = heap_.try_alloc_resident(arena_bytes, ResidentKind::Adopted);
+                group_arena_.bytes = group_arena_.base != nullptr ? arena_bytes : 0;
+                group_arena_.used = 0;
+                if (group_arena_.base != nullptr) {
+                    ++stats.og_arena_groups;
+                    stats.og_arena_blocks += static_cast<int64_t>(arena_set.size());
+                } else {
+                    ++stats.og_arena_declined;   // (no range for it: a heap block each, as before)
+                    arena_set.clear();
+                }
+            }
+        }
+        const RawTake arena_take = [&](const AdoptedBlock& w, size_t bytes) -> char* {
+            return arena_set.count(w.m) != 0 ? group_arena_take(bytes) : nullptr;
+        };
         {   // every block of the group raw: the ones held packed put back in one
             // batch, the ones that do not exist yet allocated and marked for
             // their kernel values
@@ -5624,8 +5694,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     want.push_back(AdoptedBlock{schur, schur ? static_cast<uint64_t>(morton) : t.key, t.block});
                     continue;
                 }
-                t.block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D,
-                                                       ResidentKind::OwnerNear);
+                const size_t raw = static_cast<size_t>(t.rows) * t.cols * D;
+                char* taken = arena_set.count(t.block) != 0 ? group_arena_take(raw) : nullptr;
+                t.block->ptr = taken != nullptr ? reinterpret_cast<S*>(taken)
+                                                : heap_.alloc_resident<S>(raw, ResidentKind::OwnerNear);
                 t.block->rows = t.rows;
                 t.block->cols = t.cols;
                 t.fresh = true;
@@ -5635,10 +5707,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 bool same = next_plan->want.size() == want.size();
                 for (size_t i = 0; same && i < want.size(); ++i) same = next_plan->want[i].m == want[i].m;
                 if (!same) throw std::runtime_error("LevelEliminator: the prefetched gather does not match its group");
-                materialize_from_gather(*next_plan, stream, MatGroup);
+                materialize_from_gather(*next_plan, stream, MatGroup, &arena_take);
                 next_plan.reset();
             } else {
-                materialize_adopted(want, stream, MatGroup);
+                materialize_adopted(want, stream, MatGroup, &arena_take);
             }
         }
         lap(stats.og_mat);
@@ -5810,6 +5882,27 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // precision blocks, discard the compressed bytes
         if (compress_factors_ >= 1 && env::check("fillsrc")) {
             measure_near_sizes(targets, first, last, stream);
+        }
+        if (group_arena_.base != nullptr) {
+            // what the pack left raw (the pressure foreseen wrongly, or no room
+            // in the store) to a block of its own, then the group's block back
+            bool moved = false;
+            for (size_t i = first; i < last; ++i) {
+                Target& t = targets[i];
+                if (t.block->ptr == nullptr || !in_group_arena(t.block->ptr)) continue;
+                const size_t raw = static_cast<size_t>(t.rows) * t.cols * D;
+                S* own = heap_.alloc_resident<S>(raw, t.fresh ? ResidentKind::OwnerNear : ResidentKind::Adopted);
+                check_cuda(cudaMemcpyAsync(own, t.block->ptr, raw, cudaMemcpyDeviceToDevice, stream), "owner group block");
+                t.block->ptr = own;
+                ++stats.og_arena_moved;
+                moved = true;
+            }
+            // (the pack's compression synchronized the stream; the moves have
+            // not, and the heap may hand the block to a writer on another
+            // stream - the near prefetch - before they run)
+            if (moved) check_cuda(cudaStreamSynchronize(stream), "owner group block");
+            heap_.free(group_arena_.base);
+            group_arena_ = GroupArena{};
         }
         lap(stats.og_pack);
     }
@@ -7429,12 +7522,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_fill_batch(
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
-    const std::vector<AdoptedBlock>& want, cudaStream_t stream, MatSite site) {
+    const std::vector<AdoptedBlock>& want, cudaStream_t stream, MatSite site, const RawTake* take) {
     if (want.empty()) return;
     GatherPlan g;
     g.want = want;
     plan_gather(g, stream, nullptr);
-    materialize_from_gather(g, stream, site);
+    materialize_from_gather(g, stream, site, take);
 }
 
 // The gather half.  A block written by build_parent is one contiguous run
@@ -7536,7 +7629,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::plan_gather(GatherPlan& g
 // gathered pieces and the in-place runs, the scratch returned.
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::materialize_from_gather(GatherPlan& g, cudaStream_t stream,
-                                                                                 MatSite site) {
+                                                                                 MatSite site, const RawTake* take) {
     auto& stats = eliminator_stats();
     const auto t0 = std::chrono::steady_clock::now();
     auto packed_of = [&](const AdoptedBlock& w) -> const PackedBlock* {
@@ -7563,9 +7656,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_from_gather(G
         if (pb->rows != w.m->rows || pb->cols != w.m->cols) {
             throw std::runtime_error("LevelEliminator::materialize_adopted: shape of the packed block changed");
         }
-        w.m->ptr = heap_.alloc_resident<S>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S),
-                                           ResidentKind::Adopted);
-        const double bytes = static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
+        const size_t raw = static_cast<size_t>(pb->rows) * pb->cols * sizeof(S);
+        char* taken = take != nullptr ? (*take)(w, raw) : nullptr;
+        w.m->ptr = taken != nullptr ? reinterpret_cast<S*>(taken) : heap_.alloc_resident<S>(raw, ResidentKind::Adopted);
+        const double bytes = static_cast<double>(raw);
         stats.mat_bytes += bytes;
         if (site < MatSiteCount) stats.mat_site_bytes[site] += bytes;
         ++stats.mat_blocks;

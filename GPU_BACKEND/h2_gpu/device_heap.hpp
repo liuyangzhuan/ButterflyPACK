@@ -414,6 +414,9 @@ public:
     size_t free_ranges() const { return free_.size(); }
     size_t take_calls() const { return take_calls_; }
     size_t take_scans() const { return take_scans_; }
+    // Every block's size is a multiple of this (a block cut out of another
+    // must round alike for the accounting to match).
+    static constexpr size_t block_alignment() { return kAlign; }
     // BPACK_TRACE=wave: the host time of the allocations and frees, and how many
     size_t alloc_calls() const { return alloc_calls_; }
     size_t free_calls() const { return free_calls_; }
