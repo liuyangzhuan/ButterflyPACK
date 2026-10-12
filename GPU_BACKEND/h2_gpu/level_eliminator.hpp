@@ -129,6 +129,11 @@ struct EliminatorStats {
     // the near blocks' allocations); owner candidates, pairs (parallel, with
     // a CA level's order by source), the join (new targets), batches
     double pb_buffers = 0.0, pb_items = 0.0;
+    // BPACK_TRACE=wave: the heap's own host time in the box region's buffers,
+    // and the box region's planning while the stream had nothing queued (the
+    // GPU waits for the host there)
+    double pb_heap = 0.0, pb_idle_plan = 0.0;
+    int64_t pb_heap_ops = 0, pb_idle_chunks = 0, pb_chunks = 0;
     // the owner pass's host time by part of the group loop
     double og_mat = 0.0, og_win = 0.0, og_stage = 0.0, og_launch = 0.0, og_pack = 0.0;
     double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
@@ -4547,6 +4552,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         const size_t c0 = std::min(active.size(), static_cast<size_t>(chunk) * chunk_boxes);
         const size_t c1 = nchunks == 1 ? active.size() : std::min(active.size(), c0 + chunk_boxes);
         if (c0 >= c1) continue;
+        // (the chunk's planning starts here: the buffers timer measured from
+        // the previous chunk's launch, so its compressions and keeps with
+        // their syncs were counted as buffers)
+        if (chunk > 0) t0 = clock::now();
+        const auto t_chunk = clock::now();
+        const bool gpu_idle_at_plan = cudaStreamQuery(stream) == cudaSuccess;
+        const double heap_s0 = heap_.op_seconds();
+        const size_t heap_n0 = heap_.alloc_calls() + heap_.free_calls();
         const std::vector<int> chunk_active(active.begin() + static_cast<ptrdiff_t>(c0),
                                             active.begin() + static_cast<ptrdiff_t>(c1));
         elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 0);
@@ -4667,6 +4680,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         stats.pb_buffers += std::chrono::duration<double>(clock::now() - t0).count();
+        stats.pb_heap += heap_.op_seconds() - heap_s0;
+        stats.pb_heap_ops += static_cast<int64_t>(heap_.alloc_calls() + heap_.free_calls() - heap_n0);
         const auto t_items = clock::now();
         // Launch items of the box region.
         std::vector<EvalItem> evals;
@@ -4951,6 +4966,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (int i : chunk_active) piv_ptrs.push_back(boxes[static_cast<size_t>(i)].piv);
         const size_t off_piv_ptrs = meta_.append(piv_ptrs);
         stats.plan += std::chrono::duration<double>(clock::now() - t0).count();
+        ++stats.pb_chunks;
+        if (gpu_idle_at_plan) {
+            ++stats.pb_idle_chunks;
+            stats.pb_idle_plan += std::chrono::duration<double>(clock::now() - t_chunk).count();
+        }
 
         // ---- 3. device work, in stream order: the box region, then the owner
         // pass, planned on the host while the box region runs.  Nothing waits

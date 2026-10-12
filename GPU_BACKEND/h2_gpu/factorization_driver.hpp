@@ -1651,6 +1651,15 @@ public:
                     e.po_pairs, e.po_order, e.po_batches, e.launch, e.sk_wait, e.reclaim_wait, e.exchange_wait,
                     e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
                     e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
+        if (wave_trace_enabled()) {
+            const DeviceHeap& hp = DeviceHeap::instance();
+            std::printf("  [gpu] level %d heap work (the process so far): %zu allocations %.2f s, %zu frees %.2f s; "
+                        "in the box region's buffers %.2f s (%lld calls); the box region planned while the stream "
+                        "was idle in %lld of %lld chunks, %.2f s\n",
+                        lvl, hp.alloc_calls(), hp.alloc_seconds(), hp.free_calls(), hp.free_seconds(), e.pb_heap,
+                        static_cast<long long>(e.pb_heap_ops), static_cast<long long>(e.pb_idle_chunks),
+                        static_cast<long long>(e.pb_chunks), e.pb_idle_plan);
+        }
         if (e.remote_generators > 0 || e.exchange > 0.0) {
             const auto& tt = transport_timers();
             std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, rest %.2f "

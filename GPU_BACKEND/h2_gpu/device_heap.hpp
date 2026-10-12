@@ -25,6 +25,7 @@
 #include <array>
 #include <functional>
 #include <iterator>
+#include <chrono>
 #include <map>
 #include <set>
 #include <dlfcn.h>
@@ -268,6 +269,7 @@ public:
     void set_reclaimer(std::function<bool()> reclaimer) { reclaimer_ = std::move(reclaimer); }
 
     char* alloc_bytes(size_t bytes, bool resident, ResidentKind kind = ResidentKind::Other) {
+        const OpTimer timer(op_timing_ ? &alloc_seconds_ : nullptr, alloc_calls_);
         ensure_initialized();
         const size_t size = std::max<size_t>(kAlign, (bytes + kAlign - 1) / kAlign * kAlign);
         size_t offset = 0;
@@ -316,6 +318,7 @@ public:
 
     void free(const void* ptr) {
         if (ptr == nullptr) return;
+        const OpTimer timer(op_timing_ ? &free_seconds_ : nullptr, free_calls_);
         const size_t offset = static_cast<size_t>(static_cast<const char*>(ptr) - base_);
         auto it = allocated_.find(offset);
         if (it == allocated_.end()) {
@@ -411,6 +414,12 @@ public:
     size_t free_ranges() const { return free_.size(); }
     size_t take_calls() const { return take_calls_; }
     size_t take_scans() const { return take_scans_; }
+    // BPACK_TRACE=wave: the host time of the allocations and frees, and how many
+    size_t alloc_calls() const { return alloc_calls_; }
+    size_t free_calls() const { return free_calls_; }
+    double op_seconds() const { return alloc_seconds_ + free_seconds_; }
+    double alloc_seconds() const { return alloc_seconds_; }
+    double free_seconds() const { return free_seconds_; }
     size_t resident_used() const { return resident_used_; }
     size_t transient_used() const { return transient_used_; }
     // The split of peak(): what each class held when it was reached.
@@ -622,6 +631,20 @@ private:
     size_t used_ = 0;
     size_t peak_ = 0;
     size_t take_calls_ = 0, take_scans_ = 0;
+    size_t alloc_calls_ = 0, free_calls_ = 0;
+    double alloc_seconds_ = 0.0, free_seconds_ = 0.0;
+    bool op_timing_ = env::trace("wave");
+    struct OpTimer {   // (the calls are counted always, timed under the trace)
+        double* sink;
+        std::chrono::steady_clock::time_point t0;
+        OpTimer(double* s, size_t& calls) : sink(s) {
+            ++calls;
+            if (sink != nullptr) t0 = std::chrono::steady_clock::now();
+        }
+        ~OpTimer() {
+            if (sink != nullptr) *sink += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        }
+    };
     // Resident blocks (a level or longer: chiefly the retained solve factors
     // and the fill sources) versus per-wave transient blocks, and what each
     // held when the overall peak was reached.
