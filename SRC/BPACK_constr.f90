@@ -32,6 +32,16 @@ module BPACK_constr
       type(matrixblock), pointer :: p => null()
    end type hodlr_gpu_blkptr
 
+   !> what HODLR_gpu_host_entries needs to ask the application for entries
+   !> (the GPU construction of a matrix without a GPU evaluator)
+   type hodlr_gpu_entry_ctx
+      type(Hoption), pointer :: option => null()
+      type(mesh), pointer :: msh => null()
+      type(kernelquant), pointer :: ker => null()
+      type(proctree), pointer :: ptree => null()
+      type(Hstat), pointer :: stats => null()
+   end type hodlr_gpu_entry_ctx
+
    !> seconds of the merges of a shared block: moving the decomposed side to
    !> the even layout, the TSQR, the other side's products
    real(kind=8) :: hodlr_gpu_merge_time(3) = 0
@@ -51,7 +61,14 @@ contains
 
       select TYPE (quant)
       type is (quant_bmat)
-         call BPACK_ExtractElement(quant%bmat, quant%option, quant%msh, quant%stats, quant%ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
+         if (associated(quant%ptree_caller)) then
+            ! (the source built on a subset of the caller's ranks; bmat etc. associated on those only)
+            call BPACK_ExtractElement_Bridge(quant%bmat, quant%option, quant%msh, quant%stats, quant%ptree, &
+                                             quant%ptree_caller, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, &
+                                             pgidx, Npmap, pmaps)
+         else
+            call BPACK_ExtractElement(quant%bmat, quant%option, quant%msh, quant%stats, quant%ptree, Ninter, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
+         endif
       class default
          write (*, *) "unexpected type"
          stop
@@ -917,7 +934,7 @@ contains
          do ii = 1, N
          do kk = 1, option%knn
             knn = option%knn
-            if (nns_m(kk,ii) /= 0) then
+            if (nns_n(kk,ii) /= 0) then
                msh%nns(ii + M, kk) = nns_n(kk,ii)
             else
                msh%nns(ii + M, kk) = 0
@@ -1428,7 +1445,7 @@ contains
             call BF_sym2asym(blocks)
          elseif (option%forwardN15flag == 2) then
             call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
-            call BF_checkError(blocks_1, option, msh, ker, stats, ptree, 0, -1, error)
+            call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, -1, error)
             if(error>50*option%tol_comp)then
                pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
                if(option%verbosity>=0 .and. pp==1)write(*,*)'warning: error ',error,',  with the N15 algorithm'
@@ -2000,8 +2017,8 @@ contains
       ! (not in the construction time)
       if (option%HODLR_use_gpu > 0 .and. c_associated(ho_bf1%gpu)) call HODLR_gpu_warm_up(ho_bf1, option, ptree)
       if (c_bpack_env_check('kernel'//c_null_char) /= 0) then
-         if (HODLR_gpu_construct_ok(ho_bf1, ho_bf1%Maxlevel + 1, option, ptree)) &
-            call HODLR_gpu_check_kernel(ho_bf1, option, msh, ker, ptree)
+         if (HODLR_gpu_construct_ok(ho_bf1, ho_bf1%Maxlevel + 1, option, ptree) .and. &
+             .not. HODLR_gpu_entries_on_host(ho_bf1%gpu)) call HODLR_gpu_check_kernel(ho_bf1, option, msh, ker, ptree)
       endif
 
       n1 = MPI_Wtime()
@@ -2110,6 +2127,11 @@ contains
          endif
 
          if (option%sym > 0 .and. level_c /= ho_bf1%Maxlevel + 1) then
+            ! (elem_extract=1: every rank done with the level's rounds before the links, collectives of the parents'
+            ! groups; the symmetric HODLR builds A21 only, so a rank of a parent's group may have no block of the
+            ! level and would otherwise wait in the link for ranks that wait in a round for it.  Done, not just
+            ! between rounds: a rank between rounds may be before LR_HBACA's merges, with more rounds to come)
+            call HODLR_entry_rounds_end(option, msh, ker, ptree, stats, .true.)
             do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
                if (IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP_inverse(ii)%pgno)) then
                   call HODLR_sym_link_pair(ho_bf1%levels(level_c)%BP(2*ii - 1), &
@@ -2180,10 +2202,12 @@ contains
    end subroutine HODLR_construction
 
    !> Whether level_c of the HODLR construction (Maxlevel+1: the dense
-   !> leaves) runs on the GPU: HODLR_use_gpu > 0, a GPU evaluator of the entries and the
-   !> points registered, and for the low-rank levels BACA
-   !> (RecLR_leaf=4) or BACA without overlap (RecLR_leaf=5) on whole blocks
-   !> (LR_BLK_NUM=1, forwardN15flag=0)
+   !> leaves) runs on the GPU: HODLR_use_gpu > 0, the points registered, and
+   !> for the low-rank levels BACA (RecLR_leaf=4) or BACA without overlap
+   !> (RecLR_leaf=5) on whole blocks (LR_BLK_NUM=1, forwardN15flag=0).  The
+   !> entries from the matrix's GPU evaluator, or without one through the host
+   !> from the application's block extraction (elem_extract=1, or the local
+   !> elem_extract=2; elem_extract=0 is refused)
    logical function HODLR_gpu_construct_ok(ho_bf1, level_c, option, ptree)
       implicit none
       type(hobf)::ho_bf1
@@ -2197,16 +2221,64 @@ contains
       if (option%HODLR_use_gpu <= 0 .or. option%format /= HODLR) return
       if (.not. c_associated(ho_bf1%gpu)) return
       call c_bpack_hodlr_gpu_construct_ready(ho_bf1%gpu, ready)
-      if (ready /= 1) return
+      if (ready == 0) return
       if (level_c <= ho_bf1%Maxlevel) then
          if (option%RecLR_leaf /= BACANOVER .and. option%RecLR_leaf /= BACA) return
          if (option%LR_BLK_NUM /= 1 .or. option%forwardN15flag /= 0) return
          if (option%level_check == level_c) return
+         if (ready == 2) call BPACK_require(option%elem_extract == 1 .or. option%elem_extract == 2, &
+            'the GPU HODLR construction without a GPU evaluator takes the entries from the block extraction: '// &
+            'set elem_extract=1 (or 2); elem_extract=0 is not supported')
       else
          if (option%use_zfp /= 0) return
+         if (ready == 2) call BPACK_require(option%elem_extract == 1 .or. option%elem_extract == 2, &
+            'the GPU HODLR construction without a GPU evaluator takes the entries from the block extraction: '// &
+            'set elem_extract=1 (or 2); elem_extract=0 is not supported')
       endif
       HODLR_gpu_construct_ok = .true.
    end function HODLR_gpu_construct_ok
+
+   !> Whether the GPU construction of ho_bf1 takes its entries through the
+   !> host (no GPU evaluator; HODLR_gpu_host_entries)
+   logical function HODLR_gpu_entries_on_host(gpu)
+      implicit none
+      type(c_ptr) :: gpu
+      integer(c_int) :: ready
+
+      HODLR_gpu_entries_on_host = .false.
+      if (.not. c_associated(gpu)) return
+      call c_bpack_hodlr_gpu_construct_ready(gpu, ready)
+      HODLR_gpu_entries_on_host = (ready == 2)
+   end function HODLR_gpu_entries_on_host
+
+   !> The end of a phase of the HODLR construction whose entries come from the
+   !> application's collective block extraction (elem_extract=1): every call
+   !> of element_Zmn_blocklist_user is a round over ptree%Comm, so a rank that
+   !> asked for all its entries keeps answering the other ranks' rounds.  done
+   !> = .false.: until no rank has entries to ask for, every rank waiting at
+   !> some such point (as LR_HBACA before its merges): enough before a
+   !> collective of a group all of whose ranks wait at this same point.  done
+   !> = .true.: until every rank is done with its rounds (the level's end of
+   !> HODLR_construction), before any other collective.
+   !> A no-op with the local elem_extract=2
+   subroutine HODLR_entry_rounds_end(option, msh, ker, ptree, stats, done)
+      implicit none
+      type(Hoption)::option
+      type(mesh)::msh
+      type(kernelquant)::ker
+      type(proctree)::ptree
+      type(Hstat)::stats
+      logical done
+      type(intersect)::submats(1)
+      integer passflag, myflag
+
+      if (option%elem_extract /= 1) return
+      myflag = merge(2, 1, done)
+      passflag = 0
+      do while (passflag < myflag)
+         call element_Zmn_blocklist_user(submats, 0, msh, option, ker, myflag, passflag, ptree, stats)
+      enddo
+   end subroutine HODLR_entry_rounds_end
 
    !> The low-rank blocks of level level_c on the GPU, with BPACK_CHECK=hodlr
    !> compared with the CPU construction of the same blocks from the same
@@ -2318,7 +2390,7 @@ contains
          blks(b)%p => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
          call assert(blks(b)%p%level_butterfly == 0, 'HODLR GPU construction: a block is not low rank')
       enddo
-      call HODLR_gpu_baca_blocks(ho_bf1%gpu, blks, nb, option, stats, msh, ptree, rnk, gout, thost, tcore, trec, &
+      call HODLR_gpu_baca_blocks(ho_bf1%gpu, blks, nb, option, stats, msh, ker, ptree, rnk, gout, thost, tcore, trec, &
                                  npass, nblkit, keep=.true.)
 
       !>**** the bookkeeping of BF_compress_NlogN and BP_compress_entry
@@ -2432,10 +2504,14 @@ contains
       allocate (rnk(max(1, nleaf)), pid(3, max(1, nleaf)))
       pid = 0
       if (nextra >= 0 .and. ptree%pgrp(cgno)%nproc > 1) then
-         call HODLR_gpu_balanced_pieces(ho_bf1%gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ptree, gout, pid)
+         call HODLR_gpu_balanced_pieces(ho_bf1%gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ker, ptree, &
+                                        gout, pid)
       else
-         call HODLR_gpu_baca_blocks(ho_bf1%gpu, leaves, nleaf, option, stats, msh, ptree, rnk, gout, thost, tcore, trec, &
-                                    npass, nblkit, dids=pid)
+         call HODLR_gpu_baca_blocks(ho_bf1%gpu, leaves, nleaf, option, stats, msh, ker, ptree, rnk, gout, thost, tcore, &
+                                    trec, npass, nblkit, dids=pid)
+         ! (the entries through the host: every rank's rounds done before the merges)
+         if (HODLR_gpu_entries_on_host(ho_bf1%gpu)) &
+            call HODLR_entry_rounds_end(option, msh, ker, ptree, stats, .false.)
       endif
       tb = MPI_Wtime()
       tp(1) = tb - t0
@@ -2687,7 +2763,7 @@ contains
    !> piece (the same whichever rank computes it); the pieces computed off
    !> their owner then move to it.  leaves: this rank's pieces; out: pid(:, i)
    !> the ids of the device factors U, V of leaves(i) and its rank
-   subroutine HODLR_gpu_balanced_pieces(gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ptree, gout, pid)
+   subroutine HODLR_gpu_balanced_pieces(gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ker, ptree, gout, pid)
       implicit none
       type(c_ptr) :: gpu
       type(matrixblock)::blk
@@ -2696,6 +2772,7 @@ contains
       type(Hoption)::option
       type(Hstat)::stats
       type(mesh)::msh
+      type(kernelquant)::ker
       type(proctree)::ptree
       real(c_double) :: gout(6)
       integer :: pid(:, :)
@@ -2778,8 +2855,10 @@ contains
       gout = 0
       allocate (tid(3, max(1, nmine)))
       tid = 0
-      if (nmine > 0) call HODLR_gpu_baca_blocks(gpu, list, nmine, option, stats, msh, ptree, rnk, gout, thost, tcore, &
-                                                trec, npass, nblkit, seeds, dids=tid)
+      if (nmine > 0) call HODLR_gpu_baca_blocks(gpu, list, nmine, option, stats, msh, ker, ptree, rnk, gout, thost, &
+                                                tcore, trec, npass, nblkit, seeds, dids=tid)
+      ! (the entries through the host: every rank's rounds done before the group's collectives)
+      if (HODLR_gpu_entries_on_host(gpu)) call HODLR_entry_rounds_end(option, msh, ker, ptree, stats, .false.)
       ! the ranks of all pieces; this rank's own pieces stay on the device, the others move to their
       ! owner (through the host)
       rk = 0
@@ -3066,6 +3145,52 @@ contains
       deallocate (node%sons)
    end subroutine HODLR_gpu_hmerge
 
+   !> The entries the GPU construction asks for when the matrix has no GPU
+   !> evaluator (HodlrConstruct's host entries, c_bpack_hodlr_gpu_baca_begin):
+   !> nblk sub-blocks, sub-block b with nr(b) rows and nc(b) columns, their
+   !> rows and columns (1-based, tree order) packed in rows and cols, the
+   !> values to out (column-major, packed in the same order).  One round of
+   !> the application's block extraction (element_Zmn_blocklist_user: with
+   !> elem_extract=1 collective over ptree%Comm, see HODLR_entry_rounds_end)
+   subroutine HODLR_gpu_host_entries(ctx, nblk, nr, nc, rows, cols, out) bind(c, name="c_bpack_hodlr_gpu_host_entries")
+      implicit none
+      type(c_ptr), value :: ctx, out
+      integer(c_int) :: nblk, nr(*), nc(*), rows(*), cols(*)
+      type(hodlr_gpu_entry_ctx), pointer :: q
+      type(intersect), allocatable :: submats(:)
+      DT, pointer :: vals(:)
+      integer b, passflag
+      integer(kind=8) :: ro, co, vo, nv
+
+      call c_f_pointer(ctx, q)
+      allocate (submats(nblk))
+      ro = 0
+      co = 0
+      nv = 0
+      do b = 1, nblk
+         submats(b)%nr = nr(b)
+         submats(b)%nc = nc(b)
+         allocate (submats(b)%rows(nr(b)), submats(b)%cols(nc(b)))
+         allocate (submats(b)%dat(nr(b), nc(b)))
+         submats(b)%rows = rows(ro + 1:ro + nr(b))
+         submats(b)%cols = cols(co + 1:co + nc(b))
+         submats(b)%dat = 0
+         ro = ro + nr(b)
+         co = co + nc(b)
+         nv = nv + int(nr(b), 8)*nc(b)
+      enddo
+      passflag = 0
+      call element_Zmn_blocklist_user(submats, nblk, q%msh, q%option, q%ker, 0, passflag, q%ptree, q%stats)
+      call c_f_pointer(out, vals, [max(nv, 1_8)])
+      vo = 0
+      do b = 1, nblk
+         if (nr(b) > 0 .and. nc(b) > 0) vals(vo + 1:vo + int(nr(b), 8)*nc(b)) = reshape(submats(b)%dat, [nr(b)*nc(b)])
+         vo = vo + int(nr(b), 8)*nc(b)
+         deallocate (submats(b)%rows, submats(b)%cols, submats(b)%dat)
+      enddo
+      deallocate (submats)
+   end subroutine HODLR_gpu_host_entries
+
    !> |U1 V1^T - U2 V2^T| / |U2 V2^T| of a block whose factors (this rank's
    !> rows, in the block's layout M_p, N_p) may be spread over the ranks of
    !> its group, from a few fixed probe vectors (no random numbers drawn)
@@ -3116,16 +3241,17 @@ contains
    end function HODLR_gpu_lr_diff_dist
 
 
-   subroutine HODLR_gpu_baca_blocks(gpu, blks, nb, option, stats, msh, ptree, rnk, gout, thost, tcore, trec, npass, nblkit, &
-                                    seeds, keep, dids)
+   subroutine HODLR_gpu_baca_blocks(gpu, blks, nb, option, stats, msh, ker, ptree, rnk, gout, thost, tcore, trec, npass, &
+                                    nblkit, seeds, keep, dids)
       implicit none
       type(c_ptr) :: gpu
       integer nb
       type(hodlr_gpu_blkptr) :: blks(nb)
-      type(Hoption)::option
-      type(Hstat)::stats
-      type(mesh)::msh
-      type(proctree)::ptree
+      type(Hoption), target::option
+      type(Hstat), target::stats
+      type(mesh), target::msh
+      type(kernelquant), target::ker  ! (the application's callbacks: the entries through the host without a GPU evaluator)
+      type(proctree), target::ptree
       integer rnk(nb)
       integer, optional :: seeds(nb)  ! (the random first column of block b from a stream seeded by seeds(b))
       logical, optional :: keep       ! (the blocks' final factors: their device copies kept for HODLR_gpu_upload_forward)
@@ -3155,6 +3281,9 @@ contains
       integer(c_int), allocatable :: idl(:)
       integer nseed
       integer, allocatable :: seed_save(:), seed_b(:)
+      type(hodlr_gpu_entry_ctx), target :: ectx
+      type(c_funptr) :: host_fn
+      type(c_ptr) :: host_ctx
 
       if (nb == 0) return
       if (present(seeds)) then
@@ -3182,7 +3311,19 @@ contains
       mode = option%HODLR_use_gpu
       variant = option%RecLR_leaf
       nac = nb
-      call c_bpack_hodlr_gpu_baca_begin(gpu, scale, mode, variant, nac, r0, mm, c0, nn, rest)
+      ! (no GPU evaluator: each panel's entries through the host, one round of the application's block extraction)
+      host_fn = c_null_funptr
+      host_ctx = c_null_ptr
+      if (HODLR_gpu_entries_on_host(gpu)) then
+         ectx%option => option
+         ectx%msh => msh
+         ectx%ker => ker
+         ectx%ptree => ptree
+         ectx%stats => stats
+         host_fn = c_funloc(HODLR_gpu_host_entries)
+         host_ctx = c_loc(ectx)
+      endif
+      call c_bpack_hodlr_gpu_baca_begin(gpu, scale, mode, variant, nac, r0, mm, c0, nn, rest, host_fn, host_ctx)
       tol = option%tol_comp
       rank = 0
       rank0 = 0
@@ -3537,7 +3678,10 @@ contains
 
    !> The dense leaves (level Maxlevel+1) evaluated on the GPU, as
    !> Full_construction does on the CPU (symmetrized when option%sym > 0, as
-   !> HODLR_construction does); with BPACK_CHECK=hodlr compared with the CPU
+   !> HODLR_construction does); without a GPU evaluator all of this rank's
+   !> leaves in one call of the application's block extraction (one round with
+   !> elem_extract=1, where Full_construction takes one a leaf); with
+   !> BPACK_CHECK=hodlr compared with the CPU
    subroutine HODLR_gpu_construct_leaves(ho_bf1, option, stats, msh, ker, ptree)
       implicit none
       real(kind=8) :: tev
@@ -3558,6 +3702,8 @@ contains
       real(c_double) :: scale
       real(kind=8) :: memory, err, errmax, t0, t1
       DT::sym_value
+      type(intersect), allocatable :: submats(:)
+      integer passflag
 
       level_c = ho_bf1%Maxlevel + 1
       nb = 0
@@ -3583,9 +3729,39 @@ contains
       scale = option%scale_factor
       count = nb
       tev = MPI_Wtime()
-      call c_bpack_hodlr_gpu_eval_dense(ho_bf1%gpu, scale, count, r0, mm, c0, nn, ptrs)
-      t1 = MPI_Wtime()
-      stats%Time_Entry = stats%Time_Entry + t1 - tev  ! (the entries, evaluated on the device, on the host)
+      if (HODLR_gpu_entries_on_host(ho_bf1%gpu)) then
+         ! (the application's entries into the leaves, one call; scaled there, timed in Time_Entry)
+         allocate (submats(nb))
+         b = 0
+         do ii = ho_bf1%levels(level_c)%Bidxs, ho_bf1%levels(level_c)%Bidxe
+            if (.not. IOwnPgrp(ptree, ho_bf1%levels(level_c)%BP(ii)%pgno)) cycle
+            b = b + 1
+            blk => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
+            submats(b)%nr = blk%M
+            submats(b)%nc = blk%N
+            allocate (submats(b)%rows(blk%M), submats(b)%cols(blk%N))
+            do i = 1, blk%M
+               submats(b)%rows(i) = blk%headm + i - 1
+            enddo
+            do j = 1, blk%N
+               submats(b)%cols(j) = blk%headn + j - 1
+            enddo
+            blk%fullmat = 0
+            submats(b)%dat => blk%fullmat
+         enddo
+         passflag = 0
+         call element_Zmn_blocklist_user(submats, nb, msh, option, ker, 0, passflag, ptree, stats)
+         do b = 1, nb
+            nullify (submats(b)%dat)
+            deallocate (submats(b)%rows, submats(b)%cols)
+         enddo
+         deallocate (submats)
+         t1 = MPI_Wtime()
+      else
+         call c_bpack_hodlr_gpu_eval_dense(ho_bf1%gpu, scale, count, r0, mm, c0, nn, ptrs)
+         t1 = MPI_Wtime()
+         stats%Time_Entry = stats%Time_Entry + t1 - tev  ! (the entries, evaluated on the device, on the host)
+      endif
 
       errmax = 0
       if (HODLR_gpu_check_level() > 0) call InitStat(stats_chk)
@@ -3794,6 +3970,9 @@ contains
          blk%rankmin = kg
          ho_bf1%levels(level_c)%BP(ii)%LL(1)%rankmax = kg
       enddo
+      ! (the entries through the host: every rank's rounds of the rebuild done before the reductions)
+      if (HODLR_gpu_entries_on_host(ho_bf1%gpu)) &
+         call HODLR_entry_rounds_end(option, msh, ker, ptree, stats_chk, .true.)
       call MPI_ALLREDUCE(MPI_IN_PLACE, errmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, maxdk, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE, nb, 1, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
@@ -6101,6 +6280,7 @@ contains
       DT,target::alldat_loc(:)
       integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter)
       integer::Npmap, pmaps(Npmap, 3), flag2D
+      logical gpu_ext
       type(iarray)::lst
 
       stats%Flop_Tmp = 0d0
@@ -6162,6 +6342,11 @@ contains
 
       if(ntot_loc>0)alldat_loc(1:ntot_loc)=0
 
+      ! (a HODLR built on the GPU whose host copies of the factors are unfilled, HODLR_gpu_defer_host, every
+      ! intersection on one rank: the products on the GPUs that hold the factors, HODLR_gpu_extract_blocks)
+      gpu_ext = .false.
+      if (option%format == HODLR) gpu_ext = bmat%ho_bf%gpu_host_stale .and. flag2D == 0
+
       n1 = MPI_Wtime()
 
       curr => lstr%head
@@ -6175,7 +6360,8 @@ contains
             type is (iarray)
                select case (option%format)
                case (HODLR)
-                  call HODLR_MapIntersec2Block(bmat%ho_bf, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, 1, 0)
+                  call HODLR_MapIntersec2Block(bmat%ho_bf, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, 1, 1, 0, &
+                                               members=gpu_ext)
                case (HMAT,BLR)
                   num_blocks = 2**msh%Dist_level
                   call Hmat_MapIntersec2Block(bmat%h_mat, option, stats, msh, ptree, inters, nn, ptrr, ptrc, lstblk, num_blocks)
@@ -6189,170 +6375,186 @@ contains
       enddo
 
       call MergeSort(lstblk%head, node_score_block_ptr_row)
-      ! (a HODLR built on the GPU whose host copies of the factors are unfilled, HODLR_gpu_defer_host: the rows
-      ! read below, from the GPUs, into each block's gpu_u and gpu_v)
-      if (option%format == HODLR) then
-         if (bmat%ho_bf%gpu_host_stale) call HODLR_gpu_fill_rows(bmat%ho_bf, lstblk, inters, option, ptree)
-      endif
+      if (gpu_ext) then
+         call HODLR_gpu_extract_blocks(bmat%ho_bf, lstblk, inters, Npmap, pmaps, option, stats, ptree)
+         n2 = MPI_Wtime()
+         stats%Time_Entry_BF = stats%Time_Entry_BF + n2 - n1
+         ! (the blocks' lists of rows and columns)
+         cur => lstblk%head
+         do ii = 1, lstblk%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               call list_finalizer(ptr%ptr%lstr)
+               call list_finalizer(ptr%ptr%lstc)
+            end select
+            cur => cur%next
+         enddo
+      else
+         ! (a HODLR built on the GPU whose host copies of the factors are unfilled, HODLR_gpu_defer_host: the rows
+         ! read below, from the GPUs, into each block's gpu_u and gpu_v)
+         if (option%format == HODLR) then
+            if (bmat%ho_bf%gpu_host_stale) call HODLR_gpu_fill_rows(bmat%ho_bf, lstblk, inters, option, ptree)
+         endif
 
-      n2 = MPI_Wtime()
-      stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
+         n2 = MPI_Wtime()
+         stats%Time_Entry_Traverse = stats%Time_Entry_Traverse + n2-n1
 
 #if 0
-      write (*, *) lstblk%num_nods
-      cur => lstblk%head
-      do ii = 1, lstblk%num_nods
-         select type (ptr=>cur%item)
-         type is (block_ptr)
-            curr => ptr%ptr%lstr%head
-            curc => ptr%ptr%lstc%head
-            do nn = 1, ptr%ptr%lstr%num_nods
-               ptrr=>curr%item
-               select type (ptrr)
-               type is (iarray)
-                  ptrc=>curc%item
-                  select type (ptrc)
+         write (*, *) lstblk%num_nods
+         cur => lstblk%head
+         do ii = 1, lstblk%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               curr => ptr%ptr%lstr%head
+               curc => ptr%ptr%lstc%head
+               do nn = 1, ptr%ptr%lstr%num_nods
+                  ptrr=>curr%item
+                  select type (ptrr)
                   type is (iarray)
-                     write (*, *) ptree%MyID, ptr%ptr%row_group, ptr%ptr%col_group, nn, ptrr%num_nods*ptrc%num_nods
+                     ptrc=>curc%item
+                     select type (ptrc)
+                     type is (iarray)
+                        write (*, *) ptree%MyID, ptr%ptr%row_group, ptr%ptr%col_group, nn, ptrr%num_nods*ptrc%num_nods
+                     end select
                   end select
-               end select
-               curr => curr%next
-               curc => curc%next
-            enddo
-         end select
-         cur => cur%next
-      enddo
+                  curr => curr%next
+                  curc => curc%next
+               enddo
+            end select
+            cur => cur%next
+         enddo
 #endif
 
 #ifdef HAVE_TASKLOOP
-      !$omp parallel
-      !$omp single
+         !$omp parallel
+         !$omp single
 #endif
-      ! construct intersections for each block from the block's lists
-      cur => lstblk%head
-      do ii = 1, lstblk%num_nods ! loop all blocks
-         select type (ptr=>cur%item)
-         type is (block_ptr)
-            blocks => ptr%ptr
-            pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
-            head = blocks%M_p(pp, 1) + blocks%headm - 1
-            tail = blocks%M_p(pp, 2) + blocks%headm - 1
+         ! construct intersections for each block from the block's lists
+         cur => lstblk%head
+         do ii = 1, lstblk%num_nods ! loop all blocks
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               pp = ptree%myid - ptree%pgrp(blocks%pgno)%head + 1
+               head = blocks%M_p(pp, 1) + blocks%headm - 1
+               tail = blocks%M_p(pp, 2) + blocks%headm - 1
 
-            curr => blocks%lstr%head
-            curc => blocks%lstc%head
-            allocate (blocks%inters(blocks%lstr%num_nods))
-            do nn = 1, blocks%lstr%num_nods ! loop all lists of list of rows and columns
-               ptrr=>curr%item
-               select type (ptrr)
-               type is (iarray)
-                  ptrc=>curc%item
-                  select type (ptrc)
+               curr => blocks%lstr%head
+               curc => blocks%lstc%head
+               allocate (blocks%inters(blocks%lstr%num_nods))
+               do nn = 1, blocks%lstr%num_nods ! loop all lists of list of rows and columns
+                  ptrr=>curr%item
+                  select type (ptrr)
                   type is (iarray)
-                     blocks%inters(nn)%nr = ptrr%num_nods
-                     allocate (blocks%inters(nn)%rows(ptrr%num_nods))
-                     blocks%inters(nn)%rows = ptrr%dat
-                     blocks%inters(nn)%nc = ptrc%num_nods
-                     allocate (blocks%inters(nn)%cols(ptrc%num_nods))
-                     blocks%inters(nn)%cols = ptrc%dat
-                     blocks%inters(nn)%idx = ptrr%idx
+                     ptrc=>curc%item
+                     select type (ptrc)
+                     type is (iarray)
+                        blocks%inters(nn)%nr = ptrr%num_nods
+                        allocate (blocks%inters(nn)%rows(ptrr%num_nods))
+                        blocks%inters(nn)%rows = ptrr%dat
+                        blocks%inters(nn)%nc = ptrc%num_nods
+                        allocate (blocks%inters(nn)%cols(ptrc%num_nods))
+                        blocks%inters(nn)%cols = ptrc%dat
+                        blocks%inters(nn)%idx = ptrr%idx
+                     end select
                   end select
-               end select
-               curr => curr%next
-               curc => curc%next
+                  curr => curr%next
+                  curc => curc%next
 
-               blocks%inters(nn)%nr_loc = 0
-               do jj = 1, blocks%inters(nn)%nr
-                  idx = blocks%inters(nn)%rows(jj)
-                  if (inters(blocks%inters(nn)%idx)%rows(idx) >= head .and. inters(blocks%inters(nn)%idx)%rows(idx) <= tail) then
-                     blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
-                  endif
+                  blocks%inters(nn)%nr_loc = 0
+                  do jj = 1, blocks%inters(nn)%nr
+                     idx = blocks%inters(nn)%rows(jj)
+                     if (inters(blocks%inters(nn)%idx)%rows(idx) >= head .and. inters(blocks%inters(nn)%idx)%rows(idx) <= tail) then
+                        blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
+                     endif
+                  enddo
+                  allocate (blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc))
+                  allocate (blocks%inters(nn)%glo2loc(blocks%inters(nn)%nr))
+                  blocks%inters(nn)%glo2loc = -1
+                  blocks%inters(nn)%nr_loc = 0
+                  do jj = 1, blocks%inters(nn)%nr
+                     idx = blocks%inters(nn)%rows(jj)
+                     ! write(*,*)inters(blocks%inters(nn)%idx)%rows(idx),head,tail
+                     if (inters(blocks%inters(nn)%idx)%rows(idx) >= head .and. inters(blocks%inters(nn)%idx)%rows(idx) <= tail) then
+                        blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
+                        blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc) = jj ! rows_loc stores indices in rows
+                        blocks%inters(nn)%glo2loc(jj) = blocks%inters(nn)%nr_loc
+                     endif
+                  enddo
+                  allocate (blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc))
+                  call LogMemory(stats, SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
                enddo
-               allocate (blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc))
-               allocate (blocks%inters(nn)%glo2loc(blocks%inters(nn)%nr))
-               blocks%inters(nn)%glo2loc = -1
-               blocks%inters(nn)%nr_loc = 0
-               do jj = 1, blocks%inters(nn)%nr
-                  idx = blocks%inters(nn)%rows(jj)
-                  ! write(*,*)inters(blocks%inters(nn)%idx)%rows(idx),head,tail
-                  if (inters(blocks%inters(nn)%idx)%rows(idx) >= head .and. inters(blocks%inters(nn)%idx)%rows(idx) <= tail) then
-                     blocks%inters(nn)%nr_loc = blocks%inters(nn)%nr_loc + 1
-                     blocks%inters(nn)%rows_loc(blocks%inters(nn)%nr_loc) = jj ! rows_loc stores indices in rows
-                     blocks%inters(nn)%glo2loc(jj) = blocks%inters(nn)%nr_loc
-                  endif
-               enddo
-               allocate (blocks%inters(nn)%dat_loc(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc))
-               call LogMemory(stats, SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
-            enddo
 
-            ! extract entries on an array of intersections for each block
+               ! extract entries on an array of intersections for each block
 
-            if (blocks%style == 1) then
-               call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
-            else
-               if (blocks%level_butterfly == 0) then
-                  call LR_block_extraction(blocks, inters, ptree, msh, stats)
+               if (blocks%style == 1) then
+                  call Full_block_extraction(blocks, inters, ptree, msh, stats, option)
                else
-                  call BF_block_extraction(blocks, inters, ptree, msh, stats)
+                  if (blocks%level_butterfly == 0) then
+                     call LR_block_extraction(blocks, inters, ptree, msh, stats)
+                  else
+                     call BF_block_extraction(blocks, inters, ptree, msh, stats)
+                  endif
                endif
-            endif
 
-            ! finalize the lists of lists of rows and columns for each block because they have been transferred to intersections
-            call list_finalizer(blocks%lstr)
-            call list_finalizer(blocks%lstc)
-         end select
-         cur => cur%next
-      enddo
+               ! finalize the lists of lists of rows and columns for each block because they have been transferred to intersections
+               call list_finalizer(blocks%lstr)
+               call list_finalizer(blocks%lstc)
+            end select
+            cur => cur%next
+         enddo
 #ifdef HAVE_TASKLOOP
-      !$omp end single
-      !$omp end parallel
+         !$omp end single
+         !$omp end parallel
 #endif
-      n3 = MPI_Wtime()
-      stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
+         n3 = MPI_Wtime()
+         stats%Time_Entry_BF = stats%Time_Entry_BF + n3-n2
 
-      call MPI_barrier(ptree%Comm, ierr)
-      n3 = MPI_Wtime()
-      ! redistribute from blocks' intersections to the global intersecions inters
-      if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
-         call BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
-      else
-         call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
+         call MPI_barrier(ptree%Comm, ierr)
+         n3 = MPI_Wtime()
+         ! redistribute from blocks' intersections to the global intersecions inters
+         if (flag2D == 1) then ! if each intersection is only needed by one processor, the communication can be optimized
+            call BPACK_all2all_inters(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
+         else
+            call BPACK_all2all_inters_optimized(Ninter, inters, lstblk, stats, ptree, 1, ptree%nproc, Npmap, pmaps)
+         endif
+
+         n4 = MPI_Wtime()
+         stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
+
+         ! deallocate intersections at each block
+         cur => lstblk%head
+         do ii = 1, lstblk%num_nods
+            select type (ptr=>cur%item)
+            type is (block_ptr)
+               blocks => ptr%ptr
+               do nn = 1, size(blocks%inters, 1)
+                  if (associated(blocks%inters(nn)%dat)) then
+                     call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat)/1024.0d3)
+                     deallocate (blocks%inters(nn)%dat)
+                  endif
+                  if (associated(blocks%inters(nn)%dat_loc))then
+                     call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
+                     deallocate (blocks%inters(nn)%dat_loc)
+                  endif
+                  if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
+                  if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
+                  if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
+                  blocks%inters(nn)%nr = 0
+                  blocks%inters(nn)%nr_loc = 0
+                  blocks%inters(nn)%nc = 0
+                  blocks%inters(nn)%idx = 0
+               enddo
+               deallocate (blocks%inters)
+               ! (the rows taken from the GPUs, HODLR_gpu_fill_rows)
+               if (allocated(blocks%gpu_urow)) deallocate (blocks%gpu_urow)
+               if (allocated(blocks%gpu_vrow)) deallocate (blocks%gpu_vrow)
+               if (allocated(blocks%gpu_u)) deallocate (blocks%gpu_u)
+               if (allocated(blocks%gpu_v)) deallocate (blocks%gpu_v)
+            end select
+            cur => cur%next
+         enddo
       endif
-
-      n4 = MPI_Wtime()
-      stats%Time_Entry_Comm = stats%Time_Entry_Comm + n4-n3
-
-      ! deallocate intersections at each block
-      cur => lstblk%head
-      do ii = 1, lstblk%num_nods
-         select type (ptr=>cur%item)
-         type is (block_ptr)
-            blocks => ptr%ptr
-            do nn = 1, size(blocks%inters, 1)
-               if (associated(blocks%inters(nn)%dat)) then
-                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat)/1024.0d3)
-                  deallocate (blocks%inters(nn)%dat)
-               endif
-               if (associated(blocks%inters(nn)%dat_loc))then
-                  call LogMemory(stats, -SIZEOF(blocks%inters(nn)%dat_loc)/1024.0d3)
-                  deallocate (blocks%inters(nn)%dat_loc)
-               endif
-               if (allocated(blocks%inters(nn)%rows)) deallocate (blocks%inters(nn)%rows)
-               if (allocated(blocks%inters(nn)%cols)) deallocate (blocks%inters(nn)%cols)
-               if (allocated(blocks%inters(nn)%rows_loc)) deallocate (blocks%inters(nn)%rows_loc)
-               blocks%inters(nn)%nr = 0
-               blocks%inters(nn)%nr_loc = 0
-               blocks%inters(nn)%nc = 0
-               blocks%inters(nn)%idx = 0
-            enddo
-            deallocate (blocks%inters)
-            ! (the rows taken from the GPUs, HODLR_gpu_fill_rows)
-            if (allocated(blocks%gpu_urow)) deallocate (blocks%gpu_urow)
-            if (allocated(blocks%gpu_vrow)) deallocate (blocks%gpu_vrow)
-            if (allocated(blocks%gpu_u)) deallocate (blocks%gpu_u)
-            if (allocated(blocks%gpu_v)) deallocate (blocks%gpu_v)
-         end select
-         cur => cur%next
-      enddo
 
       ! finalize the list of block_ptr
       call list_finalizer(lstblk)
@@ -6380,6 +6582,152 @@ contains
       ! endif
 
    end subroutine BPACK_ExtractElement
+
+
+!!!!!!! extract a list of intersections from a bmat built on a subset of the ranks of the caller
+   !> The block extraction (elem_extract=1: the rounds of
+   !> element_Zmn_blocklist_user, collective over ptree_caller%Comm) of a
+   !> matrix on ptree_caller from the entries of another one, bmat, built on a
+   !> subset of its ranks (ptree%Comm, any size).  bmat, option, msh, stats and
+   !> ptree are the source's, associated on its ranks only.  The
+   !> intersections are the caller's, each owned by one rank of ptree_caller
+   !> (pmaps of 1 x 1 grids, pgidx from 1); indices as for
+   !> BPACK_ExtractElement.  The source extracts each intersection
+   !> (BPACK_ExtractElement, collective over ptree%Comm) on the source rank of
+   !> its owner, or for an owner outside the source on a proxy (its rank
+   !> modulo the source's size), which sends the entries to the owner
+   subroutine BPACK_ExtractElement_Bridge(bmat, option, msh, stats, ptree, ptree_caller, Ninter, allrows, allcols, &
+                                          alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps)
+      implicit none
+      type(Bmatrix), pointer::bmat
+      type(Hoption), pointer::option
+      type(mesh), pointer::msh
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      type(proctree)::ptree_caller
+      integer:: Ninter, Npmap
+      integer:: allrows(:), allcols(:)
+      DT, target::alldat_loc(:)
+      integer::colidx(Ninter), rowidx(Ninter), pgidx(Ninter), pmaps(Npmap, 3)
+      integer, allocatable :: srcid(:), tgtid(:), owner(:), from(:), pmaps_s(:, :), rows1(:), cols1(:)
+      integer, allocatable :: scount(:), sdisp(:), rcount(:), rdisp(:)
+      integer(kind=8), allocatable :: pos(:)
+      DT, allocatable :: dat_s(:), sbuf(:), rbuf(:)
+      logical insrc
+      integer nproc, me, nsrc, mysrc, t, pp, nn, ierr
+      integer(kind=8) :: sz, at, nsend, nrecv, nloc
+
+      insrc = associated(bmat)
+      nproc = ptree_caller%nproc
+      me = ptree_caller%MyID
+
+      ! the source's ranks among the caller's
+      mysrc = -1
+      if (insrc) mysrc = ptree%MyID
+      allocate (srcid(0:nproc - 1))
+      call MPI_ALLGATHER(mysrc, 1, MPI_INTEGER, srcid, 1, MPI_INTEGER, ptree_caller%Comm, ierr)
+      nsrc = count(srcid >= 0)
+      call BPACK_require(nsrc > 0, 'BPACK_ExtractElement_Bridge: no rank of the caller holds the source matrix')
+      allocate (tgtid(0:nsrc - 1))
+      tgtid = -1
+      do t = 0, nproc - 1
+         if (srcid(t) < 0) cycle
+         call BPACK_require(srcid(t) < nsrc, 'BPACK_ExtractElement_Bridge: the source ranks are not a subset of the caller''s')
+         call BPACK_require(tgtid(srcid(t)) == -1, 'BPACK_ExtractElement_Bridge: the source ranks are not a subset of the caller''s')
+         tgtid(srcid(t)) = t
+      enddo
+      if (insrc) call BPACK_require(ptree%nproc == nsrc, &
+                             'BPACK_ExtractElement_Bridge: the source ranks are not a subset of the caller''s')
+
+      ! the owner of each intersection (a rank of the caller) and the rank of the caller that extracts it
+      allocate (owner(Ninter), from(Ninter))
+      do nn = 1, Ninter
+         pp = pgidx(nn)
+         call BPACK_require(pmaps(pp, 1) == 1 .and. pmaps(pp, 2) == 1, &
+                     'BPACK_ExtractElement_Bridge: an intersection owned by more than one rank (elem_extract=1 only)')
+         owner(nn) = pmaps(pp, 3)
+         if (srcid(owner(nn)) >= 0) then
+            from(nn) = owner(nn)
+         else
+            from(nn) = tgtid(mod(owner(nn), nsrc))
+         endif
+      enddo
+
+      ! the extraction on the source, each intersection on the source rank of from(nn)
+      nloc = 0
+      do nn = 1, Ninter
+         if (from(nn) == me) nloc = nloc + int(rowidx(nn), 8)*colidx(nn)
+      enddo
+      allocate (dat_s(max(nloc, 1_8)))
+      if (insrc) then
+         allocate (pmaps_s(Npmap, 3))
+         do pp = 1, Npmap
+            pmaps_s(pp, 1:2) = 1
+            pmaps_s(pp, 3) = 0
+            if (pmaps(pp, 1) == 1 .and. pmaps(pp, 2) == 1) then
+               t = pmaps(pp, 3)
+               if (srcid(t) >= 0) then
+                  pmaps_s(pp, 3) = srcid(t)
+               else
+                  pmaps_s(pp, 3) = mod(t, nsrc)
+               endif
+            endif
+         enddo
+         allocate (rows1(max(1, sum(rowidx))), cols1(max(1, sum(colidx))))
+         rows1(1:sum(rowidx)) = allrows(1:sum(rowidx))
+         cols1(1:sum(colidx)) = allcols(1:sum(colidx))
+         call BPACK_ExtractElement(bmat, option, msh, stats, ptree, Ninter, rows1, cols1, dat_s, rowidx, colidx, &
+                                   pgidx, Npmap, pmaps_s)
+         deallocate (pmaps_s, rows1, cols1)
+      endif
+
+      ! the entries to their owners (in the order of the intersections, by sender and receiver)
+      allocate (scount(0:nproc - 1), sdisp(0:nproc - 1), rcount(0:nproc - 1), rdisp(0:nproc - 1), pos(0:nproc - 1))
+      scount = 0
+      rcount = 0
+      nsend = 0
+      nrecv = 0
+      do nn = 1, Ninter
+         sz = int(rowidx(nn), 8)*colidx(nn)
+         if (from(nn) == me) then
+            scount(owner(nn)) = scount(owner(nn)) + int(sz)
+            nsend = nsend + sz
+         endif
+         if (owner(nn) == me) then
+            rcount(from(nn)) = rcount(from(nn)) + int(sz)
+            nrecv = nrecv + sz
+         endif
+      enddo
+      call BPACK_require(nsend < 2_8**31 .and. nrecv < 2_8**31, 'BPACK_ExtractElement_Bridge: more than 2^31 entries in a round')
+      sdisp(0) = 0
+      rdisp(0) = 0
+      do t = 1, nproc - 1
+         sdisp(t) = sdisp(t - 1) + scount(t - 1)
+         rdisp(t) = rdisp(t - 1) + rcount(t - 1)
+      enddo
+      allocate (sbuf(max(nsend, 1_8)), rbuf(max(nrecv, 1_8)))
+      pos = sdisp
+      at = 0
+      do nn = 1, Ninter
+         if (from(nn) /= me) cycle
+         sz = int(rowidx(nn), 8)*colidx(nn)
+         sbuf(pos(owner(nn)) + 1:pos(owner(nn)) + sz) = dat_s(at + 1:at + sz)
+         pos(owner(nn)) = pos(owner(nn)) + sz
+         at = at + sz
+      enddo
+      call MPI_ALLTOALLV(sbuf, scount, sdisp, MPI_DT, rbuf, rcount, rdisp, MPI_DT, ptree_caller%Comm, ierr)
+      pos = rdisp
+      at = 0
+      do nn = 1, Ninter
+         if (owner(nn) /= me) cycle
+         sz = int(rowidx(nn), 8)*colidx(nn)
+         alldat_loc(at + 1:at + sz) = rbuf(pos(from(nn)) + 1:pos(from(nn)) + sz)
+         pos(from(nn)) = pos(from(nn)) + sz
+         at = at + sz
+      enddo
+
+      deallocate (srcid, tgtid, owner, from, dat_s, scount, sdisp, rcount, rdisp, pos, sbuf, rbuf)
+   end subroutine BPACK_ExtractElement_Bridge
 
 !!!!!!! check error of BPACK construction using parallel element extraction
    subroutine BPACK_CheckError_entry(bmat, option, msh, ker, stats, ptree)
@@ -7515,7 +7863,10 @@ contains
 
    end subroutine BPACK_all2all_inters_optimized
 
-   recursive subroutine HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, level_c, bidx, flag)
+   !> members (default .false.): record a block on every rank of its parent node's group (HODLR_gpu_extract_blocks), not
+   !> only on those of its own group
+   recursive subroutine HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, level_c, bidx, flag, &
+                                                members)
 
       implicit none
       type(Hoption)::option
@@ -7534,6 +7885,11 @@ contains
       integer flag, num_nods
       type(block_ptr)::blk_ptr
       real(kind=8)::n1, n0
+      logical, optional :: members
+      logical mem
+
+      mem = .false.
+      if (present(members)) mem = members
 
       if (flag == 0) then ! inverse blocks
          blocks => ho_bf1%levels(level_c)%BP_inverse(bidx)%LL(1)%matrices_block(1)
@@ -7541,7 +7897,7 @@ contains
          col_group = blocks%col_group
          if (IOwnPgrp(ptree, blocks%pgno)) then
          if (level_c == ho_bf1%Maxlevel + 1) then
-            call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, level_c, bidx, 1)
+            call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, lstr, lstc, lstblk, level_c, bidx, 1, mem)
          else
             clstr(1)%idx = nth
             clstr(2)%idx = nth
@@ -7594,10 +7950,10 @@ contains
             ! n1 = MPI_Wtime()
             ! time_tmp = time_tmp + n1 - n0
 
-            if (clstr(1)%num_nods > 0 .and. clstc(2)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(1), clstc(2), lstblk, level_c, 2*bidx - 1, 1)
-            if (clstr(2)%num_nods > 0 .and. clstc(1)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(2), clstc(1), lstblk, level_c, 2*bidx, 1)
-            if (clstr(1)%num_nods > 0 .and. clstc(1)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(1), clstc(1), lstblk, level_c + 1, 2*bidx - 1, 0)
-            if (clstr(2)%num_nods > 0 .and. clstc(2)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(2), clstc(2), lstblk, level_c + 1, 2*bidx, 0)
+            if (clstr(1)%num_nods > 0 .and. clstc(2)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(1), clstc(2), lstblk, level_c, 2*bidx - 1, 1, mem)
+            if (clstr(2)%num_nods > 0 .and. clstc(1)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(2), clstc(1), lstblk, level_c, 2*bidx, 1, mem)
+            if (clstr(1)%num_nods > 0 .and. clstc(1)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(1), clstc(1), lstblk, level_c + 1, 2*bidx - 1, 0, mem)
+            if (clstr(2)%num_nods > 0 .and. clstc(2)%num_nods > 0) call HODLR_MapIntersec2Block(ho_bf1, option, stats, msh, ptree, inters, nth, clstr(2), clstc(2), lstblk, level_c + 1, 2*bidx, 0, mem)
 
             deallocate (clstc(1)%dat)
             deallocate (clstc(2)%dat)
@@ -7611,7 +7967,7 @@ contains
          row_group = blocks%row_group
          col_group = blocks%col_group
 
-         if (IOwnPgrp(ptree, blocks%pgno)) then
+         if (mem .or. IOwnPgrp(ptree, blocks%pgno)) then
             if (blocks%lstr%num_nods == 0) then
                blk_ptr%ptr => blocks
                call append(lstblk, blk_ptr)

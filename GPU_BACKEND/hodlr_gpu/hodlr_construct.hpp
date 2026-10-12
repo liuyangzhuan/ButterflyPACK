@@ -53,6 +53,17 @@ namespace gpu {
 template<typename T>
 class HodlrConstruct {
 public:
+    // The application's entries through the host, for a construction without
+    // a GPU evaluator: nblk sub-blocks, sub-block b with nr[b] rows and nc[b]
+    // columns, its rows and columns (1-based point slots, i.e. tree order)
+    // packed in rows and cols; its values to out, column-major, packed in the
+    // same order (already scaled).  One call is one collective round of the
+    // application's block extraction (the Fortran side,
+    // c_bpack_hodlr_gpu_host_entries), so every call of panels() and
+    // knn_panels() makes the same calls on every rank that has blocks.
+    using HostEntryFn = void (*)(void* ctx, const int* nblk, const int* nr, const int* nc, const int* rows,
+                                 const int* cols, void* out);
+
     struct Stats {
         double t_eval = 0.0;     // dense leaves (s)
         double t_panels = 0.0;   // panel evaluation, pivots, cores
@@ -154,14 +165,21 @@ public:
     // ---- BACA without overlap on the blocks of one level ----
 
     // Blocks b = 0 .. nb-1: rows r0[b] .. r0[b]+m[b]-1, columns c0[b] ..
-    // c0[b]+n[b]-1 (point slots), panel width r_est[b] (min(BACA_Batch, m, n))
-    void begin(const fmm::gpu::Evaluator& evaluator, double scale, int variant, int nb, const int64_t* r0, const int* m,
-               const int64_t* c0, const int* n, const int* r_est) {
+    // c0[b]+n[b]-1 (point slots), panel width r_est[b] (min(BACA_Batch, m, n)).
+    // The entries from the GPU evaluator, or without one through the host
+    // (host_fn, with host_ctx; its values already scaled)
+    void begin(const fmm::gpu::Evaluator* evaluator, HostEntryFn host_fn, void* host_ctx, double scale, int variant,
+               int nb, const int64_t* r0, const int* m, const int64_t* c0, const int* n, const int* r_est) {
         end();
         Context::instance().activate();
         if (variant != 4 && variant != 5) throw std::invalid_argument("HODLR GPU BACA: variant must be 4 or 5");
-        evaluator_ = &evaluator;
-        scale_ = scale;
+        if (evaluator == nullptr && host_fn == nullptr) {
+            throw std::invalid_argument("HODLR GPU BACA: neither a GPU evaluator nor host entries");
+        }
+        evaluator_ = evaluator;
+        host_fn_ = evaluator == nullptr ? host_fn : nullptr;
+        host_ctx_ = host_ctx;
+        scale_ = host_fn_ != nullptr ? 1.0 : scale;
         variant_ = variant;
         blocks_.assign(static_cast<size_t>(nb), Block{});
         size_t sel_count = 0;
@@ -316,25 +334,58 @@ public:
         gcore.stage(meta_);
         char* md = meta_.upload(meta_device_, stream);
         const fmm::gpu::PointTable pts = points();
-        entry_begin(stream);
-        evaluator_->eval<T>(evc.items, evc.device(md), evc.max_m, evc.max_n, md, pts, stream);
-        launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
-        entry_end(stream);
+        const bool host = host_fn_ != nullptr;
+        // (without a GPU evaluator each panel through the host: C = A(:, J), J
+        // on the host already; R = A(I, :) and C = A(:, J2) after I and J2,
+        // chosen on the device, come down)
+        if (host) {
+            std::vector<HostPanel> hp;
+            for (int a = 0; a < na; ++a) {
+                const Block& B = block(bl[a]);
+                hp.push_back({B.c, B.m, slots(B.r0, B.m), slots(B.c0, B.sel_cols)});
+            }
+            host_fill(hp, stream);
+        } else {
+            entry_begin(stream);
+            evaluator_->eval<T>(evc.items, evc.device(md), evc.max_m, evc.max_n, md, pts, stream);
+            launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
+            entry_end(stream);
+        }
         fmm::gpu::launch_gather(gc.device(md), gc.count(), gc.max_m, gc.max_n, md, stream);
         bc.gemm(md, MagmaNoTrans, MagmaTrans, T(-1.0), T(1.0), queue);
         piv.launch(md, stream);
-        entry_begin(stream);
-        evaluator_->eval<T>(evr.items, evr.device(md), evr.max_m, evr.max_n, md, pts, stream);
-        launch_axpby(scr.device(md), scr.count(), scr.max_m, scr.max_n, stream);
-        entry_end(stream);
+        if (host) {
+            const std::vector<int>& rows = download_ints(sel_rows_d_, stream);
+            std::vector<HostPanel> hp;
+            for (int a = 0; a < na; ++a) {
+                const Block& B = block(bl[a]);
+                hp.push_back({B.rp, B.r, slots(B.r0, rows, B.sel_offset, B.r), slots(B.c0, B.n)});
+            }
+            host_fill(hp, stream);
+        } else {
+            entry_begin(stream);
+            evaluator_->eval<T>(evr.items, evr.device(md), evr.max_m, evr.max_n, md, pts, stream);
+            launch_axpby(scr.device(md), scr.count(), scr.max_m, scr.max_n, stream);
+            entry_end(stream);
+        }
         fmm::gpu::launch_gather(gr.device(md), gr.count(), gr.max_m, gr.max_n, md, stream);
         br.gemm(md, MagmaNoTrans, MagmaTrans, T(-1.0), T(1.0), queue);
         if (baca) {
             piv_j2.launch(md, stream);
-            entry_begin(stream);
-            evaluator_->eval<T>(evc2.items, evc2.device(md), evc2.max_m, evc2.max_n, md, pts, stream);
-            launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
-            entry_end(stream);
+            if (host) {
+                const std::vector<int>& cols = download_ints(sel_j2_d_, stream);
+                std::vector<HostPanel> hp;
+                for (int a = 0; a < na; ++a) {
+                    const Block& B = block(bl[a]);
+                    hp.push_back({B.c, B.m, slots(B.r0, B.m), slots(B.c0, cols, B.sel_offset, B.r)});
+                }
+                host_fill(hp, stream);
+            } else {
+                entry_begin(stream);
+                evaluator_->eval<T>(evc2.items, evc2.device(md), evc2.max_m, evc2.max_n, md, pts, stream);
+                launch_axpby(scc.device(md), scc.count(), scc.max_m, scc.max_n, stream);
+                entry_end(stream);
+            }
             fmm::gpu::launch_gather(gc2.device(md), gc2.count(), gc2.max_m, gc2.max_n, md, stream);
             bc2.gemm(md, MagmaNoTrans, MagmaTrans, T(-1.0), T(1.0), queue);
             piv_next.launch(md, stream);
@@ -421,10 +472,21 @@ public:
         sc.stage(meta_);
         gcore.stage(meta_);
         char* md = meta_.upload(meta_device_, stream);
-        entry_begin(stream);
-        evaluator_->eval<T>(ev.items, ev.device(md), ev.max_m, ev.max_n, md, points(), stream);
-        launch_axpby(sc.device(md), sc.count(), sc.max_m, sc.max_n, stream);
-        entry_end(stream);
+        if (host_fn_ != nullptr) {  // (C and R through the host, one round)
+            std::vector<HostPanel> hp;
+            for (int a = 0; a < na; ++a) {
+                const Block& B = block(bl[a]);
+                const int kr = static_cast<int>(B.knn_rows.size());
+                hp.push_back({B.ck, B.m, slots(B.r0, B.m), slots(B.c0, B.knn_cols)});
+                hp.push_back({B.rk, kr, slots(B.r0, B.knn_rows), slots(B.c0, B.n)});
+            }
+            host_fill(hp, stream);
+        } else {
+            entry_begin(stream);
+            evaluator_->eval<T>(ev.items, ev.device(md), ev.max_m, ev.max_n, md, points(), stream);
+            launch_axpby(sc.device(md), sc.count(), sc.max_m, sc.max_n, stream);
+            entry_end(stream);
+        }
         fmm::gpu::launch_gather(gcore.device(md), gcore.count(), gcore.max_m, gcore.max_n, md, stream);
         if (cores > 0) {
             check_cuda(cudaMemcpyAsync(core_out, core, cores * sizeof(T), cudaMemcpyDeviceToHost, stream),
@@ -867,16 +929,279 @@ public:
     }
 
     // The recompression (LR_ReCompression) of the listed blocks after their
-    // BACA, all on the device: the QR of U and V^T (qr_device), the SVD of
-    // R1 R2^T (MAGMA's batched one-sided Jacobi for ranks below kBigSvdRank,
-    // zero padded by size class; cuSOLVER gesvdp one by one for the others),
-    // the new rank rn by the rule of SVD_Truncate (tol relative, underflow
-    // absolute), and the new factors [X; 0] - Y Z (= Q [X; 0]) with X_U =
-    // Us(:, 1:rn) diag(s), X_V = conj(Vs(:, 1:rn)) and Z = T Y1^H X, T^-1 =
-    // striu(Y^H Y) + diag(1/tau) (the larft recurrence on the host for a
-    // block with a zero tau).  rn_out: the new ranks; the factors stay for
-    // download()
+    // BACA, all on the device: by Gram matrices (recompress_gram) for the
+    // tolerances gram_truncation() takes, else (or when a Cholesky
+    // factorization fails) by Householder QR (recompress_qr).  rn_out: the
+    // new ranks; the factors stay for download()
     void recompress(int na, const int* bl, double tol, double underflow, DeviceSvd<T>& svd, int* rn_out) {
+        if (gram_truncation(tol) && recompress_gram(na, bl, tol, underflow, svd, rn_out)) return;
+        recompress_qr(na, bl, tol, underflow, svd, rn_out);
+    }
+
+    // The recompression by Gram matrices (hodlr_svd.hpp): R_U and R_V the
+    // upper Cholesky factors of U^H U + s I and V^H V + s I, the SVD of R_U
+    // R_V^T and the new ranks as recompress_qr(), and the new factors U R_U^-1
+    // Us(:, 1:rn) diag(s) and V R_V^-1 conj(Vs(:, 1:rn)).  U and V stay as
+    // they are; false (nothing done) when a Cholesky factorization fails
+    bool recompress_gram(int na, const int* bl, double tol, double underflow, DeviceSvd<T>& svd, int* rn_out) {
+        Context& ctx = Context::instance();
+        ctx.activate();
+        const cudaStream_t stream = ctx.stream();
+        const magma_queue_t queue = ctx.queue();
+        DeviceHeap& heap = DeviceHeap::instance();
+        auto t0 = std::chrono::steady_clock::now();
+        const size_t n_a = static_cast<size_t>(std::max(na, 0));
+        std::vector<int> ks(n_a), rn(n_a, 1);
+        std::vector<size_t> sq_at(n_a), s_at(n_a);
+        size_t sq = 0, sc = 0;
+        for (size_t a = 0; a < n_a; ++a) {
+            const Block& B = block(bl[a]);
+            if (B.rank <= 0) throw std::logic_error("HODLR GPU BACA: recompression of a block of rank 0");
+            if (B.rank > std::min(B.m, B.n) || B.rank > B.cap || B.u == nullptr || B.vt == nullptr) {
+                throw std::logic_error("HODLR GPU BACA: a block's rank exceeds its size or its storage");
+            }
+            ks[a] = B.rank;
+            sq_at[a] = sq;
+            sq += static_cast<size_t>(B.rank) * B.rank;
+            s_at[a] = sc;
+            sc += static_cast<size_t>(B.rank);
+        }
+        T* rb = heap.alloc<T>(std::max<size_t>(2 * sq, 1) * sizeof(T));  // the Gram matrices, then R_U, R_V
+        auto fail = [&]() {
+            heap.free(rb);
+            if (fmm::env::trace("hodlr-qr")) {
+                std::printf(" HODLR GPU recompression: a Cholesky factorization of %d blocks failed, by QR\n", na);
+                std::fflush(stdout);
+            }
+            return false;
+        };
+        // U^H U and V^H V
+        check_cuda(cudaMemsetAsync(rb, 0, std::max<size_t>(2 * sq, 1) * sizeof(T), stream), "HODLR GPU Gram matrices");
+        {
+            std::vector<GramJob> jobs;
+            for (size_t a = 0; a < n_a; ++a) {
+                const Block& B = block(bl[a]);
+                const int k = ks[a];
+                T* gu = rb + 2 * sq_at[a];
+                jobs.push_back({B.u, B.m, B.u, B.m, k, k, B.m, gu});
+                jobs.push_back({B.vt, B.n, B.vt, B.n, k, k, B.n, gu + static_cast<size_t>(k) * k});
+                stats_.flops += kFlopScale * 2.0 * (static_cast<double>(B.m) + B.n) * k * k;
+            }
+            run_grams(jobs, MagmaConjTrans);
+        }
+        // the shifts s = kGramShift tr(G) on the diagonals (through the host)
+        {
+            std::vector<T> dg(std::max<size_t>(2 * sc, 1));
+            size_t d = 0;
+            for (size_t a = 0; a < n_a; ++a) {
+                const int k = ks[a];
+                for (int side = 0; side < 2; ++side) {
+                    const T* g = rb + 2 * sq_at[a] + static_cast<size_t>(side) * k * k;
+                    check_cuda(cudaMemcpy2DAsync(dg.data() + d, sizeof(T), g, (static_cast<size_t>(k) + 1) * sizeof(T),
+                                                 sizeof(T), k, cudaMemcpyDeviceToHost, stream),
+                               "HODLR GPU Gram diagonals");
+                    d += static_cast<size_t>(k);
+                }
+            }
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU Gram diagonals");
+            d = 0;
+            for (size_t a = 0; a < n_a; ++a) {
+                const int k = ks[a];
+                for (int side = 0; side < 2; ++side) {
+                    double tr = 0.0;
+                    for (int i = 0; i < k; ++i) tr += fmm::gpu::real_part(dg[d + static_cast<size_t>(i)]);
+                    if (!(tr > 0.0)) return fail();  // (a zero factor: the QR's path)
+                    const double m = side == 0 ? block(bl[a]).m : block(bl[a]).n;
+                    for (int i = 0; i < k; ++i) dg[d + static_cast<size_t>(i)] += T(gram_shift(k, m) * tr);
+                    T* g = rb + 2 * sq_at[a] + static_cast<size_t>(side) * k * k;
+                    check_cuda(cudaMemcpy2DAsync(g, (static_cast<size_t>(k) + 1) * sizeof(T), dg.data() + d, sizeof(T),
+                                                 sizeof(T), k, cudaMemcpyHostToDevice, stream),
+                               "HODLR GPU Gram shifts");
+                    d += static_cast<size_t>(k);
+                }
+            }
+        }
+        // R_U and R_V: the small ones by MAGMA's batched potrf (lower, then R = L^H), the others one by one
+        {
+            std::vector<magma_int_t> pn, pld;
+            std::vector<T*> pa;
+            ItemList<TriuItem<T>> lu;
+            magma_int_t max_n = 0;
+            for (size_t a = 0; a < n_a; ++a) {
+                const int k = ks[a];
+                for (int side = 0; side < 2; ++side) {
+                    T* g = rb + 2 * sq_at[a] + static_cast<size_t>(side) * k * k;
+                    stats_.flops += kFlopScale * static_cast<double>(k) * k * k / 3.0;
+                    if (k >= kBigQrRank) {
+                        if (svd.potrf_device(k, g, k) != 0) return fail();
+                        continue;
+                    }
+                    pn.push_back(k);
+                    pld.push_back(k);
+                    pa.push_back(g);
+                    lu.add({g, k, k}, k, k);
+                    max_n = std::max<magma_int_t>(max_n, k);
+                }
+            }
+            const magma_int_t cnt = static_cast<magma_int_t>(pa.size());
+            if (cnt > 0) {
+                pn.push_back(0);
+                pld.push_back(0);
+                magma_int_t* info = heap.alloc<magma_int_t>(static_cast<size_t>(cnt) * sizeof(magma_int_t));
+                // (MAGMA's batched potrf writes info on failure only)
+                check_cuda(cudaMemsetAsync(info, 0, static_cast<size_t>(cnt) * sizeof(magma_int_t), stream), "HODLR GPU potrf info");
+                meta_.clear();
+                const size_t off_n = meta_.append(pn), off_ld = meta_.append(pld), off_a = meta_.append(pa);
+                lu.stage(meta_);
+                char* md = meta_.upload(meta_device_, stream);
+                potrf_vbatched(reinterpret_cast<magma_int_t*>(md + off_n), reinterpret_cast<T**>(md + off_a),
+                               reinterpret_cast<magma_int_t*>(md + off_ld), info, cnt, max_n, queue);
+                launch_lower_to_upper(lu.device(md), lu.count(), lu.max_n, stream);
+                std::vector<magma_int_t> info_h(static_cast<size_t>(cnt));
+                check_cuda(cudaMemcpyAsync(info_h.data(), info, cnt * sizeof(magma_int_t), cudaMemcpyDeviceToHost, stream),
+                           "HODLR GPU potrf info");
+                check_cuda(cudaStreamSynchronize(stream), "HODLR GPU potrf");
+                heap.free(info);
+                for (magma_int_t v : info_h) {
+                    if (v != 0) return fail();
+                }
+            }
+        }
+        T* mb = heap.alloc<T>(std::max<size_t>(sq, 1) * sizeof(T));  // R_U R_V^T
+        T* ub = heap.alloc<T>(std::max<size_t>(sq, 1) * sizeof(T));  // its U
+        T* vb = heap.alloc<T>(std::max<size_t>(sq, 1) * sizeof(T));  // its V
+        double* sb = heap.alloc<double>(std::max<size_t>(sc, 1) * sizeof(double));
+        check_cuda(cudaMemsetAsync(sb, 0, std::max<size_t>(sc, 1) * sizeof(double), stream), "HODLR GPU recompression s");
+        // R_U R_V^T (plain transpose, as the host's gemm 'N', 'T'), R_U and R_V upper triangular
+        {
+            meta_.clear();
+            ItemList<TriuItem<T>> tz;
+            VBatch<T> mm;
+            for (size_t a = 0; a < n_a; ++a) {
+                const int k = ks[a];
+                T* r1 = rb + 2 * sq_at[a];
+                T* r2 = r1 + static_cast<size_t>(k) * k;
+                tz.add({r1, k, k}, k, k);
+                tz.add({r2, k, k}, k, k);
+                mm.entries.push_back({r1, r2, mb + sq_at[a], k, k, k, k, k, k});
+                stats_.flops += kFlopScale * 2.0 * static_cast<double>(k) * k * k;
+            }
+            tz.stage(meta_);
+            mm.stage(meta_);
+            char* md = meta_.upload(meta_device_, stream);
+            launch_zero_lower(tz.device(md), tz.count(), tz.max_n, stream);
+            mm.gemm(md, MagmaNoTrans, MagmaTrans, T(1.0), T(0.0), queue);
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression R_U R_V^T");
+        }
+        std::vector<char> zero(n_a, 0);
+        core_svds(ks, sq_at, s_at, sc, mb, ub, vb, sb, tol, underflow, svd, rn, zero);
+        size_t xc = 0;
+        for (size_t a = 0; a < n_a; ++a) {
+            rn_out[a] = rn[a];
+            xc += 2 * static_cast<size_t>(ks[a]) * rn[a];
+        }
+        // X_U = R_U^-1 Us(:, 1:rn) diag(s), X_V = R_V^-1 conj(Vs(:, 1:rn)) (zero for a block of rank 0)
+        T* xb = heap.alloc<T>(std::max<size_t>(xc, 1) * sizeof(T));
+        check_cuda(cudaMemsetAsync(xb, 0, std::max<size_t>(xc, 1) * sizeof(T), stream), "HODLR GPU recompression X");
+        {
+            meta_.clear();
+            ItemList<ColScaleItem<T>> xs;
+            std::vector<magma_int_t> tm, tn, tlda, tldb;
+            std::vector<T*> tA, tB;
+            magma_int_t max_tm = 0, max_tn = 0;
+            size_t at = 0;
+            for (size_t a = 0; a < n_a; ++a) {
+                const int k = ks[a], r = rn[a];
+                T* xu = xb + at;
+                T* xv = xu + static_cast<size_t>(k) * r;
+                at += 2 * static_cast<size_t>(k) * r;
+                if (zero[a]) continue;
+                xs.add({xu, k, ub + sq_at[a], k, k, r, sb + s_at[a], 0}, k, r);
+                xs.add({xv, k, vb + sq_at[a], k, k, r, nullptr, 1}, k, r);
+                T* r1 = rb + 2 * sq_at[a];
+                for (int side = 0; side < 2; ++side) {
+                    tm.push_back(k);
+                    tn.push_back(r);
+                    tlda.push_back(k);
+                    tldb.push_back(k);
+                    tA.push_back(r1 + static_cast<size_t>(side) * k * k);
+                    tB.push_back(side == 0 ? xu : xv);
+                }
+                max_tm = std::max<magma_int_t>(max_tm, k);
+                max_tn = std::max<magma_int_t>(max_tn, r);
+                stats_.flops += kFlopScale * 2.0 * static_cast<double>(k) * k * r;
+            }
+            const magma_int_t ntr = static_cast<magma_int_t>(tA.size());
+            tm.push_back(0);
+            tn.push_back(0);
+            tlda.push_back(0);
+            tldb.push_back(0);
+            xs.stage(meta_);
+            const size_t off_tm = meta_.append(tm), off_tn = meta_.append(tn), off_tlda = meta_.append(tlda);
+            const size_t off_tldb = meta_.append(tldb), off_tA = meta_.append(tA), off_tB = meta_.append(tB);
+            char* md = meta_.upload(meta_device_, stream);
+            launch_col_scale(xs.device(md), xs.count(), xs.max_m, xs.max_n, stream);
+            if (ntr > 0) {
+                trsm_vbatched(max_tm, max_tn, reinterpret_cast<magma_int_t*>(md + off_tm),
+                              reinterpret_cast<magma_int_t*>(md + off_tn), reinterpret_cast<T**>(md + off_tA),
+                              reinterpret_cast<magma_int_t*>(md + off_tlda), reinterpret_cast<T**>(md + off_tB),
+                              reinterpret_cast<magma_int_t*>(md + off_tldb), ntr, queue);
+            }
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression X");
+        }
+        heap.free(sb);
+        heap.free(vb);
+        heap.free(ub);
+        heap.free(mb);
+        heap.free(rb);
+        // the new factors U X_U and V X_V
+        release_out();
+        size_t bytes = 0;
+        for (size_t a = 0; a < n_a; ++a) {
+            const Block& B = block(bl[a]);
+            bytes += aligned(static_cast<size_t>(B.m) * rn[a] * sizeof(T)) + aligned(static_cast<size_t>(B.n) * rn[a] * sizeof(T));
+        }
+        out_ = heap.alloc<char>(std::max<size_t>(bytes, 1));
+        {
+            meta_.clear();
+            VBatch<T> prod;
+            size_t x_at = 0, o_at = 0;
+            for (size_t a = 0; a < n_a; ++a) {
+                const Block& B = block(bl[a]);
+                const int k = ks[a], q = rn[a];
+                T* uo = reinterpret_cast<T*>(out_ + o_at);
+                o_at += aligned(static_cast<size_t>(B.m) * q * sizeof(T));
+                T* vo = reinterpret_cast<T*>(out_ + o_at);
+                o_at += aligned(static_cast<size_t>(B.n) * q * sizeof(T));
+                const T* xu = xb + x_at;
+                const T* xv = xu + static_cast<size_t>(k) * q;
+                x_at += 2 * static_cast<size_t>(k) * q;
+                prod.entries.push_back({B.u, xu, uo, B.m, q, k, B.m, k, B.m});
+                prod.entries.push_back({B.vt, xv, vo, B.n, q, k, B.n, k, B.n});
+                out_u_.push_back(uo);
+                out_v_.push_back(vo);
+                stats_.flops += kFlopScale * 2.0 * (static_cast<double>(B.m) + B.n) * k * q;
+            }
+            prod.stage(meta_);
+            char* md = meta_.upload(meta_device_, stream);
+            prod.gemm(md, MagmaNoTrans, MagmaNoTrans, T(1.0), T(0.0), queue);
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression factors");
+        }
+        heap.free(xb);
+        stats_.t_recomp += seconds_since(t0);
+        return true;
+    }
+
+    // The recompression by Householder QR (as the CPU's LR_ReCompression): the
+    // QR of U and V^T (qr_device), the SVD of R1 R2^T (MAGMA's batched
+    // one-sided Jacobi for ranks below kBigSvdRank, zero padded by size class;
+    // cuSOLVER gesvdp one by one for the others), the new rank rn by the rule
+    // of SVD_Truncate (tol relative, underflow absolute), and the new factors
+    // [X; 0] - Y Z (= Q [X; 0]) with X_U = Us(:, 1:rn) diag(s), X_V =
+    // conj(Vs(:, 1:rn)) and Z = T Y1^H X, T^-1 = striu(Y^H Y) + diag(1/tau)
+    // (the larft recurrence on the host for a block with a zero tau).  rn_out:
+    // the new ranks; the factors stay for download()
+    void recompress_qr(int na, const int* bl, double tol, double underflow, DeviceSvd<T>& svd, int* rn_out) {
         Context& ctx = Context::instance();
         ctx.activate();
         const cudaStream_t stream = ctx.stream();
@@ -932,105 +1257,12 @@ public:
             check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression R1 R2^T");
         }
 
-        // the SVDs: the small ones batched by size class, the others one by one
-        std::map<int, std::vector<size_t>> classes;
-        std::vector<size_t> large;
-        for (size_t a = 0; a < n_a; ++a) {
-            if (ks[a] < kBigSvdRank) {
-                classes[(ks[a] + 31) / 32 * 32].push_back(a);
-            } else {
-                large.push_back(a);
-            }
-        }
-        for (auto& cls : classes) {
-            const int K = cls.first;
-            const std::vector<size_t>& list = cls.second;
-            const size_t each = static_cast<size_t>(K) * K;
-            const size_t per = std::max<size_t>(1, kChunkBytes / (3 * each * sizeof(T) + K * sizeof(double)));
-            for (size_t c0 = 0; c0 < list.size(); c0 += per) {
-                const size_t cnt = std::min(per, list.size() - c0);
-                T* pa = heap.alloc<T>(each * cnt * sizeof(T));
-                T* pu = heap.alloc<T>(each * cnt * sizeof(T));
-                T* pv = heap.alloc<T>(each * cnt * sizeof(T));
-                double* ps = heap.alloc<double>(static_cast<size_t>(K) * cnt * sizeof(double));
-                magma_int_t* info = heap.alloc<magma_int_t>(cnt * sizeof(magma_int_t));
-                check_cuda(cudaMemsetAsync(pa, 0, each * cnt * sizeof(T), stream), "HODLR GPU SVD padding");
-                meta_.clear();
-                ItemList<AxpbyItem<T>> in, out;
-                std::vector<T*> aptr, uptr, vptr;
-                std::vector<double*> sptr;
-                for (size_t i = 0; i < cnt; ++i) {
-                    const size_t a = list[c0 + i];
-                    const int k = ks[a];
-                    in.add({pa + i * each, K, mb + sq_at[a], k, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
-                    out.add({ub + sq_at[a], k, pu + i * each, K, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
-                    out.add({vb + sq_at[a], k, pv + i * each, K, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
-                    aptr.push_back(pa + i * each);
-                    uptr.push_back(pu + i * each);
-                    vptr.push_back(pv + i * each);
-                    sptr.push_back(ps + i * K);
-                    stats_.flops += svd_flops(k);
-                }
-                in.stage(meta_);
-                out.stage(meta_);
-                const size_t off_a = meta_.append(aptr), off_u = meta_.append(uptr), off_v = meta_.append(vptr);
-                const size_t off_s = meta_.append(sptr);
-                char* md = meta_.upload(meta_device_, stream);
-                launch_axpby(in.device(md), in.count(), in.max_m, in.max_n, stream);
-                gesvj_batched(K, reinterpret_cast<T**>(md + off_a), reinterpret_cast<double**>(md + off_s),
-                              reinterpret_cast<T**>(md + off_u), reinterpret_cast<T**>(md + off_v), info,
-                              static_cast<magma_int_t>(cnt), queue);
-                launch_axpby(out.device(md), out.count(), out.max_m, out.max_n, stream);
-                for (size_t i = 0; i < cnt; ++i) {
-                    const size_t a = list[c0 + i];
-                    check_cuda(cudaMemcpyAsync(sb + s_at[a], ps + i * K, ks[a] * sizeof(double), cudaMemcpyDeviceToDevice, stream),
-                               "HODLR GPU SVD values");
-                }
-                std::vector<magma_int_t> info_h(cnt);
-                check_cuda(cudaMemcpyAsync(info_h.data(), info, cnt * sizeof(magma_int_t), cudaMemcpyDeviceToHost, stream),
-                           "HODLR GPU SVD info");
-                check_cuda(cudaStreamSynchronize(stream), "HODLR GPU batched SVD");
-                for (magma_int_t v : info_h) {
-                    if (v < 0) throw std::runtime_error("HODLR GPU: batched SVD failed, info " + std::to_string(v));
-                }
-                heap.free(info);
-                heap.free(ps);
-                heap.free(pv);
-                heap.free(pu);
-                heap.free(pa);
-            }
-        }
-        for (size_t a : large) {
-            const int k = ks[a];
-            svd.svd_device(k, k, mb + sq_at[a], sb + s_at[a], ub + sq_at[a], vb + sq_at[a]);
-            stats_.flops += svd_flops(k);
-        }
-
-        // the new ranks (SVD_Truncate)
-        std::vector<double> hs(std::max<size_t>(sc, 1));
-        if (sc > 0) check_cuda(cudaMemcpy(hs.data(), sb, sc * sizeof(double), cudaMemcpyDeviceToHost), "HODLR GPU SVD values");
         std::vector<char> zero(n_a, 0);
+        core_svds(ks, sq_at, s_at, sc, mb, ub, vb, sb, tol, underflow, svd, rn, zero);
         size_t xc = 0;
         for (size_t a = 0; a < n_a; ++a) {
-            const double* s = hs.data() + s_at[a];
-            const int k = ks[a];
-            int r = k;
-            if (s[0] < underflow) {
-                r = 0;
-            } else {
-                const double thr = std::max(s[0] * tol, underflow);
-                for (int i = 0; i < k; ++i) {
-                    if (s[i] <= thr) {
-                        r = i + 1;
-                        if (s[i] < thr / 10) r = i;
-                        break;
-                    }
-                }
-            }
-            zero[a] = r == 0;
-            rn[a] = std::max(r, 1);
             rn_out[a] = rn[a];
-            xc += 2 * static_cast<size_t>(k) * rn[a];
+            xc += 2 * static_cast<size_t>(ks[a]) * rn[a];
         }
 
         // X, then Y1^H X in place of Z, then Z = T (Y1^H X) by the triangular solve with T^-1
@@ -1124,6 +1356,117 @@ public:
         stats_.t_recomp += seconds_since(t0);
         finish_device(na, bl, rn.data(), xb, zb);
         heap.free(xb);
+    }
+
+    // The SVDs of the cores of a recompression (mb: k x k each at sq_at, k =
+    // ks[a]; destroyed) into ub, vb (k x k at sq_at) and sb (k values,
+    // descending, at s_at): the small ones batched by size class, the others
+    // one by one; then the new ranks by the rule of SVD_Truncate (rn at least
+    // 1; zero: rank 0, the factors zero)
+    void core_svds(const std::vector<int>& ks, const std::vector<size_t>& sq_at, const std::vector<size_t>& s_at, size_t sc,
+                   T* mb, T* ub, T* vb, double* sb, double tol, double underflow, DeviceSvd<T>& svd, std::vector<int>& rn,
+                   std::vector<char>& zero) {
+        Context& ctx = Context::instance();
+        const cudaStream_t stream = ctx.stream();
+        const magma_queue_t queue = ctx.queue();
+        DeviceHeap& heap = DeviceHeap::instance();
+        const size_t n_a = ks.size();
+        // the SVDs: the small ones batched by size class, the others one by one
+        std::map<int, std::vector<size_t>> classes;
+        std::vector<size_t> large;
+        for (size_t a = 0; a < n_a; ++a) {
+            if (ks[a] < kBigSvdRank) {
+                classes[(ks[a] + 31) / 32 * 32].push_back(a);
+            } else {
+                large.push_back(a);
+            }
+        }
+        for (auto& cls : classes) {
+            const int K = cls.first;
+            const std::vector<size_t>& list = cls.second;
+            const size_t each = static_cast<size_t>(K) * K;
+            const size_t per = std::max<size_t>(1, kChunkBytes / (3 * each * sizeof(T) + K * sizeof(double)));
+            for (size_t c0 = 0; c0 < list.size(); c0 += per) {
+                const size_t cnt = std::min(per, list.size() - c0);
+                T* pa = heap.alloc<T>(each * cnt * sizeof(T));
+                T* pu = heap.alloc<T>(each * cnt * sizeof(T));
+                T* pv = heap.alloc<T>(each * cnt * sizeof(T));
+                double* ps = heap.alloc<double>(static_cast<size_t>(K) * cnt * sizeof(double));
+                magma_int_t* info = heap.alloc<magma_int_t>(cnt * sizeof(magma_int_t));
+                check_cuda(cudaMemsetAsync(pa, 0, each * cnt * sizeof(T), stream), "HODLR GPU SVD padding");
+                meta_.clear();
+                ItemList<AxpbyItem<T>> in, out;
+                std::vector<T*> aptr, uptr, vptr;
+                std::vector<double*> sptr;
+                for (size_t i = 0; i < cnt; ++i) {
+                    const size_t a = list[c0 + i];
+                    const int k = ks[a];
+                    in.add({pa + i * each, K, mb + sq_at[a], k, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
+                    out.add({ub + sq_at[a], k, pu + i * each, K, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
+                    out.add({vb + sq_at[a], k, pv + i * each, K, nullptr, 0, k, k, T(1.0), T(0.0)}, k, k);
+                    aptr.push_back(pa + i * each);
+                    uptr.push_back(pu + i * each);
+                    vptr.push_back(pv + i * each);
+                    sptr.push_back(ps + i * K);
+                    stats_.flops += svd_flops(k);
+                }
+                in.stage(meta_);
+                out.stage(meta_);
+                const size_t off_a = meta_.append(aptr), off_u = meta_.append(uptr), off_v = meta_.append(vptr);
+                const size_t off_s = meta_.append(sptr);
+                char* md = meta_.upload(meta_device_, stream);
+                launch_axpby(in.device(md), in.count(), in.max_m, in.max_n, stream);
+                gesvj_batched(K, reinterpret_cast<T**>(md + off_a), reinterpret_cast<double**>(md + off_s),
+                              reinterpret_cast<T**>(md + off_u), reinterpret_cast<T**>(md + off_v), info,
+                              static_cast<magma_int_t>(cnt), queue);
+                launch_axpby(out.device(md), out.count(), out.max_m, out.max_n, stream);
+                for (size_t i = 0; i < cnt; ++i) {
+                    const size_t a = list[c0 + i];
+                    check_cuda(cudaMemcpyAsync(sb + s_at[a], ps + i * K, ks[a] * sizeof(double), cudaMemcpyDeviceToDevice, stream),
+                               "HODLR GPU SVD values");
+                }
+                std::vector<magma_int_t> info_h(cnt);
+                check_cuda(cudaMemcpyAsync(info_h.data(), info, cnt * sizeof(magma_int_t), cudaMemcpyDeviceToHost, stream),
+                           "HODLR GPU SVD info");
+                check_cuda(cudaStreamSynchronize(stream), "HODLR GPU batched SVD");
+                for (magma_int_t v : info_h) {
+                    if (v < 0) throw std::runtime_error("HODLR GPU: batched SVD failed, info " + std::to_string(v));
+                }
+                heap.free(info);
+                heap.free(ps);
+                heap.free(pv);
+                heap.free(pu);
+                heap.free(pa);
+            }
+        }
+        for (size_t a : large) {
+            const int k = ks[a];
+            svd.svd_device(k, k, mb + sq_at[a], sb + s_at[a], ub + sq_at[a], vb + sq_at[a]);
+            stats_.flops += svd_flops(k);
+        }
+
+        // the new ranks (SVD_Truncate)
+        std::vector<double> hs(std::max<size_t>(sc, 1));
+        if (sc > 0) check_cuda(cudaMemcpy(hs.data(), sb, sc * sizeof(double), cudaMemcpyDeviceToHost), "HODLR GPU SVD values");
+        for (size_t a = 0; a < n_a; ++a) {
+            const double* s = hs.data() + s_at[a];
+            const int k = ks[a];
+            int r = k;
+            if (s[0] < underflow) {
+                r = 0;
+            } else {
+                const double thr = std::max(s[0] * tol, underflow);
+                for (int i = 0; i < k; ++i) {
+                    if (s[i] <= thr) {
+                        r = i + 1;
+                        if (s[i] < thr / 10) r = i;
+                        break;
+                    }
+                }
+            }
+            zero[a] = r == 0;
+            rn[a] = std::max(r, 1);
+        }
     }
 
     // Free the blocks of the level
@@ -1371,6 +1714,21 @@ private:
         if (status != 0) throw std::runtime_error("magma gesvj_batched failed with status " + std::to_string(status));
     }
 
+    // the lower Cholesky factors of count matrices in place (n x n, sizes per
+    // entry on the device; info per entry; MAGMA's batched potrf takes the
+    // lower triangle only, and its _nocheck form does not say so)
+    static void potrf_vbatched(magma_int_t* n, T** a, magma_int_t* lda, magma_int_t* info, magma_int_t count, magma_int_t max_n,
+                               magma_queue_t queue) {
+        magma_int_t status = 0;
+        if constexpr (std::is_same_v<T, double>) {
+            status = magma_dpotrf_vbatched_max_nocheck(MagmaLower, n, a, lda, info, count, max_n, queue);
+        } else {
+            status = magma_zpotrf_vbatched_max_nocheck(MagmaLower, n, reinterpret_cast<magmaDoubleComplex**>(a), lda, info,
+                                                       count, max_n, queue);
+        }
+        if (status != 0) throw std::runtime_error("magma potrf_vbatched failed with status " + std::to_string(status));
+    }
+
     // B := A^-1 B for count upper triangular A (m x m) and B (m x n), sizes per entry (device arrays)
     static void trsm_vbatched(magma_int_t max_m, magma_int_t max_n, magma_int_t* m, magma_int_t* n, T** a, magma_int_t* lda,
                               T** b, magma_int_t* ldb, magma_int_t count, magma_queue_t queue) {
@@ -1417,6 +1775,86 @@ private:
         }
         check_cuda(cudaMemcpy(z, zz.data(), 2 * kr * sizeof(T), cudaMemcpyHostToDevice), "HODLR GPU WY Z");
     }
+    // ---- the entries through the host (no GPU evaluator; host_fn_) ----
+
+    // A sub-block of a block whose entries come through the host: its rows
+    // and columns (1-based point slots) into the device array dst (leading
+    // dimension ld)
+    struct HostPanel {
+        T* dst;
+        int ld;
+        std::vector<int> rows1, cols1;
+    };
+    // the 1-based slots first+1 .. first+count
+    static std::vector<int> slots(int64_t first, int count) {
+        std::vector<int> s(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) s[static_cast<size_t>(i)] = static_cast<int>(first + i + 1);
+        return s;
+    }
+    // the 1-based slots of local positions (from 0) of a block starting at first
+    static std::vector<int> slots(int64_t first, const std::vector<int>& local) {
+        std::vector<int> s(local.size());
+        for (size_t i = 0; i < local.size(); ++i) s[i] = static_cast<int>(first + local[i] + 1);
+        return s;
+    }
+    static std::vector<int> slots(int64_t first, const std::vector<int>& all, size_t offset, int count) {
+        return slots(first, std::vector<int>(all.begin() + static_cast<std::ptrdiff_t>(offset),
+                                             all.begin() + static_cast<std::ptrdiff_t>(offset) + count));
+    }
+    // a device index array of the blocks (sel_rows_d_, sel_j2_d_: sel_host_.size()
+    // entries) on the host, after the stream's work so far
+    const std::vector<int>& download_ints(const int* d, cudaStream_t stream) {
+        host_ints_.resize(sel_host_.size());
+        if (!host_ints_.empty()) {
+            check_cuda(cudaMemcpyAsync(host_ints_.data(), d, host_ints_.size() * sizeof(int), cudaMemcpyDeviceToHost,
+                                       stream),
+                       "HODLR GPU BACA chosen indices");
+        }
+        check_cuda(cudaStreamSynchronize(stream), "HODLR GPU BACA chosen indices");
+        return host_ints_;
+    }
+    // The panels' entries from the application (one round of host_fn_), then
+    // each to its device array in stream order
+    void host_fill(const std::vector<HostPanel>& panels, cudaStream_t stream) {
+        const int np = static_cast<int>(panels.size());
+        host_nr_.resize(static_cast<size_t>(std::max(np, 1)));
+        host_nc_.resize(static_cast<size_t>(std::max(np, 1)));
+        size_t nrows = 0, ncols = 0, nvals = 0;
+        for (int p = 0; p < np; ++p) {
+            const HostPanel& h = panels[static_cast<size_t>(p)];
+            host_nr_[static_cast<size_t>(p)] = static_cast<int>(h.rows1.size());
+            host_nc_[static_cast<size_t>(p)] = static_cast<int>(h.cols1.size());
+            nrows += h.rows1.size();
+            ncols += h.cols1.size();
+            nvals += h.rows1.size() * h.cols1.size();
+        }
+        // (no round without entries: an empty request of the collective extraction
+        // (elem_extract=1) would count as this rank's synchronization point)
+        if (nvals == 0) return;
+        host_rows_.resize(std::max<size_t>(nrows, 1));
+        host_cols_.resize(std::max<size_t>(ncols, 1));
+        host_vals_.assign(std::max<size_t>(nvals, 1), T(0.0));
+        size_t ri = 0, ci = 0;
+        for (const HostPanel& h : panels) {
+            std::copy(h.rows1.begin(), h.rows1.end(), host_rows_.begin() + static_cast<std::ptrdiff_t>(ri));
+            std::copy(h.cols1.begin(), h.cols1.end(), host_cols_.begin() + static_cast<std::ptrdiff_t>(ci));
+            ri += h.rows1.size();
+            ci += h.cols1.size();
+        }
+        host_fn_(host_ctx_, &np, host_nr_.data(), host_nc_.data(), host_rows_.data(), host_cols_.data(),
+                 host_vals_.data());
+        size_t at = 0;
+        for (const HostPanel& h : panels) {
+            const size_t m = h.rows1.size(), n = h.cols1.size();
+            if (m > 0 && n > 0) {
+                check_cuda(cudaMemcpy2DAsync(h.dst, static_cast<size_t>(h.ld) * sizeof(T), host_vals_.data() + at,
+                                             m * sizeof(T), m * sizeof(T), n, cudaMemcpyHostToDevice, stream),
+                           "HODLR GPU BACA host entries");
+            }
+            at += m * n;
+        }
+    }
+
     // device time of the entry evaluations (Stats::t_entry): an event pair
     // around each launch, read after the synchronization that follows
     void entry_begin(cudaStream_t stream) {
@@ -1594,6 +2032,10 @@ private:
     int64_t n_points_ = 0;
     int dim_ = 0;
     const fmm::gpu::Evaluator* evaluator_ = nullptr;  // the application's (GpuState::evaluator)
+    HostEntryFn host_fn_ = nullptr;                   // or the entries through the host (begin())
+    void* host_ctx_ = nullptr;
+    std::vector<int> host_nr_, host_nc_, host_rows_, host_cols_, host_ints_;
+    std::vector<T> host_vals_;
     double scale_ = 1.0;
     std::vector<Block> blocks_;
     int* sel_rows_d_ = nullptr;

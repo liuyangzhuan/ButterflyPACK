@@ -10454,7 +10454,7 @@ time_tmp = time_tmp + n2 - n1
             write(*,*) 'Full_construction_MD FFT path requires M_loc/N_loc'
             stop
          endif
-         fft_npad = product(blocks%M_loc + blocks%N_loc - 1)
+         fft_npad = BP_MD_fft_circulant_npad(Ndim, blocks%M_loc, blocks%N_loc)
          allocate(kernel_fft(fft_npad))
          call LogMemory(stats, SIZEOF(kernel_fft)/1024.0d3)
          passflag = 0

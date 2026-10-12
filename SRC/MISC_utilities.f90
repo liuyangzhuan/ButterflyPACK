@@ -1834,6 +1834,20 @@ contains
 #endif
    end subroutine assert
 
+   !> Stop the run (every rank) with msg unless statement holds, in every
+   !> build: for the checks of the user's settings and calls, which assert
+   !> skips in the builds with NDEBUG (Release)
+   subroutine BPACK_require(statement, msg)
+      logical::statement
+      character(*)::msg
+      integer ierr
+
+      if (statement) return
+      write (*, '(A)') msg
+      flush (6)
+      call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+   end subroutine BPACK_require
+
    function floor_safe(input)
       real(kind=8)::input
       integer floor_safe
@@ -4440,7 +4454,7 @@ contains
 
 
 
-subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_old,ld_new,data_in,trans_in,data_out,trans_out,loopnew)
+subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_old,ld_new,data_in,trans_in,data_out,trans_out,loopnew,par)
    implicit none
    integer Ndim,loopnew
    integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim), idx_ref(Ndim), dims_new(Ndim-1),dims_new_scalar,idx_new_scalar,dims_old(Ndim-1),dims_old_scalar,idx_old_scalar
@@ -4452,6 +4466,9 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
    character::trans_in,trans_out
    DT::data_in(:,:)
    DT,allocatable::data_out(:,:)
+   logical, optional::par   !< .true.: the mode permutations may use the idle threads of an enclosing parallel region (large arrays only)
+   logical par_loc, fresh, old_is_lo, new_is_lo
+   integer, parameter::par_min = 65536   !< entries from which a permutation is spread over tasks
 
    i=0
    do dim_i=1,Ndim
@@ -4490,13 +4507,16 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
       out_dim2 = dims_new_scalar
    endif
 
+   fresh = .false.
    if(allocated(data_out))then
       if(size(data_out,1)/=out_dim1 .or. size(data_out,2)/=out_dim2)deallocate(data_out)
    endif
    if(.not. allocated(data_out))then
       allocate(data_out(out_dim1,out_dim2))
-      data_out=0
+      fresh = .true.   ! zeroed below only on the one path that may leave entries unwritten
    endif
+   par_loc = .false.
+   if(present(par)) par_loc = par .and. out_dim1*out_dim2 >= par_min
 
    if(ld_old==Ndim .and. ld_new==1 .and. trans_in=='T' .and. trans_out=='N' .and. loopnew==1 .and. &
       dims_ref_old(Ndim)==dims_ref_new(Ndim) .and. offsets_ref(Ndim)==0)then
@@ -4553,35 +4573,26 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
             suffix_size = suffix_size*dims_ref_old(i)
          enddo
 
-         do isuffix = 0, suffix_size - 1
-            do iprefix = 0, prefix_size - 1
-               do ihi = 1, nhi
-                  do ilo = 1, nlo
-                     if(ld_old==lo_dim)then
-                        old_scalar_fast = ilo
-                        old_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
-                        new_scalar_fast = ihi
-                        new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
-                     else
-                        old_scalar_fast = ihi
-                        old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
-                        new_scalar_fast = ilo
-                        new_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
-                     endif
-
-                     if(trans_out=='N' .and. trans_in=='N')then
-                        data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
-                     else if(trans_out=='N' .and. trans_in=='T')then
-                        data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
-                     else if(trans_out=='T' .and. trans_in=='N')then
-                        data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
-                     else if(trans_out=='T' .and. trans_in=='T')then
-                        data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
-                     endif
-                  enddo
+         old_is_lo = ld_old==lo_dim
+         if(par_loc)then
+#ifdef HAVE_TASKLOOP
+            !$omp taskloop default(shared) private(isuffix,iprefix) collapse(2) num_tasks(omp_get_num_threads())
+#endif
+            do isuffix = 0, suffix_size - 1
+               do iprefix = 0, prefix_size - 1
+                  call TensorUnfoldingReshape_adjacent_slab(isuffix,iprefix,nlo,nhi,prefix_size,old_is_lo,trans_in,trans_out,data_in,data_out)
                enddo
             enddo
-         enddo
+#ifdef HAVE_TASKLOOP
+            !$omp end taskloop
+#endif
+         else
+            do isuffix = 0, suffix_size - 1
+               do iprefix = 0, prefix_size - 1
+                  call TensorUnfoldingReshape_adjacent_slab(isuffix,iprefix,nlo,nhi,prefix_size,old_is_lo,trans_in,trans_out,data_in,data_out)
+               enddo
+            enddo
+         endif
          return
       endif
 
@@ -4603,37 +4614,26 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
             suffix_size = suffix_size*dims_ref_old(i)
          enddo
 
-         do isuffix = 0, suffix_size - 1
-            do imiddle = 0, middle_size - 1
-               do iprefix = 0, prefix_size - 1
-                  do ihi = 1, nhi
-                     do ilo = 1, nlo
-                        if(ld_new<ld_old)then
-                           old_scalar_fast = ihi
-                           old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
-                           new_scalar_fast = ilo
-                           new_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
-                        else
-                           old_scalar_fast = ilo
-                           old_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
-                           new_scalar_fast = ihi
-                           new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
-                        endif
-
-                        if(trans_out=='N' .and. trans_in=='N')then
-                           data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
-                        else if(trans_out=='N' .and. trans_in=='T')then
-                           data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
-                        else if(trans_out=='T' .and. trans_in=='N')then
-                           data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
-                        else if(trans_out=='T' .and. trans_in=='T')then
-                           data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
-                        endif
-                     enddo
-                  enddo
+         new_is_lo = ld_new<ld_old
+         if(par_loc)then
+#ifdef HAVE_TASKLOOP
+            !$omp taskloop default(shared) private(isuffix,imiddle) collapse(2) num_tasks(omp_get_num_threads())
+#endif
+            do isuffix = 0, suffix_size - 1
+               do imiddle = 0, middle_size - 1
+                  call TensorUnfoldingReshape_distant_slab(isuffix,imiddle,nlo,nhi,prefix_size,middle_size,new_is_lo,trans_in,trans_out,data_in,data_out)
                enddo
             enddo
-         enddo
+#ifdef HAVE_TASKLOOP
+            !$omp end taskloop
+#endif
+         else
+            do isuffix = 0, suffix_size - 1
+               do imiddle = 0, middle_size - 1
+                  call TensorUnfoldingReshape_distant_slab(isuffix,imiddle,nlo,nhi,prefix_size,middle_size,new_is_lo,trans_in,trans_out,data_in,data_out)
+               enddo
+            enddo
+         endif
          return
       endif
 
@@ -4701,6 +4701,7 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
             idx_ref(dim_i) = mod(tmp_idx,dims_new(pos_new)) + 1 + offsets_ref(dim_i)
             tmp_idx = tmp_idx/dims_new(pos_new)
          else
+      if(fresh) data_out=0   ! this loop runs over the old index set and may leave new entries untouched
             idx_ref(dim_i) = idx_new_scalar + offsets_ref(dim_i)
          endif
          enddo
@@ -4770,13 +4771,89 @@ subroutine TensorUnfoldingReshape(Ndim,dims_ref_old,dims_ref_new,offsets_ref,ld_
 
 end subroutine TensorUnfoldingReshape
 
+!>**** One (isuffix,iprefix) slab of TensorUnfoldingReshape's permutation of two adjacent modes (lo_dim, lo_dim+1)
+subroutine TensorUnfoldingReshape_adjacent_slab(isuffix,iprefix,nlo,nhi,prefix_size,old_is_lo,trans_in,trans_out,data_in,data_out)
+   implicit none
+   integer isuffix,iprefix,nlo,nhi,prefix_size
+   logical old_is_lo   !< the old leading (scalar) mode is the lower of the two
+   character::trans_in,trans_out
+   DT::data_in(:,:)
+   DT::data_out(:,:)
+   integer ihi,ilo,old_scalar_fast,new_scalar_fast,old_col_fast,new_col_fast
+   do ihi = 1, nhi
+      do ilo = 1, nlo
+         if(old_is_lo)then
+            old_scalar_fast = ilo
+            old_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
+            new_scalar_fast = ihi
+            new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
+         else
+            old_scalar_fast = ihi
+            old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*isuffix)
+            new_scalar_fast = ilo
+            new_col_fast = 1 + iprefix + prefix_size*((ihi - 1) + nhi*isuffix)
+         endif
+         if(trans_out=='N' .and. trans_in=='N')then
+            data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
+         else if(trans_out=='N' .and. trans_in=='T')then
+            data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
+         else if(trans_out=='T' .and. trans_in=='N')then
+            data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
+         else if(trans_out=='T' .and. trans_in=='T')then
+            data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
+         endif
+      enddo
+   enddo
+end subroutine TensorUnfoldingReshape_adjacent_slab
 
+!>**** One (isuffix,imiddle) slab of TensorUnfoldingReshape's permutation of two non-adjacent modes (lo_dim, hi_dim)
+subroutine TensorUnfoldingReshape_distant_slab(isuffix,imiddle,nlo,nhi,prefix_size,middle_size,new_is_lo,trans_in,trans_out,data_in,data_out)
+   implicit none
+   integer isuffix,imiddle,nlo,nhi,prefix_size,middle_size
+   logical new_is_lo   !< the new leading (scalar) mode is the lower of the two
+   character::trans_in,trans_out
+   DT::data_in(:,:)
+   DT::data_out(:,:)
+   integer iprefix,ihi,ilo,old_scalar_fast,new_scalar_fast,old_col_fast,new_col_fast
+   do iprefix = 0, prefix_size - 1
+      do ihi = 1, nhi
+         do ilo = 1, nlo
+            if(new_is_lo)then
+               old_scalar_fast = ihi
+               old_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
+               new_scalar_fast = ilo
+               new_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
+            else
+               old_scalar_fast = ilo
+               old_col_fast = 1 + iprefix + prefix_size*(imiddle + middle_size*((ihi - 1) + nhi*isuffix))
+               new_scalar_fast = ihi
+               new_col_fast = 1 + iprefix + prefix_size*((ilo - 1) + nlo*(imiddle + middle_size*isuffix))
+            endif
+            if(trans_out=='N' .and. trans_in=='N')then
+               data_out(new_scalar_fast,new_col_fast) = data_in(old_scalar_fast,old_col_fast)
+            else if(trans_out=='N' .and. trans_in=='T')then
+               data_out(new_scalar_fast,new_col_fast) = data_in(old_col_fast,old_scalar_fast)
+            else if(trans_out=='T' .and. trans_in=='N')then
+               data_out(new_col_fast,new_scalar_fast) = data_in(old_scalar_fast,old_col_fast)
+            else if(trans_out=='T' .and. trans_in=='T')then
+               data_out(new_col_fast,new_scalar_fast) = data_in(old_col_fast,old_scalar_fast)
+            endif
+         enddo
+      enddo
+   enddo
+end subroutine TensorUnfoldingReshape_distant_slab
+
+
+!>**** Scatter one row sub-tensor's result (data_in, columns = front x rhs) into its box of the
+! full output data_out, which the caller owns and has already zeroed; entries outside the box
+! are not touched. Called from inside a task of BF_MD_block_mvp's row-side taskloop, so the
+! loops are spread over the team as tasks (a nested parallel do would run on one thread).
 subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,offsets_ref,data_in,data_out)
    implicit none
    integer Ndim
    integer dims_ref_old(Ndim),dims_ref_new(Ndim),offsets_ref(Ndim)
    DT::data_in(:,:)
-   DT,allocatable::data_out(:,:)
+   DT::data_out(:,:)
    integer idx_front(Ndim), stride_out(Ndim-1)
    integer dim_i, front, prod_front, rhs_old, rhs_out, in_col
    integer idx_old_scalar, out_row, base_out, carry_dim, out_dim1, out_dim2
@@ -4785,10 +4862,6 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
 
    out_dim1 = product(dims_ref_new(1:Ndim-1))
    out_dim2 = dims_ref_new(Ndim)
-   if(.not. allocated(data_out))then
-      allocate(data_out(out_dim1,out_dim2))
-      data_out=0
-   endif
 
    stride_out(1) = 1
    do dim_i=2,Ndim-1
@@ -4802,9 +4875,17 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
 
    full_front = all(offsets_ref(1:Ndim-2)==0) .and. all(dims_ref_old(1:Ndim-2)==dims_ref_new(1:Ndim-2))
    if(full_front)then
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs_old,rhs_out,idx_old_scalar,base_out,in_col,front) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs_old,rhs_out,idx_old_scalar,base_out,in_col,front) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
       do rhs_old=1,dims_ref_old(Ndim)
-         rhs_out = rhs_old + offsets_ref(Ndim)
          do idx_old_scalar=1,dims_ref_old(Ndim-1)
+         rhs_out = rhs_old + offsets_ref(Ndim)
             base_out = 1 + (idx_old_scalar + offsets_ref(Ndim-1) - 1)*stride_out(Ndim-1)
             in_col = 1 + (rhs_old-1)*prod_front
             do front=1,prod_front
@@ -4812,6 +4893,14 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
             enddo
          enddo
       enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
       return
    endif
 
@@ -4831,9 +4920,17 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
       enddo
    enddo
 
+#ifdef HAVE_TASKLOOP
+   !$omp taskgroup
+   !$omp taskloop default(shared) private(rhs_old,rhs_out,front,base_out,in_col,idx_old_scalar,out_row) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+   !$omp parallel do default(shared) private(rhs_old,rhs_out,front,base_out,in_col,idx_old_scalar,out_row) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
    do rhs_old=1,dims_ref_old(Ndim)
-      rhs_out = rhs_old + offsets_ref(Ndim)
       do front=1,prod_front
+      rhs_out = rhs_old + offsets_ref(Ndim)
          base_out = front_out(front)
 
          in_col = front + (rhs_old-1)*prod_front
@@ -4843,9 +4940,98 @@ subroutine TensorUnfoldingReshape_FinalScatter(Ndim,dims_ref_old,dims_ref_new,of
          enddo
       enddo
    enddo
+#ifdef HAVE_TASKLOOP
+   !$omp end taskloop
+   !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+   !$omp end parallel do
+#endif
+#endif
    deallocate(front_out)
 
 end subroutine TensorUnfoldingReshape_FinalScatter
+
+!>**** Mode-1 unfolding of a sub-tensor of data_in, written straight into the preallocated data_out.
+!> data_in(prod(dims_old),Nvec) holds Nvec tensors of extents dims_old(1:Ndim); the sub-tensor starts at offsets(1:Ndim)
+!> and has extents dims_new(1:Ndim). data_out(dims_new(1), prod(dims_new(2:Ndim))*Nvec) receives, for right-hand side rhs
+!> and tail index tail (column-major over dims_new(2:Ndim)), the contiguous run data_in(base:base+dims_new(1)-1, rhs) in
+!> column tail + (rhs-1)*prod(dims_new(2:Ndim)). Every element of data_out is written, so it need not be zeroed.
+!> par=.true. spreads the runs over tasks so the idle threads of an enclosing parallel region take part; the caller
+!> keeps small sub-tensors serial so that their data stays in the cache of the thread that consumes it next.
+subroutine TensorUnfoldingReshape_InitGather(Ndim,dims_old,dims_new,offsets,Nvec,data_in,data_out,par)
+   implicit none
+   integer Ndim, Nvec
+   integer dims_old(Ndim), dims_new(Ndim), offsets(Ndim)
+   DT::data_in(:,:)
+   DT::data_out(:,:)
+   logical par
+   integer stride_old(Ndim)
+   integer n1, tail_prod, rhs, tail, i, j, old_base, dim_i, tmp_idx, idx
+   integer, allocatable::tail_base(:)
+
+   stride_old(1) = 1
+   do dim_i=2,Ndim
+      stride_old(dim_i) = stride_old(dim_i-1)*dims_old(dim_i-1)
+   enddo
+   n1 = dims_new(1)
+   tail_prod = 1
+   do dim_i=2,Ndim
+      tail_prod = tail_prod*dims_new(dim_i)
+   enddo
+
+   ! source position of each tail's run (one per column of a right-hand side)
+   allocate(tail_base(tail_prod))
+   do tail=1,tail_prod
+      tmp_idx = tail - 1
+      old_base = 1 + offsets(1)
+      do dim_i=2,Ndim
+         idx = mod(tmp_idx,dims_new(dim_i)) + 1
+         tmp_idx = tmp_idx/dims_new(dim_i)
+         old_base = old_base + (idx + offsets(dim_i) - 1)*stride_old(dim_i)
+      enddo
+      tail_base(tail) = old_base
+   enddo
+
+   if(par)then
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs,tail,i,j) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs,tail,i,j) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
+      do rhs=1,Nvec
+         do tail=1,tail_prod
+            j = tail + (rhs - 1)*tail_prod
+            do i=1,n1
+               data_out(i,j) = data_in(tail_base(tail) + i - 1,rhs)
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
+   else
+      do rhs=1,Nvec
+         do tail=1,tail_prod
+            j = tail + (rhs - 1)*tail_prod
+            do i=1,n1
+               data_out(i,j) = data_in(tail_base(tail) + i - 1,rhs)
+            enddo
+         enddo
+      enddo
+   endif
+   deallocate(tail_base)
+
+end subroutine TensorUnfoldingReshape_InitGather
+
 
 
 

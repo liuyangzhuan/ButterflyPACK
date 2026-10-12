@@ -206,6 +206,7 @@ module BPACK_DEFS
         integer:: Ndim=0
         integer:: nproc=0
         integer:: compact_slots=0
+        integer:: round=0 !< D1: 0 = all slots, r>0 = only the slots streamed in round r
         type(vec_redist_peer_MD), allocatable:: send(:)
         type(vec_redist_peer_MD), allocatable:: recv(:)
     end type vec_redist_plan_MD
@@ -251,6 +252,11 @@ module BPACK_DEFS
         integer:: nuniq = 0
         integer, allocatable:: slot_map(:)
         integer, allocatable:: owner_slot(:)
+        !>**** D1 (slot streaming): the unique input slots of a level are gathered and
+        ! applied in rounds so that only one round's vectors, and the receive staging that
+        ! fills them, are live at a time. round(u) in 1..nround; nround==1 means off.
+        integer:: nround = 1
+        integer, allocatable:: round(:)
     end type vec_redist_groupmap_MD
 
     !>**** cached local MD MVP work vectors, used to avoid repeated allocation churn
@@ -897,6 +903,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_C_Mult_RedistSetup, Time_C_Mult_RedistSetupLocal, Time_C_Mult_RedistAlloc, Time_C_Mult_RedistFree, Time_C_Mult_RedistTotal
         real(kind=8) Time_C_Mult_Pack, Time_C_Mult_Full, Time_C_Mult_Unpack, Time_C_Mult_Final
         real(kind=8) Time_C_Mult_Reshape, Time_C_Mult_Gemm
+        real(kind=8) :: Cnt_C_Mult_Gemm_Group = 0d0, Cnt_C_Mult_Gemm_Task = 0d0, Flop_C_Mult_Gemm = 0d0, Time_C_Mult_Gemm_Task = 0d0   !< MD matvec block GEMMs: passes, tasks, flops, in-task time (MDSPLIT diagnostics)
         real(kind=8) Time_C_Mult_Reshape_Init, Time_C_Mult_Reshape_Right, Time_C_Mult_Reshape_Middle, Time_C_Mult_Reshape_Left, Time_C_Mult_Reshape_Final
         real(kind=8) Time_C_Mult_FFT_Total, Time_C_Mult_FFT_Check, Time_C_Mult_FFT_Apply, Time_C_Mult_FFT_Alloc
         real(kind=8) Time_C_Mult_FFT_Input, Time_C_Mult_FFT_Forward, Time_C_Mult_FFT_Multiply, Time_C_Mult_FFT_Backward, Time_C_Mult_FFT_Output
@@ -970,6 +977,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         type(Hstat), pointer::stats !< Use this metadata in blocked element extraction
         type(Hoption), pointer::option !< Use this metadata in blocked element extraction
         type(kernelquant), pointer::ker !< Use this metadata in blocked element extraction
+        type(proctree), pointer::ptree_caller => null() !< The caller's process tree when bmat is built on a subset of its ranks (BPACK_ExtractElement_Bridge; bmat, msh, ptree, stats and option then null outside the subset)
     end type quant_bmat
 
     !>**** a derived type containing a pointer to a block

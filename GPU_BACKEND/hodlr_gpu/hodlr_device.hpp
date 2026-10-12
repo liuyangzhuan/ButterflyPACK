@@ -401,6 +401,109 @@ public:
         heap.free(rd);
         return b.k;
     }
+    // The products of entry extraction from the forward blocks after the
+    // commit (BPACK_ExtractElement of a HODLR whose factors stay on the GPUs):
+    // piece p of np multiplies the nbig[p] rows big_rows (packed over the
+    // pieces, this rank's rows from 0) of U (role 0) or V (role 1) of block
+    // idx[p] with the nsmall[p] x k block of small (packed, column-major; k the
+    // block's rank, from the host): out_p = B S^T (nbig x nsmall) when
+    // small_first[p] is 0, S B^T (nsmall x nbig) otherwise, the outputs packed
+    // on the host.  Returns the flops.
+    double extract_products(int np, const int* idx, const int* role, const int* nbig, const int* nsmall,
+                            const int* small_first, const int* big_rows, const T* small, T* out) {
+        Context& ctx = Context::instance();
+        ctx.activate();
+        const cudaStream_t stream = ctx.stream();
+        DeviceHeap& heap = DeviceHeap::instance();
+        // the sizes, and the pieces whose rows are not one run (gathered first)
+        std::vector<size_t> small_off(static_cast<size_t>(np)), out_off(static_cast<size_t>(np));
+        std::vector<int64_t> gather_off(static_cast<size_t>(np), -1);
+        std::vector<int> gather_rows_host;
+        size_t n_small = 0, n_out = 0, n_gather = 0, at = 0;
+        double flops = 0.0;
+        for (int p = 0; p < np; ++p) {
+            const LowRank& b = committed_block(idx[p]);
+            const int ld = role[p] == 0 ? b.m : b.n;
+            const int64_t first = role[p] == 0 ? b.row0 : b.col0;
+            const int* rows = big_rows + at;
+            bool run = true;
+            for (int t = 0; t < nbig[p]; ++t) {
+                const int64_t r = rows[t] - first;
+                if (r < 0 || r >= ld) throw std::out_of_range("HODLR GPU extraction: a row outside a block's rows on this rank");
+                if (t > 0 && rows[t] != rows[t - 1] + 1) run = false;
+            }
+            if (!run) {
+                gather_off[static_cast<size_t>(p)] = static_cast<int64_t>(n_gather);
+                for (int t = 0; t < nbig[p]; ++t) gather_rows_host.push_back(static_cast<int>(rows[t] - first));
+                n_gather += static_cast<size_t>(nbig[p]) * b.k;
+            }
+            small_off[static_cast<size_t>(p)] = n_small;
+            out_off[static_cast<size_t>(p)] = n_out;
+            n_small += static_cast<size_t>(nsmall[p]) * b.k;
+            n_out += static_cast<size_t>(nbig[p]) * nsmall[p];
+            flops += 2.0 * nbig[p] * nsmall[p] * b.k;
+            at += static_cast<size_t>(nbig[p]);
+        }
+        if (n_out == 0) return 0.0;
+        T* ds = heap.alloc<T>(std::max<size_t>(n_small, 1) * sizeof(T));
+        T* dout = heap.alloc<T>(n_out * sizeof(T));
+        T* dg = heap.alloc<T>(std::max<size_t>(n_gather, 1) * sizeof(T));
+        int* drows = heap.alloc<int>(std::max<size_t>(gather_rows_host.size(), 1) * sizeof(int));
+        if (n_small > 0) {
+            check_cuda(cudaMemcpyAsync(ds, small, n_small * sizeof(T), cudaMemcpyHostToDevice, stream),
+                       "HODLR extraction (the smaller factors)");
+        }
+        // (a block of rank 0 contributes zeros)
+        check_cuda(cudaMemsetAsync(dout, 0, n_out * sizeof(T), stream), "HODLR extraction (output)");
+        if (!gather_rows_host.empty()) {
+            check_cuda(cudaMemcpyAsync(drows, gather_rows_host.data(), gather_rows_host.size() * sizeof(int),
+                                       cudaMemcpyHostToDevice, stream),
+                       "HODLR extraction (rows)");
+        }
+        VBatch<T> batch;
+        size_t gr = 0;
+        at = 0;
+        for (int p = 0; p < np; ++p) {
+            const LowRank& b = committed_block(idx[p]);
+            const T* base = role[p] == 0 ? b.u : b.v;
+            const int ld = role[p] == 0 ? b.m : b.n;
+            const int64_t first = role[p] == 0 ? b.row0 : b.col0;
+            const T* big = nullptr;
+            int ldbig = ld;
+            if (gather_off[static_cast<size_t>(p)] >= 0) {
+                T* g = dg + gather_off[static_cast<size_t>(p)];
+                if (nbig[p] > 0 && b.k > 0) launch_gather_rows(base, ld, b.k, drows + gr, nbig[p], g, stream);
+                gr += static_cast<size_t>(nbig[p]);
+                big = g;
+                ldbig = std::max(nbig[p], 1);
+            } else if (nbig[p] > 0) {
+                big = base + (big_rows[at] - first);
+            }
+            at += static_cast<size_t>(nbig[p]);
+            if (nbig[p] <= 0 || nsmall[p] <= 0 || b.k <= 0) continue;
+            T* c = dout + out_off[static_cast<size_t>(p)];
+            const T* s = ds + small_off[static_cast<size_t>(p)];
+            if (small_first[p] == 0) {
+                batch.entries.push_back({big, s, c, nbig[p], nsmall[p], b.k, ldbig, nsmall[p], nbig[p]});
+            } else {
+                batch.entries.push_back({s, big, c, nsmall[p], nbig[p], b.k, nsmall[p], ldbig, nsmall[p]});
+            }
+        }
+        if (batch.count() > 0) {
+            meta_.clear();
+            batch.stage(meta_);
+            char* md = meta_.upload(meta_device_, stream);
+            batch.gemm(md, MagmaNoTrans, MagmaTrans, T(1.0), T(0.0), ctx.queue());
+        }
+        check_cuda(cudaMemcpyAsync(out, dout, n_out * sizeof(T), cudaMemcpyDeviceToHost, stream),
+                   "HODLR extraction (entries to the host)");
+        check_cuda(cudaStreamSynchronize(stream), "HODLR extraction");
+        heap.free(drows);
+        heap.free(dg);
+        heap.free(dout);
+        heap.free(ds);
+        return flops;
+    }
     void fetch_block(int idx, T* hu, int ldu, T* hv, int ldv) const {
         const LowRank& b = committed_block(idx);
         Context::instance().activate();

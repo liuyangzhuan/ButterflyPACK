@@ -1,0 +1,10 @@
+--- reg_ref_ti2.out
+ 0 lvl: #admissible           0 #inadmissible           0
+ 1 lvl: #admissible                    0 #inadmissible                   64
+ 2 lvl: #admissible                 3096 #inadmissible                 1000
+ 3 lvl: #admissible                53352 #inadmissible                10648
+ 4 lvl: #admissible               611136 #inadmissible                70336
+ rankmax_of_level:           0           0           7           8           6
+  acc:  8.26E-03 time:  5.84E+00
+  2919.6391406249968      MB costed for butterfly forward blocks
+  177.95699999999999      MB costed for direct forward blocks

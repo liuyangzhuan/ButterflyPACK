@@ -118,6 +118,10 @@ void c_bpack_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc,
 void c_bpack_logdet_fortran(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat);
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+//------------------------------------------------------------------------------
+// The same extraction from a Bmat matrix built on a subset of the caller's ranks (collective over ptree_caller, the caller's
+// process tree; the source's handles bmat, option, msh, stats and ptree point to nullptr outside the subset)
+void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
 void c_bpack_get_comm(F2Cptr* ptree, int* fcomm);
@@ -163,6 +167,21 @@ void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, in
 void c_bf_new2old_row(F2Cptr* mshr, int* newidx_loc, int* oldidx);
 void c_bf_new2old_col(F2Cptr* mshc, int* newidx_loc, int* oldidx);
 
+
+/* BP handles are distinct from BF/BPACK handles. Initialization mirrors BF and
+ * consumes existing row/column meshes; format must be 1, 2, 3, or 5.
+ * Entry/distance callbacks use signed reordered indices (+row, -column).
+ * nnsr/nnsc are packed [point][knn], 1-based reordered opposite-axis indices
+ * (0 denotes no neighbour); unused arrays/callbacks may be NULL.
+ * Set option cpp=1. Use fresh BP stats, retain the user context, and keep
+ * format unchanged between init and compute. Mult uses column-major local
+ * vectors in reordered order and supports N/T/C; input and output cannot alias.
+ * Delete BP with c_bp_delete; delete its output msh/ker with the BPACK helpers.
+ * The input meshes, option, stats, and ptree remain caller-owned. */
+void c_bp_construct_init(int* M, int* N, int* M_loc, int* N_loc, int* nnsr, int* nnsc, F2Cptr* mshr, F2Cptr* mshc, F2Cptr* bp, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*, C2Fptr), void (*C_FuncNearFar)(int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
+void c_bp_construct_element_compute(F2Cptr* bp, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*, C2Fptr), void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
+void c_bp_mult(char const* trans, C_DT const* xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bp, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
+void c_bp_delete(F2Cptr* bp);
 
 #ifdef __cplusplus
 }
