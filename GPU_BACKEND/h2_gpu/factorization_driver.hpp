@@ -185,8 +185,16 @@ public:
     // first device exchanges are slow (Laplace 192^3 on 64 ranks: the first
     // waves of the first exchanging level at 3-4 GB/s, ~12 GB/s from the
     // fourth on; ~0.1-0.2 s per factorization, more at larger sizes); this
-    // takes that first contact out of the levels.  Returns its time (0 when
-    // it already ran); collective over the tree's ranks.
+    // takes that first contact out of the levels.  Then the same from and
+    // into the main heap, where a level's larger messages land once the
+    // arena is full: GPU-aware MPI meets a buffer's whole allocation on a
+    // pair's first transfer from it, and the heap is one allocation of most
+    // of the card (2026-10-12: after a CA0 leaf, which exchanges nothing,
+    // the first four transports of the level above waited 3.4 s more than
+    // after a Color leaf at 384^3 on 8 ranks, 6.5 s at 768^3 on 64 ranks on
+    // 80 GB cards; a Color leaf paid the same in its own first waves).
+    // Returns its time (0 when it already ran); collective over the tree's
+    // ranks.
     double warm_up_exchange() {
         static bool done = false;
         if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
@@ -225,6 +233,28 @@ public:
         if (host_send.empty()) {
             arena.free(send);
             arena.free(recv);
+        }
+        if (device_exchange_enabled()) {   // (the main heap: every rank takes part, a heap or not)
+            DeviceHeap& heap = DeviceHeap::instance();
+            heap.ensure_initialized();
+            char* hs = heap.try_alloc(total);
+            char* hr = hs != nullptr ? heap.try_alloc(total) : nullptr;
+            int ok = hr != nullptr ? 1 : 0;
+            MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, tree_->comm);
+            if (ok != 0) {
+                reqs.clear();
+                for (size_t i = 0; i < peers.size(); ++i) {
+                    reqs.emplace_back();
+                    MPI_Irecv(hr + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 791, tree_->comm, &reqs.back());
+                }
+                for (size_t i = 0; i < peers.size(); ++i) {
+                    reqs.emplace_back();
+                    MPI_Isend(hs + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 791, tree_->comm, &reqs.back());
+                }
+                MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+            }
+            if (hs != nullptr) heap.free(hs);
+            if (hr != nullptr) heap.free(hr);
         }
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
@@ -577,9 +607,13 @@ public:
             int pack = level_->shared_packing_expected() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
             level_->set_pack_shared(pack != 0);
-            if (announce && pack != 0) {
-                std::printf("  [gpu] level %d: the blocks on more than one rank held packed (a rank's near set "
-                            "would not fit raw)\n", lvl);
+            double est[2] = {level_->shared_packing_estimate(), -level_->shared_packing_room()};
+            MPI_Allreduce(MPI_IN_PLACE, est, 2, MPI_DOUBLE, MPI_MAX, level_comm);
+            if (announce) {
+                std::printf("  [gpu] level %d: the blocks on more than one rank %s through the ghosts' groups "
+                            "(their near set raw: up to %.1f GB a rank against %.1f GB of room under the hold "
+                            "limit on the tightest)\n", lvl, pack != 0 ? "held packed" : "left to each rank's pressure",
+                            est[0] / 1e9, -est[1] / 1e9);
                 std::fflush(stdout);
             }
         }
@@ -761,6 +795,11 @@ public:
     // Box region, owner pass, mirror and finalize of a wave on the device;
     // returns its number of boundary boxes.  The loop records the wave's
     // boxes as eliminated.
+    // A replicated CA level's interior group starts: no rank eliminates a
+    // ghost from here on (see LevelEliminatorBase::replicas_done).
+    void replicas_done() {
+        if (level_) level_->replicas_done();
+    }
     int eliminate_wave(const std::vector<int64_t>& wave, int counter) {
         if (!wave_trace_enabled()) return level_->eliminate_wave(wave, counter);
         trace_.wave_begin();

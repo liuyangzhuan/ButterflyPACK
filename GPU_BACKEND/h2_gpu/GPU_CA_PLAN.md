@@ -5046,6 +5046,65 @@ on both.  The logdets differ by ~1e-7 between variants and by 5e-7
 between card sizes (what packs differs); for scale, the variation run to
 run on 40 GB was Color 100.0-104.8 s, CA0 106.5-113.0 s.
 
+#### Why CA0 stopped beating Color on 80 GB, and what was left (2026-10-12)
+
+The "CA0's leaf 49.0 s against Color's 52.1 s" on 80 GB at 768^3 (11 Oct,
+noon) had two things in it that were not CA0's speed:
+
+1. That CA0 diverged.  Its ghost copies were packed by each rank's own
+   pressure, and it stopped above the leaf ("near block shape (hi)").  The
+   fix (blocks on more than one rank packed by a level-start rule) cost ~3
+   s of the leaf's owner pass on 80 GB, where every write of a shared block
+   was packed.
+2. A one-time MPI cost.  GPU-aware MPI meets a buffer's whole allocation
+   on a pair's first transfer from it, and a level's larger messages land
+   in the main heap (one allocation of most of the card) once the 2.65 GB
+   exchange arena is full.  A Color leaf paid this in its first four
+   exchanges (up to 1.1 s of payload wait each at 384^3; Color's leaf
+   exchange 6.56 -> 4.39 s once warmed).  A CA0 leaf exchanges nothing, so
+   the level above it paid instead: +3.4 s at 384^3, +6.5 s at 768^3 on
+   80 GB.  CA0 does no communication between its waves (checked: no
+   transport, no MPI in the CA loop); its leaf only moved the cost.
+
+Changes, all in one commit:
+
+- The exchange warm-up also sends 64 KB through the main heap to every
+  peer.  At 768^3 it takes 3.4 s (40 GB) / 6.7 s (80 GB), outside the
+  factor time but inside the "total time" line, so for one factorization
+  the cost moves rather than disappears.  The heap's capacity is unchanged.
+- The shared-block rule ends with the ghosts' groups (replicas_done at the
+  interior group, the same wave on every rank: no ghost is eliminated
+  after it, so no copy on another rank is read again).  On 40 GB this
+  changes nothing measurable (pressure packs the interior anyway: 504 GB
+  packed either way).
+- The level-start estimate counts the boundary groups' boxes (the rank's
+  boundary boxes and its ghosts) at their full-size near set.  Half that
+  count let 38 of 64 ranks fall back in the green group on 80 GB (37.0 GB
+  estimated against 40.9 GB of room; the raw peak was 41.5 GB at the wave
+  ends), and the level above stopped.  At the full count both cards pack.
+- Replica check, 192^3 CA0: 0 of 9488 / 3536 ghost copies differ, at the
+  default heap (shared blocks left to pressure) and at a 35% heap (packed;
+  that run then exhausts the heap at level 4, as it did before).
+
+768^3 on 64 ranks, each card in one job, Color and CA0 twice each (factor
+time excludes the warm-up; total includes it):
+
+| card | variant | factor | total | warm-up exch. | leaf | level 6 | solve |
+|---|---|---|---|---|---|---|---|
+| 40 GB | Color | 105 / 100 s | 108.4 / 103.5 | 3.4 / 3.6 | 54.2 / 51.8 | 17.0 / 16.6 | 3.03 / 2.99 |
+| 40 GB | CA0 | 106 / 106 s | 110.0 / 109.1 | 3.6 / 3.4 | 56.0 / 55.9 | 17.1 / 17.0 | 3.59 / 3.59 |
+| 40 GB | CA3 | 106 s | 109.2 | 3.4 | 54.1 | 17.3 | 3.23 |
+| 80 GB | Color | 86.1 / 85.1 s | 92.7 / 91.8 | 6.7 / 7.1 | 44.8 / 44.6 | 14.5 / 14.5 | 1.92 / 1.92 |
+| 80 GB | CA0 | 93.2 / 93.3 s | 99.7 / 99.7 | 6.9 / 6.8 | 51.3 / 50.9 | 14.2 / 14.7 | 2.13 / 2.13 |
+
+CA0's level 6 now matches Color's.  Its leaf does not: the leaf ends with
+the slowest rank, an interior one with 41,176 boxes (its ghost layer, +26%)
+against Color's 32,768.  Its waves take 49.3 s of host time against
+the slowest Color rank's 37.4 s (80 GB), and 53.6 s against 44.3 s on
+40 GB, more than Color's 8-9 s of leaf exchange.  At 8x the boxes a rank on
+64 ranks the replication costs more than the communication it saves, on
+both cards.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

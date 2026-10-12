@@ -485,6 +485,13 @@ public:
     // every rank alike, to hold the blocks on more than one rank packed
     virtual bool shared_packing_expected() { return false; }
     virtual void set_pack_shared(bool /*pack*/) {}
+    // ... and the end of its ghosts: from the interior group on no rank
+    // eliminates a ghost, so no copy of a block on another rank is read
+    // again and every block packs by this rank's pressure alone.  Called
+    // at the same wave on every rank.
+    virtual void replicas_done() {}
+    virtual double shared_packing_estimate() const { return 0.0; }
+    virtual double shared_packing_room() const { return 0.0; }
     virtual void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) {
         (void)keep;
         (void)budget;
@@ -1795,6 +1802,10 @@ private:
     template<typename TargetT>
     void pack_near_by_rule(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream,
                            bool pressure) {
+        if (replicas_done_) {   // (the interior group: no ghost reads a copy any more)
+            if (pressure) pack_near_group(targets, first, last, stream);
+            return;
+        }
         if (pack_shared_) pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
         if (!pressure) return;
         pack_near_group(targets, first, last, stream, 1.0, PackOnly::Private);
@@ -2501,30 +2512,48 @@ private:
     // because packing them after every write costs ~1.6 s of a 4 s leaf at
     // 192^3 on 8 ranks, where nothing needs packing.
     bool pack_shared_ = false;
+    bool replicas_done_ = false;       // the interior group: see replicas_done()
+    double shared_grow_ = 0.0;         // the estimate behind the decision (for the level's report)
     bool shared_packing_expected() override {
         if (!replicated_) return false;
         // Above the leaf the level's blocks are on the card already (adopted from
         // the transition or uploaded here) and the owner pass makes few new
         // ones, so the room it needs is a wave's working set.  At the leaf they
         // are made during the level: the near set raw at its peak, estimated as
-        // half the full-size blocks of the rank's boxes and their one-hop pairs
-        // (192^3 CA0 leaf on 8 ranks: 29 GB by this count, 22 GB at the blocks'
-        // largest, ~10 GB at the peak).
+        // the full-size blocks of the boxes and their one-hop pairs - of the
+        // boxes the boundary groups eliminate (the rank's boundary boxes and its
+        // ghosts), since the rule ends with them (replicas_done) and the
+        // interior group packs by pressure.  Not half of it: a rank that runs
+        // short with the shared blocks raw packs them alone and its ghost
+        // copies differ (768^3 on 64 ranks, 80 GB cards: half the count, 37.0
+        // GB against 40.9 GB of room, let 38 of 64 ranks fall back in the green
+        // group, whose raw peak was 41.5 GB at the wave ends, and the level
+        // above stopped on a near block shape).
         const bool leaf = level_index_ == static_cast<int>(tree_->levels.size()) - 1;
         double grow = 0.1 * static_cast<double>(heap_.capacity());
         if (leaf) {
             double full = 0.0;
-            for (const Box& b : level_.local_boxes) {
+            auto add = [&](const Box& b) {
                 const double n = static_cast<double>(b.num_points);
                 full += n * n * (1.0 + 0.5 * static_cast<double>(b.one_hop.size()));
-            }
-            const double boxes = static_cast<double>(states_.size() + remote_states_.size());
-            full *= static_cast<double>(sizeof(S)) * boxes / std::max(1.0, static_cast<double>(states_.size()));
-            grow = 0.5 * full;
+            };
+            for (int64_t li : level_.boundary_id) add(level_.local_boxes[static_cast<size_t>(li)]);
+            for (const Box& g : level_.ghost_boxes) add(g);
+            grow = full * static_cast<double>(sizeof(S));
         }
+        shared_grow_ = grow;
         return static_cast<double>(heap_.used()) + grow > static_cast<double>(hold_limit());
     }
+    double shared_packing_estimate() const override { return shared_grow_; }
+    double shared_packing_room() const override {
+        const double room = static_cast<double>(hold_limit()) - static_cast<double>(heap_.used());
+        return room;
+    }
     void set_pack_shared(bool pack) override { pack_shared_ = replicated_ && pack; }
+    void replicas_done() override {
+        replicas_done_ = true;
+        pack_shared_ = false;
+    }
     std::vector<char> local_shared_;   // by local index: on another rank too
     bool local_shared_ready_ = false, local_shared_all_ = false;
     bool box_shared(int64_t m) {

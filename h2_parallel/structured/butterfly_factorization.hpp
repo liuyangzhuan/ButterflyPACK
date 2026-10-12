@@ -303,6 +303,7 @@ void factorize_CA_level_gpu(
         }
         if (group_names[group_idx] == "interior") {
             clear_ghosts(level);
+            gpu_driver.replicas_done();   // (every rank at this group: the near blocks pack by pressure)
         }
         for (size_t wave_idx = 0; wave_idx < waves.size(); ++wave_idx) {
             const auto& wave = waves[wave_idx];
