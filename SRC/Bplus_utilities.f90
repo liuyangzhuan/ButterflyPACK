@@ -128,7 +128,1070 @@ module Bplus_Utilities
 #endif
    end interface
 #endif
+   !>**** DIAGNOSTIC (verbosity>=2): per-level compute time of the current MD matvec on
+   ! this rank, filled by Bplus_MD_block_MVP_dat and reduced across ranks once per matvec
+   ! by Bplus_MD_MVP_diag. Rank-local; not part of the solver state.
+   real(kind=8), save:: BP_MD_lev_time(0:LplusMax) = 0d0
+   !>**** DIAGNOSTIC: per-level transient memory of the current MD matvec on this rank.
+   ! The high-water mark reached inside a level minus what was already live at entry, i.e.
+   ! what that level alone allocates and frees.
+   real(kind=8), save:: BP_MD_lev_memdelta(0:LplusMax) = 0d0
+   !>**** DIAGNOSTIC: the same per-level transient measured by the kernel instead of by
+   ! LogMemory: VmHWM at level exit minus VmRSS at level entry, with the high-water mark
+   ! reset at entry (5 -> /proc/self/clear_refs), i.e. the resident memory this level alone
+   ! added, whether or not the allocation was logged. BP_MD_lev_rssentry is VmRSS at entry,
+   ! what was actually resident before the level ran. BP_MD_rss_life_max tracks the largest
+   ! VmHWM ever read; its first reading precedes any reset, so it includes construction. MB.
+   real(kind=8), save:: BP_MD_lev_rssdelta(0:LplusMax) = 0d0
+   real(kind=8), save:: BP_MD_lev_rssentry(0:LplusMax) = 0d0
+   real(kind=8), save:: BP_MD_rss_life_max = 0d0
+   !>**** D1 (slot streaming): per-rank byte budget for the live unique input slots of one
+   ! matvec level, read once from BPACK_MD_SLOT_BUDGET_MB (unset or 0: off, every slot live
+   ! at once as before). A slot counts twice, because the redistribution stages what it
+   ! receives before unpacking into the slot. The round count is the max over the ranks of
+   ! the exchange (it is collective) and over the levels of a batch.
+   integer(kind=8), save:: BP_MD_slot_budget_bytes = -1_8
+   integer, parameter:: BP_MD_max_rounds = 64
+   integer, save:: BP_MD_last_nround = 1
+   !>**** Duplicate pack/unpack: vectors at least this large are reoriented with all threads
+   ! inside one duplicate at a time (no per-slot locks); smaller ones keep the batch-parallel
+   ! path, where a parallel region per duplicate costs more than it saves: measured at 1280^3,
+   ! 65 MB vectors gained 2x inside, 8 MB vectors lost 50% (fork/join and wake-up on ~0.2 ms of
+   ! work per thread, twice per duplicate). 2^21 entries = 32 MB keeps the 160^3 level inside.
+   integer, parameter:: BP_MD_par_inside_min = 2097152
+   integer, parameter:: BP_MD_init_par_min = 262144   !< sub-tensor size (entries x vectors) from which the Init gather is spread over tasks
+   integer, parameter:: BP_MD_gemm_cols_min = 128      !< a block GEMM of the MD matvec is split into column chunks of at least this many columns ...
+   integer, parameter:: BP_MD_gemm_chunks_max = 32     !< ... and at most this many chunks (tasks) per row block
+   integer, parameter:: BP_MD_leaf_slab_min = 16   !< leaf mode products use slab GEMMs from this many slab rows on
+   !>**** one block of the block-diagonal factor along a tensor mode, for BF_MD_mode_product_strided
+   type BP_MD_mode_factor
+      DT, pointer :: F(:, :) => null()   !< the factor block
+      character :: transA = 'N'          !< 'N': F is (m x k); 'T': F is stored (k x m)
+      integer :: in_off = 0, k = 0       !< rows [in_off+1, in_off+k] of the mode index in the input
+      integer :: out_off = 0, m = 0      !< rows [out_off+1, out_off+m] of the mode index in the output
+      logical :: accumulate = .false.    !< add to what an earlier block of the list wrote in those rows
+   end type BP_MD_mode_factor
+   integer, save :: BP_MD_mode_check = -1   !< BPACK_MD_MODE_CHECK=1: recompute every strided mode product the old way and compare
+   !>**** BPACK_MD_PACK_CHECK=1: run the element-wise reference pack/unpack beside the affine
+   ! one on every call and report any difference (first 20 reports)
+   integer, save:: BP_MD_pack_check = -1
+   integer, save:: BP_MD_pack_check_reports = 0
+   !>**** DIAGNOSTIC (verbosity>=2): per-level phase timers of the current matvec on this
+   ! rank, split by how blocks were applied -- representatives standalone in the block loop
+   ! (rep) against duplicates batched in Bplus_MD_compact_dup_MVP_local_N (dup). Columns as
+   ! in BP_MD_phase_snapshot. Reduced across ranks once per matvec by Bplus_MD_MVP_diag.
+   integer, parameter:: BP_MD_nphase = 18
+   real(kind=8), save:: BP_MD_lev_rep(0:LplusMax, BP_MD_nphase) = 0d0
+   real(kind=8), save:: BP_MD_lev_dup(0:LplusMax, BP_MD_nphase) = 0d0
+   integer, save:: BP_MD_lev_nrep(0:LplusMax) = 0
+   integer, save:: BP_MD_lev_ndup(0:LplusMax) = 0
+
 contains
+
+   !>**** DIAGNOSTIC: report MD matvec load balance per level and the memory high-water
+   ! mark. phase==0 before the level sweep (memory only), phase==1 after (memory+balance).
+   ! Does one reduction per matvec, not one per level, so it does not add per-level
+   ! synchronisation to the thing being measured.
+   !>**** DIAGNOSTIC: one-shot structural report of how tensor-butterfly work is spread
+   ! over ranks at each level. Tests candidate cost models against the measured per-rank
+   ! times: the tensor butterfly stores one transfer matrix per mode, so the middle-stage
+   ! volume grows like rank**(2*Ndim) and a rank spread of 2x per mode is 2**(2*Ndim) in
+   ! work. Distributing middle groups by COUNT therefore cannot balance; the weight whose
+   ! max/mean matches the measured time max/mean is the one to distribute by.
+   !>**** DIAGNOSTIC: far-field partner count per row sub-tensor. Ownership is keyed on the
+   ! row group, so a rank's block count is the SUM of its row groups' partner counts. This
+   ! reports how many row groups a rank owns, the spread of partner counts within a rank
+   ! (small => the map pairs similar groups, so a better pairing can balance), and the
+   ! global max partner count against the fair share (if any single group exceeds the fair
+   ! share, no assignment of whole groups can balance and the groups must be split).
+   subroutine Bplus_MD_rowgroup_diag(Ndim, BP, ptree)
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      integer ll, bb, ierr, nslot, uu, nuniq, hsize, hmask, hpos, probe, nrep
+      integer group_md(Ndim)
+      integer, allocatable::htab(:), cnt(:), ug(:,:)
+      integer(kind=8)::hkey
+      real(kind=8)::loc(4), vmax(4), vmin(4), vsum(4), fair
+      logical found
+      !>**** LPT prediction bookkeeping
+      integer::ktree, ngpd, ngtot, gflat, gstride, dim_i, rr, nbest
+      real(kind=8)::npred
+      real(kind=8), allocatable::gcnt(:), gsum(:), rpred(:)
+      integer, allocatable::gord(:)
+
+      if (ptree%MyID == Main_ID) write (*, '(A)') ' MDROWG  per-rank: #rowgroups, '// &
+         'within-rank partner-count min/max; global: partner-count min/max vs fair share'
+
+      do ll = 1, BP%Lplus
+         nrep = BP%LL(ll)%Nbound_loc
+         nslot = nrep + BP%LL(ll)%trans_ndup
+         if (nslot <= 0) cycle
+         hsize = 16
+         do while (hsize < 2*nslot)
+            hsize = hsize*2
+         enddo
+         hmask = hsize - 1
+         allocate (htab(0:hmask), cnt(nslot), ug(Ndim, nslot))
+         htab = 0; cnt = 0; nuniq = 0
+
+         do bb = 1, nslot
+            if (bb <= nrep) then
+               group_md = BP%LL(ll)%matrices_block(bb)%row_group
+            else
+               group_md = BP%LL(ll)%trans_dup_row_group(:, bb - nrep)
+            endif
+            hkey = BP_MD_vec_slot_key_hash(Ndim, group_md, group_md, group_md)
+            hpos = int(IAND(hkey, int(hmask, kind=8)))
+            found = .false.
+            do probe = 0, hmask
+               uu = htab(hpos)
+               if (uu == 0) exit
+               if (ALL(group_md == ug(:, uu))) then
+                  cnt(uu) = cnt(uu) + 1
+                  found = .true.
+                  exit
+               endif
+               hpos = IAND(hpos + 1, hmask)
+            enddo
+            if (.not. found) then
+               nuniq = nuniq + 1
+               ug(:, nuniq) = group_md
+               cnt(nuniq) = 1
+               htab(hpos) = nuniq
+            endif
+         enddo
+
+         !>**** predict what a longest-processing-time-first assignment of WHOLE row groups
+         ! to ranks would achieve. Partner counts are a geometric property, so gathering
+         ! them globally and running LPT here predicts exactly what option B would deliver,
+         ! without touching the solver.
+         ktree = GetTreelevel(ug(1, 1)) - 1
+         ngpd = 2**ktree
+         npred = -1d0
+         if (real(ngpd, kind=8)**Ndim <= 4d6) then
+            ngtot = ngpd**Ndim
+            allocate (gcnt(0:ngtot - 1), gsum(0:ngtot - 1))
+            gcnt = 0d0
+            do uu = 1, nuniq
+               gflat = 0
+               gstride = 1
+               do dim_i = 1, Ndim
+                  gflat = gflat + (ug(dim_i, uu) - ngpd)*gstride
+                  gstride = gstride*ngpd
+               enddo
+               if (gflat >= 0 .and. gflat < ngtot) gcnt(gflat) = gcnt(gflat) + dble(cnt(uu))
+            enddo
+            call MPI_ALLREDUCE(gcnt, gsum, ngtot, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID) then
+               allocate (rpred(0:ptree%nproc - 1), gord(ngtot))
+               !>**** quick_sort returns gsum ascending; walk it backwards for LPT
+               call quick_sort(gsum, gord, ngtot)
+               rpred = 0d0
+               do uu = ngtot, 1, -1
+                  if (gsum(uu) <= 0d0) cycle
+                  nbest = 0
+                  do rr = 1, ptree%nproc - 1
+                     if (rpred(rr) < rpred(nbest)) nbest = rr
+                  enddo
+                  rpred(nbest) = rpred(nbest) + gsum(uu)
+               enddo
+               npred = maxval(rpred)/max(sum(rpred)/dble(ptree%nproc), 1d-30)
+               deallocate (rpred, gord)
+            endif
+            deallocate (gcnt, gsum)
+         endif
+
+         loc(1) = dble(nuniq)
+         loc(2) = dble(minval(cnt(1:nuniq)))
+         loc(3) = dble(maxval(cnt(1:nuniq)))
+         loc(4) = dble(sum(cnt(1:nuniq)))
+         call MPI_ALLREDUCE(loc, vmax, 4, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(loc, vmin, 4, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(loc, vsum, 4, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         if (ptree%MyID == Main_ID) then
+            fair = vsum(4)/dble(ptree%nproc)
+            write (*, '(A,I3,A,F8.2,A,I7,A,I7,A,I7,A,I7,A,F9.1,A,F7.3)') ' MDROWG lev', ll, &
+               ' rowgroups/rank=', vsum(1)/dble(ptree%nproc), &
+               '  partners: gmin=', nint(vmin(2)), ' gmax=', nint(vmax(3)), &
+               '  within-rank spread: min=', nint(vmin(3) - vmax(2)), ' max=', nint(vmax(3) - vmin(2)), &
+               '  fair_share=', fair, '  gmax/fair=', vmax(3)/max(fair, 1d-12)
+            if (npred > 0d0) write (*, '(A,I3,A,F8.3,A,F8.3)') ' MDLPT  lev', ll, &
+               '  current blockcount max/mean=', vmax(4)/max(fair, 1d-12), &
+               '   predicted after LPT=', npred
+         endif
+         deallocate (htab, cnt, ug)
+      enddo
+
+   end subroutine Bplus_MD_rowgroup_diag
+
+   subroutine Bplus_MD_struct_diag(Ndim, BP, ptree)
+
+      implicit none
+      integer Ndim
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      type(matrixblock_MD), pointer::blk
+      integer ll, bb, ierr, inst, nrep
+      real(kind=8)::r, mvol, nvol
+      real(kind=8)::w(6), wmax(6), wmin(6), wsum(6)
+      real(kind=8)::rstat(3), rmx(3), rmn(3), rsm(3)
+      real(kind=8)::vstat(3), vmx(3), vmn(3), vsm(3), vol, nmid
+      integer::iw, mm
+
+      if (ptree%MyID == Main_ID) write (*, '(A)') ' MDSTRUCT  weights: W1=instances '// &
+         'W2=inst*r W3=inst*r^Ndim W4=inst*r*(Mvol+Nvol) W5=inst*r^(2*Ndim) '// &
+         'W6=inst*sum_over_subtensors(prod(dims_m)*prod(dims_n))  [W6 is the true middle volume]'
+
+      do ll = 1, BP%Lplus
+         w = 0d0
+         rstat(1) = 1d30; rstat(2) = 0d0; rstat(3) = 0d0
+         vstat(1) = 1d30; vstat(2) = 0d0; vstat(3) = 0d0
+         nmid = 0d0
+         nrep = BP%LL(ll)%Nbound_loc
+         do bb = 1, nrep
+            blk => BP%LL(ll)%matrices_block(bb)
+            inst = 1
+            if (allocated(BP%LL(ll)%trans_dup_member_offset)) &
+               inst = 1 + (BP%LL(ll)%trans_dup_member_offset(bb + 1) &
+                           - BP%LL(ll)%trans_dup_member_offset(bb))
+            r = dble(max(blk%rankmax, 1))
+            mvol = dble(product(blk%M_loc))
+            nvol = dble(product(blk%N_loc))
+            w(1) = w(1) + dble(inst)
+            w(2) = w(2) + dble(inst)*r
+            w(3) = w(3) + dble(inst)*r**Ndim
+            w(4) = w(4) + dble(inst)*r*(mvol + nvol)
+            w(5) = w(5) + dble(inst)*r**(2*Ndim)
+            !>**** the honest middle-stage volume: each subtensor (middle group) carries its
+            ! own per-mode skeleton dims, so this captures the rank spread WITHIN a tensor
+            ! butterfly as well as between butterflies, which blk%rankmax cannot
+            if (allocated(blk%ButterflyMiddle)) then
+               do mm = 1, size(blk%ButterflyMiddle)
+                  if (allocated(blk%ButterflyMiddle(mm)%dims_m) .and. &
+                      allocated(blk%ButterflyMiddle(mm)%dims_n)) then
+                     vol = dble(product(blk%ButterflyMiddle(mm)%dims_m)) &
+                          *dble(product(blk%ButterflyMiddle(mm)%dims_n))
+                     w(6) = w(6) + dble(inst)*vol
+                     vstat(1) = min(vstat(1), vol)
+                     vstat(2) = max(vstat(2), vol)
+                     vstat(3) = vstat(3) + vol
+                     nmid = nmid + 1d0
+                  endif
+               enddo
+            endif
+            rstat(1) = min(rstat(1), r)
+            rstat(2) = max(rstat(2), r)
+            rstat(3) = rstat(3) + r
+         enddo
+         if (nrep == 0) rstat(1) = 0d0
+         if (nmid == 0d0) vstat(1) = 0d0
+         vstat(3) = nmid   ! reuse slot 3 to carry the subtensor count
+
+         call MPI_ALLREDUCE(w, wmax, 6, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(w, wmin, 6, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(w, wsum, 6, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vmx, 3, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vmn, 3, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(vstat, vsm, 3, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rmx, 3, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rmn, 3, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(rstat, rsm, 3, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+
+         if (ptree%MyID == Main_ID) then
+            if (wsum(1) > 0d0) then
+               write (*, '(A,I3,A,I8,A,F6.1,A,F6.1,A,F7.1)') ' MDSTRUCT lev', ll, &
+                  ' reps_tot=', nint(wsum(1)), '  rank min=', rmn(1), ' max=', rmx(2), &
+                  ' mean=', rsm(3)/max(wsum(1), 1d0)
+               if (vsm(3) > 0d0) write (*, '(A,I3,A,I10,3(A,Es11.4))') ' MDSTRUCT lev', ll, &
+                  ' subtensors=', nint(vsm(3)), '  middle vol per subtensor: min=', vmn(1), &
+                  ' max=', vmx(2), ' spread=', vmx(2)/max(vmn(1), 1d-30)
+               do iw = 1, 6
+                  write (*, '(A,I3,A,I2,3(A,Es11.4),A,F8.2)') ' MDSTRUCT lev', ll, ' W', iw, &
+                     ': min=', wmin(iw), ' mean=', wsum(iw)/dble(ptree%nproc), ' max=', wmax(iw), &
+                     '  max/mean=', wmax(iw)/max(wsum(iw)/dble(ptree%nproc), 1d-30)
+               enddo
+            endif
+         endif
+      enddo
+
+   end subroutine Bplus_MD_struct_diag
+
+   !>**** Resident memory of this process from /proc/self/status, in MB: rss = VmRSS now,
+   ! hwm = VmHWM, the high-water mark since process start or since the last reset. -1 where
+   ! /proc is unavailable. The kernel flushes per-thread RSS counters lazily, so a single
+   ! reading can be low by a few hundred kB per thread; irrelevant at the GB scale here.
+   !>**** DIAGNOSTIC: snapshot of the block-matvec phase counters, so a region's cost can be
+   ! read as a difference. 1 Block (whole BF_MD_block_mvp), 2 Init, 3 Reshape, 4 Reshape_Init,
+   ! 5 Reshape_Middle, 6 Reshape_Final, 7 Right, 8 Middle, 9 Left, 10 Gemm, 11 Cleanup,
+   ! 12 Pack+Unpack (duplicate stacking), 13 Full (dense blocks), 14 wall clock.
+   subroutine BP_MD_phase_snapshot(stats, v)
+      implicit none
+      type(Hstat)::stats
+      real(kind=8)::v(BP_MD_nphase)
+      v(1) = stats%Time_C_Mult_Block
+      v(2) = stats%Time_C_Mult_Init
+      v(3) = stats%Time_C_Mult_Reshape
+      v(4) = stats%Time_C_Mult_Reshape_Init
+      v(5) = stats%Time_C_Mult_Reshape_Middle
+      v(6) = stats%Time_C_Mult_Reshape_Final
+      v(7) = stats%Time_C_Mult_Right
+      v(8) = stats%Time_C_Mult_Middle
+      v(9) = stats%Time_C_Mult_Left
+      v(10) = stats%Time_C_Mult_Gemm
+      v(11) = stats%Time_C_Mult_Cleanup
+      v(12) = stats%Time_C_Mult_Pack + stats%Time_C_Mult_Unpack
+      v(13) = stats%Time_C_Mult_Full
+      v(14) = stats%Cnt_C_Mult_Gemm_Group
+      v(15) = stats%Cnt_C_Mult_Gemm_Task
+      v(16) = stats%Flop_C_Mult_Gemm
+      v(17) = stats%Time_C_Mult_Gemm_Task
+      v(18) = MPI_Wtime()
+   end subroutine BP_MD_phase_snapshot
+
+   logical function BP_MD_pack_check_on()
+      implicit none
+      character(len=16)::str
+      integer::ios, ln
+      if (BP_MD_pack_check < 0) then
+         BP_MD_pack_check = 0
+         call get_environment_variable('BPACK_MD_PACK_CHECK', str, length=ln, status=ios)
+         if (ios == 0 .and. ln > 0) then
+            if (str(1:1) == '1') BP_MD_pack_check = 1
+         endif
+      endif
+      BP_MD_pack_check_on = (BP_MD_pack_check == 1)
+   end function BP_MD_pack_check_on
+
+   !>**** Number of column chunks (tasks) for one block GEMM of the MD matvec with ncol right-hand-side columns
+   integer function BP_MD_gemm_nchunk(ncol)
+      implicit none
+      integer ncol
+      BP_MD_gemm_nchunk = max(1, min(ncol/BP_MD_gemm_cols_min, BP_MD_gemm_chunks_max))
+   end function BP_MD_gemm_nchunk
+
+   logical function BP_MD_mode_check_on()
+      implicit none
+      character(len=16) :: str
+      integer ierr
+      if (BP_MD_mode_check < 0) then
+         BP_MD_mode_check = 0
+         call get_environment_variable('BPACK_MD_MODE_CHECK', str, status=ierr)
+         if (ierr == 0) then
+            if (trim(str) == '1') BP_MD_mode_check = 1
+         endif
+      endif
+      BP_MD_mode_check_on = BP_MD_mode_check == 1
+   end function BP_MD_mode_check_on
+
+   !>**** Mode product on an unfolded tensor without reshaping it.
+   !> X is the mode-ld_old unfolding of a tensor with spatial extents dims(1:Ndim) and Nvec vectors (its rows are the
+   !> index ld_old, its columns all other indices in increasing order, the vector index last), so size(X,1) =
+   !> dims(ld_old). C is allocated here as the mode-ld_new unfolding of the result, whose extent along ld_new is nrow_c.
+   !> The factor along mode ld_new is block-diagonal: block b maps rows [in_off+1, in_off+k] of the mode index in X to
+   !> rows [out_off+1, out_off+m] in C, accumulating onto an earlier block's result where `accumulate` is set.
+   !> For ld_old /= ld_new fix all indices except ld_old and ld_new: the slab of X is an (n_old x k) matrix with unit
+   !> stride along ld_old and leading dimension ldx, the slab of C an (m x n_old) matrix with leading dimension ldc, and
+   !> C_slab = F * X_slab^T is one GEMM with transB = 'T' -- the tensor is read once and written once instead of being
+   !> permuted first (read + write) and multiplied afterwards (read + write). For ld_old == ld_new it is one GEMM over
+   !> all columns per block, in column chunks.
+   subroutine BF_MD_mode_product_strided(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk, par, ntask, stats, time_gemm, flops)
+      implicit none
+      integer Ndim, ld_old, nrow_c, ld_new, Nvec, nblk, ntask
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      logical par
+      type(Hstat) :: stats
+      real(kind=8) :: time_gemm, flops
+      integer nrow_x, ncol, ncol_c, n_old, ldx, ldc, nslab, islab, b, kk, tmp, idx, ic, c0, c1, nchunk, rx, cx, rc, cc, ngemm
+      integer dimsx(Ndim+1), dimsc(Ndim+1), csx(Ndim+1), csc(Ndim+1)
+      integer(kind=8) bx, bc, ox, oc
+      integer(kind=8), allocatable :: basex(:), basec(:)
+      DT beta
+      real(kind=8) t_start, t_end, tt0, tt1, flop_pass
+
+      nrow_x = size(X, 1)
+      call assert(nrow_x == dims(ld_old), 'BF_MD_mode_product_strided: rows of X do not match dims(ld_old)')
+      ncol = size(X, 2)
+      dimsx(1:Ndim) = dims
+      dimsx(Ndim+1) = Nvec
+      dimsc = dimsx
+      dimsc(ld_new) = nrow_c
+      ncol_c = product(dimsc)/nrow_c   ! columns of the output unfolding: all indices but ld_new
+      allocate(C(nrow_c, ncol_c))   ! every row block of C is written by its first, non-accumulating factor block
+      flop_pass = 0d0
+      do b = 1, nblk
+         flop_pass = flop_pass + flops_gemm(fblk(b)%m, ncol_c, fblk(b)%k)
+      enddo
+      t_start = MPI_Wtime()
+      if (ld_old == ld_new) then
+         nchunk = BP_MD_gemm_nchunk(ncol)
+         ngemm = nblk*nchunk
+         ! tasks over column chunks only: accumulating blocks of one chunk must run in order
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do ic = 1, nchunk
+            c0 = ((ic-1)*ncol)/nchunk + 1
+            c1 = (ic*ncol)/nchunk
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, c1-c0+1, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(fblk(b)%in_off+1, c0), nrow_x, beta, C(fblk(b)%out_off+1, c0), nrow_c)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+      else
+         ! strides of each index (the vector index is Ndim+1) in the two unfoldings
+         tmp = 1
+         do kk = 1, Ndim+1
+            csx(kk) = 0
+            if (kk /= ld_old) then
+               csx(kk) = tmp
+               tmp = tmp*dimsx(kk)
+            endif
+         enddo
+         tmp = 1
+         do kk = 1, Ndim+1
+            csc(kk) = 0
+            if (kk /= ld_new) then
+               csc(kk) = tmp
+               tmp = tmp*dimsc(kk)
+            endif
+         enddo
+         ldx = nrow_x*csx(ld_new)   ! stride of the product-mode index in X
+         ldc = nrow_c*csc(ld_old)   ! stride of the old leading index in C
+         n_old = dims(ld_old)
+         nslab = 1
+         do kk = 1, Ndim+1
+            if (kk /= ld_old .and. kk /= ld_new) nslab = nslab*dimsx(kk)
+         enddo
+         allocate(basex(nslab), basec(nslab))
+         do islab = 1, nslab
+            tmp = islab - 1
+            bx = 0
+            bc = 0
+            do kk = 1, Ndim+1
+               if (kk == ld_old .or. kk == ld_new) cycle
+               idx = mod(tmp, dimsx(kk))
+               tmp = tmp/dimsx(kk)
+               bx = bx + int(idx, 8)*int(nrow_x, 8)*int(csx(kk), 8)
+               bc = bc + int(idx, 8)*int(nrow_c, 8)*int(csc(kk), 8)
+            enddo
+            basex(islab) = bx
+            basec(islab) = bc
+         enddo
+         ngemm = nslab*nblk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(islab,b,beta,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(islab,b,beta,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do islab = 1, nslab
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               ox = basex(islab) + int(fblk(b)%in_off, 8)*int(ldx, 8)
+               oc = basec(islab) + int(fblk(b)%out_off, 8)
+               rx = int(mod(ox, int(nrow_x, 8))) + 1
+               cx = int(ox/int(nrow_x, 8)) + 1
+               rc = int(mod(oc, int(nrow_c, 8))) + 1
+               cc = int(oc/int(nrow_c, 8)) + 1
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'T', fblk(b)%m, n_old, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(rx, cx), ldx, beta, C(rc, cc), ldc)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+         deallocate(basex, basec)
+         if (BP_MD_mode_check_on()) call BF_MD_mode_product_check(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk)
+      endif
+      t_end = MPI_Wtime()
+      time_gemm = time_gemm + t_end - t_start
+      flops = flops + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + ngemm
+   end subroutine BF_MD_mode_product_strided
+
+   !>**** reference for BF_MD_mode_product_strided (BPACK_MD_MODE_CHECK=1): permute first, multiply afterwards, compare
+   subroutine BF_MD_mode_product_check(Ndim, dims, ld_old, nrow_c, ld_new, Nvec, X, C, nblk, fblk)
+      implicit none
+      integer Ndim, ld_old, nrow_c, ld_new, Nvec, nblk
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      integer dims_ref(Ndim+1), offsets_ref(Ndim+1), b
+      DT, allocatable :: mat(:, :), cref(:, :)
+      DT beta
+      real(kind=8) :: err, nrm
+      dims_ref(1:Ndim) = dims
+      dims_ref(Ndim+1) = Nvec
+      offsets_ref = 0
+      call TensorUnfoldingReshape(Ndim+1, dims_ref, dims_ref, offsets_ref, ld_old, ld_new, X, 'N', mat, 'N', 1)
+      allocate(cref(nrow_c, size(C, 2)))
+      cref = 0
+      do b = 1, nblk
+         beta = BPACK_czero
+         if (fblk(b)%accumulate) beta = BPACK_cone
+         call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, size(mat, 2), fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F, 1), &
+            mat(fblk(b)%in_off+1, 1), size(mat, 1), beta, cref(fblk(b)%out_off+1, 1), nrow_c)
+      enddo
+      err = maxval(abs(C - cref))
+      nrm = max(maxval(abs(cref)), tiny(1d0))
+      if (err > 1d-10*nrm) then
+         write(*, '(A,I3,A,I3,A,I8,A,I8,A,Es10.3)') ' MODECHECK MISMATCH ld_old=', ld_old, ' ld_new=', ld_new, ' rows=', nrow_c, &
+            ' cols=', size(C, 2), ' maxrel=', err/nrm
+      endif
+      deallocate(mat, cref)
+   end subroutine BF_MD_mode_product_check
+
+   !>**** Mode product on a tensor kept in natural layout (its mode-1 unfolding), result in the same layout.
+   !> X has spatial extents dims(1:Ndim) and Nvec vectors, stored as (dims(1), product(dims(2:Ndim))*Nvec); mode d, of
+   !> extent dims(d), becomes nrow_c in C (allocated here). The factor along mode d is a block list as in
+   !> BF_MD_mode_product_strided. For d = 1 the factor multiplies from the left over all columns. For d > 1 every
+   !> (suffix, vector) slab of X is a (prefix x k) matrix with leading dimension prefix = dims(1)*...*dims(d-1), and the
+   !> factor multiplies it from the right: C_slab = X_slab * F^T (transA 'N') or X_slab * F (transA 'T') -- the GEMM
+   !> rows are the whole leading part of the tensor, so the GEMMs are large for the later modes, and no unfolding is
+   !> ever permuted.
+   subroutine BF_MD_mode_product_natural(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, par, ntask, stats, time_gemm, flops)
+      implicit none
+      integer Ndim, d, nrow_c, Nvec, nblk, ntask
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      logical par
+      type(Hstat) :: stats
+      real(kind=8) :: time_gemm, flops
+      integer nrow_x, ncol_x, ncol_c, prefix, suffix, n_d, b, is, ic, c0, c1, nchunk, ngemm, kk, rx, cx, rc, cc
+      integer(kind=8) ox, oc
+      character transB
+      DT beta
+      real(kind=8) t_start, t_end, tt0, tt1, flop_pass
+
+      nrow_x = size(X, 1)
+      ncol_x = size(X, 2)
+      call assert(nrow_x == dims(1), 'BF_MD_mode_product_natural: rows of X do not match dims(1)')
+      prefix = 1
+      do kk = 1, d-1
+         prefix = prefix*dims(kk)
+      enddo
+      n_d = dims(d)
+      suffix = Nvec
+      do kk = d+1, Ndim
+         suffix = suffix*dims(kk)
+      enddo
+      call assert(prefix*n_d*suffix == nrow_x*ncol_x, 'BF_MD_mode_product_natural: extents do not match the array')
+      flop_pass = 0d0
+      do b = 1, nblk
+         flop_pass = flop_pass + flops_gemm(fblk(b)%m, prefix*suffix, fblk(b)%k)
+      enddo
+      t_start = MPI_Wtime()
+      if (d == 1) then
+         allocate(C(nrow_c, ncol_x))
+         nchunk = BP_MD_gemm_nchunk(ncol_x)
+         ngemm = nblk*nchunk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(b,ic,c0,c1,beta,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do ic = 1, nchunk
+            c0 = ((ic-1)*ncol_x)/nchunk + 1
+            c1 = (ic*ncol_x)/nchunk
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               tt0 = MPI_Wtime()
+               call gemmf77(fblk(b)%transA, 'N', fblk(b)%m, c1-c0+1, fblk(b)%k, BPACK_cone, fblk(b)%F, size(fblk(b)%F,1), &
+                  X(fblk(b)%in_off+1, c0), nrow_x, beta, C(fblk(b)%out_off+1, c0), nrow_c)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+      else
+         ncol_c = (ncol_x/n_d)*nrow_c
+         allocate(C(nrow_x, ncol_c))
+         ngemm = suffix*nblk
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop default(shared) private(is,b,beta,transB,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par) num_tasks(merge(ntask,1,par))
+#else
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(is,b,beta,transB,ox,oc,rx,cx,rc,cc,tt0,tt1) if(par .and. .not. omp_in_parallel())
+#endif
+#endif
+         do is = 1, suffix
+            do b = 1, nblk
+               beta = BPACK_czero
+               if (fblk(b)%accumulate) beta = BPACK_cone
+               transB = 'T'
+               if (fblk(b)%transA == 'T') transB = 'N'
+               ox = int(is-1, 8)*int(prefix, 8)*int(n_d, 8) + int(fblk(b)%in_off, 8)*int(prefix, 8)
+               oc = int(is-1, 8)*int(prefix, 8)*int(nrow_c, 8) + int(fblk(b)%out_off, 8)*int(prefix, 8)
+               rx = int(mod(ox, int(nrow_x, 8))) + 1
+               cx = int(ox/int(nrow_x, 8)) + 1
+               rc = int(mod(oc, int(nrow_x, 8))) + 1
+               cc = int(oc/int(nrow_x, 8)) + 1
+               tt0 = MPI_Wtime()
+               call gemmf77('N', transB, prefix, fblk(b)%m, fblk(b)%k, BPACK_cone, X(rx, cx), prefix, fblk(b)%F, size(fblk(b)%F,1), &
+                  beta, C(rc, cc), prefix)
+               tt1 = MPI_Wtime()
+#ifdef HAVE_OPENMP
+               !$omp atomic
+#endif
+               stats%Time_C_Mult_Gemm_Task = stats%Time_C_Mult_Gemm_Task + tt1 - tt0
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#else
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+#endif
+         if (BP_MD_mode_check_on()) call BF_MD_mode_product_natural_check(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, stats)
+      endif
+      t_end = MPI_Wtime()
+      time_gemm = time_gemm + t_end - t_start
+      flops = flops + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Flop_C_Mult_Gemm = stats%Flop_C_Mult_Gemm + flop_pass
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Group = stats%Cnt_C_Mult_Gemm_Group + 1
+#ifdef HAVE_OPENMP
+      !$omp atomic
+#endif
+      stats%Cnt_C_Mult_Gemm_Task = stats%Cnt_C_Mult_Gemm_Task + ngemm
+   end subroutine BF_MD_mode_product_natural
+
+   !>**** reference for BF_MD_mode_product_natural (BPACK_MD_MODE_CHECK=1): the verified strided product from the
+   !> mode-1 unfolding into the mode-d unfolding, permuted back to natural layout, compared with C
+   subroutine BF_MD_mode_product_natural_check(Ndim, dims, d, nrow_c, Nvec, X, C, nblk, fblk, stats)
+      implicit none
+      integer Ndim, d, nrow_c, Nvec, nblk
+      integer dims(Ndim)
+      DT, pointer :: X(:, :), C(:, :)
+      type(BP_MD_mode_factor) :: fblk(nblk)
+      type(Hstat) :: stats
+      DT, pointer :: cmd(:, :)
+      DT, allocatable :: cnat(:, :)
+      integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
+      real(kind=8) :: err, nrm, tg, fl
+      tg = 0d0
+      fl = 0d0
+      cmd => null()
+      call BF_MD_mode_product_strided(Ndim, dims, 1, nrow_c, d, Nvec, X, cmd, nblk, fblk, .false., 1, stats, tg, fl)
+      dims_ref(1:Ndim) = dims
+      dims_ref(d) = nrow_c
+      dims_ref(Ndim+1) = Nvec
+      offsets_ref = 0
+      call TensorUnfoldingReshape(Ndim+1, dims_ref, dims_ref, offsets_ref, d, 1, cmd, 'N', cnat, 'N', 1)
+      err = maxval(abs(C - cnat))
+      nrm = max(maxval(abs(cnat)), tiny(1d0))
+      if (err > 1d-10*nrm) then
+         write(*, '(A,I3,A,I8,A,I8,A,Es10.3)') ' MODECHECK(natural) MISMATCH d=', d, ' rows=', size(C, 1), ' cols=', size(C, 2), &
+            ' maxrel=', err/nrm
+      endif
+      deallocate(cmd, cnat)
+   end subroutine BF_MD_mode_product_natural_check
+
+   !>**** Scatter of a row sub-tensor's result in natural layout (extents dims_sub(1:Ndim), Nvec vectors, stored as
+   !> (dims_sub(1), rest)) into the caller's natural-layout output (extents dims_out(1:Ndim), the same Nvec vectors,
+   !> stored as (product(dims_out), Nvec)) at offsets offs(1:Ndim): one contiguous run of dims_sub(1) entries per
+   !> (tail, vector), spread over tasks
+   subroutine BF_MD_final_scatter_natural(Ndim, dims_sub, dims_out, offs, Nvec, data_in, data_out)
+      implicit none
+      integer Ndim, Nvec
+      integer dims_sub(Ndim), dims_out(Ndim), offs(Ndim)
+      DT::data_in(:, :)
+      DT::data_out(:, :)
+      integer stride_out(Ndim), tail_prod, dim_i, tail, rhs, i, tmp_idx, idx, n1
+      integer, allocatable::tail_base(:), tail_col(:)
+      stride_out(1) = 1
+      do dim_i = 2, Ndim
+         stride_out(dim_i) = stride_out(dim_i-1)*dims_out(dim_i-1)
+      enddo
+      n1 = dims_sub(1)
+      tail_prod = 1
+      do dim_i = 2, Ndim
+         tail_prod = tail_prod*dims_sub(dim_i)
+      enddo
+      allocate(tail_base(tail_prod), tail_col(tail_prod))
+      do tail = 1, tail_prod
+         tmp_idx = tail - 1
+         tail_base(tail) = 1 + offs(1)
+         do dim_i = 2, Ndim
+            idx = mod(tmp_idx, dims_sub(dim_i)) + 1
+            tmp_idx = tmp_idx/dims_sub(dim_i)
+            tail_base(tail) = tail_base(tail) + (idx + offs(dim_i) - 1)*stride_out(dim_i)
+         enddo
+         tail_col(tail) = tail
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp taskgroup
+      !$omp taskloop default(shared) private(rhs,tail,i) collapse(2) grainsize(64)
+#else
+#ifdef HAVE_OPENMP
+      !$omp parallel do default(shared) private(rhs,tail,i) collapse(2) if(.not. omp_in_parallel())
+#endif
+#endif
+      do rhs = 1, Nvec
+         do tail = 1, tail_prod
+            do i = 1, n1
+               data_out(tail_base(tail) + i - 1, rhs) = data_in(i, tail + (rhs-1)*tail_prod)
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+      !$omp end taskgroup
+#else
+#ifdef HAVE_OPENMP
+      !$omp end parallel do
+#endif
+#endif
+      deallocate(tail_base, tail_col)
+   end subroutine BF_MD_final_scatter_natural
+
+   !>**** Reorient a 3-D tensor: for every target entry in natural order over (d1,d2,d3), read
+   ! the source entry at base + (i1-1)*s1 + (i2-1)*s2 + (i3-1)*s3. An axis permutation with
+   ! reversals is affine in the indices, so the signed strides carry the whole map and the
+   ! innermost loop is a constant-stride gather (contiguous when the fastest axes coincide).
+   ! accumulate adds into the target instead of overwriting; par runs the (i3,i2) loops over the
+   ! team (the parallel region is skipped, not nested, when par is false).
+   subroutine BP_MD_permuted_gather(d1, d2, d3, s1, s2, s3, base, Nrnd, src, tgt, accumulate, par)
+      implicit none
+      integer d1, d2, d3, s1, s2, s3, base, Nrnd
+      DT src(:,:), tgt(:,:)
+      logical accumulate, par
+      integer i1, i2, i3, jj, isrc, itgt
+#ifdef HAVE_OPENMP
+!$omp parallel do if(par) default(shared) private(i1,i2,i3,jj,isrc,itgt) collapse(2) schedule(static)
+#endif
+      do i3 = 1, d3
+         do i2 = 1, d2
+            itgt = (i3 - 1)*d2*d1 + (i2 - 1)*d1
+            isrc = base + (i2 - 1)*s2 + (i3 - 1)*s3
+            do jj = 1, Nrnd
+               if (accumulate) then
+                  do i1 = 1, d1
+                     tgt(itgt + i1, jj) = tgt(itgt + i1, jj) + src(isrc + (i1 - 1)*s1, jj)
+                  enddo
+               else
+                  do i1 = 1, d1
+                     tgt(itgt + i1, jj) = src(isrc + (i1 - 1)*s1, jj)
+                  enddo
+               endif
+            enddo
+         enddo
+      enddo
+#ifdef HAVE_OPENMP
+!$omp end parallel do
+#endif
+   end subroutine BP_MD_permuted_gather
+
+   subroutine BP_MD_proc_rss(rss, hwm, anon, shm, huge)
+      implicit none
+      real(kind=8), intent(out)::rss, hwm
+      !>**** breakdown of what VmRSS counts (RssAnon, RssShmem) and what it does NOT: hugetlbfs
+      ! pages (HugetlbPages) sit outside VmRSS entirely, so a hugepage-backed heap would hide
+      ! from rss/hwm and show up only here.
+      real(kind=8), intent(out), optional::anon, shm, huge
+      character(len=256)::line
+      integer::u, ios
+      integer(kind=8)::kb
+      rss = -1d0; hwm = -1d0
+      if (present(anon)) anon = -1d0
+      if (present(shm)) shm = -1d0
+      if (present(huge)) huge = -1d0
+      open (newunit=u, file='/proc/self/status', status='old', action='read', iostat=ios)
+      if (ios /= 0) return
+      do
+         read (u, '(A)', iostat=ios) line
+         if (ios /= 0) exit
+         if (line(1:6) == 'VmRSS:') then
+            read (line(7:), *, iostat=ios) kb
+            if (ios == 0) rss = dble(kb)/1024d0
+         elseif (line(1:6) == 'VmHWM:') then
+            read (line(7:), *, iostat=ios) kb
+            if (ios == 0) hwm = dble(kb)/1024d0
+         elseif (line(1:8) == 'RssAnon:' .and. present(anon)) then
+            read (line(9:), *, iostat=ios) kb
+            if (ios == 0) anon = dble(kb)/1024d0
+         elseif (line(1:9) == 'RssShmem:' .and. present(shm)) then
+            read (line(10:), *, iostat=ios) kb
+            if (ios == 0) shm = dble(kb)/1024d0
+         elseif (line(1:13) == 'HugetlbPages:' .and. present(huge)) then
+            read (line(14:), *, iostat=ios) kb
+            if (ios == 0) huge = dble(kb)/1024d0
+         endif
+      enddo
+      close (u)
+   end subroutine BP_MD_proc_rss
+
+   !>**** Reset VmHWM to the current VmRSS (Linux >= 4.0: write 5 to /proc/self/clear_refs)
+   ! so that VmHWM measures the peak from here on. A silent no-op where unsupported.
+   subroutine BP_MD_proc_hwm_reset()
+      implicit none
+      integer::u, ios
+      open (newunit=u, file='/proc/self/clear_refs', status='old', action='write', iostat=ios)
+      if (ios /= 0) return
+      write (u, '(A)', iostat=ios) '5'
+      close (u)
+   end subroutine BP_MD_proc_hwm_reset
+
+   subroutine Bplus_MD_MVP_diag(BP, ptree, stats, phase)
+
+      implicit none
+      type(blockplus_MD)::BP
+      type(proctree)::ptree
+      type(Hstat)::stats
+      integer phase
+      integer ll, ierr, nl
+      real(kind=8)::pair(2, 0:LplusMax), pmax(2, 0:LplusMax)
+      real(kind=8)::vmin(0:LplusMax), vsum(0:LplusMax)
+      real(kind=8)::tot_pair(2), tot_pmax(2), summax, curmax, pkmax, pksum
+      integer, save:: nmvp = 0
+      !>**** kernel-measured counterparts: per-rank resident now, lifetime high-water mark,
+      ! and the per-node resident sum (ranks sharing a node, via MPI_COMM_TYPE_SHARED), which
+      ! is what has to fit in a node's memory.
+      real(kind=8)::rss_now, hwm_now, rss_max, life_max, node_sum, node_max
+      real(kind=8)::anon_now, shm_now, huge_now, anon_max, shm_max, huge_max
+      real(kind=8)::lev_node(0:LplusMax), lev_node_sum(0:LplusMax), lev_node_max(0:LplusMax)
+      real(kind=8)::ventry_max(0:LplusMax)
+      real(kind=8)::phv(BP_MD_nphase), phg(BP_MD_nphase)
+      integer::cnt2(2), cntg(2), ipath
+      integer, save:: node_comm = MPI_COMM_NULL
+
+      if (node_comm == MPI_COMM_NULL) &
+         call MPI_Comm_split_type(ptree%Comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, node_comm, ierr)
+      call BP_MD_proc_rss(rss_now, hwm_now, anon_now, shm_now, huge_now)
+      BP_MD_rss_life_max = max(BP_MD_rss_life_max, hwm_now)
+      call MPI_ALLREDUCE(anon_now, anon_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(shm_now, shm_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(huge_now, huge_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rss_now, rss_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_rss_life_max, life_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(rss_now, node_sum, 1, MPI_DOUBLE_PRECISION, MPI_SUM, node_comm, ierr)
+      call MPI_ALLREDUCE(node_sum, node_max, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+
+      call MPI_ALLREDUCE(stats%Mem_Current, curmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(stats%Mem_Peak, pkmax, 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(stats%Mem_Peak, pksum, 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+
+      if (phase == 0) then
+         if (ptree%MyID == Main_ID) then
+            write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp + 1, &
+               ' entry: cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+            write (*, '(A,I4,3(A,Es11.4))') ' MDRSS mvp', nmvp + 1, &
+               ' entry: rss_max=', rss_max, ' MB life_hwm_max=', life_max, ' MB node_rss_max=', node_max
+            write (*, '(A,I4,3(A,Es11.4))') ' MDRSSKIND mvp', nmvp + 1, &
+               ' entry: anon_max=', anon_max, ' MB shmem_max=', shm_max, ' MB hugetlb_max=', huge_max
+         endif
+         return
+      endif
+
+      nmvp = nmvp + 1
+      nl = BP%Lplus
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_time(ll)
+         pair(2, ll) = dble(ptree%MyID)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_time, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_time, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      tot_pair(1) = sum(BP_MD_lev_time(0:LplusMax))
+      tot_pair(2) = dble(ptree%MyID)
+      call MPI_ALLREDUCE(tot_pair, tot_pmax, 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+
+      if (ptree%MyID == Main_ID) then
+         summax = 0d0
+         do ll = 0, nl
+            if (pmax(1, ll) > 0d0) then
+               write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2)') ' MDBAL mvp', nmvp, ' lev', ll, &
+                  ' min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                  ' @rank=', nint(pmax(2, ll)), ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12)
+               summax = summax + pmax(1, ll)
+            endif
+         enddo
+         write (*, '(A,I4,2(A,Es11.4),A,I6,A,Es11.4)') ' MDBAL mvp', nmvp, &
+            ' sum_of_level_max=', summax, ' max_of_rank_total=', tot_pmax(1), &
+            ' @rank=', nint(tot_pmax(2)), ' sync_penalty=', summax - tot_pmax(1)
+         write (*, '(A,I4,3(A,Es11.4))') ' MDMEM mvp', nmvp, &
+            ' exit : cur_max=', curmax, ' MB peak_max=', pkmax, ' MB peak_sum=', pksum
+      endif
+
+      !>**** which level's transient sets the peak, and how imbalanced is it across ranks
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_memdelta(ll)
+         pair(2, ll) = dble(ptree%MyID)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_memdelta, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_memdelta, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) then
+         do ll = 0, nl
+            if (pmax(1, ll) > 0d0) write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2)') ' MDMEMLEV mvp', nmvp, &
+               ' lev', ll, ' transientMB min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), &
+               ' max=', pmax(1, ll), ' @rank=', nint(pmax(2, ll)), &
+               ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12)
+         enddo
+      endif
+      BP_MD_lev_memdelta = 0d0
+
+      !>**** the kernel's version of the same table, plus what was resident at level entry
+      ! and the busiest node's resident total during the level (entry + transient, summed
+      ! over the node's ranks: the ranks under one parent are consecutive and co-located, so
+      ! their transients are simultaneous)
+      do ll = 0, LplusMax
+         pair(1, ll) = BP_MD_lev_rssdelta(ll)
+         pair(2, ll) = dble(ptree%MyID)
+         lev_node(ll) = BP_MD_lev_rssentry(ll) + max(BP_MD_lev_rssdelta(ll), 0d0)
+      enddo
+      call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssdelta, vmin, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MIN, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssdelta, vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(BP_MD_lev_rssentry, ventry_max, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      call MPI_ALLREDUCE(lev_node, lev_node_sum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, node_comm, ierr)
+      call MPI_ALLREDUCE(lev_node_sum, lev_node_max, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%Comm, ierr)
+      if (ptree%MyID == Main_ID) then
+         do ll = 0, nl
+            if (ventry_max(ll) > 0d0) write (*, '(A,I4,A,I3,3(A,Es11.4),A,I6,A,F8.2,2(A,Es11.4))') ' MDRSSLEV mvp', nmvp, &
+               ' lev', ll, ' transientMB min=', vmin(ll), ' mean=', vsum(ll)/dble(ptree%nproc), &
+               ' max=', pmax(1, ll), ' @rank=', nint(pmax(2, ll)), &
+               ' max/mean=', pmax(1, ll)/max(vsum(ll)/dble(ptree%nproc), 1d-12), &
+               ' entry_max=', ventry_max(ll), ' node_peak_max=', lev_node_max(ll)
+         enddo
+         write (*, '(A,I4,3(A,Es11.4))') ' MDRSS mvp', nmvp, &
+            ' exit : rss_max=', rss_max, ' MB life_hwm_max=', life_max, ' MB node_rss_max=', node_max
+         write (*, '(A,I4,3(A,Es11.4))') ' MDRSSKIND mvp', nmvp, &
+            ' exit : anon_max=', anon_max, ' MB shmem_max=', shm_max, ' MB hugetlb_max=', huge_max
+      endif
+      BP_MD_lev_rssdelta = 0d0
+      BP_MD_lev_rssentry = 0d0
+
+      !>**** where the critical rank's compute goes, by application path: the rank with the
+      ! largest wall in the block loop (representatives, applied standalone) reports its phase
+      ! breakdown and counts; likewise for the duplicate path. Picked out by a masked sum.
+      do ipath = 1, 2
+         do ll = 0, LplusMax
+            if (ipath == 1) then
+               pair(1, ll) = BP_MD_lev_rep(ll, BP_MD_nphase)
+            else
+               pair(1, ll) = BP_MD_lev_dup(ll, BP_MD_nphase)
+            endif
+            pair(2, ll) = dble(ptree%MyID)
+         enddo
+         call MPI_ALLREDUCE(pair, pmax, LplusMax + 1, MPI_2DOUBLE_PRECISION, MPI_MAXLOC, ptree%Comm, ierr)
+         call MPI_ALLREDUCE(pair(1, :), vsum, LplusMax + 1, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+         do ll = 0, nl
+            if (pmax(1, ll) <= 0d0) cycle
+            phv = 0d0
+            cnt2 = 0
+            if (ptree%MyID == nint(pmax(2, ll))) then
+               if (ipath == 1) then
+                  phv = BP_MD_lev_rep(ll, :)
+               else
+                  phv = BP_MD_lev_dup(ll, :)
+               endif
+               cnt2(1) = BP_MD_lev_nrep(ll)
+               cnt2(2) = BP_MD_lev_ndup(ll)
+            endif
+            call MPI_ALLREDUCE(phv, phg, BP_MD_nphase, MPI_DOUBLE_PRECISION, MPI_SUM, ptree%Comm, ierr)
+            call MPI_ALLREDUCE(cnt2, cntg, 2, MPI_INTEGER, MPI_SUM, ptree%Comm, ierr)
+            if (ptree%MyID == Main_ID) then
+               if (ipath == 1) then
+                  write (*, '(A,I4,A,I3,A,I8,A,I8,2(A,Es10.3),A,I6,17(A,Es9.2))') ' MDSPLIT mvp', nmvp, ' lev', ll, &
+                     ' REP  nrep=', cntg(1), ' ndup=', cntg(2), ' wall mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                     ' @rank=', nint(pmax(2, ll)), ' | blk=', phg(1), ' init=', phg(2), ' rsh=', phg(3), ' rshI=', phg(4), &
+                     ' rshM=', phg(5), ' rshF=', phg(6), ' right=', phg(7), ' mid=', phg(8), ' left=', phg(9), ' gemm=', phg(10), &
+                     ' clean=', phg(11), ' packunp=', phg(12), ' full=', phg(13), &
+                     ' ngrp=', phg(14), ' ntask=', phg(15), ' gflop=', phg(16)/1d9, ' tgemm=', phg(17)
+               else
+                  write (*, '(A,I4,A,I3,A,I8,A,I8,2(A,Es10.3),A,I6,17(A,Es9.2))') ' MDSPLIT mvp', nmvp, ' lev', ll, &
+                     ' DUP  nrep=', cntg(1), ' ndup=', cntg(2), ' wall mean=', vsum(ll)/dble(ptree%nproc), ' max=', pmax(1, ll), &
+                     ' @rank=', nint(pmax(2, ll)), ' | blk=', phg(1), ' init=', phg(2), ' rsh=', phg(3), ' rshI=', phg(4), &
+                     ' rshM=', phg(5), ' rshF=', phg(6), ' right=', phg(7), ' mid=', phg(8), ' left=', phg(9), ' gemm=', phg(10), &
+                     ' clean=', phg(11), ' packunp=', phg(12), ' full=', phg(13), &
+                     ' ngrp=', phg(14), ' ntask=', phg(15), ' gflop=', phg(16)/1d9, ' tgemm=', phg(17)
+               endif
+            endif
+         enddo
+      enddo
+      BP_MD_lev_rep = 0d0
+      BP_MD_lev_dup = 0d0
+      BP_MD_lev_nrep = 0
+      BP_MD_lev_ndup = 0
+
+      BP_MD_lev_time = 0d0
+
+   end subroutine Bplus_MD_MVP_diag
 
    subroutine BFvec_pool_acquire(kerls, block, nrow, ncol, zero_new)
 
@@ -286,7 +1349,7 @@ contains
       real(kind=8)::rtemp
 
       if (associated(bplus%LL)) then
-      do ll = 1, LplusMax
+      do ll = 1, size(bplus%LL)
          if (bplus%LL(ll)%Nbound > 0) then
             if (associated(bplus%LL(ll)%matrices_block)) then
             do bb = 1, bplus%LL(ll)%Nbound
@@ -1016,6 +2079,160 @@ contains
    end subroutine BP_MD_vec_slot_group
 
 
+   !>**** polynomial hash of one MD vector slot key; intermediate values are masked to
+   ! 40 bits so the accumulation cannot overflow a 64-bit integer
+   integer(kind=8) function BP_MD_vec_slot_key_hash(Ndim, group_md, idxs, idxe)
+
+      implicit none
+      integer Ndim
+      integer group_md(Ndim), idxs(Ndim), idxe(Ndim)
+      integer dim_i
+      integer(kind=8)::h
+      integer(kind=8), parameter::hmask40 = 1099511627775_8
+      integer(kind=8), parameter::hmul = 1000003_8
+
+      h = 0_8
+      do dim_i = 1, Ndim
+         h = IAND(h*hmul + int(group_md(dim_i), kind=8), hmask40)
+         h = IAND(h*hmul + int(idxs(dim_i), kind=8), hmask40)
+         h = IAND(h*hmul + int(idxe(dim_i), kind=8), hmask40)
+      enddo
+      BP_MD_vec_slot_key_hash = h
+
+   end function BP_MD_vec_slot_key_hash
+
+
+   !>**** D1: the slot-streaming budget in bytes, read once from the environment (0 = off)
+   integer(kind=8) function BP_MD_slot_budget()
+      implicit none
+      character(len=64)::str
+      integer::ios, ln, mb
+      if (BP_MD_slot_budget_bytes < 0_8) then
+         BP_MD_slot_budget_bytes = 0_8
+         call get_environment_variable('BPACK_MD_SLOT_BUDGET_MB', str, length=ln, status=ios)
+         if (ios == 0 .and. ln > 0) then
+            read (str, *, iostat=ios) mb
+            if (ios == 0 .and. mb > 0) BP_MD_slot_budget_bytes = int(mb, kind=8)*1048576_8
+         endif
+      endif
+      BP_MD_slot_budget = BP_MD_slot_budget_bytes
+   end function BP_MD_slot_budget
+
+   !>**** D1: rounds this rank needs at level ll so that one round's live input slots plus
+   ! their receive staging fit the budget; 1 when the budget is off
+   subroutine BP_MD_vec_round_need(Ndim, BP, ll, Nrnd, msh, map, elem_bytes, budget, need)
+      implicit none
+      integer Ndim, ll, Nrnd, need
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::map
+      integer(kind=8)::elem_bytes, budget, tot
+      integer::uu, dims_md(Ndim)
+      need = 1
+      if (budget <= 0_8 .or. map%nuniq <= 0) return
+      tot = 0_8
+      do uu = 1, map%nuniq
+         call BP_MD_vec_slot_dims(Ndim, BP, ll, map%owner_slot(uu), 0, msh, dims_md)
+         tot = tot + 2_8*elem_bytes*int(Nrnd, kind=8)*int(product(dims_md), kind=8)
+      enddo
+      need = int(min(int(BP_MD_max_rounds - 1, kind=8), max(1_8, (tot + budget - 1_8)/budget)))
+   end subroutine BP_MD_vec_round_need
+
+   !>**** D1: give each unique input slot of level ll a round. Representatives are dealt
+   ! round-robin over the rounds and each one brings the slots of its duplicates along, so
+   ! (a) the duplicates of one representative share a round and Bplus_MD_compact_dup_MVP_local_N
+   ! still batches them with one ZFP decompression (the batch is what amortises reading the
+   ! representative's factors), and (b) every round holds a similar mix of representatives,
+   ! i.e. similar compute, not merely similar bytes -- a contiguous fill was measured to leave
+   ! heavy ranks lopsided across rounds, which the per-round exchange then waits for. Only
+   ! balance depends on this order, never results.
+   subroutine BP_MD_vec_assign_rounds(Ndim, BP, ll, Nrnd, msh, map, elem_bytes, nround)
+      implicit none
+      integer Ndim, ll, Nrnd, nround
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::map
+      integer(kind=8)::elem_bytes, tot, acc, target
+      integer::uu, bb, mm, slot, r, dims_md(Ndim)
+      integer(kind=8), allocatable::sbytes(:)
+      map%nround = max(1, nround)
+      if (allocated(map%round)) deallocate (map%round)
+      if (map%nuniq <= 0) return
+      allocate (map%round(map%nuniq))
+      map%round = 1
+      if (map%nround == 1) return
+      map%round = 0
+      allocate (sbytes(map%nuniq))
+      tot = 0_8
+      do uu = 1, map%nuniq
+         call BP_MD_vec_slot_dims(Ndim, BP, ll, map%owner_slot(uu), 0, msh, dims_md)
+         sbytes(uu) = elem_bytes*int(Nrnd, kind=8)*int(product(dims_md), kind=8)
+         tot = tot + sbytes(uu)
+      enddo
+      target = (tot + int(map%nround, kind=8) - 1_8)/int(map%nround, kind=8)
+      r = 1
+      acc = 0_8
+      do bb = 1, BP%LL(ll)%Nbound_loc
+         r = mod(bb - 1, map%nround) + 1
+         if (bb <= map%nslot) call BP_MD_vec_round_place(map, map%slot_map(bb), sbytes, target, r, acc)
+         if (allocated(BP%LL(ll)%trans_dup_member_offset)) then
+            if (size(BP%LL(ll)%trans_dup_member_offset) >= bb + 1) then
+               do mm = BP%LL(ll)%trans_dup_member_offset(bb), BP%LL(ll)%trans_dup_member_offset(bb + 1) - 1
+                  slot = BP%LL(ll)%Nbound_loc + BP%LL(ll)%trans_dup_member_list(mm)
+                  if (slot >= 1 .and. slot <= map%nslot) &
+                     call BP_MD_vec_round_place(map, map%slot_map(slot), sbytes, target, r, acc)
+               enddo
+            endif
+         endif
+      enddo
+      do uu = 1, map%nuniq
+         if (map%round(uu) == 0) map%round(uu) = map%nround
+      enddo
+      deallocate (sbytes)
+   end subroutine BP_MD_vec_assign_rounds
+
+   subroutine BP_MD_vec_round_place(map, uu, sbytes, target, r, acc)
+      implicit none
+      type(vec_redist_groupmap_MD)::map
+      integer::uu, r
+      integer(kind=8)::sbytes(:), target, acc
+      if (uu < 1 .or. uu > map%nuniq) return
+      if (map%round(uu) /= 0) return
+      map%round(uu) = r
+      acc = acc + sbytes(uu)
+   end subroutine BP_MD_vec_round_place
+
+   !>**** D1: allocate (sign>0) or free (sign<0) the unique input slot vectors of round
+   ! iround at levels level_s..level_e. With one round that is every slot, i.e. what the
+   ! matvec held before streaming.
+   subroutine BP_MD_vec_round_vectors(Ndim, BP, level_s, level_e, Nrnd, msh, maps, locs, iround, sign, stats)
+      implicit none
+      integer Ndim, level_s, level_e, Nrnd, iround, sign
+      type(blockplus_MD)::BP
+      type(mesh)::msh(Ndim)
+      type(vec_redist_groupmap_MD)::maps(level_s:level_e)
+      type(vectorsblock_oneL)::locs(level_s:level_e)
+      type(Hstat)::stats
+      integer::ll, uu, dims_md(Ndim)
+      do ll = level_s, level_e
+         do uu = 1, maps(ll)%nuniq
+            if (maps(ll)%nround > 1) then
+               if (maps(ll)%round(uu) /= iround) cycle
+            endif
+            if (sign > 0) then
+               if (allocated(locs(ll)%vs(uu)%vector)) cycle
+               call BP_MD_vec_slot_dims(Ndim, BP, ll, maps(ll)%owner_slot(uu), 0, msh, dims_md)
+               allocate (locs(ll)%vs(uu)%vector(product(dims_md), Nrnd))
+               call LogMemory(stats, SIZEOF(locs(ll)%vs(uu)%vector)/1024.0d3)
+            else
+               if (.not. allocated(locs(ll)%vs(uu)%vector)) cycle
+               call LogMemory(stats, -SIZEOF(locs(ll)%vs(uu)%vector)/1024.0d3)
+               deallocate (locs(ll)%vs(uu)%vector)
+            endif
+         enddo
+      enddo
+   end subroutine BP_MD_vec_round_vectors
+
    subroutine BP_MD_vec_build_unique_map(Ndim, BP, ll, rowcol, one2all, ptree, msh, map)
 
       implicit none
@@ -1029,6 +2246,13 @@ contains
       integer group_md(Ndim), idxs(Ndim), idxe(Ndim)
       integer, allocatable::uniq_group(:,:), uniq_idxs(:,:), uniq_idxe(:,:)
       logical owned, found
+      !>**** the number of slots reaches O(10^5) at the finest levels, so looking a key
+      ! up by scanning the unique list makes this O(nslot*nuniq); the open-addressing
+      ! index below keeps it O(nslot), which matters because the map is rebuilt twice
+      ! per level on every matvec
+      integer, allocatable::htab(:)
+      integer::hmask, hsize, hpos, probe
+      integer(kind=8)::hkey
 
       call BP_MD_vec_groupmap_clear(map)
       nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
@@ -1044,19 +2268,32 @@ contains
       map%owner_slot = 0
       map%nuniq = 0
 
+      hsize = 16
+      do while (hsize < 2*nslot)
+         hsize = hsize*2
+      enddo
+      hmask = hsize - 1
+      allocate(htab(0:hmask))
+      htab = 0
+
       do bb_loc = 1, nslot
          call BP_MD_vec_slot_group(Ndim, BP, ll, bb_loc, rowcol, group_md)
          call BP_MD_vec_slot_box(Ndim, BP, ll, bb_loc, rowcol, ptree, msh, idxs, idxe, owned)
          call assert(owned, 'local MD vector slot should be owned when building unique map')
 
+         hkey = BP_MD_vec_slot_key_hash(Ndim, group_md, idxs, idxe)
+         hpos = int(IAND(hkey, int(hmask, kind=8)))
          found = .false.
-         do uu = 1, map%nuniq
+         do probe = 0, hmask
+            uu = htab(hpos)
+            if (uu == 0) exit
             if (ALL(group_md == uniq_group(:,uu)) .and. ALL(idxs == uniq_idxs(:,uu)) .and. &
                 ALL(idxe == uniq_idxe(:,uu))) then
                map%slot_map(bb_loc) = uu
                found = .true.
                exit
             endif
+            hpos = IAND(hpos + 1, hmask)
          enddo
          if (.not. found) then
             map%nuniq = map%nuniq + 1
@@ -1065,9 +2302,11 @@ contains
             uniq_group(:,map%nuniq) = group_md
             uniq_idxs(:,map%nuniq) = idxs
             uniq_idxe(:,map%nuniq) = idxe
+            htab(hpos) = map%nuniq
          endif
       enddo
 
+      deallocate(htab)
       deallocate(uniq_group, uniq_idxs, uniq_idxe)
 
    end subroutine BP_MD_vec_build_unique_map
@@ -1181,6 +2420,45 @@ contains
       integer cache_slot
       logical use_cached_vecs, use_unique_vecs
       type(vec_redist_groupmap_MD), allocatable::Vin_maps(:), Vout_maps(:)
+      !>**** per-call profiling of one MD MVP level (rank 0 only)
+      real(kind=8)::t_prep0, t_prep1, t_call0, t_call1
+      real(kind=8)::prof0(10), prof1(10)
+      integer::nslot_prof, nuniq_prof
+      real(kind=8)::mem_peak_save, mem_entry_loc, rss_entry_loc, rss_dummy, rss_hwm_exit
+      !>**** D1 slot streaming
+      integer::iround, nround, kneed_r, kloc_r, ierr_r
+      integer(kind=8)::elem_bytes_r, budget_r
+      real(kind=8)::t_lev_acc
+      real(kind=8)::snap0(BP_MD_nphase), snap1(BP_MD_nphase), snap2(BP_MD_nphase)
+
+      t_call0 = MPI_Wtime()
+      t_prep0 = t_call0
+      !>**** restart the memory high-water mark so it measures THIS level, then restore the
+      ! global peak on exit. LogMemory only raises Mem_Peak on positive deltas, so resetting
+      ! it to the live total is safe and leaves the globally reported peak unchanged.
+      mem_peak_save = stats%Mem_Peak
+      mem_entry_loc = stats%Mem_Current
+      stats%Mem_Peak = stats%Mem_Current
+      !>**** same again from the kernel: reset VmHWM so it measures this level
+      rss_entry_loc = -1d0
+      if (option%verbosity >= 2) then
+         call BP_MD_proc_rss(rss_dummy, rss_hwm_exit)
+         BP_MD_rss_life_max = max(BP_MD_rss_life_max, rss_hwm_exit)
+         call BP_MD_proc_hwm_reset()
+         call BP_MD_proc_rss(rss_entry_loc, rss_dummy)
+      endif
+      prof0(1) = stats%Time_C_Mult_RedistSetup
+      prof0(2) = stats%Time_C_Mult_RedistMPI
+      prof0(3) = stats%Time_C_Mult_RedistPack
+      prof0(4) = stats%Time_C_Mult_RedistUnpack
+      prof0(5) = stats%Time_C_Mult_Block
+      prof0(6) = stats%Time_C_Mult_Pack
+      prof0(7) = stats%Time_C_Mult_Unpack
+      prof0(8) = stats%Time_C_Mult_Gemm
+      prof0(9) = stats%Time_C_Mult_Full
+      prof0(10) = stats%Time_C_Mult_RedistSetupLocal
+      nslot_prof = 0
+      nuniq_prof = 0
 
       blocks_1 => bplus%LL(1)%matrices_block(1)
 
@@ -1236,12 +2514,7 @@ contains
 		            allocate(Vout_locs(ll)%vs(total_slots))
 		            call LogMemory(stats, SIZEOF(Vout_locs(ll)%vs)/1024.0d3)
 		            if (use_unique_vecs) then
-		               do slot = 1, Vin_maps(ll)%nuniq
-		                  owner_slot = Vin_maps(ll)%owner_slot(slot)
-		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 0, msh, dim_in)
-		                  allocate (Vin_locs(ll)%vs(slot)%vector(product(dim_in), Nrnd))
-		                  call LogMemory(stats, SIZEOF(Vin_locs(ll)%vs(slot)%vector)/1024.0d3)
-		               enddo
+		               !>**** D1: the input slot vectors are allocated per streaming round, below
 		               do slot = 1, Vout_maps(ll)%nuniq
 		                  owner_slot = Vout_maps(ll)%owner_slot(slot)
 		                  call BP_MD_vec_slot_dims(Ndim, bplus, ll, owner_slot, 1, msh, dim_out)
@@ -1275,11 +2548,53 @@ contains
 		         enddo
 		      endif
 
+      !>**** D1: how many rounds the unique input slots are streamed in. The exchange is
+      ! collective, so every rank of this process group runs the same number of rounds.
+      nround = 1
+      if (use_unique_vecs) then
+         budget_r = BP_MD_slot_budget()
+         elem_bytes_r = int(storage_size(ctemp1), kind=8)/8_8
+         kloc_r = 1
+         if (budget_r > 0_8) then
+            do ll = level_s, level_e
+               call BP_MD_vec_round_need(Ndim, bplus, ll, Nrnd, msh, Vin_maps(ll), elem_bytes_r, budget_r, kneed_r)
+               kloc_r = max(kloc_r, kneed_r)
+            enddo
+            call MPI_ALLREDUCE(kloc_r, nround, 1, MPI_INTEGER, MPI_MAX, ptree%pgrp(blocks_1%pgno)%Comm, ierr_r)
+         endif
+         do ll = level_s, level_e
+            call BP_MD_vec_assign_rounds(Ndim, bplus, ll, Nrnd, msh, Vin_maps(ll), elem_bytes_r, nround)
+         enddo
+         BP_MD_last_nround = nround
+      endif
+
+      t_prep1 = MPI_Wtime()
+      if (use_unique_vecs) then
+         do ll = level_s, level_e
+            nslot_prof = nslot_prof + Vin_maps(ll)%nslot
+            nuniq_prof = nuniq_prof + Vin_maps(ll)%nuniq
+         enddo
+      endif
+
+      t_lev_acc = 0d0
+      if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+         BP_MD_lev_nrep(level_s) = 0
+         BP_MD_lev_ndup(level_s) = 0
+         do ll = level_s, level_e
+            BP_MD_lev_nrep(level_s) = BP_MD_lev_nrep(level_s) + bplus%LL(ll)%Nbound_loc
+            BP_MD_lev_ndup(level_s) = BP_MD_lev_ndup(level_s) + bplus%LL(ll)%trans_ndup
+         enddo
+      endif
+      !>**** D1: stream the unique input slots in rounds: gather one round's slots, apply
+      ! every local block and duplicate that reads them, accumulate into the output slots,
+      ! free them, next round. One round is the pre-streaming behaviour.
+      do iround = 1, nround
+         if (use_unique_vecs) call BP_MD_vec_round_vectors(Ndim, bplus, level_s, level_e, Nrnd, msh, Vin_maps, Vin_locs, iround, 1, stats)
       n1 = MPI_Wtime()
 	      if (chara == 'N') then
 	         if (option%trans_invariant /= 0) then
 	            if (use_unique_vecs) then
-	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vin_maps)
+	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc, Vin_maps, iround)
 	            else
 	               call Bplus_MD_vec_1Dto1D_plan(Ndim, bplus, 0, 1, level_s, level_e, ldi, random1, Nrnd, Vin_locs, ptree,msh, stats, ptree%pgrp(blocks_1%pgno)%nproc)
 	            endif
@@ -1298,6 +2613,7 @@ contains
 	      stats%Time_C_Mult_RedistIn = stats%Time_C_Mult_RedistIn + n2-n1
 
 		      n3 = MPI_Wtime()
+         if (option%verbosity >= 2) call BP_MD_phase_snapshot(stats, snap0)
 		      do ll = level_s, level_e
 		         do bb = 1, bplus%LL(ll)%Nbound_loc
 		            blocks => bplus%LL(ll)%matrices_block(bb)
@@ -1312,6 +2628,9 @@ contains
 			            out_slot = bb
 			            if (use_unique_vecs) then
 			               in_slot = Vin_maps(ll)%slot_map(bb)
+			               if (nround > 1) then
+			                  if (Vin_maps(ll)%round(in_slot) /= iround) cycle
+			               endif
 			               out_slot = Vout_maps(ll)%slot_map(bb)
 			               if (allocated(Vout_loc)) then
 			                  if (size(Vout_loc,1) /= product(dim_out) .or. size(Vout_loc,2) /= Nrnd) then
@@ -1353,11 +2672,15 @@ contains
 			            if (blocks%style == 1) stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + n2-n1
 			         enddo
 			      enddo
+         if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+            call BP_MD_phase_snapshot(stats, snap1)
+            BP_MD_lev_rep(level_s, :) = BP_MD_lev_rep(level_s, :) + (snap1 - snap0)
+         endif
 	            if (option%trans_invariant /= 0) then
 	               if(chara == 'N')then
 	                  if (use_unique_vecs) then
 	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-	                        Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
+	                        Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps, iround)
 	                  else
 	                     call Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
 	                        Vin_locs, Vout_locs, ptree, stats, msh, option)
@@ -1366,15 +2689,28 @@ contains
 	                  write(*,*)"Bplus_MD_compact_dup_MVP_local_T is not yet implemented"
 	               endif
 	            endif
+         if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+            call BP_MD_phase_snapshot(stats, snap2)
+            BP_MD_lev_dup(level_s, :) = BP_MD_lev_dup(level_s, :) + (snap2 - snap1)
+         endif
 	            if (allocated(Vout_loc)) then
 	               call LogMemory(stats, -SIZEOF(Vout_loc)/1024.0d3)
 	               deallocate(Vout_loc)
 	            endif
 		      n4 = MPI_Wtime()
 		      stats%Time_C_Mult_Level = stats%Time_C_Mult_Level + n4-n3
+         t_lev_acc = t_lev_acc + (n4 - n3)
+         if (use_unique_vecs) call BP_MD_vec_round_vectors(Ndim, bplus, level_s, level_e, Nrnd, msh, Vin_maps, Vin_locs, iround, -1, stats)
+      enddo
+            if (level_s >= 0 .and. level_s <= LplusMax) BP_MD_lev_time(level_s) = t_lev_acc
             if(ptree%MyID==0)then
-            write(*,*)n4-n3," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
+            write(*,*)t_lev_acc," seconds for level ",level_s," to ",level_e," of Bplus_MD_block_MVP_dat"
             endif
+            prof1(5) = stats%Time_C_Mult_Block - prof0(5)
+            prof1(6) = stats%Time_C_Mult_Pack - prof0(6)
+            prof1(7) = stats%Time_C_Mult_Unpack - prof0(7)
+            prof1(8) = stats%Time_C_Mult_Gemm - prof0(8)
+            prof1(9) = stats%Time_C_Mult_Full - prof0(9)
 
 
 	      n1 = MPI_Wtime()
@@ -1407,8 +2743,10 @@ contains
 	      else
 		         do ll = level_s, level_e
 		            do bb = 1, size(Vin_locs(ll)%vs)
-		               call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
-	               deallocate (Vin_locs(ll)%vs(bb)%vector)
+		               if (allocated(Vin_locs(ll)%vs(bb)%vector)) then
+		                  call LogMemory(stats, -SIZEOF(Vin_locs(ll)%vs(bb)%vector)/1024.0d3)
+		                  deallocate (Vin_locs(ll)%vs(bb)%vector)
+		               endif
 	            end do
 	            do bb = 1, size(Vout_locs(ll)%vs)
 	               call LogMemory(stats, -SIZEOF(Vout_locs(ll)%vs(bb)%vector)/1024.0d3)
@@ -1437,11 +2775,48 @@ contains
 	      n2 = MPI_Wtime()
 	      stats%Time_C_Mult_Final = stats%Time_C_Mult_Final + n2-n1
 
+      if (level_s >= 0 .and. level_s <= LplusMax) &
+         BP_MD_lev_memdelta(level_s) = stats%Mem_Peak - mem_entry_loc
+      stats%Mem_Peak = max(mem_peak_save, stats%Mem_Peak)
+      if (option%verbosity >= 2 .and. level_s >= 0 .and. level_s <= LplusMax) then
+         call BP_MD_proc_rss(rss_dummy, rss_hwm_exit)
+         if (rss_entry_loc >= 0d0 .and. rss_hwm_exit >= 0d0) then
+            BP_MD_lev_rssdelta(level_s) = rss_hwm_exit - rss_entry_loc
+            BP_MD_lev_rssentry(level_s) = rss_entry_loc
+            BP_MD_rss_life_max = max(BP_MD_rss_life_max, rss_hwm_exit)
+         endif
+      endif
+
+      if (ptree%MyID == 0 .and. option%verbosity >= 2) then
+         prof1(1) = stats%Time_C_Mult_RedistSetup - prof0(1)
+         prof1(2) = stats%Time_C_Mult_RedistMPI - prof0(2)
+         prof1(3) = stats%Time_C_Mult_RedistPack - prof0(3)
+         prof1(4) = stats%Time_C_Mult_RedistUnpack - prof0(4)
+         prof1(10) = stats%Time_C_Mult_RedistSetupLocal - prof0(10)
+         t_call1 = MPI_Wtime()
+         write(*,'(A,I3,A,I3,A,11(A,Es10.3),3(A,I9))') &
+            ' MVPPROF lev', level_s, '-', level_e, ':', &
+            ' tot=', t_call1 - t_call0, &
+            ' prep=', t_prep1 - t_prep0, &
+            ' plan=', prof1(1), &
+            ' planloc=', prof1(10), &
+            ' rmpi=', prof1(2), &
+            ' rpack=', prof1(3) + prof1(4), &
+            ' lev=', t_lev_acc, &
+            ' blk=', prof1(5), &
+            ' gemm=', prof1(8), &
+            ' dup=', prof1(6) + prof1(7), &
+            ' fin=', n2 - n1, &
+            ' nslot=', nslot_prof, &
+            ' nuniq=', nuniq_prof, &
+            ' nround=', nround
+      endif
+
 	   end subroutine Bplus_MD_block_MVP_dat
 
 
    subroutine Bplus_MD_compact_dup_MVP_local_N(Ndim, bplus, level_s, level_e, Nrnd, &
-      Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps)
+      Vin_locs, Vout_locs, ptree, stats, msh, option, Vin_maps, Vout_maps, round)
 
       implicit none
       integer Ndim, level_s, level_e, Nrnd
@@ -1452,9 +2827,13 @@ contains
       type(mesh)::msh(Ndim)
       type(Hoption)::option
       type(vec_redist_groupmap_MD), optional::Vin_maps(level_s:level_e), Vout_maps(level_s:level_e)
+      integer, optional::round !< D1: apply only the duplicates whose input slot is live in this round
+      integer::nsel, mm_sel, slot_sel, bs_sel
+      integer, allocatable::mem_sel(:)
       type(matrixblock_MD), pointer::rep
       integer ll, rep_bb, member, dup_idx, rr, batch_count, batch_start, batch_end
       integer stack_limit, col_s, col_e, slot
+      logical par_inside
       integer zfp_mvp_mode
       integer dims_dup_in(Ndim), dims_dup_out(Ndim), head_tmp(Ndim)
       integer delta_dup(Ndim), delta_rep(Ndim), dim_in(Ndim), dim_out(Ndim)
@@ -1462,6 +2841,12 @@ contains
       DT ctemp1, ctemp2
       real(kind=8) t1, t2
       logical use_unique_vecs
+      integer(kind=8) bytes_per_col
+      integer nthreads_dup
+      !>**** cap on the stacked duplicate batch, so widening it to feed the threads can
+      ! never blow up the working set at the coarse levels
+      integer(kind=8), parameter::dup_stack_budget = 67108864_8
+      integer ncols, ncols_max
 #ifdef HAVE_OPENMP
       integer(kind=omp_lock_kind), allocatable::out_locks(:)
 #endif
@@ -1471,6 +2856,10 @@ contains
       use_unique_vecs = present(Vin_maps) .and. present(Vout_maps)
       do ll = level_s, level_e
          if (bplus%LL(ll)%trans_ndup == 0) cycle
+         !>**** D1: this round's duplicate members of one representative
+         if (allocated(mem_sel)) deallocate (mem_sel)
+         allocate (mem_sel(max(1, bplus%LL(ll)%trans_dup_member_offset(bplus%LL(ll)%Nbound_loc + 1) - &
+            bplus%LL(ll)%trans_dup_member_offset(1))))
 #ifdef HAVE_OPENMP
          if (use_unique_vecs) then
             allocate(out_locks(size(Vout_locs(ll)%vs)))
@@ -1485,23 +2874,82 @@ contains
             rep => bplus%LL(ll)%matrices_block(rep_bb)
             dim_in = rep%N_loc
             dim_out = rep%M_loc
+            !>**** large vectors: reorient one duplicate at a time with all threads inside; small:
+            ! keep the batch-parallel loop (the directives below carry if(.not. par_inside))
+            par_inside = product(dim_in) >= BP_MD_par_inside_min
+            !>**** all duplicate members of one representative block are applied as one
+            ! batched matvec, and at the leaf levels those batch columns are the only
+            ! thing to spread over threads: BF_MD_block_mvp_level_butterfly0 slices Nvec
+            ! across threads and level_butterfly==0 leaves no block parallelism, so a
+            ! batch narrower than the thread count leaves threads idle. Widen it just
+            ! enough to give every thread a column. Widening much further was measured to
+            ! cost more in the block matvec (the stacked vectors stop fitting in cache)
+            ! than it saves in pack/unpack, so the budget below keeps it modest.
             stack_limit = max(1, option%BACA_Batch)
-            do batch_start = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
-               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, stack_limit
-               batch_end = min(bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1, &
-                  batch_start + stack_limit - 1)
-               batch_count = batch_end - batch_start + 1
-               allocate(Vin_stack(product(dim_in),Nrnd*batch_count))
-               allocate(Vout_stack(product(dim_out),Nrnd*batch_count))
+            !>**** A level_butterfly==0 representative has no block parallelism, so the
+            ! batch columns are the only thing its matvec can spread over threads
+            ! (BF_MD_block_mvp_level_butterfly0 slices Nvec across threads): a batch
+            ! narrower than the thread count leaves threads idle and reduces each gemm to
+            ! a matrix-vector product. Widen it just enough to give every thread a column.
+            ! Blocks that do carry butterfly structure already keep the threads busy per
+            ! block, and widening their batch was measured to cost more in cache locality
+            ! than it saves, so they keep BACA_Batch.
+            if (rep%level_butterfly == 0) then
+               nthreads_dup = 1
+#ifdef HAVE_OPENMP
+               nthreads_dup = omp_get_max_threads()
+#endif
+               bytes_per_col = (int(storage_size(ctemp1), kind=8)/8_8)*int(Nrnd, kind=8)* &
+                  (int(product(dim_in), kind=8) + int(product(dim_out), kind=8))
+               if (bytes_per_col > 0_8 .and. &
+                   bytes_per_col*int(nthreads_dup, kind=8) <= dup_stack_budget) then
+                  stack_limit = max(stack_limit, nthreads_dup)
+               endif
+            endif
+            !>**** D1: with slot streaming only the members whose input slot is live in this
+            ! round are applied now; mem_sel lists them (every member when not streaming)
+            nsel = 0
+            do mm_sel = bplus%LL(ll)%trans_dup_member_offset(rep_bb), &
+               bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1
+               if (present(round) .and. use_unique_vecs) then
+                  if (Vin_maps(ll)%nround > 1) then
+                     slot_sel = Vin_maps(ll)%slot_map(bplus%LL(ll)%Nbound_loc + bplus%LL(ll)%trans_dup_member_list(mm_sel))
+                     if (Vin_maps(ll)%round(slot_sel) /= round) cycle
+                  endif
+               endif
+               nsel = nsel + 1
+               mem_sel(nsel) = mm_sel
+            enddo
+            !>**** the two stacks live across batches and representatives and only grow: a fresh pair per batch
+            ! was a malloc (an mmap above 128 KB), first-touch page faults and a free for every batch -- 13.6k
+            ! batches per matvec at the leaf level of 1280^3, 130 MB a batch at level 4
+            ncols_max = Nrnd*min(stack_limit, max(1, nsel))
+            if (allocated(Vin_stack)) then
+               if (size(Vin_stack,1) /= product(dim_in) .or. size(Vin_stack,2) < ncols_max .or. &
+                   size(Vout_stack,1) /= product(dim_out) .or. size(Vout_stack,2) < ncols_max) then
+                  call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
+                  call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+                  deallocate(Vin_stack, Vout_stack)
+               endif
+            endif
+            if (.not. allocated(Vin_stack)) then
+               allocate(Vin_stack(product(dim_in), ncols_max))
+               allocate(Vout_stack(product(dim_out), ncols_max))
                call LogMemory(stats, SIZEOF(Vin_stack)/1024.0d3)
                call LogMemory(stats, SIZEOF(Vout_stack)/1024.0d3)
-               Vout_stack = 0
+            endif
+            do bs_sel = 1, nsel, stack_limit
+               batch_start = bs_sel
+               batch_end = min(nsel, bs_sel + stack_limit - 1)
+               batch_count = batch_end - batch_start + 1
+               ncols = Nrnd*batch_count
+               Vout_stack(:,1:ncols) = 0
 
 	               t1 = MPI_Wtime()
-!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_in, head_tmp) schedule(static)
 	               do rr = 1, batch_count
-		                  member = batch_start + rr - 1
+		                  member = mem_sel(batch_start + rr - 1)
 		                  dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                  slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                  if (use_unique_vecs) slot = Vin_maps(ll)%slot_map(slot)
@@ -1514,7 +2962,7 @@ contains
                      msh, dims_dup_in, head_tmp)
 	                  call Bplus_MD_compact_pack_vector(Ndim, option%trans_invariant, delta_dup, &
 	                     delta_rep, dims_dup_in, dim_in, Nrnd, Vin_locs(ll)%vs(slot)%vector, &
-	                     Vin_stack(:,col_s:col_e))
+	                     Vin_stack(:,col_s:col_e), par_inside)
 	               enddo
 !$omp end parallel do
 	               t2 = MPI_Wtime()
@@ -1523,12 +2971,12 @@ contains
                zfp_mvp_mode = 0
 #if HAVE_ZFP
                if (option%use_zfp >= 1) then
-                  if (batch_start == bplus%LL(ll)%trans_dup_member_offset(rep_bb) .and. &
-                      batch_end == bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1) then
+                  if (batch_start == 1 .and. &
+                      batch_end == nsel) then
                      zfp_mvp_mode = 0
-                  elseif (batch_start == bplus%LL(ll)%trans_dup_member_offset(rep_bb)) then
+                  elseif (batch_start == 1) then
                      zfp_mvp_mode = 1
-                  elseif (batch_end == bplus%LL(ll)%trans_dup_member_offset(rep_bb+1)-1) then
+                  elseif (batch_end == nsel) then
                      zfp_mvp_mode = 3
                   else
                      zfp_mvp_mode = 2
@@ -1545,10 +2993,10 @@ contains
                   if (rep%level_butterfly == 0 .and. product(rep%nc_m) == 1 .and. &
                       product(rep%nr_m) == 1 .and. ptree%pgrp(rep%pgno)%nproc == 1 .and. &
                       .not. allocated(rep%MiddleQTT)) then
-                     call BF_MD_block_mvp_level_butterfly0('N', Vin_stack, dim_in, Vout_stack, dim_out, &
+                     call BF_MD_block_mvp_level_butterfly0('N', Vin_stack(:,1:ncols), dim_in, Vout_stack(:,1:ncols), dim_out, &
                         Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option, zfp_mvp_mode)
                   else
-                     call BF_MD_block_mvp('N', Vin_stack, dim_in, Vout_stack, dim_out, &
+                     call BF_MD_block_mvp('N', Vin_stack(:,1:ncols), dim_in, Vout_stack(:,1:ncols), dim_out, &
                         Nrnd*batch_count, rep, Ndim, ptree, stats, msh, option, zfp_mvp_mode)
                   endif
                endif
@@ -1556,11 +3004,11 @@ contains
 		               t1 = MPI_Wtime()
 	               if (use_unique_vecs) then
 #ifdef HAVE_OPENMP
-!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 !$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 #endif
 		                  do rr = 1, batch_count
-		                     member = batch_start + rr - 1
+		                     member = mem_sel(batch_start + rr - 1)
 		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                     slot = Vout_maps(ll)%slot_map(slot)
@@ -1576,7 +3024,7 @@ contains
 #endif
 		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
 		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
-		                        Vout_locs(ll)%vs(slot)%vector)
+		                        Vout_locs(ll)%vs(slot)%vector, par_inside)
 #ifdef HAVE_OPENMP
 	                     call omp_unset_lock(out_locks(slot))
 #endif
@@ -1585,10 +3033,10 @@ contains
 !$omp end parallel do
 #endif
 	               else
-	!$omp parallel do default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
+	!$omp parallel do if(.not. par_inside) default(shared) private(rr, member, dup_idx, slot, col_s, col_e, &
 	!$omp& delta_dup, delta_rep, dims_dup_out, head_tmp) schedule(static)
 		                  do rr = 1, batch_count
-		                     member = batch_start + rr - 1
+		                     member = mem_sel(batch_start + rr - 1)
 		                     dup_idx = bplus%LL(ll)%trans_dup_member_list(member)
 	                     slot = bplus%LL(ll)%Nbound_loc + dup_idx
 	                     col_s = (rr-1)*Nrnd + 1
@@ -1600,15 +3048,12 @@ contains
 	                        msh, dims_dup_out, head_tmp)
 		                     call Bplus_MD_compact_unpack_vector(Ndim, option%trans_invariant, delta_rep, &
 		                        delta_dup, dim_out, dims_dup_out, Nrnd, Vout_stack(:,col_s:col_e), &
-		                        Vout_locs(ll)%vs(slot)%vector)
+		                        Vout_locs(ll)%vs(slot)%vector, par_inside)
 		                  enddo
 	!$omp end parallel do
 	               endif
 		               t2 = MPI_Wtime()
 	               stats%Time_C_Mult_Unpack = stats%Time_C_Mult_Unpack + t2 - t1
-               call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
-               call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
-               deallocate(Vin_stack, Vout_stack)
             enddo
          enddo
 #ifdef HAVE_OPENMP
@@ -1619,6 +3064,12 @@ contains
             deallocate(out_locks)
          endif
 #endif
+            if (allocated(Vin_stack)) then
+               call LogMemory(stats, -SIZEOF(Vin_stack)/1024.0d3)
+               call LogMemory(stats, -SIZEOF(Vout_stack)/1024.0d3)
+               deallocate(Vin_stack, Vout_stack)
+            endif
+            if (allocated(mem_sel)) deallocate (mem_sel)
       enddo
 
    end subroutine Bplus_MD_compact_dup_MVP_local_N
@@ -1878,7 +3329,7 @@ contains
    end subroutine Bplus_MD_compact_axis_map
 
 
-   subroutine Bplus_MD_compact_pack_vector(Ndim, trans_invariant, group_dup, group_rep, &
+   subroutine Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
       dims_dup, dims_rep, Nrnd, source, target)
 
       implicit none
@@ -1965,10 +3416,67 @@ contains
          enddo
       endif
 
+   end subroutine Bplus_MD_compact_pack_vector_ref
+
+   !>**** Copy a duplicate's input tensor (natural order of dims_dup) into its representative's
+   ! frame (natural order of dims_rep). Iterates over the target so writes are contiguous; the
+   ! source index is affine in the target indices (rep axis k reads dup axis inv(k), reversed or
+   ! not). Ndim /= 3 falls back to the element-wise reference.
+   subroutine Bplus_MD_compact_pack_vector(Ndim, trans_invariant, group_dup, group_rep, &
+      dims_dup, dims_rep, Nrnd, source, target, par)
+      implicit none
+      integer Ndim, trans_invariant, Nrnd
+      integer group_dup(Ndim), group_rep(Ndim), dims_dup(Ndim), dims_rep(Ndim)
+      DT source(:,:), target(:,:)
+      logical, optional::par
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer inv(3), stride_dup(3), s(3), base, k, i, nentry
+      logical par_loc
+      DT, allocatable::tmp(:,:)
+      real(kind=8)::diff
+      if (Ndim /= 3) then
+         call Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
+            dims_dup, dims_rep, Nrnd, source, target)
+         return
+      endif
+      par_loc = .false.
+      if (present(par)) par_loc = par
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      do i = 1, 3
+         inv(map_dup_to_rep(i)) = i
+      enddo
+      stride_dup(1) = 1
+      stride_dup(2) = dims_dup(1)
+      stride_dup(3) = dims_dup(1)*dims_dup(2)
+      base = 1
+      do k = 1, 3
+         i = inv(k)
+         s(k) = stride_dup(i)
+         if (reverse_dup_to_rep(i) == 1) then
+            s(k) = -s(k)
+            base = base + (dims_dup(i) - 1)*stride_dup(i)
+         endif
+      enddo
+      call BP_MD_permuted_gather(dims_rep(1), dims_rep(2), dims_rep(3), s(1), s(2), s(3), base, Nrnd, &
+         source, target, .false., par_loc)
+      if (BP_MD_pack_check_on()) then
+         nentry = product(dims_dup)
+         allocate (tmp(size(target, 1), Nrnd))
+         call Bplus_MD_compact_pack_vector_ref(Ndim, trans_invariant, group_dup, group_rep, &
+            dims_dup, dims_rep, Nrnd, source, tmp)
+         diff = maxval(abs(target(1:nentry, 1:Nrnd) - tmp(1:nentry, 1:Nrnd)))
+         if (diff > 0d0 .and. BP_MD_pack_check_reports < 20) then
+            BP_MD_pack_check_reports = BP_MD_pack_check_reports + 1
+            write (*, '(A,Es12.4,A,3I5,A,3I3,A,3I2)') ' PACKCHECK pack  MISMATCH maxdiff=', diff, &
+               ' dims=', dims_dup, ' map=', map_dup_to_rep, ' rev=', reverse_dup_to_rep
+         endif
+         deallocate (tmp)
+      endif
    end subroutine Bplus_MD_compact_pack_vector
 
 
-   subroutine Bplus_MD_compact_unpack_vector(Ndim, trans_invariant, group_rep, group_dup, &
+   subroutine Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
       dims_rep, dims_dup, Nrnd, source, target)
 
       implicit none
@@ -2055,6 +3563,62 @@ contains
          enddo
       endif
 
+   end subroutine Bplus_MD_compact_unpack_vector_ref
+
+   !>**** Add a representative-frame result (natural order of dims_rep) into the duplicate's
+   ! output slot (natural order of dims_dup). Iterates over the target, so the accumulation is
+   ! contiguous and threads touch disjoint rows -- no lock is needed while one duplicate is
+   ! processed at a time. Ndim /= 3 falls back to the element-wise reference.
+   subroutine Bplus_MD_compact_unpack_vector(Ndim, trans_invariant, group_rep, group_dup, &
+      dims_rep, dims_dup, Nrnd, source, target, par)
+      implicit none
+      integer Ndim, trans_invariant, Nrnd
+      integer group_rep(Ndim), group_dup(Ndim), dims_rep(Ndim), dims_dup(Ndim)
+      DT source(:,:), target(:,:)
+      logical, optional::par
+      integer map_dup_to_rep(Ndim), reverse_dup_to_rep(Ndim)
+      integer stride_rep(3), s(3), base, i, nentry
+      logical par_loc
+      DT, allocatable::tmp(:,:)
+      real(kind=8)::diff
+      if (Ndim /= 3) then
+         call Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
+            dims_rep, dims_dup, Nrnd, source, target)
+         return
+      endif
+      par_loc = .false.
+      if (present(par)) par_loc = par
+      call Bplus_MD_compact_axis_map(Ndim, trans_invariant, group_dup, group_rep, &
+         dims_dup, dims_rep, map_dup_to_rep, reverse_dup_to_rep)
+      nentry = product(dims_dup)
+      if (BP_MD_pack_check_on()) then
+         allocate (tmp(size(target, 1), Nrnd))
+         tmp(1:nentry, 1:Nrnd) = target(1:nentry, 1:Nrnd)
+         call Bplus_MD_compact_unpack_vector_ref(Ndim, trans_invariant, group_rep, group_dup, &
+            dims_rep, dims_dup, Nrnd, source, tmp)
+      endif
+      stride_rep(1) = 1
+      stride_rep(2) = dims_rep(1)
+      stride_rep(3) = dims_rep(1)*dims_rep(2)
+      base = 1
+      do i = 1, 3
+         s(i) = stride_rep(map_dup_to_rep(i))
+         if (reverse_dup_to_rep(i) == 1) then
+            s(i) = -s(i)
+            base = base + (dims_dup(i) - 1)*stride_rep(map_dup_to_rep(i))
+         endif
+      enddo
+      call BP_MD_permuted_gather(dims_dup(1), dims_dup(2), dims_dup(3), s(1), s(2), s(3), base, Nrnd, &
+         source, target, .true., par_loc)
+      if (BP_MD_pack_check_on()) then
+         diff = maxval(abs(target(1:nentry, 1:Nrnd) - tmp(1:nentry, 1:Nrnd)))
+         if (diff > 0d0 .and. BP_MD_pack_check_reports < 20) then
+            BP_MD_pack_check_reports = BP_MD_pack_check_reports + 1
+            write (*, '(A,Es12.4,A,3I5,A,3I3,A,3I2)') ' PACKCHECK unpack MISMATCH maxdiff=', diff, &
+               ' dims=', dims_dup, ' map=', map_dup_to_rep, ' rev=', reverse_dup_to_rep
+         endif
+         deallocate (tmp)
+      endif
    end subroutine Bplus_MD_compact_unpack_vector
 
 
@@ -9644,7 +11208,7 @@ contains
 
 
    subroutine BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, ptree, msh, nproc, plan, &
-      time_setup_local, slot_maps)
+      time_setup_local, slot_maps, round)
 
       implicit none
       integer Ndim, rowcol, one2all, level_s, level_e, nproc
@@ -9654,6 +11218,7 @@ contains
       type(vec_redist_plan_MD)::plan
       real(kind=8), optional::time_setup_local
       type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
+      integer, optional::round !< D1: build the plan for this streaming round only
 
       integer ll, bb_loc, bb_owner, dim_i, ii, jj, pp, ipass, nslot, compact_slots
       integer nproc_i, nproc_o, meta_nint, ierr, tag
@@ -9702,6 +11267,12 @@ contains
                   nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
                endif
                do bb_loc = 1, nslot
+                  !>**** D1: a streamed round carries only its own slots
+                  if (present(round) .and. present(slot_maps)) then
+                     if (slot_maps(ll)%nround > 1) then
+                        if (slot_maps(ll)%round(bb_loc) /= round) cycle
+                     endif
+                  endif
                   bb_owner = bb_loc
                   if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
                   call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
@@ -9744,6 +11315,12 @@ contains
                   nslot = BP_MD_vec_redist_slot_count(BP, ll, rowcol, one2all)
                endif
                do bb_loc = 1, nslot
+                  !>**** D1: a streamed round carries only its own slots
+                  if (present(round) .and. present(slot_maps)) then
+                     if (slot_maps(ll)%nround > 1) then
+                        if (slot_maps(ll)%round(bb_loc) /= round) cycle
+                     endif
+                  endif
                   bb_owner = bb_loc
                   if (present(slot_maps)) bb_owner = slot_maps(ll)%owner_slot(bb_loc)
                   call BP_MD_vec_slot_box(Ndim, BP, ll, bb_owner, rowcol, ptree, msh, &
@@ -10032,7 +11609,7 @@ contains
 
    end subroutine BP_MD_ensure_matrix_ptr
 
-   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc, slot_maps)
+   subroutine Bplus_MD_vec_1Dto1D_plan(Ndim, BP, rowcol, one2all, level_s, level_e, ld1, dat_1, Nrnd, vecs, ptree, msh, stats, nproc, slot_maps, round)
 
       implicit none
       integer Ndim
@@ -10048,6 +11625,8 @@ contains
       type(Hstat)::stats
       integer nproc
       type(vec_redist_groupmap_MD), optional::slot_maps(level_s:level_e)
+      integer, optional::round !< D1: streaming round; plans are cached per round
+      integer::round_idx
 
       type(matrixblock_MD), pointer::blocks, blocks_1
       type(commquant1D)::sendquant(nproc), recvquant(nproc)
@@ -10066,12 +11645,21 @@ contains
       t0 = t_total
       blocks_1 => BP%LL(1)%matrices_block(1)
       tag = blocks_1%pgno + 1200 + 10*rowcol + one2all
-      slot = 1 + rowcol + 2*one2all
+      !>**** one cached plan per (starting level, row/col, direction): the MVP is
+      ! driven level-by-level (htensor_mvp_level_batch), so a cache keyed only on
+      ! rowcol/one2all is invalidated by the level range on every single call and
+      ! the plan ends up rebuilt once per level per direction per MVP
+      call assert(level_s >= 1 .and. level_s <= LplusMax, &
+         'level_s out of range for the MD vector redistribution plan cache')
+      round_idx = 0
+      if (present(round)) round_idx = max(0, round)
+      call assert(round_idx < BP_MD_max_rounds, 'too many MD slot-streaming rounds for the plan cache')
+      slot = (4*level_s + rowcol + 2*one2all)*BP_MD_max_rounds + round_idx + 1
       mypp = ptree%MyID - ptree%pgrp(blocks_1%pgno)%head + 1
       compact_slots = 0
       if (present(slot_maps)) compact_slots = 1
 
-      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4))
+      if (.not. allocated(BP%vec_redist_plans)) allocate(BP%vec_redist_plans(4*(LplusMax + 1)*BP_MD_max_rounds))
       if (BP%vec_redist_plans(slot)%ready /= 1 .or. &
           BP%vec_redist_plans(slot)%rowcol /= rowcol .or. &
           BP%vec_redist_plans(slot)%one2all /= one2all .or. &
@@ -10079,13 +11667,16 @@ contains
           BP%vec_redist_plans(slot)%level_e /= level_e .or. &
           BP%vec_redist_plans(slot)%Ndim /= Ndim .or. &
           BP%vec_redist_plans(slot)%nproc /= nproc .or. &
-          BP%vec_redist_plans(slot)%compact_slots /= compact_slots) then
+          BP%vec_redist_plans(slot)%compact_slots /= compact_slots .or. &
+          BP%vec_redist_plans(slot)%round /= round_idx) then
          if (present(slot_maps)) then
             call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
-               ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal, slot_maps)
+               ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal, slot_maps, round)
+            BP%vec_redist_plans(slot)%round = round_idx
          else
             call BP_MD_vec_1Dto1D_plan_build(Ndim, BP, rowcol, one2all, level_s, level_e, &
                ptree, msh, nproc, BP%vec_redist_plans(slot), stats%Time_C_Mult_RedistSetupLocal)
+            BP%vec_redist_plans(slot)%round = round_idx
          endif
       endif
 
@@ -17099,6 +18690,11 @@ end subroutine BF_block_MVP_dat_batch_magma
       real(kind=8)::time_reshape, time_reshape_init, time_reshape_right
       real(kind=8)::time_reshape_middle, time_reshape_left, time_reshape_final
       real(kind=8)::time_gemm, flops
+      integer dims_v(Ndim), dims_u(Ndim), Kv, Mu, r_s, r_e, dim_i
+      DT, allocatable::mid_in(:, :), mid_out(:, :)
+      real(kind=8)::tr0, tr1   !< wall of the threaded region, reported as the MDSPLIT 'full' column for the leaf levels
+      real(kind=8)::tr_init, tr_right, tr_middle, tr_left, tr_cleanup, tr_reshape, tr_reshape_init
+      real(kind=8)::tr_reshape_right, tr_reshape_middle, tr_reshape_left, tr_reshape_final, tr_gemm
 
       call assert(chara == 'N', 'BF_MD_block_mvp_level_butterfly0 only supports chara=N')
       call assert(blocks%level_butterfly == 0, 'BF_MD_block_mvp_level_butterfly0 expects level_butterfly=0')
@@ -17145,29 +18741,75 @@ end subroutine BF_block_MVP_dat_batch_magma
       t2 = MPI_Wtime()
       time_init = time_init + t2 - t1
 
+      !>**** the middle product is done once for all batch columns, split by rows over the threads, so the
+      ! middle matrix streams from memory once per batch instead of once per column (8.5 MB at rank 9);
+      ! the factor products on either side stay per thread on its own columns
+      do dim_i = 1, Ndim
+         dims_v(dim_i) = size(blocks%ButterflyV(1)%blocks(1,dim_i)%matrix, 2)
+      enddo
+      dims_u = blocks%ButterflyMiddle(1)%dims_m
+      Kv = product(dims_v)
+      Mu = product(dims_u)
+      call assert(product(blocks%ButterflyMiddle(1)%dims_n) == Kv, 'BF_MD_block_mvp_level_butterfly0 middle/V dimension mismatch')
+      allocate(mid_in(Kv, Nvec), mid_out(Mu, Nvec))
+      tr0 = MPI_Wtime()
 #ifdef HAVE_OPENMP
-!$omp parallel default(shared) private(tid,nth,col_s,col_e) &
+!$omp parallel default(shared) private(tid,nth,col_s,col_e,r_s,r_e,t1,t2, &
+!$omp& tr_init,tr_right,tr_middle,tr_left,tr_cleanup,tr_reshape,tr_reshape_init,tr_reshape_right, &
+!$omp& tr_reshape_middle,tr_reshape_left,tr_reshape_final,tr_gemm) &
 !$omp& reduction(max:time_init,time_right,time_middle,time_left,time_cleanup,time_reshape, &
 !$omp& time_reshape_init,time_reshape_right,time_reshape_middle,time_reshape_left,time_reshape_final,time_gemm) &
 !$omp& reduction(+:flops)
+      ! per-thread phase times start from zero and are handed to the max reduction at the end: the private
+      ! copies of a max reduction start at -huge, so accumulating into them directly reported zero
+      tr_init = 0d0; tr_right = 0d0; tr_middle = 0d0; tr_left = 0d0; tr_cleanup = 0d0; tr_reshape = 0d0
+      tr_reshape_init = 0d0; tr_reshape_right = 0d0; tr_reshape_middle = 0d0; tr_reshape_left = 0d0
+      tr_reshape_final = 0d0; tr_gemm = 0d0
       tid = omp_get_thread_num()
       nth = omp_get_num_threads()
       col_s = (tid*Nvec)/nth + 1
       col_e = ((tid + 1)*Nvec)/nth
       if (col_s <= col_e) then
-         call BF_MD_block_mvp_level_butterfly0_chunk(xin(:,col_s:col_e), Ninloc, &
-            xout(:,col_s:col_e), Noutloc, col_e-col_s+1, blocks, Ndim, time_init, &
-            time_right, time_middle, time_left, time_cleanup, time_reshape, &
-            time_reshape_init, time_reshape_right, time_reshape_middle, time_reshape_left, &
-            time_reshape_final, time_gemm, flops)
+         call BF_MD_block_mvp_level_butterfly0_vside(xin(:,col_s:col_e), Ninloc, mid_in(:,col_s:col_e), &
+            col_e-col_s+1, blocks, Ndim, tr_right, tr_reshape, tr_reshape_right, tr_gemm, flops)
       endif
+!$omp barrier
+      r_s = (tid*Mu)/nth + 1
+      r_e = ((tid + 1)*Mu)/nth
+      if (r_s <= r_e) then
+         t1 = MPI_Wtime()
+         call gemmf77('N', 'N', r_e-r_s+1, Nvec, Kv, BPACK_cone, blocks%ButterflyMiddle(1)%matrix(r_s,1), Mu, &
+            mid_in, Kv, BPACK_czero, mid_out(r_s,1), Mu)
+         t2 = MPI_Wtime()
+         tr_middle = tr_middle + t2 - t1
+         tr_gemm = tr_gemm + t2 - t1
+         flops = flops + flops_gemm(r_e-r_s+1, Nvec, Kv)
+      endif
+!$omp barrier
+      if (col_s <= col_e) then
+         call BF_MD_block_mvp_level_butterfly0_uside(mid_out(:,col_s:col_e), dims_u, xout(:,col_s:col_e), Noutloc, &
+            col_e-col_s+1, blocks, Ndim, tr_left, tr_cleanup, tr_reshape, tr_reshape_left, tr_reshape_final, tr_gemm, flops)
+      endif
+      time_init = tr_init; time_right = tr_right; time_middle = tr_middle; time_left = tr_left; time_cleanup = tr_cleanup
+      time_reshape = tr_reshape; time_reshape_init = tr_reshape_init; time_reshape_right = tr_reshape_right
+      time_reshape_middle = tr_reshape_middle; time_reshape_left = tr_reshape_left; time_reshape_final = tr_reshape_final
+      time_gemm = tr_gemm
 !$omp end parallel
 #else
-      call BF_MD_block_mvp_level_butterfly0_chunk(xin, Ninloc, xout, Noutloc, Nvec, &
-         blocks, Ndim, time_init, time_right, time_middle, time_left, time_cleanup, &
-         time_reshape, time_reshape_init, time_reshape_right, time_reshape_middle, &
-         time_reshape_left, time_reshape_final, time_gemm, flops)
+      call BF_MD_block_mvp_level_butterfly0_vside(xin, Ninloc, mid_in, Nvec, blocks, Ndim, time_right, time_reshape, &
+         time_reshape_right, time_gemm, flops)
+      t1 = MPI_Wtime()
+      call gemmf77('N', 'N', Mu, Nvec, Kv, BPACK_cone, blocks%ButterflyMiddle(1)%matrix, Mu, mid_in, Kv, BPACK_czero, mid_out, Mu)
+      t2 = MPI_Wtime()
+      time_middle = time_middle + t2 - t1
+      time_gemm = time_gemm + t2 - t1
+      flops = flops + flops_gemm(Mu, Nvec, Kv)
+      call BF_MD_block_mvp_level_butterfly0_uside(mid_out, dims_u, xout, Noutloc, Nvec, blocks, Ndim, time_left, time_cleanup, &
+         time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops)
 #endif
+      tr1 = MPI_Wtime()
+      stats%Time_C_Mult_Full = stats%Time_C_Mult_Full + tr1 - tr0
+      deallocate(mid_in, mid_out)
 
       t1 = MPI_Wtime()
 #if HAVE_ZFP
@@ -17204,25 +18846,20 @@ end subroutine BF_block_MVP_dat_batch_magma
    end subroutine BF_MD_block_mvp_level_butterfly0
 
 
-   subroutine BF_MD_block_mvp_level_butterfly0_chunk(xin, Ninloc, xout, Noutloc, Nvec, &
-      blocks, Ndim, time_init, time_right, time_middle, time_left, time_cleanup, &
-      time_reshape, time_reshape_init, time_reshape_right, time_reshape_middle, &
-      time_reshape_left, time_reshape_final, time_gemm, flops)
-
+   !>**** V side of a level_butterfly==0 block for the calling thread's columns: the three mode products with
+   !> V^T, result into the shared middle input (one column block of it)
+   subroutine BF_MD_block_mvp_level_butterfly0_vside(xin, Ninloc, mid_in, Nvec, blocks, Ndim, time_right, &
+      time_reshape, time_reshape_right, time_gemm, flops)
       implicit none
       integer Ndim, Nvec
-      integer Ninloc(Ndim), Noutloc(Ndim)
-      DT::xin(:, :), xout(:, :)
+      integer Ninloc(Ndim)
+      DT::xin(:, :), mid_in(:, :)
       type(matrixblock_MD)::blocks
-      real(kind=8)::time_init, time_right, time_middle, time_left, time_cleanup
-      real(kind=8)::time_reshape, time_reshape_init, time_reshape_right
-      real(kind=8)::time_reshape_middle, time_reshape_left, time_reshape_final
-      real(kind=8)::time_gemm, flops
+      real(kind=8)::time_right, time_reshape, time_reshape_right, time_gemm, flops
       integer dim_i
-      integer dims_cur(Ndim), dims_next(Ndim), dims_v(Ndim), dims_u(Ndim)
+      integer dims_cur(Ndim), dims_next(Ndim)
       DT, allocatable::mat_in(:, :), mat_out(:, :)
-      real(kind=8)::t1, t2, flop
-
+      real(kind=8)::t1, t2
       dims_cur = Ninloc
       do dim_i = 1, Ndim
          t1 = MPI_Wtime()
@@ -17241,34 +18878,48 @@ end subroutine BF_block_MVP_dat_batch_magma
          call move_alloc(mat_out, mat_in)
          dims_cur = dims_next
       enddo
-      dims_v = dims_cur
-
-      dims_u = blocks%ButterflyMiddle(1)%dims_m
-      allocate(mat_out(product(dims_u), Nvec))
+      call assert(product(dims_cur) == size(mid_in,1), 'BF_MD_block_mvp_level_butterfly0 V-side dimension mismatch')
       t1 = MPI_Wtime()
-      call gemmf90(blocks%ButterflyMiddle(1)%matrix, product(dims_u), mat_in, &
-         product(dims_v), mat_out, product(dims_u), 'N', 'N', product(dims_u), &
-         Nvec, product(dims_v), BPACK_cone, BPACK_czero, flop)
+      mid_in = mat_in
       t2 = MPI_Wtime()
-      time_middle = time_middle + t2 - t1
-      time_gemm = time_gemm + t2 - t1
-      flops = flops + flop
-      if (allocated(mat_in)) deallocate(mat_in)
-      call move_alloc(mat_out, mat_in)
+      time_right = time_right + t2 - t1
+      time_reshape = time_reshape + t2 - t1
+      time_reshape_right = time_reshape_right + t2 - t1
+      deallocate(mat_in)
+   end subroutine BF_MD_block_mvp_level_butterfly0_vside
 
+   !>**** U side of a level_butterfly==0 block for the calling thread's columns: the three mode products with U
+   !> from its column block of the shared middle output into xout
+   subroutine BF_MD_block_mvp_level_butterfly0_uside(mid_out, dims_u, xout, Noutloc, Nvec, blocks, Ndim, time_left, &
+      time_cleanup, time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops)
+      implicit none
+      integer Ndim, Nvec
+      integer dims_u(Ndim), Noutloc(Ndim)
+      DT::mid_out(:, :), xout(:, :)
+      type(matrixblock_MD)::blocks
+      real(kind=8)::time_left, time_cleanup, time_reshape, time_reshape_left, time_reshape_final, time_gemm, flops
+      integer dim_i
+      integer dims_cur(Ndim), dims_next(Ndim)
+      DT, allocatable::mat_in(:, :), mat_out(:, :)
+      real(kind=8)::t1, t2
       dims_cur = dims_u
       do dim_i = 1, Ndim
          t1 = MPI_Wtime()
-         call BF_MD_level0_apply_mode_flat(mat_in, dims_cur, Ndim, Nvec, dim_i, &
-            blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
-            time_reshape, time_reshape_left, time_gemm, flops)
-         if (allocated(mat_in)) deallocate(mat_in)
+         if (dim_i == 1) then
+            call BF_MD_level0_apply_mode_flat(mid_out, dims_cur, Ndim, Nvec, dim_i, &
+               blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
+               time_reshape, time_reshape_left, time_gemm, flops)
+         else
+            call BF_MD_level0_apply_mode_flat(mat_in, dims_cur, Ndim, Nvec, dim_i, &
+               blocks%ButterflyU(1)%blocks(1,dim_i)%matrix, 'N', mat_out, dims_next, &
+               time_reshape, time_reshape_left, time_gemm, flops)
+            if (allocated(mat_in)) deallocate(mat_in)
+         endif
          t2 = MPI_Wtime()
          time_left = time_left + t2 - t1
          call move_alloc(mat_out, mat_in)
          dims_cur = dims_next
       enddo
-
       t1 = MPI_Wtime()
       call assert(all(dims_cur == Noutloc), 'BF_MD_block_mvp_level_butterfly0 output dimensions mismatch')
       xout = mat_in
@@ -17276,13 +18927,11 @@ end subroutine BF_block_MVP_dat_batch_magma
       time_left = time_left + t2 - t1
       time_reshape = time_reshape + t2 - t1
       time_reshape_final = time_reshape_final + t2 - t1
-
       t1 = MPI_Wtime()
       if (allocated(mat_in)) deallocate(mat_in)
       t2 = MPI_Wtime()
       time_cleanup = time_cleanup + t2 - t1
-
-   end subroutine BF_MD_block_mvp_level_butterfly0_chunk
+   end subroutine BF_MD_block_mvp_level_butterfly0_uside
 
 
    subroutine BF_MD_level0_apply_mode_flat(data_in, dims_in, Ndim, Nvec, dim_apply, &
@@ -17322,7 +18971,30 @@ end subroutine BF_block_MVP_dat_batch_magma
          t2 = MPI_Wtime()
          time_gemm = time_gemm + t2 - t1
          flops = flops + flop
+      else if (prefix >= BP_MD_leaf_slab_min) then
+         ! mode dim_apply sits at stride `prefix` in the natural layout: for every (suffix, vector) index the slab
+         ! X(prefix x old_dim) with leading dimension prefix times the factor gives the slab C(prefix x new_dim) --
+         ! one GEMM each, nothing packed or unpacked
+         t1 = MPI_Wtime()
+         do vv = 1, Nvec
+            do ss = 1, suffix_spatial
+               in_base = (ss-1)*prefix*old_dim + 1
+               out_base = (ss-1)*prefix*new_dim + 1
+               if (trans_factor == 'T') then
+                  call gemmf77('N', 'N', prefix, new_dim, old_dim, BPACK_cone, data_in(in_base, vv), prefix, factor, size(factor,1), &
+                     BPACK_czero, data_out(out_base, vv), prefix)
+               else
+                  call gemmf77('N', 'T', prefix, new_dim, old_dim, BPACK_cone, data_in(in_base, vv), prefix, factor, size(factor,1), &
+                     BPACK_czero, data_out(out_base, vv), prefix)
+               endif
+            enddo
+         enddo
+         t2 = MPI_Wtime()
+         time_gemm = time_gemm + t2 - t1
+         flops = flops + flops_gemm(prefix, new_dim, old_dim)*dble(suffix_spatial*Nvec)
       else
+         ! slabs of fewer than BP_MD_leaf_slab_min rows (the 10^3 leaf's second mode): the GEMM call overhead
+         ! outweighs the copies, so pack the mode to the front, multiply once and unpack
          allocate(mat_pack(old_dim, prefix*suffix_all))
          allocate(mat_gemm(new_dim, prefix*suffix_all))
 
@@ -17379,7 +19051,7 @@ end subroutine BF_block_MVP_dat_batch_magma
       character chara
       integer Ninloc(Ndim), Noutloc(Ndim), Nvec
       DT::xin(:, :), xout(:, :)
-      DT,allocatable::xout1(:, :),data_buffer(:)
+      DT,allocatable::data_buffer(:)
       type(matrixblock_MD)::blocks
       type(proctree)::ptree
       type(Hstat)::stats
@@ -17401,7 +19073,8 @@ end subroutine BF_block_MVP_dat_batch_magma
       type(nod), pointer::cur
       class(*), pointer::ptr
       type(ipair):: p
-      DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
+      DT, allocatable::mat1(:, :), mat2(:, :)
+      logical par_init
       DT, allocatable::Vpartial(:, :)
       DT::val
       type(vectorsblock),allocatable::mats(:),mats1(:)
@@ -17478,7 +19151,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 	         ! write(*,*)ptree%MyID,blocks%idx_r_m,blocks%idx_c_m,'wogan'
 #ifdef HAVE_OPENMP
 !$omp parallel do default(shared) private(nn,idx_c_m,group_n,num_blocks,dim_i,k1,i,nnn, &
-!$omp& dims_ref_old,dims_ref_new,offsets_ref,t_start,t_end,mat,level,nr,j) &
+!$omp& dims_ref_old,dims_ref_new,offsets_ref,t_start,t_end,level,nr,j,par_init) &
 !$omp& reduction(max:time_reshape_phase,time_reshape_init_phase) schedule(static)
 #endif
 	         do nn=1,product(blocks%nc_m)
@@ -17519,14 +19192,14 @@ end subroutine BF_block_MVP_dat_batch_magma
             enddo
             dims_ref_new(Ndim+1) = Nvec
             offsets_ref(Ndim+1) = 0
+            ! gather the sub-tensor's mode-1 unfolding straight into the level-0 vector (no staging copy)
+            allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(dims_ref_new(1),product(dims_ref_new(2:Ndim))*Nvec))
+            par_init = size(BFvec(nn)%vec(0)%blocks(1,1)%matrix) >= BP_MD_init_par_min
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,Ndim+1,1,xin, 'T', mat,'N',1)
+	            call TensorUnfoldingReshape_InitGather(Ndim,dims_ref_old(1:Ndim),dims_ref_new(1:Ndim),offsets_ref(1:Ndim),Nvec,xin,BFvec(nn)%vec(0)%blocks(1,1)%matrix,par_init)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_init_phase = time_reshape_init_phase + t_end - t_start
-            allocate(BFvec(nn)%vec(0)%blocks(1,1)%matrix(size(mat,1),size(mat,2)))
-            BFvec(nn)%vec(0)%blocks(1,1)%matrix = mat
-            deallocate(mat)
 
             allocate (BFvec(nn)%vec(1)%blocks(1, 1))
             allocate (BFvec(nn)%vec(1)%index_MD(Ndim,1,num_blocks+1))
@@ -17750,7 +19423,12 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,Ndim+1,BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, 'N', mats(my_tid+1)%vector, 'T',1)
+	            ! the right-side result arrives in natural layout: as a (prod(dims_n) x Nvec) matrix it is the middle's input as is
+	            if (allocated(mats(my_tid+1)%vector)) then
+	               if (size(mats(my_tid+1)%vector, 1) /= product(dims_ref(1:Ndim)) .or. size(mats(my_tid+1)%vector, 2) /= Nvec) deallocate(mats(my_tid+1)%vector)
+	            endif
+	            if (.not. allocated(mats(my_tid+1)%vector)) allocate(mats(my_tid+1)%vector(product(dims_ref(1:Ndim)), Nvec))
+	            mats(my_tid+1)%vector = reshape(BFvec_transposed(mm)%vec(1)%blocks(1,j)%matrix, [product(dims_ref(1:Ndim)), Nvec])
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_middle_phase = time_reshape_middle_phase + t_end - t_start
@@ -17817,12 +19495,13 @@ end subroutine BF_block_MVP_dat_batch_magma
             dims_ref(1+Ndim) = Nvec
             offsets_ref = 0
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim+1,Ndim,mats1(my_tid+1)%vector, 'T', mats(my_tid+1)%vector, 'N',1)
+	            ! (no permutation: the natural layout is kept)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_middle_phase = time_reshape_middle_phase + t_end - t_start
-            allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(size(mats(my_tid+1)%vector,1),size(mats(my_tid+1)%vector,2)))
-            BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = mats(my_tid+1)%vector
+            ! the middle's (prod(dims_m) x Nvec) result is the left side's input in natural layout, stored as (dims_m(1), rest)
+            allocate(BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix(dims_ref(1), product(dims_ref(2:Ndim))*Nvec))
+            BFvec1(mm)%vec(level_butterfly-level_half + 1)%blocks(1,j)%matrix = reshape(mats1(my_tid+1)%vector, [dims_ref(1), product(dims_ref(2:Ndim))*Nvec])
          enddo
 #ifdef HAVE_TASKLOOP
          !$omp end taskloop
@@ -17844,8 +19523,9 @@ end subroutine BF_block_MVP_dat_batch_magma
          n5 = MPI_Wtime()
 
 	         !>**** Step 4: multiply the factor matrices out from middle level to the outtermost level along each dimension
-	         allocate(xout1(size(xout,1),size(xout,2)))
-	         xout1 = 0
+	         ! Each row sub-tensor's result is scattered straight into xout, which the caller owns and
+	         ! has zeroed; the former xout1 staging (zero, scatter, copy, free -- single-threaded) moved
+	         ! ~1 GB per call at the 160^3 level.
             time_reshape_phase = 0d0
             time_reshape_final_phase = 0d0
 #ifdef HAVE_TASKLOOP
@@ -17874,7 +19554,7 @@ end subroutine BF_block_MVP_dat_batch_magma
             offsets_ref(Ndim+1) = 0
 
 	            t_start = MPI_Wtime()
-	            call TensorUnfoldingReshape_FinalScatter(Ndim+1,dims_ref_old,dims_ref_new,offsets_ref,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout1)
+	            call BF_MD_final_scatter_natural(Ndim,dims_ref_old(1:Ndim),dims_ref_new(1:Ndim),offsets_ref(1:Ndim),Nvec,BFvec1(mm)%vec(0)%blocks(1, 1)%matrix,xout)
 	            t_end = MPI_Wtime()
 	            time_reshape_phase = time_reshape_phase + t_end - t_start
 	            time_reshape_final_phase = time_reshape_final_phase + t_end - t_start
@@ -17887,8 +19567,6 @@ end subroutine BF_block_MVP_dat_batch_magma
 #endif
             time_reshape = time_reshape + time_reshape_phase
             time_reshape_final = time_reshape_final + time_reshape_final_phase
-	         xout=xout1
-         deallocate(xout1)
 
          n6 = MPI_Wtime()
 
@@ -18947,6 +20625,14 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
     integer group_m(Ndim), group_n(Ndim), mm, index_i, index_i0, index_i_k, index_j_k, index_i_loc_k, index_i_s, index_ii_s, index_j_s, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ij, tt, nvec1, Nvec
     integer nn1, nn2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
     integer pid, pgno_sub, index_c_scalar, dim_i, dim_ii
+    integer ic, c0, c1, nchunk
+    real(kind=8) tt0, tt1
+    logical par_inner
+    integer ntask_pass
+    integer dims_cur(Ndim), ld_old, nrow_c, nblk, ntask_u
+    logical replace_input
+    DT, pointer :: xp(:, :), cnew(:, :)
+    type(BP_MD_mode_factor), allocatable :: fblk(:)
     DT, allocatable::mat1(:, :), mat2(:, :)
     DT, allocatable, target::mat(:, :)
     DT, pointer::matp(:, :)
@@ -18959,6 +20645,17 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
     offsets_ref=0
     time_reshape = 0d0
     time_gemm = 0d0
+    ! inner parallelism only while the enclosing sub-tensor taskloop leaves threads idle; with as many
+    ! sub-tensors as threads every nested taskloop only adds oversubscription
+#ifdef HAVE_OPENMP
+    par_inner = product(blocks%nc_m) < omp_get_num_threads()
+#else
+    par_inner = .false.
+#endif
+    ntask_u = 1
+#ifdef HAVE_OPENMP
+    if (par_inner) ntask_u = omp_get_num_threads()
+#endif
 
     call SingleIndexToMultiIndex(Ndim, blocks%nc_m, bb_m, idx_c_m)
     group_n = blocks%col_group
@@ -18966,156 +20663,62 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 
    if (level == 0) then
       do dim_ii=1,Ndim
-         if(dim_ii==1)then
-            do dim_i=1,Ndim
-               dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            matp => BFvec%vec(level)%blocks(1,1)%matrix
-         else
-            do dim_i=1,Ndim
-               if(dim_i<dim_ii)then
-                  dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,1,BFvec%vec(1)%num_col+1)
-               else
-                  dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
-               endif
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,1)%matrix, 'N', mat, 'N',1)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
-            matp => mat
-         endif
-
-         call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1), size(matp,2))
-
-         flops=0
-         t_start = MPI_Wtime()
-#ifdef HAVE_TASKLOOP
-         ! !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
-         !$omp taskgroup task_reduction(+:flops)
-#else
-#ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nvec1) reduction(+:flops)
-#endif
-#endif
-         do index_j_s=1,BFvec%vec(level+1)%nc
-            index_j_k = index_j_s
-            mm = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,2)
-            nn1 = size(blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix,1)
-            nvec1 = size(matp,2)
-#ifdef HAVE_TASKLOOP
-            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_j_k)
-#endif
-            call gemmf77('T', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyV(bb_m)%blocks(index_j_k,dim_ii)%matrix, nn1, matp(BFvec%vec(level)%index_MD(dim_ii,1,index_j_s)+1,1), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,1,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,1,BFvec%vec(level+1)%num_col+1))
-            flops = flops + flops_gemm(mm, nvec1, nn1)
-#ifdef HAVE_TASKLOOP
-            !$omp end task
-#endif
+         ! extents of the tensor at this pass: modes already done carry their output size
+         do dim_i=1,Ndim
+            if(dim_i<dim_ii)then
+               dims_cur(dim_i) = BFvec%vec(1)%index_MD(dim_i,1,BFvec%vec(1)%num_col+1)
+            else
+               dims_cur(dim_i) = BFvec%vec(0)%index_MD(dim_i,1,BFvec%vec(0)%num_col+1)
+            endif
          enddo
-#ifdef HAVE_TASKLOOP
-         !   !$omp end taskloop
-         !$omp end taskgroup
-#else
-#ifdef HAVE_OPENMP
-            !$omp end parallel do
-#endif
-#endif
-         t_end = MPI_Wtime()
-         time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-         !$omp atomic
-#endif
-         stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_TASKLOOP
-         !$omp end atomic
-#endif
+         if(dim_ii==1)then
+            xp => BFvec%vec(0)%blocks(1,1)%matrix
+            replace_input = .false.
+         else
+            xp => BFvec%vec(1)%blocks(1,1)%matrix
+            replace_input = .true.
+         endif
+         nrow_c = BFvec%vec(1)%index_MD(dim_ii,1,BFvec%vec(1)%num_col+1)
+         nblk = BFvec%vec(1)%nc
+         allocate(fblk(nblk))
+         do index_j_s=1,nblk
+            fblk(index_j_s)%F => blocks%ButterflyV(bb_m)%blocks(index_j_s,dim_ii)%matrix
+            fblk(index_j_s)%transA = 'T'
+            fblk(index_j_s)%m = size(fblk(index_j_s)%F,2)
+            fblk(index_j_s)%k = size(fblk(index_j_s)%F,1)
+            fblk(index_j_s)%in_off = BFvec%vec(0)%index_MD(dim_ii,1,index_j_s)
+            fblk(index_j_s)%out_off = BFvec%vec(1)%index_MD(dim_ii,1,index_j_s)
+            fblk(index_j_s)%accumulate = .false.
+         enddo
+         call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         deallocate(fblk)
+         if(replace_input) deallocate(xp)
+         BFvec%vec(1)%blocks(1,1)%matrix => cnew
+         cnew => null()
       enddo
    else
       nr=2**(level)
       nr0=2**(level-1)
 
+      ! each child chain runs on one or two cores so that its blocks stay in that core's caches
+      ntask_pass = 1
+#ifdef HAVE_OPENMP
+      if(par_inner) ntask_pass = max(1, omp_get_num_threads()/product(nr))
+#endif
+      ! the row blocks of this level are independent (each reads its parent block and writes its own): one task
+      ! per row block with its own staging array, instead of a fork/join per (row block, mode) GEMM pass
+#ifdef HAVE_TASKLOOP
+      !$omp taskloop if(par_inner) default(shared) private(index_i_s,idxr,idxr0,index_ii_s) reduction(+:time_reshape,time_gemm) num_tasks(product(nr))
+#endif
       do index_i_s=1,product(nr)
          call SingleIndexToMultiIndex(Ndim, nr, index_i_s, idxr)
          idxr0=int((idxr + 1)/2)
          call MultiIndexToSingleIndex(Ndim, nr0, index_ii_s, idxr0)
-         do dim_ii=1,Ndim
-            if(dim_ii==1)then
-               do dim_i=1,Ndim
-                  dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
-               enddo
-               dims_ref(Ndim+1)=Nvec
-               t_start = MPI_Wtime()
-               call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level)%blocks(index_ii_s,1)%matrix, 'N', mat, 'N',1)
-               t_end = MPI_Wtime()
-               time_reshape = time_reshape + t_end - t_start
-               matp => mat
-            else
-               do dim_i=1,Ndim
-                  if(dim_i<dim_ii)then
-                     dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,index_i_s,BFvec%vec(level+1)%num_col+1)
-                  else
-                     dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
-                  endif
-               enddo
-               dims_ref(Ndim+1)=Nvec
-               t_start = MPI_Wtime()
-               call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, 'N', mat, 'N',1)
-               t_end = MPI_Wtime()
-               time_reshape = time_reshape + t_end - t_start
-               matp => mat
-            endif
-
-            call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(index_i_s,1)%matrix, BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1), size(matp,2))
-
-            flops=0
-            t_start = MPI_Wtime()
-#ifdef HAVE_TASKLOOP
-            !   !$omp taskloop default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
-            !$omp taskgroup task_reduction(+:flops)
-#else
-#ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(index_j_s,index_j_k,mm,nn1,nn2,nvec1) reduction(+:flops)
-#endif
-#endif
-            do index_j_s=1,BFvec%vec(level+1)%nc
-               index_j_k = 2*index_j_s - 1
-               nn1 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 2)
-               nn2 = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, 2)
-               mm = size(blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, 1)
-               nvec1 = size(matp,2)
-#ifdef HAVE_TASKLOOP
-               !$omp task default(shared) firstprivate(mm,nn1,nn2,nvec1,index_j_k)
-#endif
-               call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)+1,1), size(matp,1), BPACK_czero, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
-               flops = flops + flops_gemm(mm, nvec1, nn1)
-               call gemmf77('N', 'N', mm, nvec1, nn2, BPACK_cone, blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k+1,dim_ii)%matrix, mm, matp(BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k+1)+1,1), size(matp,1), BPACK_cone, BFvec%vec(level+1)%blocks(index_i_s,1)%matrix(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)+1,1), BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1))
-               flops = flops + flops_gemm(mm, nvec1, nn2)
-#ifdef HAVE_TASKLOOP
-               !$omp end task
-#endif
-            enddo
-
-#ifdef HAVE_TASKLOOP
-            !  !$omp end taskloop
-            !$omp end taskgroup
-#else
-#ifdef HAVE_OPENMP
-            !$omp end parallel do
-#endif
-#endif
-            t_end = MPI_Wtime()
-            time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-            !$omp atomic
-#endif
-            stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_TASKLOOP
-            !$omp end atomic
-#endif
-         enddo
+         call BF_MD_block_mvp_multiply_right_child(blocks, bb_m, Ndim, BFvec, Nvec, level, index_i_s, index_ii_s, stats, time_reshape, time_gemm, ntask_pass)
       enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+#endif
    endif
 
 #ifdef HAVE_OPENMP
@@ -19133,6 +20736,68 @@ subroutine BF_MD_block_mvp_multiply_right(blocks, bb_m, Ndim, BFvec, Nvec, level
 
 end subroutine BF_MD_block_mvp_multiply_right
 
+!>**** One row block of a kernel level of BF_MD_block_mvp_multiply_right: unfold its parent block along each mode and
+!> apply the two kernel column blocks of that mode, leaving the result in the row block's own block. Runs as one task
+!> per row block; all its work arrays are local.
+subroutine BF_MD_block_mvp_multiply_right_child(blocks, bb_m, Ndim, BFvec, Nvec, level, index_i_s, index_ii_s, stats, time_reshape, time_gemm, ntask_pass)
+   implicit none
+   type(matrixblock_MD)::blocks
+   type(Hstat):: stats
+   type(butterfly_vec) :: BFvec
+   integer bb_m, Ndim, Nvec, level, index_i_s, index_ii_s, ntask_pass
+   real(kind=8)::time_reshape, time_gemm
+   integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
+   integer dim_i, dim_ii, index_j_s, index_j_k, mm, nn1, nn2, nvec1, ic, c0, c1, nchunk
+   real(kind=8)::flops, t_start, t_end, tt0, tt1
+   integer dims_cur(Ndim), ld_old, nrow_c, nblk, b, kk
+   logical replace_input
+   DT, pointer :: xp(:, :), cnew(:, :)
+   type(BP_MD_mode_factor), allocatable :: fblk(:)
+   DT, allocatable, target::mat(:, :)
+   DT, pointer::matp(:, :)
+
+   offsets_ref = 0
+   do dim_ii=1,Ndim
+      ! extents of this row block's tensor at this pass: modes already done carry their output size
+      do dim_i=1,Ndim
+         if(dim_i<dim_ii)then
+            dims_cur(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,index_i_s,BFvec%vec(level+1)%num_col+1)
+         else
+            dims_cur(dim_i) = BFvec%vec(level)%index_MD(dim_i,index_ii_s,BFvec%vec(level)%num_col+1)
+         endif
+      enddo
+      if(dim_ii==1)then
+         xp => BFvec%vec(level)%blocks(index_ii_s,1)%matrix
+         replace_input = .false.
+      else
+         xp => BFvec%vec(level+1)%blocks(index_i_s,1)%matrix
+         replace_input = .true.
+      endif
+      nrow_c = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,BFvec%vec(level+1)%num_col+1)
+      nblk = 2*BFvec%vec(level+1)%nc
+      allocate(fblk(nblk))
+      ! the two input column blocks 2j-1, 2j merge into output block j: the second accumulates onto the first
+      do index_j_s=1,BFvec%vec(level+1)%nc
+         do kk=0,1
+            b = 2*(index_j_s-1) + kk + 1
+            index_j_k = 2*index_j_s - 1 + kk
+            fblk(b)%F => blocks%ButterflyKerl_R(bb_m,level)%blocks(index_i_s, index_j_k,dim_ii)%matrix
+            fblk(b)%transA = 'N'
+            fblk(b)%m = size(fblk(b)%F,1)
+            fblk(b)%k = size(fblk(b)%F,2)
+            fblk(b)%in_off = BFvec%vec(level)%index_MD(dim_ii,index_ii_s,index_j_k)
+            fblk(b)%out_off = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_j_s)
+            fblk(b)%accumulate = (kk == 1)
+         enddo
+      enddo
+      call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      deallocate(fblk)
+      if(replace_input) deallocate(xp)
+      BFvec%vec(level+1)%blocks(index_i_s,1)%matrix => cnew
+      cnew => null()
+   enddo
+end subroutine BF_MD_block_mvp_multiply_right_child
+
 
 
 subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level, ptree,stats)
@@ -19149,6 +20814,16 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
     integer group_m(Ndim), group_n(Ndim), mm, index_i, index_i0, index_i_k, index_j_k, index_i_loc_k, index_i_s, index_jj_s, index_j_s, index_i_loc_s, index_j, index_j0, index_j_loc_k, index_j_loc_s, ij, tt, nvec1, Nvec
     integer nn1, nn2, mm1, mm2, mmm, index_ii, index_jj, index_ii_loc, index_jj_loc, nnn1
     integer pid, pgno_sub, index_c_scalar, dim_i, dim_ii
+    integer ic, c0, c1, nchunk
+    real(kind=8) tt0, tt1
+    logical par_inner
+    integer ntask_pass
+    integer dims_cur(Ndim), ld_old, nrow_c, nblk, ntask_u
+    logical replace_input
+    DT, pointer :: xp(:, :), cnew(:, :)
+    type(BP_MD_mode_factor), allocatable :: fblk(:)
+    integer nchild
+    integer, allocatable::jj_list(:)
     DT, allocatable::mat1(:, :), mat2(:, :), mat(:, :)
     real(kind=8)::flop,flops,t_start,t_end,time_reshape,time_gemm
 
@@ -19158,6 +20833,17 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
     offsets_ref=0
     time_reshape = 0d0
     time_gemm = 0d0
+    ! inner parallelism only while the enclosing sub-tensor taskloop leaves threads idle; with as many
+    ! sub-tensors as threads every nested taskloop only adds oversubscription
+#ifdef HAVE_OPENMP
+    par_inner = product(blocks%nr_m) < omp_get_num_threads()
+#else
+    par_inner = .false.
+#endif
+    ntask_u = 1
+#ifdef HAVE_OPENMP
+    if (par_inner) ntask_u = omp_get_num_threads()
+#endif
 
     call SingleIndexToMultiIndex(Ndim, blocks%nr_m, bb_m, idx_r_m)
     group_m = blocks%row_group
@@ -19165,165 +20851,88 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 
    if (level == 0) then
       do dim_ii=1,Ndim
-         if(dim_ii==1)then
-            do dim_i=1,Ndim
-               dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(1)%blocks(1,1)%matrix, 'N', mat, 'N',1)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
-         else
-            do dim_i=1,Ndim
-               if(dim_i<dim_ii)then
-                  dims_ref(dim_i) = BFvec%vec(0)%index_MD(dim_i,BFvec%vec(0)%num_row+1,1)
-               else
-                  dims_ref(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
-               endif
-            enddo
-            dims_ref(Ndim+1)=Nvec
-            t_start = MPI_Wtime()
-            call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(0)%blocks(1,1)%matrix, 'N', mat, 'N',1)
-            t_end = MPI_Wtime()
-            time_reshape = time_reshape + t_end - t_start
-         endif
-
-         call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,1)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,1), size(mat,2))
-
-         flops=0
-         t_start = MPI_Wtime()
-#ifdef HAVE_TASKLOOP
-       !  !$omp taskloop default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
-         !$omp taskgroup task_reduction(+:flops)
-#else
-#ifdef HAVE_OPENMP
-         !$omp parallel do default(shared) private(index_i_s,index_i_k,mm,nn1,nvec1) reduction(+:flops)
-#endif
-#endif
-         do index_i_s=1,BFvec%vec(level)%num_row
-            index_i_k = index_i_s
-            mm = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,1)
-            nn1 = size(blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix,2)
-            nvec1 = size(mat,2)
-#ifdef HAVE_TASKLOOP
-            !$omp task default(shared) firstprivate(mm,nn1,nvec1,index_i_k)
-#endif
-            call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyU(bb_m)%blocks(index_i_k,dim_ii)%matrix, mm, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,1)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level)%blocks(1,1)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_s,1)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level+1)%num_row+1,1))
-            flops = flops + flops_gemm(mm, nvec1, nn1)
-#ifdef HAVE_TASKLOOP
-            !$omp end task
-#endif
+         ! extents of the tensor at this pass: modes already done carry their output size
+         do dim_i=1,Ndim
+            if(dim_i<dim_ii)then
+               dims_cur(dim_i) = BFvec%vec(0)%index_MD(dim_i,BFvec%vec(0)%num_row+1,1)
+            else
+               dims_cur(dim_i) = BFvec%vec(1)%index_MD(dim_i,BFvec%vec(1)%num_row+1,1)
+            endif
          enddo
-#ifdef HAVE_TASKLOOP
-         !   !$omp end taskloop
-         !$omp end taskgroup
-#else
-#ifdef HAVE_OPENMP
-            !$omp end parallel do
-#endif
-#endif
-         t_end = MPI_Wtime()
-         time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-            !$omp atomic
-#endif
-            stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_TASKLOOP
-            !$omp end atomic
-#endif
+         if(dim_ii==1)then
+            xp => BFvec%vec(1)%blocks(1,1)%matrix
+            replace_input = .false.
+         else
+            xp => BFvec%vec(0)%blocks(1,1)%matrix
+            replace_input = .true.
+         endif
+         nrow_c = BFvec%vec(0)%index_MD(dim_ii,BFvec%vec(0)%num_row+1,1)
+         nblk = BFvec%vec(0)%num_row
+         allocate(fblk(nblk))
+         do index_i_s=1,nblk
+            fblk(index_i_s)%F => blocks%ButterflyU(bb_m)%blocks(index_i_s,dim_ii)%matrix
+            fblk(index_i_s)%transA = 'N'
+            fblk(index_i_s)%m = size(fblk(index_i_s)%F,1)
+            fblk(index_i_s)%k = size(fblk(index_i_s)%F,2)
+            fblk(index_i_s)%in_off = BFvec%vec(1)%index_MD(dim_ii,index_i_s,1)
+            fblk(index_i_s)%out_off = BFvec%vec(0)%index_MD(dim_ii,index_i_s,1)
+            fblk(index_i_s)%accumulate = .false.
+         enddo
+         call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, par_inner, ntask_u, stats, time_gemm, flops)
+         deallocate(fblk)
+         if(replace_input) deallocate(xp)
+         BFvec%vec(0)%blocks(1,1)%matrix => cnew
+         cnew => null()
       enddo
    else
       nc=2**(level-1)
       nc0=2**(level)
 
+      dims_aux=2
+      nchild = product(dims_aux)
+      allocate(jj_list(nchild))
       do index_j_s=1,product(nc)
          call SingleIndexToMultiIndex(Ndim, nc, index_j_s, idxc)
-         dims_aux=2
-         do j=1,product(dims_aux)
+         do j=1,nchild
             call SingleIndexToMultiIndex(Ndim, dims_aux, j, idx_aux)
             idxc0=idxc*2-1 + idx_aux -1
-            call MultiIndexToSingleIndex(Ndim, nc0, index_jj_s, idxc0)
-
-            do dim_ii=1,Ndim
-               if(dim_ii==1)then
-                  do dim_i=1,Ndim
-                     dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
-                  enddo
-                  dims_ref(Ndim+1)=Nvec
-                  t_start = MPI_Wtime()
-                  call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,Ndim,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1)
-                  t_end = MPI_Wtime()
-                  time_reshape = time_reshape + t_end - t_start
-               else
-                  do dim_i=1,Ndim
-                     if(dim_i<dim_ii)then
-                        dims_ref(dim_i) = BFvec%vec(level)%index_MD(dim_i,BFvec%vec(level)%num_row+1,index_j_s)
-                     else
-                        dims_ref(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
-                     endif
-                  enddo
-                  dims_ref(Ndim+1)=Nvec
-                  t_start = MPI_Wtime()
-                  call TensorUnfoldingReshape(Ndim+1,dims_ref,dims_ref,offsets_ref,dim_ii-1,dim_ii,BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, 'N', mat, 'N',1)
-                  t_end = MPI_Wtime()
-                  time_reshape = time_reshape + t_end - t_start
-               endif
-               call BP_MD_ensure_matrix_ptr(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix, BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s), size(mat,2))
-
-               flops=0
-               t_start = MPI_Wtime()
-#ifdef HAVE_TASKLOOP
-            !   !$omp taskloop default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
-               !$omp taskgroup task_reduction(+:flops)
-#else
-#ifdef HAVE_OPENMP
-               !$omp parallel do default(shared) private(index_i_s,index_i_k,mm1,mm2,nn,nvec1) reduction(+:flops)
-#endif
-#endif
-               do index_i_s=1,BFvec%vec(level+1)%num_row
-                  index_i_k = 2*index_i_s - 1
-                  mm1 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 1)
-                  mm2 = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, 1)
-                  nn = size(blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, 2)
-                  nvec1 = size(mat,2)
-#ifdef HAVE_TASKLOOP
-                  !$omp task default(shared) firstprivate(mm1,mm2,nn,nvec1,index_i_k)
-#endif
-                  call gemmf77('N', 'N', mm1, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix, mm1, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
-                  flops = flops + flops_gemm(mm1, nvec1, nn)
-                  call gemmf77('N', 'N', mm2, nvec1, nn, BPACK_cone, blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k+1, index_jj_s,dim_ii)%matrix, mm2, mat(BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)+1,1), size(mat,1), BPACK_czero, BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix(BFvec%vec(level)%index_MD(dim_ii,index_i_k+1,index_j_s)+1,1), BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s))
-                  flops = flops + flops_gemm(mm2, nvec1, nn)
-#ifdef HAVE_TASKLOOP
-                  !$omp end task
-#endif
-               enddo
-#ifdef HAVE_TASKLOOP
-          !  !$omp end taskloop
-          !$omp end taskgroup
-#else
-#ifdef HAVE_OPENMP
-            !$omp end parallel do
-#endif
-#endif
-               t_end = MPI_Wtime()
-               time_gemm = time_gemm + t_end - t_start
-#ifdef HAVE_TASKLOOP
-               !$omp atomic
-#endif
-               stats%Flop_Tmp = stats%Flop_Tmp + flops
-#ifdef HAVE_TASKLOOP
-               !$omp end atomic
-#endif
-            enddo
-
-            if(.not. associated(BFvec%vec(level)%blocks(1,index_j_s)%matrix))then
-               call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,index_j_s)%matrix, size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,1),size(BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix,2))
-               BFvec%vec(level)%blocks(1,index_j_s)%matrix=0
-            endif
-            BFvec%vec(level)%blocks(1,index_j_s)%matrix = BFvec%vec(level)%blocks(1,index_j_s)%matrix + BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix
+            call MultiIndexToSingleIndex(Ndim, nc0, jj_list(j), idxc0)
          enddo
+         ! each child chain runs on one or two cores so that its blocks stay in that core's caches
+         ntask_pass = 1
+#ifdef HAVE_OPENMP
+         if(par_inner) ntask_pass = max(1, omp_get_num_threads()/nchild)
+#endif
+         ! the children of this column block are independent until their sum: one task per child, each with its own
+         ! staging array, instead of a fork/join per (child, mode) GEMM pass of a few dozen microseconds
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop if(par_inner) default(shared) private(j) reduction(+:time_reshape,time_gemm) num_tasks(nchild)
+#endif
+         do j=1,nchild
+            call BF_MD_block_mvp_multiply_left_child(blocks, bb_m, Ndim, BFvec, Nvec, level, index_j_s, jj_list(j), stats, time_reshape, time_gemm, ntask_pass)
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#endif
+         ! parent block = sum of its children, in child order as before
+         if(.not. associated(BFvec%vec(level)%blocks(1,index_j_s)%matrix))then
+            call BP_MD_ensure_matrix_ptr(BFvec%vec(level)%blocks(1,index_j_s)%matrix, size(BFvec%vec(level+1)%blocks(1,jj_list(1))%matrix,1),size(BFvec%vec(level+1)%blocks(1,jj_list(1))%matrix,2))
+            BFvec%vec(level)%blocks(1,index_j_s)%matrix=0
+         endif
+         ncol = size(BFvec%vec(level)%blocks(1,index_j_s)%matrix,2)
+#ifdef HAVE_TASKLOOP
+         !$omp taskloop if(par_inner) default(shared) private(ii,j) num_tasks(merge(omp_get_num_threads(),1,par_inner))
+#endif
+         do ii=1,ncol
+            do j=1,nchild
+               BFvec%vec(level)%blocks(1,index_j_s)%matrix(:,ii) = BFvec%vec(level)%blocks(1,index_j_s)%matrix(:,ii) + BFvec%vec(level+1)%blocks(1,jj_list(j))%matrix(:,ii)
+            enddo
+         enddo
+#ifdef HAVE_TASKLOOP
+         !$omp end taskloop
+#endif
       enddo
+      deallocate(jj_list)
    endif
 
 #ifdef HAVE_OPENMP
@@ -19339,6 +20948,62 @@ subroutine BF_MD_block_mvp_multiply_left(blocks, bb_m, Ndim, BFvec, Nvec, level,
 #endif
    stats%Time_C_Mult_Gemm = stats%Time_C_Mult_Gemm + time_gemm
 end subroutine BF_MD_block_mvp_multiply_left
+
+!>**** One child column block of a kernel level of BF_MD_block_mvp_multiply_left: unfold along each mode and apply
+!> the two kernel row blocks of that mode, leaving the result in the child's own block (its parent sums the children).
+!> Runs as one task per child; all its work arrays are local.
+subroutine BF_MD_block_mvp_multiply_left_child(blocks, bb_m, Ndim, BFvec, Nvec, level, index_j_s, index_jj_s, stats, time_reshape, time_gemm, ntask_pass)
+   implicit none
+   type(matrixblock_MD)::blocks
+   type(Hstat):: stats
+   type(butterfly_vec) :: BFvec
+   integer bb_m, Ndim, Nvec, level, index_j_s, index_jj_s, ntask_pass
+   real(kind=8)::time_reshape, time_gemm
+   integer dims_ref(Ndim+1), offsets_ref(Ndim+1)
+   integer level_butterfly, dim_i, dim_ii, index_i_s, index_i_k, mm1, mm2, nn, nvec1, ic, c0, c1, nchunk
+   real(kind=8)::flops, t_start, t_end, tt0, tt1
+   integer dims_cur(Ndim), ld_old, nrow_c, nblk, b, kk
+   logical replace_input
+   DT, pointer :: xp(:, :), cnew(:, :)
+   type(BP_MD_mode_factor), allocatable :: fblk(:)
+   DT, allocatable::mat(:, :)
+
+   level_butterfly = blocks%level_butterfly
+   offsets_ref = 0
+   do dim_ii=1,Ndim
+      ! extents of this child's tensor at this pass: modes already done carry their output size
+      do dim_i=1,Ndim
+         if(dim_i<dim_ii)then
+            dims_cur(dim_i) = BFvec%vec(level)%index_MD(dim_i,BFvec%vec(level)%num_row+1,index_j_s)
+         else
+            dims_cur(dim_i) = BFvec%vec(level+1)%index_MD(dim_i,BFvec%vec(level+1)%num_row+1,index_jj_s)
+         endif
+      enddo
+      xp => BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix   ! this child's block, replaced by the pass output below
+      nrow_c = BFvec%vec(level)%index_MD(dim_ii,BFvec%vec(level)%num_row+1,index_j_s)
+      nblk = 2*BFvec%vec(level+1)%num_row
+      allocate(fblk(nblk))
+      ! input row block i splits into the output row blocks 2i-1 and 2i
+      do index_i_s=1,BFvec%vec(level+1)%num_row
+         do kk=0,1
+            b = 2*(index_i_s-1) + kk + 1
+            index_i_k = 2*index_i_s - 1 + kk
+            fblk(b)%F => blocks%ButterflyKerl_L(bb_m,level_butterfly-level+1)%blocks(index_i_k, index_jj_s,dim_ii)%matrix
+            fblk(b)%transA = 'N'
+            fblk(b)%m = size(fblk(b)%F,1)
+            fblk(b)%k = size(fblk(b)%F,2)
+            fblk(b)%in_off = BFvec%vec(level+1)%index_MD(dim_ii,index_i_s,index_jj_s)
+            fblk(b)%out_off = BFvec%vec(level)%index_MD(dim_ii,index_i_k,index_j_s)
+            fblk(b)%accumulate = .false.
+         enddo
+      enddo
+      call BF_MD_mode_product_natural(Ndim, dims_cur, dim_ii, nrow_c, Nvec, xp, cnew, nblk, fblk, ntask_pass > 1, ntask_pass, stats, time_gemm, flops)
+      deallocate(fblk)
+      deallocate(xp)
+      BFvec%vec(level+1)%blocks(1,index_jj_s)%matrix => cnew
+      cnew => null()
+   enddo
+end subroutine BF_MD_block_mvp_multiply_left_child
 
 
 
@@ -21605,6 +23270,50 @@ end subroutine BF_block_extraction_multiply_oneblock_last
    end subroutine BP_MD_fft_circulant_reset
 
 
+   !>**** smallest length >= n whose prime factors are all <= 7: FFTW runs several times faster on such
+   !> lengths than on a prime one (the leaf blocks of 10^3 points gave 19^3 transforms)
+   integer function BP_fft_friendly_size(n)
+      implicit none
+      integer n, m, r
+      m = max(1, n)
+      do
+         r = m
+         do while (mod(r, 2) == 0)
+            r = r/2
+         enddo
+         do while (mod(r, 3) == 0)
+            r = r/3
+         enddo
+         do while (mod(r, 5) == 0)
+            r = r/5
+         enddo
+         do while (mod(r, 7) == 0)
+            r = r/7
+         enddo
+         if (r == 1) exit
+         m = m + 1
+      enddo
+      BP_fft_friendly_size = m
+   end function BP_fft_friendly_size
+
+   !>**** padded circulant extents of a block: the smallest FFTW-friendly length >= M+N-1 per dimension
+   subroutine BP_MD_fft_circulant_pad_dims(Ndim, M_loc, N_loc, dims_pad)
+      implicit none
+      integer Ndim, M_loc(Ndim), N_loc(Ndim), dims_pad(Ndim), dim_i
+      do dim_i = 1, Ndim
+         dims_pad(dim_i) = BP_fft_friendly_size(M_loc(dim_i) + N_loc(dim_i) - 1)
+      enddo
+   end subroutine BP_MD_fft_circulant_pad_dims
+
+   !>**** number of points of that padded circulant
+   integer function BP_MD_fft_circulant_npad(Ndim, M_loc, N_loc)
+      implicit none
+      integer Ndim, M_loc(Ndim), N_loc(Ndim)
+      integer dims_pad(Ndim)
+      call BP_MD_fft_circulant_pad_dims(Ndim, M_loc, N_loc, dims_pad)
+      BP_MD_fft_circulant_npad = product(dims_pad)
+   end function BP_MD_fft_circulant_npad
+
    subroutine BP_MD_fft_circulant_build_maps(fftq)
 
       implicit none
@@ -21805,7 +23514,8 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       allocate(cache_block%FullmatFFT%dims_pad(Ndim))
       cache_block%FullmatFFT%dims_in = source_block%N_loc
       cache_block%FullmatFFT%dims_out = source_block%M_loc
-      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      ! at least M+N-1 points per dimension, rounded up to a length FFTW is fast on (extra lags carry zero kernel)
+      call BP_MD_fft_circulant_pad_dims(Ndim, source_block%M_loc, source_block%N_loc, cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%plan_mode = fftw_plan_mode_loc
       call BP_MD_fft_circulant_build_maps(cache_block%FullmatFFT)
@@ -21838,18 +23548,26 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       DT::kernel_values(kernel_len)
       integer kk, dim_i, offset_i
       integer, allocatable::dims_pad(:), idx_pad(:), rows(:,:), cols(:,:)
+      logical, allocatable::outside(:)
 
       allocate(dims_pad(Ndim), idx_pad(Ndim))
-      dims_pad = blocks%M_loc + blocks%N_loc - 1
+      call BP_MD_fft_circulant_pad_dims(Ndim, blocks%M_loc, blocks%N_loc, dims_pad)
       call assert(kernel_len == product(dims_pad), 'FFT circulant kernel length mismatch')
       allocate(rows(Ndim, kernel_len))
       allocate(cols(Ndim, kernel_len))
+      allocate(outside(kernel_len))
 
       do kk = 1, kernel_len
          call SingleIndexToMultiIndex(Ndim, dims_pad, kk, idx_pad)
+         outside(kk) = .false.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - blocks%N_loc(dim_i)
-            if(offset_i >= 0)then
+            if(offset_i > blocks%M_loc(dim_i) - 1)then
+               ! padding beyond M+N-1: no lag of the block lands here; the entry is zeroed after extraction
+               outside(kk) = .true.
+               rows(dim_i, kk) = blocks%headm(dim_i)
+               cols(dim_i, kk) = blocks%headn(dim_i)
+            else if(offset_i >= 0)then
                rows(dim_i, kk) = blocks%headm(dim_i) + offset_i
                cols(dim_i, kk) = blocks%headn(dim_i)
             else
@@ -21861,8 +23579,11 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       call element_Zmn_pairlist_user(Ndim, kernel_len, rows, cols, kernel_values, msh, &
          option, ker, passflag, ptree, stats)
+      do kk = 1, kernel_len
+         if (outside(kk)) kernel_values(kk) = 0
+      enddo
 
-      deallocate(rows, cols, dims_pad, idx_pad)
+      deallocate(rows, cols, dims_pad, idx_pad, outside)
 
    end subroutine BP_MD_fft_circulant_fill_kernel_entries
 
@@ -22009,7 +23730,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          endif
       endif
 
-      if (kernel_len /= product(source_block%M_loc + source_block%N_loc - 1)) return
+      if (kernel_len /= BP_MD_fft_circulant_npad(Ndim, source_block%M_loc, source_block%N_loc)) return
 
       call BP_MD_fft_circulant_reset(cache_block%FullmatFFT)
       cache_block%FullmatFFT%Ndim = Ndim
@@ -22018,7 +23739,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       allocate(cache_block%FullmatFFT%dims_pad(Ndim))
       cache_block%FullmatFFT%dims_in = source_block%N_loc
       cache_block%FullmatFFT%dims_out = source_block%M_loc
-      cache_block%FullmatFFT%dims_pad = source_block%M_loc + source_block%N_loc - 1
+      call BP_MD_fft_circulant_pad_dims(Ndim, source_block%M_loc, source_block%N_loc, cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%npad = product(cache_block%FullmatFFT%dims_pad)
       cache_block%FullmatFFT%plan_mode = fftw_plan_mode_loc
       call BP_MD_fft_circulant_build_maps(cache_block%FullmatFFT)
@@ -22139,7 +23860,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer(c_int), allocatable::nrev(:)
       DTC, allocatable::kernel(:)
       type(c_ptr)::plan
-      logical built_plan
+      logical built_plan, inside
 
       built_fft = .false.
       Ndim = fftq%Ndim
@@ -22155,8 +23876,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       do idx_k = 1, fftq%npad
          call SingleIndexToMultiIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+         inside = .true.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - fftq%dims_in(dim_i)
+            if (offset_i > fftq%dims_out(dim_i) - 1) inside = .false.
             if(offset_i >= 0)then
                idx_out(dim_i) = offset_i + 1
                idx_in(dim_i) = 1
@@ -22165,6 +23888,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                idx_in(dim_i) = 1 - offset_i
             endif
          enddo
+         if (.not. inside) then
+            kernel(idx_k) = 0   ! padding beyond M+N-1: no lag of the block lands here
+            cycle
+         endif
          call MultiIndexToSingleIndex(Ndim, fftq%dims_out, ii, idx_out)
          call MultiIndexToSingleIndex(Ndim, fftq%dims_in, jj, idx_in)
          kernel(idx_k) = source_block%fullmat(ii, jj)
@@ -22407,7 +24134,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       integer(c_int), allocatable::nrev(:)
       DTR, allocatable::kernel(:)
       type(c_ptr)::plan
-      logical built_plan
+      logical built_plan, inside
 
       built_fft = .false.
       Ndim = fftq%Ndim
@@ -22423,8 +24150,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
       do idx_k = 1, fftq%npad
          call SingleIndexToMultiIndex(Ndim, fftq%dims_pad, idx_k, idx_pad)
+         inside = .true.
          do dim_i = 1, Ndim
             offset_i = idx_pad(dim_i) - fftq%dims_in(dim_i)
+            if (offset_i > fftq%dims_out(dim_i) - 1) inside = .false.
             if(offset_i >= 0)then
                idx_out(dim_i) = offset_i + 1
                idx_in(dim_i) = 1
@@ -22433,6 +24162,10 @@ end subroutine BF_block_extraction_multiply_oneblock_last
                idx_in(dim_i) = 1 - offset_i
             endif
          enddo
+         if (.not. inside) then
+            kernel(idx_k) = 0   ! padding beyond M+N-1: no lag of the block lands here
+            cycle
+         endif
          call MultiIndexToSingleIndex(Ndim, fftq%dims_out, ii, idx_out)
          call MultiIndexToSingleIndex(Ndim, fftq%dims_in, jj, idx_in)
          kernel(idx_k) = source_block%fullmat(ii, jj)
