@@ -1214,6 +1214,17 @@ private:
                kept_.boxes.count(wb.box->morton_index) != 0 &&
                !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
     }
+    // An owner level's owned ghost whose temp2^T is in the packed fill store:
+    // the transition puts that back (packed_restore_, as for a remote
+    // generator; its payload goes home device to device), so no host copy of
+    // its X_NR (temp2) is made.  Its X_RR_full still goes to the host (no
+    // kept LU rebuilds it).  Not a solve factor here, so not on the rescue
+    // list either.  (CA3's leaf at 768^3 on 64 ranks held ~14 GB a rank more
+    // outside the pinned chunks than CA0's, and the host ran out.)
+    bool host_drops_ghost_xnr(const WaveBox& wb) const {
+        return packed_restore_ && device_exchange_ && owner_ != nullptr && wb.ntot > 0 && wb.state != nullptr &&
+               owner_->owned_ghost(wb.box->morton_index) && packed_of(*wb.state) != nullptr;
+    }
     // H2 host memory: nor its X_RR_full - the transition rebuilds it from the
     // kept LU.  Not on a level whose generators go through the host
     // (emit_generators reads the copy).
@@ -4381,7 +4392,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     // read out of their stores it can go while the source block is still
     // being copied to the host (the copier owns that one).
     std::vector<size_t> temp2_group_bytes;
-    size_t xnr_bytes = 0;  // original X_NR of generator boxes, device exchange (packed, not downloaded)
+    // original X_NR of generator boxes, device exchange (packed, not
+    // downloaded): a block per chunk, read by the chunk's generator copies
+    // only (one block for the wave was 4.27 GB, CA3 at 768^3 on 64 ranks)
+    std::vector<size_t> xnr_chunk_bytes;
     const size_t D = sizeof(S);
     std::vector<int> active;  // boxes with a redundant part
     for (size_t i = 0; i < boxes.size(); ++i) {
@@ -4407,39 +4421,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             wb.has_remote = wb.has_remote || (ns.remote && !ca_);  // (CA levels send no generators)
         }
         wb.ntot = rows;
-        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+        const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r);
         wb.off_xrr = result_bytes;      result_bytes = align_up(result_bytes + r * r * D);
         wb.off_piv = result_bytes;      result_bytes = align_up(result_bytes + r * sizeof(int));
         wb.off_temp1 = result_bytes;    result_bytes = align_up(result_bytes + k * r * D);
         wb.off_xrs = result_bytes;      result_bytes = align_up(result_bytes + r * k * D);
-        {
-            const size_t bytes = align_up(nt * r * D) + align_up(r * r * D) +
-                                 (wb.has_remote && !device_exchange_ ? align_up(nt * r * D) : 0);
-            const int my_chunk = static_cast<int>((active.size() - 1) / chunk_boxes);
-            // (both blocks bounded: with the device exchange a box adds only its
-            // X_RR_full to the source block, so a bound on that alone let one temp2
-            // block take an unchunked wave's whole temp2 - 7.3 GB, CA3 at 8x)
-            const size_t t2_add = align_up(nt * r * D);
-            if (source_group_bytes.empty() || group_chunk_of.back() != my_chunk ||
-                (source_group_bytes.back() > 0 && source_group_bytes.back() + bytes > kSourceGroup) ||
-                (temp2_group_bytes.back() > 0 && temp2_group_bytes.back() + t2_add > kSourceGroup)) {
-                source_group_bytes.push_back(0);
-                temp2_group_bytes.push_back(0);
-                group_chunk_of.push_back(my_chunk);
-            }
-            wb.source_group = static_cast<int>(source_group_bytes.size()) - 1;
-            size_t& group = source_group_bytes.back();
-            size_t& t2 = temp2_group_bytes.back();
-            wb.off_temp2 = t2;       t2 = align_up(t2 + nt * r * D);
-            wb.off_xrr_full = group; group = align_up(group + r * r * D);
-            if (wb.has_remote && !device_exchange_) {
-                wb.off_xnr_orig = group;
-                group = align_up(group + nt * r * D);
-            } else if (wb.has_remote) {
-                wb.off_xnr_orig = xnr_bytes;
-                xnr_bytes = align_up(xnr_bytes + nt * r * D);
-            }
-        }
         if (gpu_sketch_) {
             wb.off_t = result_bytes;    result_bytes = align_up(result_bytes + k * r * D);
         } else {
@@ -4454,6 +4440,41 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             return lu_size_class(boxes[static_cast<size_t>(a)].r) < lu_size_class(boxes[static_cast<size_t>(b)].r);
         });
     }
+    // The source and temp2 groups, in the order the chunks take the boxes
+    // (after the sort: a box's chunk is its place in `active`, and its
+    // groups' blocks are allocated by that chunk)
+    for (size_t p = 0; p < active.size(); ++p) {
+        WaveBox& wb = boxes[static_cast<size_t>(active[p])];
+        const size_t r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
+        const size_t bytes = align_up(nt * r * D) + align_up(r * r * D) +
+                             (wb.has_remote && !device_exchange_ ? align_up(nt * r * D) : 0);
+        const int my_chunk = static_cast<int>(p / chunk_boxes);
+        // (both blocks bounded: with the device exchange a box adds only its
+        // X_RR_full to the source block, so a bound on that alone let one temp2
+        // block take an unchunked wave's whole temp2 - 7.3 GB, CA3 at 8x)
+        const size_t t2_add = align_up(nt * r * D);
+        if (source_group_bytes.empty() || group_chunk_of.back() != my_chunk ||
+            (source_group_bytes.back() > 0 && source_group_bytes.back() + bytes > kSourceGroup) ||
+            (temp2_group_bytes.back() > 0 && temp2_group_bytes.back() + t2_add > kSourceGroup)) {
+            source_group_bytes.push_back(0);
+            temp2_group_bytes.push_back(0);
+            group_chunk_of.push_back(my_chunk);
+        }
+        wb.source_group = static_cast<int>(source_group_bytes.size()) - 1;
+        size_t& group = source_group_bytes.back();
+        size_t& t2 = temp2_group_bytes.back();
+        wb.off_temp2 = t2;       t2 = align_up(t2 + nt * r * D);
+        wb.off_xrr_full = group; group = align_up(group + r * r * D);
+        if (wb.has_remote && !device_exchange_) {
+            wb.off_xnr_orig = group;
+            group = align_up(group + nt * r * D);
+        } else if (wb.has_remote) {
+            if (xnr_chunk_bytes.size() <= static_cast<size_t>(my_chunk)) xnr_chunk_bytes.resize(static_cast<size_t>(my_chunk) + 1, 0);
+            size_t& xb = xnr_chunk_bytes[static_cast<size_t>(my_chunk)];
+            wb.off_xnr_orig = xb;
+            xb = align_up(xb + nt * r * D);
+        }
+    }
     // (the blocks this wave reads of the previous transition's, for the stats)
     std::set<const void*> wave_schur, wave_edge;
     size_t wave_schur_bytes = 0, wave_edge_bytes = 0;
@@ -4465,7 +4486,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     for (size_t g = 0; g < d_sources.size(); ++g) d_sources[g] = heap_.alloc(std::max<size_t>(source_group_bytes[g], 1), ResidentKind::WaveSource);
     std::vector<char*> d_temp2(temp2_group_bytes.size(), nullptr);  // allocated by their chunk
     std::vector<char> temp2_to_copier(d_temp2.size(), 0);  // the copier frees these
-    char* d_xnr = xnr_bytes > 0 ? heap_.alloc(xnr_bytes, ResidentKind::WaveSource) : nullptr;
+    char* d_xnr = nullptr;  // (the chunk's, below)
     std::vector<char*> work_blocks;
     std::vector<char*> xnr_blocks;
     char* d_t = heap_.alloc(std::max<size_t>(t_bytes, 1), ResidentKind::WaveWork);
@@ -4505,6 +4526,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (size_t g = 0; g < d_temp2.size(); ++g) {
             if (group_chunk_of[g] != chunk) continue;
             d_temp2[g] = heap_.alloc(std::max<size_t>(temp2_group_bytes[g], 1), ResidentKind::WaveOutput);
+        }
+        if (static_cast<size_t>(chunk) < xnr_chunk_bytes.size() && xnr_chunk_bytes[static_cast<size_t>(chunk)] > 0) {
+            d_xnr = heap_.alloc(xnr_chunk_bytes[static_cast<size_t>(chunk)], ResidentKind::WaveSource);
         }
         const size_t xnr_first = xnr_blocks.size();
         const size_t work_first = work_blocks.size();
@@ -5026,8 +5050,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             } else {
                 copy_generators(boxes, chunk_active, d_sources, d_temp2, d_xnr, d_result, stream);
             }
-            if (chunk + 1 == nchunks) {
-                heap_.free(d_xnr);  // read by the packs only, and they have all run
+            if (d_xnr != nullptr) {
+                heap_.free(d_xnr);  // read by the chunk's packs only, and they have run
                 d_xnr = nullptr;
             }
         }
@@ -5061,7 +5085,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (int i : chunk_active) {
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             if (wb.ntot == 0) continue;
-            if (!host_skips_xnr(wb)) temp2_needed[static_cast<size_t>(wb.source_group)] = 1;
+            if (!host_skips_xnr(wb) && !host_drops_ghost_xnr(wb)) temp2_needed[static_cast<size_t>(wb.source_group)] = 1;
         }
         // This chunk's raw output, now that its stores are built and the last
         // readers of the raw form - the generators and the keep - have run.
@@ -5171,6 +5195,16 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // reader, and the stores above have been launched and waited for.
         for (size_t b = work_first; b < work_blocks.size(); ++b) heap_.free(work_blocks[b]);
         work_blocks.resize(work_first);
+        // (an owner level: the transport between the chunks too.  A payload
+        // lived about three waves when only the wave boundaries moved it -
+        // issued at the sender's next boundary, received at the receiver's,
+        // installed at the one after - 14.8 GB a rank, CA3 at 768^3 on 64
+        // ranks.  The near store is consistent here (the chunk's packs have
+        // run), and an install touches no block of this colour's waves here.)
+        if (owner_ != nullptr) {
+            owner_progress();
+            owner_install_arrived(wave_index / std::max(owner_->num_waves, 1));
+        }
     }
     // (after every chunk: a last chunk with no boxes is skipped above)
     if (device_exchange_ && owner_ != nullptr) finish_owner_generators(stream);
@@ -5854,11 +5888,13 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 wb.box->X_RR_full = MatrixStorage<DataType>{};
                 // (a kept box's X_NR stays on the device only: rescue_skipped_xnr)
                 // (an owned ghost keeps its host copies: a fill source the
-                // transition may restore, not a solve factor here)
+                // transition may restore, not a solve factor here - its X_NR
+                // only where its temp2^T is not in the packed store)
                 const bool skip = host_skips_xnr(wb);
+                const bool ghost_drop = host_drops_ghost_xnr(wb);
                 if (skip) skipped_xnr_.push_back(wb.box);
                 const bool skip_xrr = host_skips_xrr(wb);  // (H2 host memory: rebuilt from the kept LU instead)
-                if (nt > 0 && !skip) {
+                if (nt > 0 && !skip && !ghost_drop) {
                     if (d_temp2[g] == nullptr) {
                         // its chunk gave the raw form back before the keep
                         // failed; rescue_skipped_xnr reads the store instead
@@ -5871,7 +5907,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 if (wb.has_remote && nt > 0 && !device_exchange_) {
                     job.segments.push_back(Seg{&wb.box->lazy_original_x_nr, nullptr, wb.off_xnr_orig, nt * r * D});
                 }
-                shapes->push_back({wb.box, skip ? 0 : wb.ntot, wb.r, !skip_xrr});
+                shapes->push_back({wb.box, skip || ghost_drop ? 0 : wb.ntot, wb.r, !skip_xrr});
             }
             job.finalize = [shapes] {
                 for (const Shape& sh : *shapes) {
@@ -5986,13 +6022,26 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         stage_fill_copies();
         evict_fill_copies(false);
     }
+    if (owner_ != nullptr) {  // (this wave's payload goes out now that its copies are done, not at the next wave)
+        owner_progress();
+        owner_install_arrived(wave_index / std::max(owner_->num_waves, 1));
+    }
     stats.store += std::chrono::duration<double>(clock::now() - t0).count();
     if (env::trace("wave")) {   // the host side, wave by wave (BPACK_TRACE=wave)
         double rss = 0.0, hwm = 0.0;
         host_memory_gb(rss, hwm);
+        double sends = 0.0, recvs = 0.0;   // (an owner level: the payloads still held)
+        for (const OwnerWaveSend& w : owner_sends_) {
+            for (const auto& m : w.messages) sends += static_cast<double>(m.bytes);
+        }
+        for (const OwnerWaveRecv& r : owner_recvs_) recvs += static_cast<double>(r.bytes);
         std::printf("  [gpu] level %d wave %d: host RSS %.2f GB (high-water %.2f), heap used %.2f GB, pinned chunks %.2f GB "
-                    "(%.2f idle)\n", level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
-                    static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, static_cast<double>(pinned_chunk_pool().idle()) / 1e9);
+                    "(%.2f idle)%s\n", level_index_, last_wave_index_, rss, hwm, static_cast<double>(heap_.used()) / 1e9,
+                    static_cast<double>(pinned_chunk_pool().pinned()) / 1e9, static_cast<double>(pinned_chunk_pool().idle()) / 1e9,
+                    owner_ != nullptr ? (", owner payloads held: sends " + std::to_string(sends / 1e9).substr(0, 5) +
+                                         " GB in " + std::to_string(owner_sends_.size()) + " waves, receives " +
+                                         std::to_string(recvs / 1e9).substr(0, 5) + " GB in " +
+                                         std::to_string(owner_recvs_.size())).c_str() : "");
         std::printf("  [gpu] level %d wave %d: %zu boxes in %.3f s of host time: sketch %.3f (of which waiting %.3f), plan %.3f, "
                     "launch %.3f, store %.3f\n", level_index_, wave_index, wave.size(),
                     std::chrono::duration<double>(clock::now() - t_wave0).count(), stats.sketch - w_sketch0,

@@ -4973,6 +4973,79 @@ the day: 82.8 s, leaf 46.6 s.  So at 384^3 CA3 runs but is not faster
 than Color.  Its leaf spends 45.0 s in the owner schedule's waves and 3.1
 s in colour transports, and sends 25.5 GB a rank.
 
+#### Color, CA0 and CA3 at 768^3 on 64 ranks, 40 and 80 GB (2026-10-11, late)
+
+CA3 at 768^3 on 64 ranks (8x the boxes a rank, CA at the leaf, level 7)
+died in four ways after d29804d.  Each fix is in level_eliminator.hpp.
+
+1. *The generators' original X_NR in one block a wave* (`d_xnr`, 4.27 GB,
+   with 1.7-3.0 GB the largest free range).  Now a block per production
+   chunk, freed after the chunk's generator copies.  Allocated this way,
+   the source and temp2 groups have to follow the chunks exactly.  On a CA
+   level, though, the wave's boxes were sorted by LU size class *after*
+   being assigned to chunks.  A box whose class moved it to an earlier
+   chunk would then read a temp2 block not yet allocated.  This never
+   happened: at 216-point leaf boxes nearly every r is in the 256 class.
+   The groups and chunks are now formed after the sort.  Side effect: with
+   less held at the pressure decisions, Color's leaf packs a few blocks
+   differently.  It is no longer bitwise the earlier runs' (logdet
+   -792567588.01 -> -583.07 at 384^3, acc_forward 1.57e-2 -> 1.51e-2), as
+   is CA0 (-541.11 -> -543.11).
+2. *Owner payloads, 10.9-14.8 GB a rank on the main heap*.  A payload
+   lived about three waves: issued at the sender's next wave boundary
+   (once its copies had run), received at the receiver's, installed at the
+   one after.  The transport (owner_progress, owner_install_arrived) now
+   also runs after each production chunk and at the wave's end.  At a
+   chunk boundary the near store is consistent (the chunk's packs have
+   run), and `meta_` is rebuilt by each chunk.  Components of one colour
+   are not adjacent, so an install never touches a block of this colour's
+   waves.  Tried first and dropped: keeping the payloads on the main heap
+   only within the hold limit, and in pinned host memory beyond it.  That
+   killed the host at 384^3 and at 768^3.  At 384^3 the node has no room
+   (ranks at 52-59 GB).  And the pinned pool reuses an idle chunk only if
+   it is at least the request's size, so payloads of varying size pin new
+   chunks while the old ones sit idle.
+3. *The host, in the interior waves* (RSS 63 GB a rank, the node's share
+   is 60).  The owned ghosts' temp2 was copied to the host as a fill
+   source for the transition, which reads the packed temp2^T first anyway.
+   With the packed fill store (packed_restore_) the copy is no longer
+   made (host_drops_ghost_xnr); X_RR_full still is, since no kept LU
+   rebuilds it.  CA3's pageable host memory grew by 13 GB through the
+   green colour before; the leaf's RSS peak is now 55.3 GB against
+   Color's 54.0.  At 384^3 the leaf also got faster (49.8 -> 47.8 s:
+   less copied off the card).
+4. BPACK_TRACE=wave now prints the owner payloads held at each wave's end
+   (sends and receives).  The largest at 768^3: 14.2 GB on 40 GB (6.9 +
+   7.3), 17.9 GB on 80 GB.
+
+384^3 on 8 ranks with all four (lib_det26): CA3 82.0 s (leaf 47.8), logdet
+-792567657.24, acc_forward 1.57e-2, acc_backward 6.7e-16; 192^3 logdet
+-89253589.360, acc_forward 7.5e-3.
+
+768^3 on 64 ranks (16 nodes), lib_det26, each card size in one job.  Times
+in s; the levels are the shortest rank's elimination (the longest is
+within 0.15 s at the leaf).
+
+| card | variant | total | levels 7 / 6 / 5 / 4 / 3 / 2 | solve | logdet | acc_forward | acc_backward | leaf RSS peak |
+|---|---|---|---|---|---|---|---|---|
+| 40 GB | Color | 100.0 | 52.9 / 15.7 / 7.4 / 5.5 / 2.7 / 0.9 | 2.99 | -6968677311.1 | 1.65e-2 | 7.9e-16 | 54.0 GB |
+| 40 GB | CA0 | 106.5 | 54.7 / 19.2 / 7.9 / 5.5 / 2.7 / 0.9 | 3.61 | -6968676793.7 | 1.72e-2 | 6.7e-16 | 59.0 GB |
+| 40 GB | CA3 | 105.6 | 53.9 / 17.0 / 7.5 / 6.1 / 3.6 / 0.9 | 3.23 | -6968678017.3 | 1.81e-2 | 7.6e-16 | 55.3 GB |
+| 80 GB | Color | 90.1 | 50.0 / 14.4 / 7.0 / 3.0 / 1.3 / 0.9 | 1.94 | -6968673482.4 | 1.47e-2 | 8.3e-16 | 42.9 GB |
+| 80 GB | CA0 | 99.3 | 51.6 / 20.9 / 7.1 / 3.0 / 1.3 / 0.9 | 2.14 | -6968673036.6 | 1.45e-2 | 8.1e-16 | 47.6 GB |
+| 80 GB | CA3 | 90.7 | 50.5 / 13.7 / 7.0 / 2.8 / 1.3 / 0.9 | 2.00 | -6968674648.0 | 1.47e-2 | 7.4e-16 | 43.1 GB |
+
+Neither CA variant beats Color at the leaf at 8x on 64 ranks.  CA3's leaf
+is within 1-2% of Color's on both cards (53.9 vs 52.9, 50.5 vs 50.0);
+CA0's is 3% slower.  The leaf's exchange wait drops from 10.4 s (40 GB) /
+13.6 s (80 GB) for Color to 3.1 / 2.2 s for CA3, but the owner schedule's
+extra compute takes that back.  Above the leaf, CA3 is slower than Color
+on 40 GB (levels 6, 4, 3: +1.3, +0.7, +0.9 s) and level with or faster
+than it on 80 GB.  CA0's level 6 is 3.5-6.5 s slower than Color's
+on both.  The logdets differ by ~1e-7 between variants and by 5e-7
+between card sizes (what packs differs); for scale, the variation run to
+run on 40 GB was Color 100.0-104.8 s, CA0 106.5-113.0 s.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
