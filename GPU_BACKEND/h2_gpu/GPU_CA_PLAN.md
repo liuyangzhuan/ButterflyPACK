@@ -5338,6 +5338,110 @@ cannot beat Color's solve - it is Color's work in a different order - and
 CA0's factor time is unchanged by it (within run-to-run noise; ~1 s less
 at 80 GB from the smaller kept set staged at the level ends).
 
+#### The solve with several right-hand sides (2026-10-12): Color still wins
+
+The driver's solve with `--nrhs` (lib_det37, one factorization a run, CA
+at the leaf; residuals 3e-16 to 1.2e-15 in every column).  GPU solve, s:
+
+| 768^3, 64 ranks | nrhs | Color | CA0 replicated | CA0 home |
+|---|---|---|---|---|
+| 80 GB (CA0 pack_shared never) | 1 | 1.78 | 1.99 (+12%) | 1.80 (+1%) |
+| | 8 | 9.49 | 10.25 (+8%) | 9.63 (+1.5%) |
+| | 32 | 36.26 | 38.60 (+6.5%) | 36.51 (+0.7%) |
+| | 64 | 71.29 | 77.91 (+9%) | 72.38 (+1.5%) |
+| 40 GB (pack_shared auto) | 1 | 2.84 | 3.45 (+21%) | 2.87 (+1%) |
+| | 8 | 13.36 | 14.54 (+9%) | 13.57 (+1.5%) |
+| | 32 | 49.86 | 53.61 (+7.5%) | 51.55 (+3.4%) |
+
+8 ranks: 192^3, 8 columns 1.98 / 2.18 / 2.12 s; 384^3, 16 columns
+17.93 / 18.73 / 18.38 s.  Color's time a column falls only from 1.78 to
+1.11 s (80 GB): the solve kernels loop over the columns inside a box and
+read its factors again for each (solve_forward_kernel and the rest), so
+the factor reads, the messages and the halo all grow with the columns
+and the ratios stay where one column puts them.  CA0's saving is in the
+number of synchronizations, a fixed cost that the columns dilute.  Rank
+0's "MPI" (11-27 s at 32-64 columns) is mostly waiting for the interior
+ranks.  The lever for many columns is in the kernels (each factor read
+once for all the columns), for Color and CA0 alike.
+
+#### The solve kernels take the columns in passes (2026-10-13)
+
+Before, the per-box kernels (solve_kernels.cu) looped over the columns
+inside a box and read the box's factors again for each, so the solve grew
+linearly in the columns.  Now a box takes them in passes of up to 8
+columns (4 complex): each column's x_S, x_R (and x_N where it fits) in
+shared memory, each factor element read once a pass and applied to all of
+its columns.  A column's arithmetic is the single-column order (the same
+lane partial sums, summed the same way), so every column is bitwise what
+it is solved alone and bitwise the previous library's.  Details that
+mattered:
+
+- **One column a pass runs the old kernels** (`*_one_kernel`, the source
+  as it was; the SASS is identical, instruction for instruction).  Three
+  attempts at a template whose one-column instance matched them ran 7%,
+  17% and 7% slower at nrhs 1 (a guard on the column count, then an
+  explicit four-load batch, then the old loop forms inside the template):
+  the compiler scheduled the single-column loops worse.  nrhs 1 is the
+  common case (an iterative solver applies the preconditioner one vector
+  at a time).
+- **x_N when it does not fit in shared memory** (the leaf with more than
+  one column: (216 + 3965) x 8 B a column): the work buffer, as before,
+  but streamed through shared memory in chunks of 256 rows, a warp keeping
+  its four columns' lane sums over the chunks - lane l still takes rows
+  l (mod 32) in increasing order.  Reading it from the work buffer once
+  for every four factor columns made the backward 3x the forward.
+- Register arrays indexed only by unrolled loops (a runtime bound put
+  them on the stack); a pass takes as many columns as fit half the shared
+  limit (two blocks an SM).
+
+Checks: `make h2_gpu_solve_columns` (tests/solve_columns.cpp): random
+boxes small (x_N in shared memory), leaf-sized (x_N in chunks) and large
+(fewer columns a pass) through all six kernels with 2-17 columns (2-9
+complex), each column bitwise its single-column run: 0 differ, double and
+complex.  384^3 on 8 ranks against lib_det37 (the old kernels): every
+column bitwise equal with 1, 11 and 16 columns, Color, CA0 replicated and
+home; the quick verification unchanged.  (With 11 columns the last two
+columns differ from a 16-column run's in the last digits - in the old
+library too: something outside these kernels depends on the column count.)
+
+Kernel times, one synthetic wave of 1024 leaf-sized boxes (`--time`):
+
+| kernel | 1 column, old / new | 16 columns, old / new |
+|---|---|---|
+| solve forward | 2.51 / 2.51 ms | 39.5 / 6.30 ms |
+| solve backward | 2.59 / 2.63 ms | 40.4 / 10.9 ms |
+| solve diagonal | 0.61 / 0.61 ms | 8.73 / 2.36 ms |
+| multiply forward | 2.54 / 2.53 ms | 39.8 / 10.9 ms |
+| multiply diagonal | 0.30 / 0.30 ms | 3.99 / 0.72 ms |
+| multiply backward | 2.69 / 2.68 ms | 42.4 / 6.46 ms |
+
+GPU solve at 384^3 on 8 ranks (40 GB), one column 2.34 -> 2.36 s;
+16 columns: Color 17.93 -> 6.52 s, CA0 replicated 18.73 -> 6.85 s, CA0
+home 18.38 -> 6.83 s.  At 192^3 with 16 columns the solve went 3.92 ->
+1.57 s and the multiply 4.49 -> 1.50 s before the chunked x_N; the
+largest solve kernel there is now bitcomp's decoder (the kept X_NR, ~1 s,
+independent of the columns).
+
+768^3 on 64 ranks (lib_det42; CA0 at the leaf, pack_shared never on 80
+GB, auto on 40 GB), GPU solve:
+
+| | columns | Color | CA0 replicated | CA0 home | Color, old kernels |
+|---|---|---|---|---|---|
+| 80 GB | 1 | 1.80 s | 2.01 s (+12%) | 1.82 s (+1%) | 1.78 s |
+| | 8 | 3.60 s | 3.90 s (+8%) | 3.65 s (+1%) | 9.49 s |
+| | 32 | 12.0 s | 12.5 s (+4%) | 12.3 s (+2%) | 36.3 s |
+| | 64 | 23.1 s | 26.7 s (+15%) | 23.1 s (=) | 71.3 s |
+| 40 GB | 1 | 2.87 s | 3.48 s (+21%) | 2.89 s (+1%) | 2.84 s |
+| | 8 | 5.43 s | 6.34 s (+17%) | 5.63 s (+4%) | 13.4 s |
+| | 32 | 17.3 s | 19.2 s (+11%) | 18.4 s (+6%) | 49.9 s |
+
+2.5-3.1x faster with many columns, and CA0 still does not beat Color:
+home ties it at 64 columns on 80 GB at best, replicated stays behind.  With
+the kernels faster, rank 0's MPI share grew (6.4 of 23.1 s, Color, 80 GB,
+64 columns; 7.8 of 17.3 s on 40 GB at 32), mostly waiting for the interior
+ranks, and the vector transfers (pageable host copies, 4.1 s at 64
+columns) are now the next cost that grows with the columns.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
