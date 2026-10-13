@@ -653,6 +653,11 @@ if (enable_h2_gpu)
                  GPU_BACKEND/h2_gpu/tests/solve_columns.cpp)
   target_compile_definitions(h2_gpu_solve_columns PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_solve_columns butterflypack)
+  # ... and of the device H2 matvec's kernels: make h2_gpu_matvec_columns
+  add_executable(h2_gpu_matvec_columns EXCLUDE_FROM_ALL
+                 GPU_BACKEND/h2_gpu/tests/matvec_columns.cpp)
+  target_compile_definitions(h2_gpu_matvec_columns PRIVATE H2_HAVE_GPU)
+  target_link_libraries(h2_gpu_matvec_columns butterflypack)
 endif()
 # Self-test of the CA halo geometry (h2_parallel/core/halo_geometry.hpp, the
 # ghost and assisting sets by region against their enumeration; GPU_BACKEND/

@@ -5442,6 +5442,51 @@ the kernels faster, rank 0's MPI share grew (6.4 of 23.1 s, Color, 80 GB,
 ranks, and the vector transfers (pageable host copies, 4.1 s at 64
 columns) are now the next cost that grows with the columns.
 
+#### The H2 matvec's kernels in passes of columns too (2026-10-13)
+
+The compression-only H2 matvec (h2_matvec_kernels.cu: the upward and
+downward passes, the coupling and near accumulations, the symmetric pairs)
+had the same per-column loops.  Now as the solve's: up to 8 columns a pass
+(4 complex), each block element read once a pass, a column's arithmetic
+in its single-column order; one column a pass runs the kernels as they
+were (identical SASS).  Two details:
+
+- **The warp accumulation** (boxes of up to 256 rows) takes its 32-row
+  strips one after another, each through all of the box's blocks, so a
+  lane holds one strip's sums for the pass's columns instead of every
+  strip's (a lane's rows and the order of the block sums are unchanged).
+- **The pairs** (symmetric near blocks, K x_s and K^T x_t) were bound by
+  a warp reduction for every block column and right-hand side; reading K
+  once a pass alone made them slower (9.95 -> 10.93 ms, the larger shared
+  footprint).  Their K^T x_t now sums 16 block columns a reduction: the
+  xor butterfly gives every lane the same sum, so offset 16 adds all
+  sixteen values and each later offset halves what a lane keeps - 31
+  shuffles for 16 sums instead of 80, each sum bitwise warp_sum's.
+
+Checks: `make h2_gpu_matvec_columns` (tests/matvec_columns.cpp): coupling
+and near levels of every warp-kernel size and boxes beyond 256 rows (the
+block kernel), blocks with K and precomputed vectors from the local,
+ghost and partial arrays, pairs up to 512 x 512; 2-17 columns (2-9
+complex): every column bitwise its single-column run.  BiCGSTAB on the
+compressed H2 (`--precon 2`, 192^3 on 8 ranks, 485 iterations): every
+column bitwise the previous library's with 1 and 16 columns.
+
+| kernel (`--time`, double) | 1 column, old / new | 16 columns, old / new |
+|---|---|---|
+| upward | 0.101 / 0.101 ms | 1.20 / 0.32 ms |
+| downward | 0.110 / 0.111 ms | 1.38 / 0.66 ms |
+| accumulate, near (512 boxes, 216 rows) | 3.12 / 3.12 ms | 48.9 / 24.7 ms |
+| accumulate, coupling (1024 boxes, 75 rows) | 2.28 / 2.28 ms | 35.9 / 14.4 ms |
+| pairs (2048, 216 x 216) | 0.570 / 0.567 ms | 9.98 / 5.22 ms |
+
+BiCGSTAB at 192^3, 970 matvecs: with 16 columns the matvec 394.4 ->
+203.2 s (near 303.6 -> 158.0, interactions and downward 68.2 -> 24.9,
+upward 3.85 -> 1.61; transfers 18.7 s unchanged), the solve 455 -> 265 s;
+one column 25.9 s as before.  Open: the near accumulation is still ~4x
+its memory bound with 16 columns (a lane loads x for every K element and
+column; two strips a lane would halve that), and the one-column pairs
+could take the 16-column reduction too (bitwise the same; not measured).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
