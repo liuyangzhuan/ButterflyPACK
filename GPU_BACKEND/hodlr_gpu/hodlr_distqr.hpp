@@ -140,7 +140,7 @@ public:
             T* du = heap.alloc<T>(rr * sizeof(T));
             T* dv = heap.alloc<T>(rr * sizeof(T));
             double* ds = heap.alloc<double>(static_cast<size_t>(r) * sizeof(double));
-            svd_.svd_device(r, r, R.d, ds, du, dv);
+            svd_.svd_device(r, r, R.d, ds, du, dv, tol);
             flops_ += kFlopScale * (8.0 + 4.0 / 3.0) * r * static_cast<double>(r) * r;  // (as the CPU counts gesdd)
             check_cuda(cudaMemcpy(s.data(), ds, static_cast<size_t>(r) * sizeof(double), cudaMemcpyDeviceToHost), "TSQR s");
             const bool zero = !(s[0] > underflow);
@@ -306,7 +306,7 @@ public:
                 du = heap.alloc<T>(rr * sizeof(T));
                 dv = heap.alloc<T>(rr * sizeof(T));
                 ds = heap.alloc<double>(static_cast<size_t>(r) * sizeof(double));
-                svd_.svd_device(r, r, dr + rr, ds, du, dv);
+                svd_.svd_device(r, r, dr + rr, ds, du, dv, tol);
                 flops_ += kFlopScale * (8.0 + 4.0 / 3.0) * r * static_cast<double>(r) * r;  // (as the CPU counts gesdd)
                 check_cuda(cudaMemcpy(s.data(), ds, static_cast<size_t>(r) * sizeof(double), cudaMemcpyDeviceToHost),
                            "Gram TSQR s");

@@ -102,7 +102,10 @@ template<typename T>
 void launch_col_scale(const ColScaleItem<T>* items, int count, int max_m, int max_n, cudaStream_t stream);
 
 // t (k x k) = T^-1 of the compact WY form of ?geqrf's Q = I - Y T Y^H:
-// striu(gram) + diag(1 / tau), zero below the diagonal (gram = Y^H Y)
+// striu(gram) + diag(1 / tau), zero below the diagonal (gram = Y^H Y).  A
+// zero tau (a reflector H_j = I, e.g. the last one of a square matrix) is
+// left out: row and column j of t are those of the identity, and the caller
+// zeroes column j of Y
 template<typename T>
 struct TinvItem {
     T* t;

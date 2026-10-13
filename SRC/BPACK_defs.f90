@@ -940,9 +940,26 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type mesh
 
     !>**** quantities related to specific matrix kernels
+    !>**** a low-rank term U V^T added to every entry of a matrix's construction (c_bpack_set_entry_addend), its rows
+    !> distributed as the matrix's: this rank's rows of U and V, then rows fetched from the ranks owning them
+    !> (BPACK_addend_fetch) while needed
+    type entry_addend
+        DT, allocatable :: u(:, :), v(:, :) !< the rows held: this rank's first (slots 1 .. nu_loc, nv_loc), then fetched ones
+        integer, allocatable :: umap(:), vmap(:) !< the slot of each row (tree order) of U, V; 0: not held
+        integer, allocatable :: urow(:), vrow(:) !< the row of each slot
+        integer, allocatable :: mp(:, :), np(:, :) !< the rows of U, V each rank of the term's group owns (first, last)
+        integer :: nu = 0, nv = 0 !< the slots in use
+        integer :: nu_loc = 0, nv_loc = 0 !< of them this rank's own rows
+        integer :: r = 0 !< the rank of the term
+        integer :: head = 0 !< MyID of the first rank of the term's group (the matrix's ranks)
+        logical :: on_device = .false. !< the GPU construction holds the rows and adds the term to the entries it takes from the host (HODLR_gpu_addend_begin)
+        logical :: skip = .false. !< element_Zmn_blocklist_user leaves the term out (while HODLR_gpu_host_entries lets the device add it)
+    end type entry_addend
+
     type kernelquant
 
         DT, allocatable :: matZ_glo(:, :) !< Full Matrix: the full matrix to sample its entries
+        type(entry_addend), allocatable :: addend !< a low-rank term added to every entry the matrix's construction takes (c_bpack_set_entry_addend)
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z

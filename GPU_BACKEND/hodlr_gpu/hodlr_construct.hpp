@@ -79,6 +79,7 @@ public:
     ~HodlrConstruct() {
         end();
         release_points();
+        set_addend(0, 0, 0, 0, nullptr, nullptr, nullptr, nullptr);
         if (solver_params_ != nullptr) cusolverDnDestroyParams(solver_params_);
         if (solver_ != nullptr) cusolverDnDestroy(solver_);
     }
@@ -109,6 +110,36 @@ public:
         n_points_ = n;
     }
     bool has_points() const { return ids_ != nullptr; }
+
+    // A low-rank term U V^T (n x n, rows and columns in tree order) added to every entry the construction
+    // takes from the host (host_fill), for the matrices whose entries are such a sum (c_bpack_set_entry_addend):
+    // the rows of U and V this rank holds, nu and nv of them (r columns each, column-major), and for every row
+    // of U and of V its slot there (umap, vmap, n each, 1-based, 0: not held); n = 0 frees it
+    void set_addend(int64_t n, int nu, int nv, int r, const T* u, const T* v, const int* umap, const int* vmap) {
+        Context::instance().activate();
+        DeviceHeap& heap = DeviceHeap::instance();
+        if (add_u_ != nullptr) heap.free(add_u_);
+        if (add_v_ != nullptr) heap.free(add_v_);
+        add_u_ = add_v_ = nullptr;
+        add_nu_ = add_nv_ = 0;
+        add_r_ = 0;
+        add_umap_.clear();
+        add_vmap_.clear();
+        if (n <= 0 || r <= 0) return;
+        add_u_ = heap.alloc_resident<T>(static_cast<size_t>(std::max(nu, 1)) * r * sizeof(T));
+        add_v_ = heap.alloc_resident<T>(static_cast<size_t>(std::max(nv, 1)) * r * sizeof(T));
+        if (nu > 0)
+            check_cuda(cudaMemcpy(add_u_, u, static_cast<size_t>(nu) * r * sizeof(T), cudaMemcpyHostToDevice),
+                       "HODLR GPU low-rank term");
+        if (nv > 0)
+            check_cuda(cudaMemcpy(add_v_, v, static_cast<size_t>(nv) * r * sizeof(T), cudaMemcpyHostToDevice),
+                       "HODLR GPU low-rank term");
+        add_umap_.assign(umap, umap + n);
+        add_vmap_.assign(vmap, vmap + n);
+        add_nu_ = std::max(nu, 1);
+        add_nv_ = std::max(nv, 1);
+        add_r_ = r;
+    }
     int dim() const { return dim_; }
     int64_t n_points() const { return n_points_; }
 
@@ -502,8 +533,8 @@ public:
     // C(:, jpvt) and V(new, :) = W R, with jpvt (1-based, packed) and W
     // (ru x p, packed, p = r_est, or the knn row count when knn != 0) from
     // the host.  The chosen rows and columns grow by I(1:ru) and J(jpvt).
-    // Without knn, grams_out gets per block (packed) the Gram matrices of the
-    // norm update (LR_Fnorm, LR_FnormUp): U_new^H U_new, V_new^* V_new^T
+    // grams_out gets per block (packed) the Gram matrices of the norm update
+    // (LR_Fnorm, LR_FnormUp; for the knn step the seed's norm): U_new^H U_new, V_new^* V_new^T
     // (ru x ru each), and U_old^H U_new, V_old^* V_new^T with U_old = U(:,
     // rskip+1:rank), V_old = V(rskip+1:rank, :) ((rank - rskip) x ru each,
     // rank before the append).  Then the next panel columns: the pivots of R
@@ -528,7 +559,7 @@ public:
                 throw std::invalid_argument("HODLR GPU BACA: invalid rank update");
             }
             wcount += static_cast<size_t>(ru[a]) * p;
-            if (!knn) {
+            {
                 const size_t nold = static_cast<size_t>(B.rank - rskip[a]);
                 gcount += 2 * static_cast<size_t>(ru[a]) * ru[a] + 2 * nold * ru[a];
             }
@@ -564,7 +595,7 @@ public:
             vnew.entries.push_back({rpanel, wd + w_at, vnew_t, B.n, u, p, p, u, B.n});
             w_at += static_cast<size_t>(u) * p;
             stats_.flops += kFlopScale * 2.0 * B.n * static_cast<double>(u) * p;
-            if (!knn) {
+            {
                 const int nold = k - rskip[a];
                 gconj.push_back({unew, B.m, unew, B.m, u, u, B.m, gd + g_at});
                 g_at += static_cast<size_t>(u) * u;
@@ -967,10 +998,10 @@ public:
             sc += static_cast<size_t>(B.rank);
         }
         T* rb = heap.alloc<T>(std::max<size_t>(2 * sq, 1) * sizeof(T));  // the Gram matrices, then R_U, R_V
-        auto fail = [&]() {
+        auto fail = [&](const char* why) {
             heap.free(rb);
             if (fmm::env::trace("hodlr-qr")) {
-                std::printf(" HODLR GPU recompression: a Cholesky factorization of %d blocks failed, by QR\n", na);
+                std::printf(" HODLR GPU recompression of %d blocks: %s, by QR\n", na, why);
                 std::fflush(stdout);
             }
             return false;
@@ -989,7 +1020,9 @@ public:
             }
             run_grams(jobs, MagmaConjTrans);
         }
-        // the shifts s = kGramShift tr(G) on the diagonals (through the host)
+        // the shifts s = kGramShift tr(G) on the diagonals (through the host); per block the traces and
+        // shifts of U's and V's sides
+        std::vector<double> trace(2 * n_a), shift(2 * n_a);
         {
             std::vector<T> dg(std::max<size_t>(2 * sc, 1));
             size_t d = 0;
@@ -1010,9 +1043,11 @@ public:
                 for (int side = 0; side < 2; ++side) {
                     double tr = 0.0;
                     for (int i = 0; i < k; ++i) tr += fmm::gpu::real_part(dg[d + static_cast<size_t>(i)]);
-                    if (!(tr > 0.0)) return fail();  // (a zero factor: the QR's path)
+                    if (!(tr > 0.0)) return fail("a zero factor");
                     const double m = side == 0 ? block(bl[a]).m : block(bl[a]).n;
-                    for (int i = 0; i < k; ++i) dg[d + static_cast<size_t>(i)] += T(gram_shift(k, m) * tr);
+                    trace[2 * a + side] = tr;
+                    shift[2 * a + side] = gram_shift(k, m) * tr;
+                    for (int i = 0; i < k; ++i) dg[d + static_cast<size_t>(i)] += T(shift[2 * a + side]);
                     T* g = rb + 2 * sq_at[a] + static_cast<size_t>(side) * k * k;
                     check_cuda(cudaMemcpy2DAsync(g, (static_cast<size_t>(k) + 1) * sizeof(T), dg.data() + d, sizeof(T),
                                                  sizeof(T), k, cudaMemcpyHostToDevice, stream),
@@ -1033,7 +1068,7 @@ public:
                     T* g = rb + 2 * sq_at[a] + static_cast<size_t>(side) * k * k;
                     stats_.flops += kFlopScale * static_cast<double>(k) * k * k / 3.0;
                     if (k >= kBigQrRank) {
-                        if (svd.potrf_device(k, g, k) != 0) return fail();
+                        if (svd.potrf_device(k, g, k) != 0) return fail("a Cholesky factorization failed");
                         continue;
                     }
                     pn.push_back(k);
@@ -1063,7 +1098,7 @@ public:
                 check_cuda(cudaStreamSynchronize(stream), "HODLR GPU potrf");
                 heap.free(info);
                 for (magma_int_t v : info_h) {
-                    if (v != 0) return fail();
+                    if (v != 0) return fail("a Cholesky factorization failed");
                 }
             }
         }
@@ -1095,6 +1130,25 @@ public:
         }
         std::vector<char> zero(n_a, 0);
         core_svds(ks, sq_at, s_at, sc, mb, ub, vb, sb, tol, underflow, svd, rn, zero);
+        // the shifts' share of R_U R_V^T (Mirsky: the singular values move by at most its square root,
+        // since those of R_U R_V^T are those of [U; s_U^1/2 I] [V; s_V^1/2 I]^T)
+        {
+            std::vector<double> sv(std::max<size_t>(sc, 1));
+            if (sc > 0) check_cuda(cudaMemcpy(sv.data(), sb, sc * sizeof(double), cudaMemcpyDeviceToHost), "HODLR GPU SVD values");
+            for (size_t a = 0; a < n_a; ++a) {
+                if (zero[a]) continue;
+                const double shift_u = shift[2 * a], shift_v = shift[2 * a + 1];
+                const double energy = shift_u * trace[2 * a + 1] + shift_v * trace[2 * a] + ks[a] * shift_u * shift_v;
+                const double s1 = sv[s_at[a]];
+                if (energy > tol * tol * s1 * s1) {
+                    heap.free(sb);
+                    heap.free(vb);
+                    heap.free(ub);
+                    heap.free(mb);
+                    return fail("the shifts reach the truncation");
+                }
+            }
+        }
         size_t xc = 0;
         for (size_t a = 0; a < n_a; ++a) {
             rn_out[a] = rn[a];
@@ -1199,7 +1253,8 @@ public:
     // of SVD_Truncate (tol relative, underflow absolute), and the new factors
     // [X; 0] - Y Z (= Q [X; 0]) with X_U = Us(:, 1:rn) diag(s), X_V =
     // conj(Vs(:, 1:rn)) and Z = T Y1^H X, T^-1 = striu(Y^H Y) + diag(1/tau)
-    // (the larft recurrence on the host for a block with a zero tau).  rn_out:
+    // (a reflector of zero tau, the identity, left out: its column of Y
+    // zeroed, its row and column of T^-1 the identity's).  rn_out:
     // the new ranks; the factors stay for download()
     void recompress_qr(int na, const int* bl, double tol, double underflow, DeviceSvd<T>& svd, int* rn_out) {
         Context& ctx = Context::instance();
@@ -1269,14 +1324,19 @@ public:
         T* xb = heap.alloc<T>(std::max<size_t>(2 * xc, 1) * sizeof(T));
         T* zb = xb + xc;
         check_cuda(cudaMemsetAsync(xb, 0, std::max<size_t>(xc, 1) * sizeof(T), stream), "HODLR GPU recompression X");
-        std::vector<size_t> x_at(n_a);
-        std::vector<char> host_t(n_a, 0);  // (a zero tau: T by the larft recurrence on the host)
+        // the reflectors of zero tau (the identity; a square factor's last one) left out of the WY forms: their
+        // columns of Y zeroed (and their rows and columns of T^-1 the identity's, launch_tinv)
         {
             std::vector<T> ht(std::max<size_t>(q.taus, 1));
             if (q.taus > 0) check_cuda(cudaMemcpy(ht.data(), q.tau, q.taus * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU tau");
             for (size_t a = 0; a < n_a; ++a) {
-                for (int i = 0; i < 2 * ks[a]; ++i) {
-                    if (ht[q.tau_at[a] + i] == T(0.0)) host_t[a] = 1;
+                const Block& B = block(bl[a]);
+                const int k = ks[a];
+                for (int i = 0; i < 2 * k; ++i) {
+                    if (!(ht[q.tau_at[a] + i] == T(0.0))) continue;
+                    const int m = i < k ? B.m : B.n;
+                    T* y = (i < k ? B.u : B.vt) + static_cast<size_t>(i % k) * m;
+                    check_cuda(cudaMemsetAsync(y, 0, static_cast<size_t>(m) * sizeof(T), stream), "HODLR GPU zero tau");
                 }
             }
         }
@@ -1290,7 +1350,6 @@ public:
         for (size_t a = 0; a < n_a; ++a) {
             const Block& B = block(bl[a]);
             const int k = ks[a], r = rn[a];
-            x_at[a] = at;
             T* xu = xb + at;
             T* xv = xu + static_cast<size_t>(k) * r;
             T* yu = zb + at;
@@ -1303,7 +1362,6 @@ public:
             yp.entries.push_back({B.u, xu, yu, k, r, k, B.m, k, k});
             yp.entries.push_back({B.vt, xv, yv, k, r, k, B.n, k, k});
             stats_.flops += kFlopScale * 4.0 * static_cast<double>(k) * k * r;
-            if (host_t[a]) continue;
             T* t1 = rb + 2 * sq_at[a];
             T* t2 = t1 + static_cast<size_t>(k) * k;
             const T* gu = q.gram + q.top_at[a];
@@ -1344,9 +1402,6 @@ public:
                           reinterpret_cast<T**>(md + off_tB), reinterpret_cast<magma_int_t*>(md + off_tldb), ntr, queue);
         }
         check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression Z");
-        for (size_t a = 0; a < n_a; ++a) {
-            if (host_t[a]) host_wy(ks[a], rn[a], q.gram + q.top_at[a], q.tau + q.tau_at[a], zb + x_at[a]);
-        }
         heap.free(sb);
         heap.free(vb);
         heap.free(ub);
@@ -1441,7 +1496,7 @@ public:
         }
         for (size_t a : large) {
             const int k = ks[a];
-            svd.svd_device(k, k, mb + sq_at[a], sb + s_at[a], ub + sq_at[a], vb + sq_at[a]);
+            svd.svd_device(k, k, mb + sq_at[a], sb + s_at[a], ub + sq_at[a], vb + sq_at[a], tol);
             stats_.flops += svd_flops(k);
         }
 
@@ -1742,39 +1797,6 @@ private:
         }
     }
 
-    // Z = T Y1^H X for a block with a zero tau (U's then V's, each k x rn,
-    // Y1^H X in z on entry), T by the recurrence of ?larft ('F', 'C') on the host
-    static void host_wy(int k, int rn, const T* gram, const T* tau, T* z) {
-        const size_t kk = static_cast<size_t>(k) * k, kr = static_cast<size_t>(k) * rn;
-        std::vector<T> g(2 * kk), tv(2 * static_cast<size_t>(k)), y(2 * kr), zz(2 * kr), t(kk), v(static_cast<size_t>(k));
-        check_cuda(cudaMemcpy(g.data(), gram, 2 * kk * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY gram");
-        check_cuda(cudaMemcpy(tv.data(), tau, 2 * static_cast<size_t>(k) * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY tau");
-        check_cuda(cudaMemcpy(y.data(), z, 2 * kr * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY rhs");
-        for (int side = 0; side < 2; ++side) {
-            const T* gs = g.data() + side * kk;
-            const T* ts = tv.data() + side * k;
-            std::fill(t.begin(), t.end(), T(0.0));
-            for (int i = 0; i < k; ++i) {
-                if (!(ts[i] == T(0.0))) {
-                    for (int j = 0; j < i; ++j) v[static_cast<size_t>(j)] = T(0.0) - ts[i] * gs[j + static_cast<size_t>(i) * k];
-                    for (int j = 0; j < i; ++j) {
-                        T acc = T(0.0);
-                        for (int l = j; l < i; ++l) acc += t[j + static_cast<size_t>(l) * k] * v[static_cast<size_t>(l)];
-                        t[j + static_cast<size_t>(i) * k] = acc;
-                    }
-                }
-                t[i + static_cast<size_t>(i) * k] = ts[i];
-            }
-            for (int c = 0; c < rn; ++c) {
-                for (int i = 0; i < k; ++i) {
-                    T acc = T(0.0);
-                    for (int l = i; l < k; ++l) acc += t[i + static_cast<size_t>(l) * k] * y[side * kr + l + static_cast<size_t>(c) * k];
-                    zz[side * kr + i + static_cast<size_t>(c) * k] = acc;
-                }
-            }
-        }
-        check_cuda(cudaMemcpy(z, zz.data(), 2 * kr * sizeof(T), cudaMemcpyHostToDevice), "HODLR GPU WY Z");
-    }
     // ---- the entries through the host (no GPU evaluator; host_fn_) ----
 
     // A sub-block of a block whose entries come through the host: its rows
@@ -1853,6 +1875,61 @@ private:
             }
             at += m * n;
         }
+        if (add_u_ != nullptr) add_low_rank(panels, stream);
+    }
+
+    // the 1-based slots of the 1-based rows (tree order) in the low-rank term's map (set_addend)
+    static std::vector<int> addend_slots(const std::vector<int>& map, const std::vector<int>& rows1) {
+        std::vector<int> s(rows1.size());
+        for (size_t i = 0; i < rows1.size(); ++i) {
+            const int g = rows1[i];
+            if (g < 1 || static_cast<size_t>(g) > map.size() || map[static_cast<size_t>(g - 1)] <= 0)
+                throw std::logic_error("HODLR GPU low-rank term: a row not held on this rank");
+            s[i] = map[static_cast<size_t>(g - 1)];
+        }
+        return s;
+    }
+
+    // dst += U(rows, :) V(cols, :)^T for the host panels: the low-rank term (set_addend), its rows
+    // gathered and its products one batch (metadata of their own: the callers' stays staged)
+    void add_low_rank(const std::vector<HostPanel>& panels, cudaStream_t stream) {
+        DeviceHeap& heap = DeviceHeap::instance();
+        const int r = add_r_;
+        size_t nu = 0, nv = 0;
+        for (const HostPanel& h : panels) {
+            if (h.rows1.empty() || h.cols1.empty()) continue;
+            nu += h.rows1.size();
+            nv += h.cols1.size();
+        }
+        if (nu == 0) return;
+        T* ub = heap.alloc<T>(nu * r * sizeof(T));
+        T* vb = heap.alloc<T>(nv * r * sizeof(T));
+        add_meta_.clear();
+        ItemList<fmm::gpu::GatherItemT<T>> g;
+        VBatch<T> prod;
+        size_t ua = 0, va = 0;
+        for (const HostPanel& h : panels) {
+            const int m = static_cast<int>(h.rows1.size()), n = static_cast<int>(h.cols1.size());
+            if (m == 0 || n == 0) continue;
+            const size_t off_r = add_meta_.append(addend_slots(add_umap_, h.rows1));
+            const size_t off_c = add_meta_.append(addend_slots(add_vmap_, h.cols1));
+            T* ur = ub + ua * r;
+            T* vc = vb + va * r;
+            g.add({ur, m, m, r, add_u_, 1, add_nu_, listed(off_r, -1), contiguous(0)}, m, r);
+            g.add({vc, n, n, r, add_v_, 1, add_nv_, listed(off_c, -1), contiguous(0)}, n, r);
+            prod.entries.push_back({ur, vc, h.dst, m, n, r, m, n, h.ld});
+            ua += static_cast<size_t>(m);
+            va += static_cast<size_t>(n);
+            stats_.flops += kFlopScale * 2.0 * m * static_cast<double>(n) * r;
+        }
+        g.stage(add_meta_);
+        prod.stage(add_meta_);
+        char* md = add_meta_.upload(add_meta_device_, stream);
+        fmm::gpu::launch_gather(g.device(md), g.count(), g.max_m, g.max_n, md, stream);
+        prod.gemm(md, MagmaNoTrans, MagmaTrans, T(1.0), T(1.0), Context::instance().queue());
+        check_cuda(cudaStreamSynchronize(stream), "HODLR GPU low-rank term");
+        heap.free(vb);
+        heap.free(ub);
     }
 
     // device time of the entry evaluations (Stats::t_entry): an event pair
@@ -2045,6 +2122,13 @@ private:
     std::vector<int> sel_host_;
     MetaBuilder meta_;
     DeviceBuffer meta_device_;
+    T* add_u_ = nullptr;  // the low-rank term (set_addend): the rows held, and the slot of every row
+    T* add_v_ = nullptr;
+    int64_t add_nu_ = 0, add_nv_ = 0;
+    int add_r_ = 0;
+    std::vector<int> add_umap_, add_vmap_;
+    MetaBuilder add_meta_;
+    DeviceBuffer add_meta_device_;
     Stats stats_;
     cusolverDnHandle_t solver_ = nullptr;
     cusolverDnParams_t solver_params_ = nullptr;

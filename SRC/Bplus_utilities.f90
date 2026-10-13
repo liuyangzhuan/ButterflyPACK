@@ -17467,8 +17467,9 @@ end subroutine BF_block_MVP_dat_batch_magma
       integer nn, ri, ci, nng, headm, headn, head, tail, pp, row_group, col_group
       type(intersect)::inters(:)
       integer ii, jj, rank, ncol, nrow, iidx, pgno, ierr, nr_loc, nc_loc
-      DT, allocatable::Vpartial(:, :), matU(:, :), mat_loc(:,:)
-      real(kind=8)::t1, t2, t3, t4
+      integer, allocatable :: off(:)
+      DT, allocatable::Vpartial(:, :), matU(:, :)
+      real(kind=8)::t1, t2, t3, t4, flops
 
       headm = blocks%headm
       headn = blocks%headn
@@ -17489,40 +17490,48 @@ end subroutine BF_block_MVP_dat_batch_magma
       call LR_all2all_extraction(blocks, inters, Vpartial, rank, ncol, stats, ptree, msh)
       t3 = MPI_Wtime()
 
-      nr_loc = 0
-      nc_loc = 0
+      ! the intersections' columns start at off(nn) + 1 in Vpartial; their products as tasks (the callers run
+      ! this in the single region of a parallel one)
+      allocate (off(size(blocks%inters, 1) + 1))
+      off(1) = 0
       do nn = 1, size(blocks%inters, 1)
-         nr_loc = max(nr_loc, blocks%inters(nn)%nr_loc)
-         nc_loc = max(nc_loc, blocks%inters(nn)%nc)
+         off(nn + 1) = off(nn) + blocks%inters(nn)%nc
       enddo
-      allocate (matU(nr_loc, rank))
-      allocate (mat_loc(nr_loc, nc_loc))
-
-      iidx = 0
+      flops = 0
+#ifdef HAVE_TASKLOOP
+      !$omp taskloop default(shared) private(nn, nng, ii, ri, nr_loc, nc_loc, matU) reduction(+:flops)
+#endif
       do nn = 1, size(blocks%inters, 1)
+         nr_loc = blocks%inters(nn)%nr_loc
+         nc_loc = blocks%inters(nn)%nc
+         if (nr_loc == 0 .or. nc_loc == 0) cycle
          nng = blocks%inters(nn)%idx
-         if (blocks%inters(nn)%nr_loc > 0) then
-            do ii = 1, blocks%inters(nn)%nr_loc
-               ri = inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))) - headm + 1 - blocks%M_p(pp, 1) + 1
-               if (allocated(blocks%gpu_urow)) then  ! (a HODLR on the GPU: the rows from the GPUs, HODLR_gpu_fill_rows)
-                  call assert(blocks%gpu_urow(ri) > 0, 'LR_block_extraction: a row of U not taken from the GPUs')
-                  matU(ii, :) = blocks%gpu_u(blocks%gpu_urow(ri), :)
-               else
-                  matU(ii, :) = blocks%ButterflyU%blocks(1)%matrix(ri, :)
-               endif
-            enddo
-            if (blocks%inters(nn)%nc > 0) then
-               call gemmf77('N', 'N', blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, iidx + 1), rank, BPACK_czero, mat_loc(1,1), nr_loc)
-               blocks%inters(nn)%dat_loc(:,:) = mat_loc(1:blocks%inters(nn)%nr_loc, 1:blocks%inters(nn)%nc)
+         allocate (matU(nr_loc, max(rank, 1)))
+         do ii = 1, nr_loc
+            ri = inters(nng)%rows(blocks%inters(nn)%rows(blocks%inters(nn)%rows_loc(ii))) - headm + 1 - blocks%M_p(pp, 1) + 1
+            if (allocated(blocks%gpu_urow)) then  ! (a HODLR on the GPU: the rows from the GPUs, HODLR_gpu_fill_rows)
+               call assert(blocks%gpu_urow(ri) > 0, 'LR_block_extraction: a row of U not taken from the GPUs')
+               matU(ii, 1:rank) = blocks%gpu_u(blocks%gpu_urow(ri), 1:rank)
+            else
+               matU(ii, 1:rank) = blocks%ButterflyU%blocks(1)%matrix(ri, 1:rank)
             endif
-            stats%Flop_Tmp = stats%Flop_Tmp + flops_gemm(blocks%inters(nn)%nr_loc, blocks%inters(nn)%nc, rank)
+         enddo
+         if (rank > 0) then
+            call gemmf77('N', 'N', nr_loc, nc_loc, rank, BPACK_cone, matU, nr_loc, Vpartial(1, off(nn) + 1), rank, &
+                         BPACK_czero, blocks%inters(nn)%dat_loc, nr_loc)
+         else
+            blocks%inters(nn)%dat_loc = 0
          endif
-         iidx = iidx + blocks%inters(nn)%nc
+         flops = flops + flops_gemm(nr_loc, nc_loc, rank)
+         deallocate (matU)
       enddo
+#ifdef HAVE_TASKLOOP
+      !$omp end taskloop
+#endif
+      stats%Flop_Tmp = stats%Flop_Tmp + flops
 
       deallocate (Vpartial)
-      deallocate (matU)
-      deallocate (mat_loc)
+      deallocate (off)
 
       t4 = MPI_Wtime()
       ! time_tmp = time_tmp + t3 - t2
@@ -25470,6 +25479,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
          stats%Time_Entry = stats%Time_Entry + t2 - t1
       endif
 
+      ! the low-rank term registered with the matrix (c_bpack_set_entry_addend), unless the device adds it
+      if (allocated(ker%addend)) then
+         call BPACK_require(.not. present(alldat_loc_in) .or. ker%addend%skip, &
+                            'a low-rank entry term needs the entries in submats (no alldat_loc_in)')
+         call element_Zmn_addend(submats, Nsub, ker, option, ptree)
+      endif
 
       do nn = 1, Ninter_loc
          if(allocated(submats1(nn)%mmap))deallocate(submats1(nn)%mmap)
@@ -25483,6 +25498,196 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       return
 
    end subroutine element_Zmn_blocklist_user
+
+   !> dat += scale_factor U(rows, :) V(cols, :)^T for the intersections submats(1:Nsub) (rows and columns in tree
+   !> order): the low-rank term ker%addend registered with the matrix (c_bpack_set_entry_addend), unless the device
+   !> adds it (ker%addend%skip).  With elem_extract=1 (every call a round over ptree%Comm) the rows this rank lacks
+   !> come from their owners for the round, every rank taking part; else they must be held already
+   subroutine element_Zmn_addend(submats, Nsub, ker, option, ptree)
+      implicit none
+      integer Nsub
+      type(intersect) :: submats(*)
+      type(kernelquant)::ker
+      type(Hoption)::option
+      type(proctree)::ptree
+      DT, allocatable :: ur(:, :), vc(:, :)
+      integer, allocatable :: rows(:), cols(:)
+      DT :: alpha
+      integer b, i, r, nr, nc, nu0, nv0, nrow, ncol
+      logical add
+
+      add = .not. ker%addend%skip
+      nu0 = ker%addend%nu
+      nv0 = ker%addend%nv
+      if (option%elem_extract == 1) then
+         nrow = 0
+         ncol = 0
+         if (add) then
+            do b = 1, Nsub
+               nrow = nrow + submats(b)%nr
+               ncol = ncol + submats(b)%nc
+            enddo
+         endif
+         allocate (rows(max(nrow, 1)), cols(max(ncol, 1)))
+         nrow = 0
+         ncol = 0
+         if (add) then
+            do b = 1, Nsub
+               rows(nrow + 1:nrow + submats(b)%nr) = submats(b)%rows(1:submats(b)%nr)
+               cols(ncol + 1:ncol + submats(b)%nc) = submats(b)%cols(1:submats(b)%nc)
+               nrow = nrow + submats(b)%nr
+               ncol = ncol + submats(b)%nc
+            enddo
+         endif
+         call BPACK_addend_fetch(ker%addend, 1, rows, nrow, ptree, 1)
+         call BPACK_addend_fetch(ker%addend, 2, cols, ncol, ptree, 1)
+         deallocate (rows, cols)
+      endif
+      if (add .and. Nsub > 0) then
+         r = ker%addend%r
+         alpha = option%scale_factor
+#ifdef HAVE_OPENMP
+         !$omp parallel do default(shared) private(b, i, nr, nc, ur, vc) schedule(dynamic)
+#endif
+         do b = 1, Nsub
+            nr = submats(b)%nr
+            nc = submats(b)%nc
+            if (nr == 0 .or. nc == 0) cycle
+            call BPACK_require(.not. allocated(submats(b)%masks), 'a low-rank entry term with masked entries')
+            allocate (ur(nr, r), vc(nc, r))
+            do i = 1, nr
+               call BPACK_require(ker%addend%umap(submats(b)%rows(i)) > 0, 'a row of the low-rank entry term is not held')
+               ur(i, :) = ker%addend%u(ker%addend%umap(submats(b)%rows(i)), :)
+            enddo
+            do i = 1, nc
+               call BPACK_require(ker%addend%vmap(submats(b)%cols(i)) > 0, 'a row of the low-rank entry term is not held')
+               vc(i, :) = ker%addend%v(ker%addend%vmap(submats(b)%cols(i)), :)
+            enddo
+            call gemmf90(ur, nr, vc, nc, submats(b)%dat, nr, 'N', 'T', nr, nc, r, alpha, BPACK_cone)
+            deallocate (ur, vc)
+         enddo
+#ifdef HAVE_OPENMP
+         !$omp end parallel do
+#endif
+      endif
+      call BPACK_addend_truncate(ker%addend, nu0, nv0)
+   end subroutine element_Zmn_addend
+
+   !> The rows rows(1:nrows) (tree order) of the low-rank entry term's U (side 1) or V (side 2) that this rank does
+   !> not hold, from the ranks owning them (the term's layout), appended to its rows.  Collective over the ranks
+   !> of group pgno of ptree, which own every row any of them asks for
+   subroutine BPACK_addend_fetch(ad, side, rows, nrows, ptree, pgno)
+      implicit none
+      type(entry_addend)::ad
+      integer side, nrows, pgno
+      integer :: rows(*)
+      type(proctree)::ptree
+
+      if (side == 1) then
+         call addend_fetch_side(ad%u, ad%umap, ad%urow, ad%nu, ad%nu_loc, ad%mp, ad%r, ad%head, rows, nrows, ptree, pgno)
+      else
+         call addend_fetch_side(ad%v, ad%vmap, ad%vrow, ad%nv, ad%nv_loc, ad%np, ad%r, ad%head, rows, nrows, ptree, pgno)
+      endif
+   end subroutine BPACK_addend_fetch
+
+   !> BPACK_addend_fetch for one side: tab (slots), map (row -> slot), rowof (slot -> row), n slots in use, nloc
+   !> of them this rank's own, lay the rows each rank of the term's group owns (head its first rank)
+   subroutine addend_fetch_side(tab, map, rowof, n, nloc, lay, r, head, rows, nrows, ptree, pgno)
+      implicit none
+      DT, allocatable :: tab(:, :)
+      integer, allocatable :: map(:), rowof(:)
+      integer :: n, nloc, lay(:, :), r, head, nrows, pgno
+      integer :: rows(*)
+      type(proctree)::ptree
+      integer, allocatable :: need(:), own(:), sreq(:), rreq(:), sc(:), rc(:), sd(:), rd(:), at(:), itmp(:)
+      DT, allocatable :: sbuf(:, :), rbuf(:, :), tmp(:, :)
+      integer comm, np, gh, i, k, g, p, q, s, nneed, nsend, ierr, cap
+
+      comm = ptree%pgrp(pgno)%Comm
+      np = ptree%pgrp(pgno)%nproc
+      gh = ptree%pgrp(pgno)%head
+      ! the rows not held, once each, with their owners (ranks in group pgno)
+      allocate (need(max(nrows, 1)), own(max(nrows, 1)), sc(np), rc(np), sd(np), rd(np))
+      sc = 0
+      nneed = 0
+      do i = 1, nrows
+         g = rows(i)
+         if (map(g) /= 0) cycle
+         map(g) = -1
+         q = -1
+         do p = 1, size(lay, 1)
+            if (g >= lay(p, 1) .and. g <= lay(p, 2)) then
+               q = head + p - 1 - gh
+               exit
+            endif
+         enddo
+         call BPACK_require(q >= 0 .and. q < np, 'a row of the low-rank entry term outside the group fetching it')
+         nneed = nneed + 1
+         need(nneed) = g
+         own(nneed) = q
+         sc(q + 1) = sc(q + 1) + 1
+      enddo
+      ! the requests, by owner
+      sd(1) = 0
+      do q = 2, np
+         sd(q) = sd(q - 1) + sc(q - 1)
+      enddo
+      allocate (sreq(max(nneed, 1)), at(np))
+      at = sd
+      do k = 1, nneed
+         map(need(k)) = 0
+         at(own(k) + 1) = at(own(k) + 1) + 1
+         sreq(at(own(k) + 1)) = need(k)
+      enddo
+      call MPI_ALLTOALL(sc, 1, MPI_INTEGER, rc, 1, MPI_INTEGER, comm, ierr)
+      rd(1) = 0
+      do q = 2, np
+         rd(q) = rd(q - 1) + rc(q - 1)
+      enddo
+      nsend = sum(rc)
+      allocate (rreq(max(nsend, 1)))
+      call MPI_ALLTOALLV(sreq, sc, sd, MPI_INTEGER, rreq, rc, rd, MPI_INTEGER, comm, ierr)
+      ! the rows asked of this rank (its own), r values each, back in the order asked
+      allocate (sbuf(max(r, 1), max(nsend, 1)), rbuf(max(r, 1), max(nneed, 1)))
+      do k = 1, nsend
+         s = map(rreq(k))
+         call BPACK_require(s > 0 .and. s <= nloc, 'a row of the low-rank entry term asked of a rank not owning it')
+         sbuf(1:r, k) = tab(s, 1:r)
+      enddo
+      call MPI_ALLTOALLV(sbuf, rc*r, rd*r, MPI_DT, rbuf, sc*r, sd*r, MPI_DT, comm, ierr)
+      ! appended
+      if (n + nneed > size(tab, 1)) then
+         cap = max(n + nneed, 2*size(tab, 1))
+         allocate (tmp(cap, max(r, 1)), itmp(cap))
+         tmp(1:n, :) = tab(1:n, :)
+         itmp(1:n) = rowof(1:n)
+         call move_alloc(tmp, tab)
+         call move_alloc(itmp, rowof)
+      endif
+      do k = 1, nneed
+         n = n + 1
+         tab(n, 1:r) = rbuf(1:r, k)
+         rowof(n) = sreq(k)
+         map(sreq(k)) = n
+      enddo
+      deallocate (need, own, sc, rc, sd, rd, sreq, at, rreq, sbuf, rbuf)
+   end subroutine addend_fetch_side
+
+   !> The rows of the low-rank entry term fetched since its slots in use were nu, nv: dropped
+   subroutine BPACK_addend_truncate(ad, nu, nv)
+      implicit none
+      type(entry_addend)::ad
+      integer nu, nv, s
+
+      do s = nu + 1, ad%nu
+         ad%umap(ad%urow(s)) = 0
+      enddo
+      ad%nu = nu
+      do s = nv + 1, ad%nv
+         ad%vmap(ad%vrow(s)) = 0
+      enddo
+      ad%nv = nv
+   end subroutine BPACK_addend_truncate
 
 
 

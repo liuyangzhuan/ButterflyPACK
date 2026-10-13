@@ -123,6 +123,8 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
 // process tree; the source's handles bmat, option, msh, stats and ptree point to nullptr outside the subset)
 void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
+void c_bpack_set_entry_addend(F2Cptr* ker, F2Cptr* bf, F2Cptr* ptree);
+void c_bpack_clear_entry_addend(F2Cptr* ker);
 void c_bpack_createptree(int*nmpi, int*groupmembers, MPI_Fint*MPIcomm, F2Cptr*ptree);
 void c_bpack_get_comm(F2Cptr* ptree, int* fcomm);
 void c_bpack_createstats(F2Cptr*stats);
@@ -162,6 +164,7 @@ void c_bf_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats
 void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, int* nnsr, int* nnsc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_element_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr), void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_matvec_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,void (*C_FuncBMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr,C_DT*, C_DT*), C2Fptr C_QuantApp);
+void c_bf_schur_deterministic(F2Cptr* bf21, F2Cptr* bf12, F2Cptr* bmat11, F2Cptr* option11, F2Cptr* stats11, F2Cptr* ptree11, F2Cptr* bfS, F2Cptr* optionS, F2Cptr* statsS, F2Cptr* ptreeS);
 void c_bf_deletebf(F2Cptr*bf);
 void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bf,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bf_new2old_row(F2Cptr* mshr, int* newidx_loc, int* oldidx);
