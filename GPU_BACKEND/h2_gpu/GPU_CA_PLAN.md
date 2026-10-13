@@ -5239,6 +5239,33 @@ of 1-2 s that proposed it assumed the dead updates were a large share;
 they are not - once two ghosts are both eliminated, few later
 eliminations touch their pair.
 
+#### H2_CA_pack_shared: auto / always / never (2026-10-12)
+
+A solver option (the user's exception to "no new options") for replicated
+GPU CA levels: whether the near blocks held by more than one rank are
+packed through the ghosts' groups.  0 auto: the level-start estimate as
+before; 1 always; 2 never - and then no rank packs them on its own when it
+runs short either (the fallback that made the ghost copies differ), so a
+card without the room for them raw stops with "heap exhausted".  The
+drivers and the C wrapper take the words.
+
+Checks (lib_det35): 192^3 replica check 0 differ with never and with
+always (CA at levels 4 and 5; never's logdet bitwise the default's, always
+packs and costs the leaf 1.3 s there); 384^3 auto and always bitwise the
+previous build's; 384^3 never on 40 GB stops with "heap exhausted"; Color
+unchanged.  768^3 on 64 ranks, 80 GB, one job:
+
+| run | leaf | factor time | solve |
+|---|---|---|---|
+| Color | 44.37 / 44.41 s | 85.5 / 85.2 s | 1.84 / 2.53 s |
+| CA0 never | 45.12 / 45.03 s | 88.1 / 88.0 s | 2.04 / 2.15 s |
+| CA0 auto | 50.52 s | 94.6 s | 2.04 s |
+
+CA0 with never is 0.7 s behind Color at the leaf and 2.8 s in factor time
+(its levels add 1.1 s, the rest is the level starts and transitions with
+2.5 GB more kept factors staged).  Its two runs have the same logdet to
+the last digit; Color's differ run to run at 64 ranks.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

@@ -144,6 +144,7 @@ struct ProgramOptions {
     int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
+    int ca_pack_shared = 0;     // GPU, replicated CA levels: blocks on more than one rank packed: 0 auto, 1 always, 2 never
     int ca_owner_serial = 0;    // Serialize mode-3 events as a correctness oracle
     int id_neighborhood_radius = 2; // Diagnostic: append original-cloud rows through this box radius
     int id_proxy_mode = 0;          // 0: none, 1: geometric surface, 2: adaptive row sampling

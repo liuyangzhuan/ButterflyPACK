@@ -504,7 +504,7 @@ public:
     // raw (asked after set_solve_keep), and the level's decision, taken on
     // every rank alike, to hold the blocks on more than one rank packed
     virtual bool shared_packing_expected() { return false; }
-    virtual void set_pack_shared(bool /*pack*/) {}
+    virtual void set_pack_shared(bool /*pack*/, bool /*fallback*/) {}
     // ... and the end of its ghosts: from the interior group on no rank
     // eliminates a ghost, so no copy of a block on another rank is read
     // again and every block packs by this rank's pressure alone.  Called
@@ -1855,7 +1855,7 @@ private:
         if (pack_shared_) pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
         if (!pressure) return;
         pack_near_group(targets, first, last, stream, 1.0, PackOnly::Private);
-        if (!pack_shared_ && under_pressure()) {
+        if (!pack_shared_ && shared_fallback_ && under_pressure()) {
             warn_replica_fallback("short of room with its own blocks packed, the shared ones packed too");
             pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
         }
@@ -2595,7 +2595,12 @@ private:
         const double room = static_cast<double>(hold_limit()) - static_cast<double>(heap_.used());
         return room;
     }
-    void set_pack_shared(bool pack) override { pack_shared_ = replicated_ && pack; }
+    void set_pack_shared(bool pack, bool fallback) override {
+        pack_shared_ = replicated_ && pack;
+        shared_fallback_ = fallback;
+    }
+    // (H2_CA_pack_shared never: a rank short of room does not pack them alone)
+    bool shared_fallback_ = true;
     void replicas_done() override {
         replicas_done_ = true;
         pack_shared_ = false;

@@ -59,6 +59,7 @@ public:
         bool is_hermitian = false;
         bool occupancy = false;
         int ca_owner_component = 0;  // H2_CA_owner_component
+        int ca_pack_shared = 0;      // H2_CA_pack_shared: 0 auto, 1 always, 2 never
         int compress_factors = 0;    // H2_compress_factors (tolerance: `tolerance`)
     };
 
@@ -606,14 +607,22 @@ public:
         if (level_) {   // (every rank of the level: fits was decided together)
             int pack = level_->shared_packing_expected() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
-            level_->set_pack_shared(pack != 0);
+            // H2_CA_pack_shared: auto (0) by the estimate above; always (1);
+            // never (2) - and no rank packs them on its own when it runs
+            // short either (that is how ghost copies came to differ), so a
+            // card without the room for them raw runs out of heap instead
+            if (opt_.ca_pack_shared == 1) pack = 1;
+            if (opt_.ca_pack_shared == 2) pack = 0;
+            level_->set_pack_shared(pack != 0, opt_.ca_pack_shared != 2);
             double est[2] = {level_->shared_packing_estimate(), -level_->shared_packing_room()};
             MPI_Allreduce(MPI_IN_PLACE, est, 2, MPI_DOUBLE, MPI_MAX, level_comm);
             if (announce) {
+                static const char* const modes[3] = {"auto", "always", "never"};
                 std::printf("  [gpu] level %d: the blocks on more than one rank %s through the ghosts' groups "
-                            "(their near set raw: up to %.1f GB a rank against %.1f GB of room under the hold "
-                            "limit on the tightest)\n", lvl, pack != 0 ? "held packed" : "left to each rank's pressure",
-                            est[0] / 1e9, -est[1] / 1e9);
+                            "(H2_CA_pack_shared %s; their near set raw: up to %.1f GB a rank against %.1f GB of room "
+                            "under the hold limit on the tightest)\n", lvl,
+                            pack != 0 ? "held packed" : (opt_.ca_pack_shared == 2 ? "never packed" : "left to each rank's pressure"),
+                            modes[std::min(std::max(opt_.ca_pack_shared, 0), 2)], est[0] / 1e9, -est[1] / 1e9);
                 std::fflush(stdout);
             }
         }

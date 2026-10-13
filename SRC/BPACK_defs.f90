@@ -853,6 +853,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: HODLR_gpu_pieces !< HODLR GPU construction (HODLR_use_gpu > 0): pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces, each on its rank)
         integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
         integer:: H2_CA_owner_component !< H2 CA component ownership: 0 replicated, 3 asynchronous owner schedule
+        integer:: H2_CA_pack_shared !< H2 GPU, replicated CA levels (H2_CA_owner_component 0, H2_compress_factors 1): the near blocks held by more than one rank packed through the ghosts' groups: 0 auto (when the level's estimate does not fit under the hold limit), 1 always, 2 never (no rank packs them; the card must hold them raw)
         integer:: H2_CA_owner_serial !< 1: serialize the CA component-owner schedule as a correctness oracle
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling

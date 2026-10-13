@@ -380,7 +380,10 @@ void hierarchical_factorization_parallel(
     int verbosity = 1,
     // H2_compress_factors: lossy compression of the kept factors at
     // `tolerance` (0 off, 1 the retained X_NR, 2 also the fill sources).
-    int compress_factors = 0) {
+    int compress_factors = 0,
+    // H2_CA_pack_shared: a replicated GPU CA level's blocks on more than one
+    // rank packed through the ghosts' groups - 0 auto, 1 always, 2 never
+    int ca_pack_shared = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
@@ -511,6 +514,7 @@ void hierarchical_factorization_parallel(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.ca_owner_component = ca_owner_component;
+    gpu_options.ca_pack_shared = ca_pack_shared;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         const double kernels = gpu_driver.warm_up();
@@ -2238,7 +2242,8 @@ void hierarchical_factorization_parallel_if_supported(
     int ca_owner_component = 0,
     int ca_owner_serial = 0,
     int verbosity = 1,
-    int compress_factors = 0) {
+    int compress_factors = 0,
+    int ca_pack_shared = 0) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
         hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
@@ -2260,7 +2265,8 @@ void hierarchical_factorization_parallel_if_supported(
             ca_owner_component,
             ca_owner_serial,
             verbosity,
-            compress_factors);   // instantiated ONLY for double types
+            compress_factors,
+            ca_pack_shared);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
     }
@@ -2329,7 +2335,8 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
     solver->options.verbosity,
-    solver->options.compress_factors);
+    solver->options.compress_factors,
+    solver->options.ca_pack_shared);
   // the logdet and quick verification that end the call, and the GPU
   // kernel warm-up before its first level, are not factorization
   double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds() - butterfly::h2_warmup_seconds();
