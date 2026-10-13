@@ -60,6 +60,7 @@ public:
         bool occupancy = false;
         int ca_owner_component = 0;  // H2_CA_owner_component
         int ca_pack_shared = 0;      // H2_CA_pack_shared: 0 auto, 1 always, 2 never
+        int ca_solve = 0;            // H2_CA_solve: 0 replicated, 1 home
         int compress_factors = 0;    // H2_compress_factors (tolerance: `tolerance`)
     };
 
@@ -614,6 +615,14 @@ public:
             if (opt_.ca_pack_shared == 1) pack = 1;
             if (opt_.ca_pack_shared == 2) pack = 0;
             level_->set_pack_shared(pack != 0, opt_.ca_pack_shared != 2);
+            // H2_CA_solve home: the ghosts' factors are not kept (the solves run
+            // the level from each box's home factors, in its elimination order)
+            level_->set_home_solve(opt_.ca_solve == 1);
+            if (announce && opt_.ca_solve == 1) {
+                std::printf("  [gpu] level %d: solved from its home factors (H2_CA_solve home): the ghosts' factors "
+                            "are not kept\n", lvl);
+                std::fflush(stdout);
+            }
             double est[2] = {level_->shared_packing_estimate(), -level_->shared_packing_room()};
             MPI_Allreduce(MPI_IN_PLACE, est, 2, MPI_DOUBLE, MPI_MAX, level_comm);
             if (announce) {
@@ -1152,6 +1161,10 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.ghost_lu_bytes > 0) {
+                std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",
+                            level.level, e.ghost_lu_bytes / 1e9);
+            }
             if (e.rc_sources > 0 || e.tr_xrr_host > 0 || e.xr_restored > 0) {
                 std::printf("  [gpu] level %d fill sources without host copies: %lld freed during the waves, X_RR_full of "
                             "%lld restored from the host at the transition, %lld rebuilt from the LU at a keep's failure\n",

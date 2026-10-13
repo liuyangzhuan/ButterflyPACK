@@ -5266,6 +5266,78 @@ CA0 with never is 0.7 s behind Color at the leaf and 2.8 s in factor time
 2.5 GB more kept factors staged).  Its two runs have the same logdet to
 the last digit; Color's differ run to run at 64 ranks.
 
+#### H2_CA_solve: replicated / home (2026-10-12)
+
+A second solver option for CA0 on the GPU (the user's exception too): how
+a replicated level is solved.  0 replicated (the default, as before): the
+ghosts' factors are kept and the level runs its waves over the local boxes
+and the ghosts, with one halo exchange before the forward sweep and one a
+colour group in the backward sweep.  1 home: the level is solved as a
+component-owner (CA3) level is, from each box's home factors in its
+elimination order (ca_home_order, ca_home_factors); the ghosts' T, X_SR
+and X_NR are not kept, nor their host copies (except under
+`BPACK_CHECK=replica`).  Kept as an option rather than a replacement so
+both can be retested on other kernels, sizes, boxes a rank and
+tolerances.  The drivers and the C wrapper take the words.
+
+**Why the replicated solve does not win.**  The solve reads each kept
+factor once and is bandwidth-bound.  Replicated, an interior rank reads
+its ghosts' factors as well (8,408 ghosts against 32,768 boxes at 768^3 on
+64 ranks, +26%; the leaf's kept factors are up to 215 GB raw a rank
+against Color's 164), and the ranks with more ghosts wait for nothing but
+are waited for: the forward sweep, which has no exchange inside it, is
+1.60 s against home's 1.30 (40 GB).  The "CA halo copies" timer ends in a
+stream synchronize that also waits for the backward group's queued
+kernels, so most of its 0.37-0.76 s is that compute, not copying.
+
+**A bug found on the way: home's replicas were not bitwise.**  With home,
+the replica check at 192^3 (8 ranks) read 8374 of 9488 ghost copies
+differing at the leaf, from wave 1 on (in T, LU, X_SR, X_RS, X_NR and
+X_RR_full; skeletons the same).  A box whose LU is kept drops its stored
+X_RR_full, and later fills rebuild it as P L U (`xrr_lu`), which is not
+bitwise the stored one: the owner kept and rebuilt, the ghost's holder kept
+nothing and read the stored copy.  Now a home ghost keeps its LU and
+pivots (no T, X_SR, X_NR) in a block of the level's own, freed at the
+level end after the transition, so its X_RR_full goes and is rebuilt as
+its owner's is; the transition rebuilds it from that LU too, so its host
+copy is no longer made (`host_skips_xrr`).  0.31 GB a rank at the 192^3
+leaf, 0.98 GB at the 384^3 and 768^3 leaves.
+
+Checks (lib_det37): 192^3 replica check 0 differ under home and
+replicated (CA at levels 4 and 5, and at the leaf only); home's logdet
+bitwise replicated's at 192^3 (-89253589.46028012 / ...018, the
+known one-ulp run-to-run variation); acc_backward 1.1e-15 to 2.3e-15.
+At 384^3 (8 ranks, 40 GB) home and replicated differ within the
+compression (logdet -792567541.90 / -792567539.98): each rank packs owner
+groups of its private blocks under its own pressure (787 / 789), and home
+holds less.  Replicated is bitwise the previous build's: lib_det36 and
+lib_det37 alternating in one job give -792567539.97884488 four times (one
+earlier job gave -792567543.56 with lib_det37 on other nodes: a one-off,
+the same code path).  Home reproduces bitwise run to run at 384^3 and
+768^3.
+
+768^3 on 64 ranks, CA at the leaf, one job each, the runs alternating (GPU
+solve: the device solve as printed; time_solve: the solve call):
+
+| 40 GB (pack_shared auto) | GPU solve | forward / backward | MPI | time_solve | factor time | leaf |
+|---|---|---|---|---|---|---|
+| Color | 2.841 / 2.839 s | 1.27 / 1.45 | 0.73 | 3.07 / 2.92 s | 98.9 / 97.2 s | 50.6 / 49.8 s |
+| CA0 replicated | 3.449 / 3.448 s | 1.60 / 1.74 | 1.05 | 3.53 / 3.50 s | 106 / 104 s | 55.8 / 54.6 s |
+| CA0 home | 2.871 / 2.871 s | 1.30 / 1.46 | 0.77 | 2.99 / 2.91 s | 105 / 104 s | 54.9 / 54.8 s |
+
+| 80 GB (pack_shared never) | GPU solve | forward / backward | MPI | time_solve | factor time | leaf |
+|---|---|---|---|---|---|---|
+| Color | 1.782 / 1.783 s | 0.79 / 0.89 | 0.39 | 1.82 / 1.83 s | 84.9 / 84.7 s | 44.2 / 43.9 s |
+| CA0 replicated | 1.994 / 1.995 s | 0.89 / 1.00 | 0.50 | 2.04 / 2.04 s | 87.4 / 87.9 s | 44.6 / 44.8 s |
+| CA0 home | 1.802 / 1.802 s | 0.79 / 0.91 | 0.40 | 1.84 / 1.84 s | 86.9 / 86.1 s | 44.6 / 44.6 s |
+
+Home takes 17% (40 GB) and 10% (80 GB) off CA0's solve and is within 1%
+of Color's: the same factors read (164.07 GB raw at most a rank at the
+leaf, Color 164.04, replicated 215.18) and a comparable exchange.  It
+cannot beat Color's solve - it is Color's work in a different order - and
+CA0's factor time is unchanged by it (within run-to-run noise; ~1 s less
+at 80 GB from the smaller kept set staged at the level ends).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

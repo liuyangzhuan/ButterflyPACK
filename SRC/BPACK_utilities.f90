@@ -1327,6 +1327,7 @@ contains
       option%H2_CA_staged_halo=0
       option%H2_CA_owner_component=0
       option%H2_CA_pack_shared=0
+      option%H2_CA_solve=0
       option%H2_CA_owner_serial=0
       option%H2_ID_radius=2
       option%H2_ID_proxy=0
@@ -1408,6 +1409,14 @@ contains
                      option%H2_CA_pack_shared = 2
                   else
                      read (strings1, *) option%H2_CA_pack_shared
+                  endif
+               else if (trim(strings) == '--h2_ca_solve' .or. trim(strings) == '--H2_CA_solve') then
+                  if (trim(strings1) == 'replicated') then
+                     option%H2_CA_solve = 0
+                  else if (trim(strings1) == 'home') then
+                     option%H2_CA_solve = 1
+                  else
+                     read (strings1, *) option%H2_CA_solve
                   endif
                else if (trim(strings) == '--h2_ca_owner_serial' .or. trim(strings) == '--H2_CA_owner_serial') then
                   read (strings1, *) option%H2_CA_owner_serial
@@ -1550,6 +1559,7 @@ contains
       option1%H2_CA_staged_halo = option%H2_CA_staged_halo
       option1%H2_CA_owner_component = option%H2_CA_owner_component
       option1%H2_CA_pack_shared = option%H2_CA_pack_shared
+      option1%H2_CA_solve = option%H2_CA_solve
       option1%H2_CA_owner_serial = option%H2_CA_owner_serial
       option1%H2_ID_radius = option%H2_ID_radius
       option1%H2_ID_proxy = option%H2_ID_proxy
@@ -1644,6 +1654,7 @@ contains
             write (*, '(A20,I8)') 'h2_ca_staged_halo', option%H2_CA_staged_halo
             write (*, '(A22,I8)') 'h2_ca_owner_component', option%H2_CA_owner_component
             write (*, '(A18,I8)') 'h2_ca_pack_shared', option%H2_CA_pack_shared
+            write (*, '(A12,I8)') 'h2_ca_solve', option%H2_CA_solve
             write (*, '(A19,I8)') 'h2_ca_owner_serial', option%H2_CA_owner_serial
             write (*, '(A18,I8)') 'h2_id_radius', option%H2_ID_radius
             write (*, '(A18,I8)') 'h2_id_proxy', option%H2_ID_proxy

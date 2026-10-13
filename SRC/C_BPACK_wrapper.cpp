@@ -113,6 +113,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_CA_staged_halo_d = 0.0;
   double H2_CA_owner_component_d = 0.0;
   double H2_CA_pack_shared_d = 0.0;
+  double H2_CA_solve_d = 0.0;
   double H2_CA_owner_serial_d = 0.0;
   double H2_ID_radius_d = 0.0;
   double H2_ID_proxy_d = 0.0;
@@ -134,6 +135,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
   c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
   c_bpack_getoption(option, "H2_CA_pack_shared", &H2_CA_pack_shared_d);
+  c_bpack_getoption(option, "H2_CA_solve", &H2_CA_solve_d);
   c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
   c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
   c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
@@ -164,6 +166,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
       static_cast<int>(std::llround(H2_CA_owner_component_d));
   const int H2_CA_pack_shared =
       static_cast<int>(std::llround(H2_CA_pack_shared_d));
+  const int H2_CA_solve =
+      static_cast<int>(std::llround(H2_CA_solve_d));
   const int H2_CA_owner_serial =
       static_cast<int>(std::llround(H2_CA_owner_serial_d));
   const int H2_ID_radius =
@@ -207,6 +211,9 @@ static butterfly::ProgramOptions read_h2_program_options64(
   if (H2_CA_pack_shared < 0 || H2_CA_pack_shared > 2) {
     throw std::invalid_argument("H2_CA_pack_shared must be 0 (auto), 1 (always) or 2 (never)");
   }
+  if (H2_CA_solve < 0 || H2_CA_solve > 1) {
+    throw std::invalid_argument("H2_CA_solve must be 0 (replicated) or 1 (home)");
+  }
   if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
     throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
   }
@@ -247,6 +254,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
   result.ca_pack_shared = H2_CA_pack_shared;
+  result.ca_solve = H2_CA_solve;
   result.ca_owner_serial = H2_CA_owner_serial;
   result.id_neighborhood_radius = H2_ID_radius;
   result.id_proxy_mode = H2_ID_proxy;
@@ -322,6 +330,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"jitter",          "relative size of the pivots and diagonal shifts that keep dense and small factorizations nonsingular"},
 		{"h2_ca_staged_halo", "format-7 H2 CA halo mode: 0 legacy, 2 staged/overlapped"},
 		{"h2_ca_owner_component", "format-7 H2 CA ownership mode: 0 replicated, 3 asynchronous components"},
+		{"h2_ca_solve", "format-7 H2 GPU, replicated CA levels: how the level is solved: replicated (0: the ghosts' factors kept and applied again on every rank holding them) or home (1: each box's factors applied by its home rank only, the vector exchanged by wave)"},
 		{"h2_ca_pack_shared", "format-7 H2 GPU, replicated CA levels: near blocks held by more than one rank packed through the ghosts' groups: auto (0, by the level's estimate), always (1), never (2: the card must hold them raw)"},
 		{"h2_ca_owner_serial", "serialize format-7 H2 CA component-owner events (0 or 1)"},
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
@@ -440,6 +449,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_CA_owner_component", required_argument, 0, 55},
 		{"h2_ca_pack_shared", required_argument, 0, 63},
 		{"H2_CA_pack_shared", required_argument, 0, 63},
+		{"h2_ca_solve", required_argument, 0, 64},
+		{"H2_CA_solve", required_argument, 0, 64},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
 		{"h2_unstructured", required_argument, 0, 57},
@@ -759,6 +770,13 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		else if (v == "never") opt_i = 2;
 		else { std::istringstream iss(v); iss >> opt_i; }
 		c_bpack_set_I_option(&option0, "H2_CA_pack_shared", opt_i);
+		} break;
+		case 64: {
+		const std::string v(optarg);
+		if (v == "replicated") opt_i = 0;
+		else if (v == "home") opt_i = 1;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_CA_solve", opt_i);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -1166,6 +1184,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_CA_staged_halo_d;
       double H2_CA_owner_component_d;
       double H2_CA_pack_shared_d;
+      double H2_CA_solve_d;
       double H2_CA_owner_serial_d;
       double H2_ID_radius_d;
       double H2_ID_proxy_d;
@@ -1187,6 +1206,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
       c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
       c_bpack_getoption(option, "H2_CA_pack_shared", &H2_CA_pack_shared_d);
+      c_bpack_getoption(option, "H2_CA_solve", &H2_CA_solve_d);
       c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
       c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
       c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
@@ -1209,6 +1229,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
           static_cast<int>(std::llround(H2_CA_owner_component_d));
       const int H2_CA_pack_shared =
           static_cast<int>(std::llround(H2_CA_pack_shared_d));
+      const int H2_CA_solve =
+          static_cast<int>(std::llround(H2_CA_solve_d));
       const int H2_CA_owner_serial =
           static_cast<int>(std::llround(H2_CA_owner_serial_d));
       const int H2_ID_radius = static_cast<int>(std::llround(H2_ID_radius_d));
@@ -1248,6 +1270,9 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_CA_pack_shared < 0 || H2_CA_pack_shared > 2) {
         throw std::invalid_argument("H2_CA_pack_shared must be 0 (auto), 1 (always) or 2 (never)");
       }
+      if (H2_CA_solve < 0 || H2_CA_solve > 1) {
+        throw std::invalid_argument("H2_CA_solve must be 0 (replicated) or 1 (home)");
+      }
       if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
         throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
       }
@@ -1286,6 +1311,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.ca_staged_halo = H2_CA_staged_halo;
       H2_options.ca_owner_component = H2_CA_owner_component;
       H2_options.ca_pack_shared = H2_CA_pack_shared;
+      H2_options.ca_solve = H2_CA_solve;
       H2_options.ca_owner_serial = H2_CA_owner_serial;
       H2_options.id_neighborhood_radius = H2_ID_radius;
       H2_options.id_proxy_mode = H2_ID_proxy;
@@ -1321,6 +1347,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_ca_staged_halo=" << H2_options.ca_staged_halo
                   << ", h2_ca_owner_component=" << H2_options.ca_owner_component
                   << ", h2_ca_pack_shared=" << H2_options.ca_pack_shared
+                  << ", h2_ca_solve=" << H2_options.ca_solve
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
                   << ", h2_id_proxy=" << H2_options.id_proxy_mode;

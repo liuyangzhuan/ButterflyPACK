@@ -151,6 +151,7 @@ struct EliminatorStats {
     double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
     int64_t xr_dropped = 0;           // boxes whose X_RR_full is rebuilt from their LU instead of stored
     int64_t xr_rebuilt = 0;           // ... and the rebuilds that cost
+    double ghost_lu_bytes = 0.0;      // H2_CA_solve home: the ghosts' LU, held to the level's end
     // H2 host memory (2026-10-10): the fill sources freed without a host
     // copy made, the X_RR_full the transition took from the host for them,
     // and the X_RR_full rebuilt from the LU when a keep failed
@@ -510,6 +511,9 @@ public:
     // again and every block packs by this rank's pressure alone.  Called
     // at the same wave on every rank.
     virtual void replicas_done() {}
+    // H2_CA_solve home: the level is solved from each box's home factors, so a
+    // ghost's factors are not kept here (as an owner level's owned ghost's)
+    virtual void set_home_solve(bool /*home*/) {}
     virtual double shared_packing_estimate() const { return 0.0; }
     virtual double shared_packing_room() const { return 0.0; }
     virtual void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) {
@@ -1164,6 +1168,47 @@ private:
                             const std::vector<char*>& d_temp2, cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_temp2, cudaStream_t stream);
+    // H2_CA_solve home: a ghost's LU and pivots, held to the level's end (its
+    // owner keeps them for the solve).  Its stored X_RR_full then goes and is
+    // rebuilt from them wherever it is read, as its owner's is: the rebuild is
+    // not bitwise the stored X_RR_full, and a ghost reading the latter fed
+    // its later neighbours a different fill (192^3, 8 ranks: 8374 of 9488
+    // ghost copies differed from their owners').
+    void keep_ghost_lu(const std::vector<const WaveBox*>& ghosts, char* d_result, cudaStream_t stream) {
+        if (ghosts.empty()) return;
+        const size_t D = sizeof(S);
+        size_t bytes = 0;
+        for (const WaveBox* wb : ghosts) {
+            const size_t r = static_cast<size_t>(wb->r);
+            bytes += align_up(r * r * D) + align_up(r * sizeof(int));
+        }
+        char* block = heap_.alloc_resident(bytes, ResidentKind::FillXrr);
+        level_allocs_.push_back(block);
+        std::vector<CopySpan> items;
+        int64_t max_words = 0;
+        size_t at = 0;
+        for (const WaveBox* wb : ghosts) {
+            const size_t r = static_cast<size_t>(wb->r);
+            char* lu = block + at;
+            at += align_up(r * r * D);
+            char* piv = block + at;
+            at += align_up(r * sizeof(int));
+            items.push_back(CopySpan{d_result + wb->off_xrr, lu, static_cast<int64_t>(r * r * D / 4)});
+            items.push_back(CopySpan{d_result + wb->off_piv, piv, static_cast<int64_t>(r * sizeof(int) / 4)});
+            max_words = std::max(max_words, static_cast<int64_t>(r * r * D / 4));
+            wb->state->xrr_lu = reinterpret_cast<const S*>(lu);
+            wb->state->xrr_piv = reinterpret_cast<const int*>(piv);
+        }
+        const size_t list_bytes = items.size() * sizeof(CopySpan);
+        if (list_bytes > solve_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "ghost LU");  // the old list may still be read
+            solve_meta_device_.reserve(list_bytes);
+        }
+        auto* d_items = static_cast<CopySpan*>(solve_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_items, items.data(), list_bytes, cudaMemcpyHostToDevice, stream), "ghost LU");
+        launch_copy_spans(d_items, static_cast<int>(items.size()), max_words, stream);
+        eliminator_stats().ghost_lu_bytes += static_cast<double>(bytes);
+    }
     bool keep_retry_smaller_ = false;
     bool keep_may_split_ = false;   // (only a wave's own keep groups split; landed factors do not)
     // H2_compress_factors: a box whose kept X_NR is still the fill source's
@@ -1239,7 +1284,25 @@ private:
     bool host_skips_xnr(const WaveBox& wb) const {
         return skip_xnr_ && !keep_failed_ && wb.ntot > 0 &&
                kept_.boxes.count(wb.box->morton_index) != 0 &&
-               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
+               !ghost_factors_elsewhere(wb.box->morton_index);
+    }
+    // A ghost eliminated here whose factors live with its owner: an owner
+    // level's owned ghost (they go home with the FULL payload), or a
+    // replicated level's ghost under H2_CA_solve home (the level is solved
+    // from its home factors).  Not kept here for the solve.
+    bool home_solve_ = false;
+    bool ghost_factors_elsewhere(int64_t morton) const {
+        if (owner_ != nullptr) return owner_->owned_ghost(morton);
+        if (!home_solve_ || !ca_) return false;
+        const auto it = remote_index_.find(morton);
+        return it != remote_index_.end() && remote_states_[it->second].ghost;
+    }
+    // ... nor its host copies (the solve factors, its X_NR where the packed
+    // store has its temp2^T), except under the replica check, which hashes
+    // the ghost copies against their owners'
+    bool ghost_host_copies_spent(int64_t morton) const {
+        if (owner_ != nullptr) return owner_->owned_ghost(morton);
+        return ghost_factors_elsewhere(morton) && !ca_replica_check_enabled();
     }
     // An owner level's owned ghost whose temp2^T is in the packed fill store:
     // the transition puts that back (packed_restore_, as for a remote
@@ -1249,16 +1312,19 @@ private:
     // list either.  (CA3's leaf at 768^3 on 64 ranks held ~14 GB a rank more
     // outside the pinned chunks than CA0's, and the host ran out.)
     bool host_drops_ghost_xnr(const WaveBox& wb) const {
-        return packed_restore_ && device_exchange_ && owner_ != nullptr && wb.ntot > 0 && wb.state != nullptr &&
-               owner_->owned_ghost(wb.box->morton_index) && packed_of(*wb.state) != nullptr;
+        return packed_restore_ && (owner_ == nullptr || device_exchange_) && wb.ntot > 0 && wb.state != nullptr &&
+               ghost_host_copies_spent(wb.box->morton_index) && packed_of(*wb.state) != nullptr;
     }
     // H2 host memory: nor its X_RR_full - the transition rebuilds it from the
-    // kept LU.  Not on a level whose generators go through the host
+    // kept LU (an H2_CA_solve home ghost's from the LU it holds to the level's
+    // end).  Not on a level whose generators go through the host
     // (emit_generators reads the copy).
     bool host_skips_xrr(const WaveBox& wb) const {
-        return packed_restore_ && skip_xnr_ && !keep_failed_ && kept_.boxes.count(wb.box->morton_index) != 0 &&
-               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) &&
-               !(wb.has_remote && !device_exchange_);
+        const int64_t m = wb.box->morton_index;
+        const bool lu_here = ghost_factors_elsewhere(m) ? owner_ == nullptr && wb.state != nullptr &&
+                                                              wb.state->xrr_lu != nullptr
+                                                        : kept_.boxes.count(m) != 0;
+        return packed_restore_ && skip_xnr_ && !keep_failed_ && lu_here && !(wb.has_remote && !device_exchange_);
     }
     // The slot a neighbor position holds in the two stores, or -1.
     static int32_t slot_at(const WaveBox& wb, size_t pos) {
@@ -2605,6 +2671,7 @@ private:
         replicas_done_ = true;
         pack_shared_ = false;
     }
+    void set_home_solve(bool home) override { home_solve_ = home && ca_ && owner_ == nullptr; }
     std::vector<char> local_shared_;   // by local index: on another rank too
     bool local_shared_ready_ = false, local_shared_all_ = false;
     bool box_shared(int64_t m) {
@@ -5190,7 +5257,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (int i : chunk_active) {
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             if (wb.k == 0 || wb.r == 0) continue;
-            if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+            if (ghost_factors_elsewhere(wb.box->morton_index)) continue;
             const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
             factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
                                                  align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
@@ -6052,8 +6119,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             // (the host transport, which reads it, is not on).  T stays on
             // the host for the matvec.
             // An owner level's owned ghost: its factors go to its home rank
-            // (the FULL payload), nothing stays here.
-            const bool owned_ghost = owner_ != nullptr && owner_->owned_ghost(box->morton_index);
+            // (the FULL payload), nothing stays here; and a replicated level's
+            // ghost under H2_CA_solve home (solved from home factors).
+            const bool owned_ghost = ghost_host_copies_spent(box->morton_index);
             const bool host = !owned_ghost && !(skip_xnr_ && !keep_failed_ && kept_.boxes.count(box->morton_index) != 0);
             dims->push_back({box, wb.k, wb.r, host});
             box->X_RR = MatrixStorage<DataType>{};
@@ -8752,13 +8820,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     const size_t D = sizeof(S);
 
     // ---- this wave's boxes whose factors are worth keeping
-    std::vector<const WaveBox*> kept_boxes;
+    std::vector<const WaveBox*> kept_boxes, home_ghosts;
     for (int i : active) {
         const WaveBox& wb = boxes[static_cast<size_t>(i)];
         if (wb.k == 0 || wb.r == 0) continue;
-        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+        if (ghost_factors_elsewhere(wb.box->morton_index)) {
+            if (owner_ == nullptr && wb.state != nullptr) home_ghosts.push_back(&wb);
+            continue;
+        }
         kept_boxes.push_back(&wb);
     }
+    keep_ghost_lu(home_ghosts, d_result, stream);
     if (kept_boxes.empty()) return;
     if (compress_factors_ < 1) ++eliminator_stats().xnr_not_requested;
 
