@@ -185,8 +185,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
   if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
   }
-  if (H2_compress_factors < 0 || H2_compress_factors > 2) {
-    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+  if (H2_compress_factors < 0 || H2_compress_factors > 1) {
+    throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
   }
   if (H2_GEMM_split < 0) {
     throw std::invalid_argument("H2_GEMM_split must be nonnegative");
@@ -325,6 +325,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
 		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"h2_compress_factors", "format-7 H2 GPU: lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on - the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data: the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, and the CA blocks on more than one rank (so the factorization is lossy too, within the tolerance)"},
 		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
 		{"jitter",          "relative size of the pivots and diagonal shifts that keep dense and small factorizations nonsingular"},
@@ -447,9 +448,9 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_CA_staged_halo", required_argument, 0, 54},
 		{"h2_ca_owner_component", required_argument, 0, 55},
 		{"H2_CA_owner_component", required_argument, 0, 55},
-		{"h2_ca_pack_shared", required_argument, 0, 63},
+		{"h2_ca_pack_shared", required_argument, 0, 1002},
 		{"H2_CA_pack_shared", required_argument, 0, 63},
-		{"h2_ca_solve", required_argument, 0, 64},
+		{"h2_ca_solve", required_argument, 0, 1003},
 		{"H2_CA_solve", required_argument, 0, 64},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
@@ -458,6 +459,10 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_xrr_factor", required_argument, 0, 58},
 		{"H2_XRR_factor", required_argument, 0, 58},
 		{"h2_use_gpu", required_argument, 0, 59},
+		// (new options take codes from 1000 up: getopt returns '?' (63) for
+		// an option it does not know, and a driver passes its own options
+		// through here too)
+		{"h2_compress_factors", required_argument, 0, 1001},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -763,7 +768,12 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "HODLR_gpu_pieces", opt_i);
 		} break;
-		case 63: {
+		case 1001: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_compress_factors", opt_i);
+		} break;
+		case 1002: {
 		const std::string v(optarg);
 		if (v == "auto") opt_i = 0;
 		else if (v == "always") opt_i = 1;
@@ -771,7 +781,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		else { std::istringstream iss(v); iss >> opt_i; }
 		c_bpack_set_I_option(&option0, "H2_CA_pack_shared", opt_i);
 		} break;
-		case 64: {
+		case 1003: {
 		const std::string v(optarg);
 		if (v == "replicated") opt_i = 0;
 		else if (v == "home") opt_i = 1;
@@ -1244,8 +1254,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
         throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
       }
-      if (H2_compress_factors < 0 || H2_compress_factors > 2) {
-        throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+      if (H2_compress_factors < 0 || H2_compress_factors > 1) {
+        throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
       }
       if (H2_GEMM_split < 0) {
         throw std::invalid_argument("H2_GEMM_split must be nonnegative");

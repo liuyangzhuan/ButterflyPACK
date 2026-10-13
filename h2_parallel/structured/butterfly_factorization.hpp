@@ -385,8 +385,9 @@ void hierarchical_factorization_parallel(
     int ca_owner_component,
     int ca_owner_serial,
     int verbosity = 1,
-    // H2_compress_factors: lossy compression of the kept factors at
-    // `tolerance` (0 off, 1 the retained X_NR, 2 also the fill sources).
+    // H2_compress_factors: lossy compression at `tolerance`, 0 off or 1 on
+    // (the kept solve factors and the factorization's fill sources and
+    // packed blocks; core/butterfly_types.hpp).
     int compress_factors = 0,
     // H2_CA_pack_shared: a replicated GPU CA level's blocks on more than one
     // rank packed through the ghosts' groups - 0 auto, 1 always, 2 never

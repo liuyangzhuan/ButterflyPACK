@@ -845,7 +845,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
-        integer:: H2_compress_factors !< H2 GPU lossy compression of the kept factors at tol_comp: 0 off, 1 the retained X_NR, 2 also the fill sources
+        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; no other value
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
         integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)

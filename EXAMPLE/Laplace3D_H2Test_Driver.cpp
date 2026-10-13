@@ -323,8 +323,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "color_unstructured supports H2_lazy_schur=0 or 2 only");
   }
-  if (options.h2_compress_factors < 0 || options.h2_compress_factors > 2) {
-    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+  if (options.h2_compress_factors < 0 || options.h2_compress_factors > 1) {
+    throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
   }
   if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
@@ -422,8 +422,10 @@ void print_usage(const char* executable) {
       << "  --CA_level <level>\n"
       << "  --H2_use_sketch <0|1|2>\n"
       << "  --H2_lazy_schur <0|1|2>\n"
-      << "  --H2_compress_factors <0|1|2>  (GPU: lossy compression of the\n"
-         "                                  kept factors at tol_comp)\n"
+      << "  --H2_compress_factors <0|1>  (GPU: lossy compression at tol_comp of\n"
+         "                                the kept solve factors and of the\n"
+         "                                factorization's fill sources and packed\n"
+         "                                blocks; the factorization is lossy too)\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
       << "  --H2_use_gpu <0|1|2>\n"

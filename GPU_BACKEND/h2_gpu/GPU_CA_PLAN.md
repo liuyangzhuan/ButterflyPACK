@@ -5487,6 +5487,29 @@ its memory bound with 16 columns (a lane loads x for every K element and
 column; two strips a lane would halve that), and the one-column pairs
 could take the 16-column reduction too (bitwise the same; not measured).
 
+#### H2_compress_factors takes 0 or 1 (2026-10-13)
+
+The option came in (af9e726) as "0 off, 1 the retained X_NR, 2 also the
+fill sources".  The fill sources' compression went in the same day
+(8f1d37d) under `>= 1`, as a round trip nothing read yet, and everything
+after it did too: the readers of the compressed fill sources, the kept T
+and X_SR (66a1002), the near and parent blocks packed under pressure, the
+packed restores at the transitions, the CA blocks on more than one rank.
+No code ever tested for 2, so 2 was 1.  The option now takes 0 or 1 (2 is
+refused with that explanation; no script used it), and its descriptions
+(BPACK_defs.f90, core/butterfly_types.hpp, the C wrapper's help, the
+Laplace driver) say what 1 does.  The narrower mode the first plan had - an
+exact factorization with only the solve factors compressed - does not
+exist.
+
+Found on the way, in the C wrapper's command-line parser (which drivers
+such as VIE3D_H2Test and EMSURF call with all of their own arguments):
+`h2_compress_factors` was missing, so such a driver ignored it; and
+207c38b had given `h2_ca_pack_shared` the code 63, which is the '?'
+getopt returns for an option it does not know, so a driver's own options
+went to the pack_shared case.  New options take codes from 1000 up:
+`h2_compress_factors` 1001, `h2_ca_pack_shared` 1002, `h2_ca_solve` 1003.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

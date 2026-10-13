@@ -135,9 +135,14 @@ struct ProgramOptions {
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
     int use_sketch = 1;         // 0: full workspace, 1: materialized sketch, 2: streamed sketch
     int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
-    // GPU: lossy compression of the kept factors at tol_comp (X_NR is
-    // 86-88% of the factor bytes).  0 off, 1 the retained X_NR, 2 also
-    // the fill sources.  Needs a build with nvCOMP.
+    // GPU: lossy compression (nvCOMP bitcomp) at tol_comp, 0 off or 1 on:
+    // the factors kept on the device for the solve (X_NR, 86-88% of the
+    // factor bytes; T, X_SR) and the factorization's own data - the fill
+    // sources later waves and the level transition read, the near and
+    // parent blocks held under memory pressure, the CA blocks on more than
+    // one rank - so the factorization is lossy too, within the tolerance.
+    // (A value 2, "also the fill sources", was planned; the fill sources
+    // went in under 1, and 2 was never different.)
     int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
