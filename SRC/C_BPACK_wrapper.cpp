@@ -449,9 +449,9 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_ca_owner_component", required_argument, 0, 55},
 		{"H2_CA_owner_component", required_argument, 0, 55},
 		{"h2_ca_pack_shared", required_argument, 0, 1002},
-		{"H2_CA_pack_shared", required_argument, 0, 63},
+		{"H2_CA_pack_shared", required_argument, 0, 1002},
 		{"h2_ca_solve", required_argument, 0, 1003},
-		{"H2_CA_solve", required_argument, 0, 64},
+		{"H2_CA_solve", required_argument, 0, 1003},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
 		{"h2_unstructured", required_argument, 0, 57},
@@ -463,6 +463,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		// an option it does not know, and a driver passes its own options
 		// through here too)
 		{"h2_compress_factors", required_argument, 0, 1001},
+		{"H2_compress_factors", required_argument, 0, 1001},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -1315,6 +1316,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.unstructured = H2_unstructured;
       H2_options.use_sketch = H2_use_sketch;
       H2_options.lazy_schur = H2_lazy_schur;
+      H2_options.compress_factors = H2_compress_factors;
       H2_options.gemm_split = H2_GEMM_split;
       H2_options.xrr_factor = H2_XRR_factor;
       H2_options.use_gpu = H2_use_gpu;

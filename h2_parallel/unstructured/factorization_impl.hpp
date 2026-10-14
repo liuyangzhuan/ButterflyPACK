@@ -35,7 +35,10 @@ void hierarchical_factorization_unstructured(
     int ca_owner_component,
     int ca_owner_serial,
     int verbosity,
-    const OccupiedTopology& occupied_topology) {
+    const OccupiedTopology& occupied_topology,
+    // H2_compress_factors (GPU): lossy compression of the kept factors and
+    // of the factorization's fill sources and packed blocks
+    int compress_factors = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
@@ -191,6 +194,7 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
+    gpu_options.compress_factors = compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         // as the full-grid loop: before the first level (the kernels and

@@ -5510,6 +5510,134 @@ getopt returns for an option it does not know, so a driver's own options
 went to the pack_shared case.  New options take codes from 1000 up:
 `h2_compress_factors` 1001, `h2_ca_pack_shared` 1002, `h2_ca_solve` 1003.
 
+#### The unstructured Color loop takes the GPU changes (2026-10-13)
+
+The unstructured loop (`h2_parallel/unstructured/`, Color only, as decided:
+it has no CA levels) runs on the same `ColorGpuDriver` and
+`LevelEliminator` with `occupancy` on, so most of what went into the GPU
+path since it last ran there came with it: the kept factors and their
+host staging, the GPU solve and matvec with the column passes, the memory
+pressure paths (near and parent blocks packed, waves chunked).  What did
+not:
+
+1. **It no longer factored at all** (HEAD 370eca4): every unstructured GPU
+   run stopped in its first transport, "box N is neither local nor an
+   assisting box".  In occupancy mode a generator also goes to the ranks
+   that hold it as an assisting box (the lazy requesters), not only to its
+   neighbours' owners, so a receiver need not know every neighbour of it;
+   three lookups added for the factor compression (fad4d1a, 9bd0630) asked
+   for the state of each.  ee6ce3e: the packed-block pre-pass and
+   `process_gen` skip, on a Color level, a neighbour this rank has no state
+   for (it updates nothing of one), and `fill_item` takes the neighbours'
+   point counts from the generator's own header.  On a full grid every
+   neighbour of a received generator is known: structured runs bitwise
+   unchanged.
+2. **`H2_compress_factors` did not reach it**: the unstructured factorization
+   built its GPU options without it, so 192^3 on 8 ranks of 40 GB ran out
+   of device memory (fill temp2^T raw 14.23 GB on rank 2, the sketch's
+   [P; W] the request that failed).  `hierarchical_factorization_unstructured`
+   now takes it.
+3. **The fill store's bound** (`decide_fill_precision`, which picks 0.2 or
+   0.002 of tol_comp for the packed fill sources) counted 27 blocks a box;
+   with occupancy it counts the box's own one-hop list plus itself.  On a
+   full grid that is 27 inside and fewer on the boundary (192^3 leaf: 6.5
+   against 6.9 GB); every level's decision at 192^3 and 384^3 is the
+   structured one.
+4. **The C parser** (which EMSURF and VIE3D pass their arguments through)
+   knew `--H2_compress_factors` only in lower case, and e5db657 had moved
+   only the lower-case spellings of the other two new options:
+   `--H2_CA_pack_shared` still had 63 (the '?' for an unknown option) and
+   `--H2_CA_solve` 64 (no case).  Every H2/HODLR option now has both
+   spellings on one code (checked by a script over the table, and by a
+   test that parses both spellings among options the parser does not know).
+5. **`c_bpack_construct_init` never passed it on** (since af9e726): the
+   format-7 constructor that EMSURF and the VIE3D tensor driver's diagonal
+   blocks call read and checked `H2_compress_factors` but did not copy it
+   into the solver's options (`read_h2_program_options64`, behind
+   `construct_init_distributed64` - the Laplace driver, VIE3D_H2Test - did).
+   So no EMSURF run compressed, whatever its command line said: with 4.
+   fixed, the 512K sphere still printed `h2_compress_factor 1` and then
+   "16 waves not requested", 1.0x at every level.  The two now copy the
+   same fields.
+
+Laplace, 8 ranks of 40 GB, tol 1e-3, `H2_compress_factors 1`, `H2_use_gpu 2`:
+
+| | structured | unstructured |
+|---|---|---|
+| 192^3 factor | 7.43 s | 7.84 s |
+| 192^3 logdet | -89253588.472325146 | bitwise the same |
+| 192^3 solve, 1 / 8 columns | 0.333 s | 0.333 / 0.617 s |
+| 384^3 factor | 77.0 s | 78.8 s |
+| 384^3 logdet | -792567583.07 | -792567597.47 |
+| 384^3 acc_backward | 6.5e-16 | 6.6e-16 |
+| 384^3 GPU solve | 2.356 s | 2.353 s |
+
+192^3 is bitwise the structured run (the quick verification and the
+solution): no level is under memory pressure there.  At 384^3 the leaf
+is, and the unstructured rank holds a little more - the generators the
+lazy requesters receive (rank 0: 36327 fill-source blocks against 35937,
+generator boxes 0.90 against 0.81 GB) - so the pressure paths, which pack
+lossily, take a few more blocks: 728 owner groups packed against 720 at
+the leaf, 59 against 56 at level 5.  Hence the logdets' 8th digit; the
+backward errors are the same.  With 8 columns the two are bitwise equal too,
+every column (192^3).  Uncompressed, 192^3 does not fit 8 ranks of 40 GB on
+either path (the sketch's [P; W] on top of 14 GB of raw fill temp2^T).
+
+On a sparse tree - the EMSURF sphere, 1160 of 4096 leaf boxes occupied at
+128K - two more things, once the option reached it (5.):
+
+6. **A full-rank box sent no generator** on the device exchange
+   (`plan_generators` took the boxes with a redundant part only), only its
+   skeleton to the ranks that requested it, and the unstructured loop marks
+   such a box eliminated when its skeleton arrives
+   (`refresh_installed_lazy_remote_state`), without a wave; the lazy far
+   fill's `collect_lazy_far_sources` then threw "eliminated source ... has no
+   wave/generator on this rank" for one next to a two-hop pair.  With
+   occupancy a full-rank box now sends its generator without fill (wave and
+   one-hop list), as the host transport always did; the receiver already took
+   such a generator ("full rank: nothing to add").  Structured levels are left
+   as they were.  It showed with compression only because compression changed
+   the ranks: 56 full-rank leaf boxes uncompressed, 176 compressed (one rank).
+   Uncompressed runs are bitwise unchanged (128K, 8 ranks: logdet and
+   solution checksum; Laplace 192^3 both paths).
+7. **The quick verification took 108 s on one rank** at 128K (3.3 s on 8)
+   and did not finish at 512K: EMSURF's block evaluator sorts the block's
+   element list with `PIKSRT_INT_Multi`, a straight insertion sort, and the
+   verification asks for one block of every local row by 20 columns, so the
+   sort is O(rows^2).  It is a stable bottom-up merge sort now above 32 rows
+   (SRC/MISC_utilities.f90; the same order - 401 random cases with
+   duplicate keys - and bitwise the same runs): 128K on one rank 108 -> 15.9 s,
+   and 512K on one GPU completes (factor 17.3 s, verification 65 s, host RSS
+   19 GB).
+
+**H2_compress_factors does not suit this EFIE.**  Uncompressed the sphere is
+right on 1 and 8 ranks (128K: acc_mvp 1.5e-4, acc_backward 9e-14 - though
+acc_forward is 0.10, 20-48 at 512K: the mesh has 235 edges a wavelength at
+wavelength 2, deep in the EFIE's low-frequency breakdown).  Compressed it is
+not (128K, one rank: acc_mvp 4.5, the leaf's average skeleton 85.7 against
+33.2).  Taken apart with temporary switches (BPACK_TRACE=id, one rank, 128K):
+
+| quantization steps (fraction of tol_comp) | leaf boxes whose rank changed | rank sums L4 / L3 / L2 | acc_mvp |
+|---|---|---|---|
+| uncompressed | - | 38544 / 11314 / 2682 | 1.5e-4 |
+| as built (fill 0.2 at the leaf, 0.002 above; X_NR 0.2) | 980 / 1160 | 99463 / 27193 / 7995 | 4.5 |
+| fill 0.002 at the leaf too | 812 / 1160 | 42345 / 14070 / 4085 | 0.16 |
+| all steps 1e-3 | 765 / 1160 | 40736 / 13017 / 3463 | 1.2e-3 |
+| all steps 1e-9 | 1 / 1160 | 38545 / 11261 / 2316 | 2.0e-4 |
+| uncompressed, the compressed mode's summation order | 0 | 38544 / 11314 / 2682 | 1.5e-4 |
+
+It is the problem's cancellation, not a defect of the compressed path: the
+summation order alone moves the sketch norms by up to 1e-6 at the leaf,
+9e-5 at level 3 and 2e-3 at level 2 (a 1e10 amplification of rounding), so
+a step of 2e-13 of a box's largest temp2^T entry already moves the leaf's
+by 3.6e-3, and steps that save memory give no accuracy.  With every step at
+1e-9 the factorization is right (acc_mvp 2.0e-4, acc_backward 9.5e-14) and
+saves nothing.  At wavelength 0.25 (29 edges a wavelength) the same: acc_mvp
+3.8e-3 -> 6.3e-2.  The leaf's coarse fill step stands on Laplace (whose leaf
+skeletons do not depend on its fill store); for a kernel like this one the
+answer is H2_compress_factors 0.  Compressed, the 512K sphere does not fit
+one GPU either (its inflated ranks), where uncompressed it does.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

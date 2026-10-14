@@ -72,7 +72,8 @@ void factorize(H2<CoordType, DataType>* solver,
         0,
         0,
         solver->options.verbosity,
-        occupied);
+        occupied,
+        solver->options.compress_factors);
 
     // the logdet and quick verification that end the call, and the GPU
     // warm-up before its first level, are not factorization
