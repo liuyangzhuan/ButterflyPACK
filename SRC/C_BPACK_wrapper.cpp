@@ -309,6 +309,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
 		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"h2_compress_factors", "format-7 H2 GPU lossy compression of the kept factors at tol_comp: 0 off, 1 the retained X_NR, 2 also the fill sources (build with nvCOMP)"},
 		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
 		{"jitter",          "relative size of the pivots and diagonal shifts that keep dense and small factorizations nonsingular"},
@@ -442,6 +443,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"hodlr_gpu_pieces", required_argument, 0, 62},
 		{"HODLR_gpu_pieces", required_argument, 0, 62},
 		{"jitter", required_argument, 0, 61},
+		{"h2_compress_factors", required_argument, 0, 1001},
+		{"H2_compress_factors", required_argument, 0, 1001},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -745,6 +748,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_d;
 		c_bpack_set_D_option(&option0, "jitter", opt_d);
+		} break;
+		case 1001: { // not 63: that is '?', which getopt returns for every unrecognized option
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_compress_factors", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
