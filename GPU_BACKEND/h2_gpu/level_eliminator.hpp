@@ -894,6 +894,7 @@ private:
         return ca_ ? level_.find_ghost_box(morton) : nullptr;
     }
     Box* writable_box(int64_t morton) { return is_writable(morton) ? held_box(morton) : nullptr; }
+    bool has_state(int64_t morton) const { return is_local(morton) || remote_index_.count(morton) != 0; }
     BoxState& state_of(int64_t morton) {
         if (is_local(morton)) return states_[static_cast<size_t>(morton - level_.local_morton_start)];
         auto it = remote_index_.find(morton);
@@ -7131,6 +7132,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         for (size_t li = 0; li < hop.size(); ++li) {
             if (counts[li] == 0) continue;
             const int64_t lm = hop[li];
+            if (owner_ == nullptr && !has_state(lm)) continue;  // (see process_gen)
             BoxState& ls = state_of(lm);
             if (!interest(lm)) {
                 // replace_edge(false) for a box of no interest, on an owner level
@@ -7181,6 +7183,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             const int64_t lm = hop[li];
             const int c_l = static_cast<int>(counts[li]);
             if (c_l == 0) continue;
+            // A Color level updates nothing of a neighbor of no interest here,
+            // and it may have no state here at all: the unstructured exchange
+            // sends a generator to every rank holding it as an assisting box
+            // (the lazy requesters), not only to its neighbors' ranks.  On a
+            // full grid every neighbor of a received generator is known.
+            if (owner_ == nullptr && !has_state(lm)) continue;
             BoxState& ls = state_of(lm);
             if (current_size(ls) != c_l) {
                 const auto gw = level_.elimination_wave.find(g.morton);
@@ -7343,8 +7351,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             // generator table, which has only the remote ones)
             const Box* gb = g.box;
             if (gb == nullptr) return;
-            counts.reserve(gb->one_hop.size());
-            for (int64_t m : gb->one_hop) counts.push_back(current_size(state_of(m)));
+            // its rows per neighbor as the generator laid them out (its
+            // header's counts): a rank that holds it as an assisting box
+            // (unstructured: the lazy requesters) need not know every
+            // neighbor of it, and on a full grid the two views agree
+            counts.assign(gb->deferred_xnn_neighbor_point_counts.begin(),
+                          gb->deferred_xnn_neighbor_point_counts.end());
             items.push_back(FillSrcRef{g.st->temp2t, g.r, &counts, g.st});
         };
         if (gen_groups.empty()) {
