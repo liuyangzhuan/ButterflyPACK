@@ -5664,6 +5664,33 @@ Checked after the change: `--H2_use_gpu 1` and `2` are each bitwise the
 old 2 (192^3 on 8 ranks, 96^3 on one GPU; 7.50 and 7.14 s, 4.54 s), the
 EMSURF sphere bitwise the same (its levels now read "on"), and 3 is refused.
 
+#### The solve's X_NR scratch: one per process, its own where that is too small (2026-10-14)
+
+ce999d4 (from the block-diagonal preconditioner work: 8 H2 diagonal blocks a
+GPU held 16.7 GB of X_NR scratch, as much as their kept factors) allocates
+the solve's X_NR scratch only when a kept factor is compressed, and one per
+process, shared by the operators' set-ups.  Sharing is safe: a solve
+decompresses every segment it reads anew (the buffer state is a
+DeviceSolveRun's, one per solve or multiply), the set-ups' collectives sit
+with the existing ones, and a release drops a reference.  Checked here:
+Laplace 192^3 (1 and 8 columns) and 384^3 compressed bitwise as before with
+the same 4.29 GB scratch, 96^3 uncompressed bitwise without one; the tensor
+VIE's block-diagonal preconditioner (80^3, 8 blocks of 40^3, 2 a GPU,
+BPACK_CHECK=solve) bitwise the previous library, compressed or not, the
+second block on a GPU taking no scratch.
+
+What sharing left open: the shared buffers are sized by the room of the
+set-up that allocated them, and a later operator with a box they cannot hold
+(the first set up on a fuller card) failed ("a box's compressed factors exceed
+the X_NR scratch's buffer"), where its own scratch would have been sized by
+its own room.  Such an operator now gets a scratch of its own, as before the
+sharing (`DeviceSolveStore::xnr_scratch_own`, freed with it); the shared one
+is not regrown, since every set-up's decompression plans hold addresses in
+it.  A box's width is its compressed factors uncompressed (T and X_SR
+counted wherever compressed: an upper bound).  Forced on every second
+operator (a temporary switch), the 8 blocks took 4 shared and 4 own
+scratches, released cleanly, and the numbers were bitwise the shared run's.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

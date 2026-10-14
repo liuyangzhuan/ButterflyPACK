@@ -268,7 +268,12 @@ inline void rebase_kept_level(KeptSolveLevel& kl, const std::vector<char*>& targ
 // scratch serves them all; a scratch per operator held kXnrBuffers * 2 GB
 // each (a quarter of the card's room), 16.7 GB for 8 diagonal blocks of a
 // block-diagonal preconditioner on one GPU.  Allocated by the first set-up
-// that decompresses, released with the last set-up that refers to it.
+// that decompresses, released with the last set-up that refers to it.  Its
+// buffers are sized by that set-up's room; an operator with a box they cannot
+// hold (a later, larger one, the first set up on a fuller card) gets a
+// scratch of its own, sized by its own room as before the scratch was
+// shared.  The shared one is not regrown: every set-up's decompression plans
+// hold addresses in it.
 struct SharedXnrScratch {
     char* ptr = nullptr;
     size_t bytes = 0, segment = 0;
@@ -307,6 +312,7 @@ struct DeviceSolveStore {
     // of a segment each (the levels sweep one at a time)
     char* xnr_scratch = nullptr;
     size_t xnr_scratch_bytes = 0, xnr_segment_bytes = 0;
+    bool xnr_scratch_own = false;  // this operator's own, not the process's (SharedXnrScratch)
     double stream_seconds = 0.0, stream_gb = 0.0;
     struct ResidentBlock { int level; int block; size_t pos, bytes; };
     std::vector<ResidentBlock> resident;             // what the ring holds now (a copy evicts what it overlaps)
@@ -328,9 +334,13 @@ struct DeviceSolveStore {
         stream_bytes = 0;
         stream_levels = 0;
         resident.clear();
-        if (xnr_scratch != nullptr) release_shared_xnr_scratch();
+        if (xnr_scratch != nullptr) {
+            if (xnr_scratch_own) heap.free(xnr_scratch);
+            else release_shared_xnr_scratch();
+        }
         xnr_scratch = nullptr;
         xnr_scratch_bytes = xnr_segment_bytes = 0;
+        xnr_scratch_own = false;
         tree = nullptr;
         decided = false;
         usable = false;
@@ -1912,22 +1922,32 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         // room when that is less), so a level's widest wave no longer sets it.
         // Only for compressed kept factors (H2_compress_factors; the others
         // are read in place), and the process's scratch when it has one
-        // (shared_xnr_scratch): the plan counts a new one only, the largest
-        // over the ranks.
+        // (shared_xnr_scratch) and its buffers hold this operator's widest
+        // box - else one of its own: the plan counts a new one only, the
+        // largest over the ranks.  A box's width is what build_solve_xnr_waves
+        // puts in a buffer for it, its compressed factors uncompressed (here
+        // an upper bound: T and X_SR are counted where a level reads neither).
         int compressed = 0;
+        size_t widest_box = 0;
         for (const auto& [level, kl] : store.kept) {
             for (const auto& [morton, kb] : kl.boxes) {
-                if (kb.xnr_bytes > 0 || kb.t_bytes > 0 || kb.xsr_bytes > 0) {
-                    compressed = 1;
-                    break;
-                }
+                if (kb.xnr_bytes == 0 && kb.t_bytes == 0 && kb.xsr_bytes == 0) continue;
+                compressed = 1;
+                const size_t kr = static_cast<size_t>(kb.k) * static_cast<size_t>(kb.r) * D;
+                size_t raw = kb.xnr_bytes > 0
+                    ? align_up(static_cast<size_t>(kb.ntot) * static_cast<size_t>(kb.r) * D) : 0;
+                if (kb.t_bytes > 0) raw += align_up(kr);
+                if (kb.xsr_bytes > 0) raw += align_up(kr);
+                widest_box = std::max(widest_box, raw);
             }
-            if (compressed) break;
         }
         MPI_Allreduce(MPI_IN_PLACE, &compressed, 1, MPI_INT, MPI_MAX, tree->comm);
         const size_t segment = std::min<size_t>(size_t{2} << 30,
                                                 std::max<size_t>(size_t{256} << 20, static_cast<size_t>(budget / 8)));
-        double scratch = compressed && shared_xnr_scratch().ptr == nullptr ? static_cast<double>(kXnrBuffers * segment) : 0.0;
+        const SharedXnrScratch& shared_now = shared_xnr_scratch();
+        const bool own_scratch = compressed && shared_now.ptr != nullptr && widest_box > shared_now.segment;
+        double scratch = compressed && (shared_now.ptr == nullptr || own_scratch)
+                             ? static_cast<double>(kXnrBuffers * segment) : 0.0;
         MPI_Allreduce(MPI_IN_PLACE, &scratch, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         double planned = scratch;
         for (int level = 2; level <= leaf; ++level) {
@@ -2043,7 +2063,12 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         ctx.activate();
         cudaStream_t stream = ctx.stream();
         store.levels.resize(static_cast<size_t>(leaf + 1));
-        if (compressed) {
+        if (compressed && own_scratch) {   // (the process's scratch cannot hold its widest box)
+            store.xnr_segment_bytes = segment;
+            store.xnr_scratch_bytes = kXnrBuffers * segment;
+            store.xnr_scratch = DeviceHeap::instance().alloc_resident(store.xnr_scratch_bytes);
+            store.xnr_scratch_own = true;
+        } else if (compressed) {
             SharedXnrScratch& shared = shared_xnr_scratch();
             if (shared.ptr == nullptr) {
                 shared.segment = segment;
