@@ -1316,6 +1316,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.unstructured = H2_unstructured;
       H2_options.use_sketch = H2_use_sketch;
       H2_options.lazy_schur = H2_lazy_schur;
+      H2_options.compress_factors = H2_compress_factors;
       H2_options.gemm_split = H2_GEMM_split;
       H2_options.xrr_factor = H2_XRR_factor;
       H2_options.use_gpu = H2_use_gpu;
