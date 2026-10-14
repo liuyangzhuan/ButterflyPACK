@@ -261,6 +261,31 @@ struct KeptSolveLevel {
 
 inline void rebase_kept_level(KeptSolveLevel& kl, const std::vector<char*>& targets);  // (below: a streamed level's pointers)
 
+// The X_NR scratch of the solves (H2_compress_factors): one per process,
+// shared by the set-ups of its operators.  They solve one at a time on the
+// context's stream, and a solve decompresses every segment it reads into the
+// scratch anew (DeviceSolveRun's buffer state lives for one solve), so one
+// scratch serves them all; a scratch per operator held kXnrBuffers * 2 GB
+// each (a quarter of the card's room), 16.7 GB for 8 diagonal blocks of a
+// block-diagonal preconditioner on one GPU.  Allocated by the first set-up
+// that decompresses, released with the last set-up that refers to it.
+struct SharedXnrScratch {
+    char* ptr = nullptr;
+    size_t bytes = 0, segment = 0;
+    int users = 0;
+};
+inline SharedXnrScratch& shared_xnr_scratch() {
+    static SharedXnrScratch scratch;
+    return scratch;
+}
+inline void release_shared_xnr_scratch() {
+    SharedXnrScratch& s = shared_xnr_scratch();
+    if (s.users > 0 && --s.users == 0 && s.ptr != nullptr) {
+        DeviceHeap::instance().free(s.ptr);
+        s = SharedXnrScratch{};
+    }
+}
+
 struct DeviceSolveStore {
     std::map<int, KeptSolveLevel> kept;  // level -> factors kept during the factorization
     std::set<int> ca_levels;             // replicated CA levels factored on the device (ghost factors kept or on the host)
@@ -303,7 +328,7 @@ struct DeviceSolveStore {
         stream_bytes = 0;
         stream_levels = 0;
         resident.clear();
-        if (xnr_scratch != nullptr) heap.free(xnr_scratch);
+        if (xnr_scratch != nullptr) release_shared_xnr_scratch();
         xnr_scratch = nullptr;
         xnr_scratch_bytes = xnr_segment_bytes = 0;
         tree = nullptr;
@@ -1884,10 +1909,26 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         const double budget = room - static_cast<double>(size_t{256} << 20);
         // H2 8x: the X_NR scratch every level's sweeps share - kXnrBuffers
         // buffers of one segment, a segment at most 2 GB (an eighth of the
-        // room when that is less), so a level's widest wave no longer sets it
+        // room when that is less), so a level's widest wave no longer sets it.
+        // Only for compressed kept factors (H2_compress_factors; the others
+        // are read in place), and the process's scratch when it has one
+        // (shared_xnr_scratch): the plan counts a new one only, the largest
+        // over the ranks.
+        int compressed = 0;
+        for (const auto& [level, kl] : store.kept) {
+            for (const auto& [morton, kb] : kl.boxes) {
+                if (kb.xnr_bytes > 0 || kb.t_bytes > 0 || kb.xsr_bytes > 0) {
+                    compressed = 1;
+                    break;
+                }
+            }
+            if (compressed) break;
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &compressed, 1, MPI_INT, MPI_MAX, tree->comm);
         const size_t segment = std::min<size_t>(size_t{2} << 30,
                                                 std::max<size_t>(size_t{256} << 20, static_cast<size_t>(budget / 8)));
-        const double scratch = static_cast<double>(kXnrBuffers * segment);
+        double scratch = compressed && shared_xnr_scratch().ptr == nullptr ? static_cast<double>(kXnrBuffers * segment) : 0.0;
+        MPI_Allreduce(MPI_IN_PLACE, &scratch, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
         double planned = scratch;
         for (int level = 2; level <= leaf; ++level) {
             if (!replicated(level)) planned += 1.05 * need_max[static_cast<size_t>(level)];
@@ -2002,9 +2043,18 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         ctx.activate();
         cudaStream_t stream = ctx.stream();
         store.levels.resize(static_cast<size_t>(leaf + 1));
-        store.xnr_segment_bytes = segment;
-        store.xnr_scratch_bytes = kXnrBuffers * segment;
-        store.xnr_scratch = DeviceHeap::instance().alloc_resident(store.xnr_scratch_bytes);
+        if (compressed) {
+            SharedXnrScratch& shared = shared_xnr_scratch();
+            if (shared.ptr == nullptr) {
+                shared.segment = segment;
+                shared.bytes = kXnrBuffers * segment;
+                shared.ptr = DeviceHeap::instance().alloc_resident(shared.bytes);
+            }
+            ++shared.users;
+            store.xnr_segment_bytes = shared.segment;
+            store.xnr_scratch_bytes = shared.bytes;
+            store.xnr_scratch = shared.ptr;
+        }
         if (!streamed.empty()) {   // the ring the streamed levels share (H2 8x)
             size_t ring = 0;
             for (int l : streamed) {
