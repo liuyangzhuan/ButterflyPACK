@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace {
 
@@ -49,7 +50,20 @@ struct CoefficientEntry {
     }
 };
 
+// HelmholtzEntry plus diag[i] when i == j (VIE3D_tensor_Driver_scattereronly.cpp's diagonal blocks, the
+// unknown v = Q u: -G plus h^-3 Q^-1 on the diagonal): a table on the device by the point's global id;
+// symmetric, so H2 can take it
+struct DiagonalEntry {
+    using value_type = dcomplex;
+    HelmholtzEntry helmholtz;
+    const double* diag;  // device, one value per point
+    __device__ dcomplex operator()(const double* x, int64_t i, const double* y, int64_t j) const {
+        if (i == j) return helmholtz.self + dcomplex(diag[i], 0.0);
+        return helmholtz(x, i, y, j);
+    }
+};
 double* coef_device = nullptr;
+std::vector<double*> diag_devices;  // one table per matrix registered with vie3d_gpu_register_diagonal
 
 void check(cudaError_t status, const char* what) {
     if (status != cudaSuccess) {
@@ -79,7 +93,18 @@ extern "C" void vie3d_gpu_register_coefficient(void** bmat, double k, double a_r
     bpack::gpu::set_entry_evaluator(bmat, entry, BPACK_GPU_COORDINATES);  // not symmetric
 }
 
+extern "C" void vie3d_gpu_register_diagonal(void** bmat, double k, double a_re, double a_im, double self_re,
+                                            double self_im, double four_pi, const double* diag, int64_t n) {
+    double* table = nullptr;
+    check(cudaMalloc(reinterpret_cast<void**>(&table), static_cast<size_t>(n) * sizeof(double)), "cudaMalloc");
+    check(cudaMemcpy(table, diag, static_cast<size_t>(n) * sizeof(double), cudaMemcpyHostToDevice), "cudaMemcpy");
+    diag_devices.push_back(table);
+    const DiagonalEntry entry{HelmholtzEntry{k, dcomplex(a_re, a_im), dcomplex(self_re, self_im), four_pi}, table};
+    bpack::gpu::set_entry_evaluator(bmat, entry, BPACK_GPU_SYMMETRIC | BPACK_GPU_COORDINATES);
+}
 extern "C" void vie3d_gpu_release(void) {
     if (coef_device != nullptr) cudaFree(coef_device);
     coef_device = nullptr;
+    for (double* table : diag_devices) cudaFree(table);
+    diag_devices.clear();
 }

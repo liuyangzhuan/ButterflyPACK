@@ -30,6 +30,9 @@
 
 #include "G2D/bessel.h"
 #include "zBPACK_wrapper.h"
+#ifdef BPACK_EXAMPLE_GPU
+#include "gpu/gpu_evaluators.h"
+#endif
 
 // #define IVELO9_CONST 1
 
@@ -565,6 +568,9 @@ public:
   int _diag_block_stride = 0;
   int _nblock_diag = 0;
   int _bdiag_level = -1;
+  int _bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2 (format 7, needs a GPU evaluator for H2_use_gpu)
+  double _precon_time = 0.0; // wall time spent applying the block-diagonal preconditioner
+  long _precon_calls = 0;
   int _nscatter = 0;
   double _background_s0 = 2.0;
   double _scatterer_tol = 1e-12;
@@ -1285,6 +1291,7 @@ timer += difftime(end,start);
 
 inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int *nout, int *nvec, _Complex double const *xin, _Complex double *xout, C2Fptr quant) {
   C_QuantApp_BF* Q = (C_QuantApp_BF*) quant;
+  double t_precon0 = MPI_Wtime();
   int Ndim = *Ndim_p;
   int Npo = product(nout,Ndim);
 
@@ -1432,7 +1439,12 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         }
       }
 
-      z_c_bpack_inv_mult("N",xin_diag.data(),xout_diag.data(),&Nloc_diag,&Nloc_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diags[bb]));
+      if(Q->_bdiag_format==7){
+        // H2 (format 7) has no inv_mult; the blocks are complex symmetric, so inv_mult('N') is the solve
+        z_c_bpack_solve(xout_diag.data(),xin_diag.data(),&Nloc_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diags[bb]));
+      }else{
+        z_c_bpack_inv_mult("N",xin_diag.data(),xout_diag.data(),&Nloc_diag,&Nloc_diag,nvec,&(Q->bmat_diags[bb]),&(Q->option_diag),&(Q->stats_diags[bb]),&(Q->ptree_diags[bb]));
+      }
 
       for(int i0=0;i0<Nloc_diag;i0++){
         int i_new_diag_scalar = i0+1;
@@ -1524,6 +1536,8 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
       }
     }
   }
+  Q->_precon_time += MPI_Wtime() - t_precon0;
+  Q->_precon_calls++;
 }
 
 
@@ -1688,6 +1702,8 @@ if(myrank==master_rank){
   int bdiag_lrlevel = 2;
   int bdiag_knn = 20;
   int bdiag_elem_extract = 2;
+  int bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2
+  bool bdiag_gpu = false; // diagonal blocks on the GPU (H2_use_gpu / HODLR_use_gpu): register their GPU entry evaluator
   double bdiag_tol_rand = 1e-2;
   double bdiag_tol_Rdetect = 1e-3;
   double bdiag_sample_para = 2.01;
@@ -1750,6 +1766,7 @@ if(myrank==master_rank){
       {"bdiag_sample_para",        required_argument, 0, 41},
       {"bdiag_sample_para_outer",        required_argument, 0, 42},
       {"bdiag_elem_extract",        required_argument, 0, 43},
+      {"bdiag_format",        required_argument, 0, 44},
       {"use_fft_circulant",        required_argument, 0, 100},
       {"fftw_plan_mode",        required_argument, 0, 101},
       {"fft_plan_mode",        required_argument, 0, 102},
@@ -1934,6 +1951,10 @@ if(myrank==master_rank){
     case 43: {
       std::istringstream iss(optarg);
       iss >> bdiag_elem_extract;
+    } break;
+    case 44: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_format;
     } break;
     case 100: {
       // BPACK consumes this option from the original argv below.
@@ -2219,6 +2240,7 @@ if(myrank==master_rank){
     z_c_bpack_createstats(&stats_bf_s2s);
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, Nz_s, static_cast<int>(Iint), static_cast<int>(Jint), static_cast<int>(Kint), 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,&slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
+    quant_ptr_bf_s2s->_bdiag_format = bdiag_format;
     quant_ptr_bf_s2s->_nscatter = Nscatter;
     quant_ptr_bf_s2s->_background_s0 = background_s0;
     quant_ptr_bf_s2s->_scatterer_tol = scatterer_tol;
@@ -2493,6 +2515,22 @@ if(myrank==master_rank){
     z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "tol_Rdetect", bdiag_tol_Rdetect);
     z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "sample_para", bdiag_sample_para);
     z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "sample_para_outer", bdiag_sample_para_outer);
+    if(bdiag_format==7){
+      // H2 blocks: format 7 needs sym=1 and a direct factorization; tol_comp is its compression tolerance.
+      // The H2 options (H2_use_gpu, H2_XRR_factor, h2_use_sketch, h2_lazy_schur, CA_level, ...) come from the
+      // command line through option_bf; Nmin_leaf stays 64 (leaf boxes of 5^3 points for 40^3 blocks).
+      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "format", 7);
+      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "sym", 1);
+      z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "precon", 1);
+      z_c_bpack_set_D_option(&(quant_ptr_bf_s2s->option_diag), "tol_comp", bdiag_tol_rand);
+    }
+    {
+      double use_gpu = 0.0;
+      z_c_bpack_getoption(&(quant_ptr_bf_s2s->option_diag), bdiag_format==7 ? "H2_use_gpu" : "HODLR_use_gpu", &use_gpu);
+      bdiag_gpu = use_gpu > 0;
+      // the GPU HODLR stops with ZFP (use_zfp 1 comes from the tensor operator's options)
+      if(bdiag_gpu && bdiag_format!=7) z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "use_zfp", 0);
+    }
 
 
 
@@ -2528,6 +2566,7 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s->_diag_groups.resize(nblock, MPI_GROUP_NULL);
 
 
+    double t_block_setup = 0.0; // this rank's construction + factorization of its blocks
     for (int bb=0; bb<nblock; bb++){
       vector<double> data_geo_diag;
       z_c_bpack_createstats(&(quant_ptr_bf_s2s->stats_diags[bb]));
@@ -2561,8 +2600,8 @@ if(myrank==master_rank){
       MPI_Fint Fcomm_diag = MPI_Comm_c2f(quant_ptr_bf_s2s->_diag_comms[bb]);
       z_c_bpack_createptree(&pgrp_nproc, groups_diag.data(), &Fcomm_diag, &(quant_ptr_bf_s2s->ptree_diags[bb]));
 
-      if(myrank == pgrp_head){
-        std::cout<<"Rank "<< myrank <<": Constructing HODBF for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
+      if(myrank == pgrp_head && (bdiag_format!=7 || global_block_id <= 4)){
+        std::cout<<"Rank "<< myrank <<": Constructing "<<(bdiag_format==7?"H2":"HODBF")<<" for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
       }
 
       for(int ii=0;ii<Npo;ii++){
@@ -2605,8 +2644,30 @@ if(myrank==master_rank){
     tree_diag[0] = Npo;
 
     // construct hodlr with geometrical points
+    double t_block0 = MPI_Wtime();
     z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1); // suppress prining
+    if(bdiag_format==7) z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", global_block_id == 1 ? 1 : -1);
     z_c_bpack_construct_init(&Npo, &Ndim, data_geo_diag.data(), nns_ptr, &nlevel_diag, tree_diag, perms_diag, &myseg_diag, &(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncDistmn_BF, &C_FuncNearFar_BF, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
+    if(bdiag_gpu){
+    #ifdef BPACK_EXAMPLE_GPU
+      // the block's entries on the GPU (H2_use_gpu / HODLR_use_gpu): -e^{i 2 w r}/(4 pi r), and -SampleSelf +
+      // 1/(h^3 coef(x)) on the diagonal (assemble_fromD1D2Tau_s2s with scaleGreen 0), coef by the block's own
+      // 0-based point ids
+      C_QuantApp_BF* Qd = quant_ptr_bf_s2s->quant_ptr_diags[bb];
+      _Complex double self_value = 0.0;
+      Qd->SampleSelf(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, &self_value);
+      const double s0_bg = 2.0;
+      const double k0_bg = s0_bg*w;
+      vector<double> diag_term(Npo);
+      for(int ii=0; ii<Npo; ii++){
+        const double s1 = Qd->_point_slowness[ii];
+        const double coef = pow(k0_bg,2.0)*(pow(s1/s0_bg,2.0)-1);
+        diag_term[ii] = 1.0/(pow(h,3.0)*coef);
+      }
+      vie3d_gpu_register_diagonal(&(quant_ptr_bf_s2s->bmat_diags[bb]), 2.0*w, -1.0, 0.0, -__real__ self_value,
+                                  -__imag__ self_value, 4.0*pi, diag_term.data(), Npo);
+    #endif
+    }
     quant_ptr_bf_s2s->_diag_nloc[bb] = myseg_diag;
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->_Hperm.resize(Npo);
@@ -2616,16 +2677,27 @@ if(myrank==master_rank){
       z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 0);
       z_c_bpack_printoption(&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->ptree_diags[bb]));
       // z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", -1);
+      if(bdiag_format==7) z_c_bpack_set_I_option(&(quant_ptr_bf_s2s->option_diag), "verbosity", 1); // its levels and quick check
     }
 
   	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
     z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diags[bb]),&(quant_ptr_bf_s2s->msh_diags[bb]));
+    t_block_setup += MPI_Wtime() - t_block0;
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
 
     delete[] tree_diag;
     delete[] perms_diag;
     }
+      {
+        double tmax=0.0, tsum=0.0; int nbmax=0, nbsum=0;
+        MPI_Reduce(&t_block_setup, &tmax, 1, MPI_DOUBLE, MPI_MAX, master_rank, MPI_COMM_WORLD);
+        MPI_Reduce(&t_block_setup, &tsum, 1, MPI_DOUBLE, MPI_SUM, master_rank, MPI_COMM_WORLD);
+        MPI_Reduce(&nblock, &nbmax, 1, MPI_INT, MPI_MAX, master_rank, MPI_COMM_WORLD);
+        MPI_Reduce(&nblock, &nbsum, 1, MPI_INT, MPI_SUM, master_rank, MPI_COMM_WORLD);
+        if(myrank==master_rank) std::cout<<"Block-diagonal preconditioner ("<<(bdiag_format==7?"H2":"HODBF")<<"): "<<nbsum<<" blocks, up to "<<nbmax
+          <<" per rank; construction+factorization max "<<tmax<<" s, mean "<<tsum/size<<" s per rank"<<std::endl;
+      }
 	  }
 
 
@@ -2706,6 +2778,12 @@ if(myrank==master_rank){
       }
     }
 
+    if(bdiag_precon==1){
+      double tmax=0.0; long calls=quant_ptr_bf_s2s->_precon_calls;
+      MPI_Reduce(&(quant_ptr_bf_s2s->_precon_time), &tmax, 1, MPI_DOUBLE, MPI_MAX, master_rank, MPI_COMM_WORLD);
+      if(myrank==master_rank) std::cout<<"Block-diagonal preconditioner applications: "<<calls<<", total "<<tmax
+        <<" s (max over ranks), "<<(calls>0?tmax/calls:0.0)<<" s each"<<std::endl;
+    }
     if(myrank==master_rank)std::cout<<"\n\nPrinting stats of the scaled Green/VIE operator: "<<std::endl;
     z_c_bpack_printstats(&stats_bf_s2s,&ptree_bf);
 
@@ -2715,7 +2793,7 @@ if(myrank==master_rank){
       for (int bb=0; bb<nblock; bb++){
         z_c_bpack_deletestats(&(quant_ptr_bf_s2s->stats_diags[bb]));
         z_c_bpack_deletemesh(&(quant_ptr_bf_s2s->msh_diags[bb]));
-        z_c_bpack_deletekernelquant(&(quant_ptr_bf_s2s->kerquant_diags[bb]));
+        if(bdiag_format!=7) z_c_bpack_deletekernelquant(&(quant_ptr_bf_s2s->kerquant_diags[bb])); // (format 7 does not set it)
         z_c_bpack_delete(&(quant_ptr_bf_s2s->bmat_diags[bb]));
         z_c_bpack_deleteproctree(&(quant_ptr_bf_s2s->ptree_diags[bb]));
         if(quant_ptr_bf_s2s->_diag_comms[bb] != MPI_COMM_NULL) MPI_Comm_free(&(quant_ptr_bf_s2s->_diag_comms[bb]));
@@ -2723,6 +2801,9 @@ if(myrank==master_rank){
         delete quant_ptr_bf_s2s->quant_ptr_diags[bb];
       }
       z_c_bpack_deleteoption(&(quant_ptr_bf_s2s->option_diag));
+#ifdef BPACK_EXAMPLE_GPU
+      if(bdiag_gpu) vie3d_gpu_release();
+#endif
       delete[] quant_ptr_bf_s2s->bmat_diags;
       delete[] quant_ptr_bf_s2s->kerquant_diags;
       delete[] quant_ptr_bf_s2s->stats_diags;
