@@ -7,8 +7,9 @@
  * backends (enable_h2_gpu, which defines BPACK_EXAMPLE_GPU for the drivers).
  *
  *   laplace3d_gpu.cu  entry evaluator (C++): 3D Laplace
- *   vie3d_gpu.cu      entry evaluators (C++): Helmholtz, and Helmholtz
- *                     scaled by a coefficient table on the device
+ *   vie3d_gpu.cu      entry evaluators (C++): Helmholtz, Helmholtz
+ *                     scaled by a coefficient table on the device, and
+ *                     Helmholtz plus a diagonal table on the device
  *   emsurf_gpu.cu     block evaluator: EFIE of RWG edges by triangle pairs;
  *                     entry evaluator: CFIE
  *
@@ -40,6 +41,12 @@ void vie3d_gpu_register_helmholtz(void** bmat, double k, double a_re, double a_i
  * The table stays on the device until vie3d_gpu_release. */
 void vie3d_gpu_register_coefficient(void** bmat, double k, double a_re, double a_im, double self_re, double self_im,
                                     double four_pi, double diag_re, double diag_im, const double* coef, int64_t n);
+/* VIE3D_tensor_Driver_scattereronly.cpp's diagonal blocks (bdiag_format 7):
+ * the Helmholtz kernel above, plus diag[i] when the ids match; diag: one
+ * value per point, by 0-based global id (complex, symmetric: H2 and HODLR).
+ * Each call keeps its own table on the device until vie3d_gpu_release. */
+void vie3d_gpu_register_diagonal(void** bmat, double k, double a_re, double a_im, double self_re, double self_im,
+                                 double four_pi, const double* diag, int64_t n);
 void vie3d_gpu_release(void);
 
 /* EMSURF_Driver.cpp: the EFIE (cfie_alpha == 1: a block evaluator, complex
