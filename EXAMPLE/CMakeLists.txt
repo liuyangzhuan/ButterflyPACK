@@ -326,6 +326,7 @@ add_executable(cvie3d_t_so ${CVIE3DT})
 target_link_libraries(cvie3d_t_so ${all_link_libs_d})
 target_link_libraries(cvie3d_t_so ${all_link_libs_z})
 add_dependencies(cvie3d_t_so cvie3d_t)
+bpack_example_gpu_evaluators(cvie3d_t_so)
 endif()
 
 

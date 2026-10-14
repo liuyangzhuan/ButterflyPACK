@@ -463,6 +463,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		// an option it does not know, and a driver passes its own options
 		// through here too)
 		{"h2_compress_factors", required_argument, 0, 1001},
+		{"H2_compress_factors", required_argument, 0, 1001},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
