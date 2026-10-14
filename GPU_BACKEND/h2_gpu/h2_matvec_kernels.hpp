@@ -1,7 +1,10 @@
 #pragma once
 // Kernels of the device matvec of the compression-only H2 (h2_matvec.hpp),
 // the steps of hierarchical_h2_mul_parallel on one level.  One thread block
-// per box.  A level's vector holds column c of box b at c * ld + b.vec
+// per box (or pair), which takes the right-hand sides in passes of several
+// columns: each pass reads the box's blocks once for all of its columns (a
+// column's result does not depend on the grouping).  A level's vector holds column c
+// of box b at c * ld + b.vec
 // (ld: the level's points), as the host matvec's input and output arrays
 // hold the leaf level; compact skeleton vectors likewise at c * ldq + b.q.
 // Factors and blocks are untyped pointers of the launch's element type T

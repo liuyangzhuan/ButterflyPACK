@@ -1326,6 +1326,8 @@ contains
       option%HODLR_gpu_pieces=4
       option%H2_CA_staged_halo=0
       option%H2_CA_owner_component=0
+      option%H2_CA_pack_shared=0
+      option%H2_CA_solve=0
       option%H2_CA_owner_serial=0
       option%H2_ID_radius=2
       option%H2_ID_proxy=0
@@ -1398,6 +1400,24 @@ contains
                   read (strings1, *) option%H2_CA_staged_halo
                else if (trim(strings) == '--h2_ca_owner_component' .or. trim(strings) == '--H2_CA_owner_component') then
                   read (strings1, *) option%H2_CA_owner_component
+               else if (trim(strings) == '--h2_ca_pack_shared' .or. trim(strings) == '--H2_CA_pack_shared') then
+                  if (trim(strings1) == 'auto') then
+                     option%H2_CA_pack_shared = 0
+                  else if (trim(strings1) == 'always') then
+                     option%H2_CA_pack_shared = 1
+                  else if (trim(strings1) == 'never') then
+                     option%H2_CA_pack_shared = 2
+                  else
+                     read (strings1, *) option%H2_CA_pack_shared
+                  endif
+               else if (trim(strings) == '--h2_ca_solve' .or. trim(strings) == '--H2_CA_solve') then
+                  if (trim(strings1) == 'replicated') then
+                     option%H2_CA_solve = 0
+                  else if (trim(strings1) == 'home') then
+                     option%H2_CA_solve = 1
+                  else
+                     read (strings1, *) option%H2_CA_solve
+                  endif
                else if (trim(strings) == '--h2_ca_owner_serial' .or. trim(strings) == '--H2_CA_owner_serial') then
                   read (strings1, *) option%H2_CA_owner_serial
                else if (trim(strings) == '--h2_id_radius' .or. trim(strings) == '--H2_ID_radius') then
@@ -1538,6 +1558,8 @@ contains
       option1%HODLR_gpu_pieces = option%HODLR_gpu_pieces
       option1%H2_CA_staged_halo = option%H2_CA_staged_halo
       option1%H2_CA_owner_component = option%H2_CA_owner_component
+      option1%H2_CA_pack_shared = option%H2_CA_pack_shared
+      option1%H2_CA_solve = option%H2_CA_solve
       option1%H2_CA_owner_serial = option%H2_CA_owner_serial
       option1%H2_ID_radius = option%H2_ID_radius
       option1%H2_ID_proxy = option%H2_ID_proxy
@@ -1631,6 +1653,8 @@ contains
             write (*, '(A18,I8)') 'h2_use_gpu', option%H2_use_gpu
             write (*, '(A20,I8)') 'h2_ca_staged_halo', option%H2_CA_staged_halo
             write (*, '(A22,I8)') 'h2_ca_owner_component', option%H2_CA_owner_component
+            write (*, '(A18,I8)') 'h2_ca_pack_shared', option%H2_CA_pack_shared
+            write (*, '(A12,I8)') 'h2_ca_solve', option%H2_CA_solve
             write (*, '(A19,I8)') 'h2_ca_owner_serial', option%H2_CA_owner_serial
             write (*, '(A18,I8)') 'h2_id_radius', option%H2_ID_radius
             write (*, '(A18,I8)') 'h2_id_proxy', option%H2_ID_proxy

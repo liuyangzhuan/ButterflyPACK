@@ -28,6 +28,99 @@ __device__ __forceinline__ T* shared_array() {
     return reinterpret_cast<T*>(solve_shared);
 }
 
+// The right-hand sides go through a box in passes of up to kMaxCols columns:
+// each pass reads the box's factors once and applies every element to all of
+// its columns (column q's x_S, x_R and, where it fits, x_N in shared memory at
+// q times the column's stride).  A column's arithmetic is the single-column
+// order - the same partial sums, summed the same way - so its result does not
+// depend on nrhs or on how the columns are grouped.
+template<typename T>
+constexpr int kMaxCols = std::is_same_v<T, double> ? 8 : 4;
+
+// Whether unrolled column q is in the pass (column 0 always is: the compiler
+// drops the test, and a one-column launch is the single-column code).
+__device__ __forceinline__ bool live(int q, int nc) { return q == 0 || q < nc; }
+
+// s_q += sum_{j0 <= j < j1} a[j * lda] x_q[j] for the columns x_q = x + q * xs
+// (q < nc), in the order of j; the loads of four j are issued before their
+// products, so they are in flight together.
+template<typename T, int CB>
+__device__ __forceinline__ void accumulate_row(const T* a, int64_t lda, const T* x, int xs, int nc, int j0, int j1,
+                                               T s[CB]) {
+    int j = j0;
+    for (; j + 3 < j1; j += 4) {
+        const T a0 = a[j * lda], a1 = a[(j + 1) * lda], a2 = a[(j + 2) * lda], a3 = a[(j + 3) * lda];
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) {
+                const T* xq = x + q * xs;
+                s[q] += a0 * xq[j];
+                s[q] += a1 * xq[j + 1];
+                s[q] += a2 * xq[j + 2];
+                s[q] += a3 * xq[j + 3];
+            }
+        }
+    }
+    for (; j < j1; ++j) {
+        const T a0 = a[j * lda];
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) s[q] += a0 * x[q * xs + j];
+        }
+    }
+}
+
+// row_dot for the columns x_q = x + q * xs (q < nc): out[q] = sum_j a[j * lda]
+// x_q[j], four independent partial sums a column (loads in flight)
+template<typename T, int CB>
+__device__ __forceinline__ void row_dot_cols(const T* a, int lda, const T* x, int xs, int nc, int n, T out[CB]) {
+    T s0[CB], s1[CB], s2[CB], s3[CB];
+#pragma unroll
+    for (int q = 0; q < CB; ++q) {
+        s0[q] = T(0.0);
+        s1[q] = T(0.0);
+        s2[q] = T(0.0);
+        s3[q] = T(0.0);
+    }
+    const int64_t ld = lda;
+    int j = 0;
+    for (; j + 3 < n; j += 4) {
+        const T a0 = a[j * ld], a1 = a[(j + 1) * ld], a2 = a[(j + 2) * ld], a3 = a[(j + 3) * ld];
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) {
+                const T* xq = x + q * xs;
+                s0[q] += a0 * xq[j];
+                s1[q] += a1 * xq[j + 1];
+                s2[q] += a2 * xq[j + 2];
+                s3[q] += a3 * xq[j + 3];
+            }
+        }
+    }
+    for (; j < n; ++j) {
+        const T a0 = a[j * ld];
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) s0[q] += a0 * x[q * xs + j];
+        }
+    }
+#pragma unroll
+    for (int q = 0; q < CB; ++q) out[q] = (s0[q] + s1[q]) + (s2[q] + s3[q]);
+}
+
+__device__ __forceinline__ double warp_sum(double v) {
+    for (int offset = 16; offset > 0; offset >>= 1) v += __shfl_down_sync(0xffffffffu, v, offset);
+    return v;
+}
+__device__ __forceinline__ dcomplex warp_sum(dcomplex v) { return dcomplex(warp_sum(v.re), warp_sum(v.im)); }
+
+// ---- one column at a time: the kernels as they were before the passes (each
+// column in turn, the factors read again for each).  A launch whose passes
+// would take one column - nrhs 1, or boxes too large for two columns of
+// shared memory - runs these, so its code is what it was; the passes'
+// kernels further down take two columns or more (and one column when x_N is
+// in the work buffer: they stream it through shared memory in chunks).
+
 // sum_j a[j * lda] x[j], four independent partial sums (loads in flight)
 template<typename T>
 __device__ __forceinline__ T row_dot(const T* a, int lda, const T* x, int n) {
@@ -44,14 +137,8 @@ __device__ __forceinline__ T row_dot(const T* a, int lda, const T* x, int n) {
     return (s0 + s1) + (s2 + s3);
 }
 
-__device__ __forceinline__ double warp_sum(double v) {
-    for (int offset = 16; offset > 0; offset >>= 1) v += __shfl_down_sync(0xffffffffu, v, offset);
-    return v;
-}
-__device__ __forceinline__ dcomplex warp_sum(dcomplex v) { return dcomplex(warp_sum(v.re), warp_sum(v.im)); }
-
 template<typename T>
-__global__ void __launch_bounds__(kThreads) solve_forward_kernel(const SolveBox* boxes, const int* wave, T* vec,
+__global__ void __launch_bounds__(kThreads) solve_forward_one_kernel(const SolveBox* boxes, const int* wave, T* vec,
                                                                  T* work, int nrhs) {
     T* sh = shared_array<T>();
     const SolveBox b = boxes[wave[blockIdx.x]];
@@ -118,7 +205,7 @@ __device__ __forceinline__ void cols4_dot(const T* a, int64_t ld, const T* x, in
 
 // x_N in shared memory (after x_S, x_R) when kSharedXn, else in the work buffer
 template<typename T, bool kSharedXn>
-__global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox* boxes, const SolveSlot* slots,
+__global__ void __launch_bounds__(kThreads) solve_backward_one_kernel(const SolveBox* boxes, const SolveSlot* slots,
                                                                   const int* wave, T* vec, const T* ghost, T* work,
                                                                   int nrhs) {
     T* sh = shared_array<T>();
@@ -162,7 +249,7 @@ __global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox
 
 // LAPACK getrs ('N') with the 1-based interchanges of getrf.
 template<typename T>
-__global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
+__global__ void __launch_bounds__(kThreads) solve_diagonal_one_kernel(const SolveBox* boxes, const int* list, T* vec,
                                                                   int nrhs) {
     T* xr = shared_array<T>();
     const SolveBox b = boxes[list[blockIdx.x]];
@@ -206,7 +293,7 @@ __global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox
 // ---- the multiply
 
 template<typename T, bool kSharedXn>
-__global__ void __launch_bounds__(kThreads) mul_forward_kernel(const SolveBox* boxes, const SolveSlot* slots,
+__global__ void __launch_bounds__(kThreads) mul_forward_one_kernel(const SolveBox* boxes, const SolveSlot* slots,
                                                                const int* wave, T* vec, const T* ghost, T* work,
                                                                int nrhs) {
     T* sh = shared_array<T>();
@@ -254,7 +341,7 @@ __global__ void __launch_bounds__(kThreads) mul_forward_kernel(const SolveBox* b
 
 // x_R = P L U x_R (LAPACK trmm U, trmm unit L, laswp with the interchanges reversed)
 template<typename T>
-__global__ void __launch_bounds__(kThreads) mul_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
+__global__ void __launch_bounds__(kThreads) mul_diagonal_one_kernel(const SolveBox* boxes, const int* list, T* vec,
                                                                 int nrhs) {
     T* sh = shared_array<T>();
     const SolveBox b = boxes[list[blockIdx.x]];
@@ -296,7 +383,7 @@ __global__ void __launch_bounds__(kThreads) mul_diagonal_kernel(const SolveBox* 
 }
 
 template<typename T>
-__global__ void __launch_bounds__(kThreads) mul_backward_kernel(const SolveBox* boxes, const int* wave, T* vec,
+__global__ void __launch_bounds__(kThreads) mul_backward_one_kernel(const SolveBox* boxes, const int* wave, T* vec,
                                                                 T* work, int nrhs) {
     T* sh = shared_array<T>();
     const SolveBox b = boxes[wave[blockIdx.x]];
@@ -335,6 +422,590 @@ __global__ void __launch_bounds__(kThreads) mul_backward_kernel(const SolveBox* 
                 for (int i = lane; i < b.k; i += 32) s += col[i] * xs[i];
                 s = warp_sum(s);
                 if (lane == 0) v[b.red[j]] = xr[j] + s;
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// ---- passes of several columns
+
+// sum_i a[i] x_q[i] for the columns x_q = x + q * xs (q < nc), lanes striding
+// i; lane 0 gets the sums
+template<typename T, int CB>
+__device__ __forceinline__ void col_dot_cols(const T* a, const T* x, int xs, int nc, int rows, int lane, T s[CB]) {
+#pragma unroll
+    for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+    for (int i = lane; i < rows; i += 32) {
+        const T t = a[i];
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) s[q] += t * x[q * xs + i];
+        }
+    }
+#pragma unroll
+    for (int q = 0; q < CB; ++q) {
+        if (live(q, nc)) s[q] = warp_sum(s[q]);
+    }
+}
+
+// Columns j .. j+3 of A^T x_q for the columns x_q = x + q * xs (q < nc; A:
+// rows x cols, ld): lane partial sums, summed over the warp (lane 0 gets them)
+template<typename T, int CB>
+__device__ __forceinline__ void cols4_dot_cols(const T* a, int64_t ld, const T* x, int64_t xs, int nc, int rows, int j,
+                                               int cols, int lane, T s[4][CB]) {
+#pragma unroll
+    for (int p = 0; p < 4; ++p) {
+#pragma unroll
+        for (int q = 0; q < CB; ++q) s[p][q] = T(0.0);
+    }
+    const T* c0 = a + j * ld;
+    const bool has1 = j + 1 < cols, has2 = j + 2 < cols, has3 = j + 3 < cols;
+    for (int i = lane; i < rows; i += 32) {
+        const T a0 = c0[i];
+        const T a1 = has1 ? c0[ld + i] : T(0.0);
+        const T a2 = has2 ? c0[2 * ld + i] : T(0.0);
+        const T a3 = has3 ? c0[3 * ld + i] : T(0.0);
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) {
+                const T xi = x[q * xs + i];
+                s[0][q] += a0 * xi;
+                if (has1) s[1][q] += a1 * xi;
+                if (has2) s[2][q] += a2 * xi;
+                if (has3) s[3][q] += a3 * xi;
+            }
+        }
+    }
+#pragma unroll
+    for (int p = 0; p < 4; ++p) {
+#pragma unroll
+        for (int q = 0; q < CB; ++q) {
+            if (live(q, nc)) s[p][q] = warp_sum(s[p][q]);
+        }
+    }
+}
+
+// x_R +/-= X_NR^T x_N for the pass's columns when x_N is in the work buffer
+// (column q at xn + q * ntot; x_R of column q at xr + q * stride).  The rows
+// of x_N go through shared memory in chunks of kChunkRows, and a warp keeps
+// its four columns' lane sums over all the chunks: lane l takes the rows
+// i = l (mod 32) in increasing order, the single-column order.  x_N is read
+// once a round of the warps' columns instead of once for every four.
+constexpr int kChunkRows = 256;
+
+template<typename T, int CB, bool kSubtract>
+__device__ __forceinline__ void xnr_t_chunked(const SolveBox& b, const T* bxnr, const T* xn, T* chunk, T* xr,
+                                              int stride, int nc) {
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5, nwarps = blockDim.x >> 5;
+    const int64_t ld = b.ntot;
+    for (int jr = 0; jr < b.r; jr += 4 * nwarps) {
+        const int j = jr + 4 * warp;
+        const bool has0 = j < b.r, has1 = j + 1 < b.r, has2 = j + 2 < b.r, has3 = j + 3 < b.r;
+        const T* c0 = bxnr + static_cast<int64_t>(j) * ld;
+        T s[4][CB];
+#pragma unroll
+        for (int p = 0; p < 4; ++p) {
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[p][q] = T(0.0);
+        }
+        for (int i0 = 0; i0 < b.ntot; i0 += kChunkRows) {
+            const int rows = min(kChunkRows, b.ntot - i0);
+            __syncthreads();  // (the last chunk is read)
+            for (int q = 0; q < nc; ++q) {
+                const T* src = xn + q * ld + i0;
+                T* dst = chunk + q * kChunkRows;
+                for (int i = threadIdx.x; i < rows; i += blockDim.x) dst[i] = src[i];
+            }
+            __syncthreads();
+            if (has0) {
+                for (int i = lane; i < rows; i += 32) {
+                    const int64_t gi = i0 + i;
+                    const T a0 = c0[gi];
+                    const T a1 = has1 ? c0[ld + gi] : T(0.0);
+                    const T a2 = has2 ? c0[2 * ld + gi] : T(0.0);
+                    const T a3 = has3 ? c0[3 * ld + gi] : T(0.0);
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc)) {
+                            const T xi = chunk[q * kChunkRows + i];
+                            s[0][q] += a0 * xi;
+                            if (has1) s[1][q] += a1 * xi;
+                            if (has2) s[2][q] += a2 * xi;
+                            if (has3) s[3][q] += a3 * xi;
+                        }
+                    }
+                }
+            }
+        }
+        if (has0) {
+#pragma unroll
+            for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) s[p][q] = warp_sum(s[p][q]);
+                }
+            }
+            if (lane == 0) {
+#pragma unroll
+                for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc) && j + p < b.r) {
+                            T& x = xr[q * stride + j + p];
+                            x = kSubtract ? x - s[p][q] : x + s[p][q];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// x_S and x_R of the pass's columns into shared memory (column q at sh + q * stride)
+template<typename T>
+__device__ __forceinline__ void load_sr(const SolveBox& b, const T* v0, T* sh, int stride, int nc) {
+    for (int q = 0; q < nc; ++q) {
+        const T* v = v0 + static_cast<int64_t>(q) * b.n;
+        T* xs = sh + q * stride;
+        for (int i = threadIdx.x; i < b.k; i += blockDim.x) xs[i] = v[b.skel[i]];
+        for (int j = threadIdx.x; j < b.r; j += blockDim.x) xs[b.k + j] = v[b.red[j]];
+    }
+}
+// x_R of the pass's columns back into the vector
+template<typename T>
+__device__ __forceinline__ void store_r(const SolveBox& b, T* v0, const T* sh, int stride, int nc) {
+    for (int q = 0; q < nc; ++q) {
+        T* v = v0 + static_cast<int64_t>(q) * b.n;
+        const T* xr = sh + q * stride + b.k;
+        for (int j = threadIdx.x; j < b.r; j += blockDim.x) v[b.red[j]] = xr[j];
+    }
+}
+// x_N of the pass's columns (column q at xn + q * xs), the neighbors' current
+// rows in X_NR's row order
+template<typename T>
+__device__ __forceinline__ void gather_n(const SolveBox& b, const SolveSlot* slots, const T* vec, const T* ghost,
+                                         int nrhs, int c0, T* xn, int64_t xs, int nc) {
+    for (int q = 0; q < nc; ++q) {
+        T* x = xn + q * xs;
+        for (int a = 0; a < b.nslots; ++a) {
+            const SolveSlot sl = slots[b.slot0 + a];
+            const T* src = (sl.ghost ? ghost : vec) + sl.vec * nrhs + static_cast<int64_t>(c0 + q) * sl.n;
+            for (int i = threadIdx.x; i < sl.count; i += blockDim.x) {
+                x[sl.row0 + i] = sl.full ? src[i] : src[sl.skel[i]];
+            }
+        }
+    }
+}
+
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) solve_forward_kernel(const SolveBox* boxes, const int* wave, T* vec,
+                                                                 T* work, int nrhs, int cols) {
+    T* sh = shared_array<T>();
+    const SolveBox b = boxes[wave[blockIdx.x]];
+    const T* bT = static_cast<const T*>(b.T);
+    const T* bxsr = static_cast<const T*>(b.xsr);
+    const T* bxnr = static_cast<const T*>(b.xnr);
+    const int stride = b.k + b.r;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        load_sr(b, v0, sh, stride, nc);
+        __syncthreads();
+        if (bT != nullptr) {  // x_R -= T^T x_S
+            for (int j = warp; j < b.r; j += nwarps) {
+                T s[CB];
+                col_dot_cols<T, CB>(bT + static_cast<int64_t>(j) * b.k, sh, stride, nc, b.k, lane, s);
+                if (lane == 0) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc)) sh[q * stride + b.k + j] -= s[q];
+                    }
+                }
+            }
+            __syncthreads();
+        }
+        store_r(b, v0, sh, stride, nc);
+        if (bxsr != nullptr) {  // x_S += X_SR x_R
+            for (int i = tid; i < b.k; i += blockDim.x) {
+                T s[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                accumulate_row<T, CB>(bxsr + i, b.k, sh + b.k, stride, nc, 0, b.r, s);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) v0[static_cast<int64_t>(q) * b.n + b.skel[i]] = sh[q * stride + i] + s[q];
+                }
+            }
+        }
+        if (b.ntot > 0) {  // the neighbors' updates X_NR x_R
+            T* u0 = work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
+            for (int i = tid; i < b.ntot; i += blockDim.x) {
+                T s[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                accumulate_row<T, CB>(bxnr + i, b.ntot, sh + b.k, stride, nc, 0, b.r, s);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) u0[static_cast<int64_t>(q) * b.ntot + i] = s[q];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// x_N in shared memory (after each column's x_S, x_R) when kSharedXn, else
+// in the work buffer
+template<typename T, int CB, bool kSharedXn>
+__global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox* boxes, const SolveSlot* slots,
+                                                                  const int* wave, T* vec, const T* ghost, T* work,
+                                                                  int nrhs, int cols) {
+    // with x_N in the work buffer, its chunks first, then the columns
+    T* const chunk = shared_array<T>();
+    T* sh = kSharedXn ? chunk : chunk + kChunkRows * CB;
+    const SolveBox b = boxes[wave[blockIdx.x]];
+    const T* bT = static_cast<const T*>(b.T);
+    const T* bxsr = static_cast<const T*>(b.xsr);
+    const T* bxnr = static_cast<const T*>(b.xnr);
+    const int kr = b.k + b.r;
+    const int stride = kSharedXn ? kr + b.ntot : kr;
+    const int64_t xn_stride = kSharedXn ? stride : b.ntot;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        T* xn = kSharedXn ? sh + kr : work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
+        load_sr(b, v0, sh, stride, nc);
+        gather_n(b, slots, static_cast<const T*>(vec), ghost, nrhs, c0, xn, xn_stride, nc);
+        __syncthreads();
+        // x_R += X_SR^T x_S, then x_R += X_NR^T x_N (two products, as on the host);
+        // a warp takes four columns at a time
+        for (int j = 4 * warp; j < b.r; j += 4 * nwarps) {
+            T s[4][CB];
+            if (bxsr != nullptr) {
+                cols4_dot_cols<T, CB>(bxsr, b.k, sh, stride, nc, b.k, j, b.r, lane, s);
+            } else {
+#pragma unroll
+                for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) s[p][q] = T(0.0);
+                }
+            }
+            if (lane == 0) {
+#pragma unroll
+                for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc) && j + p < b.r) {
+                            T& x = sh[q * stride + b.k + j + p];
+                            x = x + s[p][q];
+                        }
+                    }
+                }
+            }
+            if constexpr (kSharedXn) {
+                cols4_dot_cols<T, CB>(bxnr, b.ntot, xn, xn_stride, nc, b.ntot, j, b.r, lane, s);
+                if (lane == 0) {
+#pragma unroll
+                    for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                        for (int q = 0; q < CB; ++q) {
+                            if (live(q, nc) && j + p < b.r) {
+                            T& x = sh[q * stride + b.k + j + p];
+                            x = x + s[p][q];
+                        }
+                        }
+                    }
+                }
+            }
+        }
+        if constexpr (!kSharedXn) xnr_t_chunked<T, CB, false>(b, bxnr, xn, chunk, sh + b.k, stride, nc);
+        __syncthreads();
+        store_r(b, v0, sh, stride, nc);
+        if (bT != nullptr) {  // x_S -= T x_R
+            for (int i = tid; i < b.k; i += blockDim.x) {
+                T d[CB];
+                row_dot_cols<T, CB>(bT + i, b.k, sh + b.k, stride, nc, b.r, d);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) v0[static_cast<int64_t>(q) * b.n + b.skel[i]] = sh[q * stride + i] - d[q];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// LAPACK getrs ('N') with the 1-based interchanges of getrf.
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) solve_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
+                                                                  int nrhs, int cols) {
+    T* sh = shared_array<T>();
+    const SolveBox b = boxes[list[blockIdx.x]];
+    const T* lu = static_cast<const T*>(b.lu);
+    const int r = b.r, tid = threadIdx.x;
+    if (r == 0) return;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        for (int q = 0; q < nc; ++q) {
+            const T* v = v0 + static_cast<int64_t>(q) * b.n;
+            for (int j = tid; j < r; j += blockDim.x) sh[q * r + j] = v[b.red[j]];
+        }
+        __syncthreads();
+        if (tid < nc) {  // a thread a column
+            T* xr = sh + tid * r;
+            for (int i = 0; i < r; ++i) {
+                const int p = b.ipiv[i] - 1;
+                if (p != i) {
+                    const T t = xr[i];
+                    xr[i] = xr[p];
+                    xr[p] = t;
+                }
+            }
+        }
+        for (int i = 0; i < r; ++i) {  // unit lower L
+            __syncthreads();
+            T xi[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) xi[q] = live(q, nc) ? sh[q * r + i] : T(0.0);
+            const T* col = lu + static_cast<int64_t>(i) * r;
+            for (int l = i + 1 + tid; l < r; l += blockDim.x) {
+                const T a = col[l];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) sh[q * r + l] -= a * xi[q];
+                }
+            }
+        }
+        for (int i = r - 1; i >= 0; --i) {  // upper U
+            __syncthreads();
+            if (tid < nc) sh[tid * r + i] = sh[tid * r + i] / lu[i + static_cast<int64_t>(i) * r];
+            __syncthreads();
+            T xi[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) xi[q] = live(q, nc) ? sh[q * r + i] : T(0.0);
+            const T* col = lu + static_cast<int64_t>(i) * r;
+            for (int l = tid; l < i; l += blockDim.x) {
+                const T a = col[l];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) sh[q * r + l] -= a * xi[q];
+                }
+            }
+        }
+        __syncthreads();
+        for (int q = 0; q < nc; ++q) {
+            T* v = v0 + static_cast<int64_t>(q) * b.n;
+            for (int j = tid; j < r; j += blockDim.x) v[b.red[j]] = sh[q * r + j];
+        }
+        __syncthreads();
+    }
+}
+
+// ---- the multiply
+
+template<typename T, int CB, bool kSharedXn>
+__global__ void __launch_bounds__(kThreads) mul_forward_kernel(const SolveBox* boxes, const SolveSlot* slots,
+                                                               const int* wave, T* vec, const T* ghost, T* work,
+                                                               int nrhs, int cols) {
+    // with x_N in the work buffer, its chunks first, then the columns
+    T* const chunk = shared_array<T>();
+    T* sh = kSharedXn ? chunk : chunk + kChunkRows * CB;
+    const SolveBox b = boxes[wave[blockIdx.x]];
+    const T* bT = static_cast<const T*>(b.T);
+    const T* bxsr = static_cast<const T*>(b.xsr);
+    const T* bxnr = static_cast<const T*>(b.xnr);
+    const int kr = b.k + b.r;
+    const int stride = kSharedXn ? kr + b.ntot : kr;
+    const int64_t xn_stride = kSharedXn ? stride : b.ntot;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        T* xn = kSharedXn ? sh + kr : work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
+        load_sr(b, v0, sh, stride, nc);
+        __syncthreads();
+        if (bT != nullptr) {  // x_S += T x_R
+            for (int i = tid; i < b.k; i += blockDim.x) {
+                T s[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                accumulate_row<T, CB>(bT + i, b.k, sh + b.k, stride, nc, 0, b.r, s);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) {
+                        sh[q * stride + i] += s[q];
+                        v0[static_cast<int64_t>(q) * b.n + b.skel[i]] = sh[q * stride + i];
+                    }
+                }
+            }
+        }
+        gather_n(b, slots, static_cast<const T*>(vec), ghost, nrhs, c0, xn, xn_stride, nc);
+        __syncthreads();
+        // x_R -= X_SR^T x_S, then x_R -= X_NR^T x_N (two products, as on the host)
+        for (int j = 4 * warp; j < b.r; j += 4 * nwarps) {
+            T s[4][CB];
+            if (bxsr != nullptr) {
+                cols4_dot_cols<T, CB>(bxsr, b.k, sh, stride, nc, b.k, j, b.r, lane, s);
+            } else {
+#pragma unroll
+                for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) s[p][q] = T(0.0);
+                }
+            }
+            if (lane == 0) {
+#pragma unroll
+                for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc) && j + p < b.r) {
+                            T& x = sh[q * stride + b.k + j + p];
+                            x = x - s[p][q];
+                        }
+                    }
+                }
+            }
+            if constexpr (kSharedXn) {
+                cols4_dot_cols<T, CB>(bxnr, b.ntot, xn, xn_stride, nc, b.ntot, j, b.r, lane, s);
+                if (lane == 0) {
+#pragma unroll
+                    for (int p = 0; p < 4; ++p) {
+#pragma unroll
+                        for (int q = 0; q < CB; ++q) {
+                            if (live(q, nc) && j + p < b.r) {
+                            T& x = sh[q * stride + b.k + j + p];
+                            x = x - s[p][q];
+                        }
+                        }
+                    }
+                }
+            }
+        }
+        if constexpr (!kSharedXn) xnr_t_chunked<T, CB, true>(b, bxnr, xn, chunk, sh + b.k, stride, nc);
+        __syncthreads();
+        store_r(b, v0, sh, stride, nc);
+        __syncthreads();
+    }
+}
+
+// x_R = P L U x_R (LAPACK trmm U, trmm unit L, laswp with the interchanges reversed)
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) mul_diagonal_kernel(const SolveBox* boxes, const int* list, T* vec,
+                                                                int nrhs, int cols) {
+    T* sh = shared_array<T>();
+    const SolveBox b = boxes[list[blockIdx.x]];
+    const T* lu = static_cast<const T*>(b.lu);
+    const int r = b.r, tid = threadIdx.x;
+    if (r == 0) return;
+    const int stride = 2 * r;  // a column's x, then its y
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        for (int q = 0; q < nc; ++q) {
+            const T* v = v0 + static_cast<int64_t>(q) * b.n;
+            for (int j = tid; j < r; j += blockDim.x) sh[q * stride + j] = v[b.red[j]];
+        }
+        __syncthreads();
+        for (int i = tid; i < r; i += blockDim.x) {  // y = U x
+            T s[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+            accumulate_row<T, CB>(lu + i, r, sh, stride, nc, i, r, s);
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                if (live(q, nc)) sh[q * stride + r + i] = s[q];
+            }
+        }
+        __syncthreads();
+        for (int i = tid; i < r; i += blockDim.x) {  // x = L y (unit diagonal)
+            T s[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[q] = live(q, nc) ? sh[q * stride + r + i] : T(0.0);
+            accumulate_row<T, CB>(lu + i, r, sh + r, stride, nc, 0, i, s);
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                if (live(q, nc)) sh[q * stride + i] = s[q];
+            }
+        }
+        __syncthreads();
+        if (tid < nc) {  // a thread a column
+            T* x = sh + tid * stride;
+            for (int i = r - 1; i >= 0; --i) {
+                const int p = b.ipiv[i] - 1;
+                if (p != i) {
+                    const T t = x[i];
+                    x[i] = x[p];
+                    x[p] = t;
+                }
+            }
+        }
+        __syncthreads();
+        for (int q = 0; q < nc; ++q) {
+            T* v = v0 + static_cast<int64_t>(q) * b.n;
+            for (int j = tid; j < r; j += blockDim.x) v[b.red[j]] = sh[q * stride + j];
+        }
+        __syncthreads();
+    }
+}
+
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) mul_backward_kernel(const SolveBox* boxes, const int* wave, T* vec,
+                                                                T* work, int nrhs, int cols) {
+    T* sh = shared_array<T>();
+    const SolveBox b = boxes[wave[blockIdx.x]];
+    const T* bT = static_cast<const T*>(b.T);
+    const T* bxsr = static_cast<const T*>(b.xsr);
+    const T* bxnr = static_cast<const T*>(b.xnr);
+    const int stride = b.k + b.r;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + b.vec * nrhs + static_cast<int64_t>(c0) * b.n;
+        load_sr(b, v0, sh, stride, nc);
+        __syncthreads();
+        if (bxsr != nullptr) {  // x_S -= X_SR x_R
+            for (int i = tid; i < b.k; i += blockDim.x) {
+                T s[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                accumulate_row<T, CB>(bxsr + i, b.k, sh + b.k, stride, nc, 0, b.r, s);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) {
+                        sh[q * stride + i] -= s[q];
+                        v0[static_cast<int64_t>(q) * b.n + b.skel[i]] = sh[q * stride + i];
+                    }
+                }
+            }
+        }
+        if (b.ntot > 0) {  // the neighbors' updates -X_NR x_R
+            T* u0 = work + b.work * nrhs + static_cast<int64_t>(c0) * b.ntot;
+            for (int i = tid; i < b.ntot; i += blockDim.x) {
+                T s[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                accumulate_row<T, CB>(bxnr + i, b.ntot, sh + b.k, stride, nc, 0, b.r, s);
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) u0[static_cast<int64_t>(q) * b.ntot + i] = -s[q];
+                }
+            }
+        }
+        __syncthreads();
+        if (bT != nullptr) {  // x_R += T^T x_S
+            for (int j = warp; j < b.r; j += nwarps) {
+                T s[CB];
+                col_dot_cols<T, CB>(bT + static_cast<int64_t>(j) * b.k, sh, stride, nc, b.k, lane, s);
+                if (lane == 0) {
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc)) v0[static_cast<int64_t>(q) * b.n + b.red[j]] = sh[q * stride + b.k + j] + s[q];
+                    }
+                }
             }
         }
         __syncthreads();
@@ -405,15 +1076,50 @@ unsigned grid_y(int64_t max_count) {
     return static_cast<unsigned>(std::max<int64_t>(1, std::min<int64_t>(blocks, 64)));
 }
 
+// The columns a pass of a per-box kernel takes when each needs `per_column`
+// bytes of shared memory: one, or up to kMaxCols<T> within half the limit
+// (so two blocks still fit on an SM).
+template<typename T>
+int pass_columns(int nrhs, size_t per_column) {
+    if (nrhs <= 1) return 1;
+    const size_t fit = (kSolveSharedLimit / 2) / std::max<size_t>(per_column, 1);
+    const size_t cols = std::min<size_t>({static_cast<size_t>(nrhs), static_cast<size_t>(kMaxCols<T>), fit});
+    return static_cast<int>(std::max<size_t>(cols, 1));
+}
+// f(std::integral_constant<int, CB>) with the smallest instantiated CB (1, 2,
+// 4 or 8) that holds `cols` columns
+template<typename T, typename F>
+void with_cols(int cols, F&& f) {
+    if (cols <= 1) {
+        f(std::integral_constant<int, 1>{});
+    } else if (cols <= 2) {
+        f(std::integral_constant<int, 2>{});
+    } else if (cols <= 4 || kMaxCols<T> < 8) {
+        f(std::integral_constant<int, 4>{});
+    } else {
+        f(std::integral_constant<int, (kMaxCols<T> < 8 ? 4 : 8)>{});
+    }
+}
+
 }  // namespace
 
 template<typename T>
 void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
                           cudaStream_t stream) {
     if (count <= 0) return;
-    const size_t shared = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
-    allow_shared(solve_forward_kernel<T>, shared);
-    solve_forward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs);
+    const size_t per_column = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(solve_forward_one_kernel<T>, shared);
+        solve_forward_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(solve_forward_kernel<T, CB>, shared);
+            solve_forward_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols);
+        });
+    }
     check_launch("solve_forward_kernel");
 }
 
@@ -421,14 +1127,32 @@ template<typename T>
 void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                            const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream) {
     if (count <= 0) return;
-    const size_t shared = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
-    const size_t with_xn = shared + static_cast<size_t>(max_ntot) * sizeof(T);
-    if (with_xn <= kSolveSharedLimit) {
-        allow_shared(solve_backward_kernel<T, true>, with_xn);
-        solve_backward_kernel<T, true><<<count, kThreads, with_xn, stream>>>(boxes, slots, wave, vec, ghost, work, nrhs);
+    // x_N in shared memory when that takes as many columns a pass as the work
+    // buffer would (one column: whenever it fits, as before)
+    const size_t per_column = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
+    const size_t per_column_xn = per_column + static_cast<size_t>(max_ntot) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const int cols_xn = per_column_xn <= kSolveSharedLimit ? pass_columns<T>(nrhs, per_column_xn) : 0;
+    if (cols_xn >= cols && cols_xn == 1) {
+        allow_shared(solve_backward_one_kernel<T, true>, per_column_xn);
+        solve_backward_one_kernel<T, true><<<count, kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                       work, nrhs);
     } else {
-        allow_shared(solve_backward_kernel<T, false>, shared);
-        solve_backward_kernel<T, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost, work, nrhs);
+        with_cols<T>(cols_xn >= cols ? cols_xn : cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            if (cols_xn >= cols) {
+                const size_t shared = static_cast<size_t>(cols_xn) * per_column_xn;
+                allow_shared(solve_backward_kernel<T, CB, true>, shared);
+                solve_backward_kernel<T, CB, true><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                        work, nrhs, cols_xn);
+            } else {  // (x_N in the work buffer, through shared memory in chunks)
+                const size_t shared =
+                    static_cast<size_t>(kChunkRows) * CB * sizeof(T) + static_cast<size_t>(cols) * per_column;
+                allow_shared(solve_backward_kernel<T, CB, false>, shared);
+                solve_backward_kernel<T, CB, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                         work, nrhs, cols);
+            }
+        });
     }
     check_launch("solve_backward_kernel");
 }
@@ -437,9 +1161,19 @@ template<typename T>
 void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
                            cudaStream_t stream) {
     if (count <= 0 || max_r <= 0) return;
-    const size_t shared = static_cast<size_t>(max_r) * sizeof(T);
-    allow_shared(solve_diagonal_kernel<T>, shared);
-    solve_diagonal_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+    const size_t per_column = static_cast<size_t>(max_r) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(solve_diagonal_one_kernel<T>, shared);
+        solve_diagonal_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(solve_diagonal_kernel<T, CB>, shared);
+            solve_diagonal_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+        });
+    }
     check_launch("solve_diagonal_kernel");
 }
 
@@ -539,14 +1273,31 @@ template<typename T>
 void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                         const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream) {
     if (count <= 0) return;
-    const size_t shared = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
-    const size_t with_xn = shared + static_cast<size_t>(max_ntot) * sizeof(T);
-    if (with_xn <= kSolveSharedLimit) {
-        allow_shared(mul_forward_kernel<T, true>, with_xn);
-        mul_forward_kernel<T, true><<<count, kThreads, with_xn, stream>>>(boxes, slots, wave, vec, ghost, work, nrhs);
+    // x_N placed as in launch_solve_backward
+    const size_t per_column = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
+    const size_t per_column_xn = per_column + static_cast<size_t>(max_ntot) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const int cols_xn = per_column_xn <= kSolveSharedLimit ? pass_columns<T>(nrhs, per_column_xn) : 0;
+    if (cols_xn >= cols && cols_xn == 1) {
+        allow_shared(mul_forward_one_kernel<T, true>, per_column_xn);
+        mul_forward_one_kernel<T, true><<<count, kThreads, per_column_xn, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                    work, nrhs);
     } else {
-        allow_shared(mul_forward_kernel<T, false>, shared);
-        mul_forward_kernel<T, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost, work, nrhs);
+        with_cols<T>(cols_xn >= cols ? cols_xn : cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            if (cols_xn >= cols) {
+                const size_t shared = static_cast<size_t>(cols_xn) * per_column_xn;
+                allow_shared(mul_forward_kernel<T, CB, true>, shared);
+                mul_forward_kernel<T, CB, true><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                     work, nrhs, cols_xn);
+            } else {  // (x_N in the work buffer, through shared memory in chunks)
+                const size_t shared =
+                    static_cast<size_t>(kChunkRows) * CB * sizeof(T) + static_cast<size_t>(cols) * per_column;
+                allow_shared(mul_forward_kernel<T, CB, false>, shared);
+                mul_forward_kernel<T, CB, false><<<count, kThreads, shared, stream>>>(boxes, slots, wave, vec, ghost,
+                                                                                      work, nrhs, cols);
+            }
+        });
     }
     check_launch("mul_forward_kernel");
 }
@@ -555,9 +1306,19 @@ template<typename T>
 void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
                          cudaStream_t stream) {
     if (count <= 0 || max_r <= 0) return;
-    const size_t shared = 2 * static_cast<size_t>(max_r) * sizeof(T);
-    allow_shared(mul_diagonal_kernel<T>, shared);
-    mul_diagonal_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+    const size_t per_column = 2 * static_cast<size_t>(max_r) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(mul_diagonal_one_kernel<T>, shared);
+        mul_diagonal_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(mul_diagonal_kernel<T, CB>, shared);
+            mul_diagonal_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, list, vec, nrhs, cols);
+        });
+    }
     check_launch("mul_diagonal_kernel");
 }
 
@@ -565,9 +1326,19 @@ template<typename T>
 void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
                          cudaStream_t stream) {
     if (count <= 0) return;
-    const size_t shared = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
-    allow_shared(mul_backward_kernel<T>, shared);
-    mul_backward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs);
+    const size_t per_column = static_cast<size_t>(std::max(max_n, 1)) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(mul_backward_one_kernel<T>, shared);
+        mul_backward_one_kernel<T><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(mul_backward_kernel<T, CB>, shared);
+            mul_backward_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, wave, vec, work, nrhs, cols);
+        });
+    }
     check_launch("mul_backward_kernel");
 }
 

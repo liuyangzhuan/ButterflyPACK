@@ -1071,6 +1071,14 @@ contains
          val_d = option%H2_CA_owner_component
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_CA_pack_shared' .or. trim(str) == 'h2_ca_pack_shared') then
+         val_d = option%H2_CA_pack_shared
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_solve' .or. trim(str) == 'h2_ca_solve') then
+         val_d = option%H2_CA_solve
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then
          val_d = option%H2_CA_owner_serial
          valid_opt = 1
@@ -1419,6 +1427,16 @@ contains
       if (trim(str) == 'H2_CA_owner_component' .or. trim(str) == 'h2_ca_owner_component') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_CA_owner_component = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_pack_shared' .or. trim(str) == 'h2_ca_pack_shared') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_pack_shared = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_solve' .or. trim(str) == 'h2_ca_solve') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_solve = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then

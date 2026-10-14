@@ -129,6 +129,14 @@ struct EliminatorStats {
     // the near blocks' allocations); owner candidates, pairs (parallel, with
     // a CA level's order by source), the join (new targets), batches
     double pb_buffers = 0.0, pb_items = 0.0;
+    // BPACK_TRACE=wave: the heap's own host time in the box region's buffers,
+    // and the box region's planning while the stream had nothing queued (the
+    // GPU waits for the host there)
+    double pb_heap = 0.0, pb_idle_plan = 0.0;
+    int64_t pb_heap_ops = 0, pb_idle_chunks = 0, pb_chunks = 0;
+    // the owner groups' raw blocks in one heap block a group (group_arena_):
+    // groups, blocks, groups with no range for it, blocks moved out raw
+    int64_t og_arena_groups = 0, og_arena_blocks = 0, og_arena_declined = 0, og_arena_moved = 0;
     // the owner pass's host time by part of the group loop
     double og_mat = 0.0, og_win = 0.0, og_stage = 0.0, og_launch = 0.0, og_pack = 0.0;
     double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
@@ -143,6 +151,7 @@ struct EliminatorStats {
     double persist_gen_bytes = 0.0;   // ... of which the generator boxes' (other ranks' assisting boxes)
     int64_t xr_dropped = 0;           // boxes whose X_RR_full is rebuilt from their LU instead of stored
     int64_t xr_rebuilt = 0;           // ... and the rebuilds that cost
+    double ghost_lu_bytes = 0.0;      // H2_CA_solve home: the ghosts' LU, held to the level's end
     // H2 host memory (2026-10-10): the fill sources freed without a host
     // copy made, the X_RR_full the transition took from the host for them,
     // and the X_RR_full rebuilt from the LU when a keep failed
@@ -333,6 +342,18 @@ struct EliminatorStats {
     int64_t tr_blocks_max_chunk = 0;
     int64_t transition_fill_gemms = 0;
     double owner_flops = 0.0, transition_flops = 0.0, solve_flops = 0.0;
+    // BPACK_TRACE=wave: the floating-point work by device phase, for rates per
+    // wave - the sketch (rows and stored blocks, its GEMMs, the ID's QR with
+    // pivoting at its full size, an upper bound) and the box region by the
+    // marks el[] is timed with (kernel values, gathers and adds count none)
+    double fl_sketch = 0.0, fl_sketch_id = 0.0;
+    double fl_box[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    // replicated CA levels: owner-pass updates read nowhere on this rank, not
+    // made - pairs of two eliminated ghosts (since before 2026-10-12), an
+    // eliminated ghost's own Schur block and its pairs with boxes beyond the
+    // halo (2026-10-12) - their floating-point work and counts
+    double dead_pair_flops = 0.0, dead_schur_flops = 0.0, dead_beyond_flops = 0.0;
+    int64_t dead_pair_tasks = 0, dead_schur_tasks = 0, dead_beyond_tasks = 0;
     double bytes_up = 0.0;
     double bytes_down = 0.0;
     int64_t boxes = 0;
@@ -484,7 +505,17 @@ public:
     // raw (asked after set_solve_keep), and the level's decision, taken on
     // every rank alike, to hold the blocks on more than one rank packed
     virtual bool shared_packing_expected() { return false; }
-    virtual void set_pack_shared(bool /*pack*/) {}
+    virtual void set_pack_shared(bool /*pack*/, bool /*fallback*/) {}
+    // ... and the end of its ghosts: from the interior group on no rank
+    // eliminates a ghost, so no copy of a block on another rank is read
+    // again and every block packs by this rank's pressure alone.  Called
+    // at the same wave on every rank.
+    virtual void replicas_done() {}
+    // H2_CA_solve home: the level is solved from each box's home factors, so a
+    // ghost's factors are not kept here (as an owner level's owned ghost's)
+    virtual void set_home_solve(bool /*home*/) {}
+    virtual double shared_packing_estimate() const { return 0.0; }
+    virtual double shared_packing_room() const { return 0.0; }
     virtual void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) {
         (void)keep;
         (void)budget;
@@ -1137,6 +1168,47 @@ private:
                             const std::vector<char*>& d_temp2, cudaStream_t stream);
     bool keep_solve_factor_group(const std::vector<const WaveBox*>& kept_boxes, char* d_result,
                                  const std::vector<char*>& d_temp2, cudaStream_t stream);
+    // H2_CA_solve home: a ghost's LU and pivots, held to the level's end (its
+    // owner keeps them for the solve).  Its stored X_RR_full then goes and is
+    // rebuilt from them wherever it is read, as its owner's is: the rebuild is
+    // not bitwise the stored X_RR_full, and a ghost reading the latter fed
+    // its later neighbours a different fill (192^3, 8 ranks: 8374 of 9488
+    // ghost copies differed from their owners').
+    void keep_ghost_lu(const std::vector<const WaveBox*>& ghosts, char* d_result, cudaStream_t stream) {
+        if (ghosts.empty()) return;
+        const size_t D = sizeof(S);
+        size_t bytes = 0;
+        for (const WaveBox* wb : ghosts) {
+            const size_t r = static_cast<size_t>(wb->r);
+            bytes += align_up(r * r * D) + align_up(r * sizeof(int));
+        }
+        char* block = heap_.alloc_resident(bytes, ResidentKind::FillXrr);
+        level_allocs_.push_back(block);
+        std::vector<CopySpan> items;
+        int64_t max_words = 0;
+        size_t at = 0;
+        for (const WaveBox* wb : ghosts) {
+            const size_t r = static_cast<size_t>(wb->r);
+            char* lu = block + at;
+            at += align_up(r * r * D);
+            char* piv = block + at;
+            at += align_up(r * sizeof(int));
+            items.push_back(CopySpan{d_result + wb->off_xrr, lu, static_cast<int64_t>(r * r * D / 4)});
+            items.push_back(CopySpan{d_result + wb->off_piv, piv, static_cast<int64_t>(r * sizeof(int) / 4)});
+            max_words = std::max(max_words, static_cast<int64_t>(r * r * D / 4));
+            wb->state->xrr_lu = reinterpret_cast<const S*>(lu);
+            wb->state->xrr_piv = reinterpret_cast<const int*>(piv);
+        }
+        const size_t list_bytes = items.size() * sizeof(CopySpan);
+        if (list_bytes > solve_meta_device_.capacity()) {
+            check_cuda(cudaStreamSynchronize(stream), "ghost LU");  // the old list may still be read
+            solve_meta_device_.reserve(list_bytes);
+        }
+        auto* d_items = static_cast<CopySpan*>(solve_meta_device_.reserve(list_bytes));
+        check_cuda(cudaMemcpyAsync(d_items, items.data(), list_bytes, cudaMemcpyHostToDevice, stream), "ghost LU");
+        launch_copy_spans(d_items, static_cast<int>(items.size()), max_words, stream);
+        eliminator_stats().ghost_lu_bytes += static_cast<double>(bytes);
+    }
     bool keep_retry_smaller_ = false;
     bool keep_may_split_ = false;   // (only a wave's own keep groups split; landed factors do not)
     // H2_compress_factors: a box whose kept X_NR is still the fill source's
@@ -1212,7 +1284,25 @@ private:
     bool host_skips_xnr(const WaveBox& wb) const {
         return skip_xnr_ && !keep_failed_ && wb.ntot > 0 &&
                kept_.boxes.count(wb.box->morton_index) != 0 &&
-               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index));
+               !ghost_factors_elsewhere(wb.box->morton_index);
+    }
+    // A ghost eliminated here whose factors live with its owner: an owner
+    // level's owned ghost (they go home with the FULL payload), or a
+    // replicated level's ghost under H2_CA_solve home (the level is solved
+    // from its home factors).  Not kept here for the solve.
+    bool home_solve_ = false;
+    bool ghost_factors_elsewhere(int64_t morton) const {
+        if (owner_ != nullptr) return owner_->owned_ghost(morton);
+        if (!home_solve_ || !ca_) return false;
+        const auto it = remote_index_.find(morton);
+        return it != remote_index_.end() && remote_states_[it->second].ghost;
+    }
+    // ... nor its host copies (the solve factors, its X_NR where the packed
+    // store has its temp2^T), except under the replica check, which hashes
+    // the ghost copies against their owners'
+    bool ghost_host_copies_spent(int64_t morton) const {
+        if (owner_ != nullptr) return owner_->owned_ghost(morton);
+        return ghost_factors_elsewhere(morton) && !ca_replica_check_enabled();
     }
     // An owner level's owned ghost whose temp2^T is in the packed fill store:
     // the transition puts that back (packed_restore_, as for a remote
@@ -1222,16 +1312,19 @@ private:
     // list either.  (CA3's leaf at 768^3 on 64 ranks held ~14 GB a rank more
     // outside the pinned chunks than CA0's, and the host ran out.)
     bool host_drops_ghost_xnr(const WaveBox& wb) const {
-        return packed_restore_ && device_exchange_ && owner_ != nullptr && wb.ntot > 0 && wb.state != nullptr &&
-               owner_->owned_ghost(wb.box->morton_index) && packed_of(*wb.state) != nullptr;
+        return packed_restore_ && (owner_ == nullptr || device_exchange_) && wb.ntot > 0 && wb.state != nullptr &&
+               ghost_host_copies_spent(wb.box->morton_index) && packed_of(*wb.state) != nullptr;
     }
     // H2 host memory: nor its X_RR_full - the transition rebuilds it from the
-    // kept LU.  Not on a level whose generators go through the host
+    // kept LU (an H2_CA_solve home ghost's from the LU it holds to the level's
+    // end).  Not on a level whose generators go through the host
     // (emit_generators reads the copy).
     bool host_skips_xrr(const WaveBox& wb) const {
-        return packed_restore_ && skip_xnr_ && !keep_failed_ && kept_.boxes.count(wb.box->morton_index) != 0 &&
-               !(owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) &&
-               !(wb.has_remote && !device_exchange_);
+        const int64_t m = wb.box->morton_index;
+        const bool lu_here = ghost_factors_elsewhere(m) ? owner_ == nullptr && wb.state != nullptr &&
+                                                              wb.state->xrr_lu != nullptr
+                                                        : kept_.boxes.count(m) != 0;
+        return packed_restore_ && skip_xnr_ && !keep_failed_ && lu_here && !(wb.has_remote && !device_exchange_);
     }
     // The slot a neighbor position holds in the two stores, or -1.
     static int32_t slot_at(const WaveBox& wb, size_t pos) {
@@ -1289,8 +1382,11 @@ private:
     struct AdoptedBlock { bool schur; uint64_t key; DeviceMatrix* m; };
     enum MatSite { MatBeginSchur = 0, MatOwnerJoin, MatGroup, MatDownload, MatGenerator,
                    MatBuildParent, MatSiteCount };
+    // `take`: where a block's raw memory comes from instead of a heap block of
+    // its own (null from it: the heap)
+    using RawTake = std::function<char*(const AdoptedBlock&, size_t)>;
     void materialize_adopted(const std::vector<AdoptedBlock>& want, cudaStream_t stream,
-                             MatSite site = MatSiteCount);
+                             MatSite site = MatSiteCount, const RawTake* take = nullptr);
     // H2 host staging (c), asynchronous: the gather half of a materialization
     // kept apart, so a group's gather can run on the near copy stream under
     // the previous group's GEMMs and be decompressed when its turn comes.
@@ -1303,7 +1399,30 @@ private:
         cudaEvent_t done = nullptr;        // recorded after a gather on another stream
     };
     void plan_gather(GatherPlan& g, cudaStream_t stream, cudaEvent_t done);
-    void materialize_from_gather(GatherPlan& g, cudaStream_t stream, MatSite site);
+    void materialize_from_gather(GatherPlan& g, cudaStream_t stream, MatSite site, const RawTake* take = nullptr);
+    // An owner group's raw blocks that its pack takes back, in one heap block
+    // cut by a bump pointer (2026-10-12): the leaf's owner pass made a heap
+    // block for each of them and gave it back after the pack - 2.85M blocks
+    // of ~105 KB a leaf, 5.3 s of the heap's host time with the frees (384^3
+    // on 8 ranks, 40 GB cards).  Sizes round as the heap's do, so what the
+    // heap counts at every decision is unchanged.
+    struct GroupArena { char* base = nullptr; size_t bytes = 0, used = 0; };
+    GroupArena group_arena_;
+    bool in_group_arena(const void* p) const {
+        const char* c = static_cast<const char*>(p);
+        return group_arena_.base != nullptr && c >= group_arena_.base && c < group_arena_.base + group_arena_.bytes;
+    }
+    static size_t arena_round(size_t bytes) {
+        const size_t a = DeviceHeap::block_alignment();
+        return std::max<size_t>(a, (bytes + a - 1) / a * a);
+    }
+    char* group_arena_take(size_t bytes) {
+        const size_t size = arena_round(bytes);
+        if (group_arena_.base == nullptr || group_arena_.used + size > group_arena_.bytes) return nullptr;
+        char* p = group_arena_.base + group_arena_.used;
+        group_arena_.used += size;
+        return p;
+    }
     // Everywhere outside the wave materialization a null ptr means "no block
     // here", and the reader answers from the kernel or makes a fresh block.
     // It must not also mean "adopted and still packed": that reads as the
@@ -1795,10 +1914,14 @@ private:
     template<typename TargetT>
     void pack_near_by_rule(std::vector<TargetT>& targets, size_t first, size_t last, cudaStream_t stream,
                            bool pressure) {
+        if (replicas_done_) {   // (the interior group: no ghost reads a copy any more)
+            if (pressure) pack_near_group(targets, first, last, stream);
+            return;
+        }
         if (pack_shared_) pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
         if (!pressure) return;
         pack_near_group(targets, first, last, stream, 1.0, PackOnly::Private);
-        if (!pack_shared_ && under_pressure()) {
+        if (!pack_shared_ && shared_fallback_ && under_pressure()) {
             warn_replica_fallback("short of room with its own blocks packed, the shared ones packed too");
             pack_near_group(targets, first, last, stream, 1.0, PackOnly::Shared);
         }
@@ -1934,7 +2057,7 @@ private:
             if (!ok[j]) continue;
             TargetT& t = targets[which[j]];
             if (t.block->ptr == nullptr) continue;
-            heap_.free(t.block->ptr);
+            if (!in_group_arena(t.block->ptr)) heap_.free(t.block->ptr);   // (the group's block: at its end)
             t.block->ptr = nullptr;
         }
         ++stats.np_groups;
@@ -2501,30 +2624,54 @@ private:
     // because packing them after every write costs ~1.6 s of a 4 s leaf at
     // 192^3 on 8 ranks, where nothing needs packing.
     bool pack_shared_ = false;
+    bool replicas_done_ = false;       // the interior group: see replicas_done()
+    double shared_grow_ = 0.0;         // the estimate behind the decision (for the level's report)
     bool shared_packing_expected() override {
         if (!replicated_) return false;
         // Above the leaf the level's blocks are on the card already (adopted from
         // the transition or uploaded here) and the owner pass makes few new
         // ones, so the room it needs is a wave's working set.  At the leaf they
         // are made during the level: the near set raw at its peak, estimated as
-        // half the full-size blocks of the rank's boxes and their one-hop pairs
-        // (192^3 CA0 leaf on 8 ranks: 29 GB by this count, 22 GB at the blocks'
-        // largest, ~10 GB at the peak).
+        // the full-size blocks of the boxes and their one-hop pairs - of the
+        // boxes the boundary groups eliminate (the rank's boundary boxes and its
+        // ghosts), since the rule ends with them (replicas_done) and the
+        // interior group packs by pressure.  Not half of it: a rank that runs
+        // short with the shared blocks raw packs them alone and its ghost
+        // copies differ (768^3 on 64 ranks, 80 GB cards: half the count, 37.0
+        // GB against 40.9 GB of room, let 38 of 64 ranks fall back in the green
+        // group, whose raw peak was 41.5 GB at the wave ends, and the level
+        // above stopped on a near block shape).
         const bool leaf = level_index_ == static_cast<int>(tree_->levels.size()) - 1;
         double grow = 0.1 * static_cast<double>(heap_.capacity());
         if (leaf) {
             double full = 0.0;
-            for (const Box& b : level_.local_boxes) {
+            auto add = [&](const Box& b) {
                 const double n = static_cast<double>(b.num_points);
                 full += n * n * (1.0 + 0.5 * static_cast<double>(b.one_hop.size()));
-            }
-            const double boxes = static_cast<double>(states_.size() + remote_states_.size());
-            full *= static_cast<double>(sizeof(S)) * boxes / std::max(1.0, static_cast<double>(states_.size()));
-            grow = 0.5 * full;
+            };
+            for (int64_t li : level_.boundary_id) add(level_.local_boxes[static_cast<size_t>(li)]);
+            for (const Box& g : level_.ghost_boxes) add(g);
+            grow = full * static_cast<double>(sizeof(S));
         }
+        shared_grow_ = grow;
         return static_cast<double>(heap_.used()) + grow > static_cast<double>(hold_limit());
     }
-    void set_pack_shared(bool pack) override { pack_shared_ = replicated_ && pack; }
+    double shared_packing_estimate() const override { return shared_grow_; }
+    double shared_packing_room() const override {
+        const double room = static_cast<double>(hold_limit()) - static_cast<double>(heap_.used());
+        return room;
+    }
+    void set_pack_shared(bool pack, bool fallback) override {
+        pack_shared_ = replicated_ && pack;
+        shared_fallback_ = fallback;
+    }
+    // (H2_CA_pack_shared never: a rank short of room does not pack them alone)
+    bool shared_fallback_ = true;
+    void replicas_done() override {
+        replicas_done_ = true;
+        pack_shared_ = false;
+    }
+    void set_home_solve(bool home) override { home_solve_ = home && ca_ && owner_ == nullptr; }
     std::vector<char> local_shared_;   // by local index: on another rank too
     bool local_shared_ready_ = false, local_shared_all_ = false;
     bool box_shared(int64_t m) {
@@ -4045,6 +4192,30 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     }
     if (adaptive) selector->plan(meta_);  // its first round: the IDs of the sketches, the root nodes
 
+    {   // (the sketch's floating-point work, for BPACK_TRACE=wave)
+        auto vb = [](const VBatch<S>& b) {
+            double f = 0.0;
+            for (const auto& e : b.entries) f += 2.0 * e.m * e.n * e.k;
+            return f;
+        };
+        double f = 0.0;
+        for (const OrderedSketchItem& it : row_items) f += 2.0 * it.d * static_cast<double>(it.rows) * it.ncols;
+        for (const auto& grp : stored_by_group) {
+            for (const OrderedSketchItem& it : grp) f += 2.0 * it.d * static_cast<double>(it.rows) * it.ncols;
+        }
+        for (const VBatch<S>& b : xrr_gemm) f += vb(b);
+        for (const VBatch<S>& b : p_by_group) f += vb(b);
+        for (const auto& passes : fill_by_group) {
+            for (const VBatch<S>& b : passes) f += vb(b);
+        }
+        double fid = 0.0;
+        for (const QrcpItem& it : id_items) {
+            const double m = it.m, n = it.n, k = std::min(m, n);
+            fid += 4.0 * m * n * k - 4.0 / 3.0 * k * k * k;
+        }
+        stats.fl_sketch += kFlopScale * f;
+        stats.fl_sketch_id += kFlopScale * fid;
+    }
     // ---- launches, then Y to the host
     stats.sk_meta += std::chrono::duration<double>(clock::now() - t_gpu).count();
     StreamMarks marks;
@@ -4518,6 +4689,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         const size_t c0 = std::min(active.size(), static_cast<size_t>(chunk) * chunk_boxes);
         const size_t c1 = nchunks == 1 ? active.size() : std::min(active.size(), c0 + chunk_boxes);
         if (c0 >= c1) continue;
+        // (the chunk's planning starts here: the buffers timer measured from
+        // the previous chunk's launch, so its compressions and keeps with
+        // their syncs were counted as buffers)
+        if (chunk > 0) t0 = clock::now();
+        const auto t_chunk = clock::now();
+        const bool gpu_idle_at_plan = cudaStreamQuery(stream) == cudaSuccess;
+        const double heap_s0 = heap_.op_seconds();
+        const size_t heap_n0 = heap_.alloc_calls() + heap_.free_calls();
         const std::vector<int> chunk_active(active.begin() + static_cast<ptrdiff_t>(c0),
                                             active.begin() + static_cast<ptrdiff_t>(c1));
         elim_marks_.emplace_back(std::make_unique<StreamMarks>(), 0);
@@ -4638,6 +4817,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         stats.pb_buffers += std::chrono::duration<double>(clock::now() - t0).count();
+        stats.pb_heap += heap_.op_seconds() - heap_s0;
+        stats.pb_heap_ops += static_cast<int64_t>(heap_.alloc_calls() + heap_.free_calls() - heap_n0);
         const auto t_items = clock::now();
         // Launch items of the box region.
         std::vector<EvalItem> evals;
@@ -4922,6 +5103,11 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (int i : chunk_active) piv_ptrs.push_back(boxes[static_cast<size_t>(i)].piv);
         const size_t off_piv_ptrs = meta_.append(piv_ptrs);
         stats.plan += std::chrono::duration<double>(clock::now() - t0).count();
+        ++stats.pb_chunks;
+        if (gpu_idle_at_plan) {
+            ++stats.pb_idle_chunks;
+            stats.pb_idle_plan += std::chrono::duration<double>(clock::now() - t_chunk).count();
+        }
 
         // ---- 3. device work, in stream order: the box region, then the owner
         // pass, planned on the host while the box region runs.  Nothing waits
@@ -5021,6 +5207,19 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         marks.mark(stream);  // 4: temp1, temp2
         for (const auto& e : trsm.entries) stats.solve_flops += kFlopScale * 2.0 * e.m * e.n * e.n;  // two triangular solves
         for (const auto& e : gsolve.entries) stats.solve_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+        {   // (the box region's work by the marks it is timed with, BPACK_TRACE=wave)
+            auto vb = [](const VBatch<S>& b) {
+                double f = 0.0;
+                for (const auto& e : b.entries) f += 2.0 * e.m * e.n * e.k;
+                return f;
+            };
+            stats.fl_box[1] += kFlopScale * (vb(g1) + vb(g2) + vb(g3) + vb(g4));
+            for (const auto& e : getrf.entries) stats.fl_box[2] += kFlopScale * 2.0 / 3.0 * e.m * e.m * e.m;
+            stats.fl_box[3] += kFlopScale * vb(g5);
+            for (const auto& e : trsm.entries) stats.fl_box[4] += kFlopScale * 2.0 * e.m * e.n * e.n;
+            stats.fl_box[4] += kFlopScale * vb(gsolve);
+            stats.fl_box[5] += kFlopScale * (vb(g6) + vb(g7));
+        }
         launch_transpose(reinterpret_cast<const TransposeItem*>(items(off_transposes)), static_cast<int>(transposes.size()),
                          max_tr_m, max_tr_n, stream);
         g6.gemm(md, MagmaNoTrans, MagmaTrans, 1.0, 1.0, queue);
@@ -5058,7 +5257,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         for (int i : chunk_active) {
             const WaveBox& wb = boxes[static_cast<size_t>(i)];
             if (wb.k == 0 || wb.r == 0) continue;
-            if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+            if (ghost_factors_elsewhere(wb.box->morton_index)) continue;
             const size_t k = static_cast<size_t>(wb.k), r = static_cast<size_t>(wb.r), nt = static_cast<size_t>(wb.ntot);
             factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
                                                  align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
@@ -5289,6 +5488,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::vector<SrcSlot> src_slots;               // ... and their slots
     };
     std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
+    // (per candidate, summed after the loop: the dead updates not made, by kind
+    // - two eliminated ghosts, an eliminated ghost's Schur block, with a box
+    // beyond the halo - flops and tasks)
+    std::vector<std::array<double, 6>> dead_by_candidate(candidates.size(), std::array<double, 6>{});
     std::exception_ptr owner_failure;
     std::mutex owner_failure_mutex;
     #pragma omp parallel for schedule(dynamic, 4)
@@ -5341,9 +5544,26 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     const int64_t am = src_hop[a];
                     const int n_a = static_cast<int>(src.counts[a]);
                     if (n_a == 0) continue;
+                    auto& dead = dead_by_candidate[static_cast<size_t>(ci)];
+                    const double task_flops = 2.0 * n_c * n_a * src.r;
                     if (eliminated_ghost && am != cm) {
                         const BoxState& as = state_of(am);
-                        if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) continue;
+                        if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) {
+                            if (cm < am || !is_interest(am)) { dead[0] += task_flops; dead[1] += 1; }  // (once a pair)
+                            continue;
+                        }
+                    }
+                    // A replicated level: nor an eliminated ghost's own Schur block,
+                    // nor its pairs with boxes beyond this rank's halo.  Its
+                    // parent is another rank's, and the transition builds only
+                    // this rank's parents (pairs with a box of this rank); the
+                    // box beyond the halo is never eliminated here.  The owner
+                    // makes both for real.
+                    if (eliminated_ghost && owner_ == nullptr && ca_ && (am == cm || !is_interest(am))) {
+                        const int k = am == cm ? 2 : 4;
+                        dead[k] += task_flops;
+                        dead[k + 1] += 1;
+                        continue;
                     }
                     CandidateTarget* target = nullptr;
                     // (an owner level: a block is updated here only if it is read
@@ -5420,6 +5640,14 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
     }
     if (owner_failure) std::rethrow_exception(owner_failure);
+    for (const auto& d : dead_by_candidate) {
+        stats.dead_pair_flops += kFlopScale * d[0];
+        stats.dead_pair_tasks += static_cast<int64_t>(d[1]);
+        stats.dead_schur_flops += kFlopScale * d[2];
+        stats.dead_schur_tasks += static_cast<int64_t>(d[3]);
+        stats.dead_beyond_flops += kFlopScale * d[4];
+        stats.dead_beyond_tasks += static_cast<int64_t>(d[5]);
+    }
     owner_lap(stats.po_pairs);
     // the join: blocks of new targets (their kernel values first), in the
     // sequential loop's order
@@ -5560,6 +5788,47 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             st.os_slots += static_cast<int64_t>(slots.size());
             ++st.os_groups;
         }
+        // The blocks this group's pack will take back - by the rule the pack
+        // applies after the GEMMs, with the pressure foreseen from what the
+        // group adds to the heap - in one heap block (group_arena_).  A block
+        // the pack leaves raw after all moves to a block of its own before
+        // that one goes back, so the decision itself stays where it was.
+        std::unordered_set<const DeviceMatrix*> arena_set;
+        if (kHoldNearBlocksPacked && compress_factors_ >= 1) {
+            size_t group_raw = 0;
+            for (size_t i = first; i < last; ++i) {
+                const Target& t = targets[i];
+                if (t.block->ptr == nullptr) group_raw += arena_round(static_cast<size_t>(t.rows) * t.cols * D);
+            }
+            const bool pressure = heap_.used() + group_raw > hold_limit();
+            size_t arena_bytes = 0;
+            for (size_t i = first; i < last; ++i) {
+                const Target& t = targets[i];
+                if (t.block->ptr != nullptr || t.rows <= 0 || t.cols <= 0) continue;
+                bool packs = pressure;
+                if (replicated_ && !replicas_done_) {
+                    packs = block_shared(static_cast<uint64_t>(t.key)) ? pack_shared_ : pressure;
+                }
+                if (!packs) continue;
+                arena_set.insert(t.block);
+                arena_bytes += arena_round(static_cast<size_t>(t.rows) * t.cols * D);
+            }
+            if (arena_bytes > 0) {
+                group_arena_.base = heap_.try_alloc_resident(arena_bytes, ResidentKind::Adopted);
+                group_arena_.bytes = group_arena_.base != nullptr ? arena_bytes : 0;
+                group_arena_.used = 0;
+                if (group_arena_.base != nullptr) {
+                    ++stats.og_arena_groups;
+                    stats.og_arena_blocks += static_cast<int64_t>(arena_set.size());
+                } else {
+                    ++stats.og_arena_declined;   // (no range for it: a heap block each, as before)
+                    arena_set.clear();
+                }
+            }
+        }
+        const RawTake arena_take = [&](const AdoptedBlock& w, size_t bytes) -> char* {
+            return arena_set.count(w.m) != 0 ? group_arena_take(bytes) : nullptr;
+        };
         {   // every block of the group raw: the ones held packed put back in one
             // batch, the ones that do not exist yet allocated and marked for
             // their kernel values
@@ -5575,8 +5844,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     want.push_back(AdoptedBlock{schur, schur ? static_cast<uint64_t>(morton) : t.key, t.block});
                     continue;
                 }
-                t.block->ptr = heap_.alloc_resident<S>(static_cast<size_t>(t.rows) * t.cols * D,
-                                                       ResidentKind::OwnerNear);
+                const size_t raw = static_cast<size_t>(t.rows) * t.cols * D;
+                char* taken = arena_set.count(t.block) != 0 ? group_arena_take(raw) : nullptr;
+                t.block->ptr = taken != nullptr ? reinterpret_cast<S*>(taken)
+                                                : heap_.alloc_resident<S>(raw, ResidentKind::OwnerNear);
                 t.block->rows = t.rows;
                 t.block->cols = t.cols;
                 t.fresh = true;
@@ -5586,10 +5857,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 bool same = next_plan->want.size() == want.size();
                 for (size_t i = 0; same && i < want.size(); ++i) same = next_plan->want[i].m == want[i].m;
                 if (!same) throw std::runtime_error("LevelEliminator: the prefetched gather does not match its group");
-                materialize_from_gather(*next_plan, stream, MatGroup);
+                materialize_from_gather(*next_plan, stream, MatGroup, &arena_take);
                 next_plan.reset();
             } else {
-                materialize_adopted(want, stream, MatGroup);
+                materialize_adopted(want, stream, MatGroup, &arena_take);
             }
         }
         lap(stats.og_mat);
@@ -5704,7 +5975,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans, from_store ? MagmaNoTrans : MagmaTrans,
                    1.0, 1.0, queue);
             stats.owner_gemms += static_cast<int64_t>(b.count());
-            for (const auto& e : b.entries) stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+            for (const auto& e : b.entries) {
+                stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
+                stats.fl_box[7] += kFlopScale * 2.0 * e.m * e.n * e.k;
+            }
             ++stats.owner_batches;
         }
         // The next group's packed blocks gathered now, on the near copy
@@ -5761,6 +6035,27 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // precision blocks, discard the compressed bytes
         if (compress_factors_ >= 1 && env::check("fillsrc")) {
             measure_near_sizes(targets, first, last, stream);
+        }
+        if (group_arena_.base != nullptr) {
+            // what the pack left raw (the pressure foreseen wrongly, or no room
+            // in the store) to a block of its own, then the group's block back
+            bool moved = false;
+            for (size_t i = first; i < last; ++i) {
+                Target& t = targets[i];
+                if (t.block->ptr == nullptr || !in_group_arena(t.block->ptr)) continue;
+                const size_t raw = static_cast<size_t>(t.rows) * t.cols * D;
+                S* own = heap_.alloc_resident<S>(raw, t.fresh ? ResidentKind::OwnerNear : ResidentKind::Adopted);
+                check_cuda(cudaMemcpyAsync(own, t.block->ptr, raw, cudaMemcpyDeviceToDevice, stream), "owner group block");
+                t.block->ptr = own;
+                ++stats.og_arena_moved;
+                moved = true;
+            }
+            // (the pack's compression synchronized the stream; the moves have
+            // not, and the heap may hand the block to a writer on another
+            // stream - the near prefetch - before they run)
+            if (moved) check_cuda(cudaStreamSynchronize(stream), "owner group block");
+            heap_.free(group_arena_.base);
+            group_arena_ = GroupArena{};
         }
         lap(stats.og_pack);
     }
@@ -5824,8 +6119,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             // (the host transport, which reads it, is not on).  T stays on
             // the host for the matvec.
             // An owner level's owned ghost: its factors go to its home rank
-            // (the FULL payload), nothing stays here.
-            const bool owned_ghost = owner_ != nullptr && owner_->owned_ghost(box->morton_index);
+            // (the FULL payload), nothing stays here; and a replicated level's
+            // ghost under H2_CA_solve home (solved from home factors).
+            const bool owned_ghost = ghost_host_copies_spent(box->morton_index);
             const bool host = !owned_ghost && !(skip_xnr_ && !keep_failed_ && kept_.boxes.count(box->morton_index) != 0);
             dims->push_back({box, wb.k, wb.r, host});
             box->X_RR = MatrixStorage<DataType>{};
@@ -7380,12 +7676,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_fill_batch(
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::materialize_adopted(
-    const std::vector<AdoptedBlock>& want, cudaStream_t stream, MatSite site) {
+    const std::vector<AdoptedBlock>& want, cudaStream_t stream, MatSite site, const RawTake* take) {
     if (want.empty()) return;
     GatherPlan g;
     g.want = want;
     plan_gather(g, stream, nullptr);
-    materialize_from_gather(g, stream, site);
+    materialize_from_gather(g, stream, site, take);
 }
 
 // The gather half.  A block written by build_parent is one contiguous run
@@ -7487,7 +7783,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::plan_gather(GatherPlan& g
 // gathered pieces and the in-place runs, the scratch returned.
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::materialize_from_gather(GatherPlan& g, cudaStream_t stream,
-                                                                                 MatSite site) {
+                                                                                 MatSite site, const RawTake* take) {
     auto& stats = eliminator_stats();
     const auto t0 = std::chrono::steady_clock::now();
     auto packed_of = [&](const AdoptedBlock& w) -> const PackedBlock* {
@@ -7514,9 +7810,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::materialize_from_gather(G
         if (pb->rows != w.m->rows || pb->cols != w.m->cols) {
             throw std::runtime_error("LevelEliminator::materialize_adopted: shape of the packed block changed");
         }
-        w.m->ptr = heap_.alloc_resident<S>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S),
-                                           ResidentKind::Adopted);
-        const double bytes = static_cast<double>(static_cast<size_t>(pb->rows) * pb->cols * sizeof(S));
+        const size_t raw = static_cast<size_t>(pb->rows) * pb->cols * sizeof(S);
+        char* taken = take != nullptr ? (*take)(w, raw) : nullptr;
+        w.m->ptr = taken != nullptr ? reinterpret_cast<S*>(taken) : heap_.alloc_resident<S>(raw, ResidentKind::Adopted);
+        const double bytes = static_cast<double>(raw);
         stats.mat_bytes += bytes;
         if (site < MatSiteCount) stats.mat_site_bytes[site] += bytes;
         ++stats.mat_blocks;
@@ -8523,13 +8820,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factors(
     const size_t D = sizeof(S);
 
     // ---- this wave's boxes whose factors are worth keeping
-    std::vector<const WaveBox*> kept_boxes;
+    std::vector<const WaveBox*> kept_boxes, home_ghosts;
     for (int i : active) {
         const WaveBox& wb = boxes[static_cast<size_t>(i)];
         if (wb.k == 0 || wb.r == 0) continue;
-        if (owner_ != nullptr && owner_->owned_ghost(wb.box->morton_index)) continue;
+        if (ghost_factors_elsewhere(wb.box->morton_index)) {
+            if (owner_ == nullptr && wb.state != nullptr) home_ghosts.push_back(&wb);
+            continue;
+        }
         kept_boxes.push_back(&wb);
     }
+    keep_ghost_lu(home_ghosts, d_result, stream);
     if (kept_boxes.empty()) return;
     if (compress_factors_ < 1) ++eliminator_stats().xnr_not_requested;
 

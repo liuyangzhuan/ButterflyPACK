@@ -646,6 +646,18 @@ if (enable_h2_gpu)
                  GPU_BACKEND/h2_gpu/tests/batch_determinism.cpp)
   target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_batch_determinism butterflypack)
+  # Column-independence test of the device solve's per-box kernels (a column
+  # of a many-column launch against that column alone); not built by default:
+  # make h2_gpu_solve_columns
+  add_executable(h2_gpu_solve_columns EXCLUDE_FROM_ALL
+                 GPU_BACKEND/h2_gpu/tests/solve_columns.cpp)
+  target_compile_definitions(h2_gpu_solve_columns PRIVATE H2_HAVE_GPU)
+  target_link_libraries(h2_gpu_solve_columns butterflypack)
+  # ... and of the device H2 matvec's kernels: make h2_gpu_matvec_columns
+  add_executable(h2_gpu_matvec_columns EXCLUDE_FROM_ALL
+                 GPU_BACKEND/h2_gpu/tests/matvec_columns.cpp)
+  target_compile_definitions(h2_gpu_matvec_columns PRIVATE H2_HAVE_GPU)
+  target_link_libraries(h2_gpu_matvec_columns butterflypack)
 endif()
 # Self-test of the CA halo geometry (h2_parallel/core/halo_geometry.hpp, the
 # ghost and assisting sets by region against their enumeration; GPU_BACKEND/

@@ -59,6 +59,8 @@ public:
         bool is_hermitian = false;
         bool occupancy = false;
         int ca_owner_component = 0;  // H2_CA_owner_component
+        int ca_pack_shared = 0;      // H2_CA_pack_shared: 0 auto, 1 always, 2 never
+        int ca_solve = 0;            // H2_CA_solve: 0 replicated, 1 home
         int compress_factors = 0;    // H2_compress_factors (tolerance: `tolerance`)
     };
 
@@ -185,8 +187,16 @@ public:
     // first device exchanges are slow (Laplace 192^3 on 64 ranks: the first
     // waves of the first exchanging level at 3-4 GB/s, ~12 GB/s from the
     // fourth on; ~0.1-0.2 s per factorization, more at larger sizes); this
-    // takes that first contact out of the levels.  Returns its time (0 when
-    // it already ran); collective over the tree's ranks.
+    // takes that first contact out of the levels.  Then the same from and
+    // into the main heap, where a level's larger messages land once the
+    // arena is full: GPU-aware MPI meets a buffer's whole allocation on a
+    // pair's first transfer from it, and the heap is one allocation of most
+    // of the card (2026-10-12: after a CA0 leaf, which exchanges nothing,
+    // the first four transports of the level above waited 3.4 s more than
+    // after a Color leaf at 384^3 on 8 ranks, 6.5 s at 768^3 on 64 ranks on
+    // 80 GB cards; a Color leaf paid the same in its own first waves).
+    // Returns its time (0 when it already ran); collective over the tree's
+    // ranks.
     double warm_up_exchange() {
         static bool done = false;
         if (done || !color_gpu_enabled() || tree_->mpi_size <= 1) return 0.0;
@@ -225,6 +235,28 @@ public:
         if (host_send.empty()) {
             arena.free(send);
             arena.free(recv);
+        }
+        if (device_exchange_enabled()) {   // (the main heap: every rank takes part, a heap or not)
+            DeviceHeap& heap = DeviceHeap::instance();
+            heap.ensure_initialized();
+            char* hs = heap.try_alloc(total);
+            char* hr = hs != nullptr ? heap.try_alloc(total) : nullptr;
+            int ok = hr != nullptr ? 1 : 0;
+            MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, tree_->comm);
+            if (ok != 0) {
+                reqs.clear();
+                for (size_t i = 0; i < peers.size(); ++i) {
+                    reqs.emplace_back();
+                    MPI_Irecv(hr + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 791, tree_->comm, &reqs.back());
+                }
+                for (size_t i = 0; i < peers.size(); ++i) {
+                    reqs.emplace_back();
+                    MPI_Isend(hs + i * kBytes, static_cast<int>(kBytes), MPI_BYTE, peers[i], 791, tree_->comm, &reqs.back());
+                }
+                MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+            }
+            if (hs != nullptr) heap.free(hs);
+            if (hr != nullptr) heap.free(hr);
         }
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
@@ -576,10 +608,30 @@ public:
         if (level_) {   // (every rank of the level: fits was decided together)
             int pack = level_->shared_packing_expected() ? 1 : 0;
             MPI_Allreduce(MPI_IN_PLACE, &pack, 1, MPI_INT, MPI_MAX, level_comm);
-            level_->set_pack_shared(pack != 0);
-            if (announce && pack != 0) {
-                std::printf("  [gpu] level %d: the blocks on more than one rank held packed (a rank's near set "
-                            "would not fit raw)\n", lvl);
+            // H2_CA_pack_shared: auto (0) by the estimate above; always (1);
+            // never (2) - and no rank packs them on its own when it runs
+            // short either (that is how ghost copies came to differ), so a
+            // card without the room for them raw runs out of heap instead
+            if (opt_.ca_pack_shared == 1) pack = 1;
+            if (opt_.ca_pack_shared == 2) pack = 0;
+            level_->set_pack_shared(pack != 0, opt_.ca_pack_shared != 2);
+            // H2_CA_solve home: the ghosts' factors are not kept (the solves run
+            // the level from each box's home factors, in its elimination order)
+            level_->set_home_solve(opt_.ca_solve == 1);
+            if (announce && opt_.ca_solve == 1) {
+                std::printf("  [gpu] level %d: solved from its home factors (H2_CA_solve home): the ghosts' factors "
+                            "are not kept\n", lvl);
+                std::fflush(stdout);
+            }
+            double est[2] = {level_->shared_packing_estimate(), -level_->shared_packing_room()};
+            MPI_Allreduce(MPI_IN_PLACE, est, 2, MPI_DOUBLE, MPI_MAX, level_comm);
+            if (announce) {
+                static const char* const modes[3] = {"auto", "always", "never"};
+                std::printf("  [gpu] level %d: the blocks on more than one rank %s through the ghosts' groups "
+                            "(H2_CA_pack_shared %s; their near set raw: up to %.1f GB a rank against %.1f GB of room "
+                            "under the hold limit on the tightest)\n", lvl,
+                            pack != 0 ? "held packed" : (opt_.ca_pack_shared == 2 ? "never packed" : "left to each rank's pressure"),
+                            modes[std::min(std::max(opt_.ca_pack_shared, 0), 2)], est[0] / 1e9, -est[1] / 1e9);
                 std::fflush(stdout);
             }
         }
@@ -761,11 +813,22 @@ public:
     // Box region, owner pass, mirror and finalize of a wave on the device;
     // returns its number of boundary boxes.  The loop records the wave's
     // boxes as eliminated.
+    // A replicated CA level's interior group starts: no rank eliminates a
+    // ghost from here on (see LevelEliminatorBase::replicas_done).
+    void replicas_done() {
+        if (level_) level_->replicas_done();
+    }
     int eliminate_wave(const std::vector<int64_t>& wave, int counter) {
         if (!wave_trace_enabled()) return level_->eliminate_wave(wave, counter);
         trace_.wave_begin();
         const int boundary = level_->eliminate_wave(wave, counter);
-        trace_.wave_end(counter, wave.size());
+        size_t ghosts = 0;   // (a replicated CA level's: boxes of other ranks eliminated here too)
+        if (level_index_ >= 0) {
+            const auto& L = tree_->levels[static_cast<size_t>(level_index_)];
+            const int64_t lo = L.local_morton_start, hi = lo + static_cast<int64_t>(L.local_boxes.size());
+            for (int64_t m : wave) ghosts += (m < lo || m >= hi) ? 1 : 0;
+        }
+        trace_.wave_end(counter, wave.size(), ghosts);
         return boundary;
     }
 
@@ -906,6 +969,7 @@ public:
         MPI_Barrier(level_comm);
         if (rank == slowest.r && !announce) trace_.print(lvl, rank);
         MPI_Barrier(level_comm);
+        trace_.print_rows(lvl, rank);   // (every rank, a line a wave)
     }
 
     // Level 1 (active, not eliminated) adopts the blocks of the level-2
@@ -1097,6 +1161,10 @@ public:
                         reduced ? (blocks_ ? "merged on this device (process reduction)"
                                            : "sent to their owner's device (process reduction)")
                                 : (blocks_ ? "kept on the device" : "copied to the host"));
+            if (e.ghost_lu_bytes > 0) {
+                std::printf("  [gpu] level %d ghosts' LU held to the level's end (H2_CA_solve home): %.2f GB\n",
+                            level.level, e.ghost_lu_bytes / 1e9);
+            }
             if (e.rc_sources > 0 || e.tr_xrr_host > 0 || e.xr_restored > 0) {
                 std::printf("  [gpu] level %d fill sources without host copies: %lld freed during the waves, X_RR_full of "
                             "%lld restored from the host at the transition, %lld rebuilt from the LU at a keep's failure\n",
@@ -1148,6 +1216,14 @@ public:
                 host_memory_gb(rss, hwm);
                 std::printf("  [gpu] level %d host memory: RSS %.2f GB, high-water %.2f GB\n", level.level, rss, hwm);
                 if (wave_trace_enabled()) report_host_boxes(level.level);
+            }
+            if (e.dead_pair_tasks + e.dead_schur_tasks + e.dead_beyond_tasks > 0) {
+                std::printf("  [gpu] level %d owner pass, updates read nowhere on this rank and not made: pairs of two "
+                            "eliminated ghosts %.0f GFLOP (%lld), eliminated ghosts' Schur blocks %.0f GFLOP (%lld), their "
+                            "pairs with boxes beyond the halo %.0f GFLOP (%lld); made: %.0f GFLOP\n", level.level,
+                            e.dead_pair_flops / 1e9, static_cast<long long>(e.dead_pair_tasks), e.dead_schur_flops / 1e9,
+                            static_cast<long long>(e.dead_schur_tasks), e.dead_beyond_flops / 1e9,
+                            static_cast<long long>(e.dead_beyond_tasks), e.owner_flops / 1e9);
             }
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
@@ -1612,6 +1688,19 @@ public:
                     e.po_pairs, e.po_order, e.po_batches, e.launch, e.sk_wait, e.reclaim_wait, e.exchange_wait,
                     e.owner_flops / std::max(e.el[7], 1e-9) / 1e9,
                     e.solve_flops / std::max(e.el[4], 1e-9) / 1e9);
+        if (wave_trace_enabled()) {
+            const DeviceHeap& hp = DeviceHeap::instance();
+            std::printf("  [gpu] level %d heap work (the process so far): %zu allocations %.2f s, %zu frees %.2f s; "
+                        "in the box region's buffers %.2f s (%lld calls); the box region planned while the stream "
+                        "was idle in %lld of %lld chunks, %.2f s\n",
+                        lvl, hp.alloc_calls(), hp.alloc_seconds(), hp.free_calls(), hp.free_seconds(), e.pb_heap,
+                        static_cast<long long>(e.pb_heap_ops), static_cast<long long>(e.pb_idle_chunks),
+                        static_cast<long long>(e.pb_chunks), e.pb_idle_plan);
+            std::printf("  [gpu] level %d owner groups' raw blocks in one heap block a group: %lld groups, %lld blocks; "
+                        "%lld groups found no range for it, %lld blocks moved out raw\n", lvl,
+                        static_cast<long long>(e.og_arena_groups), static_cast<long long>(e.og_arena_blocks),
+                        static_cast<long long>(e.og_arena_declined), static_cast<long long>(e.og_arena_moved));
+        }
         if (e.remote_generators > 0 || e.exchange > 0.0) {
             const auto& tt = transport_timers();
             std::printf("  [gpu] level %d ranks (%s memory): emit %.2f s, exchange %.2f s [sizes %.2f, rest %.2f "
