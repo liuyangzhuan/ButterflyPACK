@@ -2313,7 +2313,7 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
   configure_color_gpu(solver->options.use_gpu != 0);
   fmm::env::report_environment(solver->comm);
 #ifdef H2_HAVE_GPU
-  fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+  fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)
 #endif
   fmm::HierarchicalFactorization<CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
     solver->options.N,

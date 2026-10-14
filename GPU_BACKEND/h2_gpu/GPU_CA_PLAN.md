@@ -5638,6 +5638,32 @@ skeletons do not depend on its fill store); for a kernel like this one the
 answer is H2_compress_factors 0.  Compressed, the 512K sphere does not fit
 one GPU either (its inflated ranks), where uncompressed it does.
 
+#### H2_use_gpu=1 is the tensor-core mode (2026-10-14)
+
+`H2_use_gpu` took 1 (the backend's double GEMM batches on MAGMA) and 2 (on
+the FP64 tensor cores, `launch_dgemm_vbatched_tc`).  2 was never the slower:
+when it came in (2026-09-26, one A100) the 96^3 factorization went 4.1 ->
+3.31 s and 48^3 0.99 -> 0.92 s, the GEMM shapes 5.4 -> 13.2 TF/s
+(256x256x256), 6.2 -> 8.4 (216x216x176) and 2.6 -> 4.9 (40x40x176); and its
+products are bitwise MAGMA's (the DMMA rounds each product-add as MAGMA's
+kernel does, in the same order).  Again on 73aed23, each run twice:
+
+| Laplace | 1 (MAGMA) | 2 (tensor cores) |
+|---|---|---|
+| 192^3, 8 ranks, compressed: factor | 8.77 / 8.44 s | 7.05 / 7.00 s |
+| 96^3, one GPU: factor | 5.15 / 5.01 s | 4.47 / 4.41 s |
+
+The solves are the same (0.333 s, 0.129 s), and every run is bitwise its
+pair in the other mode.  So 1 is now the tensor-core mode: every H2 GPU
+run sets `tensor_core_gemm()`.  2 is still accepted and stored as 1, so the
+scripts that pass it keep working; other values are refused.  Complex
+batches stay on MAGMA either way (the kernel is double only), and a level's
+line says "on (FP64 tensor-core GEMMs)" only for real data now (it said so
+for complex runs with 2 too).  `HODLR_use_gpu` keeps its 0 / 1 / 2.
+Checked after the change: `--H2_use_gpu 1` and `2` are each bitwise the
+old 2 (192^3 on 8 ranks, 96^3 on one GPU; 7.50 and 7.14 s, 4.54 s), the
+EMSURF sphere bitwise the same (its levels now read "on"), and 3 is refused.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

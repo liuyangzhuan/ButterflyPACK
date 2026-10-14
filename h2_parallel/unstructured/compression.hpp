@@ -37,7 +37,7 @@ void compress(H2<CoordType, DataType>* solver,
         configure_color_gpu(solver->options.use_gpu != 0);
         fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
-        fmm::gpu::tensor_core_gemm() = solver->options.use_gpu == 2;
+        fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)
         if (solver->options.use_gpu != 0) {
             fmm::gpu::begin_operator_build(solver->tree.get(), solver->tree->comm);
             fmm::gpu::invalidate_device_solve();

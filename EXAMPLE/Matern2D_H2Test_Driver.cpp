@@ -299,7 +299,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (options.h2_use_gpu < 0 || options.h2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2 is taken as 1");
   }
   if (options.h2_ca_staged_halo != 0 && options.h2_ca_staged_halo != 2) {
     throw std::invalid_argument("H2_CA_staged_halo must be 0 or 2");
@@ -368,7 +368,7 @@ void print_usage(const char* executable) {
       << "  --H2_lazy_schur <0|1|2>\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
-      << "  --H2_use_gpu <0|1|2>\n"
+      << "  --H2_use_gpu <0|1>   (1: GPU, FP64 tensor-core GEMMs; 2 is taken as 1)\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_pack_shared <auto|always|never>\n"

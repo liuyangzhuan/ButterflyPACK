@@ -146,7 +146,7 @@ struct ProgramOptions {
     int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
-    int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)
+    int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend with FP64 tensor-core GEMMs for real data (needs H2_HAVE_GPU)
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
     int ca_pack_shared = 0;     // GPU, replicated CA levels: blocks on more than one rank packed: 0 auto, 1 always, 2 never

@@ -479,7 +479,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU box path: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << (level_ && !fits ? ", host sketches (boxes over " + std::to_string(kEntryDestMask) +
                                                 " points)"
@@ -537,7 +537,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU owner level: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << std::endl;
         }
@@ -638,7 +638,7 @@ public:
         if (wave_trace_enabled()) trace_.start_end();
         if (announce) {
             std::cout << "  GPU CA level: "
-                      << (level_ ? std::string(tensor_core_gemm() ? "on (FP64 tensor-core GEMMs)" : "on")
+                      << (level_ ? std::string(tensor_core_gemm() && std::is_same_v<DataType, double> ? "on (FP64 tensor-core GEMMs)" : "on")
                                  : "off (" + reason + ")")
                       << std::endl;
         }

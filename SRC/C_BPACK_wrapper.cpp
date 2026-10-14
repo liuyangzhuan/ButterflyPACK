@@ -195,11 +195,11 @@ static butterfly::ProgramOptions read_h2_program_options64(
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (H2_use_gpu < 0 || H2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2, the old tensor-core mode, is taken as 1");
   }
 #ifndef H2_HAVE_GPU
   if (H2_use_gpu != 0) {
-    throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+    throw std::invalid_argument("H2_use_gpu=1 requires a build with enable_h2_gpu=ON");
   }
 #endif
   if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
@@ -250,7 +250,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.compress_factors = H2_compress_factors;
   result.gemm_split = H2_GEMM_split;
   result.xrr_factor = H2_XRR_factor;
-  result.use_gpu = H2_use_gpu;
+  result.use_gpu = H2_use_gpu != 0 ? 1 : 0;
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
   result.ca_pack_shared = H2_CA_pack_shared;
@@ -324,7 +324,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_lazy_schur",   "format-7 H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near"},
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
-		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
+		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend (FP64 tensor-core GEMMs for real data; 2 is taken as 1) (build with enable_h2_gpu)"},
 		{"h2_compress_factors", "format-7 H2 GPU: lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on - the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data: the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, and the CA blocks on more than one rank (so the factorization is lossy too, within the tolerance)"},
 		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
@@ -1265,11 +1265,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
       }
       if (H2_use_gpu < 0 || H2_use_gpu > 2) {
-        throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+        throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2, the old tensor-core mode, is taken as 1");
       }
 #ifndef H2_HAVE_GPU
       if (H2_use_gpu != 0) {
-        throw std::invalid_argument("H2_use_gpu=1 or 2 requires a build with enable_h2_gpu=ON");
+        throw std::invalid_argument("H2_use_gpu=1 requires a build with enable_h2_gpu=ON");
       }
 #endif
       if (H2_CA_staged_halo != 0 && H2_CA_staged_halo != 2) {
@@ -1319,7 +1319,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.compress_factors = H2_compress_factors;
       H2_options.gemm_split = H2_GEMM_split;
       H2_options.xrr_factor = H2_XRR_factor;
-      H2_options.use_gpu = H2_use_gpu;
+      H2_options.use_gpu = H2_use_gpu != 0 ? 1 : 0;
       H2_options.ca_staged_halo = H2_CA_staged_halo;
       H2_options.ca_owner_component = H2_CA_owner_component;
       H2_options.ca_pack_shared = H2_CA_pack_shared;

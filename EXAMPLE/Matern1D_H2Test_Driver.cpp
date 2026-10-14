@@ -263,7 +263,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("H2_XRR_factor must be 0 or 1");
   }
   if (options.h2_use_gpu < 0 || options.h2_use_gpu > 2) {
-    throw std::invalid_argument("H2_use_gpu must be 0, 1 or 2");
+    throw std::invalid_argument("H2_use_gpu must be 0 (CPU) or 1 (GPU, FP64 tensor-core GEMMs); 2 is taken as 1");
   }
   if (options.format != 1 && options.format != 7) {
     throw std::invalid_argument("format must be 1 (HODLR) or 7 (H2)");
@@ -320,7 +320,7 @@ void print_usage(const char* executable) {
       << "  --H2_lazy_schur <0|1|2>\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
-      << "  --H2_use_gpu <0|1|2>\n"
+      << "  --H2_use_gpu <0|1>   (1: GPU, FP64 tensor-core GEMMs; 2 is taken as 1)\n"
       << "  --length-scale <value>\n"
       << "  --nugget <value>\n"
       << "  --precon <1|3>\n"

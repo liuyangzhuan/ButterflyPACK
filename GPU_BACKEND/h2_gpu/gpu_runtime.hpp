@@ -463,8 +463,12 @@ typename MagmaScalar<DataType>::type to_magma(DataType value) {
     }
 }
 
-// H2_use_gpu=2: the backend's double GEMM batches (VBatch::gemm) run on the
-// FP64 tensor cores (launch_dgemm_vbatched_tc) instead of MAGMA.
+// The backend's double GEMM batches (VBatch::gemm) on the FP64 tensor cores
+// (launch_dgemm_vbatched_tc) instead of MAGMA: every H2 GPU run (H2_use_gpu=1)
+// and HODLR_use_gpu=2; complex batches stay on MAGMA.  The products are
+// bitwise MAGMA's - the DMMA rounds each product-add as MAGMA's kernel does,
+// in the same order - and faster at every shape measured (GPU_CA_PLAN.md,
+// "H2_use_gpu=1 is the tensor-core mode").
 inline bool& tensor_core_gemm() {
     static bool enabled = false;
     return enabled;
@@ -783,7 +787,7 @@ struct VBatch {
     size_t sizes_offset = 0;     // m, n, k, lda, ldb, ldc: (count + 1) each
     size_t pointers_offset = 0;  // a, b, c: count each
     magma_int_t max_m = 0, max_n = 0, max_k = 0;
-    // tensor-core schedule (H2_use_gpu=2, set by stage): the tile blocks of
+    // tensor-core schedule (tensor_core_gemm(), set by stage): the tile blocks of
     // every entry, the 48 x 48 ones first, as {entry, row << 16 | column}
     bool tc = false;
     size_t tc_blocks_offset = 0;
