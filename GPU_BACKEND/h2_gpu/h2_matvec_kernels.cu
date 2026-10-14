@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 namespace fmm {
 namespace gpu {
@@ -284,6 +285,373 @@ __global__ void __launch_bounds__(kThreads) h2_pairs_kernel(const H2Pair* pairs,
     }
 }
 
+// ---- passes of several columns
+//
+// The kernels above take the columns one at a time and read a box's blocks
+// again for each; these take up to kMaxCols at once (column q's vectors in
+// shared memory at q times a stride) and apply each block element to all of
+// them.  A column's arithmetic is the single-column order - the same sums
+// in the same order - so its result does not depend on how the columns are
+// grouped.  A launch whose passes would take one column runs the kernels
+// above.
+
+template<typename T>
+constexpr int kMaxCols = std::is_same_v<T, double> ? 8 : 4;
+
+// Whether unrolled column q is in the pass (column 0 always is).
+__device__ __forceinline__ bool live(int q, int nc) { return q == 0 || q < nc; }
+
+// x_S += T x_R
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) h2_upward_cols_kernel(const H2Box* boxes, T* vec, int64_t ld, int nrhs,
+                                                                  int cols) {
+    const H2Box b = boxes[blockIdx.x];
+    if (b.r == 0 || b.T == nullptr) return;
+    T* xr = shared_array<T>();  // column q at xr + q * r
+    const T* Tm = static_cast<const T*>(b.T);
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + static_cast<int64_t>(c0) * ld + b.vec;
+        for (int q = 0; q < nc; ++q) {
+            const T* v = v0 + static_cast<int64_t>(q) * ld;
+            for (int j = threadIdx.x; j < b.r; j += blockDim.x) xr[q * b.r + j] = v[b.red[j]];
+        }
+        __syncthreads();
+        for (int i = threadIdx.x; i < b.k; i += blockDim.x) {
+            T s[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+            const T* a = Tm + i;
+            const int64_t lda = b.k;
+            int j = 0;
+            for (; j + 3 < b.r; j += 4) {  // (the loads of four j in flight together)
+                const T a0 = a[j * lda], a1 = a[(j + 1) * lda], a2 = a[(j + 2) * lda], a3 = a[(j + 3) * lda];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) {
+                        const T* x = xr + q * b.r;
+                        s[q] += a0 * x[j];
+                        s[q] += a1 * x[j + 1];
+                        s[q] += a2 * x[j + 2];
+                        s[q] += a3 * x[j + 3];
+                    }
+                }
+            }
+            for (; j < b.r; ++j) {
+                const T a0 = a[j * lda];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) s[q] += a0 * xr[q * b.r + j];
+                }
+            }
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                if (live(q, nc)) v0[static_cast<int64_t>(q) * ld + b.skel[i]] += s[q];
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// y[rows] += sum_j K_j x_j for boxes of up to `covered` rows, as
+// h2_accumulate_warp_kernel a column: a warp per block (lane l takes row l of
+// a 32-row strip), warp w taking blocks w, w + 8, ..., the warps' sums added
+// in warp order.  The strips go one after another (all warps alike), each
+// through all of the box's blocks, so a lane holds one strip's sums.
+template<typename T, int CB>
+__global__ void __launch_bounds__(kH2AccumThreads) h2_accumulate_warp_cols_kernel(
+    const H2Box* boxes, const H2BlockRef* blocks, T* vec, int64_t ld, const T* local, const T* ghost,
+    const T* partial, int nrhs, int near, int covered, int cols) {
+    constexpr int kWarps = kH2AccumThreads / 32;
+    const H2Box b = boxes[blockIdx.x];
+    const int m = near ? b.n : b.k;
+    const int first = near ? b.near0 : b.block0;
+    const int count = near ? b.nnear : b.nblocks;
+    if (m == 0 || m > covered || count == 0) return;  // (larger boxes: h2_accumulate_cols_kernel)
+    __shared__ T part[kWarps][CB][32];
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        for (int r0 = 0; r0 < m; r0 += 32) {
+            const int i = r0 + lane;
+            T s[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+            for (int j = warp; j < count; j += kWarps) {
+                const H2BlockRef br = blocks[first + j];
+                const T* K = static_cast<const T*>(br.K);
+                const T* x = (br.ghost == 0 ? local : br.ghost == 1 ? ghost : partial) + br.base * nrhs +
+                             static_cast<int64_t>(c0) * br.stride + br.off;  // column q at x + q * stride
+                T t[CB];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) t[q] = T(0.0);
+                if (K == nullptr) {  // a precomputed vector
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc) && i < m) t[q] = x[q * br.stride + i];
+                    }
+                }
+                for (int cc = 0; K != nullptr && cc < br.cols; ++cc) {
+                    const T kv = i < m ? K[i + static_cast<int64_t>(cc) * m] : T(0.0);
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc)) {
+                            const T xc = x[q * br.stride + cc];
+                            if (i < m) t[q] += kv * xc;
+                        }
+                    }
+                }
+#pragma unroll
+                for (int q = 0; q < CB; ++q) s[q] += t[q];
+            }
+#pragma unroll
+            for (int q = 0; q < CB; ++q) part[warp][q][lane] = s[q];
+            __syncthreads();
+            for (int e = threadIdx.x; e < 32 * nc; e += blockDim.x) {
+                const int l = e & 31, q = e >> 5, row = r0 + l;
+                if (row >= m) continue;
+                T add = part[0][q][l];
+                for (int w = 1; w < kWarps; ++w) add += part[w][q][l];
+                T* y = vec + static_cast<int64_t>(c0 + q) * ld + b.vec;
+                T& yi = near ? y[row] : y[b.skel[row]];
+                yi += add;
+            }
+            __syncthreads();
+        }
+    }
+}
+
+// y[rows] += sum_j K_j x_j for the larger boxes, as h2_accumulate_kernel a
+// column (column q's acc at q * mr, its part at q * kH2AccumThreads, its
+// source vector at q * mc; mr, mc: the launch's largest rows and columns).
+template<typename T, int CB>
+__global__ void __launch_bounds__(kH2AccumThreads) h2_accumulate_cols_kernel(
+    const H2Box* boxes, const H2BlockRef* blocks, T* vec, int64_t ld, const T* local, const T* ghost,
+    const T* partial, int nrhs, int near, int skip_small, int cols, int mr, int mc) {
+    const H2Box b = boxes[blockIdx.x];
+    const int m = near ? b.n : b.k;
+    const int first = near ? b.near0 : b.block0;
+    const int count = near ? b.nnear : b.nblocks;
+    if (m == 0 || count == 0 || m <= skip_small) return;  // (smaller boxes: h2_accumulate_warp_cols_kernel)
+    T* acc = shared_array<T>();
+    T* part = acc + static_cast<int64_t>(cols) * mr;
+    T* xs = part + static_cast<int64_t>(cols) * kH2AccumThreads;
+    const int tid = threadIdx.x;
+    const int R = m < kH2AccumThreads ? m : kH2AccumThreads;  // rows per pass
+    const int G = kH2AccumThreads / R;                         // column groups
+    const int ri = tid % R, g = tid / R;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* y0 = vec + static_cast<int64_t>(c0) * ld + b.vec;
+        for (int q = 0; q < nc; ++q) {
+            const T* y = y0 + static_cast<int64_t>(q) * ld;
+            for (int i = tid; i < m; i += blockDim.x) acc[q * mr + i] = near ? y[i] : y[b.skel[i]];
+        }
+        for (int j = 0; j < count; ++j) {
+            const H2BlockRef br = blocks[first + j];
+            const T* K = static_cast<const T*>(br.K);
+            const T* x = (br.ghost == 0 ? local : br.ghost == 1 ? ghost : partial) + br.base * nrhs +
+                         static_cast<int64_t>(c0) * br.stride + br.off;  // column q at x + q * stride
+            if (K == nullptr) {  // a precomputed vector
+                __syncthreads();
+                for (int q = 0; q < nc; ++q) {
+                    for (int i = tid; i < m; i += blockDim.x) acc[q * mr + i] += x[q * br.stride + i];
+                }
+                continue;
+            }
+            __syncthreads();  // the previous block is done with xs
+            for (int q = 0; q < nc; ++q) {
+                for (int e = tid; e < br.cols; e += blockDim.x) xs[q * mc + e] = x[q * br.stride + e];
+            }
+            __syncthreads();
+            for (int r0 = 0; r0 < m; r0 += R) {
+                const int i = r0 + ri;
+                if (g < G && i < m) {
+                    T s[CB];
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+                    for (int cc = g; cc < br.cols; cc += G) {
+                        const T kv = K[i + static_cast<int64_t>(cc) * m];
+#pragma unroll
+                        for (int q = 0; q < CB; ++q) {
+                            if (live(q, nc)) s[q] += kv * xs[q * mc + cc];
+                        }
+                    }
+#pragma unroll
+                    for (int q = 0; q < CB; ++q) {
+                        if (live(q, nc)) part[q * kH2AccumThreads + g * R + ri] = s[q];
+                    }
+                }
+                __syncthreads();
+                if (g == 0 && i < m) {
+                    for (int q = 0; q < nc; ++q) {
+                        T s = part[q * kH2AccumThreads + ri];
+                        for (int h = 1; h < G; ++h) s += part[q * kH2AccumThreads + h * R + ri];
+                        acc[q * mr + i] += s;
+                    }
+                }
+                __syncthreads();
+            }
+        }
+        __syncthreads();
+        for (int q = 0; q < nc; ++q) {
+            T* y = y0 + static_cast<int64_t>(q) * ld;
+            for (int i = tid; i < m; i += blockDim.x) {
+                if (near) {
+                    y[i] = acc[q * mr + i];
+                } else {
+                    y[b.skel[i]] = acc[q * mr + i];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// x_R += T^T x_S: a warp per redundant entry
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) h2_downward_cols_kernel(const H2Box* boxes, T* vec, int64_t ld, int nrhs,
+                                                                    int cols) {
+    const H2Box b = boxes[blockIdx.x];
+    if (b.r == 0 || b.T == nullptr) return;
+    T* xs = shared_array<T>();  // column q at xs + q * k
+    const T* Tm = static_cast<const T*>(b.T);
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5, nwarps = blockDim.x >> 5;
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        T* v0 = vec + static_cast<int64_t>(c0) * ld + b.vec;
+        for (int q = 0; q < nc; ++q) {
+            const T* v = v0 + static_cast<int64_t>(q) * ld;
+            for (int i = threadIdx.x; i < b.k; i += blockDim.x) xs[q * b.k + i] = v[b.skel[i]];
+        }
+        __syncthreads();
+        for (int j = warp; j < b.r; j += nwarps) {
+            const T* col = Tm + static_cast<int64_t>(j) * b.k;
+            T s[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) s[q] = T(0.0);
+            for (int i = lane; i < b.k; i += 32) {
+                const T t = col[i];
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) s[q] += t * xs[q * b.k + i];
+                }
+            }
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                if (live(q, nc)) s[q] = warp_sum(s[q]);
+            }
+            if (lane == 0) {
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (live(q, nc)) v0[static_cast<int64_t>(q) * ld + b.red[j]] += s[q];
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
+__device__ __forceinline__ double shfl_xor(double v, int o) { return __shfl_xor_sync(0xffffffffu, v, o); }
+__device__ __forceinline__ dcomplex shfl_xor(dcomplex v, int o) {
+    return dcomplex(__shfl_xor_sync(0xffffffffu, v.re, o), __shfl_xor_sync(0xffffffffu, v.im, o));
+}
+
+// The sums over the warp of p[0..15] (lane l's values), each bitwise what
+// warp_sum gives it - the xor butterfly, every lane adding its partner's
+// value to its own, offsets 16, 8, 4, 2, 1; every lane ends with the same
+// sum - in 31 shuffles instead of 80: offset 16 adds all sixteen, and each
+// later offset halves what a lane keeps (the half its bit of the offset
+// selects), so lane l ends holding the sum of index l & 15.
+template<int O, typename T>
+__device__ __forceinline__ void halve_sum(T p[16], int lane) {
+    const bool upper = (lane & O) != 0;
+#pragma unroll
+    for (int u = 0; u < O; ++u) {
+        const T send = upper ? p[u] : p[u + O];
+        const T keep = upper ? p[u + O] : p[u];
+        p[u] = keep + shfl_xor(send, O);
+    }
+}
+template<typename T>
+__device__ __forceinline__ T transposed_sum16(T p[16], int lane) {
+#pragma unroll
+    for (int u = 0; u < 16; ++u) p[u] = p[u] + shfl_xor(p[u], 16);
+    halve_sum<8>(p, lane);
+    halve_sum<4>(p, lane);
+    halve_sum<2>(p, lane);
+    halve_sum<1>(p, lane);
+    return p[0];
+}
+
+// The pairs, as h2_pairs_kernel a column (column q's column sums at bsum + q
+// * kWarps * mc; mc: the launch's widest block).  K is read once a pass, in
+// groups of 16 columns whose b sums (K^T x_t over the strip) go through
+// transposed_sum16: what dominated the pairs was a warp reduction for every
+// block column and right-hand side.
+template<typename T, int CB>
+__global__ void __launch_bounds__(kThreads) h2_pairs_cols_kernel(const H2Pair* pairs, const T* x, int64_t ldx,
+                                                                 T* partial, int64_t ldp, int nrhs, int cols, int mc) {
+    constexpr int kWarps = kThreads / 32, kG = 16;
+    const H2Pair pr = pairs[blockIdx.x];
+    const T* K = static_cast<const T*>(pr.K);
+    T* bsum = shared_array<T>();
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    const int m = pr.rows, n = pr.cols;
+    const int64_t bs = static_cast<int64_t>(kWarps) * mc;  // a column's column sums
+    for (int c0 = 0; c0 < nrhs; c0 += cols) {
+        const int nc = min(cols, nrhs - c0);
+        for (int q = 0; q < nc; ++q) {
+            for (int j = threadIdx.x; j < kWarps * n; j += blockDim.x) bsum[q * bs + j] = T(0.0);
+        }
+        __syncthreads();
+        for (int r0 = 32 * warp; r0 < m; r0 += 32 * kWarps) {
+            const int i = r0 + lane;
+            T xi[CB], ai[CB];
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                xi[q] = live(q, nc) && i < m ? x[static_cast<int64_t>(c0 + q) * ldx + pr.xt + i] : T(0.0);
+                ai[q] = T(0.0);
+            }
+            for (int cc0 = 0; cc0 < n; cc0 += kG) {
+                T kv[kG];
+#pragma unroll
+                for (int u = 0; u < kG; ++u) {
+                    kv[u] = i < m && cc0 + u < n ? K[i + static_cast<int64_t>(cc0 + u) * m] : T(0.0);
+                }
+#pragma unroll
+                for (int q = 0; q < CB; ++q) {
+                    if (!live(q, nc)) continue;
+                    const T* xs = x + static_cast<int64_t>(c0 + q) * ldx + pr.xs + cc0;
+#pragma unroll
+                    for (int u = 0; u < kG; ++u) {
+                        if (cc0 + u < n) ai[q] += kv[u] * xs[u];
+                    }
+                    T pp[kG];
+#pragma unroll
+                    for (int u = 0; u < kG; ++u) pp[u] = kv[u] * xi[q];
+                    const T col = transposed_sum16(pp, lane);
+                    const int cc = cc0 + (lane & 15);
+                    if (lane < 16 && cc < n) bsum[q * bs + warp * n + cc] += col;
+                }
+            }
+#pragma unroll
+            for (int q = 0; q < CB; ++q) {
+                if (live(q, nc) && i < m) partial[static_cast<int64_t>(c0 + q) * ldp + pr.pa + i] = ai[q];
+            }
+        }
+        __syncthreads();
+        for (int q = 0; q < nc; ++q) {
+            for (int j = threadIdx.x; j < n; j += blockDim.x) {
+                T sum = bsum[q * bs + j];
+                for (int w = 1; w < kWarps; ++w) sum += bsum[q * bs + w * n + j];
+                partial[static_cast<int64_t>(c0 + q) * ldp + pr.pb + j] = sum;
+            }
+        }
+        __syncthreads();
+    }
+}
+
 template<typename Kernel>
 void allow_shared(Kernel kernel, size_t bytes) {
     if (bytes > kH2MatvecSharedLimit) throw std::runtime_error("device H2 matvec: box too large for shared memory");
@@ -293,14 +661,47 @@ void allow_shared(Kernel kernel, size_t bytes) {
     }
 }
 
+// The columns a pass takes when each needs `per_column` bytes of shared
+// memory: one, or up to kMaxCols<T> within half the limit (two blocks still
+// fit on an SM).
+template<typename T>
+int pass_columns(int nrhs, size_t per_column) {
+    if (nrhs <= 1) return 1;
+    const size_t fit = (kH2MatvecSharedLimit / 2) / std::max<size_t>(per_column, 1);
+    const size_t cols = std::min<size_t>({static_cast<size_t>(nrhs), static_cast<size_t>(kMaxCols<T>), fit});
+    return static_cast<int>(std::max<size_t>(cols, 1));
+}
+// f(std::integral_constant<int, CB>) with the smallest instantiated CB (2, 4
+// or 8) that holds `cols` (>= 2) columns
+template<typename T, typename F>
+void with_cols(int cols, F&& f) {
+    if (cols <= 2) {
+        f(std::integral_constant<int, 2>{});
+    } else if (cols <= 4 || kMaxCols<T> < 8) {
+        f(std::integral_constant<int, 4>{});
+    } else {
+        f(std::integral_constant<int, (kMaxCols<T> < 8 ? 4 : 8)>{});
+    }
+}
+
 }  // namespace
 
 template<typename T>
 void launch_h2_upward(const H2Box* boxes, int count, T* vec, int64_t ld, int nrhs, int max_r, cudaStream_t stream) {
     if (count <= 0 || max_r <= 0) return;
-    const size_t shared = static_cast<size_t>(max_r) * sizeof(T);
-    allow_shared(h2_upward_kernel<T>, shared);
-    h2_upward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs);
+    const size_t per_column = static_cast<size_t>(max_r) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(h2_upward_kernel<T>, shared);
+        h2_upward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(h2_upward_cols_kernel<T, CB>, shared);
+            h2_upward_cols_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs, cols);
+        });
+    }
     check_launch("h2_upward_kernel");
 }
 
@@ -319,35 +720,65 @@ void launch_h2_accumulate(const H2Box* boxes, int count, const H2BlockRef* block
     if (count <= 0 || max_rows <= 0) return;
     // boxes of up to 256 rows: a warp per block; larger ones: a pass per block
     const int nearf = near ? 1 : 0;
-    int covered = 0;
-    if (max_rows <= 32) {
-        h2_accumulate_warp_kernel<T, 1><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf);
-        covered = 32;
-    } else if (max_rows <= 64) {
-        h2_accumulate_warp_kernel<T, 2><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf);
-        covered = 64;
-    } else if (max_rows <= 128) {
-        h2_accumulate_warp_kernel<T, 4><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf);
-        covered = 128;
-    } else {
-        h2_accumulate_warp_kernel<T, 8><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf);
-        covered = 256;
+    const int covered = max_rows <= 32 ? 32 : max_rows <= 64 ? 64 : max_rows <= 128 ? 128 : 256;
+    if (nrhs == 1) {
+        if (max_rows <= 32) {
+            h2_accumulate_warp_kernel<T, 1><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local,
+                                                                                   ghost, partial, nrhs, nearf);
+        } else if (max_rows <= 64) {
+            h2_accumulate_warp_kernel<T, 2><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local,
+                                                                                   ghost, partial, nrhs, nearf);
+        } else if (max_rows <= 128) {
+            h2_accumulate_warp_kernel<T, 4><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local,
+                                                                                   ghost, partial, nrhs, nearf);
+        } else {
+            h2_accumulate_warp_kernel<T, 8><<<count, kH2AccumThreads, 0, stream>>>(boxes, blocks, vec, ld, local,
+                                                                                   ghost, partial, nrhs, nearf);
+        }
+    } else {  // (its shared memory is static: a pass takes kMaxCols columns)
+        const int cols = std::min(nrhs, kMaxCols<T>);
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            h2_accumulate_warp_cols_kernel<T, CB><<<count, kH2AccumThreads, 0, stream>>>(
+                boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf, covered, cols);
+        });
     }
     check_launch("h2_accumulate_warp_kernel");
     if (max_rows <= covered) return;
-    const size_t shared = h2_accumulate_shared<T>(max_rows, max_cols);
-    allow_shared(h2_accumulate_kernel<T>, shared);
-    h2_accumulate_kernel<T><<<count, kH2AccumThreads, shared, stream>>>(boxes, blocks, vec, ld, local, ghost, partial,
-                                                                         nrhs, nearf, covered);
+    const size_t per_column = h2_accumulate_shared<T>(max_rows, max_cols);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(h2_accumulate_kernel<T>, shared);
+        h2_accumulate_kernel<T><<<count, kH2AccumThreads, shared, stream>>>(boxes, blocks, vec, ld, local, ghost,
+                                                                             partial, nrhs, nearf, covered);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(h2_accumulate_cols_kernel<T, CB>, shared);
+            h2_accumulate_cols_kernel<T, CB><<<count, kH2AccumThreads, shared, stream>>>(
+                boxes, blocks, vec, ld, local, ghost, partial, nrhs, nearf, covered, cols, max_rows, max_cols);
+        });
+    }
     check_launch("h2_accumulate_kernel");
 }
 
 template<typename T>
 void launch_h2_downward(const H2Box* boxes, int count, T* vec, int64_t ld, int nrhs, int max_k, cudaStream_t stream) {
     if (count <= 0 || max_k <= 0) return;
-    const size_t shared = static_cast<size_t>(max_k) * sizeof(T);
-    allow_shared(h2_downward_kernel<T>, shared);
-    h2_downward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs);
+    const size_t per_column = static_cast<size_t>(max_k) * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(h2_downward_kernel<T>, shared);
+        h2_downward_kernel<T><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(h2_downward_cols_kernel<T, CB>, shared);
+            h2_downward_cols_kernel<T, CB><<<count, kThreads, shared, stream>>>(boxes, vec, ld, nrhs, cols);
+        });
+    }
     check_launch("h2_downward_kernel");
 }
 
@@ -356,9 +787,20 @@ void launch_h2_pairs(const H2Pair* pairs, int count, const T* x, int64_t ldx, T*
                      int max_cols, cudaStream_t stream) {
     if (count <= 0 || max_cols <= 0) return;
     if (max_cols > kH2PairMaxCols) throw std::runtime_error("device H2 matvec: near block too wide for the pair kernel");
-    const size_t shared = static_cast<size_t>(kThreads / 32) * max_cols * sizeof(T);
-    allow_shared(h2_pairs_kernel<T>, shared);
-    h2_pairs_kernel<T><<<count, kThreads, shared, stream>>>(pairs, x, ldx, partial, ldp, nrhs);
+    const size_t per_column = static_cast<size_t>(kThreads / 32) * max_cols * sizeof(T);
+    const int cols = pass_columns<T>(nrhs, per_column);
+    const size_t shared = static_cast<size_t>(cols) * per_column;
+    if (cols == 1) {
+        allow_shared(h2_pairs_kernel<T>, shared);
+        h2_pairs_kernel<T><<<count, kThreads, shared, stream>>>(pairs, x, ldx, partial, ldp, nrhs);
+    } else {
+        with_cols<T>(cols, [&](auto cb) {
+            constexpr int CB = decltype(cb)::value;
+            allow_shared(h2_pairs_cols_kernel<T, CB>, shared);
+            h2_pairs_cols_kernel<T, CB><<<count, kThreads, shared, stream>>>(pairs, x, ldx, partial, ldp, nrhs, cols,
+                                                                             max_cols);
+        });
+    }
     check_launch("h2_pairs_kernel");
 }
 

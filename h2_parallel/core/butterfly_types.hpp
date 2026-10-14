@@ -135,15 +135,22 @@ struct ProgramOptions {
     int CA_level = 10000;       // First level using CA; values above the leaf preserve full color
     int use_sketch = 1;         // 0: full workspace, 1: materialized sketch, 2: streamed sketch
     int lazy_schur = 0;         // Color levels: 0 eager, 1 lazy far, 2 lazy far plus generated near
-    // GPU: lossy compression of the kept factors at tol_comp (X_NR is
-    // 86-88% of the factor bytes).  0 off, 1 the retained X_NR, 2 also
-    // the fill sources.  Needs a build with nvCOMP.
+    // GPU: lossy compression (nvCOMP bitcomp) at tol_comp, 0 off or 1 on:
+    // the factors kept on the device for the solve (X_NR, 86-88% of the
+    // factor bytes; T, X_SR) and the factorization's own data - the fill
+    // sources later waves and the level transition read, the near and
+    // parent blocks held under memory pressure, the CA blocks on more than
+    // one rank - so the factorization is lossy too, within the tolerance.
+    // (A value 2, "also the fill sources", was planned; the fill sources
+    // went in under 1, and 2 was never different.)
     int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
     int use_gpu = 0;            // Color levels: 0 CPU, 1 GPU backend, 2 GPU with FP64 tensor-core GEMMs (needs H2_HAVE_GPU)
     int ca_staged_halo = 0;     // CA levels: 0 legacy gather, 2 staged/overlapped gather
     int ca_owner_component = 0; // CA levels: 0 replicated, 3 asynchronous component owners
+    int ca_pack_shared = 0;     // GPU, replicated CA levels: blocks on more than one rank packed: 0 auto, 1 always, 2 never
+    int ca_solve = 0;           // GPU, replicated CA levels: 0 replicated solve (ghost factors kept), 1 home (solved from home factors)
     int ca_owner_serial = 0;    // Serialize mode-3 events as a correctness oracle
     int id_neighborhood_radius = 2; // Diagnostic: append original-cloud rows through this box radius
     int id_proxy_mode = 0;          // 0: none, 1: geometric surface, 2: adaptive row sampling

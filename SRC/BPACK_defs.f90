@@ -845,7 +845,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: CA_level !< first H2 level using communication-avoiding factorization; 10000 selects color
         integer:: H2_use_sketch !< H2 ID mode: 0 full workspace, 1 materialized sketch, 2 streamed sketch when H2_ID_proxy!=2
         integer:: H2_lazy_schur !< H2 color Schur mode: 0 eager, 1 lazy far, 2 lazy far plus generated near
-        integer:: H2_compress_factors !< H2 GPU lossy compression of the kept factors at tol_comp: 0 off, 1 the retained X_NR, 2 also the fill sources
+        integer:: H2_compress_factors !< H2 GPU lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on: the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data (the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, the CA blocks on more than one rank), so the factorization is lossy too, within the tolerance; no other value
         integer:: H2_GEMM_split !< maximum OpenMP task split for one H2 color work item; 0 disables splitting
         integer:: H2_XRR_factor !< H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
         integer:: H2_use_gpu !< H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (requires a build with enable_h2_gpu)
@@ -853,6 +853,8 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: HODLR_gpu_pieces !< HODLR GPU construction (HODLR_use_gpu > 0): pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces, each on its rank)
         integer:: H2_CA_staged_halo !< H2 CA halo mode: 0 legacy gather, 2 staged/overlapped gather
         integer:: H2_CA_owner_component !< H2 CA component ownership: 0 replicated, 3 asynchronous owner schedule
+        integer:: H2_CA_solve !< H2 GPU, replicated CA levels (H2_CA_owner_component 0): how the level is solved: 0 replicated (the ghosts' factors kept, applied again on every rank holding them), 1 home (each box's factors applied by its home rank only, the ghosts' factors not kept; the vector exchanged by wave)
+        integer:: H2_CA_pack_shared !< H2 GPU, replicated CA levels (H2_CA_owner_component 0, H2_compress_factors 1): the near blocks held by more than one rank packed through the ghosts' groups: 0 auto (when the level's estimate does not fit under the hold limit), 1 always, 2 never (no rank packs them; the card must hold them raw)
         integer:: H2_CA_owner_serial !< 1: serialize the CA component-owner schedule as a correctness oracle
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
@@ -940,9 +942,26 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
     end type mesh
 
     !>**** quantities related to specific matrix kernels
+    !>**** a low-rank term U V^T added to every entry of a matrix's construction (c_bpack_set_entry_addend), its rows
+    !> distributed as the matrix's: this rank's rows of U and V, then rows fetched from the ranks owning them
+    !> (BPACK_addend_fetch) while needed
+    type entry_addend
+        DT, allocatable :: u(:, :), v(:, :) !< the rows held: this rank's first (slots 1 .. nu_loc, nv_loc), then fetched ones
+        integer, allocatable :: umap(:), vmap(:) !< the slot of each row (tree order) of U, V; 0: not held
+        integer, allocatable :: urow(:), vrow(:) !< the row of each slot
+        integer, allocatable :: mp(:, :), np(:, :) !< the rows of U, V each rank of the term's group owns (first, last)
+        integer :: nu = 0, nv = 0 !< the slots in use
+        integer :: nu_loc = 0, nv_loc = 0 !< of them this rank's own rows
+        integer :: r = 0 !< the rank of the term
+        integer :: head = 0 !< MyID of the first rank of the term's group (the matrix's ranks)
+        logical :: on_device = .false. !< the GPU construction holds the rows and adds the term to the entries it takes from the host (HODLR_gpu_addend_begin)
+        logical :: skip = .false. !< element_Zmn_blocklist_user leaves the term out (while HODLR_gpu_host_entries lets the device add it)
+    end type entry_addend
+
     type kernelquant
 
         DT, allocatable :: matZ_glo(:, :) !< Full Matrix: the full matrix to sample its entries
+        type(entry_addend), allocatable :: addend !< a low-rank term added to every entry the matrix's construction takes (c_bpack_set_entry_addend)
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z

@@ -112,6 +112,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_use_gpu_d = 0.0;
   double H2_CA_staged_halo_d = 0.0;
   double H2_CA_owner_component_d = 0.0;
+  double H2_CA_pack_shared_d = 0.0;
+  double H2_CA_solve_d = 0.0;
   double H2_CA_owner_serial_d = 0.0;
   double H2_ID_radius_d = 0.0;
   double H2_ID_proxy_d = 0.0;
@@ -132,6 +134,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
   c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
   c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
+  c_bpack_getoption(option, "H2_CA_pack_shared", &H2_CA_pack_shared_d);
+  c_bpack_getoption(option, "H2_CA_solve", &H2_CA_solve_d);
   c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
   c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
   c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
@@ -160,6 +164,10 @@ static butterfly::ProgramOptions read_h2_program_options64(
       static_cast<int>(std::llround(H2_CA_staged_halo_d));
   const int H2_CA_owner_component =
       static_cast<int>(std::llround(H2_CA_owner_component_d));
+  const int H2_CA_pack_shared =
+      static_cast<int>(std::llround(H2_CA_pack_shared_d));
+  const int H2_CA_solve =
+      static_cast<int>(std::llround(H2_CA_solve_d));
   const int H2_CA_owner_serial =
       static_cast<int>(std::llround(H2_CA_owner_serial_d));
   const int H2_ID_radius =
@@ -177,8 +185,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
   if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
   }
-  if (H2_compress_factors < 0 || H2_compress_factors > 2) {
-    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+  if (H2_compress_factors < 0 || H2_compress_factors > 1) {
+    throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
   }
   if (H2_GEMM_split < 0) {
     throw std::invalid_argument("H2_GEMM_split must be nonnegative");
@@ -199,6 +207,12 @@ static butterfly::ProgramOptions read_h2_program_options64(
   }
   if (H2_CA_owner_component != 0 && H2_CA_owner_component != 3) {
     throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+  }
+  if (H2_CA_pack_shared < 0 || H2_CA_pack_shared > 2) {
+    throw std::invalid_argument("H2_CA_pack_shared must be 0 (auto), 1 (always) or 2 (never)");
+  }
+  if (H2_CA_solve < 0 || H2_CA_solve > 1) {
+    throw std::invalid_argument("H2_CA_solve must be 0 (replicated) or 1 (home)");
   }
   if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
     throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
@@ -239,6 +253,8 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.use_gpu = H2_use_gpu;
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
+  result.ca_pack_shared = H2_CA_pack_shared;
+  result.ca_solve = H2_CA_solve;
   result.ca_owner_serial = H2_CA_owner_serial;
   result.id_neighborhood_radius = H2_ID_radius;
   result.id_proxy_mode = H2_ID_proxy;
@@ -309,12 +325,14 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_gemm_split",   "maximum task split for one format-7 H2 color work item; 0 disables splitting"},
 		{"h2_xrr_factor",   "format-7 H2 X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting"},
 		{"h2_use_gpu",      "format-7 H2 Color levels: 0 CPU, 1 GPU backend, 2 GPU backend with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
-		{"h2_compress_factors", "format-7 H2 GPU lossy compression of the kept factors at tol_comp: 0 off, 1 the retained X_NR, 2 also the fill sources (build with nvCOMP)"},
+		{"h2_compress_factors", "format-7 H2 GPU: lossy compression (nvCOMP bitcomp) at tol_comp: 0 off, 1 on - the factors kept on the device for the solve (X_NR, T, X_SR) and the factorization's own data: the fill sources later waves and the level transition read, the near and parent blocks held under memory pressure, and the CA blocks on more than one rank (so the factorization is lossy too, within the tolerance)"},
 		{"hodlr_use_gpu",   "format-1 HODLR with lrlevel=0: 0 CPU, 1 GPU construction/multiply/factorization/solve, 2 the same with FP64 tensor-core GEMMs (build with enable_h2_gpu)"},
 		{"hodlr_gpu_pieces", "HODLR GPU construction: pieces per rank of a low-rank block shared by several ranks, spread over its ranks by estimated cost (rounded down to a power of 2; 1: the CPU's pieces; default 4)"},
 		{"jitter",          "relative size of the pivots and diagonal shifts that keep dense and small factorizations nonsingular"},
 		{"h2_ca_staged_halo", "format-7 H2 CA halo mode: 0 legacy, 2 staged/overlapped"},
 		{"h2_ca_owner_component", "format-7 H2 CA ownership mode: 0 replicated, 3 asynchronous components"},
+		{"h2_ca_solve", "format-7 H2 GPU, replicated CA levels: how the level is solved: replicated (0: the ghosts' factors kept and applied again on every rank holding them) or home (1: each box's factors applied by its home rank only, the vector exchanged by wave)"},
+		{"h2_ca_pack_shared", "format-7 H2 GPU, replicated CA levels: near blocks held by more than one rank packed through the ghosts' groups: auto (0, by the level's estimate), always (1), never (2: the card must hold them raw)"},
 		{"h2_ca_owner_serial", "serialize format-7 H2 CA component-owner events (0 or 1)"},
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
@@ -430,6 +448,10 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_CA_staged_halo", required_argument, 0, 54},
 		{"h2_ca_owner_component", required_argument, 0, 55},
 		{"H2_CA_owner_component", required_argument, 0, 55},
+		{"h2_ca_pack_shared", required_argument, 0, 1002},
+		{"H2_CA_pack_shared", required_argument, 0, 63},
+		{"h2_ca_solve", required_argument, 0, 1003},
+		{"H2_CA_solve", required_argument, 0, 64},
 		{"h2_ca_owner_serial", required_argument, 0, 56},
 		{"H2_CA_owner_serial", required_argument, 0, 56},
 		{"h2_unstructured", required_argument, 0, 57},
@@ -437,14 +459,16 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_xrr_factor", required_argument, 0, 58},
 		{"H2_XRR_factor", required_argument, 0, 58},
 		{"h2_use_gpu", required_argument, 0, 59},
+		// (new options take codes from 1000 up: getopt returns '?' (63) for
+		// an option it does not know, and a driver passes its own options
+		// through here too)
+		{"h2_compress_factors", required_argument, 0, 1001},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
 		{"hodlr_gpu_pieces", required_argument, 0, 62},
 		{"HODLR_gpu_pieces", required_argument, 0, 62},
 		{"jitter", required_argument, 0, 61},
-		{"h2_compress_factors", required_argument, 0, 1001},
-		{"H2_compress_factors", required_argument, 0, 1001},
 		{NULL, 0, NULL, 0}
 		};
 	int c, option_index = 0;
@@ -744,15 +768,30 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "HODLR_gpu_pieces", opt_i);
 		} break;
+		case 1001: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_compress_factors", opt_i);
+		} break;
+		case 1002: {
+		const std::string v(optarg);
+		if (v == "auto") opt_i = 0;
+		else if (v == "always") opt_i = 1;
+		else if (v == "never") opt_i = 2;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_CA_pack_shared", opt_i);
+		} break;
+		case 1003: {
+		const std::string v(optarg);
+		if (v == "replicated") opt_i = 0;
+		else if (v == "home") opt_i = 1;
+		else { std::istringstream iss(v); iss >> opt_i; }
+		c_bpack_set_I_option(&option0, "H2_CA_solve", opt_i);
+		} break;
 		case 61: {
 		std::istringstream iss(optarg);
 		iss >> opt_d;
 		c_bpack_set_D_option(&option0, "jitter", opt_d);
-		} break;
-		case 1001: { // not 63: that is '?', which getopt returns for every unrecognized option
-		std::istringstream iss(optarg);
-		iss >> opt_i;
-		c_bpack_set_I_option(&option0, "H2_compress_factors", opt_i);
 		} break;
 		case 36: {
 		std::istringstream iss(optarg);
@@ -1154,6 +1193,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_use_gpu_d;
       double H2_CA_staged_halo_d;
       double H2_CA_owner_component_d;
+      double H2_CA_pack_shared_d;
+      double H2_CA_solve_d;
       double H2_CA_owner_serial_d;
       double H2_ID_radius_d;
       double H2_ID_proxy_d;
@@ -1174,6 +1215,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_use_gpu", &H2_use_gpu_d);
       c_bpack_getoption(option, "H2_CA_staged_halo", &H2_CA_staged_halo_d);
       c_bpack_getoption(option, "H2_CA_owner_component", &H2_CA_owner_component_d);
+      c_bpack_getoption(option, "H2_CA_pack_shared", &H2_CA_pack_shared_d);
+      c_bpack_getoption(option, "H2_CA_solve", &H2_CA_solve_d);
       c_bpack_getoption(option, "H2_CA_owner_serial", &H2_CA_owner_serial_d);
       c_bpack_getoption(option, "H2_ID_radius", &H2_ID_radius_d);
       c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
@@ -1194,6 +1237,10 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
           static_cast<int>(std::llround(H2_CA_staged_halo_d));
       const int H2_CA_owner_component =
           static_cast<int>(std::llround(H2_CA_owner_component_d));
+      const int H2_CA_pack_shared =
+          static_cast<int>(std::llround(H2_CA_pack_shared_d));
+      const int H2_CA_solve =
+          static_cast<int>(std::llround(H2_CA_solve_d));
       const int H2_CA_owner_serial =
           static_cast<int>(std::llround(H2_CA_owner_serial_d));
       const int H2_ID_radius = static_cast<int>(std::llround(H2_ID_radius_d));
@@ -1207,8 +1254,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       if (H2_lazy_schur < 0 || H2_lazy_schur > 2) {
         throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
       }
-      if (H2_compress_factors < 0 || H2_compress_factors > 2) {
-        throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+      if (H2_compress_factors < 0 || H2_compress_factors > 1) {
+        throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
       }
       if (H2_GEMM_split < 0) {
         throw std::invalid_argument("H2_GEMM_split must be nonnegative");
@@ -1229,6 +1276,12 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       }
       if (H2_CA_owner_component != 0 && H2_CA_owner_component != 3) {
         throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+      }
+      if (H2_CA_pack_shared < 0 || H2_CA_pack_shared > 2) {
+        throw std::invalid_argument("H2_CA_pack_shared must be 0 (auto), 1 (always) or 2 (never)");
+      }
+      if (H2_CA_solve < 0 || H2_CA_solve > 1) {
+        throw std::invalid_argument("H2_CA_solve must be 0 (replicated) or 1 (home)");
       }
       if (H2_CA_owner_serial != 0 && H2_CA_owner_serial != 1) {
         throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
@@ -1267,6 +1320,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.use_gpu = H2_use_gpu;
       H2_options.ca_staged_halo = H2_CA_staged_halo;
       H2_options.ca_owner_component = H2_CA_owner_component;
+      H2_options.ca_pack_shared = H2_CA_pack_shared;
+      H2_options.ca_solve = H2_CA_solve;
       H2_options.ca_owner_serial = H2_CA_owner_serial;
       H2_options.id_neighborhood_radius = H2_ID_radius;
       H2_options.id_proxy_mode = H2_ID_proxy;
@@ -1301,6 +1356,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_use_gpu=" << H2_options.use_gpu
                   << ", h2_ca_staged_halo=" << H2_options.ca_staged_halo
                   << ", h2_ca_owner_component=" << H2_options.ca_owner_component
+                  << ", h2_ca_pack_shared=" << H2_options.ca_pack_shared
+                  << ", h2_ca_solve=" << H2_options.ca_solve
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
                   << ", h2_id_proxy=" << H2_options.id_proxy_mode;

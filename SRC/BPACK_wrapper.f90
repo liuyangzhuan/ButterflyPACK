@@ -1071,6 +1071,14 @@ contains
          val_d = option%H2_CA_owner_component
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_CA_pack_shared' .or. trim(str) == 'h2_ca_pack_shared') then
+         val_d = option%H2_CA_pack_shared
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_solve' .or. trim(str) == 'h2_ca_solve') then
+         val_d = option%H2_CA_solve
+         valid_opt = 1
+      endif
       if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then
          val_d = option%H2_CA_owner_serial
          valid_opt = 1
@@ -1419,6 +1427,16 @@ contains
       if (trim(str) == 'H2_CA_owner_component' .or. trim(str) == 'h2_ca_owner_component') then
          call c_f_pointer(val_Cptr, val_i)
          option%H2_CA_owner_component = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_pack_shared' .or. trim(str) == 'h2_ca_pack_shared') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_pack_shared = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_CA_solve' .or. trim(str) == 'h2_ca_solve') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%H2_CA_solve = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'H2_CA_owner_serial' .or. trim(str) == 'h2_ca_owner_serial') then
@@ -3008,6 +3026,231 @@ contains
 
    end subroutine C_BF_Construct_Matvec_Compute
 
+!>**** C interface of a low-rank term added to every entry the next constructions of a matrix take
+   !> (c_bpack_construct_element_compute): its entries become A(i, j) + S(i, j), S the low-rank block bf on the
+   !> matrix's rows and columns and with its row layout (a c_bf_* block, e.g. from c_bf_schur_deterministic).
+   !> Each rank keeps its own rows of S's factors; the rows another rank needs come from their owners when it
+   !> needs them (BPACK_addend_fetch).  The GPU HODLR construction adds S on the device, the CPU constructions
+   !> when they take the entries (element_Zmn_blocklist_user).  Until c_bpack_clear_entry_addend
+   !> @param ker_Cptr: the structure containing kernel quantities of the matrix (inout)
+   !> @param bf_Cptr: the low-rank block S (in)
+   !> @param ptree_Cptr: the structure containing process tree of S (in)
+   subroutine C_BPACK_Set_Entry_Addend(ker_Cptr, bf_Cptr, ptree_Cptr) bind(c, name="c_bpack_set_entry_addend")
+      implicit none
+      type(c_ptr) :: ker_Cptr, bf_Cptr, ptree_Cptr
+      type(kernelquant), pointer::ker
+      type(matrixblock), pointer::blocks
+      type(proctree), pointer::ptree
+      integer r, me, i, mloc, nloc
+
+      call c_f_pointer(ker_Cptr, ker)
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call BPACK_require(blocks%level_butterfly == 0, 'c_bpack_set_entry_addend: the block must be low rank')
+      if (allocated(ker%addend)) deallocate (ker%addend)
+      allocate (ker%addend)
+      r = size(blocks%ButterflyU%blocks(1)%matrix, 2)
+      ker%addend%r = r
+      ker%addend%head = ptree%pgrp(blocks%pgno)%head
+      ker%addend%mp = blocks%M_p
+      ker%addend%np = blocks%N_p
+      me = ptree%MyID - ker%addend%head + 1
+      mloc = blocks%M_loc
+      nloc = blocks%N_loc
+      allocate (ker%addend%u(max(mloc, 1), r), ker%addend%v(max(nloc, 1), r))
+      allocate (ker%addend%urow(max(mloc, 1)), ker%addend%vrow(max(nloc, 1)))
+      allocate (ker%addend%umap(blocks%M), ker%addend%vmap(blocks%N))
+      ker%addend%umap = 0
+      ker%addend%vmap = 0
+      if (mloc > 0) ker%addend%u(1:mloc, :) = blocks%ButterflyU%blocks(1)%matrix(1:mloc, 1:r)
+      if (nloc > 0) ker%addend%v(1:nloc, :) = blocks%ButterflyV%blocks(1)%matrix(1:nloc, 1:r)
+      do i = 1, mloc
+         ker%addend%urow(i) = blocks%M_p(me, 1) + i - 1
+         ker%addend%umap(ker%addend%urow(i)) = i
+      enddo
+      do i = 1, nloc
+         ker%addend%vrow(i) = blocks%N_p(me, 1) + i - 1
+         ker%addend%vmap(ker%addend%vrow(i)) = i
+      enddo
+      ker%addend%nu = mloc
+      ker%addend%nu_loc = mloc
+      ker%addend%nv = nloc
+      ker%addend%nv_loc = nloc
+   end subroutine C_BPACK_Set_Entry_Addend
+
+   !> C interface: the matrix's low-rank entry term (c_bpack_set_entry_addend) removed
+   !> @param ker_Cptr: the structure containing kernel quantities of the matrix (inout)
+   subroutine C_BPACK_Clear_Entry_Addend(ker_Cptr) bind(c, name="c_bpack_clear_entry_addend")
+      implicit none
+      type(c_ptr) :: ker_Cptr
+      type(kernelquant), pointer::ker
+
+      call c_f_pointer(ker_Cptr, ker)
+      if (allocated(ker%addend)) deallocate (ker%addend)
+   end subroutine C_BPACK_Clear_Entry_Addend
+
+!>**** C interface of the Schur update S = -F21*inv(F11)*F12 of a sparse front, computed from the
+   !> factors of low-rank F21 = U21*V21^T and F12 = U12*V12^T (butterflies are not supported yet):
+   !> S = -U21*(V21^T*inv(F11)*U12)*V12^T, one solve with F11 on the rank(F12) columns of U12 (on the
+   !> GPU for a GPU HODLR) instead of the randomized sampling of C_BF_Construct_Matvec_Compute, then a
+   !> recompression to option%tol_rand of S: for a GPU HODLR F11 on the GPUs of its state, by TSQRs
+   !> (BF_gpu_schur_recompress), else on the CPU. The blocks are stored unscaled (scale_factor 1).
+   !> @param bf21_Cptr: the block F21, its rows S's rows and its columns F11's rows (in)
+   !> @param bf12_Cptr: the block F12, its rows F11's rows and its columns S's columns (in)
+   !> @param bmat11_Cptr: the factored F11 (in)
+   !> @param option11_Cptr: the structure containing option of F11 (in)
+   !> @param stats11_Cptr: the structure containing statistics of F11, the solve counted as by C_BPACK_Inv_Mult (inout)
+   !> @param ptree11_Cptr: the structure containing process tree of F11 (in)
+   !> @param bfS_Cptr: the block S from C_BF_Construct_Init (inout)
+   !> @param optionS_Cptr: the structure containing option of S (in)
+   !> @param statsS_Cptr: the structure containing statistics of S (inout)
+   !> @param ptreeS_Cptr: the structure containing process tree of S (in)
+   subroutine C_BF_Schur_Deterministic(bf21_Cptr, bf12_Cptr, bmat11_Cptr, option11_Cptr, stats11_Cptr, ptree11_Cptr, bfS_Cptr, optionS_Cptr, statsS_Cptr, ptreeS_Cptr) bind(c, name="c_bf_schur_deterministic")
+      implicit none
+      type(c_ptr) :: bf21_Cptr, bf12_Cptr, bmat11_Cptr, option11_Cptr, stats11_Cptr, ptree11_Cptr
+      type(c_ptr) :: bfS_Cptr, optionS_Cptr, statsS_Cptr, ptreeS_Cptr
+
+      type(matrixblock), pointer::blocks21, blocks12, blocks
+      type(Bmatrix), pointer::bmat11
+      type(Hoption), pointer::option, option11
+      type(Hstat), pointer::stats
+      type(proctree), pointer::ptree
+      character(kind=c_char, len=1) :: transN(1)
+      integer n11, M_loc, N_loc, r12, r21, r0, ku, kv, mn, rank, i, comm, ierr
+      DT, allocatable::W(:, :), Cmat(:, :), U0(:, :), V0(:, :), QU(:, :), QV(:, :), RU(:, :), RV(:, :), core(:, :), UU(:, :), VV(:, :)
+      DTR, allocatable::Singular(:)
+      real(kind=8) t1, t2, flop, flops
+
+      call c_f_pointer(bf21_Cptr, blocks21)
+      call c_f_pointer(bf12_Cptr, blocks12)
+      call c_f_pointer(bfS_Cptr, blocks)
+      call c_f_pointer(optionS_Cptr, option)
+      call c_f_pointer(statsS_Cptr, stats)
+      call c_f_pointer(ptreeS_Cptr, ptree)
+
+      call BPACK_require(blocks21%level_butterfly == 0 .and. blocks12%level_butterfly == 0 .and. blocks%level_butterfly == 0, &
+                         'c_bf_schur_deterministic: F21, F12 and S must be low-rank blocks (butterflies are not supported yet)')
+      call BPACK_require(blocks12%M_loc == blocks21%N_loc .and. blocks21%M_loc == blocks%M_loc .and. blocks12%N_loc == blocks%N_loc, &
+                         'c_bf_schur_deterministic: the local rows and columns of F21, F12 and S do not match')
+
+      t1 = MPI_Wtime()
+      flops = 0
+      comm = ptree%pgrp(blocks%pgno)%Comm
+      n11 = blocks12%M_loc
+      M_loc = blocks%M_loc
+      N_loc = blocks%N_loc
+      r12 = size(blocks12%ButterflyU%blocks(1)%matrix, 2)
+      r21 = size(blocks21%ButterflyU%blocks(1)%matrix, 2)
+
+      !>**** W = inv(F11)*U12, then Cmat = V21^T*W
+      allocate (W(n11, r12))
+      transN(1) = 'N'
+      call C_BPACK_Inv_Mult(transN, blocks12%ButterflyU%blocks(1)%matrix, W, n11, n11, r12, bmat11_Cptr, option11_Cptr, stats11_Cptr, ptree11_Cptr)
+      allocate (Cmat(r21, r12))
+      Cmat = 0
+      if (n11 > 0) then
+         call gemmf90(blocks21%ButterflyV%blocks(1)%matrix, n11, W, n11, Cmat, r21, 'T', 'N', r21, r12, n11, BPACK_cone, BPACK_czero, flop=flop)
+         flops = flops + flop
+      endif
+      call MPI_ALLREDUCE(MPI_IN_PLACE, Cmat, r21*r12, MPI_DT, MPI_SUM, comm, ierr)
+      deallocate (W)
+
+      call c_f_pointer(bmat11_Cptr, bmat11)
+      call c_f_pointer(option11_Cptr, option11)
+      if (c_associated(bmat11%gpu) .and. option11%HODLR_use_gpu > 0) then
+         !>**** F11 on the GPU: the recompression of S on the GPUs (TSQRs of U0 and of V0 times its R)
+         call BF_gpu_schur_recompress(bmat11%gpu, blocks21, blocks12, Cmat, blocks, option, ptree, rank, flop)
+         flops = flops + flop
+         deallocate (Cmat)
+      else
+         !>**** S = U0*V0^T, through the smaller of rank(F12) and rank(F21)
+         r0 = min(r12, r21)
+         allocate (U0(M_loc, r0), V0(N_loc, r0))
+         if (r12 <= r21) then
+            if (M_loc > 0) then
+               call gemmf90(blocks21%ButterflyU%blocks(1)%matrix, M_loc, Cmat, r21, U0, M_loc, 'N', 'N', M_loc, r12, r21, -BPACK_cone, BPACK_czero, flop=flop)
+               flops = flops + flop
+            endif
+            V0 = blocks12%ButterflyV%blocks(1)%matrix
+         else
+            U0 = -blocks21%ButterflyU%blocks(1)%matrix
+            if (N_loc > 0) then
+               call gemmf90(blocks12%ButterflyV%blocks(1)%matrix, N_loc, Cmat, r21, V0, N_loc, 'N', 'T', N_loc, r21, r12, BPACK_cone, BPACK_czero, flop=flop)
+               flops = flops + flop
+            endif
+         endif
+         deallocate (Cmat)
+
+         !>**** recompression: U0 = QU*RU and V0 = QV*RV with orthonormal QU and QV, then the SVD of RU*RV^T
+         allocate (QU(M_loc, r0), QV(N_loc, r0))
+         QU = U0
+         call PComputeRange(blocks%M_p, r0, QU, ku, BPACK_SafeEps, ptree, blocks%pgno, Flops=flop)
+         flops = flops + flop
+         QV = V0
+         call PComputeRange(blocks%N_p, r0, QV, kv, BPACK_SafeEps, ptree, blocks%pgno, Flops=flop)
+         flops = flops + flop
+         allocate (RU(ku, r0), RV(kv, r0))
+         RU = 0
+         RV = 0
+         if (M_loc > 0) then
+            call gemmf90(QU, M_loc, U0, M_loc, RU, ku, 'C', 'N', ku, r0, M_loc, BPACK_cone, BPACK_czero, flop=flop)
+            flops = flops + flop
+         endif
+         if (N_loc > 0) then
+            call gemmf90(QV, N_loc, V0, N_loc, RV, kv, 'C', 'N', kv, r0, N_loc, BPACK_cone, BPACK_czero, flop=flop)
+            flops = flops + flop
+         endif
+         call MPI_ALLREDUCE(MPI_IN_PLACE, RU, ku*r0, MPI_DT, MPI_SUM, comm, ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, RV, kv*r0, MPI_DT, MPI_SUM, comm, ierr)
+         deallocate (U0, V0)
+         allocate (core(ku, kv))
+         call gemmf90(RU, ku, RV, kv, core, ku, 'N', 'T', ku, kv, r0, BPACK_cone, BPACK_czero, flop=flop)
+         flops = flops + flop
+         deallocate (RU, RV)
+
+         ! the truncation on one rank, so that every rank keeps the same rank
+         mn = min(ku, kv)
+         allocate (UU(ku, mn), VV(mn, kv), Singular(mn))
+         if (ptree%MyID == ptree%pgrp(blocks%pgno)%head) then
+            call SVD_Truncate(core, ku, kv, mn, UU, VV, Singular, option%tol_rand, BPACK_SafeUnderflow, rank, flop=flop)
+            flops = flops + flop
+         endif
+         call MPI_Bcast(rank, 1, MPI_INTEGER, 0, comm, ierr)
+         call MPI_Bcast(UU, ku*mn, MPI_DT, 0, comm, ierr)
+         call MPI_Bcast(VV, mn*kv, MPI_DT, 0, comm, ierr)
+         call MPI_Bcast(Singular, mn, MPI_DTR, 0, comm, ierr)
+         deallocate (core)
+         do i = 1, rank
+            UU(:, i) = UU(:, i)*Singular(i)
+         enddo
+
+         !>**** S = (QU*UU*Sigma)*(QV*VV^T)^T
+         call BF_lr_factors_alloc(blocks, rank, option)
+         if (M_loc > 0) then
+            call gemmf90(QU, M_loc, UU, ku, blocks%ButterflyU%blocks(1)%matrix, M_loc, 'N', 'N', M_loc, rank, ku, BPACK_cone, BPACK_czero, flop=flop)
+            flops = flops + flop
+         endif
+         if (N_loc > 0) then
+            call gemmf90(QV, N_loc, VV, mn, blocks%ButterflyV%blocks(1)%matrix, N_loc, 'N', 'T', N_loc, rank, kv, BPACK_cone, BPACK_czero, flop=flop)
+            flops = flops + flop
+         endif
+         deallocate (QU, QV, UU, VV, Singular)
+      endif
+
+      t2 = MPI_Wtime()
+      if (.not. allocated(stats%rankmax_of_level)) allocate (stats%rankmax_of_level(0:0))
+      if (.not. allocated(stats%rankmax_of_level_global)) allocate (stats%rankmax_of_level_global(0:0))
+      stats%rankmax_of_level(0) = blocks%rankmax
+      stats%rankmax_of_level_global(0) = stats%rankmax_of_level(0)
+      call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
+      stats%Mem_Fill = stats%Mem_Comp_for + stats%Mem_Direct_for
+      call LogMemory(stats, stats%Mem_Fill)
+      stats%Time_Fill = stats%Time_Fill + t2 - t1
+      stats%Flop_Fill = stats%Flop_Fill + flops
+      if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "Deterministic Schur update of rank", rank, "from ranks", r21, r12, "in", t2 - t1, 'Seconds'
+
+   end subroutine C_BF_Schur_Deterministic
+
 !>**** C interface of BF construction via entry extraction
    !> @param bf_Cptr: the structure containing the block (inout)
    !> @param option_Cptr: the structure containing option (in)
@@ -3090,6 +3333,9 @@ contains
             option%tol_comp=option%tol_comp/5
             call BF_sym2asym(blocks)
          endif
+      elseif (BF_gpu_construct_ok(blocks, option)) then
+         call BF_gpu_construct(blocks, option, stats, msh, ker, ptree)
+         call BF_ComputeMemory(blocks, Memory)
       else
          call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
       end if

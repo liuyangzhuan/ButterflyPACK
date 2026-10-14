@@ -2,8 +2,11 @@
 // Kernels of the device solve (H2 GPU backend): the per-box steps of the
 // forward (V^{-1}) and backward (W^{-1}) Color sweeps, the diagonal X_RR
 // solves, ordered accumulation of neighbor updates, and vector copies.  One
-// thread block per box.  A level's vectors are one array holding each box's
-// n x nrhs block (column-major) at nrhs * (its point offset); the work,
+// thread block per box, which takes the right-hand sides in passes of several
+// columns: each pass reads the box's factors once for all of its columns (a
+// column's result does not depend on the grouping).  A level's vectors are
+// one array holding each box's n x nrhs block (column-major) at nrhs * (its
+// point offset); the work,
 // ghost, and message buffers follow the same convention.  All offsets in the
 // tables below are in points, so the tables do not depend on nrhs or on
 // where a solve's buffers live.  The vectors and factors are real (double)

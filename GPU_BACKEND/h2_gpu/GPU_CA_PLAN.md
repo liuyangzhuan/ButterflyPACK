@@ -5046,6 +5046,470 @@ on both.  The logdets differ by ~1e-7 between variants and by 5e-7
 between card sizes (what packs differs); for scale, the variation run to
 run on 40 GB was Color 100.0-104.8 s, CA0 106.5-113.0 s.
 
+#### Why CA0 stopped beating Color on 80 GB, and what was left (2026-10-12)
+
+The "CA0's leaf 49.0 s against Color's 52.1 s" on 80 GB at 768^3 (11 Oct,
+noon) had two things in it that were not CA0's speed:
+
+1. That CA0 diverged.  Its ghost copies were packed by each rank's own
+   pressure, and it stopped above the leaf ("near block shape (hi)").  The
+   fix (blocks on more than one rank packed by a level-start rule) cost ~3
+   s of the leaf's owner pass on 80 GB, where every write of a shared block
+   was packed.
+2. A one-time MPI cost.  GPU-aware MPI meets a buffer's whole allocation
+   on a pair's first transfer from it, and a level's larger messages land
+   in the main heap (one allocation of most of the card) once the 2.65 GB
+   exchange arena is full.  A Color leaf paid this in its first four
+   exchanges (up to 1.1 s of payload wait each at 384^3; Color's leaf
+   exchange 6.56 -> 4.39 s once warmed).  A CA0 leaf exchanges nothing, so
+   the level above it paid instead: +3.4 s at 384^3, +6.5 s at 768^3 on
+   80 GB.  CA0 does no communication between its waves (checked: no
+   transport, no MPI in the CA loop); its leaf only moved the cost.
+
+Changes, all in one commit:
+
+- The exchange warm-up also sends 64 KB through the main heap to every
+  peer.  At 768^3 it takes 3.4 s (40 GB) / 6.7 s (80 GB), outside the
+  factor time but inside the "total time" line, so for one factorization
+  the cost moves rather than disappears.  The heap's capacity is unchanged.
+- The shared-block rule ends with the ghosts' groups (replicas_done at the
+  interior group, the same wave on every rank: no ghost is eliminated
+  after it, so no copy on another rank is read again).  On 40 GB this
+  changes nothing measurable (pressure packs the interior anyway: 504 GB
+  packed either way).
+- The level-start estimate counts the boundary groups' boxes (the rank's
+  boundary boxes and its ghosts) at their full-size near set.  Half that
+  count let 38 of 64 ranks fall back in the green group on 80 GB (37.0 GB
+  estimated against 40.9 GB of room; the raw peak was 41.5 GB at the wave
+  ends), and the level above stopped.  At the full count both cards pack.
+- Replica check, 192^3 CA0: 0 of 9488 / 3536 ghost copies differ, at the
+  default heap (shared blocks left to pressure) and at a 35% heap (packed;
+  that run then exhausts the heap at level 4, as it did before).
+
+768^3 on 64 ranks, each card in one job, Color and CA0 twice each (factor
+time excludes the warm-up; total includes it):
+
+| card | variant | factor | total | warm-up exch. | leaf | level 6 | solve |
+|---|---|---|---|---|---|---|---|
+| 40 GB | Color | 105 / 100 s | 108.4 / 103.5 | 3.4 / 3.6 | 54.2 / 51.8 | 17.0 / 16.6 | 3.03 / 2.99 |
+| 40 GB | CA0 | 106 / 106 s | 110.0 / 109.1 | 3.6 / 3.4 | 56.0 / 55.9 | 17.1 / 17.0 | 3.59 / 3.59 |
+| 40 GB | CA3 | 106 s | 109.2 | 3.4 | 54.1 | 17.3 | 3.23 |
+| 80 GB | Color | 86.1 / 85.1 s | 92.7 / 91.8 | 6.7 / 7.1 | 44.8 / 44.6 | 14.5 / 14.5 | 1.92 / 1.92 |
+| 80 GB | CA0 | 93.2 / 93.3 s | 99.7 / 99.7 | 6.9 / 6.8 | 51.3 / 50.9 | 14.2 / 14.7 | 2.13 / 2.13 |
+
+CA0's level 6 now matches Color's.  Its leaf does not: the leaf ends with
+the slowest rank, an interior one with 41,176 boxes (its ghost layer, +26%)
+against Color's 32,768.  Its waves take 49.3 s of host time against
+the slowest Color rank's 37.4 s (80 GB), and 53.6 s against 44.3 s on
+40 GB, more than Color's 8-9 s of leaf exchange.  At 8x the boxes a rank on
+64 ranks the replication costs more than the communication it saves, on
+both cards.
+
+#### The heap's host time, and an owner group's raw blocks in one block (2026-10-12)
+
+The box region's "buffers" timer was not restarted per production chunk, so
+from the second chunk on it also counted the previous chunk's launches,
+compressions and keeps: 6-8.5 s a leaf, of which 0.26-0.56 s is buffers
+(fixed in 39b9fa6, which also times the heap under BPACK_TRACE=wave).
+Measured at the 384^3 leaf on 8 ranks (the same 32,768 boxes a rank as
+768^3 on 64): the heap does 3.8M allocations and 3.9M frees, 5.3 s of
+host time, on 40 GB cards (2.1M and 1.7M, 5.0 s, on 80 GB).  Most are the
+owner pass's: each group puts its packed near blocks back raw, a heap
+block each (~105 KB), and under pressure packs them again and frees them
+(2.85M blocks a leaf on 40 GB, 0.66M on 80 GB).  The GPU idles 5.4-5.8 s
+inside the leaf's waves.
+
+Fix 1: an owner group allocates one heap block for the raw blocks its pack
+will take back, foreseen by the pack's own rule (pressure from what the
+group adds; on a replicated level's ghost groups the shared-block rule),
+and cuts them out with a bump pointer.  The pack's decision stays where it
+was, after the GEMMs; a block it leaves raw after all is copied to a block
+of its own before the group's goes back.  Sizes round as the heap's do, so
+the heap's count at every decision is unchanged and the results are
+bitwise the same.
+
+384^3 on 8 ranks, alternating builds on the same nodes (Color, two runs
+each):
+
+| card | | heap allocations / frees | heap host time | leaf | factor time |
+|---|---|---|---|---|---|
+| 40 GB | before | 3.81M / 3.91M | 5.26 s | 47.35 / 47.17 s | 79.7 / 79.3 s |
+| 40 GB | fix 1 | 1.28M / 1.38M | 2.31 s | 45.15 / 45.12 s | 77.5 / 77.3 s |
+| 80 GB | before | 2.06M / 1.68M | 4.87 s | 39.10 / 39.10 s | 68.7 / 68.6 s |
+| 80 GB | fix 1 | 1.44M / 1.06M | 4.03 s | 38.94 / 38.67 s | 68.6 / 68.4 s |
+
+On 40 GB 716 groups took 2.53M blocks this way, none moved out; on 80 GB
+(where 409 of 776 groups stay raw) 369 groups took 0.63M blocks, 11,892
+moved out.  Color, CA0 at 384^3 and CA0 at 192^3 bitwise unchanged; the
+192^3 replica check: 0 of 9488 / 3536 ghost copies differ.  CA0's leaf
+took 3.0M blocks this way, CA3's 2.6M.
+
+What is left on 80 GB is the transient search (19.8M range look-ups a
+leaf: each step of the size-class walk looks the range up again in the
+address map) and the per-call bookkeeping (five or six node containers):
+fix 2, not done.
+
+#### CA0's boundary phase at 768^3 on 64 ranks, measured by rank and wave (2026-10-12)
+
+BPACK_TRACE=wave now prints a line per wave on every rank ([wave-row]: boxes
+and ghosts, host phases, the owner pass's host parts, device times, the
+shared-block writes it packed); h2_c1_work/wave_rows.py sums them by phase.
+One job, 80 GB cards, 768^3 on 64 ranks (lib_det32); "CA0 np" is a
+measurement-only build in which the blocks on more than one rank are never
+packed (no level rule, no fallback).
+
+The leaf's slowest rank (35, interior: 5,768 own boundary boxes and 8,408
+ghosts) and a corner rank (0: 3,826 ghosts):
+
+| rank 35 | boundary phase | of which waiting | owner GEMMs (dev) | owner host mat + pack | interior phase |
+|---|---|---|---|---|---|
+| Color (8 waves) | 5.12 s | +4.75 s between waves | 1.42 s | 0.07 s | 31.6 s |
+| CA0 (24 waves) | 18.64 s | 0 | 9.91 s | 5.30 s | 30.1 s |
+| CA0 np | 12.30 s | 0 | 3.43 s | 0.14 s | 31.4 s |
+
+| rank 0 | boundary phase | of which waiting | interior phase |
+|---|---|---|---|
+| Color | 3.95 s | +5.67 s | 29.6 s |
+| CA0 | 10.50 s | 0 | 28.9 s |
+| CA0 np | 6.76 s | 0 | 29.8 s |
+
+So the slowest rank's 18.6 s is: its own boundary boxes ~5 s (as Color's),
+the ghosts ~7.2 s (0.80-0.86 ms each, as an own box), and packing the
+blocks on more than one rank ~6.3 s (1.66M packed writes, 276 GB raw).  The
+wave count costs nothing measurable: a fit over 1,536 boundary waves gives
+no per-wave constant (wall = 0.865 ms per own box + 0.804 ms per ghost,
+CA0 np).  Leaves: Color 44.1 s, CA0 50.6 s, CA0 np 45.1 s; factor time
+84.8 / 93.1 / 87.5 s.  CA0 np completed every level (no rank packs a
+shared block, so the copies cannot differ; quick verification passes) and
+held at most 53.2 GB at a wave end, against 40.0 GB packed and a 43.3 GB
+hold limit.  Without the packing CA0 is 2.9 s ahead of Color on a corner
+rank's boundary phase and 2.4 s behind on an interior one; the leaf ends
+with the interior ranks.
+
+#### FLOP rates of CA0's colour groups (2026-10-12)
+
+The trace rows now carry each wave's floating-point work by device phase
+(the sketch's GEMMs and stored-block products, the ID's pivoted QR at its
+full size - an upper bound -, the box region's GEMMs, LU and solves, the
+owner GEMMs; kernel values, gathers and adds count none);
+h2_c1_work/flop_groups.py sums them by colour group.  768^3 on 64 ranks, 80
+GB, one job; the slowest rank (interior), GFLOP/s per GPU-busy second and
+per wall second:
+
+| run | group | waves (boxes) | GFLOP | busy / wall | rate busy | rate wall | owner pass | sketch |
+|---|---|---|---|---|---|---|---|---|
+| CA0 | blue/orange | 8 x 128 | 5,324 | 1.25 / 1.36 s | 4,257 | 3,906 | 1,610 | 17,004 |
+| CA0 | purple | 8 x 468 | 19,690 | 4.46 / 4.90 s | 4,413 | 4,021 | 1,663 | 17,773 |
+| CA0 | green | 8 x 1,176 | 49,877 | 11.18 / 12.33 s | 4,462 | 4,045 | 1,739 | 17,981 |
+| CA0 | interior | 8 x 3,375 | 135,364 | 25.25 / 30.17 s | 5,362 | 4,486 | 2,223 | 16,935 |
+| CA0 np | blue/orange | 8 x 128 | 5,324 | 0.69 / 0.80 s | 7,667 | 6,643 | 5,017 | 17,019 |
+| CA0 np | purple | 8 x 468 | 19,690 | 2.54 / 2.99 s | 7,743 | 6,587 | 4,923 | 17,794 |
+| CA0 np | green | 8 x 1,176 | 49,878 | 6.80 / 8.43 s | 7,339 | 5,915 | 4,879 | 17,244 |
+| CA0 np | interior | 8 x 3,375 | 135,365 | 26.55 / 31.30 s | 5,098 | 4,325 | 2,093 | 16,923 |
+| Color | boundary | 8 x 721 | 28,388 | 3.95 / 4.76 s | 7,184 | 5,966 | 5,245 | 18,573 |
+| Color | interior | 8 x 3,375 | 135,009 | 25.34 / 31.87 s | 5,327 | 4,236 | 2,297 | 16,967 |
+
+The interior is not the efficient phase.  Every box costs ~5 GFLOP (ghosts
+5.2-5.3, interior 5.0), even the 128-box waves keep the GPU as busy as the
+3,375-box ones (idle 14-19% of the wall in every group), and with no
+packing the boundary groups run at 7.3-7.7 TFLOP/s busy against the
+interior's 5.1-5.4.  The difference is the owner pass's interval: ~5
+TFLOP/s in the boundary groups, 2.1-2.4 in the interior, where the heap is
+past the hold limit and the near blocks are put back and packed again
+inside it (the same in Color), plus ~5 s a rank of kernels with no
+floating-point work (kernel values, gathers, near-block adds).  The shared
+packing takes CA0's boundary owner pass from ~5 down to 1.6-1.7 TFLOP/s.
+The sketch's GEMMs run at 17-18.6 TFLOP/s (FP64 tensor cores, peak 19.5),
+the box region's at 6-7, the ID's QR at ~1.1.
+
+#### Owner-pass updates read nowhere on the rank (2026-10-12): ~1%, not 1-2 s
+
+The idea: on a replicated level a rank updates near blocks that only the
+other ranks' copies need.  The owner pass already skipped pairs of two
+eliminated ghosts.  Now also an eliminated ghost's own Schur block (its
+parent is another rank's; build_parent reads only pairs with a box of this
+rank) and its pairs with boxes beyond the halo (never eliminated here).
+Counted at the 384^3 leaf on rank 0 (8 ranks, 40 GB): pairs of two
+eliminated ghosts 59 GFLOP, the Schur blocks 16, the pairs beyond the halo
+394, against 38,141 GFLOP made - 1.2% in all, 1.1% newly skipped.  CA0's
+leaf 45.40 / 45.38 s before, 45.58 / 45.52 s after (factor time 78.1-78.2 s
+in all four).  192^3 replica check (CA at the leaf; and at levels 4 and 5):
+0 differ, logdet bitwise unchanged; Color bitwise unchanged.  The estimate
+of 1-2 s that proposed it assumed the dead updates were a large share;
+they are not - once two ghosts are both eliminated, few later
+eliminations touch their pair.
+
+#### H2_CA_pack_shared: auto / always / never (2026-10-12)
+
+A solver option (the user's exception to "no new options") for replicated
+GPU CA levels: whether the near blocks held by more than one rank are
+packed through the ghosts' groups.  0 auto: the level-start estimate as
+before; 1 always; 2 never - and then no rank packs them on its own when it
+runs short either (the fallback that made the ghost copies differ), so a
+card without the room for them raw stops with "heap exhausted".  The
+drivers and the C wrapper take the words.
+
+Checks (lib_det35): 192^3 replica check 0 differ with never and with
+always (CA at levels 4 and 5; never's logdet bitwise the default's, always
+packs and costs the leaf 1.3 s there); 384^3 auto and always bitwise the
+previous build's; 384^3 never on 40 GB stops with "heap exhausted"; Color
+unchanged.  768^3 on 64 ranks, 80 GB, one job:
+
+| run | leaf | factor time | solve |
+|---|---|---|---|
+| Color | 44.37 / 44.41 s | 85.5 / 85.2 s | 1.84 / 2.53 s |
+| CA0 never | 45.12 / 45.03 s | 88.1 / 88.0 s | 2.04 / 2.15 s |
+| CA0 auto | 50.52 s | 94.6 s | 2.04 s |
+
+CA0 with never is 0.7 s behind Color at the leaf and 2.8 s in factor time
+(its levels add 1.1 s, the rest is the level starts and transitions with
+2.5 GB more kept factors staged).  Its two runs have the same logdet to
+the last digit; Color's differ run to run at 64 ranks.
+
+#### H2_CA_solve: replicated / home (2026-10-12)
+
+A second solver option for CA0 on the GPU (the user's exception too): how
+a replicated level is solved.  0 replicated (the default, as before): the
+ghosts' factors are kept and the level runs its waves over the local boxes
+and the ghosts, with one halo exchange before the forward sweep and one a
+colour group in the backward sweep.  1 home: the level is solved as a
+component-owner (CA3) level is, from each box's home factors in its
+elimination order (ca_home_order, ca_home_factors); the ghosts' T, X_SR
+and X_NR are not kept, nor their host copies (except under
+`BPACK_CHECK=replica`).  Kept as an option rather than a replacement so
+both can be retested on other kernels, sizes, boxes a rank and
+tolerances.  The drivers and the C wrapper take the words.
+
+**Why the replicated solve does not win.**  The solve reads each kept
+factor once and is bandwidth-bound.  Replicated, an interior rank reads
+its ghosts' factors as well (8,408 ghosts against 32,768 boxes at 768^3 on
+64 ranks, +26%; the leaf's kept factors are up to 215 GB raw a rank
+against Color's 164), and the ranks with more ghosts wait for nothing but
+are waited for: the forward sweep, which has no exchange inside it, is
+1.60 s against home's 1.30 (40 GB).  The "CA halo copies" timer ends in a
+stream synchronize that also waits for the backward group's queued
+kernels, so most of its 0.37-0.76 s is that compute, not copying.
+
+**A bug found on the way: home's replicas were not bitwise.**  With home,
+the replica check at 192^3 (8 ranks) read 8374 of 9488 ghost copies
+differing at the leaf, from wave 1 on (in T, LU, X_SR, X_RS, X_NR and
+X_RR_full; skeletons the same).  A box whose LU is kept drops its stored
+X_RR_full, and later fills rebuild it as P L U (`xrr_lu`), which is not
+bitwise the stored one: the owner kept and rebuilt, the ghost's holder kept
+nothing and read the stored copy.  Now a home ghost keeps its LU and
+pivots (no T, X_SR, X_NR) in a block of the level's own, freed at the
+level end after the transition, so its X_RR_full goes and is rebuilt as
+its owner's is; the transition rebuilds it from that LU too, so its host
+copy is no longer made (`host_skips_xrr`).  0.31 GB a rank at the 192^3
+leaf, 0.98 GB at the 384^3 and 768^3 leaves.
+
+Checks (lib_det37): 192^3 replica check 0 differ under home and
+replicated (CA at levels 4 and 5, and at the leaf only); home's logdet
+bitwise replicated's at 192^3 (-89253589.46028012 / ...018, the
+known one-ulp run-to-run variation); acc_backward 1.1e-15 to 2.3e-15.
+At 384^3 (8 ranks, 40 GB) home and replicated differ within the
+compression (logdet -792567541.90 / -792567539.98): each rank packs owner
+groups of its private blocks under its own pressure (787 / 789), and home
+holds less.  Replicated is bitwise the previous build's: lib_det36 and
+lib_det37 alternating in one job give -792567539.97884488 four times (one
+earlier job gave -792567543.56 with lib_det37 on other nodes: a one-off,
+the same code path).  Home reproduces bitwise run to run at 384^3 and
+768^3.
+
+768^3 on 64 ranks, CA at the leaf, one job each, the runs alternating (GPU
+solve: the device solve as printed; time_solve: the solve call):
+
+| 40 GB (pack_shared auto) | GPU solve | forward / backward | MPI | time_solve | factor time | leaf |
+|---|---|---|---|---|---|---|
+| Color | 2.841 / 2.839 s | 1.27 / 1.45 | 0.73 | 3.07 / 2.92 s | 98.9 / 97.2 s | 50.6 / 49.8 s |
+| CA0 replicated | 3.449 / 3.448 s | 1.60 / 1.74 | 1.05 | 3.53 / 3.50 s | 106 / 104 s | 55.8 / 54.6 s |
+| CA0 home | 2.871 / 2.871 s | 1.30 / 1.46 | 0.77 | 2.99 / 2.91 s | 105 / 104 s | 54.9 / 54.8 s |
+
+| 80 GB (pack_shared never) | GPU solve | forward / backward | MPI | time_solve | factor time | leaf |
+|---|---|---|---|---|---|---|
+| Color | 1.782 / 1.783 s | 0.79 / 0.89 | 0.39 | 1.82 / 1.83 s | 84.9 / 84.7 s | 44.2 / 43.9 s |
+| CA0 replicated | 1.994 / 1.995 s | 0.89 / 1.00 | 0.50 | 2.04 / 2.04 s | 87.4 / 87.9 s | 44.6 / 44.8 s |
+| CA0 home | 1.802 / 1.802 s | 0.79 / 0.91 | 0.40 | 1.84 / 1.84 s | 86.9 / 86.1 s | 44.6 / 44.6 s |
+
+Home takes 17% (40 GB) and 10% (80 GB) off CA0's solve and is within 1%
+of Color's: the same factors read (164.07 GB raw at most a rank at the
+leaf, Color 164.04, replicated 215.18) and a comparable exchange.  It
+cannot beat Color's solve - it is Color's work in a different order - and
+CA0's factor time is unchanged by it (within run-to-run noise; ~1 s less
+at 80 GB from the smaller kept set staged at the level ends).
+
+#### The solve with several right-hand sides (2026-10-12): Color still wins
+
+The driver's solve with `--nrhs` (lib_det37, one factorization a run, CA
+at the leaf; residuals 3e-16 to 1.2e-15 in every column).  GPU solve, s:
+
+| 768^3, 64 ranks | nrhs | Color | CA0 replicated | CA0 home |
+|---|---|---|---|---|
+| 80 GB (CA0 pack_shared never) | 1 | 1.78 | 1.99 (+12%) | 1.80 (+1%) |
+| | 8 | 9.49 | 10.25 (+8%) | 9.63 (+1.5%) |
+| | 32 | 36.26 | 38.60 (+6.5%) | 36.51 (+0.7%) |
+| | 64 | 71.29 | 77.91 (+9%) | 72.38 (+1.5%) |
+| 40 GB (pack_shared auto) | 1 | 2.84 | 3.45 (+21%) | 2.87 (+1%) |
+| | 8 | 13.36 | 14.54 (+9%) | 13.57 (+1.5%) |
+| | 32 | 49.86 | 53.61 (+7.5%) | 51.55 (+3.4%) |
+
+8 ranks: 192^3, 8 columns 1.98 / 2.18 / 2.12 s; 384^3, 16 columns
+17.93 / 18.73 / 18.38 s.  Color's time a column falls only from 1.78 to
+1.11 s (80 GB): the solve kernels loop over the columns inside a box and
+read its factors again for each (solve_forward_kernel and the rest), so
+the factor reads, the messages and the halo all grow with the columns
+and the ratios stay where one column puts them.  CA0's saving is in the
+number of synchronizations, a fixed cost that the columns dilute.  Rank
+0's "MPI" (11-27 s at 32-64 columns) is mostly waiting for the interior
+ranks.  The lever for many columns is in the kernels (each factor read
+once for all the columns), for Color and CA0 alike.
+
+#### The solve kernels take the columns in passes (2026-10-13)
+
+Before, the per-box kernels (solve_kernels.cu) looped over the columns
+inside a box and read the box's factors again for each, so the solve grew
+linearly in the columns.  Now a box takes them in passes of up to 8
+columns (4 complex): each column's x_S, x_R (and x_N where it fits) in
+shared memory, each factor element read once a pass and applied to all of
+its columns.  A column's arithmetic is the single-column order (the same
+lane partial sums, summed the same way), so every column is bitwise what
+it is solved alone and bitwise the previous library's.  Details that
+mattered:
+
+- **One column a pass runs the old kernels** (`*_one_kernel`, the source
+  as it was; the SASS is identical, instruction for instruction).  Three
+  attempts at a template whose one-column instance matched them ran 7%,
+  17% and 7% slower at nrhs 1 (a guard on the column count, then an
+  explicit four-load batch, then the old loop forms inside the template):
+  the compiler scheduled the single-column loops worse.  nrhs 1 is the
+  common case (an iterative solver applies the preconditioner one vector
+  at a time).
+- **x_N when it does not fit in shared memory** (the leaf with more than
+  one column: (216 + 3965) x 8 B a column): the work buffer, as before,
+  but streamed through shared memory in chunks of 256 rows, a warp keeping
+  its four columns' lane sums over the chunks - lane l still takes rows
+  l (mod 32) in increasing order.  Reading it from the work buffer once
+  for every four factor columns made the backward 3x the forward.
+- Register arrays indexed only by unrolled loops (a runtime bound put
+  them on the stack); a pass takes as many columns as fit half the shared
+  limit (two blocks an SM).
+
+Checks: `make h2_gpu_solve_columns` (tests/solve_columns.cpp): random
+boxes small (x_N in shared memory), leaf-sized (x_N in chunks) and large
+(fewer columns a pass) through all six kernels with 2-17 columns (2-9
+complex), each column bitwise its single-column run: 0 differ, double and
+complex.  384^3 on 8 ranks against lib_det37 (the old kernels): every
+column bitwise equal with 1, 11 and 16 columns, Color, CA0 replicated and
+home; the quick verification unchanged.  (With 11 columns the last two
+columns differ from a 16-column run's in the last digits - in the old
+library too: something outside these kernels depends on the column count.)
+
+Kernel times, one synthetic wave of 1024 leaf-sized boxes (`--time`):
+
+| kernel | 1 column, old / new | 16 columns, old / new |
+|---|---|---|
+| solve forward | 2.51 / 2.51 ms | 39.5 / 6.30 ms |
+| solve backward | 2.59 / 2.63 ms | 40.4 / 10.9 ms |
+| solve diagonal | 0.61 / 0.61 ms | 8.73 / 2.36 ms |
+| multiply forward | 2.54 / 2.53 ms | 39.8 / 10.9 ms |
+| multiply diagonal | 0.30 / 0.30 ms | 3.99 / 0.72 ms |
+| multiply backward | 2.69 / 2.68 ms | 42.4 / 6.46 ms |
+
+GPU solve at 384^3 on 8 ranks (40 GB), one column 2.34 -> 2.36 s;
+16 columns: Color 17.93 -> 6.52 s, CA0 replicated 18.73 -> 6.85 s, CA0
+home 18.38 -> 6.83 s.  At 192^3 with 16 columns the solve went 3.92 ->
+1.57 s and the multiply 4.49 -> 1.50 s before the chunked x_N; the
+largest solve kernel there is now bitcomp's decoder (the kept X_NR, ~1 s,
+independent of the columns).
+
+768^3 on 64 ranks (lib_det42; CA0 at the leaf, pack_shared never on 80
+GB, auto on 40 GB), GPU solve:
+
+| | columns | Color | CA0 replicated | CA0 home | Color, old kernels |
+|---|---|---|---|---|---|
+| 80 GB | 1 | 1.80 s | 2.01 s (+12%) | 1.82 s (+1%) | 1.78 s |
+| | 8 | 3.60 s | 3.90 s (+8%) | 3.65 s (+1%) | 9.49 s |
+| | 32 | 12.0 s | 12.5 s (+4%) | 12.3 s (+2%) | 36.3 s |
+| | 64 | 23.1 s | 26.7 s (+15%) | 23.1 s (=) | 71.3 s |
+| 40 GB | 1 | 2.87 s | 3.48 s (+21%) | 2.89 s (+1%) | 2.84 s |
+| | 8 | 5.43 s | 6.34 s (+17%) | 5.63 s (+4%) | 13.4 s |
+| | 32 | 17.3 s | 19.2 s (+11%) | 18.4 s (+6%) | 49.9 s |
+
+2.5-3.1x faster with many columns, and CA0 still does not beat Color:
+home ties it at 64 columns on 80 GB at best, replicated stays behind.  With
+the kernels faster, rank 0's MPI share grew (6.4 of 23.1 s, Color, 80 GB,
+64 columns; 7.8 of 17.3 s on 40 GB at 32), mostly waiting for the interior
+ranks, and the vector transfers (pageable host copies, 4.1 s at 64
+columns) are now the next cost that grows with the columns.
+
+#### The H2 matvec's kernels in passes of columns too (2026-10-13)
+
+The compression-only H2 matvec (h2_matvec_kernels.cu: the upward and
+downward passes, the coupling and near accumulations, the symmetric pairs)
+had the same per-column loops.  Now as the solve's: up to 8 columns a pass
+(4 complex), each block element read once a pass, a column's arithmetic
+in its single-column order; one column a pass runs the kernels as they
+were (identical SASS).  Two details:
+
+- **The warp accumulation** (boxes of up to 256 rows) takes its 32-row
+  strips one after another, each through all of the box's blocks, so a
+  lane holds one strip's sums for the pass's columns instead of every
+  strip's (a lane's rows and the order of the block sums are unchanged).
+- **The pairs** (symmetric near blocks, K x_s and K^T x_t) were bound by
+  a warp reduction for every block column and right-hand side; reading K
+  once a pass alone made them slower (9.95 -> 10.93 ms, the larger shared
+  footprint).  Their K^T x_t now sums 16 block columns a reduction: the
+  xor butterfly gives every lane the same sum, so offset 16 adds all
+  sixteen values and each later offset halves what a lane keeps - 31
+  shuffles for 16 sums instead of 80, each sum bitwise warp_sum's.
+
+Checks: `make h2_gpu_matvec_columns` (tests/matvec_columns.cpp): coupling
+and near levels of every warp-kernel size and boxes beyond 256 rows (the
+block kernel), blocks with K and precomputed vectors from the local,
+ghost and partial arrays, pairs up to 512 x 512; 2-17 columns (2-9
+complex): every column bitwise its single-column run.  BiCGSTAB on the
+compressed H2 (`--precon 2`, 192^3 on 8 ranks, 485 iterations): every
+column bitwise the previous library's with 1 and 16 columns.
+
+| kernel (`--time`, double) | 1 column, old / new | 16 columns, old / new |
+|---|---|---|
+| upward | 0.101 / 0.101 ms | 1.20 / 0.32 ms |
+| downward | 0.110 / 0.111 ms | 1.38 / 0.66 ms |
+| accumulate, near (512 boxes, 216 rows) | 3.12 / 3.12 ms | 48.9 / 24.7 ms |
+| accumulate, coupling (1024 boxes, 75 rows) | 2.28 / 2.28 ms | 35.9 / 14.4 ms |
+| pairs (2048, 216 x 216) | 0.570 / 0.567 ms | 9.98 / 5.22 ms |
+
+BiCGSTAB at 192^3, 970 matvecs: with 16 columns the matvec 394.4 ->
+203.2 s (near 303.6 -> 158.0, interactions and downward 68.2 -> 24.9,
+upward 3.85 -> 1.61; transfers 18.7 s unchanged), the solve 455 -> 265 s;
+one column 25.9 s as before.  Open: the near accumulation is still ~4x
+its memory bound with 16 columns (a lane loads x for every K element and
+column; two strips a lane would halve that), and the one-column pairs
+could take the 16-column reduction too (bitwise the same; not measured).
+
+#### H2_compress_factors takes 0 or 1 (2026-10-13)
+
+The option came in (af9e726) as "0 off, 1 the retained X_NR, 2 also the
+fill sources".  The fill sources' compression went in the same day
+(8f1d37d) under `>= 1`, as a round trip nothing read yet, and everything
+after it did too: the readers of the compressed fill sources, the kept T
+and X_SR (66a1002), the near and parent blocks packed under pressure, the
+packed restores at the transitions, the CA blocks on more than one rank.
+No code ever tested for 2, so 2 was 1.  The option now takes 0 or 1 (2 is
+refused with that explanation; no script used it), and its descriptions
+(BPACK_defs.f90, core/butterfly_types.hpp, the C wrapper's help, the
+Laplace driver) say what 1 does.  The narrower mode the first plan had - an
+exact factorization with only the solve factors compressed - does not
+exist.
+
+Found on the way, in the C wrapper's command-line parser (which drivers
+such as VIE3D_H2Test and EMSURF call with all of their own arguments):
+`h2_compress_factors` was missing, so such a driver ignored it; and
+207c38b had given `h2_ca_pack_shared` the code 63, which is the '?'
+getopt returns for an option it does not know, so a driver's own options
+went to the pack_shared case.  New options take codes from 1000 up:
+`h2_compress_factors` 1001, `h2_ca_pack_shared` 1002, `h2_ca_solve` 1003.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

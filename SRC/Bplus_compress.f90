@@ -8877,6 +8877,12 @@ time_tmp = time_tmp + n2 - n1
 
                rank = rank + rankup
                rank0 = rank
+               ! (the seed's norm starts that of the approximation, normA, so that the ACA iterations stop relative to
+               ! the whole block, not to what remains after the seed; normUV = normA: at least one ACA iteration)
+               call LR_Fnorm(SVD_Q%matU(:, rank - rankup + 1:rank), row_Rtmp_knn, M, N, rankup, normUV, tolerance*1e-2, &
+                             Flops=flop)
+               stats%Flop_Fill = stats%Flop_Fill + flop
+               normA = normUV
 
                ! if (rank == rmax)then
                !    goto 10 !>*** skip ACA iteration

@@ -303,6 +303,7 @@ void factorize_CA_level_gpu(
         }
         if (group_names[group_idx] == "interior") {
             clear_ghosts(level);
+            gpu_driver.replicas_done();   // (every rank at this group: the near blocks pack by pressure)
         }
         for (size_t wave_idx = 0; wave_idx < waves.size(); ++wave_idx) {
             const auto& wave = waves[wave_idx];
@@ -317,6 +318,13 @@ void factorize_CA_level_gpu(
         }
     }
 
+    // the solves' order should the level be solved from its home factors
+    // (H2_CA_solve home; the level's cleanup drops elimination_wave)
+    level.ca_home_order.clear();
+    for (const auto& box : level.local_boxes) {
+        const auto it = level.elimination_wave.find(box.morton_index);
+        if (it != level.elimination_wave.end()) level.ca_home_order[box.morton_index] = it->second;
+    }
     for (const auto& box : level.local_boxes) {
         total_skeleton += static_cast<int64_t>(box.skeleton_indices.size());
         total_redundant += static_cast<int64_t>(box.redundant_indices.size());
@@ -377,9 +385,16 @@ void hierarchical_factorization_parallel(
     int ca_owner_component,
     int ca_owner_serial,
     int verbosity = 1,
-    // H2_compress_factors: lossy compression of the kept factors at
-    // `tolerance` (0 off, 1 the retained X_NR, 2 also the fill sources).
-    int compress_factors = 0) {
+    // H2_compress_factors: lossy compression at `tolerance`, 0 off or 1 on
+    // (the kept solve factors and the factorization's fill sources and
+    // packed blocks; core/butterfly_types.hpp).
+    int compress_factors = 0,
+    // H2_CA_pack_shared: a replicated GPU CA level's blocks on more than one
+    // rank packed through the ghosts' groups - 0 auto, 1 always, 2 never
+    int ca_pack_shared = 0,
+    // H2_CA_solve: a replicated GPU CA level solved replicated (0: the ghosts'
+    // factors kept) or from its home factors (1: the ghosts' factors dropped)
+    int ca_solve = 0) {
 
     // To Do: NEED TO FIX KERNEL!!!!!
     using clock = std::chrono::high_resolution_clock;
@@ -510,6 +525,8 @@ void hierarchical_factorization_parallel(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.ca_owner_component = ca_owner_component;
+    gpu_options.ca_pack_shared = ca_pack_shared;
+    gpu_options.ca_solve = ca_solve;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         const double kernels = gpu_driver.warm_up();
@@ -811,7 +828,13 @@ void hierarchical_factorization_parallel(
                 PendingFactorUpdates<DataType> no_updates;
                 gpu_driver.finish_level(current_level, no_updates, level_comm,
                                         print_detail && rank == level_print_rank);
-                gpu::device_solve_store().ca_levels.insert(current_level);  // the device solve runs it (M4b)
+                if (ca_solve == 1) {
+                    // H2_CA_solve home: solved as a component-owner level is, from
+                    // each box's home factors in the elimination order
+                    level.ca_home_factors = true;
+                } else {
+                    gpu::device_solve_store().ca_levels.insert(current_level);  // the device solve runs it (M4b)
+                }
                 ca_on_device = true;
             }
 #endif
@@ -2237,7 +2260,9 @@ void hierarchical_factorization_parallel_if_supported(
     int ca_owner_component = 0,
     int ca_owner_serial = 0,
     int verbosity = 1,
-    int compress_factors = 0) {
+    int compress_factors = 0,
+    int ca_pack_shared = 0,
+    int ca_solve = 0) {
     if constexpr (std::is_same_v<DataType, double> ||
                   std::is_same_v<DataType, std::complex<double>>) {
         hierarchical_factorization_parallel<CoordType, DataType, KernelType>(
@@ -2259,7 +2284,9 @@ void hierarchical_factorization_parallel_if_supported(
             ca_owner_component,
             ca_owner_serial,
             verbosity,
-            compress_factors);   // instantiated ONLY for double types
+            compress_factors,
+            ca_pack_shared,
+            ca_solve);   // instantiated ONLY for double types
     } else {
         throw std::runtime_error("H2/FMM only supports double / std::complex<double>");
     }
@@ -2328,7 +2355,9 @@ void butterfly_factorization_parallel(H2<CoordType,DataType>* solver, double* fa
     solver->options.ca_owner_component,
     solver->options.ca_owner_serial,
     solver->options.verbosity,
-    solver->options.compress_factors);
+    solver->options.compress_factors,
+    solver->options.ca_pack_shared,
+    solver->options.ca_solve);
   // the logdet and quick verification that end the call, and the GPU
   // kernel warm-up before its first level, are not factorization
   double tf = MPI_Wtime() - t0 - butterfly::h2_verification_seconds() - butterfly::h2_warmup_seconds();

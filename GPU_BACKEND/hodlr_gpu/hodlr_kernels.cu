@@ -630,8 +630,13 @@ __global__ void tinv_kernel(const TinvItem<T>* items) {
     if (j >= it.k) return;
     T* col = it.t + static_cast<long long>(j) * it.k;
     const T* g = it.gram + static_cast<long long>(j) * it.ldg;
+    const bool skip_j = it.tau[j] == T(0.0);
     for (int i = threadIdx.x; i < it.k; i += blockDim.x) {
-        col[i] = i < j ? g[i] : (i == j ? T(1.0) / it.tau[j] : T(0.0));
+        if (i < j) {
+            col[i] = skip_j || it.tau[i] == T(0.0) ? T(0.0) : g[i];
+        } else {
+            col[i] = i == j ? (skip_j ? T(1.0) : T(1.0) / it.tau[j]) : T(0.0);
+        }
     }
 }
 

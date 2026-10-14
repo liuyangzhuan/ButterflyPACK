@@ -48,6 +48,8 @@ struct DriverOptions {
   int h2_id_proxy_points = -1;
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
+  int h2_ca_pack_shared = 0;  // 0 auto, 1 always, 2 never
+  int h2_ca_solve = 0;        // 0 replicated, 1 home
   int h2_ca_owner_serial = 0;
   int precon = 1;
   int nrhs = 1;
@@ -223,6 +225,13 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     } else if (name == "h2_ca_owner_component") {
       options.h2_ca_owner_component =
           parse_int(value, "H2_CA_owner_component");
+    } else if (name == "h2_ca_pack_shared") {
+      options.h2_ca_pack_shared =
+          value == "auto" ? 0 : value == "always" ? 1 : value == "never" ? 2
+                                                    : parse_int(value, "H2_CA_pack_shared");
+    } else if (name == "h2_ca_solve") {
+      options.h2_ca_solve =
+          value == "replicated" ? 0 : value == "home" ? 1 : parse_int(value, "H2_CA_solve");
     } else if (name == "h2_ca_owner_serial") {
       options.h2_ca_owner_serial = parse_int(value, "H2_CA_owner_serial");
     } else if (name == "precon") {
@@ -314,8 +323,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument(
         "color_unstructured supports H2_lazy_schur=0 or 2 only");
   }
-  if (options.h2_compress_factors < 0 || options.h2_compress_factors > 2) {
-    throw std::invalid_argument("H2_compress_factors must be 0, 1, or 2");
+  if (options.h2_compress_factors < 0 || options.h2_compress_factors > 1) {
+    throw std::invalid_argument("H2_compress_factors must be 0 (off) or 1 (on); 2 is not a separate mode: 1 compresses the fill sources too");
   }
   if (options.h2_lazy_schur < 0 || options.h2_lazy_schur > 2) {
     throw std::invalid_argument("H2_lazy_schur must be 0, 1, or 2");
@@ -344,6 +353,12 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.h2_ca_owner_component != 0 &&
       options.h2_ca_owner_component != 3) {
     throw std::invalid_argument("H2_CA_owner_component must be 0 or 3");
+  }
+  if (options.h2_ca_pack_shared < 0 || options.h2_ca_pack_shared > 2) {
+    throw std::invalid_argument("H2_CA_pack_shared must be auto (0), always (1) or never (2)");
+  }
+  if (options.h2_ca_solve < 0 || options.h2_ca_solve > 1) {
+    throw std::invalid_argument("H2_CA_solve must be replicated (0) or home (1)");
   }
   if (options.h2_ca_owner_serial != 0 && options.h2_ca_owner_serial != 1) {
     throw std::invalid_argument("H2_CA_owner_serial must be 0 or 1");
@@ -407,8 +422,10 @@ void print_usage(const char* executable) {
       << "  --CA_level <level>\n"
       << "  --H2_use_sketch <0|1|2>\n"
       << "  --H2_lazy_schur <0|1|2>\n"
-      << "  --H2_compress_factors <0|1|2>  (GPU: lossy compression of the\n"
-         "                                  kept factors at tol_comp)\n"
+      << "  --H2_compress_factors <0|1>  (GPU: lossy compression at tol_comp of\n"
+         "                                the kept solve factors and of the\n"
+         "                                factorization's fill sources and packed\n"
+         "                                blocks; the factorization is lossy too)\n"
       << "  --H2_GEMM_split <count>\n"
       << "  --H2_XRR_factor <0|1>\n"
       << "  --H2_use_gpu <0|1|2>\n"
@@ -421,6 +438,8 @@ void print_usage(const char* executable) {
       << "  --H2_ID_proxy_points <n>   (surface samples of --H2_ID_proxy 1)\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
+      << "  --H2_CA_pack_shared <auto|always|never>\n"
+      << "  --H2_CA_solve <replicated|home>\n"
       << "  --H2_CA_owner_serial <0|1>\n"
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
@@ -761,6 +780,10 @@ int main(int argc, char** argv) {
                 << driver_options.h2_ca_staged_halo << "\n"
                 << "H2_CA_owner_component: "
                 << driver_options.h2_ca_owner_component << "\n"
+                << "H2_CA_pack_shared: "
+                << driver_options.h2_ca_pack_shared << "\n"
+                << "H2_CA_solve: "
+                << driver_options.h2_ca_solve << "\n"
                 << "H2_CA_owner_serial: "
                 << driver_options.h2_ca_owner_serial << "\n"
                 << "Number of RHS: " << driver_options.nrhs << "\n"
@@ -849,6 +872,12 @@ int main(int argc, char** argv) {
       d_c_bpack_set_I_option(
           option_handle, "H2_CA_owner_component",
           driver_options.h2_ca_owner_component);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_CA_pack_shared",
+          driver_options.h2_ca_pack_shared);
+      d_c_bpack_set_I_option(
+          option_handle, "H2_CA_solve",
+          driver_options.h2_ca_solve);
       d_c_bpack_set_I_option(
           option_handle, "H2_CA_owner_serial",
           driver_options.h2_ca_owner_serial);

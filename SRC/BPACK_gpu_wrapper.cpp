@@ -673,6 +673,32 @@ void c_bpack_hodlr_gpu_set_points(void* gpu, const int64_t* n, const int* dim, c
 #endif
 }
 
+// The low-rank term U V^T (n x n, tree order) the construction adds to the entries it takes from the host
+// (c_bpack_set_entry_addend): the nu rows of U and nv of V this rank holds (r columns, column-major), and the
+// 1-based slot of every row there (umap, vmap, n each, 0: not held); n = 0 frees it
+void c_bpack_hodlr_gpu_set_addend(void* gpu, const int64_t* n, const int* nu, const int* nv, const int* r,
+                                  const void* u, const void* v, const int* umap, const int* vmap) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    construct_of(gpu, "c_bpack_hodlr_gpu_set_addend")
+        .set_addend(*n, *nu, *nv, *r, reinterpret_cast<const Scalar*>(u), reinterpret_cast<const Scalar*>(v), umap,
+                    vmap);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_set_addend", e.what());
+  }
+#else
+  (void)gpu;
+  (void)n;
+  (void)nu;
+  (void)nv;
+  (void)r;
+  (void)u;
+  (void)v;
+  (void)umap;
+  (void)vmap;
+#endif
+}
+
 // out[b] (m[b] x n[b], host) = scale * A(r0[b] .., c0[b] ..), r0 and c0 0-based slots
 void c_bpack_hodlr_gpu_eval_dense(void* gpu, const double* scale, const int* count, const int64_t* r0,
                                   const int* m, const int64_t* c0, const int* n, void** out) {

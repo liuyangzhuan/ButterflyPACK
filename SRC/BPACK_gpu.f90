@@ -268,6 +268,13 @@ module BPACK_GPU
          integer(c_int64_t) :: ids(*)
       end subroutine c_bpack_hodlr_gpu_set_points
 
+      subroutine c_bpack_hodlr_gpu_set_addend(gpu, n, nu, nv, r, u, v, umap, vmap) bind(c, name="c_bpack_hodlr_gpu_set_addend")
+         import :: c_ptr, c_int64_t, c_int
+         type(c_ptr), value :: gpu, u, v, umap, vmap
+         integer(c_int64_t) :: n
+         integer(c_int) :: nu, nv, r
+      end subroutine c_bpack_hodlr_gpu_set_addend
+
       subroutine c_bpack_hodlr_gpu_eval_dense(gpu, scale, count, r0, m, c0, n, out) &
          bind(c, name="c_bpack_hodlr_gpu_eval_dense")
          import :: c_ptr, c_int, c_int64_t, c_double
@@ -430,6 +437,70 @@ contains
    end subroutine BPACK_gpu_bind
 
    !> Free the GPU state of bmat (device copies and registered kernel)
+   !> The low-rank entry term of ker (c_bpack_set_entry_addend) to the device for the GPU construction of
+   !> bmat, which adds it to the entries it takes from the host (HodlrConstruct::host_fill; a construction
+   !> by a GPU evaluator cannot take one): this rank's rows, and while a shared block is built the rows its
+   !> pieces need (HODLR_gpu_addend_prefetch).  Else the host adds it (element_Zmn_blocklist_user)
+   subroutine HODLR_gpu_addend_begin(bmat, option, ker)
+      type(Bmatrix)::bmat
+      type(Hoption)::option
+      type(kernelquant)::ker
+      integer(c_int) :: ready
+
+      if (.not. allocated(ker%addend)) return
+      ker%addend%on_device = .false.
+      if (option%format /= HODLR .or. option%HODLR_use_gpu <= 0 .or. .not. c_associated(bmat%gpu)) return
+      call c_bpack_hodlr_gpu_construct_ready(bmat%gpu, ready)
+      call BPACK_require(ready /= 1, 'a low-rank entry term (c_bpack_set_entry_addend) needs the entries from the host, '// &
+                         'not a GPU evaluator')
+      if (ready /= 2) return
+      call BPACK_require(size(ker%addend%vmap) == size(ker%addend%umap), 'a low-rank entry term of a square matrix')
+      ker%addend%on_device = .true.
+      call HODLR_gpu_addend_sync(bmat%gpu, ker%addend, option)
+   end subroutine HODLR_gpu_addend_begin
+
+   !> The rows of the low-rank entry term ad held now (with their slots) to the device, U scaled as the host
+   !> entries (scale_factor)
+   subroutine HODLR_gpu_addend_sync(gpu, ad, option)
+      type(c_ptr) :: gpu
+      type(entry_addend)::ad
+      type(Hoption)::option
+      DT, allocatable, target :: ut(:, :), vt(:, :)
+      integer(c_int), allocatable, target :: um(:), vm(:)
+      integer(c_int) :: nu, nv, r
+      integer(c_int64_t) :: n
+
+      if (.not. ad%on_device) return
+      allocate (ut(max(ad%nu, 1), ad%r), vt(max(ad%nv, 1), ad%r), um(size(ad%umap)), vm(size(ad%vmap)))
+      if (ad%nu > 0) ut(1:ad%nu, :) = ad%u(1:ad%nu, 1:ad%r)*option%scale_factor
+      if (ad%nv > 0) vt(1:ad%nv, :) = ad%v(1:ad%nv, 1:ad%r)
+      um = ad%umap
+      vm = ad%vmap
+      n = size(ad%umap)
+      nu = ad%nu
+      nv = ad%nv
+      r = ad%r
+      call c_bpack_hodlr_gpu_set_addend(gpu, n, nu, nv, r, c_loc(ut), c_loc(vt), c_loc(um), c_loc(vm))
+      deallocate (ut, vt, um, vm)
+   end subroutine HODLR_gpu_addend_sync
+
+   !> The device copy of the low-rank entry term freed (after the construction of bmat)
+   subroutine HODLR_gpu_addend_end(bmat, ker)
+      type(Bmatrix)::bmat
+      type(kernelquant)::ker
+      integer(c_int) :: nu, nv, r
+      integer(c_int64_t) :: n
+
+      if (.not. allocated(ker%addend)) return
+      if (.not. ker%addend%on_device) return
+      n = 0
+      nu = 0
+      nv = 0
+      r = 0
+      call c_bpack_hodlr_gpu_set_addend(bmat%gpu, n, nu, nv, r, c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr)
+      ker%addend%on_device = .false.
+   end subroutine HODLR_gpu_addend_end
+
    subroutine BPACK_gpu_delete(bmat)
       type(Bmatrix)::bmat
 
@@ -1647,8 +1718,8 @@ contains
    end subroutine HODLR_gpu_fetch_rows
 
    !> BPACK_ExtractElement of a HODLR built on the GPU whose host copies of the
-   !> factors are unfilled (HODLR_gpu_defer_host), every intersection on one
-   !> rank (pmaps of 1 x 1 grids): the products where the factors are.  lstblk
+   !> factors are unfilled (HODLR_gpu_defer_host): the products where the
+   !> factors are.  lstblk
    !> holds the blocks of the intersections of every node this rank belongs to
    !> (HODLR_MapIntersec2Block with members), with the positions of their rows
    !> and columns in the intersections.  The piece of an intersection in a
@@ -1657,9 +1728,10 @@ contains
    !> owners of the rows of R, U(R_d, :) V(C, :)^T; else the owners of C,
    !> U(R, :) V(C_d, :)^T.  Only the rows of the smaller side move (from their
    !> owners' devices, HODLR_gpu_fetch_rows), the products run on the devices
-   !> (c_bpack_hodlr_gpu_extract_products), and the entries go to the rank of
-   !> the intersection.  A piece in a dense leaf is computed on the host by the
-   !> leaf's rank.  Collective over ptree%Comm
+   !> (c_bpack_hodlr_gpu_extract_products), and the entries go to the ranks
+   !> holding them: the intersection's rank, or for a 2D grid (pmaps) each rank
+   !> its block-cyclic part.  A piece in a dense leaf is computed on the host by
+   !> the leaf's rank.  Collective over ptree%Comm
    subroutine HODLR_gpu_extract_blocks(ho_bf1, lstblk, inters, Npmap, pmaps, option, stats, ptree)
       type(hobf), target::ho_bf1
       type(list)::lstblk
@@ -1683,6 +1755,8 @@ contains
       integer(kind=8), allocatable :: voff(:), ipos_d(:), ival_d(:)
       integer pass, b, it, nn, nR, nC, nb, ns, t, s, c, g, lc, ii, iis, urole, k, nlr, nlf, ilr, ilf, iq, nq, p, np
       integer dest, nproc, ierr, i, j, idx_start_glo, ge  ! (nr, nc below: nR, nC)
+      integer pass2, npr, npc, gh, pr, pc, nrd, ncd, rr, cc, lr_, lc_
+      integer, allocatable :: rsel(:), csel(:)
       integer(kind=8) :: npos, nbig_tot, nout, nout_lr, nsmallv, ipos, ibig, ival, ism, nis, nvs, ip, iv
       integer(c_int) :: idx_c, k_c, np_c
       integer(c_int64_t) :: n_loc
@@ -1889,40 +1963,82 @@ contains
       endif
       stats%Flop_Tmp = stats%Flop_Tmp + flops
 
-      ! the entries to the ranks of their intersections: per piece its intersection, its numbers of rows and
-      ! columns and their positions in the intersection, then its values (column-major)
+      ! the entries to the ranks holding them: per piece and rank of its intersection's grid (pmaps: nprow x
+      ! npcol, block cyclic by nbslpk from process (0, 0), column-major ranks from pmaps(:, 3) as Gridinfo_2D; a
+      ! 1 x 1 grid takes the whole piece) its intersection, its numbers of rows and columns there and their
+      ! positions in the intersection, then its values (column-major); the receiver puts them at their local
+      ! positions
       allocate (scount(nproc), rcount(nproc), sdisp(nproc), rdisp(nproc), svcount(nproc), rvcount(nproc), &
                 svdisp(nproc), rvdisp(nproc), ipos_d(nproc), ival_d(nproc))
+      nrd = 1
+      ncd = 1
+      if (np > 0) nrd = max(1, maxval(p_nrow(1:np)))
+      if (np > 0) ncd = max(1, maxval(p_ncol(1:np)))
+      allocate (rsel(nrd), csel(ncd))
       scount = 0
       svcount = 0
       nis = 0
       nvs = 0
-      do p = 1, np
-         dest = pmaps(inters(p_nn(p))%pg, 3) + 1
-         scount(dest) = scount(dest) + 3 + p_nrow(p) + p_ncol(p)
-         svcount(dest) = svcount(dest) + p_nrow(p)*p_ncol(p)
-         nis = nis + 3 + p_nrow(p) + p_ncol(p)
-         nvs = nvs + int(p_nrow(p), 8)*p_ncol(p)
-      enddo
-      call assert(nis < 2_8**31 .and. nvs < 2_8**31, 'HODLR_gpu_extract_blocks: more than 2^31 entries to send')
-      sdisp(1) = 0
-      svdisp(1) = 0
-      do dest = 2, nproc
-         sdisp(dest) = sdisp(dest - 1) + scount(dest - 1)
-         svdisp(dest) = svdisp(dest - 1) + svcount(dest - 1)
-      enddo
-      allocate (sbuf(max(1_8, nis)), svals(max(1_8, nvs)))
-      ipos_d = sdisp
-      ival_d = svdisp
-      do p = 1, np
-         dest = pmaps(inters(p_nn(p))%pg, 3) + 1
-         nr = p_nrow(p)
-         nc = p_ncol(p)
-         sbuf(ipos_d(dest) + 1:ipos_d(dest) + 3) = (/p_nn(p), nr, nc/)
-         sbuf(ipos_d(dest) + 4:ipos_d(dest) + 3 + nr + nc) = pos(p_pos(p) + 1:p_pos(p) + nr + nc)
-         ipos_d(dest) = ipos_d(dest) + 3 + nr + nc
-         svals(ival_d(dest) + 1:ival_d(dest) + int(nr, 8)*nc) = outv(p_val(p) + 1:p_val(p) + int(nr, 8)*nc)
-         ival_d(dest) = ival_d(dest) + int(nr, 8)*nc
+      do pass2 = 1, 2  ! (count, then fill)
+         if (pass2 == 2) then
+            call assert(nis < 2_8**31 .and. nvs < 2_8**31, 'HODLR_gpu_extract_blocks: more than 2^31 entries to send')
+            sdisp(1) = 0
+            svdisp(1) = 0
+            do dest = 2, nproc
+               sdisp(dest) = sdisp(dest - 1) + scount(dest - 1)
+               svdisp(dest) = svdisp(dest - 1) + svcount(dest - 1)
+            enddo
+            allocate (sbuf(max(1_8, nis)), svals(max(1_8, nvs)))
+            ipos_d = sdisp
+            ival_d = svdisp
+         endif
+         do p = 1, np
+            nr = p_nrow(p)
+            nc = p_ncol(p)
+            npr = pmaps(inters(p_nn(p))%pg, 1)
+            npc = pmaps(inters(p_nn(p))%pg, 2)
+            gh = pmaps(inters(p_nn(p))%pg, 3)
+            do pc = 0, npc - 1
+               ncd = 0
+               do j = 1, nc
+                  if (mod((pos(p_pos(p) + nr + j) - 1)/nbslpk, npc) /= pc) cycle
+                  ncd = ncd + 1
+                  csel(ncd) = j
+               enddo
+               if (ncd == 0) cycle
+               do pr = 0, npr - 1
+                  nrd = 0
+                  do i = 1, nr
+                     if (mod((pos(p_pos(p) + i) - 1)/nbslpk, npr) /= pr) cycle
+                     nrd = nrd + 1
+                     rsel(nrd) = i
+                  enddo
+                  if (nrd == 0) cycle
+                  dest = gh + pr + pc*npr + 1
+                  if (pass2 == 1) then
+                     scount(dest) = scount(dest) + 3 + nrd + ncd
+                     svcount(dest) = svcount(dest) + nrd*ncd
+                     nis = nis + 3 + nrd + ncd
+                     nvs = nvs + int(nrd, 8)*ncd
+                  else
+                     sbuf(ipos_d(dest) + 1:ipos_d(dest) + 3) = (/p_nn(p), nrd, ncd/)
+                     do i = 1, nrd
+                        sbuf(ipos_d(dest) + 3 + i) = pos(p_pos(p) + rsel(i))
+                     enddo
+                     do j = 1, ncd
+                        sbuf(ipos_d(dest) + 3 + nrd + j) = pos(p_pos(p) + nr + csel(j))
+                     enddo
+                     ipos_d(dest) = ipos_d(dest) + 3 + nrd + ncd
+                     do j = 1, ncd
+                        do i = 1, nrd
+                           svals(ival_d(dest) + i + int(j - 1, 8)*nrd) = outv(p_val(p) + rsel(i) + int(csel(j) - 1, 8)*nr)
+                        enddo
+                     enddo
+                     ival_d(dest) = ival_d(dest) + int(nrd, 8)*ncd
+                  endif
+               enddo
+            enddo
+         enddo
       enddo
       call MPI_ALLTOALL(scount, 1, MPI_INTEGER, rcount, 1, MPI_INTEGER, ptree%Comm, ierr)
       call MPI_ALLTOALL(svcount, 1, MPI_INTEGER, rvcount, 1, MPI_INTEGER, ptree%Comm, ierr)
@@ -1942,15 +2058,21 @@ contains
          nr = rbuf(ip + 2)
          nc = rbuf(ip + 3)
          call assert(associated(inters(nn)%dat_loc), 'HODLR_gpu_extract_blocks: entries of an intersection of another rank')
+         npr = pmaps(inters(nn)%pg, 1)
+         npc = pmaps(inters(nn)%pg, 2)
          do j = 1, nc
-            c = rbuf(ip + 3 + nr + j)
+            cc = rbuf(ip + 3 + nr + j)
+            lc_ = ((cc - 1)/(nbslpk*npc))*nbslpk + mod(cc - 1, nbslpk) + 1
             do i = 1, nr
-               inters(nn)%dat_loc(rbuf(ip + 3 + i), c) = rvals(iv + i + int(j - 1, 8)*nr)
+               rr = rbuf(ip + 3 + i)
+               lr_ = ((rr - 1)/(nbslpk*npr))*nbslpk + mod(rr - 1, nbslpk) + 1
+               inters(nn)%dat_loc(lr_, lc_) = rvals(iv + i + int(j - 1, 8)*nr)
             enddo
          enddo
          ip = ip + 3 + nr + nc
          iv = iv + int(nr, 8)*nc
       enddo
+      deallocate (rsel, csel)
       deallocate (p_nn, p_nrow, p_ncol, p_q0, p_pos, p_val, pos, d_idx, d_role, d_nbig, d_nsmall, d_first, d_rows)
       deallocate (q_owner, q_int, outv, small, vals, voff, tab)
       deallocate (scount, rcount, sdisp, rdisp, svcount, rvcount, svdisp, rvdisp, ipos_d, ival_d, sbuf, svals, rbuf, rvals)
