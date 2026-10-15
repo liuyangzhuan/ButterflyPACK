@@ -16,7 +16,12 @@
 // path) - a thin shell (a sphere's surface: most boxes empty, the rest
 // clipped by different amounts), a dense cluster and random weights with
 // empty boxes - with the leaf regions' imbalance by points and the bricks
-// flag; then the worst imbalances, and the layouts of a few counts.
+// flag; and with the counts keeping more ranks on the coarse levels (the
+// unstructured path): the same invariants, level 1 on one rank, (2^d)^k in
+// 3D at threshold 8 still the bricks, and how many coarse ranks are kept;
+// the reduction groups (region_parent against region_first_child) for every
+// pair of counts; then the worst imbalances, and the layouts of a few
+// counts.
 //
 //   make h2_region_partition_test && ./h2_region_partition_test     (in a build directory), or
 //   g++ -std=c++17 -O2 -I../core region_partition_test.cpp -o region_partition_test && ./region_partition_test
@@ -129,8 +134,54 @@ static std::vector<int64_t> weights_of(int kind, int dim, int level, std::mt1993
     return w;
 }
 
+// Keeping ranks against the rule, both with these weights: the levels with
+// more and with fewer ranks, and the leaf imbalance.
+struct KeepStats {
+    long layouts = 0, more = 0, fewer = 0, over = 0;
+    double worst = 0.0;
+};
+static void check_keeping(const RegionPlan& rule, int dim, int levels, int procs, int64_t threshold,
+                          const RegionWeights& w, const char* weights, KeepStats& st) {
+    RegionPlan k;
+    try {
+        k = plan_regions(dim, levels, procs, threshold, w, true);
+    } catch (const std::exception&) {
+        fail("no layout keeping ranks", weights, dim, levels, procs, -1);
+        return;
+    }
+    ++st.layouts;
+    check_layout(k, weights, dim, levels, procs);
+    if (k.count[1] != 1) fail("keeping ranks: level 1 on one rank", weights, dim, levels, procs, 1);
+    if (dim == 3 && threshold == 8 && region_count_is_cubic(dim, procs) && rule.bricks &&
+        (k.count != rule.count || !k.bricks)) {
+        fail("keeping ranks: (2^d)^k the bricks", weights, dim, levels, procs, -1);
+    }
+    bool more = false, fewer = false;
+    for (int l = 0; l < levels; ++l) {
+        more = more || k.count[static_cast<size_t>(l)] > rule.count[static_cast<size_t>(l)];
+        fewer = fewer || k.count[static_cast<size_t>(l)] < rule.count[static_cast<size_t>(l)];
+    }
+    st.more += more;
+    st.fewer += fewer;
+    if (k.leaf_imbalance > kRegionImbalance && k.leaf_imbalance > rule.leaf_imbalance) ++st.over;
+    if (!k.empty_region) st.worst = std::max(st.worst, k.leaf_imbalance);
+}
+
 int main() {
     const int64_t threshold = 8;
+    // the reduction groups: region c below is in the group of its parent
+    for (int32_t below = 1; below <= 300; ++below) {
+        for (int32_t n = 1; n <= below; ++n) {
+            for (int32_t c = 0; c < below; ++c) {
+                const int32_t q = region_parent(c, n, below);
+                if (q < 0 || q >= n || region_first_child(q, n, below) > c || c >= region_first_child(q + 1, n, below)) {
+                    fail("region_parent", "none", 0, 0, below, n);
+                    break;
+                }
+            }
+        }
+    }
+    KeepStats keep_none, keep_shell;
     const char* const kind_name[3] = {"shell", "cluster", "random"};
     long checked = 0, raised = 0, over = 0, weighted = 0, w_over[3] = {0, 0, 0}, w_empty[3] = {0, 0, 0},
          left_bricks[3] = {0, 0, 0};
@@ -178,6 +229,7 @@ int main() {
                 if (u.count != p.count || u.start != p.start || u.threshold != p.threshold || u.bricks != p.bricks) {
                     fail("uniform weights change the layout", "uniform", dim, levels, procs, -1);
                 }
+                check_keeping(p, dim, levels, procs, threshold, RegionWeights{}, "none, keeping ranks", keep_none);
                 for (int kind = 0; kind < 3; ++kind) {
                     const RegionWeights w = RegionWeights::of_counts(h, weights_of(kind, dim, h, rng));
                     if (w.prefix.back() == 0) continue;
@@ -190,6 +242,7 @@ int main() {
                     }
                     ++weighted;
                     check_layout(q, kind_name[kind], dim, levels, procs);
+                    if (kind == 0) check_keeping(q, dim, levels, procs, threshold, w, "shell, keeping ranks", keep_shell);
                     if (cubic && !q.bricks) ++left_bricks[kind];
                     if (q.empty_region) ++w_empty[kind];
                     if (q.leaf_imbalance > kRegionImbalance) ++w_over[kind];
@@ -210,9 +263,15 @@ int main() {
                     "worst with 512 leaf boxes a rank or more %.3f\n",
                     kind_name[kind], kRegionImbalance, w_over[kind], w_empty[kind], left_bricks[kind], w_worst[kind]);
     }
-    std::printf("dim levels ranks: threshold, leaf imbalance, ranks by level (none | shell)\n");
+    for (const auto& [name, st] : {std::pair<const char*, const KeepStats&>{"none", keep_none},
+                                   std::pair<const char*, const KeepStats&>{"shell", keep_shell}}) {
+        std::printf("keeping ranks (%s): %ld layouts, more ranks on some level in %ld, fewer on some level in %ld, "
+                    "leaf imbalance over %.2f and over the rule's in %ld, worst %.3f\n",
+                    name, st.layouts, st.more, st.fewer, kRegionImbalance, st.over, st.worst);
+    }
+    std::printf("dim levels ranks: threshold, leaf imbalance, ranks by level (none | shell | none, keeping ranks)\n");
     for (const auto& [dim, levels, procs] : std::vector<std::tuple<int, int, int>>{
-             {3, 6, 8}, {3, 6, 12}, {3, 6, 20}, {3, 6, 24}, {3, 6, 50}, {3, 7, 64}, {3, 7, 100}, {3, 8, 192},
+             {3, 6, 8}, {3, 6, 12}, {3, 6, 16}, {3, 6, 20}, {3, 6, 24}, {3, 6, 50}, {3, 7, 64}, {3, 7, 100}, {3, 8, 192},
              {2, 8, 50}, {2, 10, 100}}) {
         const RegionPlan p = plan_regions(dim, levels, procs, threshold);
         const int h = region_weight_level(dim, levels, procs);
@@ -222,6 +281,9 @@ int main() {
         for (const int32_t x : p.count) std::printf("%d ", x);
         std::printf("| %3ld %.3f%s  ", static_cast<long>(q.threshold), q.leaf_imbalance, q.bricks ? " bricks" : "");
         for (const int32_t x : q.count) std::printf("%d ", x);
+        const RegionPlan k = plan_regions(dim, levels, procs, threshold, RegionWeights{}, true);
+        std::printf("| %3ld %.3f%s  ", static_cast<long>(k.threshold), k.leaf_imbalance, k.bricks ? " bricks" : "");
+        for (const int32_t x : k.count) std::printf("%d ", x);
         std::printf("\n");
     }
     if (failures) {

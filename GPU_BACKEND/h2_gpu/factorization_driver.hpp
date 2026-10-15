@@ -290,19 +290,17 @@ public:
     // Whether the parents' blocks can stay on the device across the process
     // reduction from level `lvl` into level `parent_lvl`: the parent level
     // would run on the device on its owners (the tests of keeps_blocks_of
-    // without this rank's own activity there, which a sender lacks), the
-    // levels' regions are the equal cubes (device_reduction.hpp; ranges split
-    // by points need not be, even for (2^d)^k ranks), and on a CA
-    // parent level this rank's parents fit the device sketch.
+    // without this rank's own activity there, which a sender lacks), every
+    // region of the child level is whole parent boxes (device_reduction.hpp:
+    // the equal cubes, or the Morton ranges of the unstructured path), and on
+    // a CA parent level this rank's parents fit the device sketch.
     // Rank-independent but for the last test; the caller all-reduces it over
     // the transition's ranks.
     bool device_reduction_possible(int lvl, int parent_lvl, const std::vector<Box>& parents) const {
         if (!color_gpu_enabled() || parent_lvl < 1 || lvl < 2) return false;
         const Level& child = tree_->levels[static_cast<size_t>(lvl)];
         const Level& parent = tree_->levels[static_cast<size_t>(parent_lvl)];
-        const RegionLayout lc = RegionLayout::of(tree_->dimension, lvl, child.num_active_processes);
-        const RegionLayout lp = RegionLayout::of(tree_->dimension, parent_lvl, parent.num_active_processes);
-        if (!lc.uniform || !lp.uniform || !child.regions_cubic || !parent.regions_cubic) return false;
+        if (!regions_hold_whole_parents(child, tree_->dimension) || parent.region_start.size() < 2) return false;
         if (parent_lvl == 1) {
             // level 1 adopts the blocks on its rank; its transition builds the root there
             const Level& l0 = tree_->levels[0];

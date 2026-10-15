@@ -30,6 +30,10 @@
 // largest leaf region is more than kRegionImbalance of the mean: 50 ranks
 // then reduce at level 3 (512 boxes) and the leaf regions are within 1.07.
 //
+// On the unstructured path the counts keep more ranks on the coarse levels
+// (region_counts_keeping_ranks): a reduction divides the count by the
+// smallest k <= 2^d that keeps the leaf regions even, not always by 2^d.
+//
 // The splits weigh the boxes by a load (RegionWeights): on the unstructured
 // path the points in each box, so that empty boxes count for nothing and
 // every leaf region gets about the same number of points; without weights
@@ -152,7 +156,7 @@ inline std::vector<std::vector<int64_t>> region_starts(int dimension, const std:
             w = weight[static_cast<size_t>(level + 1)];
             continue;
         }
-        if (n != (below + f - 1) / f) {
+        if (n < 1 || n > below) {
             throw std::invalid_argument("region_starts: level " + std::to_string(level) + " has " + std::to_string(n) +
                                         " regions for " + std::to_string(below) + " below");
         }
@@ -257,6 +261,71 @@ inline bool region_starts_are_bricks(int dimension, int level, const std::vector
 // plan_regions takes the first reduction a level finer.
 inline constexpr double kRegionImbalance = 1.15;
 
+// The counts of the levels above `level` by the reduction rule of
+// region_counts, from count[level].
+inline void region_counts_above(int dimension, int level, int64_t threshold, std::vector<int32_t>& count) {
+    const int32_t f = int32_t{1} << dimension;
+    for (int l = level - 1; l >= 0; --l) {
+        const int64_t boxes = int64_t{1} << (dimension * l);
+        const int32_t prev = count[static_cast<size_t>(l + 1)];
+        count[static_cast<size_t>(l)] = boxes / prev < threshold ? std::max(1, (prev + f - 1) / f) : prev;
+    }
+}
+
+// Active ranks per level keeping more of them on the coarse levels (the
+// unstructured path).  Where region_counts divides a count by 2^d, take
+// instead the largest ceil(count / k), k = 2 .. 2^d, that leaves a rank of
+// the level `threshold` boxes or more (and at most 2^d (level - 1) ranks, so
+// that level 1 is one) and whose layout - the levels above by the rule -
+// has its leaf regions within kRegionImbalance of the mean or no further
+// off than with 2^d (and no region without load that 2^d avoids); else
+// 2^d.  Whole parent boxes make this a matter of factors: 12 ranks keep 4 on
+// level 2 of a 3D tree (groups of 3 under 2 level-1 boxes each), not 8
+// (groups of 1 and 2 under one box each: one leaf region 1.5x the mean) nor
+// the rule's 2.  Leaf first, each level's choice fixed before the next.
+inline std::vector<int32_t> region_counts_keeping_ranks(int dimension, int num_levels, int num_procs,
+                                                        int64_t threshold, const RegionWeights& weights) {
+    const int32_t f = int32_t{1} << dimension;
+    std::vector<int32_t> count = region_counts(dimension, num_levels, num_procs, threshold);
+    for (int level = num_levels - 2; level >= 2; --level) {
+        const int64_t boxes = int64_t{1} << (dimension * level);
+        const int32_t prev = count[static_cast<size_t>(level + 1)];
+        if (boxes / prev >= threshold) continue;  // no reduction here (count[level] == prev)
+        auto layout = [&](int32_t n, double& imbalance, bool& empty) {
+            std::vector<int32_t> c = count;
+            c[static_cast<size_t>(level)] = n;
+            region_counts_above(dimension, level, threshold, c);
+            const auto start = region_starts(dimension, c, weights);
+            imbalance = start.empty() ? -1.0 : region_leaf_imbalance(dimension, start, weights, &empty);
+            return c;
+        };
+        const int32_t plain = std::max(1, (prev + f - 1) / f);
+        double plain_imbalance = 0.0;
+        bool plain_empty = false;
+        std::vector<int32_t> chosen = layout(plain, plain_imbalance, plain_empty);
+        const int64_t cap = std::min<int64_t>(boxes / threshold, int64_t{1} << (dimension * (level - 1)));
+        int32_t tried = 0;
+        for (int32_t k = 2; k < f; ++k) {
+            const int32_t n = (prev + k - 1) / k;  // decreasing in k
+            if (n <= plain) break;
+            if (n > cap || n == tried) continue;
+            tried = n;
+            double imbalance = 0.0;
+            bool empty = false;
+            std::vector<int32_t> c = layout(n, imbalance, empty);
+            if (imbalance < 0.0 || (empty && !plain_empty)) continue;
+            const double limit =
+                plain_imbalance < 0.0 ? kRegionImbalance : std::max(kRegionImbalance, plain_imbalance);
+            if (imbalance <= limit) {
+                chosen = c;
+                break;
+            }
+        }
+        count = chosen;
+    }
+    return count;
+}
+
 // The layout of every level: counts, starts, and the threshold that made them
 // (the caller's, or a multiple of 2^d of it - see the top of this file).
 struct RegionPlan {
@@ -268,7 +337,11 @@ struct RegionPlan {
     bool bricks = false;           // the equal cubes of (2^d)^k ranks
 };
 inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int64_t threshold,
-                               const RegionWeights& weights = RegionWeights{}) {
+                               const RegionWeights& weights = RegionWeights{}, bool keep_ranks = false) {
+    auto counts_at = [&](int64_t t) {
+        return keep_ranks ? region_counts_keeping_ranks(dimension, num_levels, num_procs, t, weights)
+                          : region_counts(dimension, num_levels, num_procs, t);
+    };
     const int64_t f = int64_t{1} << dimension;
     // the better of two layouts: a leaf region with no load is worse than
     // any imbalance; then the smaller imbalance; the first on a tie
@@ -277,6 +350,20 @@ inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int
         return a.leaf_imbalance < b.leaf_imbalance;
     };
     auto good = [](const RegionPlan& p) { return !p.empty_region && p.leaf_imbalance <= kRegionImbalance; };
+    // the layout of these counts (no starts where whole parent boxes cannot be)
+    auto build = [&](const std::vector<int32_t>& count, int64_t t) {
+        RegionPlan p;
+        p.count = count;
+        p.threshold = t;
+        p.start = region_starts(dimension, p.count, weights);
+        if (p.start.empty()) return p;
+        p.leaf_imbalance = region_leaf_imbalance(dimension, p.start, weights, &p.empty_region);
+        p.bricks = region_count_is_cubic(dimension, num_procs);
+        for (int level = 0; p.bricks && level < num_levels; ++level) {
+            p.bricks = region_starts_are_bricks(dimension, level, p.start[static_cast<size_t>(level)]);
+        }
+        return p;
+    };
     RegionPlan plan;
     bool have = false;
     if (region_count_is_cubic(dimension, num_procs)) {
@@ -294,9 +381,20 @@ inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int
             t.resize(static_cast<size_t>(n) + 1);
             for (int64_t i = 0; i <= n; ++i) t[static_cast<size_t>(i)] = i * (boxes / n);
         }
-        if (weights.empty()) return plan;
+        if (weights.empty() && !keep_ranks) return plan;
         plan.leaf_imbalance = region_leaf_imbalance(dimension, plan.start, weights, &plan.empty_region);
-        if (good(plan)) return plan;
+        if (good(plan)) {
+            // keeping ranks: a layout with more on the coarse levels at this
+            // threshold where it is as even (other thresholds keep fewer)
+            if (keep_ranks) {
+                const std::vector<int32_t> count = counts_at(threshold);
+                if (count != plan.count) {
+                    RegionPlan p = build(count, threshold);
+                    if (!p.start.empty() && good(p)) return p;
+                }
+            }
+            return plan;
+        }
         have = true;
     }
     // the caller's threshold while the leaf regions are within
@@ -306,18 +404,11 @@ inline RegionPlan plan_regions(int dimension, int num_levels, int num_procs, int
     const int64_t leaf_boxes = int64_t{1} << (dimension * (num_levels - 1));
     std::vector<int32_t> seen;
     for (int64_t t = threshold; t <= std::max(threshold, leaf_boxes); t *= f) {
-        RegionPlan p;
-        p.count = region_counts(dimension, num_levels, num_procs, t);
-        if (p.count == seen) continue;
-        seen = p.count;
-        p.threshold = t;
-        p.start = region_starts(dimension, p.count, weights);
+        const std::vector<int32_t> count = counts_at(t);
+        if (count == seen) continue;
+        seen = count;
+        RegionPlan p = build(count, t);
         if (p.start.empty()) continue;
-        p.leaf_imbalance = region_leaf_imbalance(dimension, p.start, weights, &p.empty_region);
-        p.bricks = region_count_is_cubic(dimension, num_procs);
-        for (int level = 0; p.bricks && level < num_levels; ++level) {
-            p.bricks = region_starts_are_bricks(dimension, level, p.start[static_cast<size_t>(level)]);
-        }
         if (!have || better(p, plan)) plan = p;
         have = true;
         if (good(p)) break;

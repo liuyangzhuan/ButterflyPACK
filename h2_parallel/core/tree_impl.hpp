@@ -423,11 +423,12 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree,
             std::to_string(1 << tree->dimension) + "^k (any count with H2_unstructured=1)");
     }
     // the counts and ranges of every level (region_partition.hpp), the
-    // ranges split by the points in the boxes where the caller gave them (the
-    // unstructured path); possibly with the first reduction a level finer
-    // than reduction_threshold asks, so that the leaf regions are even
+    // ranges split by the points in the boxes where the caller gave them, and
+    // more ranks kept on the coarse levels (the unstructured path, any rank
+    // count); possibly with the first reduction a level finer than
+    // reduction_threshold asks, so that the leaf regions are even
     const RegionPlan region_plan = plan_regions(tree->dimension, tree->num_levels, tree->mpi_size,
-                                                tree->reduction_threshold, region_weights);
+                                                tree->reduction_threshold, region_weights, tree->any_process_count);
     const std::vector<int32_t>& region_count = region_plan.count;
     const std::vector<std::vector<int64_t>>& region_start_of = region_plan.start;
     if (tree->mpi_rank == 0 && (!region_weights.empty() || !region_plan.bricks)) {
@@ -554,7 +555,9 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree,
             case ReductionPattern::UNIFORM:
                 // fewer than reduction_threshold boxes per process of the level
                 // below: prev_active / 2^d, rounded up (region_counts; the same
-                // as before for (2^d)^k)
+                // as before for (2^d)^k), or on the unstructured path the
+                // largest prev_active / k, k <= 2^d, that keeps the leaf
+                // regions even (region_counts_keeping_ranks)
                 lvl.num_active_processes = region_count[static_cast<size_t>(level)];
                 break;
             case ReductionPattern::ADAPTIVE:

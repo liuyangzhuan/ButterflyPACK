@@ -5935,6 +5935,64 @@ the points did not move - are as before.  The levers left are compact
 ranges (fewer boundary boxes) or weights that count boundary boxes; and,
 for the coarse levels, a planner that keeps more ranks there.
 
+#### Coarse levels keep more ranks (2026-10-15)
+
+Limit 1 above, as decided.  The reduction rule divides a level's count by
+2^d where it has fewer than reduction_threshold boxes a rank, so 12 ranks
+keep 2 on level 2 of a 3D tree where 8 keep 8.  Keeping the most ranks that
+have the threshold's boxes (12 -> 8) does not work with whole parent boxes:
+12 regions under 8 are groups of 1 and 2, each group under one level-1 box,
+and a leaf region alone in its group is 1.5x the mean.  It is a matter of
+factors: 12 -> 4 puts groups of 3 under 2 level-1 boxes each (1.125).
+
+1. *The counts* (`region_counts_keeping_ranks`, the unstructured path):
+   leaf first, where the rule reduces, the largest ceil(count / k), k = 2 ..
+   2^d - 1, that leaves the threshold's boxes a rank (at most 2^d (level-1)
+   ranks, so level 1 stays one) and whose layout - the levels above by the
+   rule - has its leaf regions within 1.15 of the mean or no worse than the
+   rule's (and no empty region the rule avoids); else the rule.  The
+   structured path keeps the rule; (2^d)^k in 3D at threshold 8 gives the
+   rule's counts, so the bricks (other thresholds, and 2D, may keep more).
+   `region_starts` takes any reduction now (it required ceil(below / 2^d)).
+2. *The device reduction* (device_reduction.hpp) took the bricks only: it
+   found a parent's child rank and owner from the brick arithmetic.  It uses
+   the levels' ranges now (`owner_rank_of`) and needs only that every child
+   region is whole parent boxes, which the unstructured layouts are; so their
+   reductions merge on the device too (Laplace 192^3 on 12 ranks: 7.90 ->
+   7.03 s, bitwise the host path's numbers).
+
+The self-test adds the counts keeping ranks (3114 layouts without weights,
+3114 with the shell): every invariant, level 1 on one rank, 3D (2^d)^k at
+threshold 8 the bricks; more ranks on some level in 2387 / 2325, fewer on
+none / one; never over 1.15 and over the rule.  3D, 6 levels, ranks by
+level: 12: 1 1 4 12 12 12 (rule 1 1 2 ...); 16: 1 1 8 16 16 16 (1 1 2 ...);
+36: 1 1 8 36 36 36 at threshold 8 (the rule needs 64: 1 1 1 5 36 36);
+192 (8 levels): 1 1 8 64 192 ... (1 1 3 24 192 ...).
+
+Runs (GPU, 40 GB A100s; factor times):
+
+| | before (rule, host reduction) | keeping ranks | + device reduction |
+|---|---|---|---|
+| Laplace 192^3, 12 ranks | 8.73 s (1 1 2 12 12 12) | 7.90 s (1 1 4 12 12 12) | 7.03 s |
+| Laplace 192^3, 16 ranks | 6.27 s (1 1 2 16 16 16) | 5.62 s (1 1 8 16 16 16) | 5.30 s |
+| 512K sphere, 12 ranks | 3.42-3.58 s (3 runs) | 3.15 s (1 1 4 12 12 12) | 3.00 s |
+| Laplace 96^3, 12 ranks | 2.24 s (1 1 2 12 12) | | 1.82 s (1 1 4 12 12) |
+
+8 ranks bitwise as before (Laplace 192^3, the 128K sphere with its solution
+checksum).  The 12-rank layouts change the numbers within the compression
+(192^3 logdet -89253588.465 against -89253588.472 on 8 ranks; 96^3 the CPU
+path agrees with the GPU to 2e-16, acc_backward 5e-16 / 8e-16).
+
+**The RBF case of limit 1 is not fixed.**  RBF3D_H2Test (64^3 scattered,
+tol 1e-6, compressed) on 12 ranks now gets past level 2 (4 ranks, 10.3 GB at
+its peak, where 2 ranks asked for 17.8 GB) and runs out in level 2's
+transition: rank 0 restores 15.7 GB of packed fill sources and then asks
+for 7.6 GB more (G;P).  A 4-rank run has the same level-2 regions and stops
+at the same request (15.6 + 7.4 GB): level 2 of this problem needs 8 ranks,
+which 12 can have only with a leaf region 1.5x the mean.  What would fix it:
+the transition holding fewer restores at once (its chunking), or a planner
+that weighs a coarse level's memory against the leaf's balance.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

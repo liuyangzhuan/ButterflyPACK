@@ -36,6 +36,18 @@
 namespace fmm {
 namespace gpu {
 
+// Whether every region of a level is whole boxes of the level above (a
+// parent's children on one rank): the condition of the device reduction.
+template<typename CoordType, typename DataType>
+bool regions_hold_whole_parents(const TreeLevel<CoordType, DataType>& level, int dimension) {
+    const int64_t nc = morton::children_per_box(dimension);
+    if (level.region_start.size() < 2) return false;
+    for (const int64_t s : level.region_start) {
+        if (s % nc != 0) return false;
+    }
+    return true;
+}
+
 struct ReductionStats {
     double total = 0.0, plan = 0.0, pack = 0.0, mpi = 0.0, unpack = 0.0;
     double bytes_sent = 0.0, bytes_received = 0.0;
@@ -76,14 +88,14 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
         throw std::runtime_error("reduce_parent_blocks: an active rank neither sends nor receives");
     }
     // the rank holding a parent's children (all in one region of the child
-    // level), and a parent's owner at the parent level
-    const RegionLayout Lc = RegionLayout::of(dim, level.level, level.num_active_processes);
-    const RegionLayout Lp = RegionLayout::of(dim, level.level - 1, parent_level.num_active_processes);
-    if (!Lc.uniform || !Lp.uniform || !level.regions_cubic || !parent_level.regions_cubic) {
-        throw std::runtime_error("reduce_parent_blocks: the levels' regions are not uniform cubes");
+    // level: its regions are whole parent boxes), and a parent's owner at the
+    // parent level, by the levels' ranges (equal cubes or not)
+    if (!regions_hold_whole_parents(level, dim)) {
+        throw std::runtime_error("reduce_parent_blocks: a region of level " + std::to_string(level.level) +
+                                 " splits a parent box");
     }
-    auto child_rank_of = [&](int64_t pm) { return level.morton_to_rank.at(static_cast<int>(Lc.region_of(pm * nc))); };
-    auto owner_of = [&](int64_t pm) { return parent_level.morton_to_rank.at(static_cast<int>(Lp.region_of(pm))); };
+    auto child_rank_of = [&](int64_t pm) { return level.owner_rank_of(pm * nc); };
+    auto owner_of = [&](int64_t pm) { return parent_level.owner_rank_of(pm); };
     // whether this rank contributes its copy of pair (lo, hi): a local pair
     // always; a pair with another child rank's parent when that rank has
     // another owner, or when this rank holds the lower parent
