@@ -30,6 +30,11 @@ extern "C" {
  * match (real, symmetric). */
 void laplace3d_gpu_register(void** bmat, double scale, double diagonal);
 
+/* RBF3D_H2Test_Driver.cpp: scale * exp(-|x - y|^2 / (2 l^2)) with length_scale > 0,
+ * and scale / |x - y| otherwise; `diagonal` when the ids match (real, symmetric). */
+void rbf3d_gpu_register(void** bmat, double scale, double diagonal,
+                        double length_scale);
+
 /* VIE3D_H2Test_Driver.cpp with scaleGreen 1: a e^{i k r} / (four_pi r), and
  * `self` when the ids match (complex, symmetric). */
 void vie3d_gpu_register_helmholtz(void** bmat, double k, double a_re, double a_im, double self_re, double self_im,
