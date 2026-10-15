@@ -53,10 +53,12 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_structure_unstructu
         parent_boxes, parent_level_num, occupied_topology);
 
     // ===== Step 2: Check boundary conditions =====
-    // if no reduction happen, then no multiplier needed, otherwise multiply by 4 (2D) or 8 (3D)
-    int transition_multiplier = (parent_level.num_active_processes == child_level.num_active_processes) ? 1 : num_children;
-    int64_t start_accounted_for_reduction = parent_level.rank_to_morton[child_level.parent_level_owner] * num_parent_boxes * transition_multiplier;
-    int64_t end_accounted_for_reduction = (parent_level.rank_to_morton[child_level.parent_level_owner] + 1) * (num_parent_boxes) * transition_multiplier - 1;
+    // the range of the parent region these parents go to (this rank's, or with
+    // a reduction its group's): the parent level's region ranges
+    // (region_partition.hpp; the equal ones for (2^d)^k ranks)
+    const int parent_region = parent_level.rank_to_morton.at(child_level.parent_level_owner);
+    const int64_t start_accounted_for_reduction = parent_level.region_start.at(static_cast<size_t>(parent_region));
+    const int64_t end_accounted_for_reduction = parent_level.region_start.at(static_cast<size_t>(parent_region) + 1) - 1;
     for (int64_t parent_idx : occupied_parent_indices) {
         auto& parent_box = parent_boxes[static_cast<size_t>(parent_idx)];
         parent_box.on_boundary = check_boundary_condition(

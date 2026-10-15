@@ -828,10 +828,9 @@ namespace solve_detail {
 
 template<typename CoordType, typename DataType>
 int owner_of(ParallelTree<CoordType, DataType>* tree, TreeLevel<CoordType, DataType>& lvl, int level, int64_t morton) {
-    const std::vector<uint64_t> single = {static_cast<uint64_t>(morton)};
-    const std::vector<uint32_t> region =
-        morton::assign_to_processes_nd(tree->dimension, single, lvl.num_active_processes, 1u << level);
-    return lvl.morton_to_rank.at(static_cast<int>(region[0]));
+    (void)tree;
+    (void)level;
+    return lvl.owner_rank_of(morton);  // (the level's region ranges)
 }
 
 // Color waves as the host solve bins them: boundary boxes by color, then

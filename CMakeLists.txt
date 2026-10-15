@@ -668,6 +668,10 @@ target_include_directories(h2_halo_geometry_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_
 # construction against the global one; h2_gpu/GPU_CA_PLAN.md, M5e); not built by default: make h2_owner_graph_test
 add_executable(h2_owner_graph_test EXCLUDE_FROM_ALL h2_parallel/tests/owner_graph_test.cpp)
 target_include_directories(h2_owner_graph_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
+# Self-test of the regions of any number of ranks (h2_parallel/core/region_partition.hpp, the
+# unstructured Color path; h2_gpu/GPU_CA_PLAN.md); not built by default: make h2_region_partition_test
+add_executable(h2_region_partition_test EXCLUDE_FROM_ALL h2_parallel/tests/region_partition_test.cpp)
+target_include_directories(h2_region_partition_test PRIVATE ${CMAKE_SOURCE_DIR}/h2_parallel/core)
 
 set_target_properties(butterflypack PROPERTIES
   VERSION ${PROJECT_VERSION}

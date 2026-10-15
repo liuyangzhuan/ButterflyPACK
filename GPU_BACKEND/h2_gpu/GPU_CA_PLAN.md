@@ -5763,6 +5763,95 @@ counted wherever compressed: an upper bound).  Forced on every second
 operator (a temporary switch), the 8 blocks took 4 shared and 4 own
 scratches, released cleanly, and the numbers were bitwise the shared run's.
 
+#### Any number of ranks on the unstructured Color path (2026-10-15)
+
+`H2_unstructured=1` now runs on any number of ranks (CPU and GPU, Color
+only).  The structured loop and the CA modes keep (2^d)^k and refuse
+anything else ("3D tree requires process count to be 8^k (any count with
+H2_unstructured=1)"); a CA level on such a layout throws in
+`compute_assisting_boxes`.
+
+**The layout** (`h2_parallel/core/region_partition.hpp`).  A rank's boxes on
+a level are still one contiguous Morton range, but the ranges need not be
+equal cubes: a level stores its count + 1 range starts (`TreeLevel::
+region_start`) and finds a box's region by binary search (`region_of`,
+`owner_rank_of`).  Nothing grows with the number of boxes; the largest new
+structure is the P + 1 starts of a level, like `morton_to_rank`.
+
+1. *Counts*: the old reduction rule, rounded up - all ranks at the leaf; a
+   level with fewer than the threshold's boxes a rank has the level below's
+   count over 2^d, rounded up (12 ranks in 3D: 12 -> 2 -> 1).  The groups are
+   as even as they can be (`region_first_child`: 50 under 7 is groups of 7
+   and 8, not six of 8 and one of 2).
+2. *Ranges, top down*: where the count does not change a region's range is
+   its parent range times 2^d (a box's children on its rank).  Where it does
+   (a reduction), the parent region's boxes are divided among its child
+   regions in whole boxes of the parent's level, in proportion to the leaf
+   regions under each - so each child rank builds whole parent boxes from
+   its own children, which the transitions (CPU and GPU), the H2 build and
+   the solve's gathers all assume (option a3 of the discussion).
+3. *Threshold*: whole parent boxes are coarse where a reduction happens, so
+   `plan_regions` takes the first reduction a level finer (threshold x 2^d)
+   while the largest leaf region is more than 1.15 of the mean (50 ranks in
+   3D: 2.3x at the caller's threshold, 1.07 at 64).  Rank 0 prints the
+   imbalance, the threshold if raised and the ranks of every level.
+4. *(2^d)^k ranks*: the caller's threshold, the old counts and the equal
+   ranges - the bricks as before, and the rest of the code (CA, structured,
+   the device reduction) sees what it always saw.  A non-uniform layout
+   takes the host reduction path (`device_reduction_possible`).
+
+**What changed besides the layout.**  The owner lookups (the generator,
+factor-update, solve and matvec exchanges; `device_solve`, the level
+eliminator) go through `owner_rank_of` in place of the brick arithmetic;
+`distribute_boxes` uses the starts; `scatter_solution_to_children` splits a
+parent by its child ranks' actual ranges; the unstructured parent
+transition's boundary range comes from the parent region's starts.  The
+one-hop neighbour ranks of a non-cubic level (`region_peers`) are the owners
+of the boxes within 3 hops of the rank's boundary boxes, found from its own
+boxes (no global map): two hops cover the factorization's assisting boxes,
+three the H2 interaction lists.  On the layouts measured 3 added no peer
+over 2.  The CA-only sites are unchanged.
+
+**Checks.**  `make h2_region_partition_test` (h2_parallel/tests): 3114
+layouts (2D and 3D, every depth, 1-300 ranks) against the invariants above,
+the (2^d)^k layouts against the old counts and ranges; 0 failures, worst
+leaf imbalance 1.178 with 64 or more leaf boxes a rank.  8 ranks bitwise as
+before (structured and unstructured Laplace 192^3 compressed, the 128K
+sphere's logdet and solution checksum).  Unstructured Laplace 96^3, one GPU
+a rank, tol 1e-3, every acc_backward ~1e-15:
+
+| ranks | logdet | acc_mvp | layout | factor |
+|---|---|---|---|---|
+| 8 | -9928892.0403 | 7.47e-4 | bricks | 1.37 s |
+| 12 | -9928891.9501 | 8.34e-4 | 1.125; ranks 1 1 2 12 12 | 2.24 s |
+| 6 | -9928892.0068 | 6.96e-4 | threshold 8 -> 64; 1.03 | 2.46 s |
+| 16 | -9928891.9586 | | 1.0 | 2.46 s |
+| 5 | -9928892.0029 | | threshold -> 64 | 3.27 s |
+| 3 | -9928892.0434 | | 1.125 | 2.77 s |
+
+The CPU path on 12 and 6 ranks agrees with the GPU to ~1e-16; 3 columns on
+12 ranks are right; `--precon 2` on 12 ranks converges (BiCGSTAB 252
+iterations GPU, 242 CPU, 205 on 8; the compressed operator's acc_mvp is the
+same 7.9477e-4, the solutions agree to 5e-8).  The EMSURF sphere (128K):
+acc_mvp 1.40e-4 / 1.87e-4 / 1.58e-4 on 8 / 12 / 6 ranks, acc_backward
+4e-14 to 1e-13, logdets within 6e-5 relative.  The CPU-only build compiles.
+
+**Limits, not addressed.**
+1. *Coarse levels get fewer ranks* than with the next (2^d)^k count below:
+   RBF3D_H2Test at tol 1e-6 on 12 ranks runs out of device memory at level 2
+   (17.8 GB on rank 0), which has 2 ranks where 8 ranks keep 8.  A planner
+   that reduces by factors of the count (12 -> 6 -> 3 ...) would keep more.
+2. *More boundary*: Laplace 192^3 compressed factors in 8.73 s on 12 ranks
+   against 7.51 s on 8 and 6.27 s on 16.  The leaf's transport doubles (1.42
+   against 0.68 s, MPI wait): 42% of a 12-rank region's boxes are boundary
+   boxes (18% of a brick on 8, 34% on 16), up to 11 peers against 7.
+3. *Boxes, not work, are balanced*: on a sparse tree (the sphere: 14-28% of
+   the leaf boxes occupied) equal box ranges are not equal loads - next to
+   discuss (weighting by occupancy).
+4. 2D is checked by the unit test only (no 2D unstructured driver), and the
+   occupied-leaf allgather of `discover_occupied_topology` (from before) is
+   still global.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

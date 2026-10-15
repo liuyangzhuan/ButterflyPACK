@@ -444,13 +444,8 @@ int distributed_leaf_owner(
     throw std::runtime_error(
         "distributed_leaf_owner: unsupported leaf box distribution");
   }
-  const int64_t quotient = boxes / processes;
-  const int64_t remainder = boxes % processes;
-  const int64_t enlarged_span = remainder * (quotient + 1);
-  const int region = morton < enlarged_span
-      ? static_cast<int>(morton / (quotient + 1))
-      : static_cast<int>(remainder +
-            (morton - enlarged_span) / quotient);
+  // the leaf's region ranges (region_partition.hpp: equal for (2^d)^k ranks)
+  const int region = leaf.region_of(morton);
   const auto owner = leaf.morton_to_rank.find(region);
   if (owner == leaf.morton_to_rank.end()) {
     throw std::runtime_error(
@@ -807,7 +802,8 @@ int bpack_initiate_distributed64(
       fmm::create_uniform_tree<CoordType, DataType>(
           nullptr, 0, options.num_levels, bounds, options.dimension,
           solver->comm, options.reduction_threshold, options.CA_level,
-          unused_index_map));
+          unused_index_map, fmm::ReductionPattern::UNIFORM,
+          options.unstructured != 0));  // (any rank count: unstructured Color only)
   tree->num_points = options.N;
   tree->id_neighborhood_radius = options.id_neighborhood_radius;
   tree->id_proxy_mode = options.id_proxy_mode;
@@ -870,7 +866,9 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
           H2_solver->comm,
           options.reduction_threshold,
           options.CA_level,
-          idx_map));
+          idx_map,
+          fmm::ReductionPattern::UNIFORM,
+          options.unstructured != 0));  // (any rank count: unstructured Color only)
 
   H2_solver->tree = std::move(tree); 
 

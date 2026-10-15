@@ -2447,10 +2447,7 @@ private:
     int owner_of(int64_t morton) {
         auto it = owner_cache_.find(morton);
         if (it != owner_cache_.end()) return it->second;
-        const std::vector<uint64_t> single = {static_cast<uint64_t>(morton)};
-        const std::vector<uint32_t> region = morton::assign_to_processes_nd(
-            tree_->dimension, single, level_.num_active_processes, 1u << level_index_);
-        const int rank = level_.morton_to_rank.at(static_cast<int>(region[0]));
+        const int rank = level_.owner_rank_of(morton);  // (the level's region ranges)
         owner_cache_.emplace(morton, rank);
         return rank;
     }

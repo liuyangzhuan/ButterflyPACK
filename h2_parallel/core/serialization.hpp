@@ -3319,12 +3319,9 @@ static int owner_rank_of_morton(
     int level,
     int64_t morton)
 {
-    const uint32_t grid_size = 1u << level;
-    std::vector<uint64_t> single = { static_cast<uint64_t>(morton) };
-    std::vector<uint32_t> region = morton::assign_to_processes_nd(
-        tree->dimension, single, lvl.num_active_processes, grid_size);
-    const int region_id = static_cast<int>(region[0]);
-    return lvl.morton_to_rank.at(region_id);
+    (void)tree;
+    (void)level;
+    return lvl.owner_rank_of(morton);  // (the level's region ranges)
 }
 
 template <typename CoordType, typename DataType>
@@ -3335,6 +3332,9 @@ std::vector<int> compute_one_hop_neighbor_ranks(
 {
     if (!lvl.is_process_active) return {};
     if (lvl.my_morton_id < 0) throw std::runtime_error("my_morton_id < 0 on active process");
+    // regions of unequal length (any rank count): the owners of the boxes
+    // within two hops of this rank's (compute_assisting_boxes)
+    if (!lvl.regions_cubic) return lvl.region_peers;
 
     const uint32_t P = static_cast<uint32_t>(lvl.num_active_processes);
 
@@ -3419,15 +3419,9 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     std::unordered_map<int, std::vector<int64_t>> req_to_send;
     req_to_send.reserve(neighbor_ranks.size());
 
-    const uint32_t grid_size = 1u << level;
-
-    auto owner_of_morton = [&](int64_t morton_idx) -> int {
-        std::vector<uint64_t> single = { static_cast<uint64_t>(morton_idx) };
-        std::vector<uint32_t> region = morton::assign_to_processes_nd(
-            tree->dimension, single, lvl.num_active_processes, grid_size);
-        const int rid = static_cast<int>(region[0]);
-        return lvl.morton_to_rank.at(rid);
-    };
+    // (the level's region ranges: equal cubes, or unequal ranges for any
+    // rank count - region_partition.hpp)
+    auto owner_of_morton = [&](int64_t morton_idx) -> int { return lvl.owner_rank_of(morton_idx); };
 
     std::unordered_set<int> neigh_set(neighbor_ranks.begin(), neighbor_ranks.end());
 
@@ -4924,7 +4918,7 @@ void form_near_updates_from_generators(
  *  2) Partition locally-produced updates into per-destination packets:
  *      - Step 7 REPLACE: sent only to owner(target_box)
  *      - Step 9 ADD: sent to owner(lo) and/or owner(hi); sent once if both endpoints share owner
- *     Ownership is derived from assign_to_processes_nd followed by lvl.morton_to_rank.
+ *     Ownership is the level's region (TreeLevel::region_of) followed by lvl.morton_to_rank.
  *     (This routine enforces the assumption that all destinations are within 1-hop neighbor ranks;
  *      it throws if violated.)
  *  3) Pairwise exchange with each neighbor:
@@ -4981,15 +4975,9 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     const std::vector<int> neighbor_ranks = compute_one_hop_neighbor_ranks(tree, lvl, level);
     std::unordered_set<int> neigh_set(neighbor_ranks.begin(), neighbor_ranks.end());
 
-    const uint32_t grid_size = 1u << level;
-
-    auto owner_of_morton = [&](int64_t morton_idx) -> int {
-        std::vector<uint64_t> single = { static_cast<uint64_t>(morton_idx) };
-        std::vector<uint32_t> region = morton::assign_to_processes_nd(
-            tree->dimension, single, lvl.num_active_processes, grid_size);
-        const int rid = static_cast<int>(region[0]);
-        return lvl.morton_to_rank.at(rid);
-    };
+    // (the level's region ranges: equal cubes, or unequal ranges for any
+    // rank count - region_partition.hpp)
+    auto owner_of_morton = [&](int64_t morton_idx) -> int { return lvl.owner_rank_of(morton_idx); };
 
     // Build outgoing packets per destination rank, while retaining locally-owned
     // updates so they still flow through the unified apply path below.
@@ -5447,8 +5435,6 @@ void gather_boxes_solve(
     MPI_Comm_rank(tree->comm, &rank);
     MPI_Comm_size(tree->comm, &size);
 
-    uint32_t grid_size = 1 << level;
-
     auto abort_on_mpi_error = [&](int err,
                                   const char* op,
                                   int peer_rank,
@@ -5569,13 +5555,7 @@ void gather_boxes_solve(
     std::unordered_map<int, std::vector<RequestInfo>> solve_requests_to_send;
 
     for (const auto& [morton, idx] : lvl.ghost_and_assisting_box_points_for_solve_map) {
-        std::vector<uint64_t> single_box = {static_cast<uint64_t>(morton)};
-        const std::vector<uint32_t> morton_ids =
-            morton::assign_to_processes_nd(
-                tree->dimension, single_box,
-                lvl.num_active_processes, grid_size);
-
-        int morton_region_id = static_cast<int>(morton_ids[0]);
+        int morton_region_id = lvl.region_of(morton);  // (the level's region ranges)
 
         auto rank_it = lvl.morton_to_rank.find(morton_region_id);
         if (rank_it == lvl.morton_to_rank.end()) {
@@ -5974,15 +5954,10 @@ std::chrono::high_resolution_clock::duration transport_and_apply_solve_updates_o
     if (local_count < 0 || (int64_t)level_solve_data.size() != local_count)
         throw std::runtime_error("transport_and_apply_solve_updates_onehop: solve_data[level] size mismatch");
 
-    const uint32_t grid_size = 1u << level_index;
-
     auto owner_of_morton = [&](int64_t morton_idx) -> int {
-        std::vector<uint64_t> single_box = { (uint64_t)morton_idx };
-        std::vector<uint32_t> region = morton::assign_to_processes_nd(
-            tree->dimension, single_box,
-            lvl.num_active_processes, grid_size);
-
-        const int morton_region_id = (int)region[0];
+        // (the level's region ranges: equal cubes, or unequal ranges for any
+        // rank count - region_partition.hpp)
+        const int morton_region_id = lvl.region_of(morton_idx);
 
         auto it = lvl.morton_to_rank.find(morton_region_id);
         if (it == lvl.morton_to_rank.end())

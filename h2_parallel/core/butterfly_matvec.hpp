@@ -328,13 +328,9 @@ std::unordered_map<int64_t, std::vector<DataType>> exchange_h2_vectors_onehop(
     const std::unordered_set<int> neighbor_set(
         neighbor_ranks.begin(), neighbor_ranks.end());
 
-    const uint32_t grid_size = 1u << level_number;
-    auto owner_of_morton = [&](int64_t morton_index) {
-        std::vector<uint64_t> one{static_cast<uint64_t>(morton_index)};
-        const auto regions = morton::assign_to_processes_nd(
-            tree->dimension, one, level.num_active_processes, grid_size);
-        return level.morton_to_rank.at(static_cast<int>(regions.front()));
-    };
+    // (the level's region ranges: equal cubes, or unequal ranges for any
+    // rank count - region_partition.hpp)
+    auto owner_of_morton = [&](int64_t morton_index) { return level.owner_rank_of(morton_index); };
 
     std::sort(needed_remote_mortons.begin(), needed_remote_mortons.end());
     needed_remote_mortons.erase(

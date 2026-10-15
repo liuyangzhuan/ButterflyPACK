@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <mpi.h>
 #include "morton.hpp"
+#include "region_partition.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <omp.h>
@@ -1260,6 +1261,17 @@ struct TreeLevel {
     std::unordered_map<int, int> morton_to_rank; ///< Morton region ID → MPI rank
     std::unordered_map<int, int> rank_to_morton; ///< MPI rank → Morton region ID
     int my_morton_id;                  ///< This process's Morton region (-1 if inactive)
+    /// Region i holds boxes [region_start[i], region_start[i + 1]) of the level
+    /// (num_active_processes + 1 entries, region_partition.hpp): equal cubes
+    /// for a count of (2^dimension)^k, unequal Morton ranges otherwise
+    std::vector<int64_t> region_start;
+    /// Whether the regions are equal cubes (bricks): the count is
+    /// (2^dimension)^k.  Else only the unstructured Color path runs the level.
+    bool regions_cubic = true;
+    /// The ranks this one exchanges with on the level: the owners of the
+    /// boxes within two hops of its boxes (compute_one_hop_neighbor_ranks;
+    /// filled for a level whose regions are not cubes)
+    std::vector<int> region_peers;
     ProcessPairCommunicationSchedule process_pair_schedule; ///< Cached one-peer-per-phase schedule for deterministic pairwise communication
     
     // ========== Inter-Level Communication for Reduction ==========
@@ -1303,6 +1315,10 @@ struct TreeLevel {
     {
         return (morton_index >= local_morton_start && morton_index <= local_morton_end);
     }
+
+    /// The region of box `morton` on this level, and the rank that holds it
+    int32_t region_of(int64_t morton) const { return fmm::region_of_box(region_start, morton); }
+    int owner_rank_of(int64_t morton) const { return morton_to_rank.at(region_of(morton)); }
 
 
 };
@@ -1521,6 +1537,7 @@ struct ParallelTree {
     // Process reduction configuration (Section 5.3-5.4)
     ReductionPattern reduction_pattern;  ///< Reduction strategy
     int64_t reduction_threshold;         ///< Boxes/process threshold for reduction
+    bool any_process_count = false;      ///< Any rank count (unstructured Color); else (2^dimension)^k
     int CA_level;                        ///< First factorization level using CA
     int id_neighborhood_radius;          ///< Diagnostic ID row-neighborhood radius
     int id_proxy_mode;                   ///< 0: none, 1: geometric surface, 2: adaptive sampling

@@ -768,18 +768,29 @@ void scatter_solution_to_children(
         
         int num_children_processes = parent_level.children_senders.size();
         int64_t num_parent_boxes = parent_solve_data.size();
-        int64_t boxes_per_child = num_parent_boxes / num_children_processes;
+        // each child process's parent boxes: its range of the child level over
+        // 2^d (whole parent boxes, region_partition.hpp; equal shares for
+        // (2^d)^k processes), in the children_senders (Morton) order
+        const int64_t children_per_parent = morton::children_per_box(dimension);
+        std::vector<int64_t> child_first(static_cast<size_t>(num_children_processes) + 1, 0);
+        for (int proc_idx = 0; proc_idx < num_children_processes; ++proc_idx) {
+            const int child_region = child_level.rank_to_morton.at(parent_level.children_senders[static_cast<size_t>(proc_idx)]);
+            const int64_t child_boxes = child_level.region_start.at(static_cast<size_t>(child_region) + 1) -
+                                        child_level.region_start.at(static_cast<size_t>(child_region));
+            child_first[static_cast<size_t>(proc_idx) + 1] = child_first[static_cast<size_t>(proc_idx)] + child_boxes / children_per_parent;
+        }
+        if (child_first.back() != num_parent_boxes) {
+            throw std::runtime_error("scatter_solution_to_children: the child processes' ranges hold " +
+                                     std::to_string(child_first.back()) + " parent boxes, this process " +
+                                     std::to_string(num_parent_boxes));
+        }
 
-        
-        
-        for (size_t proc_idx = 0; proc_idx < num_children_processes; ++proc_idx) {
+        for (size_t proc_idx = 0; proc_idx < static_cast<size_t>(num_children_processes); ++proc_idx) {
             int child_rank = parent_level.children_senders[proc_idx];
             
-            
             // Calculate range of parent boxes for this child process
-            int64_t start_idx = proc_idx * boxes_per_child;
-            int64_t end_idx = (proc_idx == num_children_processes - 1) ? 
-                              num_parent_boxes : (proc_idx + 1) * boxes_per_child;
+            int64_t start_idx = child_first[proc_idx];
+            int64_t end_idx = child_first[proc_idx + 1];
             
             
             if (child_active && child_rank == rank) {
