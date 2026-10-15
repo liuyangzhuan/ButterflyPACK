@@ -2729,6 +2729,20 @@ if(myrank==master_rank){
 
     z_c_bpack_md_iter_usermatvec_precon(&Ndim, x_s.data(),b_s.data(),myseg_s2s,&nvec,&option_bf, &stats_bf_s2s, &ptree_bf, &kerquant_s2s, &C_FuncHMatVec_MD, &C_FuncApplyDiagPrecond, quant_ptr_bf_s2s);
     z_c_bpack_deletekernelquant(&kerquant_s2s);
+    {
+      // the true relative residual ||b - A x|| / ||b|| (with bdiag_precon=1 the iteration's error is
+      // that of the preconditioned system)
+      vector<_Complex double> ax_s(x_s.size(),{0.0,0.0});
+      C_FuncHMatVec_MD(&Ndim,"N",myseg_s2s,myseg_s2s,&nvec,x_s.data(),ax_s.data(),quant_ptr_bf_s2s);
+      double sums[2] = {0.0, 0.0};
+      for(size_t i=0; i<x_s.size(); i++){
+        _Complex double r = b_s[i]-ax_s[i];
+        sums[0] += __real__ r*__real__ r + __imag__ r*__imag__ r;
+        sums[1] += __real__ b_s[i]*__real__ b_s[i] + __imag__ b_s[i]*__imag__ b_s[i];
+      }
+      MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      if(myrank==master_rank) std::cout<<"True relative residual ||b - A x|| / ||b||: "<<(sums[1]>0.0 ? sqrt(sums[0]/sums[1]) : 0.0)<<std::endl;
+    }
 
     for (int i=0; i<product(myseg_s2s,Ndim); i++){
       if(quant_ptr_bf_s2s->LocalScatterIndex(i) <= 0){
