@@ -5595,8 +5595,17 @@ On a sparse tree - the EMSURF sphere, 1160 of 4096 leaf boxes occupied at
    wave/generator on this rank" for one next to a two-hop pair.  With
    occupancy a full-rank box now sends its generator without fill (wave and
    one-hop list), as the host transport always did; the receiver already took
-   such a generator ("full rank: nothing to add").  Structured levels are left
-   as they were.  It showed with compression only because compression changed
+   such a generator ("full rank: nothing to add").  Structured levels were
+   left as they were, and then needed it too (ea023e6, 2026-10-15): the
+   structured loop marks other ranks' boxes eliminated by their colour, so
+   RBF3D_H2Test (Gaussian, length scale 0.05, tol 1e-10, 8 ranks: every leaf
+   box and some level-3 boxes full rank) stopped the same way.  Every Color
+   level sends them now; Laplace 192^3 bitwise unchanged.  Rank 0 needs
+   nothing: the device ID keeps column 0 with a zero row of T for a zero
+   target, and its relative rank rule gives a nonzero one rank >= 1 (RBF at
+   length scale 0.001, every sketch exactly zero: acc_mvp 2.6e-15).  That
+   RBF case at tol 1e-10 or 1e-8 then runs out of device memory at level 2
+   (level-3 skeletons 499 and 436 of 512: hardly compressible); 1e-6 runs.  It showed with compression only because compression changed
    the ranks: 56 full-rank leaf boxes uncompressed, 176 compressed (one rank).
    Uncompressed runs are bitwise unchanged (128K, 8 ranks: logdet and
    solution checksum; Laplace 192^3 both paths).
