@@ -410,6 +410,10 @@ public:
     size_t used() const { return used_; }
     size_t largest_free() const { return by_size_.empty() ? 0 : by_size_.rbegin()->first; }
     size_t peak() const { return peak_; }
+    // The high-water since the current operator build began (begin_operator_build;
+    // the levels' reset_peak leaves it alone).
+    size_t build_peak() const { return build_peak_; }
+    void reset_build_peak() { build_peak_ = used_; }
     // the allocator's work: free ranges now, transient takes and the ranges they scanned from the top
     size_t free_ranges() const { return free_.size(); }
     size_t take_calls() const { return take_calls_; }
@@ -545,6 +549,7 @@ public:
 
 private:
     void note_peak() {
+        if (used_ > build_peak_) build_peak_ = used_;
         if (used_ <= peak_) return;
         peak_ = used_;
         resident_at_peak_ = resident_used_;
@@ -633,6 +638,7 @@ private:
     size_t capacity_ = 0;
     size_t used_ = 0;
     size_t peak_ = 0;
+    size_t build_peak_ = 0;
     size_t take_calls_ = 0, take_scans_ = 0;
     size_t alloc_calls_ = 0, free_calls_ = 0;
     double alloc_seconds_ = 0.0, free_seconds_ = 0.0;
@@ -810,10 +816,18 @@ inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) 
 // The operators of a process are assumed to share its ranks, which call
 // their H2 operations in the same order: the use order below is then the
 // same on every rank, and so are the evictions.  The least recently used
-// operators' data is released collectively at the start of a build while the
-// other operators hold more than half of some rank's heap (an eviction on
-// one rank only would split the ranks between the device and host paths of
-// that operator); an allocation that still does not fit fails.
+// operators' data is released collectively at the start of a build while
+// some rank's free heap is short of what a build takes (the largest so far:
+// its high-water over the data held when it began, plus an eighth); an
+// allocation that still does not fit fails.  An eviction on one rank only
+// would split the ranks between the device and host paths of that operator.
+// The evicted operator's kept solve factors go to the host first (its
+// keeper, register_solve_keeper in device_solve.hpp): the factorization left
+// the LU of X_RR on the device only, so it could not solve otherwise.  It
+// solves on, on the host or with its factors uploaded again at its next
+// solve.  (Evicting when the others held half the heap dropped the factors
+// of 7 of 16 diagonal blocks of a block-diagonal preconditioner on a 40 GB
+// GPU, which then failed in the host solve.)
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
     uint64_t clock = 0;
@@ -821,6 +835,12 @@ struct OperatorContext {
     // per kind of store (solve, matvec): release an operator's data; bytes it holds
     std::vector<std::function<void(const void*)>> releasers;
     std::vector<std::function<size_t(const void*)>> holders;
+    // per operator: bring its device-only data to the host (before an eviction)
+    std::unordered_map<const void*, std::function<void()>> keepers;
+    // what a build takes beyond the data held when it began (the largest so
+    // far), and what was held when the current one began
+    size_t build_need = 0, build_base = 0;
+    bool build_open = false;
 };
 
 inline OperatorContext& operator_context() {
@@ -851,10 +871,26 @@ inline bool other_operators_hold_data() {
     return false;
 }
 
+// Operator `tree` gives up its device data to make room (an eviction, on
+// every rank of the operator): its keeper first, with the stores serving it,
+// then every store releases its data.
+inline void evict_operator(const void* tree) {
+    OperatorContext& c = operator_context();
+    if (auto k = c.keepers.find(tree); k != c.keepers.end()) {
+        const void* active = c.active;
+        c.active = tree;
+        k->second();
+        c.active = active;
+    }
+    for (const auto& release : c.releasers) release(tree);
+    c.last_use.erase(tree);
+}
+
 // The device data of operator `tree` is released (its destruction, on every rank).
 inline void release_operator(const void* tree) {
     OperatorContext& c = operator_context();
     for (const auto& release : c.releasers) release(tree);
+    c.keepers.erase(tree);
     c.last_use.erase(tree);
     if (c.active == tree) c.active = nullptr;
 }
@@ -870,25 +906,48 @@ inline void begin_operator_build(const void* tree, MPI_Comm comm, double exchang
     reserve_exchange_arena(nproc, share_device(comm), exchange_fraction);
     activate_operator(tree);
     OperatorContext& c = operator_context();
-    const DeviceHeap& heap = DeviceHeap::instance();
+    DeviceHeap& heap = DeviceHeap::instance();
+    // the previous build is over: what it took
+    if (c.build_open && heap.build_peak() > c.build_base) {
+        c.build_need = std::max(c.build_need, heap.build_peak() - c.build_base);
+    }
+    // (the operator's own earlier data goes with the build: invalidate_device_solve)
+    auto held = [&] { return heap.used() - std::min(heap.used(), operator_bytes(tree)); };
+    int evicted = 0;
+    size_t evicted_bytes = 0;
     for (;;) {
-        size_t others = 0;
         const void* oldest = nullptr;
         uint64_t oldest_use = 0;
         for (const auto& [t, use] : c.last_use) {
-            if (t == tree) continue;
-            others += operator_bytes(t);
+            if (t == tree || operator_bytes(t) == 0) continue;
             if (oldest == nullptr || use < oldest_use) {
                 oldest = t;
                 oldest_use = use;
             }
         }
-        int over = others > heap.capacity() / 2 ? 1 : 0;
-        MPI_Allreduce(MPI_IN_PLACE, &over, 1, MPI_INT, MPI_MAX, comm);
-        if (!over || oldest == nullptr) return;
-        for (const auto& release : c.releasers) release(oldest);
-        c.last_use.erase(oldest);
+        const size_t room = heap.capacity() > held() ? heap.capacity() - held() : 0;
+        // {some rank is short of room, some rank has nothing to evict}
+        int flags[2] = {room < c.build_need + c.build_need / 8 ? 1 : 0, oldest == nullptr ? 1 : 0};
+        MPI_Allreduce(MPI_IN_PLACE, flags, 2, MPI_INT, MPI_MAX, comm);
+        if (!flags[0] || flags[1]) break;
+        evicted_bytes += operator_bytes(oldest);
+        evict_operator(oldest);
+        ++evicted;
     }
+    if (evicted > 0) {
+        int rank = 0;
+        MPI_Comm_rank(comm, &rank);
+        if (rank == 0) {
+            std::printf("GPU: %d other operator(s) evicted before this build (%.2f GB, kept factors to the host); a build "
+                        "takes %.2f GB, room now %.2f of %.2f GB\n", evicted, static_cast<double>(evicted_bytes) / 1e9,
+                        static_cast<double>(c.build_need) / 1e9, static_cast<double>(heap.capacity() - held()) / 1e9,
+                        static_cast<double>(heap.capacity()) / 1e9);
+            std::fflush(stdout);
+        }
+    }
+    heap.reset_build_peak();
+    c.build_base = held();
+    c.build_open = true;
 }
 
 }  // namespace gpu

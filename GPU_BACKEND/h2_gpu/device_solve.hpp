@@ -1614,6 +1614,13 @@ void materialize_host_factors(ParallelTree<CoordType, DataType>* tree) {
     for (auto& [level, kl] : store.kept) materialize_host_factors_level(tree, level, kl);
 }
 
+// Operator `tree`'s keeper (device_heap.hpp evict_operator): its kept solve
+// factors to the host, so that an eviction leaves it able to solve.
+template<typename CoordType, typename DataType>
+void register_solve_keeper(ParallelTree<CoordType, DataType>* tree) {
+    operator_context().keepers[tree] = [tree] { materialize_host_factors(tree); };
+}
+
 // The log-determinant contributions (the sum of log|u_kk| and of the
 // arguments of the diagonal of the LU of X_RR, LAPACK pivots counted, as
 // core/butterfly_logdet.hpp accumulate_logdet_lu) of the local boxes of
