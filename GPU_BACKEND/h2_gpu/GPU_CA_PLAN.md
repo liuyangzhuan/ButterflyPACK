@@ -1852,6 +1852,69 @@ there; CA3 might take a further ~0.3-0.7 s off the leaf and avoid CA0's
 8^3-level loss. The CA3-only work runs in small component batches (15
 components, 294 boxes at the 64-rank leaf), the GPU's weak spot.
 
+#### Known issue, not fixed (2026-10-15): full-rank boxes on GPU CA3 levels
+
+A box with no redundant points (r = 0, k = n) eliminated on an owner level
+sends nothing: `plan_owner_generators` (and `copy_owner_generators`) take
+the wave's boxes with a redundant part only (`active`), so its home rank
+never gets its FULL state and the level stops at its end in ca_owner.hpp:
+"owner level: box N was never eliminated".  Color levels had the same gap
+(no wave for a full-rank box) and were fixed in 73aed23 (unstructured) and
+ea023e6 (structured); replicated CA0 is not affected (every rank eliminates
+its ghost copies itself, nothing arrives from another rank).  The CPU CA3
+is right: it ships the whole box state, the Schur complement included,
+whatever the rank (core/owner_schedule.hpp).
+
+Reproducer (RBF3D_H2Test, Gaussian kernel: at these tolerances every leaf
+box, or nearly every one, is full rank), 4 nodes, 8 ranks:
+
+    srun -N 4 -n 8 --ntasks-per-node=2 -c 64 --cpu-bind=cores --gpus-per-node=4 crbf3d_h2 \
+      --grid-size 64 --Nmin_leaf 64 --length_scale 0.05 --scattered 1 \
+      --reduction_threshold 8 --tol_comp 1e-6 \
+      --H2_use_sketch 2 --H2_lazy_schur 2 --H2_XRR_factor 1 \
+      --H2_use_gpu 1 --H2_compress_factors 1 --verbosity 1 --H2_CA_owner_component 3
+
+(the leaf is a CA level by the driver's default CA_level 0 and its 512
+boxes a rank).  It fails at the leaf at tol 1e-6 ("box 1064 was never
+eliminated") and at 1e-10 ("box 3072").  The references, tol 1e-6, without
+compression:
+
+| | logdet | acc_mvp | acc_backward |
+|---|---|---|---|
+| CPU CA3 (`--H2_use_gpu 0 --H2_compress_factors 0`, factor 890 s) | -1137223.4681469242 | 4.8e-6 | 3.4e-15 |
+| CPU CA0 (the same without `--H2_CA_owner_component 3`) | -1137223.1779893097 | 4.9e-6 | 3.2e-15 |
+| GPU CA0, compressed (`--H2_compress_factors 1`, factor 15.1 s) | -1137223.3951199437 | 2.6e-5 | 4.8e-15 |
+
+(Logs: h2_c1_work/rbf/R_ca3_tol6.log, R_ca3_tol6_cpu.log, R_ca0_tol6_cpu.log,
+R_tol6.log.)
+
+Why it is more than sending a short entry: a home rank does not maintain
+the blocks of its boxes eliminated elsewhere (owner_plan.hpp: "foreign
+local boxes ... their FULL state lands here").  The FULL payload carries
+the box's Schur block after its elimination, which replaces the home's
+copy; for a full-rank box that block is its whole self block (n x n) with
+the updates its owner applied.  A FULL entry without it would let the
+level finish and leave the home's copy stale - silently wrong.  The fix,
+owner paths only (Color and CA0 never reach them):
+
+1. `plan_owner_generators`: every wave box, not only `active`; a full-rank
+   box's COMPACT and SKELETON recipients get the no-fill entry the receiver
+   already accepts (it marks the box eliminated with its skeleton through
+   `set_remote_skeletons`), its FULL recipient an entry with the n x n
+   block (OwnerLayout with r = 0: only the Schur part), k sent for it.
+2. The block on the owner as the wave takes a box's A_SS: its stored Schur
+   block (gathered from the packed form if it is packed), else the kernel's
+   entries (no update yet) - if that reuses the wave's gather batch, behind
+   the owner check, so the Color and CA0 batches stay as they are.
+3. `install_owner_messages`: a FULL entry with r = 0 and a payload installs
+   the block as the box's Schur block (as `land_full_factors` does for the
+   others).
+4. Checks: the reproducer at tol 1e-6 against CPU CA3 (logdet to ~1e-7,
+   acc_mvp ~5e-6 uncompressed); a Laplace CA3 run (no full-rank boxes)
+   bitwise as before; Color and CA0 bitwise as before.
+
+Not done for now (the user's decision, 2026-10-15).
+
 ### M6. Hybrid level selection
 Choose CA vs Color per level from brick size and measured costs instead of
 the fixed `CA_level` / 343-box rule.
