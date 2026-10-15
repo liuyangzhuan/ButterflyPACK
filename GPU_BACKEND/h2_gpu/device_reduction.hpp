@@ -79,7 +79,9 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
     // level), and a parent's owner at the parent level
     const RegionLayout Lc = RegionLayout::of(dim, level.level, level.num_active_processes);
     const RegionLayout Lp = RegionLayout::of(dim, level.level - 1, parent_level.num_active_processes);
-    if (!Lc.uniform || !Lp.uniform) throw std::runtime_error("reduce_parent_blocks: the levels' regions are not uniform cubes");
+    if (!Lc.uniform || !Lp.uniform || !level.regions_cubic || !parent_level.regions_cubic) {
+        throw std::runtime_error("reduce_parent_blocks: the levels' regions are not uniform cubes");
+    }
     auto child_rank_of = [&](int64_t pm) { return level.morton_to_rank.at(static_cast<int>(Lc.region_of(pm * nc))); };
     auto owner_of = [&](int64_t pm) { return parent_level.morton_to_rank.at(static_cast<int>(Lp.region_of(pm))); };
     // whether this rank contributes its copy of pair (lo, hi): a local pair

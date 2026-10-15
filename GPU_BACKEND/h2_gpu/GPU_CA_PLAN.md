@@ -5852,6 +5852,89 @@ acc_mvp 1.40e-4 / 1.87e-4 / 1.58e-4 on 8 / 12 / 6 ranks, acc_backward
    occupied-leaf allgather of `discover_occupied_topology` (from before) is
    still global.
 
+#### The ranges split by points (2026-10-15)
+
+Limit 3 above, as decided: on the unstructured path a level's ranges are
+split by the points in the boxes, so an empty box counts for nothing; this
+holds for (2^d)^k ranks too, which keep the bricks unless their points are
+more uneven than 1.15 of the mean or a brick has none.  Points rather than
+occupied leaves or a cost model (n^3 a leaf box): on the meshes at hand the
+three agree within a few percent a rank (the 128K sphere's boxes hold 4 to
+322 points, but each rank holds ~100 of them), and points add up over
+ranks, so they are counted before the points are routed - one collective,
+no second routing pass.
+
+1. *The weights* (`RegionWeights`, `region_weights_of_points`): the points
+   in each box of the weight level, the finest level with at most 512 boxes
+   a rank (`kRegionWeightBoxes`), each point binned at the leaf as the
+   trees bin it.  `h2_initiate` (every rank holds every point) counts on
+   rank 0 and broadcasts; `bpack_initiate_distributed64` (each rank its
+   own) all-reduces.  A finer level spreads a weight-level box's points
+   evenly over its boxes.  Size: at most 512 P counts.
+2. *The splits*: where a level reduces, each child region's start is the
+   box before which the parent region's points are nearest to the child's
+   share (by the leaf regions under it), the later on a tie, one box at
+   least each.  Without weights this is the old rounding: every unweighted
+   layout of 14848 configurations (2D/3D, all depths, 1-300 ranks,
+   thresholds 4-64) is the committed planner's, and the same weight in
+   every box gives the same layouts.
+3. *The choice*: a layout with a leaf region of no points is worse than
+   any imbalance; otherwise as before (the first reduction a level finer
+   while the largest leaf region is over 1.15 of the mean).
+4. `TreeLevel::regions_cubic` now means the equal cubes by the ranges, not
+   by the count; `device_reduction_possible` and `reduce_parent_blocks`
+   check it (they derived bricks from the count, which an 8-rank layout
+   split by points need not be).  Rank 0 prints the layout ("H2 tree: 12
+   ranks, Morton ranges: the largest leaf region holds 1.067 of the mean
+   points; ...") on every unstructured run.
+
+`make h2_region_partition_test` adds weighted layouts (a thin shell, a
+dense cluster, random weights with a third of the boxes empty): every
+invariant holds, the bricks flag matches the ranges.  What the shell shows
+is the price of whole parent boxes: uneven weights often need the first
+reduction several levels finer (64 ranks on a shell: 1 1 1 1 8 64 64 ranks
+by level against the bricks' 1 1 8 64 64 64 64), so the coarse levels keep
+fewer ranks (limit 1 above).  On the real meshes it is milder.  The 128K
+sphere's largest leaf region by points, box-count layout -> points layout:
+
+| ranks | 8 | 10 | 12 | 16 | 20 | 24 | 32 | 48 | 64 |
+|---|---|---|---|---|---|---|---|---|---|
+| box count | 1.008 | 1.215 | 1.196 | 1.010 | 1.368 | 1.509 | 1.315 | 1.747, a rank empty | 1.433, a rank empty |
+| points | bricks | 1.079 | 1.067 | 1.010 | 1.062 | 1.067* | 1.096* | 1.166 | 1.341* |
+
+(* the first reduction a level finer: level 2 on one rank.)  The 512K
+sphere: 10 ranks 1.216 -> 1.067, 12 ranks 1.197 -> 1.053.
+
+Runs (GPU, 40 GB A100s, uncompressed sphere, Laplace as before):
+- bitwise as before: Laplace 192^3 compressed on 8 ranks (bricks) and 96^3
+  on 12 ranks (equal points a box: the same ranges), the 128K sphere on 8
+  ranks (bricks; logdet and solution checksum), RBF3D_H2Test through
+  distributed64 (48^3 scattered, tol 1e-6) on 12 ranks (its points split as
+  its boxes did, 1.135) and on 8 (bricks);
+- the 128K sphere on 10, 12, 16 ranks with the new ranges: acc_mvp 2.0e-4,
+  1.19e-4 (1.87e-4 before), 1.80e-4; acc_backward 7e-14 to 9e-13; the CPU
+  path on 12 ranks acc_mvp 1.31e-4, acc_backward 7.6e-14.  (Accuracy moves
+  with the layout on this EFIE: the 512K sphere's acc_mvp is 6.2e-4 on 8
+  ranks, 9.6e-4 on one, 3.9e-4 to 1.27e-3 on 10 and 12 either way.)
+
+**It balances the work but does not shorten the factorization** (512K
+sphere, 12 ranks, three runs each):
+
+| | box-count ranges | point ranges |
+|---|---|---|
+| factor | 3.48 / 3.58 / 3.42 s | 3.73 / 3.32 / 3.39 s |
+| leaf ID/elimination, min / mean / max a rank | 743 / 928 / 1094 ms | 894 / 931 / 972 ms |
+| leaf transport, min / mean / max | 248 / 414 / 599 ms | 375 / 416 / 453 ms |
+| leaf elimination, longest rank | 1506 / 1541 / 1469 ms | 1795 / 1486 / 1486 ms |
+
+(10 ranks, one run each: 4.54 -> 4.40 s, the leaf's ID/elimination max
+1285 -> 1175 ms.)  The leaf's slowest rank is set by the boundary, not by
+its points: a rank's time is its boxes plus its transport waits, and the
+ranks with the most boundary boxes - 168 on ranks 1 and 10, whose ranges
+the points did not move - are as before.  The levers left are compact
+ranges (fewer boundary boxes) or weights that count boundary boxes; and,
+for the coarse levels, a planner that keeps more ranks there.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

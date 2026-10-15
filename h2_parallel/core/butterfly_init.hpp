@@ -797,13 +797,20 @@ int bpack_initiate_distributed64(
       solver->comm, input_coordinates, input_local_count,
       options.dimension, supplied_bounds, bounds_provided, bounds);
 
+  // the unstructured path splits the ranks' ranges by points (each rank's own)
+  const fmm::RegionWeights region_weights =
+      options.unstructured != 0
+          ? fmm::region_weights_of_points(input_coordinates, input_local_count, options.dimension,
+                                          options.num_levels, bounds, solver->comm, true)
+          : fmm::RegionWeights{};
   std::vector<int> unused_index_map;
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
       fmm::create_uniform_tree<CoordType, DataType>(
           nullptr, 0, options.num_levels, bounds, options.dimension,
           solver->comm, options.reduction_threshold, options.CA_level,
           unused_index_map, fmm::ReductionPattern::UNIFORM,
-          options.unstructured != 0));  // (any rank count: unstructured Color only)
+          options.unstructured != 0,  // (any rank count: unstructured Color only)
+          region_weights));
   tree->num_points = options.N;
   tree->id_neighborhood_radius = options.id_neighborhood_radius;
   tree->id_proxy_mode = options.id_proxy_mode;
@@ -854,6 +861,13 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
       bounds
   );
 
+  // the unstructured path splits the ranks' ranges by points (every rank has
+  // all of them)
+  const fmm::RegionWeights region_weights =
+      options.unstructured != 0
+          ? fmm::region_weights_of_points(Locations, static_cast<int64_t>(options.N), options.dimension,
+                                          options.num_levels, bounds, H2_solver->comm, false)
+          : fmm::RegionWeights{};
   std::vector<int> idx_map;
   // Provide Locations to nullptr, check compatibility
   auto tree = std::unique_ptr<fmm::ParallelTree<CoordType, DataType>>(
@@ -868,7 +882,8 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
           options.CA_level,
           idx_map,
           fmm::ReductionPattern::UNIFORM,
-          options.unstructured != 0));  // (any rank count: unstructured Color only)
+          options.unstructured != 0,  // (any rank count: unstructured Color only)
+          region_weights));
 
   H2_solver->tree = std::move(tree); 
 

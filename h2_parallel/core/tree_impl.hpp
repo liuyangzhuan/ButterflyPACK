@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 #include <ostream>
 #include <iostream>
@@ -338,6 +339,54 @@ int64_t point_to_morton(
         dimension, coordinates[0], coordinates[1], coordinates[2]);
 }
 
+/**
+ * @brief The points in each box of the region weight level (region_partition.hpp),
+ * for splitting the levels' ranges by points: every point binned at the leaf, as
+ * the trees bin them, and counted in its box of that level.  `distributed`: each
+ * rank holds its own points (the counts are summed over `comm`); else every rank
+ * holds all of them and rank 0's count is broadcast.  Size: at most
+ * kRegionWeightBoxes boxes a rank.
+ */
+template<typename CoordType>
+RegionWeights region_weights_of_points(
+    const CoordType* coords,
+    int64_t num_points,
+    int32_t dimension,
+    int32_t num_levels,
+    const CoordType global_bounds[6],
+    MPI_Comm comm,
+    bool distributed) {
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    const int level = region_weight_level(dimension, num_levels, size);
+    const int leaf = num_levels - 1;
+    const int shift = dimension * (leaf - level);
+    std::vector<int64_t> count(size_t{1} << (dimension * level), 0);
+    if (distributed || rank == 0) {
+        if (num_points > 0 && coords == nullptr) {
+            throw std::invalid_argument("region_weights_of_points: null coordinates");
+        }
+        for (int64_t i = 0; i < num_points; ++i) {
+            CoordType point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+            for (int d = 0; d < dimension; ++d) point[d] = coords[i * dimension + d];
+            int32_t grid[3];
+            const int64_t morton = point_to_morton(point, dimension, global_bounds, leaf, grid);
+            ++count[static_cast<size_t>(morton >> shift)];
+        }
+    }
+    if (count.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw std::overflow_error("region_weights_of_points: too many boxes");
+    }
+    const int n = static_cast<int>(count.size());
+    if (distributed) {
+        MPI_Allreduce(MPI_IN_PLACE, count.data(), n, MPI_INT64_T, MPI_SUM, comm);
+    } else {
+        MPI_Bcast(count.data(), n, MPI_INT64_T, 0, comm);
+    }
+    return RegionWeights::of_counts(level, count);
+}
+
 
 
 /**
@@ -346,7 +395,8 @@ int64_t point_to_morton(
  * Also builds Morton ID mapping and communication patterns for process reduction.
  */
 template<typename CoordType, typename DataType>
-void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
+void compute_active_processes(ParallelTree<CoordType, DataType>* tree,
+                              const RegionWeights& region_weights = RegionWeights{}) {
      /**
      * Process Reduction Logic (FMM3D.pdf Section 6.4):
      * 
@@ -372,16 +422,18 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
             "D tree requires process count to be " +
             std::to_string(1 << tree->dimension) + "^k (any count with H2_unstructured=1)");
     }
-    // the counts and ranges of every level (region_partition.hpp); for a
-    // count other than (2^d)^k possibly with the first reduction a level
-    // finer than reduction_threshold asks, so that the leaf regions are even
-    const RegionPlan region_plan =
-        plan_regions(tree->dimension, tree->num_levels, tree->mpi_size, tree->reduction_threshold);
+    // the counts and ranges of every level (region_partition.hpp), the
+    // ranges split by the points in the boxes where the caller gave them (the
+    // unstructured path); possibly with the first reduction a level finer
+    // than reduction_threshold asks, so that the leaf regions are even
+    const RegionPlan region_plan = plan_regions(tree->dimension, tree->num_levels, tree->mpi_size,
+                                                tree->reduction_threshold, region_weights);
     const std::vector<int32_t>& region_count = region_plan.count;
     const std::vector<std::vector<int64_t>>& region_start_of = region_plan.start;
-    if (tree->mpi_rank == 0 && !region_count_is_cubic(tree->dimension, tree->mpi_size)) {
-        std::cout << "H2 tree: " << tree->mpi_size << " ranks (not " << (1 << tree->dimension)
-                  << "^k): the largest leaf region is " << region_plan.leaf_imbalance << " of the mean";
+    if (tree->mpi_rank == 0 && (!region_weights.empty() || !region_plan.bricks)) {
+        std::cout << "H2 tree: " << tree->mpi_size << " ranks, "
+                  << (region_plan.bricks ? "equal cubes" : "Morton ranges") << ": the largest leaf region holds "
+                  << region_plan.leaf_imbalance << " of the mean " << (region_weights.empty() ? "boxes" : "points");
         if (region_plan.threshold != tree->reduction_threshold) {
             std::cout << "; reduction_threshold " << tree->reduction_threshold << " -> " << region_plan.threshold
                       << " (the first reduction a level finer, for whole parent boxes)";
@@ -389,6 +441,10 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
         std::cout << "; active ranks by level:";
         for (int32_t c : region_count) std::cout << " " << c;
         std::cout << std::endl;
+        if (region_plan.empty_region) {
+            std::cout << "H2 tree: warning: a leaf region has no points (no layout of these "
+                      << tree->mpi_size << " ranks avoids it)" << std::endl;
+        }
     }
     tree->reduction_threshold = region_plan.threshold;
 
@@ -481,7 +537,8 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
     tree->levels[leaf_level].my_morton_id = tree->mpi_rank;
     tree->levels[leaf_level].parent_level_owner = -1;
     tree->levels[leaf_level].region_start = region_start_of[static_cast<size_t>(leaf_level)];
-    tree->levels[leaf_level].regions_cubic = region_count_is_cubic(tree->dimension, tree->mpi_size);
+    tree->levels[leaf_level].regions_cubic =
+        region_starts_are_bricks(tree->dimension, leaf_level, region_start_of[static_cast<size_t>(leaf_level)]);
     
     for (int32_t level = leaf_level - 1; level >= 0; --level) {
         auto& lvl = tree->levels[level];
@@ -577,7 +634,7 @@ void compute_active_processes(ParallelTree<CoordType, DataType>* tree) {
         }
         
         lvl.region_start = region_start_of[static_cast<size_t>(level)];
-        lvl.regions_cubic = region_count_is_cubic(tree->dimension, lvl.num_active_processes);
+        lvl.regions_cubic = region_starts_are_bricks(tree->dimension, level, region_start_of[static_cast<size_t>(level)]);
 
         auto rank_it = lvl.rank_to_morton.find(tree->mpi_rank);
         if (rank_it != lvl.rank_to_morton.end()) {
@@ -1278,7 +1335,8 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     int CA_level = 10000,
     std::vector<int>& idx_map = std::vector<int>(), 
     ReductionPattern pattern = ReductionPattern::UNIFORM,  // NEW parameter
-    bool any_process_count = false) {  // any rank count (unstructured Color); else (2^dimension)^k
+    bool any_process_count = false,  // any rank count (unstructured Color); else (2^dimension)^k
+    const RegionWeights& region_weights = RegionWeights{}) {  // the boxes' points (region_weights_of_points), or none
     
     // Validate inputs
     if (dimension < 1 || dimension > 3) {
@@ -1317,7 +1375,7 @@ ParallelTree<CoordType, DataType>* create_uniform_tree(
     tree->levels.resize(num_levels);
     
     // Step 1: Determine active processes at each level (Section 5.1.3)
-    compute_active_processes(tree);
+    compute_active_processes(tree, region_weights);
 
     // Root assembly requires all level-1 sibling boxes on one process. Process
     // reduction from level 2 to level 1 is supported, but level 1 to level 0 is not.

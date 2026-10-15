@@ -6,20 +6,30 @@
 //   - where the count does not change, a region's range one level finer is
 //     its range times 2^d (a box's children on its rank);
 //   - where it does, each region's child regions tile its children, and
-//     (counts other than (2^d)^k) every child region is whole parent boxes;
-//   - (2^d)^k ranks: the caller's threshold, the counts of the old reduction
-//     rule and the equal ranges (the bricks), so these runs are unchanged;
-// then the worst leaf imbalance, and the layouts of a few counts.
+//     (unless the layout is the bricks) every child region is whole parent
+//     boxes;
+//   - (2^d)^k ranks without weights: the caller's threshold, the counts of
+//     the old reduction rule and the equal ranges (the bricks), so these runs
+//     are unchanged; with the same weight in every box, the same layouts as
+//     without weights, for every count;
+// and the same invariants with the boxes weighted by points (the unstructured
+// path) - a thin shell (a sphere's surface: most boxes empty, the rest
+// clipped by different amounts), a dense cluster and random weights with
+// empty boxes - with the leaf regions' imbalance by points and the bricks
+// flag; then the worst imbalances, and the layouts of a few counts.
 //
 //   make h2_region_partition_test && ./h2_region_partition_test     (in a build directory), or
 //   g++ -std=c++17 -O2 -I../core region_partition_test.cpp -o region_partition_test && ./region_partition_test
 //
-// (no MPI calls; well under a second)
+// (no MPI calls; a few seconds)
 
+#include "morton.hpp"
 #include "region_partition.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <exception>
+#include <random>
 #include <tuple>
 #include <vector>
 
@@ -27,9 +37,9 @@ using namespace fmm;
 
 static int failures = 0;
 
-static void fail(const char* what, int dim, int levels, int procs, int level) {
+static void fail(const char* what, const char* weights, int dim, int levels, int procs, int level) {
     ++failures;
-    std::printf("FAIL %s: dim %d levels %d procs %d level %d\n", what, dim, levels, procs, level);
+    std::printf("FAIL %s (%s): dim %d levels %d procs %d level %d\n", what, weights, dim, levels, procs, level);
 }
 
 // The counts of the reduction rule before any count was allowed ((2^d)^k only).
@@ -45,13 +55,89 @@ static std::vector<int32_t> cubic_counts(int dim, int levels, int procs, int64_t
     return count;
 }
 
+// The invariants of a layout (see the top).
+static void check_layout(const RegionPlan& p, const char* weights, int dim, int levels, int procs) {
+    const int64_t f = int64_t{1} << dim;
+    const auto& c = p.count;
+    const auto& s = p.start;
+    bool bricks = region_count_is_cubic(dim, procs);
+    for (int l = 0; l < levels; ++l) {
+        const auto& t = s[static_cast<size_t>(l)];
+        const int32_t n = c[static_cast<size_t>(l)];
+        if (static_cast<int32_t>(t.size()) != n + 1 || t[0] != 0 || t.back() != (int64_t{1} << (dim * l))) {
+            fail("cover", weights, dim, levels, procs, l);
+            return;
+        }
+        for (int32_t i = 0; i < n; ++i) {
+            if (t[static_cast<size_t>(i) + 1] <= t[static_cast<size_t>(i)]) {
+                fail("empty range", weights, dim, levels, procs, l);
+                break;
+            }
+        }
+        bricks = bricks && region_starts_are_bricks(dim, l, t);
+        if (l + 1 == levels) continue;
+        const auto& u = s[static_cast<size_t>(l) + 1];
+        const int32_t below = c[static_cast<size_t>(l) + 1];
+        for (int32_t i = 0; i <= n; ++i) {
+            const int32_t child = n == below ? i : region_first_child(i, n, below);
+            if (u[static_cast<size_t>(child)] != t[static_cast<size_t>(i)] * f) {
+                fail(n == below ? "aligned children" : "grouped children", weights, dim, levels, procs, l);
+                break;
+            }
+        }
+    }
+    if (bricks != p.bricks) fail("bricks flag", weights, dim, levels, procs, -1);
+    if (!p.bricks) {
+        for (int l = 0; l + 1 < levels; ++l) {
+            if (c[static_cast<size_t>(l)] == c[static_cast<size_t>(l) + 1]) continue;
+            for (const int64_t x : s[static_cast<size_t>(l) + 1]) {
+                if (x % f != 0) {
+                    fail("whole parent boxes", weights, dim, levels, procs, l);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Points per box of `level` for three densities on the unit cube.
+static std::vector<int64_t> weights_of(int kind, int dim, int level, std::mt19937_64& rng) {
+    const int64_t boxes = int64_t{1} << (dim * level);
+    const double width = 1.0 / static_cast<double>(1u << level);
+    std::vector<int64_t> w(static_cast<size_t>(boxes), 0);
+    std::uniform_int_distribution<int> pick(0, 99);
+    for (int64_t m = 0; m < boxes; ++m) {
+        uint32_t x = 0, y = 0, z = 0;
+        morton::decode_nd(dim, static_cast<uint64_t>(m), x, y, z);
+        const double cx = (x + 0.5) * width - 0.5, cy = (y + 0.5) * width - 0.5, cz = dim == 3 ? (z + 0.5) * width - 0.5 : 0.0;
+        const double r = std::sqrt(cx * cx + cy * cy + cz * cz);
+        double v = 0.0;
+        if (kind == 0) {
+            // a shell of radius 0.4: the boxes it crosses, more points the
+            // nearer their centre is to it
+            v = 1000.0 * std::max(0.0, 1.0 - std::abs(r - 0.4) / width);
+        } else if (kind == 1) {
+            // a cluster about (-0.2, -0.2, -0.2) over a sparse background
+            const double dx = cx + 0.2, dy = cy + 0.2, dz = dim == 3 ? cz + 0.2 : 0.0;
+            v = 1.0e4 * std::exp(-(dx * dx + dy * dy + dz * dz) / (2 * 0.1 * 0.1)) + 1.0;
+        } else {
+            // random, a third of the boxes empty
+            v = pick(rng) < 33 ? 0.0 : static_cast<double>(pick(rng) + 1);
+        }
+        w[static_cast<size_t>(m)] = static_cast<int64_t>(std::llround(v));
+    }
+    return w;
+}
+
 int main() {
     const int64_t threshold = 8;
-    long checked = 0, raised = 0, over = 0;
-    double worst = 0.0;
+    const char* const kind_name[3] = {"shell", "cluster", "random"};
+    long checked = 0, raised = 0, over = 0, weighted = 0, w_over[3] = {0, 0, 0}, w_empty[3] = {0, 0, 0},
+         left_bricks[3] = {0, 0, 0};
+    double worst = 0.0, w_worst[3] = {0.0, 0.0, 0.0};
     int worst_dim = 0, worst_levels = 0, worst_procs = 0;
+    std::mt19937_64 rng(20261015);
     for (int dim = 2; dim <= 3; ++dim) {
-        const int64_t f = int64_t{1} << dim;
         for (int levels = 2; levels <= (dim == 3 ? 8 : 11); ++levels) {
             const int64_t leaf_boxes = int64_t{1} << (dim * (levels - 1));
             for (int procs = 1; procs <= 300; ++procs) {
@@ -64,53 +150,11 @@ int main() {
                 }
                 if (p.count[1] != 1) continue;  // the tree rejects these (level 1 has one rank)
                 ++checked;
-                const auto& c = p.count;
-                const auto& s = p.start;
                 const bool cubic = region_count_is_cubic(dim, procs);
-                for (int l = 0; l < levels; ++l) {
-                    const auto& t = s[static_cast<size_t>(l)];
-                    const int32_t n = c[static_cast<size_t>(l)];
-                    if (static_cast<int32_t>(t.size()) != n + 1 || t[0] != 0 || t.back() != (int64_t{1} << (dim * l))) {
-                        fail("cover", dim, levels, procs, l);
-                    }
-                    for (int32_t i = 0; i < n; ++i) {
-                        if (t[static_cast<size_t>(i) + 1] <= t[static_cast<size_t>(i)]) {
-                            fail("empty region", dim, levels, procs, l);
-                            break;
-                        }
-                    }
-                    if (l + 1 == levels) continue;
-                    const auto& u = s[static_cast<size_t>(l) + 1];
-                    const int32_t below = c[static_cast<size_t>(l) + 1];
-                    for (int32_t i = 0; i <= n; ++i) {
-                        const int32_t child = n == below ? i : region_first_child(i, n, below);
-                        if (u[static_cast<size_t>(child)] != t[static_cast<size_t>(i)] * f) {
-                            fail(n == below ? "aligned children" : "grouped children", dim, levels, procs, l);
-                            break;
-                        }
-                    }
-                    if (n != below && !cubic) {
-                        for (int32_t ch = 0; ch <= below; ++ch) {
-                            if (u[static_cast<size_t>(ch)] % f != 0) {
-                                fail("whole parent boxes", dim, levels, procs, l);
-                                break;
-                            }
-                        }
-                    }
-                }
+                check_layout(p, "none", dim, levels, procs);
                 if (cubic) {
-                    if (cubic_counts(dim, levels, procs, threshold) != c || p.threshold != threshold) {
-                        fail("(2^d)^k counts", dim, levels, procs, -1);
-                    }
-                    for (int l = 0; l < levels; ++l) {
-                        const int64_t boxes = int64_t{1} << (dim * l);
-                        const int32_t n = c[static_cast<size_t>(l)];
-                        for (int32_t i = 0; i <= n; ++i) {
-                            if (s[static_cast<size_t>(l)][static_cast<size_t>(i)] != i * (boxes / n)) {
-                                fail("(2^d)^k ranges", dim, levels, procs, l);
-                                break;
-                            }
-                        }
+                    if (!p.bricks || cubic_counts(dim, levels, procs, threshold) != p.count || p.threshold != threshold) {
+                        fail("(2^d)^k: the bricks", "none", dim, levels, procs, -1);
                     }
                 } else {
                     if (p.threshold != threshold) ++raised;
@@ -123,6 +167,36 @@ int main() {
                         worst_procs = procs;
                     }
                 }
+                // the same weight everywhere: the same layout
+                const int h = region_weight_level(dim, levels, procs);
+                const size_t hb = size_t{1} << (dim * h);
+                if (static_cast<int64_t>(hb) > kRegionWeightBoxes * procs && h + 1 < levels) {
+                    fail("weight level too fine", "uniform", dim, levels, procs, h);
+                }
+                const RegionPlan u = plan_regions(dim, levels, procs, threshold,
+                                                  RegionWeights::of_counts(h, std::vector<int64_t>(hb, 5)));
+                if (u.count != p.count || u.start != p.start || u.threshold != p.threshold || u.bricks != p.bricks) {
+                    fail("uniform weights change the layout", "uniform", dim, levels, procs, -1);
+                }
+                for (int kind = 0; kind < 3; ++kind) {
+                    const RegionWeights w = RegionWeights::of_counts(h, weights_of(kind, dim, h, rng));
+                    if (w.prefix.back() == 0) continue;
+                    RegionPlan q;
+                    try {
+                        q = plan_regions(dim, levels, procs, threshold, w);
+                    } catch (const std::exception&) {
+                        fail("no weighted layout", kind_name[kind], dim, levels, procs, -1);
+                        continue;
+                    }
+                    ++weighted;
+                    check_layout(q, kind_name[kind], dim, levels, procs);
+                    if (cubic && !q.bricks) ++left_bricks[kind];
+                    if (q.empty_region) ++w_empty[kind];
+                    if (q.leaf_imbalance > kRegionImbalance) ++w_over[kind];
+                    if (leaf_boxes >= 512 * procs && !q.empty_region) {
+                        w_worst[kind] = std::max(w_worst[kind], q.leaf_imbalance);
+                    }
+                }
             }
         }
     }
@@ -130,13 +204,24 @@ int main() {
                 checked, raised, kRegionImbalance, over);
     std::printf("worst leaf imbalance with 64 leaf boxes a rank or more: %.3f (%dD, %d levels, %d ranks)\n", worst,
                 worst_dim, worst_levels, worst_procs);
-    std::printf("dim levels ranks: threshold, leaf imbalance, ranks by level\n");
+    std::printf("weighted by points: %ld layouts\n", weighted);
+    for (int kind = 0; kind < 3; ++kind) {
+        std::printf("  %-7s: over %.2f in %ld, a leaf region without points in %ld, (2^d)^k off the bricks in %ld; "
+                    "worst with 512 leaf boxes a rank or more %.3f\n",
+                    kind_name[kind], kRegionImbalance, w_over[kind], w_empty[kind], left_bricks[kind], w_worst[kind]);
+    }
+    std::printf("dim levels ranks: threshold, leaf imbalance, ranks by level (none | shell)\n");
     for (const auto& [dim, levels, procs] : std::vector<std::tuple<int, int, int>>{
              {3, 6, 8}, {3, 6, 12}, {3, 6, 20}, {3, 6, 24}, {3, 6, 50}, {3, 7, 64}, {3, 7, 100}, {3, 8, 192},
              {2, 8, 50}, {2, 10, 100}}) {
         const RegionPlan p = plan_regions(dim, levels, procs, threshold);
+        const int h = region_weight_level(dim, levels, procs);
+        const RegionPlan q =
+            plan_regions(dim, levels, procs, threshold, RegionWeights::of_counts(h, weights_of(0, dim, h, rng)));
         std::printf("%dD %d %4d: %3ld %.3f  ", dim, levels, procs, static_cast<long>(p.threshold), p.leaf_imbalance);
         for (const int32_t x : p.count) std::printf("%d ", x);
+        std::printf("| %3ld %.3f%s  ", static_cast<long>(q.threshold), q.leaf_imbalance, q.bricks ? " bricks" : "");
+        for (const int32_t x : q.count) std::printf("%d ", x);
         std::printf("\n");
     }
     if (failures) {

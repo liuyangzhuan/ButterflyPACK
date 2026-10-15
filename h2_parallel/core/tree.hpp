@@ -1263,13 +1263,15 @@ struct TreeLevel {
     int my_morton_id;                  ///< This process's Morton region (-1 if inactive)
     /// Region i holds boxes [region_start[i], region_start[i + 1]) of the level
     /// (num_active_processes + 1 entries, region_partition.hpp): equal cubes
-    /// for a count of (2^dimension)^k, unequal Morton ranges otherwise
+    /// for a count of (2^dimension)^k, else (or where the unstructured path's
+    /// points make the cubes uneven) Morton ranges of unequal length
     std::vector<int64_t> region_start;
-    /// Whether the regions are equal cubes (bricks): the count is
-    /// (2^dimension)^k.  Else only the unstructured Color path runs the level.
+    /// Whether the regions are equal cubes (bricks): a count of
+    /// (2^dimension)^k and the equal ranges.  Else only the unstructured Color
+    /// path runs the level.
     bool regions_cubic = true;
     /// The ranks this one exchanges with on the level: the owners of the
-    /// boxes within two hops of its boxes (compute_one_hop_neighbor_ranks;
+    /// boxes within three hops of its boundary boxes (compute_assisting_boxes;
     /// filled for a level whose regions are not cubes)
     std::vector<int> region_peers;
     ProcessPairCommunicationSchedule process_pair_schedule; ///< Cached one-peer-per-phase schedule for deterministic pairwise communication
