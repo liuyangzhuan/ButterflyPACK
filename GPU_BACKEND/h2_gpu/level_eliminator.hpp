@@ -4687,19 +4687,20 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     if (device_exchange_) {  // (the generators' headers and offsets are the wave's; the copies are the chunks')
         if (owner_ != nullptr) {
             plan_owner_generators(boxes, active);
-        } else if (occupancy_) {
+        } else {
             // A full-rank box sends its generator too, without fill (its wave
-            // and one-hop list), as the unstructured host transport does: a
-            // requester marks the box eliminated once its skeleton arrives,
-            // and the lazy far fill then wants the wave of every eliminated
-            // neighbor (collect_lazy_far_sources), which threw for one that
-            // had come skeleton-only (the 128K EFIE sphere on 8 ranks with
-            // H2_compress_factors 1, which leaves more leaf boxes full rank).
+            // and one-hop list), as the host transports do.  Other ranks mark
+            // it eliminated without it - the structured loop by its colour
+            // (mark_assisting_eliminated), the unstructured one when its
+            // skeleton arrives - and the lazy far fill then wants the wave of
+            // every eliminated neighbor (collect_lazy_far_sources), which
+            // threw for one that never sent it: the 128K EFIE sphere on 8
+            // ranks with H2_compress_factors 1 (unstructured), and the RBF
+            // kernel at tol 1e-10 (structured, every leaf box full rank and
+            // some at level 3).
             std::vector<int> all(boxes.size());
             for (size_t i = 0; i < boxes.size(); ++i) all[i] = static_cast<int>(i);
             plan_generators(boxes, all);
-        } else {
-            plan_generators(boxes, active);
         }
     }
     const int nchunks = can_chunk ? static_cast<int>(std::min(wave_chunks, std::max<size_t>(active.size(), 1))) : 1;
