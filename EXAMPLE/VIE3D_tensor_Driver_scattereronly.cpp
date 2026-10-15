@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <memory>
 #include <algorithm>
+#include <climits>
 #include <pthread.h>
 #include <unordered_map>
 
@@ -571,6 +572,12 @@ public:
   int _bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2 (format 7, needs a GPU evaluator for H2_use_gpu)
   double _precon_time = 0.0; // wall time spent applying the block-diagonal preconditioner
   long _precon_calls = 0;
+  // restricted additive Schwarz (bdiag_overlap > 0): per local block, the tensor ids of its halo points (after its
+  // own points in the block's ordering); per routing entry, a local point that is in another block's halo: its local
+  // position, the block's root rank, global id and the point's position in the block
+  int _bdiag_overlap = 0;
+  std::vector<std::vector<int> > _halo_tensor;
+  std::vector<int> _halo_local, _halo_dest, _halo_gid, _halo_pos;
   int _nscatter = 0;
   double _background_s0 = 2.0;
   double _scatterer_tol = 1e-12;
@@ -1335,6 +1342,18 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         }
       }
     }
+    // restricted additive Schwarz: the local points in other blocks' halos go to those blocks too (no return)
+    for(size_t hh=0; hh<Q->_halo_local.size(); hh++){
+      int i0 = Q->_halo_local[hh];
+      int dest = Q->_halo_dest[hh];
+      for (int nth=0; nth<*nvec; nth++){
+        send_meta_by_rank[dest].push_back(Q->_halo_gid[hh]);
+        send_meta_by_rank[dest].push_back(Q->_halo_pos[hh]);
+        send_meta_by_rank[dest].push_back(nth);
+        send_meta_by_rank[dest].push_back(-1);
+        send_vals_by_rank[dest].push_back(xin[i0+nth*Npo]);
+      }
+    }
 
     vector<int> send_counts(nproc,0), recv_counts(nproc,0), send_displs(nproc,0), recv_displs(nproc,0);
     for(int rr=0; rr<nproc; rr++) send_counts[rr] = static_cast<int>(send_vals_by_rank[rr].size());
@@ -1408,7 +1427,9 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         cout<<"inconsistent diagonal block size in C_FuncApplyDiagPrecond"<<endl;
         exit(1);
       }
-      int cnt_block = (*nvec)*Npo_diag;
+      // the grown block (restricted additive Schwarz): own points, then halo; only own points are returned
+      int Npo_ext = Npo_diag + (Q->_halo_tensor.empty() ? 0 : static_cast<int>(Q->_halo_tensor[bb].size()));
+      int cnt_block = (*nvec)*Npo_ext;
       int cnt_diag = (*nvec)*Nloc_diag;
       vector<_Complex double> block_in(cnt_block,{0.0,0.0});
       vector<_Complex double> block_out(cnt_block,{0.0,0.0});
@@ -1422,8 +1443,8 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
             int item = it->second[qq];
             int pos = recv_meta[4*item+1];
             int nth = recv_meta[4*item+2];
-            if(pos >= 0 && pos < Npo_diag && nth >= 0 && nth < *nvec){
-              block_in[pos+nth*Npo_diag] = recv_vals[item];
+            if(pos >= 0 && pos < Npo_ext && nth >= 0 && nth < *nvec){
+              block_in[pos+nth*Npo_ext] = recv_vals[item];
             }
           }
         }
@@ -1435,7 +1456,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
         for (int nth=0; nth<*nvec; nth++){
-          xin_diag[i0+nth*Nloc_diag] = block_in[(ii-1)+nth*Npo_diag];
+          xin_diag[i0+nth*Nloc_diag] = block_in[(ii-1)+nth*Npo_ext];
         }
       }
 
@@ -1451,7 +1472,7 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
         int ii;
         z_c_bpack_new2old(Q->quant_ptr_diags[bb]->msh_bf,&i_new_diag_scalar,&ii);
         for (int nth=0; nth<*nvec; nth++){
-          block_out[(ii-1)+nth*Npo_diag] = xout_diag[i0+nth*Nloc_diag];
+          block_out[(ii-1)+nth*Npo_ext] = xout_diag[i0+nth*Nloc_diag];
         }
       }
 
@@ -1472,10 +1493,10 @@ inline void C_FuncApplyDiagPrecond(int* Ndim_p, char const *trans, int *nin, int
             int pos = recv_meta[4*item+1];
             int nth = recv_meta[4*item+2];
             int local_i0 = recv_meta[4*item+3];
-            if(pos >= 0 && pos < Npo_diag && nth >= 0 && nth < *nvec){
+            if(pos >= 0 && pos < Npo_diag && local_i0 >= 0 && nth >= 0 && nth < *nvec){
               ret_meta_by_rank[src].push_back(local_i0);
               ret_meta_by_rank[src].push_back(nth);
-              ret_vals_by_rank[src].push_back(block_out_sum[pos+nth*Npo_diag]);
+              ret_vals_by_rank[src].push_back(block_out_sum[pos+nth*Npo_ext]);
             }
           }
         }
@@ -1703,6 +1724,7 @@ if(myrank==master_rank){
   int bdiag_knn = 20;
   int bdiag_elem_extract = 2;
   int bdiag_format = 1; // diagonal blocks: 1 HODLR, 7 H2
+  int bdiag_overlap = 0; // 0: block Jacobi; > 0: restricted additive Schwarz, blocks grown by this many grid layers
   bool bdiag_gpu = false; // diagonal blocks on the GPU (H2_use_gpu / HODLR_use_gpu): register their GPU entry evaluator
   double bdiag_tol_rand = 1e-2;
   double bdiag_tol_Rdetect = 1e-3;
@@ -1767,6 +1789,7 @@ if(myrank==master_rank){
       {"bdiag_sample_para_outer",        required_argument, 0, 42},
       {"bdiag_elem_extract",        required_argument, 0, 43},
       {"bdiag_format",        required_argument, 0, 44},
+      {"bdiag_overlap",        required_argument, 0, 45},
       {"use_fft_circulant",        required_argument, 0, 100},
       {"fftw_plan_mode",        required_argument, 0, 101},
       {"fft_plan_mode",        required_argument, 0, 102},
@@ -1955,6 +1978,10 @@ if(myrank==master_rank){
     case 44: {
       std::istringstream iss(optarg);
       iss >> bdiag_format;
+    } break;
+    case 45: {
+      std::istringstream iss(optarg);
+      iss >> bdiag_overlap;
     } break;
     case 100: {
       // BPACK consumes this option from the original argv below.
@@ -2241,6 +2268,7 @@ if(myrank==master_rank){
     quant_ptr_bf_s2s=new C_QuantApp_BF(data_geo, Ndim, Nx_s, Ny_s, Nz_s, static_cast<int>(Iint), static_cast<int>(Jint), static_cast<int>(Kint), 1, w, x0min, x0max, y0min, y0max, z0min, z0max, h, dl, ivelo,&slowness_array,rmax,verbose,vs, bdiag_precon, x_cheb,y_cheb,z_cheb,u1_square_int_cheb,D1_int_cheb,D2_int_cheb);
     quant_ptr_bf_s2s->_bdiag_level = bdiag_level;
     quant_ptr_bf_s2s->_bdiag_format = bdiag_format;
+    quant_ptr_bf_s2s->_bdiag_overlap = bdiag_overlap;
     quant_ptr_bf_s2s->_nscatter = Nscatter;
     quant_ptr_bf_s2s->_background_s0 = background_s0;
     quant_ptr_bf_s2s->_scatterer_tol = scatterer_tol;
@@ -2547,6 +2575,125 @@ if(myrank==master_rank){
 	      quant_ptr_bf_s2s->_local_diag_pos[i] = active_diag_pos[ii];
 	    }
 
+    // Restricted additive Schwarz (bdiag_overlap > 0): a block's matrix is built on its points and a halo, the
+    // points of other blocks within bdiag_overlap grid layers of its box (the bounding box of its grid indices;
+    // the blocks' boxes do not overlap, as the bisection's cells do not); the preconditioner solves on the grown
+    // block and keeps the solution on the block's own points.  A halo point's value goes to the block's root with
+    // the block's input, from the rank that owns the point.
+    quant_ptr_bf_s2s->_halo_tensor.assign(nblock, vector<int>());
+    if(bdiag_overlap > 0){
+      // the boxes of the blocks this rank is the root of, gathered on every rank: gid, root, lo[3], hi[3]
+      vector<int> mine;
+      for(int bb=0, off=0; bb<nblock; bb++){
+        int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+        int n = info[1] - info[0];
+        if(myrank == info[4]){
+          int lo[3] = {INT_MAX, INT_MAX, INT_MAX}, hi[3] = {0, 0, 0};
+          for(int ii=0; ii<n; ii++){
+            int ts = diag_tensor_perm[off+ii], md[3];
+            z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&ts,md);
+            for(int d=0; d<3; d++){ lo[d] = min(lo[d],md[d]); hi[d] = max(hi[d],md[d]); }
+          }
+          mine.insert(mine.end(), {info[7], info[4], lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]});
+        }
+        off += n;
+      }
+      int nmine = static_cast<int>(mine.size());
+      vector<int> box_counts(size), box_displs(size);
+      MPI_Allgather(&nmine, 1, MPI_INT, box_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+      int box_total = 0;
+      for(int rr=0; rr<size; rr++){ box_displs[rr] = box_total; box_total += box_counts[rr]; }
+      vector<int> boxes(box_total);
+      MPI_Allgatherv(mine.data(), nmine, MPI_INT, boxes.data(), box_counts.data(), box_displs.data(), MPI_INT, MPI_COMM_WORLD);
+
+      // this rank's points: tensor id -> local position, and the bounds of their grid indices
+      unordered_map<int,int> local_of;
+      local_of.reserve(2*static_cast<size_t>(nlocal_active));
+      int llo[3] = {INT_MAX, INT_MAX, INT_MAX}, lhi[3] = {0, 0, 0};
+      for(int ii=0; ii<nlocal_active; ii++){
+        int ts = active_tensor_old[ii], md[3];
+        local_of[ts] = active_local_pos[ii];
+        z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&ts,md);
+        for(int d=0; d<3; d++){ llo[d] = min(llo[d],md[d]); lhi[d] = max(lhi[d],md[d]); }
+      }
+
+      // this rank's points in each block's halo: (gid, tensor id) to the block's root
+      vector<vector<int> > req_by_rank(size), req_local_by_rank(size);
+      for(int b=0; b<box_total/8 && nlocal_active>0; b++){
+        const int* B = boxes.data() + 8*b;
+        int glo[3], ghi[3];
+        bool empty = false;
+        for(int d=0; d<3; d++){
+          glo[d] = max(max(B[2+d]-bdiag_overlap, 1), llo[d]);
+          ghi[d] = min(min(B[5+d]+bdiag_overlap, Ns_s[d]), lhi[d]);
+          if(glo[d] > ghi[d]) empty = true;
+        }
+        if(empty) continue;
+        for(int z=glo[2]; z<=ghi[2]; z++) for(int y=glo[1]; y<=ghi[1]; y++) for(int x=glo[0]; x<=ghi[0]; x++){
+          if(x>=B[2] && x<=B[5] && y>=B[3] && y<=B[6] && z>=B[4] && z<=B[7]) continue;  // (the block's own)
+          int md[3] = {x, y, z}, ts;
+          z_c_bpack_multiindex_to_singleindex(&Ndim,Ns_s,&ts,md);
+          auto it = local_of.find(ts);
+          if(it == local_of.end()) continue;  // (another rank's, or not a scatterer point)
+          req_by_rank[B[1]].push_back(B[0]);
+          req_by_rank[B[1]].push_back(ts);
+          req_local_by_rank[B[1]].push_back(it->second);
+        }
+      }
+      vector<int> req_send_counts(size), req_recv_counts(size), req_send_displs(size), req_recv_displs(size);
+      for(int rr=0; rr<size; rr++) req_send_counts[rr] = static_cast<int>(req_by_rank[rr].size());
+      MPI_Alltoall(req_send_counts.data(), 1, MPI_INT, req_recv_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+      int req_send_total = 0, req_recv_total = 0;
+      for(int rr=0; rr<size; rr++){
+        req_send_displs[rr] = req_send_total; req_send_total += req_send_counts[rr];
+        req_recv_displs[rr] = req_recv_total; req_recv_total += req_recv_counts[rr];
+      }
+      vector<int> req_send, req_recv(req_recv_total);
+      req_send.reserve(req_send_total);
+      for(int rr=0; rr<size; rr++) req_send.insert(req_send.end(), req_by_rank[rr].begin(), req_by_rank[rr].end());
+      MPI_Alltoallv(req_send.data(), req_send_counts.data(), req_send_displs.data(), MPI_INT,
+                    req_recv.data(), req_recv_counts.data(), req_recv_displs.data(), MPI_INT, MPI_COMM_WORLD);
+
+      // at the roots: a block's halo is its requested points in tensor-id order, after its own points
+      unordered_map<int,int> local_block_of;  // gid -> bb, the blocks this rank is the root of
+      vector<int> own_size(nblock, 0);
+      for(int bb=0; bb<nblock; bb++){
+        int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+        own_size[bb] = info[1] - info[0];
+        if(myrank == info[4]) local_block_of[info[7]] = bb;
+      }
+      for(int k=0; k<req_recv_total/2; k++) quant_ptr_bf_s2s->_halo_tensor[local_block_of.at(req_recv[2*k])].push_back(req_recv[2*k+1]);
+      for(auto& h : quant_ptr_bf_s2s->_halo_tensor){
+        sort(h.begin(), h.end());
+        h.erase(unique(h.begin(), h.end()), h.end());
+      }
+      vector<int> pos_reply(req_recv_total/2);
+      for(int k=0; k<req_recv_total/2; k++){
+        int bb = local_block_of.at(req_recv[2*k]);
+        const vector<int>& h = quant_ptr_bf_s2s->_halo_tensor[bb];
+        pos_reply[k] = own_size[bb] + static_cast<int>(lower_bound(h.begin(), h.end(), req_recv[2*k+1]) - h.begin());
+      }
+      // back to the owners: each requested point's position in its block
+      vector<int> pos_send_counts(size), pos_send_displs(size), pos_recv_counts(size), pos_recv_displs(size);
+      for(int rr=0; rr<size; rr++){
+        pos_send_counts[rr] = req_recv_counts[rr]/2; pos_send_displs[rr] = req_recv_displs[rr]/2;
+        pos_recv_counts[rr] = req_send_counts[rr]/2; pos_recv_displs[rr] = req_send_displs[rr]/2;
+      }
+      vector<int> pos_recv(req_send_total/2);
+      MPI_Alltoallv(pos_reply.data(), pos_send_counts.data(), pos_send_displs.data(), MPI_INT,
+                    pos_recv.data(), pos_recv_counts.data(), pos_recv_displs.data(), MPI_INT, MPI_COMM_WORLD);
+      quant_ptr_bf_s2s->_halo_local.clear(); quant_ptr_bf_s2s->_halo_dest.clear();
+      quant_ptr_bf_s2s->_halo_gid.clear(); quant_ptr_bf_s2s->_halo_pos.clear();
+      for(int rr=0; rr<size; rr++){
+        for(size_t k=0; k<req_local_by_rank[rr].size(); k++){
+          quant_ptr_bf_s2s->_halo_local.push_back(req_local_by_rank[rr][k]);
+          quant_ptr_bf_s2s->_halo_dest.push_back(rr);
+          quant_ptr_bf_s2s->_halo_gid.push_back(req_by_rank[rr][2*k]);
+          quant_ptr_bf_s2s->_halo_pos.push_back(pos_recv[pos_recv_displs[rr]+k]);
+        }
+      }
+    }
+
     quant_ptr_bf_s2s->_diag_block_offsets.assign(nblock+1,0);
     for (int bb=0; bb<nblock; bb++){
       int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
@@ -2574,9 +2721,10 @@ if(myrank==master_rank){
       int* block_info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
       int head_g = block_info[0];
       int tail_g = block_info[1];
-      int Npo = tail_g - head_g;
+      int Npo_own = tail_g - head_g;
+      int Npo = Npo_own;  // (with bdiag_overlap > 0, its halo too, below)
       int block_offset = quant_ptr_bf_s2s->_diag_block_offsets[bb];
-      quant_ptr_bf_s2s->_diag_npo[bb] = Npo;
+      quant_ptr_bf_s2s->_diag_npo[bb] = Npo_own;
       data_geo_diag.resize(Ndim*Npo);
       vector<double> point_slowness(Npo,background_s0);
       vector<pair<int64_t,int> > diag_slowness_requests;
@@ -2599,14 +2747,29 @@ if(myrank==master_rank){
       }
       MPI_Fint Fcomm_diag = MPI_Comm_c2f(quant_ptr_bf_s2s->_diag_comms[bb]);
       z_c_bpack_createptree(&pgrp_nproc, groups_diag.data(), &Fcomm_diag, &(quant_ptr_bf_s2s->ptree_diags[bb]));
+      if(bdiag_overlap > 0){
+        // the grown block: its own points, then its halo (the block's other ranks get it from its root)
+        vector<int>& halo = quant_ptr_bf_s2s->_halo_tensor[bb];
+        if(pgrp_nproc > 1){
+          int nh = static_cast<int>(halo.size());
+          MPI_Bcast(&nh, 1, MPI_INT, 0, quant_ptr_bf_s2s->_diag_comms[bb]);
+          halo.resize(nh);
+          MPI_Bcast(halo.data(), nh, MPI_INT, 0, quant_ptr_bf_s2s->_diag_comms[bb]);
+        }
+        Npo = Npo_own + static_cast<int>(halo.size());
+        data_geo_diag.resize(Ndim*Npo);
+        point_slowness.assign(Npo, background_s0);
+      }
 
       if(myrank == pgrp_head && (bdiag_format!=7 || global_block_id <= 4)){
-        std::cout<<"Rank "<< myrank <<": Constructing "<<(bdiag_format==7?"H2":"HODBF")<<" for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo << " MPI ranks: " << pgrp_nproc <<std::endl;
+        std::cout<<"Rank "<< myrank <<": Constructing "<<(bdiag_format==7?"H2":"HODBF")<<" for diagonal block: "<< bb+1 << " out of " << nblock <<". Npo: "<< Npo_own;
+        if(Npo > Npo_own) std::cout<<" + "<<Npo-Npo_own<<" halo";
+        std::cout<<" MPI ranks: " << pgrp_nproc <<std::endl;
       }
 
       for(int ii=0;ii<Npo;ii++){
-        int tensor_scalar = diag_tensor_perm[block_offset + ii];
-        quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
+        int tensor_scalar = ii < Npo_own ? diag_tensor_perm[block_offset + ii] : quant_ptr_bf_s2s->_halo_tensor[bb][ii-Npo_own];
+        if(ii < Npo_own) quant_ptr_bf_s2s->_diag_tensor_ids[block_offset + ii] = tensor_scalar;
 
         int tensor_scalar_tmp = tensor_scalar;
         int tensor_md[Ndim];
@@ -2697,6 +2860,21 @@ if(myrank==master_rank){
         MPI_Reduce(&nblock, &nbsum, 1, MPI_INT, MPI_SUM, master_rank, MPI_COMM_WORLD);
         if(myrank==master_rank) std::cout<<"Block-diagonal preconditioner ("<<(bdiag_format==7?"H2":"HODBF")<<"): "<<nbsum<<" blocks, up to "<<nbmax
           <<" per rank; construction+factorization max "<<tmax<<" s, mean "<<tsum/size<<" s per rank"<<std::endl;
+        if(bdiag_overlap > 0){
+          // the halos, counted at the blocks' roots
+          double own_halo[2] = {0.0, 0.0}, halo_max = 0.0;
+          for(int bb=0; bb<nblock; bb++){
+            int* info = quant_ptr_bf_s2s->_diag_block_info.data() + bb*quant_ptr_bf_s2s->_diag_block_stride;
+            if(myrank != info[4]) continue;
+            own_halo[0] += info[1] - info[0];
+            own_halo[1] += quant_ptr_bf_s2s->_halo_tensor[bb].size();
+            halo_max = max(halo_max, static_cast<double>(quant_ptr_bf_s2s->_halo_tensor[bb].size()));
+          }
+          MPI_Allreduce(MPI_IN_PLACE, own_halo, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+          MPI_Allreduce(MPI_IN_PLACE, &halo_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+          if(myrank==master_rank) std::cout<<"  restricted additive Schwarz, overlap "<<bdiag_overlap<<" grid layers: halo points per block mean "
+            <<own_halo[1]/max(nbsum,1)<<", max "<<halo_max<<" ("<<100.0*own_halo[1]/max(own_halo[0],1.0)<<"% of the blocks' own points)"<<std::endl;
+        }
       }
 	  }
 
