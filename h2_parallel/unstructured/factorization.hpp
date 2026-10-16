@@ -32,16 +32,9 @@ void factorize(H2<CoordType, DataType>* solver,
                   std::is_same_v<DataType, std::complex<double>>) {
     const auto factorization_method =
         butterfly::h2_xrr_factorization_method(solver->options);
-    // (entries through a collective callback: on the host for now)
-    configure_color_gpu(solver->options.use_gpu != 0 && solver->kernel.collective == nullptr);
-    if (solver->options.use_gpu != 0 && solver->kernel.collective != nullptr && solver->options.verbosity >= 0) {
-        int rank = 0;
-        MPI_Comm_rank(solver->comm, &rank);
-        if (rank == 0) {
-            std::cout << "H2: entries through a collective callback (elem_extract=1): the factorization on the host"
-                      << std::endl;
-        }
-    }
+    // (entries through a collective callback: the GPU reads them through
+    // the library's evaluator of them, gpu/collective_evaluator.hpp)
+    configure_color_gpu(solver->options.use_gpu != 0);
     fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
     fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)

@@ -17,6 +17,16 @@
 // with flag kRoundActive, the others serving (serve) until the section's
 // end (end_section).  With entries through a local callback (elem_extract 0
 // or 2) none of this exists: H2Kernel::collective is null.
+//
+// A round is the same calls wherever a rank makes it, so the ranks need not
+// be at the same point of their work: a phase ends at the first round in
+// which no rank asks for a block, whichever rounds the others are in.  The
+// device path (H2_use_gpu; gpu/collective_evaluator.hpp) fetches the blocks
+// a batch lacks in one round on the spot (fetch_now, flag kRoundBusy), and
+// before any other communication between the level's ranks (a transport,
+// the level's end, the transition's decisions) waits in rounds until no rank
+// is busy (quiesce): a rank blocked elsewhere would leave the others' rounds
+// without it.
 
 #include <mpi.h>
 
@@ -80,6 +90,7 @@ public:
                               void*);
     static constexpr int kRoundRequest = 1;  // (a rank has recorded blocks)
     static constexpr int kRoundActive = 2;   // (a section is running)
+    static constexpr int kRoundBusy = 4;     // (a rank may still ask, in the device path's sense)
 
     CollectiveEntries(MPI_Comm comm, Callback callback, void* quant, int callback_pid)
         : callback_(callback), quant_(quant) {
@@ -114,6 +125,24 @@ public:
         return false;
     }
 
+    // Drops the block (or its transpose) once read: the device path reads
+    // each block it fetched once.  Not concurrent with lookups.
+    void release(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
+        for (int t = 0; t < 2; ++t) {
+            const int64_t* a = t == 0 ? x : y;
+            const int64_t* b = t == 0 ? y : x;
+            const int64_t na = t == 0 ? nx : ny, nb = t == 0 ? ny : nx;
+            auto range = index_.equal_range(hash(a, na, b, nb));
+            for (auto it = range.first; it != range.second; ++it) {
+                Block& blk = blocks_[it->second];
+                if (!same(blk, a, na, b, nb)) continue;
+                blk = Block{};
+                index_.erase(it);
+                return;
+            }
+        }
+    }
+
     // Records the block for the next round.  Thread safe.
     void record(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -145,13 +174,23 @@ public:
         round_seconds_ += MPI_Wtime() - t0;
         return global;
     }
+    // The blocks recorded so far, fetched now (one round, flags kRoundActive
+    // | kRoundBusy): the device path, from one thread.
+    void fetch_now() { round(kRoundActive | kRoundBusy); }
+    // Rounds until one in which no rank is busy: before communication between
+    // the section's ranks that is not a round (see the notes at the top).
+    // Every rank of the section calls it at the same points.
+    void quiesce() {
+        while ((round(kRoundActive) & kRoundBusy) != 0) {}
+    }
     // A rank outside a running section: rounds until the section's end.
     void serve() {
         while ((round(0) & kRoundActive) != 0) {}
     }
-    // The ranks of a section, at its end (all of them, together).
+    // A rank of a section, at its end: serves the others' rounds until every
+    // rank of the section has ended it.
     void end_section() {
-        if (round(0) != 0) throw std::logic_error("CollectiveEntries::end_section: a section still running");
+        serve();
         clear();
     }
     // The fetched blocks are no longer needed (a phase's end).
@@ -332,7 +371,7 @@ void run_entry_phase(Entries* entries, std::vector<int64_t> items, Run&& run) {
             if (!abandoned.empty()) throw std::logic_error("run_entry_phase: an item abandoned without collective entries");
             return;
         }
-        const int global = entries->round(Entries::kRoundActive);
+        const int global = entries->round(Entries::kRoundActive | Entries::kRoundBusy);
         if ((global & Entries::kRoundRequest) == 0) {
             if (!abandoned.empty()) throw std::logic_error("run_entry_phase: an item abandoned with nothing to fetch");
             return;

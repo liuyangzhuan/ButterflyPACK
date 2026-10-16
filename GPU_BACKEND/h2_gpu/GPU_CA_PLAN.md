@@ -6090,10 +6090,8 @@ ranks bitwise as before):
   are made first by a pass that writes nothing;
 - the rounds are collective over all ranks: the ranks of a level run its
   phases, the others serve the rounds (from the level's start) until the
-  level's transition is built; a rank with no boxes in a wave joins its rounds
-  with nothing to run; on the host for now (the device transition's
-  decisions are collective over the transition, whose parent-only ranks are
-  serving).
+  level's parents are built; a rank with no boxes in a wave joins its rounds
+  with nothing to run.
 
 Laplace, tol 1e-3, host path (H2_use_gpu 0; the factor time against the same
 H2 factored from the kernel):
@@ -6110,9 +6108,50 @@ H2 factored from the kernel):
 (mostly the ID's two-hop rows), not the rounds.  Without discovery (each
 item abandoned at its first request) 32^3 took 72.9 s.
 
-Not yet: the GPU path in this mode (step 4 of the plan), and planners
-(fetching a phase's structural requests before it runs), which by the profile
-above would save rounds and replays but not the extraction volume.
+**4. The GPU path** (H2_use_gpu 1; gpu/collective_evaluator.hpp).  The
+device box path takes its entries from the application's GPU evaluator; with
+entries through a collective callback the library registers its own in its
+place: a block evaluator over the fetched blocks (the blocks' ids on the
+host), which fetches the blocks a batch lacks in one round on the spot
+(`fetch_now`) and drops each block once it is on the device.  Nothing is
+abandoned: the device goes on with the real values.  A round is the same
+calls wherever a rank makes it, so a rank fetching in the middle of a wave is
+joined by the others at their own next round (a fetch, a host phase, a
+quiesce, serving).  What must not happen is a rank blocked in other
+communication (a transport's exchange, the level's collectives) while another
+waits for it in a round:
+- before and after each transport and before the level's end, the level's
+  ranks quiesce: rounds until one in which no rank is busy (flag kRoundBusy,
+  set by the device's fetches and by the host phases);
+- the level's section ends once its parents are built, inside the device
+  transition between the build and the reduction's decisions (a rank whose
+  parents are built on the host builds them before the transition), so the
+  parent-only ranks serving its rounds are free for the reduction; a rank
+  ending its section serves the others' rounds until all have ended it;
+- the host IDs of a level without the device sketch run as a phase;
+  BPACK_CHECK=kernel is skipped (no host entries of its own to compare).
+
+Laplace, tol 1e-3, the same runs on the GPU (rounds: the slowest rank's time
+in them; from the kernel: the same H2 factored on the GPU from the kernel):
+
+| | source ranks | target ranks | factor | in rounds | from the kernel | host path | acc_mvp | acc_backward |
+|---|---|---|---|---|---|---|---|---|
+| 32^3 | 1 | 1 | 3.58 s | 2.54 s | 0.45 s | 11.8 s | 3.5e-4 | 6.1e-16 |
+| 48^3 | 4 | 8 | 5.06 s | 3.98 s | 0.39 s | 9.85 s | 3.4e-4 | 6.6e-16 |
+| 64^3 | 5 | 12 | 13.6 s | 12.3 s | 1.37 s | 36.7 s | 3.9e-4 | 5.3e-16 |
+
+Every level and transition ran on the device, the reductions too (48^3:
+8 -> 1; 64^3: 12 -> 4 -> 1, the last into rank 4, idle at level 2 and serving
+its rounds until the section's end).  Fewer rounds than on the host (84 with
+38 fetching vs 143 with 36; 69 with 23 vs 130 with 23) for the same entries
+(1.4e9, 7.21e9): about 1 s of the factor time is the factorization, the rest
+is the extraction.  With elem_extract 0 or 2 nothing changed (Laplace 192^3
+and the 128K sphere on 8 ranks, GPU, bitwise); the host path's rounds are as
+before (143, 130).
+
+Not yet: planners (fetching a phase's structural requests before it runs),
+which by the profiles above would save rounds and replays but not the
+extraction volume; and the extraction's own throughput, now the cost.
 
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 

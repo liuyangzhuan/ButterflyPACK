@@ -88,6 +88,16 @@ public:
         e->origin_ = "block evaluator";
         return e;
     }
+    // The library's own block evaluator of entries through a collective
+    // callback (collective_evaluator.hpp): reads the host ids, never warmed
+    // up (its first use costs nothing; a warm-up would fetch).
+    static std::shared_ptr<Evaluator> from_collective(bpack_gpu_block_evaluator f, void* user, int scalar_bytes) {
+        std::shared_ptr<Evaluator> e = from_block(f, user, BPACK_GPU_SYMMETRIC | BPACK_GPU_HOST_IDS, scalar_bytes);
+        e->warmed_ = true;
+        e->collective_ = true;
+        e->origin_ = "entries through the collective callback";
+        return e;
+    }
     static std::shared_ptr<Evaluator> from_list(bpack_gpu_list_evaluator f, void* user, int flags,
                                                 int scalar_bytes) {
         if (f == nullptr) throw std::invalid_argument("GPU entry-list evaluator: null function");
@@ -104,6 +114,8 @@ public:
     bool needs_coordinates() const { return (flags_ & BPACK_GPU_COORDINATES) != 0; }
     // The sketch's kernel rows can be evaluated inside the sketch.
     bool inline_entries() const { return form_ == Form::entry; }
+    // The entries come from a collective callback (from_collective).
+    bool collective() const { return collective_; }
     const std::string& origin() const { return origin_; }
     // Seconds of the NVRTC compile of an entry evaluator given as source (0
     // before its first use, and for the other forms)
@@ -444,6 +456,7 @@ private:
     mutable std::shared_ptr<NvrtcEntryKernels> nvrtc_;
     mutable double* params_ = nullptr;
     mutable bool warmed_ = false;  // (warm_up ran)
+    bool collective_ = false;
     mutable double compile_seconds_ = 0.0;
     // block, list
     bpack_gpu_block_evaluator block_ = nullptr;

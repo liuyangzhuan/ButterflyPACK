@@ -1706,11 +1706,25 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	// may communicate, as c_bpack_extractelement_bridge does), so the blocks
 	// are fetched in rounds of all ranks (collective_entries.hpp); otherwise
 	// each rank calls its callbacks when it needs an entry
+	// (H2_use_gpu: the device reads the same blocks through the library's
+	// evaluator of them, gpu/collective_evaluator.hpp, in place of the
+	// application's)
+#if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+	if (const auto* e = fmm::gpu::evaluator_of(H2_solver->kernel.gpu_evaluator); e != nullptr && e->collective()) {
+	  H2_solver->kernel.gpu_evaluator.reset();
+	}
+#endif
 	H2_solver->kernel.collective.reset();
 	if (elem_extract == 1 && C_FuncZmnBlock != nullptr) {
 	  H2_solver->kernel.collective =
 	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
 	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid);
+#if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+	  if (H2_solver->options.use_gpu != 0) {
+	    H2_solver->kernel.gpu_evaluator =
+	      fmm::gpu::make_collective_evaluator<H2Data>(H2_solver->kernel.collective.get());
+	  }
+#endif
 	}
 #else
 	format7_requires_mpi("c_bpack_construct_element_compute");

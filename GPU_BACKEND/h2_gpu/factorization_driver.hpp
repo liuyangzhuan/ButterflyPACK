@@ -20,6 +20,7 @@
 #ifdef H2_HAVE_GPU
 
 #include "ca_halo.hpp"
+#include "collective_evaluator.hpp"
 #include "device_reduction.hpp"
 #include "level_eliminator.hpp"
 #include "owner_plan.hpp"
@@ -31,6 +32,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -793,9 +795,16 @@ public:
     // or the generators of the last wave, the host transport
     // (host_transport(&installed) installs the remote generators and returns
     // its MPI time), and the device updates from the installed generators.
+    // (Entries through a collective callback: the level's ranks quiesce their
+    // rounds before the exchange and after the device updates, which fetch.)
     template<typename HostTransport>
     Duration transport(PendingFactorUpdates<DataType>& pending, HostTransport&& host_transport) {
-        if (level_->device_exchange()) return level_->exchange();
+        quiesce_entries();
+        if (level_->device_exchange()) {
+            const Duration duration = level_->exchange();
+            quiesce_entries();
+            return duration;
+        }
         const auto t_emit = std::chrono::steady_clock::now();
         level_->emit_generators(pending);
         const auto t_exchange = std::chrono::steady_clock::now();
@@ -806,6 +815,7 @@ public:
         eliminator_stats().exchange +=
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t_exchange).count();
         level_->receive_remote(installed);
+        quiesce_entries();
         return duration;
     }
 
@@ -836,6 +846,7 @@ public:
     // the solve's factors stay on the device (only if every rank of the
     // level still holds all of its own).
     void finish_level(int lvl, const PendingFactorUpdates<DataType>& pending, MPI_Comm level_comm, bool announce) {
+        if (level_) quiesce_entries();  // (before the collectives below)
         const auto t_finish = std::chrono::steady_clock::now();
         double finish_seconds = 0.0;  // this rank's level_->finish()
         if (level_) {
@@ -984,6 +995,13 @@ public:
 
     // ---- the level transition
 
+    // This rank builds the parents of its boxes on the device (transition).
+    bool builds_parents(const Level& level, const Level& parent_level) const {
+        const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
+        return level_ && level.is_process_active && level_->can_build_parent() &&
+               (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric && !opt_.is_hermitian;
+    }
+
     // Device transition: this level's blocks never leave the device, and the
     // parent's go to the next level's eliminator (or to the host when that
     // level runs there).  Each rank builds the parents of its own boxes, with
@@ -1001,15 +1019,18 @@ public:
     // ranks and the parent level's, whose owners at a reduction may be ranks
     // idle at this level): the device reduction runs over it, the idle
     // owners receiving only.
+    // `section_end` (every rank of the call, after the parents are built and
+    // before any communication of the transition): entries through a
+    // collective callback end the level's section of rounds there, so the
+    // parent-only ranks serving them come to the transition (a rank that
+    // builds its parents on the host does so before the call: builds_parents).
     template<typename StructureBuilder>
     bool transition(const Level& level, const Level& parent_level, std::vector<Box>& parents,
                     StructureBuilder&& build_structure, bool announce, MPI_Comm level_comm = MPI_COMM_NULL,
-                    MPI_Comm transition_comm = MPI_COMM_NULL) {
+                    MPI_Comm transition_comm = MPI_COMM_NULL, const std::function<void()>& section_end = {}) {
         bool on_device = false;
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
-        const bool builds = level_ && level.is_process_active && level_->can_build_parent() &&
-                            (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric &&
-                            !opt_.is_hermitian;
+        const bool builds = builds_parents(level, parent_level);
         if (builds) {
             parents = build_structure();
             {   // (8x diagnostics) a parent wider than the device sketch takes, with its children's sizes
@@ -1059,6 +1080,7 @@ public:
                 }
             }
         }
+        if (section_end) section_end();
         const int parent_lvl = level.level - 1;
         bool keep = false;
         bool reduced = false;
@@ -1721,6 +1743,13 @@ public:
     }
 
 private:
+    // Entries through a collective callback: rounds until no rank of the
+    // level is fetching (collective_entries.hpp), before communication
+    // between them.  Nothing otherwise.
+    void quiesce_entries() {
+        if (auto* entries = kernel_entries(kernel_, 0)) entries->quiesce();
+    }
+
     Tree* tree_;
     KernelType* kernel_;
     Options opt_;

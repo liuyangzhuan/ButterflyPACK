@@ -3066,7 +3066,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
     if (ca_) sync_remote_boxes(false);
 
     // BPACK_CHECK=kernel: the GPU evaluator against the host's entries
-    if (env::check("kernel")) check_device_kernel();
+    // (entries through a collective callback: no host entries of its own to compare)
+    if (env::check("kernel") && !evaluator_->collective()) check_device_kernel();
 
     // ---- Schur and near-field blocks: adopted from the device transition,
     //      or packed on the host (in parallel), uploaded once, and scattered
@@ -3352,7 +3353,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::check_device_kernel() {
 }
 
 // ---------------------------------------------------------------------------
-// Host sketch and ID of every box of the wave (the CPU code).
+// Host sketch and ID of every box of the wave (the CPU code).  With entries
+// through a collective callback the boxes whose sketch asked for blocks not
+// fetched yet sketch again after a round (run_entry_phase), as on the host.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
@@ -3362,16 +3365,23 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
     int boundary = 0;
     const int team = std::max(1, omp_get_max_threads());
     const int split = split_threads_for(static_cast<int64_t>(wave.size()), team);
+    std::vector<int64_t> wave_items(wave.size());
+    std::iota(wave_items.begin(), wave_items.end(), int64_t{0});
+    run_entry_phase(kernel_entries(kernel_, 0), std::move(wave_items), [&](const std::vector<int64_t>& items) {
+    std::vector<int64_t> abandoned;
     #pragma omp parallel default(shared) reduction(+ : boundary)
     {
         FactorizationThreadScratch<CoordType, DataType> scratch;
         scratch.split_threads = split;
         #pragma omp for schedule(dynamic)
-        for (int64_t bi = 0; bi < static_cast<int64_t>(wave.size()); ++bi) {
+        for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+            const int64_t bi = items[static_cast<size_t>(item)];
             try {
                 Box* box = writable_box(wave[static_cast<size_t>(bi)]);
                 if (box == nullptr) throw std::runtime_error("LevelEliminator: wave box is not local");
+                entry_item_begin();
                 gather_id_target_streamed(tree_, box, level_, kernel_, scratch, box->on_boundary, tolerance_);
+                entry_item_end();
                 if (!scratch.streamed_sketch_valid) {
                     throw std::runtime_error("LevelEliminator: streamed sketch unavailable for box " +
                                              std::to_string(box->morton_index));
@@ -3400,13 +3410,22 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
                 wb.n = static_cast<int>(box->num_points);
                 wb.k = static_cast<int>(box->skeleton_indices.size());
                 wb.r = static_cast<int>(box->redundant_indices.size());
+            } catch (const H2EntryMiss&) {
+                std::lock_guard<std::mutex> lock(failure_mutex);
+                abandoned.push_back(bi);
             } catch (...) {
                 std::lock_guard<std::mutex> lock(failure_mutex);
-                if (!failure) failure = std::current_exception();
+                if (entry_item_abandoned()) {
+                    abandoned.push_back(bi);
+                } else if (!failure) {
+                    failure = std::current_exception();
+                }
             }
         }
     }
     if (failure) std::rethrow_exception(failure);
+    return abandoned;
+    });
     boundary_count = boundary;
 }
 

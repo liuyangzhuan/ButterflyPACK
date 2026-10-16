@@ -240,8 +240,8 @@ void hierarchical_factorization_unstructured(
         auto& parent_level = tree->levels[current_level - 1];
         filter_level_topology(tree, current_level, occupied_topology);
         // Entries through a collective callback: the level's ranks fetch
-        // their blocks in rounds over all ranks until the level's transition
-        // is built (the section's end below); a rank without work here serves
+        // their blocks in rounds over all ranks until the level's parents
+        // are built (the section's end below); a rank without work here serves
         // those rounds first.
         if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && !level.is_process_active) {
             entries->serve();
@@ -620,8 +620,10 @@ void hierarchical_factorization_unstructured(
             gpu_driver.start_level(current_level, use_streamed_level, level_comm,
                                    print_detail && rank == level_print_rank);
             const bool gpu_level_local = gpu_driver.local();
+            const bool gpu_level_on = gpu_driver.on();
 #else
             const bool gpu_level_local = false;
+            const bool gpu_level_on = false;
 #endif
 
             for (int counter = 0; counter < static_cast<int>(color_bins.size()); ++counter) {
@@ -757,8 +759,9 @@ void hierarchical_factorization_unstructured(
                     // participated in this wave's transport.  Avoid numerical
                     // work while still advancing remote assisting-box state.
                     // (Entries through a collective callback: this wave's
-                    // phase rounds all the same, with nothing to run.)
-                    if (auto* entries = kernel_entries(kernel, 0)) {
+                    // phase rounds all the same, with nothing to run; a
+                    // device level has no phases here.)
+                    if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && !gpu_level_on) {
                         auto nothing = [](const std::vector<int64_t>&) { return std::vector<int64_t>{}; };
                         run_entry_phase(entries, {}, nothing);
                         if (use_owner_deferred_xnn) run_entry_phase(entries, {}, nothing);
@@ -1613,24 +1616,8 @@ void hierarchical_factorization_unstructured(
 #endif
         std::vector<BoxData<CoordType, DataType>> parent_boxes;
         bool transition_on_device = false;
-#ifdef H2_HAVE_GPU
-        // Device transition, or this level's blocks back in the host BoxData
-        // for the host transition.
-        // (entries through a collective callback: on the host; the device
-        // transition's decisions are collective over the transition, whose
-        // parent-only ranks are serving the level's rounds until its end)
-        if (kernel_entries(kernel, 0) == nullptr) {
-            transition_on_device = gpu_driver.transition(
-                level, parent_level, parent_boxes,
-                [&] {
-                    return build_parent_level_structure_unstructured(
-                        level, tree->levels[current_level - 1], dimension,
-                        tree->global_bounds, occupied_topology);
-                },
-                print_detail && rank == level_print_rank, level_comm, transition_comm);
-        }
-#endif
-        if (level.is_process_active && !transition_on_device) {
+        bool parents_built = false;
+        auto build_parents_on_host = [&] {
             parent_boxes =
                 build_parent_level_interactions_unstructured<
                     CoordType, DataType, KernelType>(
@@ -1642,11 +1629,42 @@ void hierarchical_factorization_unstructured(
                     kernel,
                     tree->global_bounds,
                     occupied_topology);
+            parents_built = true;
+        };
+        // Entries through a collective callback: the level's section of
+        // rounds ends once its parents are built, before the transition
+        // communicates (its parent-only ranks serve the rounds until then).
+        auto* level_entries = kernel_entries(kernel, 0);
+        bool section_open = level_entries != nullptr && level.is_process_active;
+        auto end_level_section = [&] {
+            if (section_open) {
+                level_entries->end_section();
+                section_open = false;
+            }
+        };
+#ifdef H2_HAVE_GPU
+        // (with them, a rank whose parents are built on the host builds them
+        // before the transition)
+        if (section_open && !gpu_driver.builds_parents(level, parent_level)) {
+            build_parents_on_host();
+            end_level_section();
         }
-        // (the end of the level's section of rounds: its transition built)
-        if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && level.is_process_active) {
-            entries->end_section();
+        // Device transition, or this level's blocks back in the host BoxData
+        // for the host transition.
+        transition_on_device = gpu_driver.transition(
+            level, parent_level, parent_boxes,
+            [&] {
+                return build_parent_level_structure_unstructured(
+                    level, tree->levels[current_level - 1], dimension,
+                    tree->global_bounds, occupied_topology);
+            },
+            print_detail && rank == level_print_rank, level_comm, transition_comm,
+            end_level_section);
+#endif
+        if (level.is_process_active && !transition_on_device && !parents_built) {
+            build_parents_on_host();
         }
+        end_level_section();
 
         if (memory_diagnostics.enabled()) {
             memory_diagnostics.record(
