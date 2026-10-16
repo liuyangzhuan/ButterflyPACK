@@ -124,6 +124,22 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
 // process tree; the source's handles bmat, option, msh, stats and ptree point to nullptr outside the subset)
 void c_bpack_extractelement_bridge_fortran(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+//------------------------------------------------------------------------------
+// Sketched blocks (format 7 with elem_extract=1): request n < Nsketch asks for Y_n = Omega_n A(rows, columns),
+// sketchdim[n] x colidx[n], column major, for the rows allrows (rowidx[n] of them, stacked as for the block
+// callback), the columns allcols (colidx[n]) and Omega_n (sketchdim[n] x rowidx[n]) given by its omegaidx[n]
+// entries, stacked: omega_row (1-based position among the request's rows), omega_dest (1-based row of Y_n) and
+// omega_val. Y_n goes to alldat_loc on the rank owning n (pgidx and pmaps as for the block callback, 1 x 1
+// grids), in request order. Collective over the matrix's ranks, like the block callback.
+typedef void (*c_bpack_func_zmn_sketch)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, C2Fptr C_QuantApp);
+// An H2 (format 7) whose entries come through a collective block callback (elem_extract=1) asks for the ID
+// sketches of its kernel rows through this callback (its C_QuantApp: that of the construction), set before
+// c_bpack_construct_element_compute; other formats ignore it.
+void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch);
+// The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
+// compression-only H2 (format 7) sketches them from its representation; other formats extract the entries and
+// sketch them on their owners.
+void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_set_entry_addend(F2Cptr* ker, F2Cptr* bf, F2Cptr* ptree);

@@ -722,6 +722,19 @@ void extraction_block_callback(
       pgidx, npmap, pmaps);
 }
 
+// The sketched blocks of the H2 under test (the ID's sketches of its kernel
+// rows) from the source, collective over all ranks (elem_extract=1)
+void extraction_sketch_callback(
+    int* nsketch, int* nallrows, int* nallcols, int64_t* nallomega, int64_t* nalldat_loc, int* allrows,
+    int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest,
+    double* omega_val, double* alldat_loc, int* pgidx, int* npmap, int* pmaps, C2Fptr quant) {
+  auto* source = static_cast<ExtractionSource*>(quant);
+  d_c_bpack_extractsketch_bridge(
+      &source->matrix, &source->option, &source->mesh, &source->stats, &source->process_tree,
+      &source->caller_tree, nsketch, nallrows, nallcols, nallomega, nalldat_loc, allrows, allcols, rowidx,
+      colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val, alldat_loc, pgidx, npmap, pmaps);
+}
+
 struct ButterflyResources {
   F2Cptr option = nullptr;
   F2Cptr stats = nullptr;
@@ -1052,6 +1065,10 @@ int main(int argc, char** argv) {
           &resources.mesh, &kernel_quantities, &resources.process_tree,
           &laplace_entry_callback64, &laplace_block_callback64, &application);
     } else if (source_ranks > 0) {
+      // an H2 asks for the ID's sketches of its kernel rows sketched
+      if (driver_options.format == 7) {
+        d_c_bpack_set_sketch_callback(&resources.matrix, &extraction_sketch_callback);
+      }
       d_c_bpack_construct_element_compute(
           &resources.matrix, &resources.option, &resources.stats,
           &resources.mesh, &kernel_quantities, &resources.process_tree,
@@ -1191,12 +1208,77 @@ int main(int argc, char** argv) {
       MPI_Allreduce(MPI_IN_PLACE, &matvec_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
       MPI_Allreduce(MPI_IN_PLACE, &matvec_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
       MPI_Allreduce(MPI_IN_PLACE, &entries, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+
+      // the random blocks sketched (c_bpack_extractsketch_bridge), against
+      // the same sketch of their extracted entries
+      int nsketch = random_blocks;
+      std::vector<int> sketchdim, omegaidx, omega_row, omega_dest;
+      std::vector<double> omega_val;
+      int nsrows = 0, nscols = 0;
+      for (int n = 0; n < nsketch; ++n) {
+        const int d = 1 + static_cast<int>(rng() % 40);
+        sketchdim.push_back(d);
+        for (int i = 0; i < rowidx[n]; ++i) {
+          for (int e = 0; e < 4; ++e) {
+            omega_row.push_back(i + 1);
+            omega_dest.push_back(static_cast<int>(rng() % static_cast<uint64_t>(d)) + 1);
+            omega_val.push_back(rng() % 2 == 0 ? 0.5 : -0.5);
+          }
+        }
+        omegaidx.push_back(4 * rowidx[n]);
+        nsrows += rowidx[n];
+        nscols += colidx[n];
+      }
+      int64_t sketch_mine = 0;
+      for (int n = 0; n < nsketch; ++n) {
+        if (pgidx[n] == rank) sketch_mine += static_cast<int64_t>(sketchdim[n]) * colidx[n];
+      }
+      std::vector<double> sketched(static_cast<size_t>(std::max<int64_t>(sketch_mine, 1)));
+      int64_t nallomega = static_cast<int64_t>(omega_val.size());
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double t_sketch0 = MPI_Wtime();
+      d_c_bpack_extractsketch_bridge(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+          &resources.process_tree, &resources.process_tree, &nsketch, &nsrows, &nscols, &nallomega,
+          &sketch_mine, allrows.data(), allcols.data(), rowidx.data(), colidx.data(), sketchdim.data(),
+          omegaidx.data(), omega_row.data(), omega_dest.data(), omega_val.data(), sketched.data(),
+          pgidx.data(), &npmap, pmaps.data());
+      double t_sketch = MPI_Wtime() - t_sketch0;
+      MPI_Allreduce(MPI_IN_PLACE, &t_sketch, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      double sketch_error = 0.0, sketch_scale = 0.0;
+      {
+        int64_t at_entries = 0, at_sketch = 0, e0 = 0;
+        for (int n = 0; n < nsketch; ++n) {
+          const int nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
+          if (pgidx[n] == rank) {
+            std::vector<double> reference(static_cast<size_t>(d) * nc, 0.0);
+            for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
+              const int r = omega_row[static_cast<size_t>(e)] - 1, i = omega_dest[static_cast<size_t>(e)] - 1;
+              for (int j = 0; j < nc; ++j) {
+                reference[static_cast<size_t>(i + j * d)] +=
+                    omega_val[static_cast<size_t>(e)] * values[static_cast<size_t>(at_entries + r + static_cast<int64_t>(j) * nr)];
+              }
+            }
+            for (size_t q = 0; q < reference.size(); ++q) {
+              sketch_error = std::max(sketch_error, std::abs(sketched[static_cast<size_t>(at_sketch) + q] - reference[q]));
+              sketch_scale = std::max(sketch_scale, std::abs(reference[q]));
+            }
+            at_entries += static_cast<int64_t>(nr) * nc;
+            at_sketch += static_cast<int64_t>(d) * nc;
+          }
+          e0 += omegaidx[n];
+        }
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &sketch_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
       if (rank == 0) {
         std::cout << std::setprecision(4) << "H2 extraction check: " << ninter << " blocks, " << entries
                   << " entries in " << t_extract << " s; random blocks against the kernel "
                   << std::sqrt(kernel_error2 / kernel_norm2) << " (Frobenius, relative); "
                   << "rows of 2 columns against the matvec " << matvec_error / matvec_scale
-                  << " (max, relative)" << std::setprecision(6) << std::endl;
+                  << " (max, relative); the random blocks sketched (" << t_sketch
+                  << " s) against their entries sketched " << sketch_error / sketch_scale << " (max, relative)"
+                  << std::setprecision(6) << std::endl;
       }
     }
 

@@ -6149,9 +6149,73 @@ is the extraction.  With elem_extract 0 or 2 nothing changed (Laplace 192^3
 and the 128K sphere on 8 ranks, GPU, bitwise); the host path's rounds are as
 before (143, 130).
 
+**Where the time goes** (verbosity 1 now prints it with the rounds: the
+rounds' parts, the blocks by what asked for them, the extraction's steps;
+core/extraction_profile.hpp).  64^3 on 12 ranks from 5 (factor 13.8 s; from
+the kernel 1.37 s):
+
+| | s |
+|---|---|
+| resolving the requested ids (every rank, the whole list, each round) | 2.36 |
+| source: tasks and interpolation vectors | 0.6 |
+| source: computing the entries (GEMMs, near-block copies) | 1.37 |
+| source: packing the values (serial) | 2.10 |
+| routing: the exchange's own copies | 1.1 |
+| routing: the all-to-alls (57.7 GB, up to 12.3 GB from one of the 5) | 2.37 |
+| unpacking into the callback's output | 0.5 |
+| target: request lists, storing, the device's copies | 1.5 |
+| target: waiting for the other ranks at a round (mean; max 2.35) | 1.46 |
+
+(the callback's path is the slowest source rank's: resolve, its work to the
+pack, its route, unpack = 10.4 s; the other ranks' route time is mostly
+waiting for it).  The arithmetic is 1.37 s; the same values are copied five
+times (pack, the exchange twice, unpack, store, then to the device: about
+5 s) and moved once (2.4 s), and the id resolution is replicated.  By origin:
+the ID sketch 5.21e9 entries of 7.21e9 (72%, 576 blocks: one per box, its
+two-hop ring by its columns), the owner pass's new fill targets 1.06e9 (15%),
+remote generators 0.48e9, the box region 0.35e9, the transition 0.11e9, host
+phases 5e6.  48^3 on 8 from 4: the sketch 1.02e9 of 1.4e9 (73%); resolve
+1.14 s, compute 0.57, pack 0.62, route 2.20 (max).
+
+**5. Sketched rows instead of entries** (2026-10-16).  The ID's sketch
+needs only Y = Omega K(R, B) (d = n rows, Omega the sparse sign draws, 4 a
+row), not the ring rows K(R, B) themselves.  A sketch callback
+(`c_bpack_set_sketch_callback`, set before the construction; ignored by
+other formats) makes those requests sketched: the request carries R, B and
+Omega's entries (row, destination, value), and the answer is d x n.
+`c_bpack_extractsketch_bridge` serves it: from a compressed H2 (format 7)
+without forming A far from the diagonal (on the owner of each row box t,
+(Omega U_t^T) K(S_t, S_s), d x k_s, summed there over its boxes t, then over
+the ranks on the owner of s, times U_s of the columns; near blocks sketched
+where they are stored; unstructured/extraction.hpp, the plan shared with the
+entries); from other formats by extracting the entries and sketching them on
+their owners.  The target asks for the kernel rows of each box's sketch in
+one request: the host's streamed sketch keeps their draws as Omega instead of
+evaluating them (one request a box after its ring), the device's sketch_rows
+reads back each box's row and column ids and its packed draws.  Without a
+sketch callback, with elem_extract 0 or 2, and for HODLR nothing changes
+(Laplace 192^3 and the 128K sphere on 8 ranks bitwise; the HODLR-from-HODLR
+example as before, its logdet varying run to run by 2e-1 as it did).
+
+Checked: the bridge against the same sketch of the extracted entries 1.7e-16
+(--extract_check, 8 ranks); the H2 factored from the source with the same
+logdet (all printed digits) and accuracy as with entries.  Laplace, tol 1e-3:
+
+| | ranks (source / target) | entries fetched | factor, GPU | before | factor, host | before |
+|---|---|---|---|---|---|---|
+| 32^3 | 1 / 1 | 1.58e8 (was 4.54e8) | not run | 3.58 s | 10.2 s | 11.8 s |
+| 48^3 | 4 / 8 | 4.06e8 (was 1.40e9) | 3.19 s | 5.06 s | 8.11 s | 9.85 s |
+| 64^3 | 5 / 12 | 2.15e9 (was 7.21e9) | 8.33 s | 13.6 s | 29.9 s | 36.7 s |
+
+The sketches are 1.42e8 values for 5.21e9 entries of their rows at 64^3
+(37x).  What is left at 64^3 on the GPU (7.4 s in rounds): resolving the
+requested ids, 2.4 s on every rank and unchanged (the sketches' row ids are
+still in the lists), routing 2.4 s (17.2 GB), the fill targets' entries now
+the largest request (1.06e9 of 2.15e9).
+
 Not yet: planners (fetching a phase's structural requests before it runs),
 which by the profiles above would save rounds and replays but not the
-extraction volume; and the extraction's own throughput, now the cost.
+extraction volume.
 
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 

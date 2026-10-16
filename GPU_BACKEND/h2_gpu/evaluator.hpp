@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -88,13 +89,32 @@ public:
         e->origin_ = "block evaluator";
         return e;
     }
+    // A sketch of kernel rows asked of the entries' source (the collective
+    // evaluator with a sketch callback): out (d x cols, leading dimension
+    // ldo, on the device) = Omega K(rows, cols), Omega by its entries (orow:
+    // the position in rows, odest: the row of out, oval).
+    struct SketchRequest {
+        std::vector<int64_t> rows, cols;
+        int d = 0;
+        std::vector<int> orow, odest;
+        std::vector<double> oval;
+        void* out = nullptr;
+        int ldo = 0;
+    };
+    using SketchReady = std::function<bool()>;
+    using SketchFetch = std::function<void(std::vector<SketchRequest>&, cudaStream_t)>;
+
     // The library's own block evaluator of entries through a collective
     // callback (collective_evaluator.hpp): reads the host ids, never warmed
-    // up (its first use costs nothing; a warm-up would fetch).
-    static std::shared_ptr<Evaluator> from_collective(bpack_gpu_block_evaluator f, void* user, int scalar_bytes) {
+    // up (its first use costs nothing; a warm-up would fetch).  With a sketch
+    // callback (ready()), sketch_rows asks the source for the sketches.
+    static std::shared_ptr<Evaluator> from_collective(bpack_gpu_block_evaluator f, void* user, int scalar_bytes,
+                                                      SketchReady ready, SketchFetch fetch) {
         std::shared_ptr<Evaluator> e = from_block(f, user, BPACK_GPU_SYMMETRIC | BPACK_GPU_HOST_IDS, scalar_bytes);
         e->warmed_ = true;
         e->collective_ = true;
+        e->sketch_ready_ = std::move(ready);
+        e->sketch_fetch_ = std::move(fetch);
         e->origin_ = "entries through the collective callback";
         return e;
     }
@@ -160,6 +180,10 @@ public:
                                   stream);
             }
             check_launch("the entry evaluator's sketch");
+            return;
+        }
+        if (collective_ && sketch_ready_ && sketch_ready_()) {
+            collective_sketch_rows<T>(host_items, points, stream);
             return;
         }
         // the rows into scratch (ncols x rows per item, row by row), then
@@ -305,6 +329,82 @@ private:
     }
     static void release_scratch(void*, void* ptr) {
         if (ptr != nullptr) DeviceHeap::instance().free(ptr);
+    }
+
+    // Entries through a collective callback with a sketch callback: each
+    // item's sketch asked of the source (sketch_fetch_), its points' ids and
+    // its draws (the packed entries of the warp lists) read back first.
+    template<typename T>
+    void collective_sketch_rows(const std::vector<OrderedSketchItemT<T>>& host_items, const PointTable& points,
+                                cudaStream_t stream) const {
+        DeviceHeap& heap = DeviceHeap::instance();
+        std::vector<size_t> asked;
+        std::vector<BlockGatherItem> gather;
+        int64_t total = 0;
+        int max_mn = 0;
+        for (size_t k = 0; k < host_items.size(); ++k) {
+            const OrderedSketchItemT<T>& s = host_items[k];
+            if (s.d <= 0 || s.ncols <= 0) continue;
+            if (s.rows <= 0) {  // (no rows: zeros, as the sketch kernel writes)
+                check_cuda(cudaMemset2DAsync(s.out, static_cast<size_t>(s.ldo) * sizeof(T), 0,
+                                             static_cast<size_t>(s.d) * sizeof(T), static_cast<size_t>(s.ncols), stream),
+                           "collective sketch zeros");
+                continue;
+            }
+            // the columns' points (col_base + c), then the rows' (row_slots)
+            gather.push_back(BlockGatherItem{IndexList{-1, s.col_base, nullptr}, IndexList{-1, 0, s.row_slots}, s.ncols,
+                                             s.rows, total, total + s.ncols});
+            total += s.ncols + s.rows;
+            max_mn = std::max(max_mn, std::max(s.ncols, s.rows));
+            asked.push_back(k);
+        }
+        if (asked.empty()) return;
+        int64_t* ids = heap.alloc<int64_t>(static_cast<size_t>(total) * sizeof(int64_t));
+        BlockGatherItem* d_gather = upload(heap, gather, stream);
+        launch_gather_block_points(d_gather, static_cast<int>(gather.size()), max_mn, nullptr, points, ids, nullptr,
+                                   stream);
+        check_launch("the gather of the sketches' points");
+        std::vector<int64_t> h_ids(static_cast<size_t>(total));
+        check_cuda(cudaMemcpyAsync(h_ids.data(), ids, h_ids.size() * sizeof(int64_t), cudaMemcpyDeviceToHost, stream),
+                   "collective sketch ids");
+        std::vector<std::vector<int>> ptr(asked.size(), std::vector<int>(kSketchOwners + 1));
+        for (size_t q = 0; q < asked.size(); ++q) {
+            check_cuda(cudaMemcpyAsync(ptr[q].data(), host_items[asked[q]].ptr, ptr[q].size() * sizeof(int),
+                                       cudaMemcpyDeviceToHost, stream),
+                       "collective sketch lists");
+        }
+        check_cuda(cudaStreamSynchronize(stream), "collective sketch lists");
+        std::vector<std::vector<int>> entries(asked.size());
+        for (size_t q = 0; q < asked.size(); ++q) {
+            entries[q].resize(static_cast<size_t>(ptr[q][kSketchOwners] - ptr[q][0]));
+            if (entries[q].empty()) continue;
+            check_cuda(cudaMemcpyAsync(entries[q].data(), host_items[asked[q]].entries + ptr[q][0],
+                                       entries[q].size() * sizeof(int), cudaMemcpyDeviceToHost, stream),
+                       "collective sketch draws");
+        }
+        check_cuda(cudaStreamSynchronize(stream), "collective sketch draws");
+        heap.free(d_gather);
+        heap.free(ids);
+        std::vector<SketchRequest> requests(asked.size());
+        for (size_t q = 0; q < asked.size(); ++q) {
+            const OrderedSketchItemT<T>& s = host_items[asked[q]];
+            const BlockGatherItem& g = gather[q];
+            SketchRequest& r = requests[q];
+            r.cols.assign(h_ids.begin() + g.row_at, h_ids.begin() + g.row_at + s.ncols);
+            r.rows.assign(h_ids.begin() + g.col_at, h_ids.begin() + g.col_at + s.rows);
+            r.d = s.d;
+            r.out = s.out;
+            r.ldo = s.ldo;
+            r.orow.reserve(entries[q].size());
+            r.odest.reserve(entries[q].size());
+            r.oval.reserve(entries[q].size());
+            for (int e : entries[q]) {
+                r.orow.push_back(e & kEntryRowMask);
+                r.odest.push_back((e >> kEntryRowBits) & kEntryDestMask);
+                r.oval.push_back((static_cast<unsigned>(e) & 0x80000000u) != 0 ? -s.scale : s.scale);
+            }
+        }
+        sketch_fetch_(requests, stream);
     }
 
     // The block and list forms: the items' points gathered, then the
@@ -457,6 +557,8 @@ private:
     mutable double* params_ = nullptr;
     mutable bool warmed_ = false;  // (warm_up ran)
     bool collective_ = false;
+    SketchReady sketch_ready_;
+    SketchFetch sketch_fetch_;
     mutable double compile_seconds_ = 0.0;
     // block, list
     bpack_gpu_block_evaluator block_ = nullptr;

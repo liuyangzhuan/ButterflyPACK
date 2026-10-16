@@ -8655,10 +8655,8 @@ void gather_id_target_streamed(
     auto& rec_sign = scratch.stream_row_sign;
     auto& blk_idx = scratch.stream_blk_draw_idx;    // this block's draws (a x sk)
     auto& blk_sgn = scratch.stream_blk_draw_sign;
-    auto consume_rows = [&](const DataType* blk_rowmajor, int64_t a, int64_t rec_row0) {
-        int n_int = static_cast<int>(n);
-        int inc_one = 1;
-        // Draws first (sequential RNG, recorded per block), then the axpys.
+    // The draws of a rows (sequential RNG, recorded per block).
+    auto draw_rows = [&](int64_t a, int64_t rec_row0) {
         const size_t nd = static_cast<size_t>(a * sk);
         if (blk_idx.size() < nd) {
             blk_idx.resize(nd);
@@ -8680,6 +8678,12 @@ void gather_id_target_streamed(
                 }
             }
         }
+    };
+    auto consume_rows = [&](const DataType* blk_rowmajor, int64_t a, int64_t rec_row0) {
+        int n_int = static_cast<int>(n);
+        int inc_one = 1;
+        // Draws first, then the axpys.
+        draw_rows(a, rec_row0);
         // The axpys are memory-bound: splitting them by column ownership
         // (tried) only multiplied cache traffic and taskloop barriers, so
         // they stay on the box's own thread.
@@ -8698,6 +8702,29 @@ void gather_id_target_streamed(
                            const_cast<std::complex<double>*>(row), &inc_one,
                            ocol, &inc_one);
                 }
+            }
+        }
+    };
+
+    // Entries through a collective callback with a sketch callback: kernel
+    // rows are not evaluated; their draws become Omega's entries and the
+    // entries' source sketches them, in one request a box after pass 2
+    // (CollectiveEntries; the same Y up to the order of the sums).
+    const bool sketch_kernel_rows = kernel_sketches(kernel, 0);
+    std::vector<int64_t> sketch_ids;
+    std::vector<int> sketch_orow, sketch_odest;
+    std::vector<double> sketch_oval;
+    const double sketch_scale = 1.0 / std::sqrt(static_cast<double>(sk));
+    auto defer_rows = [&](const int64_t* ids, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
+        const int64_t base = static_cast<int64_t>(sketch_ids.size());
+        sketch_ids.insert(sketch_ids.end(), ids, ids + a);
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                sketch_orow.push_back(static_cast<int>(base + jj));
+                sketch_odest.push_back(blk_idx[q]);
+                sketch_oval.push_back(blk_sgn[q] > 0 ? sketch_scale : -sketch_scale);
             }
         }
     };
@@ -8743,6 +8770,7 @@ void gather_id_target_streamed(
         blockbuf.resize(static_cast<size_t>(a * n));
 
         bool produced = false;
+        const int64_t* kernel_row_ids = nullptr;  // (kernel rows: their points)
         if (!lazy_fill && lazy_mode != LazyFarFieldMode::LAZY) {
             // Eager mode: stored far block if present. The slicer emits the
             // (a x n) block column-major; transpose once (cache-resident)
@@ -8855,7 +8883,8 @@ void gather_id_target_streamed(
 
             // Swapped orientation: evaluates (n x a) column-major, which is
             // exactly the (a x n) block in row-major layout (kernel symmetric).
-            {
+            kernel_row_ids = active_row_indices;
+            if (!sketch_kernel_rows) {
                 FMM_PHASE_SCOPE(SK_KERNEL);
                 evaluate_block_by_index_split<DataType>(
                     kernel,
@@ -8877,7 +8906,11 @@ void gather_id_target_streamed(
 
         {
             FMM_PHASE_SCOPE(SK_CONSUME);
-            consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+            if (kernel_row_ids != nullptr && sketch_kernel_rows) {
+                defer_rows(kernel_row_ids, a, lazy_fill ? row_base : int64_t{-1});
+            } else {
+                consume_rows(blockbuf.data(), a, lazy_fill ? row_base : int64_t{-1});
+            }
         }
         row_base += a;
     }
@@ -8885,14 +8918,31 @@ void gather_id_target_streamed(
     if (!extra_training_indices.empty()) {
         const int64_t extra_rows =
             static_cast<int64_t>(extra_training_indices.size());
-        blockbuf.resize(static_cast<size_t>(extra_rows * n));
-        evaluate_block_by_index_split<DataType>(
-            kernel,
-            box->point_indices.data(), n,
-            extra_training_indices.data(), extra_rows,
-            blockbuf.data(), n,
-            scratch.split_threads);
-        consume_rows(blockbuf.data(), extra_rows, int64_t{-1});
+        if (sketch_kernel_rows) {
+            defer_rows(extra_training_indices.data(), extra_rows, int64_t{-1});
+        } else {
+            blockbuf.resize(static_cast<size_t>(extra_rows * n));
+            evaluate_block_by_index_split<DataType>(
+                kernel,
+                box->point_indices.data(), n,
+                extra_training_indices.data(), extra_rows,
+                blockbuf.data(), n,
+                scratch.split_threads);
+            consume_rows(blockbuf.data(), extra_rows, int64_t{-1});
+        }
+    }
+    if (!sketch_ids.empty()) {
+        // the kernel rows' sketch from the entries' source, into O' = Y^T
+        std::vector<DataType> Yk(static_cast<size_t>(d * n));
+        FMM_PHASE_SCOPE(SK_KERNEL);
+        kernel_sketch_block(kernel, 0, sketch_ids.data(), static_cast<int64_t>(sketch_ids.size()),
+                            box->point_indices.data(), n, static_cast<int>(d),
+                            static_cast<int64_t>(sketch_orow.size()), sketch_orow.data(), sketch_odest.data(),
+                            sketch_oval.data(), Yk.data(), d);
+        for (int64_t i = 0; i < d; ++i) {
+            DataType* ocol = Oacc.data() + static_cast<size_t>(i) * n;
+            for (int64_t c = 0; c < n; ++c) ocol[c] += Yk[static_cast<size_t>(i + c * d)];
+        }
     }
 
     // ------------------------------------------------------------------

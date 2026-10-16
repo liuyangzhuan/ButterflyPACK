@@ -1719,6 +1719,10 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	  H2_solver->kernel.collective =
 	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
 	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid);
+	  // (c_bpack_set_sketch_callback: the ID sketches of kernel rows fetched sketched)
+	  if (H2_solver->kernel.sketch_callback != nullptr) {
+	    H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
+	  }
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 	  if (H2_solver->options.use_gpu != 0) {
 	    H2_solver->kernel.gpu_evaluator =
@@ -2388,6 +2392,32 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
 }
 
 #ifdef HAVE_MPI
+// The rank owning each intersection (pmaps of 1 x 1 grids only).
+static std::vector<int> single_rank_owners(int ninter, const int* pgidx, int npmap, const int* pmaps,
+                                           const char* caller) {
+  std::vector<int> owner(static_cast<size_t>(std::max(ninter, 0)));
+  for (int n = 0; n < ninter; ++n) {
+    const int pg = pgidx[n];
+    if (pg < 0 || pg >= npmap) {
+      throw std::invalid_argument(std::string(caller) + ": a process group out of range");
+    }
+    if (pmaps[pg] != 1 || pmaps[npmap + pg] != 1) {
+      throw std::invalid_argument(std::string(caller) +
+        ": an intersection owned by more than one rank (1 x 1 process grids only)");
+    }
+    owner[static_cast<size_t>(n)] = pmaps[2 * npmap + pg];
+  }
+  return owner;
+}
+
+template<typename H2Data>
+static butterfly::H2<double, H2Data>* h2_of(F2Cptr* bmat) {
+  if (bmat == nullptr || *bmat == nullptr) return nullptr;
+  void* raw = nullptr;
+  c_bpack_get_h2(*bmat, &raw);
+  return static_cast<butterfly::H2<double, H2Data>*>(raw);
+}
+
 // The blocks of a list of intersections from a compression-only
 // unstructured Color H2 (format 7; unstructured/extraction.hpp), each to one
 // rank of caller_comm (pmaps of 1 x 1 grids), collective over caller_comm;
@@ -2397,27 +2427,36 @@ static void h2_extract_elements(
     C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
     int* pmaps, const char* caller) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
-  butterfly::H2<double, H2Data>* solver = nullptr;
-  if (bmat != nullptr && *bmat != nullptr) {
-    void* raw = nullptr;
-    c_bpack_get_h2(*bmat, &raw);
-    solver = static_cast<butterfly::H2<double, H2Data>*>(raw);
-  }
-  std::vector<int> owner(static_cast<size_t>(std::max(*Ninter, 0)));
-  for (int n = 0; n < *Ninter; ++n) {
-    const int pg = pgidx[n];
-    if (pg < 0 || pg >= *Npmap) {
-      throw std::invalid_argument(std::string(caller) + ": a process group out of range");
-    }
-    if (pmaps[pg] != 1 || pmaps[*Npmap + pg] != 1) {
-      throw std::invalid_argument(std::string(caller) +
-        " (format 7): an intersection owned by more than one rank (1 x 1 process grids only)");
-    }
-    owner[static_cast<size_t>(n)] = pmaps[2 * (*Npmap) + pg];
-  }
+  const std::vector<int> owner =
+    single_rank_owners(*Ninter, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
   butterfly::color_unstructured::extract_compressed_blocks(
-    solver, caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
+    h2_of<H2Data>(bmat), caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
     reinterpret_cast<H2Data*>(alldat_loc));
+}
+
+// The sketched blocks of a list of requests from a compression-only
+// unstructured Color H2 (as h2_extract_elements; Omega's entries 1-based).
+static void h2_extract_sketches(
+    F2Cptr* bmat, MPI_Comm caller_comm, int* Nsketch, int* allrows, int* allcols, int* rowidx, int* colidx,
+    int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc,
+    int* pgidx, int* Npmap, int* pmaps, const char* caller) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  const std::vector<int> owner =
+    single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
+  std::vector<int64_t> omega_off(static_cast<size_t>(std::max(*Nsketch, 0)) + 1, 0);
+  for (int n = 0; n < *Nsketch; ++n) {
+    if (omegaidx[n] < 0) throw std::invalid_argument(std::string(caller) + ": a negative sketch entry count");
+    omega_off[static_cast<size_t>(n) + 1] = omega_off[static_cast<size_t>(n)] + omegaidx[n];
+  }
+  const int64_t nomega = omega_off.back();
+  std::vector<int> orow(static_cast<size_t>(nomega)), odest(static_cast<size_t>(nomega));
+  for (int64_t e = 0; e < nomega; ++e) {
+    orow[static_cast<size_t>(e)] = omega_row[e] - 1;
+    odest[static_cast<size_t>(e)] = omega_dest[e] - 1;
+  }
+  butterfly::color_unstructured::extract_compressed_sketches(
+    h2_of<H2Data>(bmat), caller_comm, *Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omega_off.data(),
+    orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc));
 }
 #endif
 
@@ -2483,6 +2522,93 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
 #endif
   c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Ninter,
     Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps);
+}
+
+
+void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_sketch_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2: its entries are never sketched)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.sketch_callback = reinterpret_cast<typename Entries::SketchCallback>(C_FuncZmnSketch);
+  if (solver->kernel.collective) solver->kernel.collective->set_sketch(solver->kernel.sketch_callback);
+#else
+  (void)bmat;
+  (void)C_FuncZmnSketch;
+#endif
+}
+
+void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+#ifdef HAVE_MPI
+  (void)Nallomega;
+  (void)Nalldat_loc;
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int crank = 0;
+  MPI_Comm_rank(caller_comm, &crank);
+  // the source's format, from its ranks (the others hold no option)
+  int format = -1;
+  if (option != nullptr && *option != nullptr) {
+    double tmp = 0.0;
+    c_bpack_getoption(option, "format", &tmp);
+    format = static_cast<int>(tmp);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  try {
+    if (format == 7) {
+      h2_extract_sketches(bmat, caller_comm, Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omegaidx,
+                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps,
+                          "c_bpack_extractsketch_bridge");
+      return;
+    }
+    // other formats: the requests' entries, sketched on their owners
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    const std::vector<int> owner =
+      single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, "c_bpack_extractsketch_bridge");
+    int64_t nentries = 0;
+    for (int n = 0; n < *Nsketch; ++n) {
+      if (owner[static_cast<size_t>(n)] == crank) nentries += static_cast<int64_t>(rowidx[n]) * colidx[n];
+    }
+    std::vector<H2Data> entries(static_cast<size_t>(std::max<int64_t>(nentries, 1)));
+    c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows,
+      Nallcols, &nentries, allrows, allcols, reinterpret_cast<C_DT*>(entries.data()), rowidx, colidx, pgidx,
+      Npmap, pmaps);
+    H2Data* out = reinterpret_cast<H2Data*>(alldat_loc);
+    int64_t at = 0, e0 = 0;
+    for (int n = 0; n < *Nsketch; ++n) {
+      const int64_t nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
+      if (owner[static_cast<size_t>(n)] == crank) {
+        std::fill(out, out + d * nc, H2Data{0});
+        const H2Data* A = entries.data() + at;
+        for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
+          const int64_t r = omega_row[e] - 1, i = omega_dest[e] - 1;
+          const H2Data w = static_cast<H2Data>(omega_val[e]);
+          for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[r + j * nr];
+        }
+        at += nr * nc;
+        out += d * nc;
+      }
+      e0 += omegaidx[n];
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Error on rank " << crank << ": " << e.what() << std::endl;
+    MPI_Abort(caller_comm, 1);
+  }
+#else
+  (void)bmat; (void)option; (void)msh; (void)stats; (void)ptree; (void)ptree_caller; (void)Nsketch;
+  (void)Nallrows; (void)Nallcols; (void)Nallomega; (void)Nalldat_loc; (void)allrows; (void)allcols;
+  (void)rowidx; (void)colidx; (void)sketchdim; (void)omegaidx; (void)omega_row; (void)omega_dest;
+  (void)omega_val; (void)alldat_loc; (void)pgidx; (void)Npmap; (void)pmaps;
+  throw std::runtime_error("c_bpack_extractsketch_bridge requires MPI");
+#endif
 }
 
 

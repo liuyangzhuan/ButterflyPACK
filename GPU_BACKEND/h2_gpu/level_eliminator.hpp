@@ -3445,6 +3445,7 @@ template<typename CoordType, typename DataType, typename KernelType>
 void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     const std::vector<int64_t>& wave, std::vector<WaveBox>& boxes, int& boundary_count) {
     using clock = std::chrono::steady_clock;
+    EntryOriginScope origin(EntryOrigin::sketch);  // (collective entries' profile)
     auto& stats = eliminator_stats();
     Context& ctx = Context::instance();
     cudaStream_t stream = ctx.stream();
@@ -5159,7 +5160,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         marks.mark(stream);
         check_items(evals, "wave evals");
         check_items(fills, "wave fills");
-        eval_blocks(evals, meta_, md, off_evals, max_eval_m, max_eval_n, stream);
+        {
+            EntryOriginScope origin(EntryOrigin::box);  // (collective entries' profile)
+            eval_blocks(evals, meta_, md, off_evals, max_eval_m, max_eval_n, stream);
+        }
         if (fill_window != nullptr) {
             auto& st_fw = eliminator_stats();
             st_fw.fw_passes += static_cast<int64_t>(win_passes.size());
@@ -6005,7 +6009,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         lap(stats.og_stage);
         check_items(evals, "group evals");
         for (const auto& b : gb) check_batch(b, "group gemms");
-        eval_blocks(evals, owner_meta_, gmd, off_ev, ev_m, ev_n, stream);
+        {
+            EntryOriginScope origin(EntryOrigin::fill);  // (collective entries' profile)
+            eval_blocks(evals, owner_meta_, gmd, off_ev, ev_m, ev_n, stream);
+        }
         for (const auto& b : gb) {
             b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans, from_store ? MagmaNoTrans : MagmaTrans,
                    1.0, 1.0, queue);
@@ -7526,7 +7533,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         rep_nn.stage(meta_);
         char* md = meta_.upload(meta_device_, stream);
         stats.bytes_up += static_cast<double>(meta_.size());
-        eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
+        {
+            EntryOriginScope origin(EntryOrigin::remote);  // (collective entries' profile)
+            eval_blocks(evals, meta_, md, off_evals, max_ev_m, max_ev_n, stream);
+        }
         launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()), max_ga_m,
                       max_ga_n, md, stream);
         for (const VBatch<S>& b : prods) {
@@ -10879,7 +10889,10 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         }
         launch_transpose(reinterpret_cast<const TransposeItem*>(md + off_restores), static_cast<int>(restores.size()),
                          max_rs_m, max_rs_n, stream);
-        eval_blocks(evals, meta, md, off_evals, max_eval_m, max_eval_n, stream);
+        {
+            EntryOriginScope origin(EntryOrigin::transition);  // (collective entries' profile)
+            eval_blocks(evals, meta, md, off_evals, max_eval_m, max_eval_n, stream);
+        }
         launch_gather(reinterpret_cast<const GatherItem*>(md + off_gathers), static_cast<int>(gathers.size()),
                       max_gather_m, max_gather_n, md, stream);
         launch_gather(reinterpret_cast<const GatherItem*>(md + off_g), static_cast<int>(g_gathers.size()), max_g_m,

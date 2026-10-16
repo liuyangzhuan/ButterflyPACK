@@ -237,6 +237,10 @@ struct H2Kernel {
     // another one abandoning the item that made it.  Null: the callbacks
     // above, called when an entry is needed.
     std::shared_ptr<fmm::CollectiveEntries<DataType, kerData>> collective;
+    // The application's sketch callback (c_bpack_set_sketch_callback): with
+    // collective entries, the ID's sketches of kernel rows are fetched
+    // sketched (sketch_block_by_index).  Null: their entries are.
+    typename fmm::CollectiveEntries<DataType, kerData>::SketchCallback sketch_callback = nullptr;
 
 
     H2Kernel() = default;
@@ -373,6 +377,30 @@ struct H2Kernel {
     // x_indices index the rows, y_indices the columns. Indices are 0-based
     // global DOF indices (as in BoxData::point_indices); C_FuncZmn expects
     // 1-based, so we add 1.
+    // Entries through a collective callback with a sketch callback: Y (d x
+    // y_size, leading dimension ldy) = Omega K(x_indices, y_indices), Omega
+    // (d x x_size) given by its nnz entries (orow: the position in x_indices,
+    // odest: the row of Y, oval), fetched in rounds as the blocks are (an
+    // item asking for one not fetched yet goes on with zeros, doomed).
+    // False, with Y untouched, without a sketch callback: the caller sketches
+    // the rows' entries itself.
+    bool sketch_block_by_index(const int64_t* x_indices, int64_t x_size, const int64_t* y_indices, int64_t y_size,
+                               int d, int64_t nnz, const int* orow, const int* odest, const double* oval, DataType* Y,
+                               int64_t ldy) const {
+        if (!collective || !collective->has_sketch()) return false;
+        const typename fmm::CollectiveEntries<DataType, kerData>::SketchKey key{x_indices, x_size, y_indices, y_size,
+                                                                               d, nnz, orow, odest, oval};
+        if (collective->lookup_sketch(key, Y, ldy)) return true;
+        collective->record_sketch(key);
+        if (!fmm::entry_item().active) throw fmm::H2EntryMiss();
+        fmm::entry_item().doomed = true;  // (zeros: see collective_entries.hpp)
+        for (int64_t j = 0; j < y_size; ++j) {
+            for (int64_t i = 0; i < d; ++i) Y[i + j * ldy] = DataType{0};
+        }
+        return true;
+    }
+    bool sketches_kernel_rows() const { return collective && collective->has_sketch(); }
+
     void evaluate_block_by_index(const int64_t* x_indices, int64_t x_size,
                                  const int64_t* y_indices, int64_t y_size,
                                  DataType* A, int64_t lda) const {
