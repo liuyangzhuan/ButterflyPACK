@@ -18,6 +18,12 @@ void apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
     bool include_ghosts = false,
     const DeferredPairFilter* pair_filter = nullptr) {
     mirror_targets.clear();
+    // (entries through a collective callback: the remote additions held in
+    // the candidate until its requests are all fetched, so that an abandoned
+    // candidate changes nothing outside itself)
+    PendingFactorUpdates<DataType> candidate_adds;
+    PendingFactorUpdates<DataType>* add_target =
+        (kernel_entries(kernel, 0) != nullptr && pending != nullptr) ? &candidate_adds : pending;
 
     DeferredXnnEndpoint<CoordType, DataType> candidate_endpoint =
         resolve_deferred_xnn_endpoint(level, candidate_morton);
@@ -521,7 +527,7 @@ void apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
                     (block.kind == DeferredXnnTargetKind::NEAR_A_NS) ? EdgeKind::Near :
                                                                        EdgeKind::Far;
                 deferred_xnn_accumulate_canonical_edge_delta_from_slice(
-                    *pending,
+                    *add_target,
                     candidate_morton,
                     block.neighbor_morton,
                     edge_kind,
@@ -530,6 +536,27 @@ void apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
                     0,
                     block.rows,
                     n_candidate);
+            }
+        }
+    }
+
+    // (entries through a collective callback: every request made; abandoned
+    // here if one was not fetched, before anything outside the candidate
+    // changes; then its remote additions, held back until now)
+    entry_checkpoint();
+    if (add_target != pending) {
+        for (auto& [key, block] : candidate_adds.accumulated_deltas) {
+            auto& destination = pending->accumulated_deltas[key];
+            if (destination.data.empty()) {
+                destination = std::move(block);
+            } else {
+                if (destination.rows != block.rows || destination.cols != block.cols ||
+                    destination.data.size() != block.data.size()) {
+                    throw std::runtime_error(
+                        "apply_unstructured_owner_deferred_xnn_updates_for_candidate_box: "
+                        "inconsistent remote addition");
+                }
+                for (size_t i = 0; i < block.data.size(); ++i) destination.data[i] += block.data[i];
             }
         }
     }

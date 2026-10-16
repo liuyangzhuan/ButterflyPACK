@@ -32,7 +32,16 @@ void factorize(H2<CoordType, DataType>* solver,
                   std::is_same_v<DataType, std::complex<double>>) {
     const auto factorization_method =
         butterfly::h2_xrr_factorization_method(solver->options);
-    configure_color_gpu(solver->options.use_gpu != 0);
+    // (entries through a collective callback: on the host for now)
+    configure_color_gpu(solver->options.use_gpu != 0 && solver->kernel.collective == nullptr);
+    if (solver->options.use_gpu != 0 && solver->kernel.collective != nullptr && solver->options.verbosity >= 0) {
+        int rank = 0;
+        MPI_Comm_rank(solver->comm, &rank);
+        if (rank == 0) {
+            std::cout << "H2: entries through a collective callback (elem_extract=1): the factorization on the host"
+                      << std::endl;
+        }
+    }
     fmm::env::report_environment(solver->tree->comm);
 #ifdef H2_HAVE_GPU
     fmm::gpu::tensor_core_gemm() = solver->options.use_gpu != 0;  // (real double: FP64 tensor cores)
@@ -53,6 +62,7 @@ void factorize(H2<CoordType, DataType>* solver,
     const double start = MPI_Wtime();
     butterfly::h2_verification_seconds() = 0.0;
     butterfly::h2_warmup_seconds() = 0.0;
+    if (solver->kernel.collective) solver->kernel.collective->reset_counts();
     hierarchical_factorization_unstructured(
         solver->tree.get(),
         &solver->kernel,
@@ -74,6 +84,9 @@ void factorize(H2<CoordType, DataType>* solver,
         solver->options.verbosity,
         occupied,
         solver->options.compress_factors);
+    if (solver->kernel.collective && solver->options.verbosity >= 1) {
+        solver->kernel.collective->report("factorization");
+    }
 
     // the logdet and quick verification that end the call, and the GPU
     // warm-up before its first level, are not factorization

@@ -1702,6 +1702,16 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	  (elem_extract == 2) ? C_FuncZmnBlock : nullptr;
 	MPI_Comm_rank(MPI_COMM_WORLD, &H2_solver->kernel.block_callback_pid);
 	H2_solver->kernel.quant = C_QuantApp;
+	// elem_extract=1 with a block callback: the callback is collective (it
+	// may communicate, as c_bpack_extractelement_bridge does), so the blocks
+	// are fetched in rounds of all ranks (collective_entries.hpp); otherwise
+	// each rank calls its callbacks when it needs an entry
+	H2_solver->kernel.collective.reset();
+	if (elem_extract == 1 && C_FuncZmnBlock != nullptr) {
+	  H2_solver->kernel.collective =
+	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
+	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid);
+	}
 #else
 	format7_requires_mpi("c_bpack_construct_element_compute");
 #endif
@@ -2361,6 +2371,104 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
   }else{
 	c_bpack_inv_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
   }
+}
+
+#ifdef HAVE_MPI
+// The blocks of a list of intersections from a compression-only
+// unstructured Color H2 (format 7; unstructured/extraction.hpp), each to one
+// rank of caller_comm (pmaps of 1 x 1 grids), collective over caller_comm;
+// the H2 on a subset of its ranks, bmat null on the others.
+static void h2_extract_elements(
+    F2Cptr* bmat, MPI_Comm caller_comm, int* Ninter, int* allrows, int* allcols,
+    C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
+    int* pmaps, const char* caller) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = nullptr;
+  if (bmat != nullptr && *bmat != nullptr) {
+    void* raw = nullptr;
+    c_bpack_get_h2(*bmat, &raw);
+    solver = static_cast<butterfly::H2<double, H2Data>*>(raw);
+  }
+  std::vector<int> owner(static_cast<size_t>(std::max(*Ninter, 0)));
+  for (int n = 0; n < *Ninter; ++n) {
+    const int pg = pgidx[n];
+    if (pg < 0 || pg >= *Npmap) {
+      throw std::invalid_argument(std::string(caller) + ": a process group out of range");
+    }
+    if (pmaps[pg] != 1 || pmaps[*Npmap + pg] != 1) {
+      throw std::invalid_argument(std::string(caller) +
+        " (format 7): an intersection owned by more than one rank (1 x 1 process grids only)");
+    }
+    owner[static_cast<size_t>(n)] = pmaps[2 * (*Npmap) + pg];
+  }
+  butterfly::color_unstructured::extract_compressed_blocks(
+    solver, caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
+    reinterpret_cast<H2Data*>(alldat_loc));
+}
+#endif
+
+void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols,
+	C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps){
+  // every rank holds the matrix: its own format
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+#ifdef HAVE_MPI
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    MPI_Comm comm = static_cast<butterfly::H2<double, H2Data>*>(H2_raw)->comm;
+    try {
+      h2_extract_elements(bmat, comm, Ninter, allrows, allcols, alldat_loc,
+                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
+    } catch (const std::exception& e) {
+      int rank = 0;
+      MPI_Comm_rank(comm, &rank);
+      std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+      MPI_Abort(comm, 1);
+    }
+#else
+	format7_requires_mpi("c_bpack_extractelement");
+#endif
+  }else{
+	c_bpack_extractelement_fortran(bmat, option, msh, stats, ptree, Ninter, Nallrows, Nallcols,
+	  Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps);
+  }
+}
+
+void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc,
+	int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx,
+	int* Npmap, int* pmaps){
+#ifdef HAVE_MPI
+  // the source's format, from its ranks (the others hold no option)
+  int fcomm = 0;
+  c_bpack_get_comm(ptree_caller, &fcomm);
+  MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
+  int format = -1;
+  if (option != nullptr && *option != nullptr) {
+    double tmp = 0.0;
+    c_bpack_getoption(option, "format", &tmp);
+    format = static_cast<int>(tmp);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  if (format == 7) {
+    try {
+      h2_extract_elements(bmat, caller_comm, Ninter, allrows, allcols, alldat_loc,
+                          rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
+    } catch (const std::exception& e) {
+      int rank = 0;
+      MPI_Comm_rank(caller_comm, &rank);
+      std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+      MPI_Abort(caller_comm, 1);
+    }
+    return;
+  }
+#endif
+  c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Ninter,
+    Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps);
 }
 
 

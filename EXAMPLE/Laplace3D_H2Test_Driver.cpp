@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +56,7 @@ struct DriverOptions {
   int precon = 1;
   int nrhs = 1;
   int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
+  int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
   int lrlevel = 0;
@@ -242,12 +244,14 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.nrhs = parse_int(value, "nrhs");
     } else if (name == "inv_mult_check") {
       options.inv_mult_check = parse_int(value, "inv_mult_check");
+    } else if (name == "extract_check") {
+      options.extract_check = parse_int(value, "extract_check");
     } else if (name == "verbosity") {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
       options.elem_extract = parse_int(value, "elem_extract");
-    } else if (name == "hodlr_extract_ranks") {
-      options.hodlr_extract_ranks = parse_int(value, "hodlr_extract_ranks");
+    } else if (name == "hodlr_extract_ranks" || name == "extract_ranks") {
+      options.hodlr_extract_ranks = parse_int(value, "extract_ranks");
     } else if (name == "gpu_evaluator") {
       options.gpu_evaluator = parse_int(value, "gpu_evaluator");
     } else if (name == "lrlevel") {
@@ -293,9 +297,16 @@ DriverOptions parse_driver_options(int argc, char** argv) {
     throw std::invalid_argument("hodlr_extract_ranks must be nonnegative");
   }
   if (options.hodlr_extract_ranks > 0 &&
-      (options.format != 1 || options.distributed64 != 0)) {
+      ((options.format != 1 && options.format != 7) || options.distributed64 != 0)) {
     throw std::invalid_argument(
-        "hodlr_extract_ranks requires format=1 and distributed64=0");
+        "extract_ranks requires format=1 or 7 and distributed64=0");
+  }
+  if (options.hodlr_extract_ranks > 0 && options.format == 7 &&
+      (options.elem_extract == 0 || options.h2_unstructured != 1 || options.precon == 2)) {
+    // (the H2's blocks from the compressed H2 through the collective block
+    // callback; unstructured Color only; the H2 under test factored)
+    throw std::invalid_argument(
+        "extract_ranks with format=7 requires elem_extract 1, H2_unstructured 1 and precon 1 or 3");
   }
   if (options.gpu_evaluator != 0 && options.gpu_evaluator != 1) {
     throw std::invalid_argument("gpu_evaluator must be 0 or 1");
@@ -309,7 +320,7 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.hodlr_extract_ranks > 0 && options.elem_extract == 2) {
     // (the extraction from the source is collective over all ranks)
     throw std::invalid_argument(
-        "with hodlr_extract_ranks, elem_extract must be 1 (or 0)");
+        "with extract_ranks, elem_extract must be 1 (or 0)");
   }
   if (options.precon < 1 || options.precon > 3) {
     throw std::invalid_argument("precon must be 1, 2, or 3");
@@ -449,14 +460,21 @@ void print_usage(const char* executable) {
       << "  --nrhs <count>\n"
       << "  --inv_mult_check <columns>   (after the solve: inv_mult N/T/C and the\n"
          "                                transposed mult; not with precon 2)\n"
+      << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
+         "                             random blocks extracted from the compressed H2,\n"
+         "                             against the kernel and its matvec)\n"
       << "  --format <1|7>\n"
       << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
       << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|1|2>   (default 2; with --hodlr_extract_ranks: of\n"
          "                            the HODLR from the entries, default 1)\n"
-      << "  --hodlr_extract_ranks <P>   (format=1: build the HODLR from the kernel on\n"
+      << "  --extract_ranks <P>   (format=1: build the HODLR from the kernel on\n"
          "                            the first P ranks, then the one factored and\n"
-         "                            solved on all ranks from its entries)\n"
+         "                            solved on all ranks from its entries; format=7:\n"
+         "                            the same with a compression-only H2 (precon 2)\n"
+         "                            and an H2 factored from its entries through the\n"
+         "                            collective block callback, elem_extract 1;\n"
+         "                            alias --hodlr_extract_ranks)\n"
       << "  --gpu_evaluator <0|1>   (0: no GPU evaluator of the kernel; the GPU\n"
          "                            HODLR construction takes the entries through\n"
          "                            the block callback)\n"
@@ -921,9 +939,11 @@ int main(int argc, char** argv) {
       d_c_bpack_createptree(&source_size, source_groups.data(),
                             &source_fortran_comm, &source.process_tree);
       set_options(&source.option);
-      // (not factored; the Laplace block callback on its own ranks)
+      // (not factored, or for an H2 compressed only; the Laplace block
+      // callback on its own ranks)
       d_c_bpack_set_I_option(&source.option, "ErrSol", 0);
       d_c_bpack_set_I_option(&source.option, "elem_extract", 2);
+      if (driver_options.format == 7) d_c_bpack_set_I_option(&source.option, "precon", 2);
       int point_count = static_cast<int>(point_count_64);
       int nlevel = 0;
       int user_tree = point_count;
@@ -936,7 +956,8 @@ int main(int argc, char** argv) {
           &source_kernel_quantities, &source.process_tree,
           &distance_callback, &near_far_callback, &application);
 #ifdef BPACK_EXAMPLE_GPU
-      if (driver_options.hodlr_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
+      if ((driver_options.format == 7 ? driver_options.h2_use_gpu : driver_options.hodlr_use_gpu) > 0 &&
+          driver_options.gpu_evaluator == 1) {
         laplace3d_gpu_register(&source.matrix, application.inverse_4pi_n(),
                                application.diagonal());
       }
@@ -945,14 +966,20 @@ int main(int argc, char** argv) {
           &source.matrix, &source.option, &source.stats, &source.mesh,
           &source_kernel_quantities, &source.process_tree,
           &laplace_entry_callback, &laplace_block_callback, &application);
+      if (driver_options.format == 7) {
+        // the compression-only H2 (precon 2): the source of the entries
+        d_c_bpack_factor(&source.matrix, &source.option, &source.stats,
+                         &source.process_tree, &source.mesh);
+      }
       extraction.matrix = source.matrix;
       extraction.option = source.option;
       extraction.mesh = source.mesh;
       extraction.stats = source.stats;
       extraction.process_tree = source.process_tree;
       if (rank == 0) {
-        std::cout << "\nBuilt the source HODLR on " << source_ranks
-                  << " ranks; the HODLR under test from its entries on "
+        const char* kind = driver_options.format == 7 ? "H2" : "HODLR";
+        std::cout << "\nBuilt the source " << kind << " on " << source_ranks
+                  << " ranks; the " << kind << " under test from its entries on "
                   << mpi_size << " ranks:" << std::endl;
       }
     }
@@ -960,10 +987,13 @@ int main(int argc, char** argv) {
     set_options(&resources.option);
     if (source_ranks > 0) {
       // the HODLR under test in the source's tree order (natural order, no
-      // geometry), its entries by blocks from the source
-      d_c_bpack_set_I_option(&resources.option, "nogeo", 1);
-      d_c_bpack_set_I_option(&resources.option, "xyzsort", 0);
-      d_c_bpack_set_I_option(&resources.option, "knn", 0);
+      // geometry), its entries by blocks from the source; an H2 keeps its
+      // geometry (the source's indices are the points', as its own)
+      if (driver_options.format == 1) {
+        d_c_bpack_set_I_option(&resources.option, "nogeo", 1);
+        d_c_bpack_set_I_option(&resources.option, "xyzsort", 0);
+        d_c_bpack_set_I_option(&resources.option, "knn", 0);
+      }
       extraction.caller_tree = resources.process_tree;
     }
 
@@ -1040,6 +1070,135 @@ int main(int argc, char** argv) {
     d_c_bpack_factor(
         &resources.matrix, &resources.option, &resources.stats,
         &resources.process_tree, &resources.mesh);
+
+    // --extract_check: random blocks of the compression-only H2 through the
+    // extraction bridge (each to a random rank), against the kernel; then
+    // this rank's rows of two columns against the compressed matvec of their
+    // unit vectors (the same representation: rounding)
+    if (driver_options.extract_check > 0 && driver_options.format == 7 &&
+        driver_options.precon == 2 && driver_options.distributed64 == 1) {
+      const int64_t n_global = point_count_64;
+      std::mt19937_64 rng(20261016);
+      auto pick = [&](int count, std::vector<int>& out) {
+        // a random box-sized cluster of consecutive ids, or scattered ids
+        const bool cluster = rng() % 2 == 0;
+        const int64_t first = static_cast<int64_t>(rng() % static_cast<uint64_t>(n_global));
+        for (int i = 0; i < count; ++i) {
+          const int64_t id = cluster ? (first + i * 7) % n_global
+                                     : static_cast<int64_t>(rng() % static_cast<uint64_t>(n_global));
+          out.push_back(static_cast<int>(id + 1));
+        }
+      };
+      int ninter = driver_options.extract_check;
+      std::vector<int> allrows, allcols, rowidx, colidx, pgidx;
+      for (int n = 0; n < ninter; ++n) {
+        const int nr = 1 + static_cast<int>(rng() % 60), nc = 1 + static_cast<int>(rng() % 60);
+        pick(nr, allrows);
+        pick(nc, allcols);
+        rowidx.push_back(nr);
+        colidx.push_back(nc);
+        pgidx.push_back(static_cast<int>(rng() % static_cast<uint64_t>(mpi_size)));
+      }
+      // this rank's rows of two random columns, owned here
+      std::vector<int> probe(2);
+      for (int& j : probe) j = static_cast<int>(rng() % static_cast<uint64_t>(n_global)) + 1;
+      for (int p = 0; p < mpi_size; ++p) {
+        for (int j : probe) {
+          // (every rank must pass the same list: rank p's rows)
+          const int64_t base = n_global / mpi_size, extra = n_global % mpi_size;
+          const int64_t first = p * base + std::min<int64_t>(p, extra);
+          const int64_t count = base + (p < extra ? 1 : 0);
+          for (int64_t i = 0; i < count; ++i) allrows.push_back(static_cast<int>(first + i + 1));
+          allcols.push_back(j);
+          rowidx.push_back(static_cast<int>(count));
+          colidx.push_back(1);
+          pgidx.push_back(p);
+        }
+      }
+      ninter = static_cast<int>(rowidx.size());
+      std::vector<int> pmaps(3 * mpi_size);
+      for (int p = 0; p < mpi_size; ++p) {
+        pmaps[p] = 1;
+        pmaps[mpi_size + p] = 1;
+        pmaps[2 * mpi_size + p] = p;
+      }
+      int64_t mine = 0;
+      for (int n = 0; n < ninter; ++n) {
+        if (pgidx[n] == rank) mine += static_cast<int64_t>(rowidx[n]) * colidx[n];
+      }
+      std::vector<double> values(static_cast<size_t>(std::max<int64_t>(mine, 1)));
+      int nallrows = static_cast<int>(allrows.size()), nallcols = static_cast<int>(allcols.size());
+      int npmap = mpi_size;
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double t0 = MPI_Wtime();
+      d_c_bpack_extractelement_bridge(
+          &resources.matrix, &resources.option, &resources.mesh, &resources.stats,
+          &resources.process_tree, &resources.process_tree, &ninter, &nallrows,
+          &nallcols, &mine, allrows.data(), allcols.data(), values.data(),
+          rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps.data());
+      double t_extract = MPI_Wtime() - t0;
+      MPI_Allreduce(MPI_IN_PLACE, &t_extract, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+      // against the kernel (the random blocks), and the matvec (the probes)
+      std::vector<double> unit(static_cast<size_t>(local_points) * 2, 0.0);
+      for (int c = 0; c < 2; ++c) {
+        const int64_t local = probe[static_cast<size_t>(c)] - 1 - distributed_input.first;
+        if (local >= 0 && local < local_points) unit[static_cast<size_t>(local + c * local_points)] = 1.0;
+      }
+      std::vector<double> product(unit.size(), 0.0);
+      {
+        int two = 2, n_in = local_points, n_out = local_points;
+        const char trans = 'N';
+        d_c_bpack_mult(&trans, unit.data(), product.data(), &n_in, &n_out, &two,
+                       &resources.matrix, &resources.option, &resources.stats,
+                       &resources.process_tree);
+      }
+      double kernel_error2 = 0.0, kernel_norm2 = 0.0, matvec_error = 0.0, matvec_scale = 0.0;
+      int64_t entries = 0;
+      int64_t at = 0, row_at = 0, col_at = 0;
+      const int random_blocks = driver_options.extract_check;
+      for (int n = 0; n < ninter; ++n) {
+        const int nr = rowidx[n], nc = colidx[n];
+        if (pgidx[n] == rank) {
+          for (int j = 0; j < nc; ++j) {
+            for (int i = 0; i < nr; ++i) {
+              const double v = values[static_cast<size_t>(at + i + static_cast<int64_t>(j) * nr)];
+              if (n < random_blocks) {
+                // (distributed64: the coordinates from the ids, none stored)
+                const int64_t a = allrows[static_cast<size_t>(row_at + i)], b = allcols[static_cast<size_t>(col_at + j)];
+                double x[3], y[3];
+                application.coordinate(a - 1, x);
+                application.coordinate(b - 1, y);
+                const double k = application.evaluate_coordinates(a, b, x, y);
+                kernel_error2 += (v - k) * (v - k);
+                kernel_norm2 += k * k;
+              } else {
+                const int c = ((n - random_blocks) % 2);
+                const double y = product[static_cast<size_t>(i + c * local_points)];
+                matvec_error = std::max(matvec_error, std::abs(v - y));
+                matvec_scale = std::max(matvec_scale, std::abs(y));
+              }
+            }
+          }
+          at += static_cast<int64_t>(nr) * nc;
+          entries += static_cast<int64_t>(nr) * nc;
+        }
+        row_at += nr;
+        col_at += nc;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &kernel_error2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &kernel_norm2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &matvec_error, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &matvec_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &entries, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+      if (rank == 0) {
+        std::cout << std::setprecision(4) << "H2 extraction check: " << ninter << " blocks, " << entries
+                  << " entries in " << t_extract << " s; random blocks against the kernel "
+                  << std::sqrt(kernel_error2 / kernel_norm2) << " (Frobenius, relative); "
+                  << "rows of 2 columns against the matvec " << matvec_error / matvec_scale
+                  << " (max, relative)" << std::setprecision(6) << std::endl;
+      }
+    }
 
     int number_of_rhs = driver_options.nrhs;
     const size_t value_count = static_cast<size_t>(local_points) *

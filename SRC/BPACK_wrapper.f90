@@ -4638,7 +4638,7 @@ contains
    !> @param Nallrows: total number of rows
    !> @param Nallcols: total number of columns
    !> @param Nalldat_loc: total number of local entries
-   subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement")
+   subroutine C_BPACK_ExtractElement(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_fortran")
       implicit none
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr
@@ -4699,7 +4699,7 @@ contains
    !> intersection owned by one rank), collective over the caller's process tree ptree_caller_Cptr; bmat_Cptr,
    !> option_Cptr, msh_Cptr, stats_Cptr and ptree_Cptr are the source matrix's, null on the caller's ranks outside it
    !> (BPACK_ExtractElement_Bridge)
-   subroutine C_BPACK_ExtractElement_Bridge(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, ptree_caller_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_bridge")
+   subroutine C_BPACK_ExtractElement_Bridge(bmat_Cptr, option_Cptr, msh_Cptr, stats_Cptr, ptree_Cptr, ptree_caller_Cptr, Ninter, Nallrows, Nallcols, Nalldat_loc, allrows, allcols, alldat_loc, rowidx, colidx, pgidx, Npmap, pmaps) bind(c, name="c_bpack_extractelement_bridge_fortran")
       implicit none
       type(c_ptr), intent(in) :: bmat_Cptr
       type(c_ptr), intent(in) :: ptree_Cptr

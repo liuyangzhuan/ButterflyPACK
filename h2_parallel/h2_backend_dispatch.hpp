@@ -10,6 +10,7 @@
 #include "unstructured/compression.hpp"
 #include "unstructured/compression_apply.hpp"
 #include "unstructured/solver.hpp"
+#include "unstructured/extraction.hpp"
 
 namespace butterfly {
 

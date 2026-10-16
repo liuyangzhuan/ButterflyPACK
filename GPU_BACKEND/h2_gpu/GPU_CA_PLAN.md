@@ -6039,6 +6039,81 @@ The solve is bitwise as before (Laplace 192^3 on 8 ranks, the sphere's
 checksum).  At 64 columns a call is 4.30 s, of which the GPU sweeps 3.78
 (0.06 s a column); the sweeps are the solve's, unchanged.
 
+#### An H2 factored from the entries of a compressed H2 (2026-10-16)
+
+The example the STRUMPACK fronts need (F22 from the children's compressed
+F22; BP-5 and BP-7 of the integration plan), on the unstructured Color path:
+a compression-only H2 on some ranks (`--extract_ranks P`, format 7, precon 2
+on the source), and an H2 factored on all ranks whose block callback takes its
+entries from the first through `c_bpack_extractelement_bridge`.  Laplace3D
+driver: `--format 7 --distributed64 0 --H2_unstructured 1 --extract_ranks P
+--elem_extract 1`.
+
+**1. Batched extraction from a compressed H2** (unstructured/extraction.hpp;
+`c_bpack_extractelement` and `_bridge` route format 7 there, other formats
+to the Fortran, now `*_fortran`).  The compressed H2 holds every number its
+matvec uses, so an entry needs no kernel: K_near(t, s)(a, b) for neighbouring
+leaf boxes, else u_a^T K(S_tl, S_sl) u_b at the one level l where the
+ancestors are in each other's interaction lists, u being a point's
+interpolation vector carried up the tree (v[S] + T v[R], the children's
+skeletons concatenated in the parent).  It runs like the matvec on the
+requested points only: the u vectors up the tree (to the parents' owners at a
+reduction), the column side's to the row side's owner of each level, which
+computes the block; the blocks to their owners.  Collective over the caller;
+the source on a subset of its ranks.  Checked (`--extract_check N`, precon 2):
+random blocks against the kernel 6.5e-4 to 7.4e-4 (the compression's
+accuracy), rows of single columns against the compressed matvec of the unit
+vectors 3e-17 to 5e-17 (the same representation), on 1, 8, 12 and 16 ranks,
+GPU- and CPU-compressed sources (the GPU keeps host copies of every block).
+
+**2. Entries through a collective callback** (core/collective_entries.hpp).
+H2 called its block callback for one block on one rank, from OpenMP loops, at
+different times on different ranks; a bridge needs every rank in each call.
+`elem_extract=1` with a block callback now makes the kernel collective (with
+elem_extract 0 or 2 nothing changes: Laplace 192^3 and the 128K sphere on 8
+ranks bitwise as before):
+- the blocks are fetched in rounds: each phase of the factorization (a wave's
+  primary loop, its owner replay, transport's generator updates and a
+  fetch-only pass before its apply, the parent transition, the quick
+  verification) runs its items with the blocks it has; a request for another
+  one records it and the item goes on with zeros (discovery: its other
+  requests are recorded in the same pass), doomed, and is abandoned at its
+  next checkpoint, before it changes anything outside itself; a round fetches
+  every rank's records in one callback call; the abandoned items run again
+  (deterministic: the sketches are seeded per box), until a round finds no
+  request anywhere;
+- every item is replayable: the primary loop's last request comes before step
+  2's updates (a checkpoint there); the owner replay holds its remote
+  additions until its last request; a parent rebuilds from a fresh box; a
+  generator source writes only its own slot; transport's apply changes the
+  boxes as it goes, so its requests (the same indices and existence tests)
+  are made first by a pass that writes nothing;
+- the rounds are collective over all ranks: the ranks of a level run its
+  phases, the others serve the rounds (from the level's start) until the
+  level's transition is built; a rank with no boxes in a wave joins its rounds
+  with nothing to run; on the host for now (the device transition's
+  decisions are collective over the transition, whose parent-only ranks are
+  serving).
+
+Laplace, tol 1e-3, host path (H2_use_gpu 0; the factor time against the same
+H2 factored from the kernel):
+
+| | source ranks | target ranks | factor | from the kernel | acc_mvp (target vs source) | acc_backward |
+|---|---|---|---|---|---|---|
+| 32^3 | 1 | 1 | 11.8 s | 5.29 s | 3.5e-4 | 5.2e-16 |
+| 48^3 | 4 | 8 | 10.1 s | 4.17 s | 3.4e-4 | 4.7e-16 |
+| 64^3 | 5 | 12 | 37.1 s | 17.3 s | 3.9e-4 | 4.5e-16 |
+
+48^3 on 8 ranks: 143 rounds (36 fetching), 81376 blocks, 1.4e9 entries,
+5.7 s in rounds; the rest (4.4 s) is about the factorization from the kernel
+(4.17 s), so the replays cost little: the time is the entries' extraction
+(mostly the ID's two-hop rows), not the rounds.  Without discovery (each
+item abandoned at its first request) 32^3 took 72.9 s.
+
+Not yet: the GPU path in this mode (step 4 of the plan), and planners
+(fetching a phase's structural requests before it runs), which by the profile
+above would save rounds and replays but not the extraction volume.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:

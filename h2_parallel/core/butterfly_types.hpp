@@ -16,6 +16,7 @@
 
 // MPI
 #include <mpi.h>
+#include "collective_entries.hpp"
 
 // FMM Verification
 #include <iomanip>
@@ -231,6 +232,11 @@ struct H2Kernel {
     mutable std::vector<double> entryeval_time_per_thread;
     mutable std::unordered_map<int64_t, std::array<CoordType, 3>>
         coordinate_cache;
+    // Entries through a collective block callback (elem_extract=1;
+    // collective_entries.hpp): the blocks fetched in rounds, a request for
+    // another one abandoning the item that made it.  Null: the callbacks
+    // above, called when an entry is needed.
+    std::shared_ptr<fmm::CollectiveEntries<DataType, kerData>> collective;
 
 
     H2Kernel() = default;
@@ -375,6 +381,17 @@ struct H2Kernel {
                 "H2Kernel::evaluate_block_by_index: invalid block dimensions");
         }
         if (x_size == 0 || y_size == 0) return;
+
+        if (collective) {
+            if (collective->lookup(x_indices, x_size, y_indices, y_size, A, lda)) return;
+            collective->record(x_indices, x_size, y_indices, y_size);
+            if (!fmm::entry_item().active) throw fmm::H2EntryMiss();
+            fmm::entry_item().doomed = true;  // (zeros: see collective_entries.hpp)
+            for (int64_t j = 0; j < y_size; ++j) {
+                for (int64_t i = 0; i < x_size; ++i) A[i + j * lda] = DataType{0};
+            }
+            return;
+        }
 
         double t0 = MPI_Wtime();
 

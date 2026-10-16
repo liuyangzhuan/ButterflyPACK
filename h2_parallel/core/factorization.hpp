@@ -430,7 +430,9 @@ inline void evaluate_block_by_index_split(
     DataType* matrix,
     int64_t leading_dimension,
     int split_threads) {
-    if (split_threads <= 1 || columns < 2 * split_threads) {
+    // (entries through a collective callback: one block, as fetched; a
+    // request may abandon the item, which an OpenMP task cannot throw)
+    if (split_threads <= 1 || columns < 2 * split_threads || kernel_entries_collective(kernel, 0)) {
         kernel->evaluate_block_by_index(
             row_indices, rows,
             column_indices, columns,
@@ -9205,6 +9207,8 @@ void compute_and_modify(
             );
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
+    } catch (const H2EntryMiss&) {
+        throw;
     } catch (const std::exception& e) {
         const auto workspace_summary = summarize_colmajor_matrix(
             workspace,
@@ -10436,6 +10440,9 @@ void compute_and_modify(
     // STEP 2: Second Elimination (Section 2.4) - Call internal helper
     // ========================================================================
     FMM_PHASE_LAP(box_lap, BOX_NEAR);
+    // (entries through a collective callback: the box's requests are all
+    // made; abandoned here if one was not fetched, before step 2's updates)
+    entry_checkpoint();
     
     compute_step_two_internal(
         box, level, X_BB,

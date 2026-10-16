@@ -4,7 +4,10 @@
 #include "tree.hpp"
 #include "halo_geometry.hpp"
 #include "blas_declare.hpp"
+#include "collective_entries.hpp"
 #include <cstring>
+#include <numeric>
+#include <set>
 #include <map>
 #include <unordered_set>
 #include <vector>
@@ -3996,6 +3999,80 @@ static void apply_updates_with_kernel_symmetric(
         }
     }
 
+    // Entries through a collective callback: the kernel blocks the apply
+    // below takes (a new Schur block, a new near or far block: the kernel plus
+    // the update) fetched first, since the apply changes the boxes as it
+    // goes.  The requests are the apply's own: the same indices (the box's and
+    // the neighbour's current point counts, which the slicing of a payload
+    // only matches), the same tests of which blocks exist, the blocks the
+    // box's earlier tasks create counted as existing.
+    if (auto* entries = kernel_entries(kernel, 0)) {
+        std::vector<int64_t> boxes(lvl.local_boxes.size());
+        std::iota(boxes.begin(), boxes.end(), int64_t{0});
+        run_entry_phase(entries, std::move(boxes), [&](const std::vector<int64_t>& items) {
+            std::vector<int64_t> abandoned;
+            std::mutex abandoned_mutex;
+            #pragma omp parallel for schedule(static) if (items.size() > 1)
+            for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+                const int64_t local_idx = items[static_cast<size_t>(item)];
+                auto& target_box = lvl.local_boxes[static_cast<size_t>(local_idx)];
+                try {
+                    entry_item_begin();
+                    bool schur_exists = target_box.schur_complement.is_allocated();
+                    std::set<std::pair<int64_t, int>> created;
+                    for (const auto& task : tasks_per_box[static_cast<size_t>(local_idx)]) {
+                        const auto* payload = task.block;
+                        if (payload == nullptr || payload->rows <= 0 || payload->cols <= 0) continue;
+                        if (task.kind == IncomingApplyTaskKind::Replace) {
+                            created.insert({task.neighbor_morton, static_cast<int>(EdgeKind::Near)});
+                            continue;
+                        }
+                        if (task.kind == IncomingApplyTaskKind::Diag) {
+                            if (!schur_exists && payload->rows == payload->cols) {
+                                auto indices = indices_for_count_from_box(target_box, payload->rows, dim);
+                                std::vector<DataType> A(static_cast<size_t>(payload->rows * payload->rows));
+                                kernel->evaluate_block_by_index(indices.data(), payload->rows, indices.data(),
+                                                                payload->rows, A.data(), payload->rows);
+                            }
+                            schur_exists = true;
+                            continue;
+                        }
+                        const std::pair<int64_t, int> edge{task.neighbor_morton, static_cast<int>(task.edge_kind)};
+                        const ModifiedBlock<DataType>* mb =
+                            find_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
+                        if ((mb != nullptr && mb->a_ns_is_allocated()) || created.count(edge) != 0) continue;
+                        created.insert(edge);
+                        const int64_t n_self =
+                            (lvl.eliminated_boxes.find(task.target_morton) != lvl.eliminated_boxes.end() &&
+                             !target_box.skeleton_indices.empty())
+                                ? static_cast<int64_t>(target_box.skeleton_indices.size())
+                                : target_box.num_points;
+                        const int64_t n_nei = current_point_count(task.neighbor_morton);
+                        auto indices_self = indices_for_count_from_box(target_box, n_self, dim);
+                        std::vector<int64_t> indices_nei;
+                        const int64_t neighbor_local_idx = local_box_index(task.neighbor_morton);
+                        if (neighbor_local_idx >= 0) {
+                            indices_nei = indices_for_count_from_box(
+                                lvl.local_boxes[static_cast<size_t>(neighbor_local_idx)], n_nei, dim);
+                        } else {
+                            const auto* assist = get_assist(task.neighbor_morton);
+                            if (!assist) continue;  // (the apply reports it)
+                            indices_nei = indices_for_count_from_assist(*assist, n_nei, dim);
+                        }
+                        std::vector<DataType> A(static_cast<size_t>(n_self * n_nei));
+                        kernel->evaluate_block_by_index(indices_self.data(), n_self, indices_nei.data(), n_nei,
+                                                        A.data(), n_self);
+                    }
+                    entry_item_end();
+                } catch (const H2EntryMiss&) {
+                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                    abandoned.push_back(local_idx);
+                }
+            }
+            return abandoned;
+        });
+    }
+
     std::exception_ptr apply_exception;
     std::mutex apply_exception_mutex;
     std::atomic<bool> apply_failed{false};
@@ -4656,12 +4733,21 @@ void form_near_updates_from_generators(
     std::mutex form_exception_mutex;
     std::atomic<bool> form_failed{false};
 
-    #pragma omp parallel for schedule(dynamic) if (source_order.size() > 1)
-    for (int64_t source_index = 0;
-         source_index < static_cast<int64_t>(source_order.size());
-         ++source_index) {
+    // (entries through a collective callback: the sources that asked for a
+    // block not fetched yet form their updates again after a round; a
+    // source writes only its own entry of formed)
+    std::vector<int64_t> form_items(source_order.size());
+    std::iota(form_items.begin(), form_items.end(), int64_t{0});
+    run_entry_phase(kernel_entries(kernel, 0), std::move(form_items), [&](const std::vector<int64_t>& items) {
+    std::vector<int64_t> abandoned;
+    std::mutex abandoned_mutex;
+    #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
+    for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+        const int64_t source_index = items[static_cast<size_t>(item)];
         if (form_failed.load(std::memory_order_relaxed)) continue;
         try {
+            formed[static_cast<size_t>(source_index)] = FormedUpdates{};
+            entry_item_begin();
             const int64_t source_morton =
                 source_order[static_cast<size_t>(source_index)];
             BoxData<CoordType, DataType>* source =
@@ -4876,13 +4962,25 @@ void form_near_updates_from_generators(
                         EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
                 }
             }
+            entry_item_end();
+        } catch (const H2EntryMiss&) {
+            std::lock_guard<std::mutex> lock(abandoned_mutex);
+            abandoned.push_back(source_index);
         } catch (...) {
+            if (entry_item_abandoned()) {
+                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                abandoned.push_back(source_index);
+                continue;
+            }
             if (!form_failed.exchange(true, std::memory_order_relaxed)) {
                 std::lock_guard<std::mutex> lock(form_exception_mutex);
                 form_exception = std::current_exception();
             }
         }
     }
+    if (form_exception) std::rethrow_exception(form_exception);
+    return abandoned;
+    });
 
     if (form_exception) std::rethrow_exception(form_exception);
 

@@ -2,6 +2,8 @@
 
 #include "occupied_topology.hpp"
 
+#include <numeric>
+
 namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
@@ -167,10 +169,33 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
     std::atomic<bool> build_failed{false};
     const bool parallel_build = is_symmetric || is_hermitian;
 
-    #pragma omp parallel for schedule(dynamic) if (parallel_build && occupied_parent_indices.size() > 1)
-    for (int64_t occupied_slot = 0;
-         occupied_slot < static_cast<int64_t>(occupied_parent_indices.size());
-         ++occupied_slot) {
+    // With entries through a collective callback, the parents that asked
+    // for a block not fetched yet run again after a round, from a fresh box:
+    // an iteration writes only its parent's Schur complement and near blocks
+    // (and its own deferred blocks for the others), which start empty.
+    auto* entries = kernel_entries(kernel, 0);
+    if (entries != nullptr) {
+        if (!parallel_build) {
+            throw std::invalid_argument(
+                "build_parent_level_interactions_unstructured: collective entries need a symmetric matrix");
+        }
+        for (int64_t parent_index : occupied_parent_indices) {
+            const auto& B = parent_boxes[static_cast<size_t>(parent_index)];
+            if (B.schur_complement.is_allocated() || !B.near_field_modified_interactions.empty() ||
+                !B.near_field_interaction_map.empty() || !B.near_field_interaction_map_nonsymmetry.empty()) {
+                throw std::logic_error(
+                    "build_parent_level_interactions_unstructured: a parent box not fresh");
+            }
+        }
+    }
+    std::vector<int64_t> parent_items(occupied_parent_indices.size());
+    std::iota(parent_items.begin(), parent_items.end(), int64_t{0});
+    run_entry_phase(entries, std::move(parent_items), [&](const std::vector<int64_t>& items) {
+    std::vector<int64_t> abandoned;
+    std::mutex abandoned_mutex;
+    #pragma omp parallel for schedule(dynamic) if (parallel_build && items.size() > 1)
+    for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+        const int64_t occupied_slot = items[static_cast<size_t>(item)];
         const size_t b1_idx = static_cast<size_t>(
             occupied_parent_indices[static_cast<size_t>(occupied_slot)]);
         if (build_failed.load(std::memory_order_relaxed)) continue;
@@ -179,6 +204,14 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
         if (!occupied_topology.contains(parent_level_num, B1.morton_index)) {
             continue;
         }
+        if (entries != nullptr) {
+            B1.schur_complement = MatrixStorage<DataType>{};
+            B1.near_field_modified_interactions.clear();
+            B1.near_field_interaction_map.clear();
+            B1.near_field_interaction_map_nonsymmetry.clear();
+            deferred_parent_blocks[static_cast<size_t>(occupied_slot)].clear();
+        }
+        entry_item_begin();
         // printf("Assembling interactions for parent box %lu (morton %lu)\n",
         //        b1_idx, B1.morton_index);
         // fflush(stdout);
@@ -767,13 +800,25 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
                 }
             }
         }
+        entry_item_end();
+        } catch (const H2EntryMiss&) {
+            std::lock_guard<std::mutex> lock(abandoned_mutex);
+            abandoned.push_back(occupied_slot);
         } catch (...) {
+            if (entry_item_abandoned()) {
+                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                abandoned.push_back(occupied_slot);
+                continue;
+            }
             if (!build_failed.exchange(true, std::memory_order_relaxed)) {
                 std::lock_guard<std::mutex> lock(build_exception_mutex);
                 build_exception = std::current_exception();
             }
         }
     }
+    if (build_exception) std::rethrow_exception(build_exception);
+    return abandoned;
+    });
 
     if (build_exception) std::rethrow_exception(build_exception);
 

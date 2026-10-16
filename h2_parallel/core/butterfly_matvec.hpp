@@ -766,11 +766,22 @@ SparseMvpVerificationData<DataType> make_sparse_mvp_verification_data(
     const int64_t Nloc = static_cast<int64_t>(local_rows.size());
     std::vector<DataType> block(
         static_cast<size_t>(Nloc) * static_cast<size_t>(Npt_src));
-    if (Nloc > 0 && Npt_src > 0) {
-        kernel->evaluate_block_by_index(local_rows.data(), Nloc,
-                                        stv.idx.data(), Npt_src,
-                                        block.data(), Nloc);
-    }
+    // (entries through a collective callback: one phase of every rank)
+    run_entry_phase(kernel_entries(kernel, 0), std::vector<int64_t>{0}, [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        if (!items.empty() && Nloc > 0 && Npt_src > 0) {
+            try {
+                entry_item_begin();
+                kernel->evaluate_block_by_index(local_rows.data(), Nloc,
+                                                stv.idx.data(), Npt_src,
+                                                block.data(), Nloc);
+                entry_item_end();
+            } catch (const H2EntryMiss&) {
+                abandoned.push_back(0);
+            }
+        }
+        return abandoned;
+    });
 
     verification.exact_output.assign(static_cast<size_t>(Nloc), DataType{0.0});
     for (int64_t row = 0; row < Nloc; ++row) {
