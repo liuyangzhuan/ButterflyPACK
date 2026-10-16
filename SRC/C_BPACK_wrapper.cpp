@@ -5,10 +5,12 @@
 #endif
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <vector>
 #include <memory>
 #include <cstring>
@@ -65,6 +67,93 @@ int sync_h2_verbosity(
   c_bpack_getoption(option, "verbosity", &verbosity_d);
   solver->options.verbosity = static_cast<int>(std::llround(verbosity_d));
   return solver->options.verbosity;
+}
+
+// The operation a trans argument asks of format 7 ('N', 'T' or 'C', either
+// case).  The H2 matrix is transpose-symmetric (option%sym=1), so 'T' is
+// 'N', and 'C' is 'N' on conjugated vectors: A^H x = conj(A conj(x)), and
+// A^{-H} x = conj(A^{-1} conj(x)) (for real data 'T' again).
+static char h2_trans_operation(char const* trans, const char* caller) {
+  const char given = (trans != nullptr && trans[0] != '\0') ? trans[0] : 'N';
+  const char op = static_cast<char>(std::toupper(static_cast<unsigned char>(given)));
+  if (op != 'N' && op != 'T' && op != 'C') {
+    throw std::invalid_argument(std::string(caller) +
+      ": trans must be 'N', 'T' or 'C'; got '" + std::string(1, given) + "'");
+  }
+  return op;
+}
+
+template<typename DataType>
+void conjugate_h2_values(std::vector<DataType>& values) {
+  if constexpr (butterfly::is_complex_v<DataType>) {
+    for (DataType& value : values) value = std::conj(value);
+  }
+}
+
+// `ncol` columns of the caller's local rows in the solver's (tree) order: a
+// distributed64 handle converts from the caller's input ownership (`nloc`
+// must be its input-local size), a legacy handle already uses the tree's.
+// Returns the internal local row count.
+template<typename DataType>
+int h2_values_to_internal(
+    const butterfly::H2<double, DataType>* solver,
+    const DataType* values, int nloc, int ncol,
+    std::vector<DataType>& internal, const char* caller) {
+  const auto* layout = solver->distributed_layout.get();
+  int internal_nloc = nloc;
+  if (layout != nullptr) {
+    if (layout->input_local_size != nloc) {
+      throw std::invalid_argument(std::string(caller) +
+        " (distributed64): the local row count must equal the input-local size");
+    }
+    if (layout->internal_local_size > std::numeric_limits<int>::max()) {
+      throw std::overflow_error(std::string(caller) +
+        " (distributed64): internal local size exceeds INT_MAX");
+    }
+    internal_nloc = static_cast<int>(layout->internal_local_size);
+  }
+  internal.resize(static_cast<size_t>(internal_nloc) * static_cast<size_t>(ncol));
+  if (layout != nullptr) {
+    layout->input_to_internal(values, internal.data(), ncol);
+  } else {
+    std::copy_n(values, internal.size(), internal.data());
+  }
+  return internal_nloc;
+}
+
+// ... and back to the caller's order.
+template<typename DataType>
+void h2_values_from_internal(
+    const butterfly::H2<double, DataType>* solver,
+    const std::vector<DataType>& internal, DataType* values, int ncol) {
+  const auto* layout = solver->distributed_layout.get();
+  if (layout != nullptr) {
+    layout->internal_to_input(internal.data(), values, ncol);
+  } else {
+    std::copy(internal.begin(), internal.end(), values);
+  }
+}
+
+// solution = A^{-1} rhs with the factorization (c_bpack_factor, precon != 2),
+// both in the tree's order: the direct solve, and c_bpack_inv_mult.
+// `seconds`: the sweeps (with the solve data's set-up) and the gather.
+template<typename DataType>
+void h2_apply_factorized_inverse(
+    butterfly::H2<double, DataType>* solver,
+    const std::vector<DataType>& rhs, std::vector<DataType>& solution,
+    int internal_nloc, int ncol, int verbosity, double* seconds = nullptr) {
+  const double t0 = MPI_Wtime();
+  std::vector<std::vector<fmm::SolveDataRequest<double, DataType>>> solve_data(
+    solver->options.num_levels);
+  butterfly::dispatch_h2_solve(solver, rhs, solve_data, ncol, verbosity);
+  const double t1 = MPI_Wtime();
+  solution.resize(static_cast<size_t>(internal_nloc) * static_cast<size_t>(ncol));
+  butterfly::gather_local_solution(
+    solver->tree.get(), solve_data, solution.data(), &internal_nloc, ncol);
+  if (seconds != nullptr) {
+    seconds[0] = t1 - t0;
+    seconds[1] = MPI_Wtime() - t1;
+  }
 }
 
 template<typename CoordType, typename DataType>
@@ -2021,34 +2110,13 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     try {
       const int verbosity = sync_h2_verbosity(option, H2_solver);
       double t0 = MPI_Wtime();
-      const H2Data* b_h2 = reinterpret_cast<const H2Data*>(b);
 	  // A distributed64 handle exposes the caller's input ownership at this
-	  // public boundary.  Convert the entire RHS batch to tree ownership before
-	  // solving and convert the solution back below.  Legacy handles have no
-	  // layout object and already use the solver's internal ownership.
-	  const auto* distributed_layout = H2_solver->distributed_layout.get();
-	  int internal_nloc = *Nloc;
-	  if (distributed_layout != nullptr) {
-		if (distributed_layout->input_local_size != *Nloc) {
-		  throw std::invalid_argument(
-			"c_bpack_solve (distributed64): Nloc must equal the input-local size");
-		}
-		if (distributed_layout->internal_local_size >
-			std::numeric_limits<int>::max()) {
-		  throw std::overflow_error(
-			"c_bpack_solve (distributed64): internal local size exceeds INT_MAX");
-		}
-		internal_nloc = static_cast<int>(
-			distributed_layout->internal_local_size);
-	  }
-	  std::vector<H2Data> rhs(
-		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
-	  if (distributed_layout != nullptr) {
-		distributed_layout->input_to_internal(
-		  b_h2, rhs.data(), *Nrhs);
-	  } else {
-		std::copy_n(b_h2, rhs.size(), rhs.data());
-	  }
+	  // public boundary: the RHS batch goes to tree ownership and the solution
+	  // comes back below.
+	  std::vector<H2Data> rhs;
+	  const int internal_nloc = h2_values_to_internal(
+		H2_solver, reinterpret_cast<const H2Data*>(b), *Nloc, *Nrhs, rhs,
+		"c_bpack_solve");
 	  std::vector<H2Data> internal_solution;
 	  double precon_d = 1.0;
 	  c_bpack_getoption(option, "precon", &precon_d);
@@ -2079,15 +2147,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		  throw std::runtime_error(
 			"c_bpack_solve (format 7): direct solve requires c_bpack_factor first");
 		}
-		std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> solve_data(
-		  H2_solver->options.num_levels);
-		butterfly::dispatch_h2_solve(
-		  H2_solver, rhs, solve_data, *Nrhs, verbosity);
-		internal_solution.resize(
-		  static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs));
-		butterfly::gather_local_solution(
-		  H2_solver->tree.get(), solve_data,
-		  internal_solution.data(), &internal_nloc, *Nrhs);
+		h2_apply_factorized_inverse(
+		  H2_solver, rhs, internal_solution, internal_nloc, *Nrhs, verbosity);
 	  }
 
 	  if (internal_solution.size() !=
@@ -2095,13 +2156,8 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		throw std::runtime_error(
 		  "c_bpack_solve (format 7): internal solution length mismatch");
 	  }
-	  if (distributed_layout != nullptr) {
-		distributed_layout->internal_to_input(
-		  internal_solution.data(), reinterpret_cast<H2Data*>(x), *Nrhs);
-	  } else {
-		std::copy(internal_solution.begin(), internal_solution.end(),
-		          reinterpret_cast<H2Data*>(x));
-	  }
+	  h2_values_from_internal(
+		H2_solver, internal_solution, reinterpret_cast<H2Data*>(x), *Nrhs);
 
 	  double t_solve = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_solve, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
@@ -2148,15 +2204,13 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
         "c_bpack_mult (format 7): Ncol must be positive");
     }
 
-    // Only F·x is implemented for format 7 (transpose/conj-transpose not yet supported).
-    const char op = (trans && trans[0]) ? trans[0] : 'N';
-    if (op != 'N' && op != 'n') {
-      throw std::runtime_error(
-          "c_bpack_mult (format 7): only trans == 'N' is currently supported; got '" +
-          std::string(1, op) + "'");
-    }
-
     try {
+      // F x, F^T x = F x, F^H x = conj(F conj(x)) (h2_trans_operation)
+      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)");
+      if (*Ninloc != *Noutloc) {
+        throw std::invalid_argument(
+          "c_bpack_mult (format 7): Ninloc must equal Noutloc");
+      }
       const int verbosity = sync_h2_verbosity(option, H2_solver);
       double t0 = MPI_Wtime();
       double precon_d = 1.0;
@@ -2168,34 +2222,13 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 		  "c_bpack_mult (format 7): call c_bpack_factor before multiplication");
       }
 
-      const H2Data* xin_h2 = reinterpret_cast<const H2Data*>(xin);
 	  // Keep the public multiply contract in caller input order for a
 	  // distributed64 handle; the H2 multiply itself operates in tree order.
-	  // Legacy handles bypass both redistributions.
-	  const auto* distributed_layout = H2_solver->distributed_layout.get();
-	  int internal_nloc = *Ninloc;
-	  if (distributed_layout != nullptr) {
-		if (distributed_layout->input_local_size != *Ninloc ||
-			distributed_layout->input_local_size != *Noutloc) {
-		  throw std::invalid_argument(
-			"c_bpack_mult (distributed64): Ninloc and Noutloc must equal "
-			"the input-local size");
-		}
-		if (distributed_layout->internal_local_size >
-			std::numeric_limits<int>::max()) {
-		  throw std::overflow_error(
-			"c_bpack_mult (distributed64): internal local size exceeds INT_MAX");
-		}
-		internal_nloc = static_cast<int>(
-			distributed_layout->internal_local_size);
-	  }
-	  std::vector<H2Data> lhs(
-		static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Ncol));
-	  if (distributed_layout != nullptr) {
-		distributed_layout->input_to_internal(xin_h2, lhs.data(), *Ncol);
-	  } else {
-		std::copy_n(xin_h2, lhs.size(), lhs.data());
-	  }
+	  std::vector<H2Data> lhs;
+	  int internal_nloc = h2_values_to_internal(
+		H2_solver, reinterpret_cast<const H2Data*>(xin), *Ninloc, *Ncol, lhs,
+		"c_bpack_mult");
+	  if (op == 'C') conjugate_h2_values(lhs);
 	  std::vector<H2Data> compressed_output;
 	  std::vector<std::vector<fmm::SolveDataRequest<double, H2Data>>> mul_data;
 
@@ -2225,13 +2258,9 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 		  H2_solver->tree.get(), mul_data,
 		  internal_output.data(), &internal_nloc, *Ncol);
 	  }
-	  if (distributed_layout != nullptr) {
-		distributed_layout->internal_to_input(
-		  internal_output.data(), reinterpret_cast<H2Data*>(xout), *Ncol);
-	  } else {
-		std::copy(internal_output.begin(), internal_output.end(),
-		          reinterpret_cast<H2Data*>(xout));
-	  }
+	  if (op == 'C') conjugate_h2_values(internal_output);
+	  h2_values_from_internal(
+		H2_solver, internal_output, reinterpret_cast<H2Data*>(xout), *Ncol);
 
 	  double t_mult = MPI_Wtime() - t0;
 	  MPI_Allreduce(MPI_IN_PLACE, &t_mult, 1, MPI_DOUBLE, MPI_MAX,
@@ -2251,6 +2280,86 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 #endif
   }else{
 	c_bpack_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  }
+}
+
+void c_bpack_inv_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+
+  // xout = F^{-1} xin ('N'), F^{-T} xin ('T') or F^{-H} xin ('C'), F the
+  // factorized matrix; repeated on blocks of vectors (Schur sampling), so
+  // quiet below verbosity 1.  Format 7 applies the H2 factorization (the
+  // direct solve's sweeps): 'T' is 'N' and 'C' conjugates (h2_trans_operation).
+  double tmp;
+  c_bpack_getoption(option, "format", &tmp);
+  int format=(int)tmp;
+  if(format==7){
+#ifdef HAVE_MPI
+    using H2Data = typename butterfly::fmm_data<C_DT>::type;
+    void* H2_raw = nullptr;
+    c_bpack_get_h2(*bmat, &H2_raw);
+    butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_inv_mult");
+
+    int rank = 0;
+    MPI_Comm_rank(H2_solver->comm, &rank);
+
+    try {
+      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)");
+      if (*Ncol <= 0) {
+        throw std::invalid_argument(
+          "c_bpack_inv_mult (format 7): Ncol must be positive");
+      }
+      if (*Ninloc != *Noutloc) {
+        throw std::invalid_argument(
+          "c_bpack_inv_mult (format 7): Ninloc must equal Noutloc");
+      }
+      if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+        throw std::runtime_error(
+          "c_bpack_inv_mult (format 7): applies the factorization; call "
+          "c_bpack_factor with precon other than 2 first");
+      }
+      const int verbosity = sync_h2_verbosity(option, H2_solver);
+      double t0 = MPI_Wtime();
+
+      std::vector<H2Data> rhs;
+      const int internal_nloc = h2_values_to_internal(
+        H2_solver, reinterpret_cast<const H2Data*>(xin), *Ninloc, *Ncol, rhs,
+        "c_bpack_inv_mult");
+      if (op == 'C') conjugate_h2_values(rhs);
+      const double t_in = MPI_Wtime();
+      std::vector<H2Data> solution;
+      double t_apply[2] = {0.0, 0.0};
+      h2_apply_factorized_inverse(
+        H2_solver, rhs, solution, internal_nloc, *Ncol,
+        verbosity >= 1 ? verbosity : -1, t_apply);
+      const double t_out = MPI_Wtime();
+      if (op == 'C') conjugate_h2_values(solution);
+      h2_values_from_internal(
+        H2_solver, solution, reinterpret_cast<H2Data*>(xout), *Ncol);
+
+      // (as the Fortran inv_mult: this call's time)
+      double t_inv_mult = MPI_Wtime() - t0;
+      if (verbosity >= 1 && rank == 0) {
+        std::cout << "c_bpack_inv_mult (format 7, '" << op << "', " << *Ncol
+                  << " columns): " << t_inv_mult << " s on rank 0: to the tree's order "
+                  << t_in - t0 << ", sweeps " << t_apply[0] << ", gather "
+                  << t_apply[1] << ", back " << MPI_Wtime() - t_out << std::endl;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &t_inv_mult, 1, MPI_DOUBLE, MPI_MAX,
+                    H2_solver->comm);
+      c_bpack_setstats(stats, "Time_C_Mult", &t_inv_mult);
+      c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &t_inv_mult);
+    } catch (const std::exception& e) {
+        std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+#else
+	format7_requires_mpi("c_bpack_inv_mult");
+#endif
+  }else{
+	c_bpack_inv_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
   }
 }
 

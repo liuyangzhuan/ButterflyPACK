@@ -15,6 +15,7 @@
 #include <mpi.h>
 
 #include "dBPACK_wrapper.h"
+#include "bpack_inv_mult_check.hpp"
 #ifdef BPACK_EXAMPLE_GPU
 #include "gpu/gpu_evaluators.h"
 #endif
@@ -53,6 +54,7 @@ struct DriverOptions {
   int h2_ca_owner_serial = 0;
   int precon = 1;
   int nrhs = 1;
+  int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
   int lrlevel = 0;
@@ -238,6 +240,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.precon = parse_int(value, "precon");
     } else if (name == "nrhs") {
       options.nrhs = parse_int(value, "nrhs");
+    } else if (name == "inv_mult_check") {
+      options.inv_mult_check = parse_int(value, "inv_mult_check");
     } else if (name == "verbosity") {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
@@ -443,6 +447,8 @@ void print_usage(const char* executable) {
       << "  --H2_CA_owner_serial <0|1>\n"
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
+      << "  --inv_mult_check <columns>   (after the solve: inv_mult N/T/C and the\n"
+         "                                transposed mult; not with precon 2)\n"
       << "  --format <1|7>\n"
       << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
       << "  --distributed64 <0|1>\n"
@@ -1114,6 +1120,25 @@ int main(int argc, char** argv) {
                     << std::setprecision(6) << std::endl;
         }
       }
+    }
+
+    if (driver_options.inv_mult_check > 0 && driver_options.precon != 2) {
+      auto inv_mult = [&](char trans, const double* in, double* out, int ncol) {
+        int n_in = local_points, n_out = local_points;
+        d_c_bpack_inv_mult(&trans, in, out, &n_in, &n_out, &ncol,
+                           &resources.matrix, &resources.option, &resources.stats,
+                           &resources.process_tree);
+      };
+      auto mult = [&](char trans, const double* in, double* out, int ncol) {
+        int n_in = local_points, n_out = local_points;
+        d_c_bpack_mult(&trans, in, out, &n_in, &n_out, &ncol,
+                       &resources.matrix, &resources.option, &resources.stats,
+                       &resources.process_tree);
+      };
+      bpack_example::check_inv_mult<double>(
+          MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, 5,
+          rhs, solution, number_of_rhs, inv_mult, mult,
+          driver_options.format == 7 ? "H2" : "HODLR");
     }
 
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);

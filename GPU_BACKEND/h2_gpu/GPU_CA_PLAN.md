@@ -5993,6 +5993,52 @@ which 12 can have only with a leaf region 1.5x the mean.  What would fix it:
 the transition holding fewer restores at once (its chunking), or a planner
 that weighs a coarse level's memory against the leaf's balance.
 
+#### inv_mult and the transposed apply on format 7 (BP-6a, BP-6b; 2026-10-15)
+
+From the STRUMPACK integration plan: a front applies F11^{-1} to blocks of
+vectors many times after the factorization (the Schur sampling), with
+`trans` 'N', 'T' and 'C'; `c_bpack_inv_mult` had no format-7 route (it was
+the Fortran routine, which knows no H2) and `c_bpack_mult` took 'N' only.
+
+1. `c_bpack_inv_mult` is a C++ entry now, as `solve` and `mult` are: format
+   7 applies the factorization (the direct solve's sweeps, CPU or GPU, the
+   factors kept on the device from the first solve), other formats go to the
+   Fortran (`c_bpack_inv_mult_fortran`).  It needs a factorized H2 (precon
+   other than 2), square blocks, and is quiet below verbosity 1 (at 1 a line
+   a call: the time to the tree's order, the sweeps, the gather, back).
+2. 'T' and 'C' (both entries): the H2 matrix is transpose-symmetric
+   (option%sym=1, required), so 'T' is 'N', and 'C' is 'N' on conjugated
+   vectors, A^{-H} x = conj(A^{-1} conj(x)).  That this is exact and not an
+   approximation of the factorization is checked: the factorized inverse is
+   symmetric to rounding (below).
+3. The input-to-tree redistribution of distributed64 handles
+   (`DistributedLayout64::redistribute`, used by solve, mult and inv_mult)
+   packed each point's columns together, a read a stride of the local length
+   apart per value, on one thread: 0.51 s each way for 64 columns of 885K
+   points a rank.  A chunk is now column by column, packed and unpacked in
+   threads: 0.16 s in, 0.13-0.24 s back; bitwise the same.
+
+`--inv_mult_check <columns>` in the Laplace and EMSURF drivers
+(EXAMPLE/bpack_inv_mult_check.hpp): inv_mult 'N', 'T', 'C' on test
+vectors, their residuals through mult 'N', 'T', 'C', inv_mult against the
+solve, and the bilinear symmetry u0^T F^{-1} u1 - u1^T F^{-1} u0 (and of F):
+
+| run (8 columns unless noted) | 'T' - 'N' | 'C' - conj(N(conj)) | residuals | vs solve | F^{-1} symmetry | a call |
+|---|---|---|---|---|---|---|
+| Laplace 96^3 unstructured, 8 ranks GPU | 0 | 0 | 5.4e-15 | 0 | 7.7e-15 | 0.183 s |
+| the same, 12 ranks | 0 | 0 | 4.2e-15 | 0 | 4.5e-15 | 0.162 s |
+| the same, 8 ranks, CPU path | 0 | 0 | 1.4e-15 | 0 | 7.2e-15 | 0.486 s |
+| the same, distributed64 0 (legacy) | 0 | 0 | 6.2e-15 | 0 | 5.0e-15 | 0.176 s |
+| Laplace 192^3 compressed, 8 ranks GPU, 64 columns | 0 | 0 | 1.9e-15 | 0 | 5.4e-15 | 4.30 s (4.99 before 3.) |
+| 128K sphere (complex EFIE), 8 ranks GPU | 0 | 0 | 2.1e-11 | 0 | 1.0e-13 | 0.095 s |
+| the same, CPU path | 0 | 0 | 6.9e-11 | 0 | 5.4e-13 | 0.189 s |
+| HODLR (format 1) Laplace 48^3, the Fortran behind the new entry | 0 | 0 | 5.2e-15 | 0 | 2.0e-15 | 0.046 s |
+
+The structured loop passes the same check (96^3: as the unstructured run).
+The solve is bitwise as before (Laplace 192^3 on 8 ranks, the sphere's
+checksum).  At 64 columns a call is 4.30 s, of which the GPU sweeps 3.78
+(0.06 s a column); the sweeps are the solve's, unchanged.
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
