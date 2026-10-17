@@ -28,6 +28,8 @@ namespace gpu {
 // host copy (h2_gpu/device_solve.hpp); returns how many boxes it covered.
 template<typename CoordType, typename DataType>
 int64_t device_logdet_kept_level(fmm::ParallelTree<CoordType, DataType>* tree, int level, double& logabs, double& arg);
+// The device stores serve operator `tree` (h2_gpu/device_heap.hpp).
+inline void activate_operator(const void* tree);
 }  // namespace gpu
 }  // namespace fmm
 #endif
@@ -127,6 +129,11 @@ inline void accumulate_logdet_lu(const DataType* A, int64_t r, int64_t lda,
 template<typename CoordType, typename DataType>
 void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
                                   double* logabsdet, DataType* phase) {
+#ifdef H2_HAVE_GPU
+    // (the device stores of this operator, where its LUs kept without a host
+    // copy are: another operator may have been built or used since)
+    fmm::gpu::activate_operator(tree);
+#endif
 
     int leaf_level = tree->num_levels - 1;
 

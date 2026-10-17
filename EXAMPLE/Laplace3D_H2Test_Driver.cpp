@@ -57,6 +57,7 @@ struct DriverOptions {
   int nrhs = 1;
   int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
+  int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
   int lrlevel = 0;
@@ -246,6 +247,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.inv_mult_check = parse_int(value, "inv_mult_check");
     } else if (name == "extract_check") {
       options.extract_check = parse_int(value, "extract_check");
+    } else if (name == "logdet_check") {
+      options.logdet_check = parse_int(value, "logdet_check");
     } else if (name == "verbosity") {
       options.verbosity = parse_int(value, "verbosity");
     } else if (name == "elem_extract") {
@@ -463,6 +466,9 @@ void print_usage(const char* executable) {
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
          "                             against the kernel and its matvec)\n"
+      << "  --logdet_check <0|1>   (format=7, precon 1 or 3: the logdet and a solve of\n"
+         "                          the factored H2 again after a compression-only H2\n"
+         "                          of the same kernel is built)\n"
       << "  --format <1|7>\n"
       << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
       << "  --distributed64 <0|1>\n"
@@ -1380,6 +1386,77 @@ int main(int argc, char** argv) {
           MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, 5,
           rhs, solution, number_of_rhs, inv_mult, mult,
           driver_options.format == 7 ? "H2" : "HODLR");
+    }
+
+    // --logdet_check: the log-determinant and a solve of the factored H2
+    // again after another H2 operator was built in the process (a
+    // compression-only H2 of the same kernel on all ranks): the device data
+    // is kept per operator, and each call must find this one's
+    if (driver_options.logdet_check > 0 && driver_options.format == 7 && driver_options.precon != 2) {
+      double phase_before = 0.0, logabs_before = 0.0;
+      d_c_bpack_logdet(&phase_before, &logabs_before, &resources.option, &resources.matrix);
+      ButterflyResources other;
+      d_c_bpack_createoption(&other.option);
+      d_c_bpack_createstats(&other.stats);
+      d_c_bpack_createptree(&mpi_size, groups.data(), &fortran_comm, &other.process_tree);
+      set_options(&other.option);
+      d_c_bpack_set_I_option(&other.option, "precon", 2);
+      d_c_bpack_set_I_option(&other.option, "ErrSol", 0);
+      d_c_bpack_set_I_option(&other.option, "elem_extract", 2);
+      F2Cptr other_quantities = nullptr;
+      if (driver_options.distributed64 == 1) {
+        int bounds_provided = 1;
+        const double global_bounds[6] = {0.0, 1.0, 0.0, 1.0, 0.0, 1.0};
+        int64_t internal_local_points = 0;
+        d_c_bpack_construct_init_distributed64(
+            &point_count_64, &distributed_input.count, &dimension, distributed_input.global_ids.data(),
+            distributed_input.coordinates.data(), &bounds_provided, global_bounds, &internal_local_points,
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree);
+      } else {
+        int point_count = static_cast<int>(point_count_64);
+        int nlevel = 0;
+        int user_tree = point_count;
+        int other_local_points = 0;
+        std::vector<int> permutation(static_cast<size_t>(point_count));
+        d_c_bpack_construct_init(
+            &point_count, &dimension, application.locations(), nullptr, &nlevel, &user_tree, permutation.data(),
+            &other_local_points, &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities,
+            &other.process_tree, &distance_callback, &near_far_callback, &application);
+      }
+#ifdef BPACK_EXAMPLE_GPU
+      if (driver_options.h2_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
+        laplace3d_gpu_register(&other.matrix, application.inverse_4pi_n(), application.diagonal());
+      }
+#endif
+      if (driver_options.distributed64 == 1) {
+        d_c_bpack_construct_element_compute_distributed64(
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree,
+            &laplace_entry_callback64, &laplace_block_callback64, &application);
+      } else {
+        d_c_bpack_construct_element_compute(
+            &other.matrix, &other.option, &other.stats, &other.mesh, &other_quantities, &other.process_tree,
+            &laplace_entry_callback, &laplace_block_callback, &application);
+      }
+      d_c_bpack_factor(&other.matrix, &other.option, &other.stats, &other.process_tree, &other.mesh);
+      double phase_after = 0.0, logabs_after = 0.0;
+      d_c_bpack_logdet(&phase_after, &logabs_after, &resources.option, &resources.matrix);
+      std::vector<double> again(value_count, 0.0);
+      d_c_bpack_solve(again.data(), rhs.data(), &local_points, &number_of_rhs, &resources.matrix, &resources.option,
+                      &resources.stats, &resources.process_tree);
+      double difference = 0.0, scale = 0.0;
+      for (size_t i = 0; i < again.size(); ++i) {
+        difference = std::max(difference, std::abs(again[i] - solution[i]));
+        scale = std::max(scale, std::abs(solution[i]));
+      }
+      MPI_Allreduce(MPI_IN_PLACE, &difference, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      if (rank == 0) {
+        std::cout << std::setprecision(17) << "H2 logdet check: log|det| " << logabs_before << " (phase "
+                  << phase_before << ") before and " << logabs_after << " (phase " << phase_after
+                  << ") after another H2 was built, difference " << std::abs(logabs_after - logabs_before)
+                  << "; the solve again: max difference " << difference / scale << " (relative)"
+                  << std::setprecision(6) << std::endl;
+      }
     }
 
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);

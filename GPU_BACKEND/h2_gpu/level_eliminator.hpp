@@ -718,8 +718,11 @@ public:
     bool solve_factors_kept() const override { return keep_solve_ && !keep_failed_; }
     void commit_solve_factors(bool keep) override {
         if (keep && keep_solve_ && !keep_failed_) {
-            device_solve_store().kept[level_index_] = std::move(kept_);
+            DeviceSolveStore& store = device_solve_store();
+            store.kept[level_index_] = std::move(kept_);
             kept_ = KeptSolveLevel{};
+            // (an eviction of this operator's device data copies them to its host boxes first)
+            store.spill = [tree = tree_](DeviceSolveStore& s) { materialize_host_factors(tree, s); };
             // the pledged boxes' X_NR is handed to this copy at the transition
             committed_kept_ = &device_solve_store().kept[level_index_];
             skipped_factors_.clear();  // (read from the store from now on)

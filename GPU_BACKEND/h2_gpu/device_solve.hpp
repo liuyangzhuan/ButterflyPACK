@@ -317,6 +317,9 @@ struct DeviceSolveStore {
     struct ResidentBlock { int level; int block; size_t pos, bytes; };
     std::vector<ResidentBlock> resident;             // what the ring holds now (a copy evicts what it overlaps)
     PinnedBuffer host_vec, host_out, host_in;  // staging of the solves (kept: pinning is slow)
+    // the kept factors into the operator's host boxes (materialize_host_factors,
+    // set by the factorization that kept them): before an eviction
+    std::function<void(DeviceSolveStore&)> spill;
     bool empty() const { return levels.empty() && kept.empty(); }
 
     // A preparation's tables and uploaded factors (the kept factors stay).
@@ -748,6 +751,10 @@ inline DeviceSolveStore& device_solve_store() {
             double bytes = it->second.bytes;
             for (const auto& [level, kl] : it->second.kept) bytes += kl.bytes;
             return static_cast<size_t>(bytes);
+        });
+        c.spillers.push_back([s](const void* tree) {
+            auto it = s->find(tree);
+            if (it != s->end() && it->second.spill && !it->second.kept.empty()) it->second.spill(it->second);
         });
         return s;
     }();
@@ -1618,9 +1625,12 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
 }
 
 template<typename CoordType, typename DataType>
-void materialize_host_factors(ParallelTree<CoordType, DataType>* tree) {
-    DeviceSolveStore& store = device_solve_store();
+void materialize_host_factors(ParallelTree<CoordType, DataType>* tree, DeviceSolveStore& store) {
     for (auto& [level, kl] : store.kept) materialize_host_factors_level(tree, level, kl);
+}
+template<typename CoordType, typename DataType>
+void materialize_host_factors(ParallelTree<CoordType, DataType>* tree) {
+    materialize_host_factors(tree, device_solve_store());
 }
 
 // The log-determinant contributions (the sum of log|u_kk| and of the

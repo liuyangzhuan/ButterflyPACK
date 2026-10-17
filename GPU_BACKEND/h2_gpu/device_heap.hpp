@@ -813,14 +813,23 @@ inline void reserve_exchange_arena(int nproc, int share, double fraction = 0.0) 
 // operators' data is released collectively at the start of a build while the
 // other operators hold more than half of some rank's heap (an eviction on
 // one rank only would split the ranks between the device and host paths of
-// that operator); an allocation that still does not fit fails.
+// that operator); an allocation that still does not fit fails.  What of an
+// evicted operator has no host copy (the solve factors kept on the device
+// only) goes to its host boxes first (spillers), so its later solves and
+// logdet take the host's factors.
+//
+// Every H2 call on an operator activates it before it reads a store: the
+// builds (begin_operator_build), the solve (run_device_solve), the matvec
+// (run_device_h2_mul) and the logdet (hierarchical_logdet_parallel).
 struct OperatorContext {
     const void* active = nullptr;                         // the operator of the current H2 call
     uint64_t clock = 0;
     std::unordered_map<const void*, uint64_t> last_use;   // operator -> last use
-    // per kind of store (solve, matvec): release an operator's data; bytes it holds
+    // per kind of store (solve, matvec): release an operator's data; bytes it
+    // holds; before an eviction, its data without a host copy to the host
     std::vector<std::function<void(const void*)>> releasers;
     std::vector<std::function<size_t(const void*)>> holders;
+    std::vector<std::function<void(const void*)>> spillers;
 };
 
 inline OperatorContext& operator_context() {
@@ -886,6 +895,7 @@ inline void begin_operator_build(const void* tree, MPI_Comm comm, double exchang
         int over = others > heap.capacity() / 2 ? 1 : 0;
         MPI_Allreduce(MPI_IN_PLACE, &over, 1, MPI_INT, MPI_MAX, comm);
         if (!over || oldest == nullptr) return;
+        for (const auto& spill : c.spillers) spill(oldest);
         for (const auto& release : c.releasers) release(oldest);
         c.last_use.erase(oldest);
     }

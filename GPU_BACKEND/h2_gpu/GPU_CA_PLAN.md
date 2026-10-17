@@ -6259,6 +6259,31 @@ compression-only run (precon 2, 128K, 7 levels) compresses to 1.0e-5 (2e-7
 with the old 5 levels) and its BiCGSTAB stalls at 1000 iterations as it did
 with the old tree (7.8e-3 vs 5.0e-3: the unpreconditioned CFIE).
 
+#### logdet of an operator after another one is built (2026-10-17)
+
+GPTune's GP training factors K, builds the derivative operators (compression
+only), then asks for K's logdet: "logdet: level 7: 1428 boxes without a host
+LU, 0 covered by the device" (GPTune spatial_h2/near_block_too_wide.md,
+follow-up).  The device stores are per operator, chosen by the active one
+(device_heap.hpp), and every call activated its operator except the logdet,
+which read the last-built operator's store: no kept levels there, while K's
+leaf LUs are on the device only (040fa78).  hierarchical_logdet_parallel now
+activates its tree first.  Also: an eviction (begin_operator_build, when the
+other operators hold over half a heap) dropped an operator's device-only
+factors with them; it now copies them into the operator's host boxes first
+(DeviceSolveStore::spill, materialize_host_factors), so its later solve and
+logdet run from the host's factors.
+
+Checked with the Laplace driver's --logdet_check (logdet and a solve of the
+factored H2 again after a compression-only H2 of the same kernel is built):
+the previous library fails as GPTune did (48^3 on 8 ranks: "level 3: 64
+boxes without a host LU"); now the logdet and the solution are the same as
+before the second build (48^3 on 8, 64^3 on 12 ranks).  With a test build
+that evicts at every build, the second build spills K: its solve sets up
+again from the host factors (the same solution), its logdet sums them on the
+host (1.7e-16 relative from the device's sum).  Single-operator runs bitwise
+as before (Laplace 192^3, the 128K sphere, the collective extraction).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
