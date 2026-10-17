@@ -390,6 +390,110 @@ RegionWeights region_weights_of_points(
 
 
 /**
+ * @brief The tree depth from the occupied boxes (H2_unstructured): the rule
+ * from N alone (`num_levels`, as if the points filled the bounding box) made
+ * deeper while the occupied leaf boxes still hold at least `nmin_leaf` points
+ * on average, so that points on a surface or in clusters get leaves of about
+ * nmin_leaf points too.  Never shallower than `num_levels` (volume-filling
+ * points keep their depth), and with at most kOccupancyBoxesPerPoint * N leaf
+ * boxes in all (the unstructured slabs hold the empty boxes too).  Each level's
+ * occupied boxes are counted by sending each rank's distinct boxes to an owner
+ * rank by a hash of the box: no table over all boxes.  `distributed`: each rank
+ * holds its own points; else every rank holds all of them and counts a slice.
+ * Collective over comm; the occupied leaf boxes at the chosen depth in
+ * *occupied (0 when it is `num_levels` itself).
+ */
+constexpr int64_t kOccupancyBoxesPerPoint = 4;
+
+template<typename CoordType>
+int occupancy_num_levels(
+    const CoordType* coords,
+    int64_t num_points,
+    int32_t dimension,
+    int32_t num_levels,
+    int64_t n_global,
+    int64_t nmin_leaf,
+    const CoordType global_bounds[6],
+    MPI_Comm comm,
+    bool distributed,
+    int64_t* occupied = nullptr,
+    bool* capped = nullptr) {
+    if (occupied != nullptr) *occupied = 0;
+    if (capped != nullptr) *capped = false;
+    if (nmin_leaf <= 0 || n_global <= 0) return num_levels;
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    int64_t first = 0, count = num_points;
+    if (!distributed) {
+        const int64_t base = num_points / size, extra = num_points % size;
+        first = rank * base + std::min<int64_t>(rank, extra);
+        count = base + (rank < extra ? 1 : 0);
+    }
+    if (count > 0 && coords == nullptr) throw std::invalid_argument("occupancy_num_levels: null coordinates");
+    const int max_leaf = dimension == 3 ? 20 : 30;  // (the Morton codes' bits)
+    auto mix = [](uint64_t x) {  // (splitmix64)
+        x += 0x9e3779b97f4a7c15ULL;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+        return x ^ (x >> 31);
+    };
+    int best = num_levels;
+    for (int levels = num_levels + 1;; ++levels) {
+        const int leaf = levels - 1;
+        if (leaf > max_leaf) break;
+        const bool over_cap = std::ldexp(1.0, dimension * leaf) >
+                              static_cast<double>(kOccupancyBoxesPerPoint) * static_cast<double>(n_global);
+        // this rank's distinct leaf boxes, to their owners by hash
+        std::vector<int64_t> mine(static_cast<size_t>(count));
+        for (int64_t i = 0; i < count; ++i) {
+            CoordType point[3] = {CoordType(0), CoordType(0), CoordType(0)};
+            for (int d = 0; d < dimension; ++d) point[d] = coords[(first + i) * dimension + d];
+            int32_t grid[3];
+            mine[static_cast<size_t>(i)] = point_to_morton(point, dimension, global_bounds, leaf, grid);
+        }
+        std::sort(mine.begin(), mine.end());
+        mine.erase(std::unique(mine.begin(), mine.end()), mine.end());
+        std::vector<int> sc(static_cast<size_t>(size), 0), rc(static_cast<size_t>(size)), sd(static_cast<size_t>(size)),
+            rd(static_cast<size_t>(size));
+        std::vector<int> to(mine.size());
+        for (size_t j = 0; j < mine.size(); ++j) {
+            to[j] = static_cast<int>(mix(static_cast<uint64_t>(mine[j])) % static_cast<uint64_t>(size));
+            ++sc[static_cast<size_t>(to[j])];
+        }
+        MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+        int64_t stotal = 0, rtotal = 0;
+        for (int p = 0; p < size; ++p) {
+            sd[static_cast<size_t>(p)] = static_cast<int>(stotal);
+            rd[static_cast<size_t>(p)] = static_cast<int>(rtotal);
+            stotal += sc[static_cast<size_t>(p)];
+            rtotal += rc[static_cast<size_t>(p)];
+        }
+        if (stotal > std::numeric_limits<int>::max() || rtotal > std::numeric_limits<int>::max()) {
+            throw std::overflow_error("occupancy_num_levels: too many boxes on a rank");
+        }
+        std::vector<int64_t> sbuf(static_cast<size_t>(stotal)), rbuf(static_cast<size_t>(rtotal));
+        {
+            std::vector<int> at(sd);
+            for (size_t j = 0; j < mine.size(); ++j) sbuf[static_cast<size_t>(at[static_cast<size_t>(to[j])]++)] = mine[j];
+        }
+        MPI_Alltoallv(sbuf.data(), sc.data(), sd.data(), MPI_INT64_T, rbuf.data(), rc.data(), rd.data(), MPI_INT64_T,
+                      comm);
+        std::sort(rbuf.begin(), rbuf.end());
+        int64_t distinct = static_cast<int64_t>(std::unique(rbuf.begin(), rbuf.end()) - rbuf.begin());
+        MPI_Allreduce(MPI_IN_PLACE, &distinct, 1, MPI_INT64_T, MPI_SUM, comm);
+        if (distinct <= 0 || n_global < nmin_leaf * distinct) break;
+        if (over_cap) {  // (deeper by the points, too many boxes in all)
+            if (capped != nullptr) *capped = true;
+            break;
+        }
+        best = levels;
+        if (occupied != nullptr) *occupied = distinct;
+    }
+    return best;
+}
+
+/**
  * @brief Compute which processes are active at each level (FMM3D.pdf Section 5.3)
  * 
  * Also builds Morton ID mapping and communication patterns for process reduction.

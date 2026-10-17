@@ -124,6 +124,7 @@ inline const char* number_kind_to_string(NumberKind kind) {
 
 struct ProgramOptions {
     int num_levels = 0;
+    int64_t nmin_leaf = 0;      // Nmin_leaf (H2_unstructured: the depth also follows the occupied boxes)
     int64_t N = 0;
     int64_t grid_size = 0;
     double tolerance = 0.0;

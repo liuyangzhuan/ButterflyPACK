@@ -6217,6 +6217,48 @@ Not yet: planners (fetching a phase's structural requests before it runs),
 which by the profiles above would save rounds and replays but not the
 extraction volume.
 
+#### The tree depth from the occupied boxes (H2_unstructured, 2026-10-16)
+
+The depth came from N alone (butterfly_init.hpp: the deepest level at which
+round(nmin_leaf^(1/d)) doublings fit in round(N^(1/d)), i.e. N over all the
+leaf boxes at least about nmin_leaf), as if the points filled the bounding
+box.  Points on a surface or in clusters occupy few of the boxes, so their
+leaves held far more than nmin_leaf: 164 a leaf on the 128K-patch sphere
+(190K unknowns) with nmin_leaf 8, up to 2,388 on the 542K SST grid of the GPTune runs (whose
+compression-only GPU matvec then stops at "near block too wide", leaves over
+512 points; GPTune examples/GPTune-Demo/spatial_h2/near_block_too_wide.md).
+
+With H2_unstructured=1 the depth is now the deepest at which the N points
+over the occupied leaf boxes are still at least nmin_leaf
+(fmm::occupancy_num_levels, tree_impl.hpp): never shallower than the rule
+from N (volume-filling points keep their depth: Laplace 192^3 on 8 ranks
+bitwise, both init paths), and at most 4 leaf boxes a point in all, since the
+unstructured slabs hold the empty boxes too (1.3 KB each; a curve in 3D would
+otherwise ask for ~N^3 boxes).  A level's occupied boxes are counted by
+hashing each rank's distinct boxes to an owner rank (no table over the
+boxes); the options' num_levels (the solve arrays) and CA_level follow.
+Rank 0 prints the choice at verbosity 1.  The structured path is unchanged.
+
+The EMSURF sphere (CFIE, tol 1e-4, GPU, nmin_leaf 8 in its scripts) is
+therefore deeper and its leaves smaller:
+
+| | nmin_leaf | levels (from N) | occupied leaves | points a leaf | factor | acc_mvp |
+|---|---|---|---|---|---|---|
+| 128K, 8 ranks (190K unknowns) | 8 (before) | 5 | 1,160 | 164 | 1.68 s | 1.4e-4 |
+| | 8 | 7 (5) | 17,272 | 11 | 1.95 s | 1.9e-4 |
+| | 64 | 5 (4) | 1,160 | 164 | | bitwise as before |
+| 512K, 12 ranks (761K unknowns) | 8 (before) | 6 | 4,714 | 161 | 3.15 s | 8.4e-4 |
+| | 8 | 8 (6) | 69,998 | 11 | 4.92 s | 4.2e-3 |
+| | 32 | 7 (5) | 18,369 | 41 | 3.51 s | 1.8e-3 |
+| | 64 | 6 (5) | 4,714 | 161 | 3.02 s | 8.4e-4 (as before) |
+
+so nmin_leaf now means what it says on surfaces too, and the sphere scripts'
+8 (chosen under the old rule) was small: they now pass 64, which keeps the
+128K and 512K trees (the 9000 mesh: 3 levels instead of 4).  A
+compression-only run (precon 2, 128K, 7 levels) compresses to 1.0e-5 (2e-7
+with the old 5 levels) and its BiCGSTAB stalls at 1000 iterations as it did
+with the old tree (7.8e-3 vs 5.0e-3: the unpreconditioned CFIE).
+
 #### What the transient actually is (2026-10-08): the sketch's [P; W], 5.41 GB
 
 With transient blocks tagged, the 192^3 leaf reads, identically on both paths:
