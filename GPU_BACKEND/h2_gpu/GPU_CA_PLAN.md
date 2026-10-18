@@ -6369,6 +6369,54 @@ storage for the two views of a pair) are where that goes.  Symmetric runs
 bitwise as before (Laplace 192^3 on the GPU, the 128K sphere, the collective
 extraction, the extraction check).
 
+#### Nonsymmetric matrices, step N4: the CPU lazy and streamed path (2026-10-18)
+
+A nonsymmetric matrix with H2_lazy_schur=2 and H2_use_sketch=2 now runs the
+symmetric matrix's lazy, streamed Color levels (lazy_schur 0 keeps N3's
+eager ones, the reference).  What each piece takes for the two orientations:
+
+- A source E keeps temp4 = -X_RR^-1 X_RN (r x one-hop points) beside temp2,
+  pending in deferred_xnn_temp4 until finalize_deferred_xnn_source_box puts
+  it in X_RN.  A far block is regenerated as K(rows, cols) - sum_E
+  temp2_E[rows] X_RR_E temp4_E[:, cols] (lazy_far_gather_column_side: the
+  column side from temp4 for a nonsymmetric source, temp2 otherwise), in
+  the ID's fill and in the parent transition's two-hop child pairs.
+- The ID: gather_id_target_streamed_nonsymmetric sketches the stacked
+  [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T] in gather_id_workspace's row order
+  and with compute_id_sparse_sketch's draws, the fill in sketch space a
+  source at a time: O' -= P1^T W1 + P2^T W2, P1 = X_RR temp4[:, B], P2 =
+  X_RR^T temp2[B]^T, W1 (W2) the sketched temp2 rows (temp4 columns) of the
+  ring.  (With no fill it gives the materialized sketch bitwise: EMSURF and
+  VIE3D on 8 ranks, one box a wave, factor as N3 did to the last digit.)
+- The owner pass (apply_unstructured_owner_deferred_xnn_updates_nonsymmetric):
+  a local candidate C takes from each wave source B its two views of B (B's
+  of C), the Schur update temp2_B[C] X_RN_B[:, C] and, for each neighbor D
+  of B one hop from C, A_SN[D] += temp2_B[C] X_RN_B[:, D] and A_NS[D] +=
+  temp2_B[D] X_RN_B[:, C].  Of two local candidates the lower one computes
+  the pair and the other copies its views (C's A_SN[D] is D's A_NS[C]); the
+  views are formed from the kernel before the wave, near pairs only.
+- Remote sources: the generator carries temp4, the original X_RN and the
+  solved X_SR too; form_near_updates_from_generators_nonsymmetric forms a
+  local box's Schur update, the replacements of its two views of the source
+  and both orientations of its near pairs.
+
+| problem | ranks | logdet | check | factor N4 (N3, sym lazy) | peak RSS N4 (N3, sym) |
+|---|---|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 | -1095138.28969 | sym + sum log w: 4.6e-8 | 14.5 s (22.5, 5.5) | 7.5 GB (15.4, 3.8) |
+| the same | 8 / 12 | -1095138.27926 / .27721 | 4.8e-8 / 4.9e-8 | 9.4 / 9.5 s (12.0 / 12.5, 4.2) | |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8999 / .8978 / .8957 | N3: 1e-9 | 14.1 / 10.1 / 10.3 s | |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.595192 / 3763.595241 | N3: 1.3e-8 / 0 | 186 / 98 s (133 / 111, 97 on 1) | |
+| VIE3D 32^3, scaleGreen 0 | 1 / 8 | 340527.78214 / .78219 | N3: 1e-10 / 0 | 28.4 / 20.6 s (29.7 / 19.3, 15.9 on 1) | |
+
+(acc_forward as N3's: 4.1e-3, 3.0e-3, 7.5e-5, 1.7e-5; acc_backward 1e-15.)
+Peak memory halves against the eager levels, as the far blocks are never
+stored; time and memory are about 2x the symmetric lazy path's, the two
+orientations: the ring's kernel rows and both views of each pair.  On
+EMSURF the lazy path is slower than the eager one (186 vs 133 s), as for a
+symmetric matrix (97 vs 82 s): its endpoints and transition evaluate their
+far blocks from the kernel, which the eager path forms once.  Symmetric runs
+bitwise as before.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

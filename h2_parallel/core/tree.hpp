@@ -186,6 +186,12 @@ struct GeneratorPayload {
     int64_t k = 0;
     std::vector<int64_t> skeleton_indices;
     std::vector<DataType> x_rs;
+    // a nonsymmetric matrix: temp4 = -X_RR^-1 X_RN (r x total_rows, the
+    // column side of the source's fill), and for its near updates (lazy
+    // Schur mode 2) the original X_RN and the solved X_SR (k x r)
+    std::vector<DataType> temp4;
+    std::vector<DataType> original_x_rn;
+    std::vector<DataType> x_sr;
 };
 
 
@@ -1080,9 +1086,13 @@ struct BoxData {
     MatrixStorage<DataType> X_RS_entry;
     std::vector<int64_t> deferred_xnn_neighbor_point_counts;
     std::vector<DataType> deferred_xnn_temp2;
+    // (a nonsymmetric matrix: temp4 = -X_RR^-1 X_RN, held as temp2 is until
+    // the source is finalized, when it replaces X_RN)
+    std::vector<DataType> deferred_xnn_temp4;
     // Remote lazy generators keep the source-time one-hop coupling so mode 2
     // can reproduce eager near updates without reconstructing it through X_RR.
     std::vector<DataType> lazy_original_x_nr;
+    std::vector<DataType> lazy_original_x_rn;  // (nonsymmetric)
 
     
     // ===== Near-Field and Far-Field Interactions =====
@@ -1473,6 +1483,8 @@ size_t calculate_box_data_size(const BoxData<CoordType, DataType>& box) {
     total += matrix_heap(box.X_NR);
     total += matrix_heap(box.X_RR_full);
     total += matrix_heap(box.X_RS_entry);
+    total += vec_heap(box.deferred_xnn_temp4);
+    total += vec_heap(box.lazy_original_x_rn);
 
     // ===== Interaction maps =====
     total += map_heap(box.near_field_interaction_map);

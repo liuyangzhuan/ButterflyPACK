@@ -132,6 +132,8 @@ void clear_modified_interaction_matrices(
         box.X_RS_entry = MatrixStorage<DataType>{};
         std::vector<int64_t>().swap(box.deferred_xnn_neighbor_point_counts);
         std::vector<DataType>().swap(box.lazy_original_x_nr);
+        std::vector<DataType>().swap(box.lazy_original_x_rn);
+        std::vector<DataType>().swap(box.deferred_xnn_temp4);
     };
 
     // Iterate through all local boxes and clear their interaction data.

@@ -22,12 +22,16 @@ using namespace fmm;
 // the Schur block on the diagonal), from the kernel once each and in parallel
 // over the pairs; the wave's boxes then only add to them (several boxes of a
 // wave update one pair).
+//
+// With the lazy fill (lazy_far), only the near pairs: the far ones are never
+// stored.
 template<typename CoordType, typename DataType, typename KernelType>
 void form_nonsymmetric_wave_views(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     const std::vector<int64_t>& wave,
-    const OccupiedTopology& occupied_topology) {
+    const OccupiedTopology& occupied_topology,
+    bool lazy_far = false) {
     const int dimension = level.dimension;
     auto current_count = [&](int64_t morton) {
         const std::vector<int64_t>* points = nullptr;
@@ -74,6 +78,7 @@ void form_nonsymmetric_wave_views(
                 pair.lg = lg;
                 pair.rg = rg;
                 pair.kind = kind_of(lg, rg);
+                if (lazy_far && pair.kind == EdgeKind::Far) continue;
                 if (auto* lg_box = level.find_local_box(lg)) {
                     pair.lg_view = !formed(*lg_box, rg, pair.kind, true);
                 }
@@ -374,9 +379,11 @@ void hierarchical_factorization_unstructured(
         }
         const bool CA_requested = tree->level_requests_CA(current_level);
         const bool use_CA_level = tree->level_uses_CA(current_level);
+        // (a nonsymmetric matrix: streamed and lazy with lazy_schur 2, the
+        // eager levels with 0)
         const bool use_streamed_level =
-            current_level > 1 && use_sketch == 2 &&
-            is_symmetric && !is_hermitian;
+            current_level > 1 && use_sketch == 2 && !is_hermitian &&
+            (is_symmetric || lazy_schur == 2);
         const int level_lazy_schur = use_streamed_level
             ? (use_CA_level ? std::min(lazy_schur, 1) : lazy_schur)
             : 0;
@@ -862,7 +869,8 @@ void hierarchical_factorization_unstructured(
                 const bool enable_deferred_xnn =
                     to_store && (store_interior_wave || !is_interior);
                 const bool use_owner_deferred_xnn =
-                    enable_deferred_xnn && is_symmetric && !is_hermitian;
+                    enable_deferred_xnn && !is_hermitian &&
+                    (is_symmetric || use_streamed_level);
 
                 if (color_list.empty()) {
                     // All ranks retain the same wave schedule and have already
@@ -950,7 +958,9 @@ void hierarchical_factorization_unstructured(
                 const int wave_split = split_threads_for(
                     static_cast<int64_t>(color_list.size()), wave_team);
                 if (!(is_symmetric || is_hermitian)) {
-                    form_nonsymmetric_wave_views(level, kernel, color_list, occupied_topology);
+                    form_nonsymmetric_wave_views(
+                        level, kernel, color_list, occupied_topology,
+                        lazy_far_field_mode() == LazyFarFieldMode::LAZY);
                 }
                 record_deep_phase(DEEP_WAVE_SETUP, wave_setup_start);
                 const auto primary_start = clock::now();
@@ -1001,7 +1011,11 @@ void hierarchical_factorization_unstructured(
                             }
 
                             entry_item_begin();
-                            if (use_streamed_level) {
+                            if (use_streamed_level && !is_symmetric) {
+                                gather_id_target_streamed_nonsymmetric(
+                                    tree, &box, level, kernel, scratch,
+                                    box.on_boundary);
+                            } else if (use_streamed_level) {
                                 gather_id_target_streamed(
                                     tree, &box, level, kernel, scratch,
                                     box.on_boundary, tolerance);
@@ -1207,6 +1221,11 @@ void hierarchical_factorization_unstructured(
                                 //   local-remote  -> local replay + remote transport
                                 //   remote-remote -> remote transport only
                                 entry_item_begin();
+                                if (!is_symmetric) {
+                                    apply_unstructured_owner_deferred_xnn_updates_nonsymmetric(
+                                        candidate_morton, level, kernel, wave_box_set, scratch,
+                                        wave_xnn_mirror_targets[static_cast<size_t>(idx)]);
+                                } else {
                                 apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
                                     candidate_morton,
                                     level,
@@ -1217,6 +1236,7 @@ void hierarchical_factorization_unstructured(
                                         static_cast<size_t>(idx)],
                                     &thread_pending[
                                         static_cast<size_t>(tid)]);
+                                }
                                 entry_item_end();
                             } catch (const H2EntryMiss&) {
                                 std::lock_guard<std::mutex> lock(abandoned_mutex);
@@ -1301,10 +1321,15 @@ void hierarchical_factorization_unstructured(
                                     continue;
                                 }
 
+                                if (!is_symmetric) {
+                                    apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+                                        level, wave_xnn_mirror_targets[static_cast<size_t>(idx)]);
+                                } else {
                                 apply_symmetric_owner_deferred_xnn_updates_for_candidate_box(
                                     candidate_box,
                                     wave_xnn_mirror_targets[static_cast<size_t>(idx)],
                                     level);
+                                }
                             } catch (...) {
                                 if (!mirror_failed.exchange(true, std::memory_order_relaxed)) {
                                     std::lock_guard<std::mutex> lock(mirror_exception_mutex);
@@ -1320,7 +1345,7 @@ void hierarchical_factorization_unstructured(
                     record_deep_phase(DEEP_MIRROR, mirror_start);
 
                     const auto share_start = clock::now();
-                    share_symmetric_level_edges(level);
+                    if (is_symmetric) share_symmetric_level_edges(level);
                     record_deep_phase(DEEP_SHARE, share_start);
 
                     const auto generator_start = clock::now();

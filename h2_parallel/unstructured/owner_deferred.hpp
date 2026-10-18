@@ -583,5 +583,152 @@ void apply_unstructured_owner_deferred_xnn_updates_for_candidate_box(
 }
 
 
+// A nonsymmetric matrix (lazy Schur mode 2): a local candidate C takes, from
+// each source B of the wave among its neighbors, its two views of B (B's
+// views of C at B's skeleton: A_NS[B] = K(S_B, C) from B's A_SN[C], A_SN[B]
+// = K(C, S_B) from B's A_NS[C]), the Schur update temp2_B[C] X_RN_B[:, C],
+// and for each neighbor D of B one hop from C its views A_SN[D] +=
+// temp2_B[C] X_RN_B[:, D] and A_NS[D] += temp2_B[D] X_RN_B[:, C] (X_RN_B
+// the source's original, before finalize_deferred_xnn_source_box).  The far
+// pairs are the lazy fill's; a remote box forms its own updates from the
+// source's generator (form_near_updates_from_generators_nonsymmetric).  A
+// candidate writes only its own views, so the candidates run in parallel.
+// Of a pair of local candidates the lower one updates its views (C's A_SN[D]
+// and D's A_NS[C] are the same block), the other copies them afterwards
+// (mirror_targets, apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric).
+template<typename CoordType, typename DataType, typename KernelType>
+void apply_unstructured_owner_deferred_xnn_updates_nonsymmetric(
+    int64_t candidate_morton,
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const std::unordered_set<int64_t>& wave_box_set,
+    DeferredXnnOwnerScratch<DataType>& scratch,
+    std::vector<DeferredXnnTargetKey>& mirror_targets) {
+    mirror_targets.clear();
+    BoxData<CoordType, DataType>* candidate = level.find_local_box(candidate_morton);
+    if (candidate == nullptr || candidate->one_hop.empty()) return;
+    const int dimension = level.dimension;
+    std::vector<DataType> delta;
+
+    for (int64_t source_morton : candidate->one_hop) {
+        if (wave_box_set.count(source_morton) == 0) continue;
+        BoxData<CoordType, DataType>* source = level.find_local_box(source_morton);
+        if (source == nullptr || source->deferred_xnn_temp2.empty()) continue;
+        const auto& counts = source->deferred_xnn_neighbor_point_counts;
+        if (counts.size() != source->one_hop.size() || !source->X_RN.is_allocated() ||
+            source->X_NR.rows != source->X_RN.cols) {
+            throw std::runtime_error(
+                "apply_unstructured_owner_deferred_xnn_updates_nonsymmetric: incomplete source " +
+                std::to_string(source_morton));
+        }
+        std::vector<int64_t> offsets(counts.size() + 1, 0);
+        size_t c_idx = counts.size();
+        for (size_t idx = 0; idx < counts.size(); ++idx) {
+            offsets[idx + 1] = offsets[idx] + counts[idx];
+            if (source->one_hop[idx] == candidate_morton) c_idx = idx;
+        }
+        if (c_idx == counts.size()) {
+            throw std::runtime_error(
+                "apply_unstructured_owner_deferred_xnn_updates_nonsymmetric: candidate not a neighbor of its source");
+        }
+        const int64_t n_c = counts[c_idx];
+        if (n_c == 0) continue;
+
+        // the candidate's views of the source, the source's of it (Step 7)
+        const auto* source_ns = find_directed_block(*source, candidate_morton, EdgeKind::Near, false);
+        const auto* source_sn = find_directed_block(*source, candidate_morton, EdgeKind::Near, true);
+        if (source_ns == nullptr || !source_ns->a_ns_is_allocated() ||
+            source_sn == nullptr || !source_sn->A_SN.is_allocated()) {
+            throw std::runtime_error(
+                "apply_unstructured_owner_deferred_xnn_updates_nonsymmetric: source views missing");
+        }
+        upsert_directed_block(*candidate, source_morton, EdgeKind::Near, true)
+            .A_SN.set_owned(source_ns->a_ns_rows(), source_ns->a_ns_cols(), source_ns->copy_a_ns_data(),
+                            MatrixStorage<DataType>::FULL);
+        upsert_directed_block(*candidate, source_morton, EdgeKind::Near, false)
+            .set_a_ns_owned(source_sn->A_SN.rows, source_sn->A_SN.cols, source_sn->copy_a_sn_data(),
+                            MatrixStorage<DataType>::FULL);
+
+        const int64_t total = source->X_NR.rows;
+        const int64_t r = source->X_NR.cols;
+        if (r == 0) continue;
+        const DataType* temp2 = source->deferred_xnn_temp2.data();  // total x r
+        const DataType* x_rn = source->X_RN.data.data();            // r x total
+        const int64_t x_rn_ld = source->X_RN.lda;
+        // delta = temp2[rows of a] X_RN[:, cols of b]
+        auto product = [&](int64_t a_off, int64_t a_rows, int64_t b_off, int64_t b_cols) {
+            delta.resize(static_cast<size_t>(a_rows * b_cols));
+            int m = static_cast<int>(a_rows);
+            int k = static_cast<int>(r);
+            int lda = static_cast<int>(total);
+            int ldb = static_cast<int>(x_rn_ld);
+            int ldc = static_cast<int>(a_rows);
+            DataType alpha = 1.0;
+            DataType beta = 0.0;
+            split_columns_chunked(b_cols, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                int n = static_cast<int>(c1 - c0);
+                gemm_("N", "N", &m, &n, &k, &alpha, temp2 + a_off, &lda,
+                      x_rn + (b_off + c0) * x_rn_ld, &ldb, &beta, delta.data() + c0 * a_rows, &ldc);
+            });
+        };
+        for (size_t d_idx = 0; d_idx < counts.size(); ++d_idx) {
+            const int64_t n_d = counts[d_idx];
+            if (n_d == 0) continue;
+            const int64_t neighbor = source->one_hop[d_idx];
+            if (d_idx == c_idx) {
+                product(offsets[c_idx], n_c, offsets[c_idx], n_c);
+                add_to_schur_block(level, kernel, *candidate, n_c, delta.data(), n_c);
+                continue;
+            }
+            if (!deferred_xnn_boxes_are_one_hop(dimension, candidate_morton, neighbor)) continue;
+            if (neighbor < candidate_morton && level.find_local_box(neighbor) != nullptr) {
+                DeferredXnnTargetKey mirror;
+                mirror.box_morton = candidate_morton;
+                mirror.neighbor_morton = neighbor;
+                mirror.kind = DeferredXnnTargetKind::NEAR_A_NS;
+                if (std::find(mirror_targets.begin(), mirror_targets.end(), mirror) == mirror_targets.end()) {
+                    mirror_targets.push_back(mirror);
+                }
+                continue;
+            }
+            product(offsets[c_idx], n_c, offsets[d_idx], n_d);
+            add_to_directed_view(level, kernel, *candidate, neighbor, EdgeKind::Near, true,
+                                 n_c, n_d, delta.data(), n_c);
+            product(offsets[d_idx], n_d, offsets[c_idx], n_c);
+            add_to_directed_view(level, kernel, *candidate, neighbor, EdgeKind::Near, false,
+                                 n_c, n_d, delta.data(), n_d);
+        }
+    }
+}
+
+// After every candidate's pass: a candidate's views of a lower local
+// candidate, copied from that one's (its A_SN[D] = D's A_NS[C], its A_NS[D]
+// = D's A_SN[C]).  Reads only views no mirror writes.
+template<typename CoordType, typename DataType>
+void apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+    TreeLevel<CoordType, DataType>& level,
+    const std::vector<DeferredXnnTargetKey>& mirror_targets) {
+    for (const auto& mirror : mirror_targets) {
+        BoxData<CoordType, DataType>* box = level.find_local_box(mirror.box_morton);
+        BoxData<CoordType, DataType>* owner = level.find_local_box(mirror.neighbor_morton);
+        if (box == nullptr || owner == nullptr) {
+            throw std::runtime_error("apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric: box missing");
+        }
+        const auto* owner_ns = find_directed_block(*owner, mirror.box_morton, EdgeKind::Near, false);
+        const auto* owner_sn = find_directed_block(*owner, mirror.box_morton, EdgeKind::Near, true);
+        if (owner_ns == nullptr || !owner_ns->a_ns_is_allocated() ||
+            owner_sn == nullptr || !owner_sn->A_SN.is_allocated()) {
+            throw std::runtime_error(
+                "apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric: owner views missing");
+        }
+        upsert_directed_block(*box, mirror.neighbor_morton, EdgeKind::Near, true)
+            .A_SN.set_owned(owner_ns->a_ns_rows(), owner_ns->a_ns_cols(), owner_ns->copy_a_ns_data(),
+                            MatrixStorage<DataType>::FULL);
+        upsert_directed_block(*box, mirror.neighbor_morton, EdgeKind::Near, false)
+            .set_a_ns_owned(owner_sn->A_SN.rows, owner_sn->A_SN.cols, owner_sn->copy_a_sn_data(),
+                            MatrixStorage<DataType>::FULL);
+    }
+}
+
 }  // namespace color_unstructured
 }  // namespace butterfly

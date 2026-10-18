@@ -447,7 +447,10 @@ inline size_t bytes_generator(const GeneratorPayload<DataType>& g) {
            ser::bytes_vector(g.original_x_nr) +
            ser::bytes_vector(g.x_rr_full) +
            ser::bytes_vector(g.skeleton_indices) +
-           ser::bytes_vector(g.x_rs);
+           ser::bytes_vector(g.x_rs) +
+           ser::bytes_vector(g.temp4) +
+           ser::bytes_vector(g.original_x_rn) +
+           ser::bytes_vector(g.x_sr);
 }
 
 template <typename DataType>
@@ -463,6 +466,9 @@ inline char* serialize(const GeneratorPayload<DataType>& g, char* ptr) {
     ptr = ser::write_vector(ptr, g.x_rr_full);
     ptr = ser::write_vector(ptr, g.skeleton_indices);
     ptr = ser::write_vector(ptr, g.x_rs);
+    ptr = ser::write_vector(ptr, g.temp4);
+    ptr = ser::write_vector(ptr, g.original_x_rn);
+    ptr = ser::write_vector(ptr, g.x_sr);
     return ptr;
 }
 
@@ -479,6 +485,9 @@ inline const char* deserialize(GeneratorPayload<DataType>& g, const char* ptr) {
     ptr = ser::read_vector(ptr, g.x_rr_full);
     ptr = ser::read_vector(ptr, g.skeleton_indices);
     ptr = ser::read_vector(ptr, g.x_rs);
+    ptr = ser::read_vector(ptr, g.temp4);
+    ptr = ser::read_vector(ptr, g.original_x_rn);
+    ptr = ser::read_vector(ptr, g.x_sr);
     return ptr;
 }
 
@@ -580,6 +589,9 @@ size_t resident_bytes_pending(const PendingFactorUpdates<DataType>& p) {
         bytes += generator->x_rr_full.capacity() * sizeof(DataType);
         bytes += generator->skeleton_indices.capacity() * sizeof(int64_t);
         bytes += generator->x_rs.capacity() * sizeof(DataType);
+        bytes += generator->temp4.capacity() * sizeof(DataType);
+        bytes += generator->original_x_rn.capacity() * sizeof(DataType);
+        bytes += generator->x_sr.capacity() * sizeof(DataType);
     }
     return bytes;
 }
@@ -5040,6 +5052,27 @@ void emit_lazy_generators(
                     box->X_RS_entry.data.begin() +
                         redundant_count * skeleton_count);
             }
+
+            // a nonsymmetric matrix: the column side temp4, and for the near
+            // updates the original X_RN and the solved X_SR
+            if (!box->deferred_xnn_temp4.empty()) {
+                if (!box->X_RN.is_allocated() || box->X_RN.lda != redundant_count ||
+                    box->X_RN.data.size() != box->deferred_xnn_temp4.size()) {
+                    throw std::runtime_error(
+                        "emit_lazy_generators: X_RN mismatch for source " + std::to_string(morton));
+                }
+                generator->temp4 = box->deferred_xnn_temp4;
+                if (generator_near_enabled()) {
+                    const int64_t skeleton_count = static_cast<int64_t>(box->skeleton_indices.size());
+                    if (box->X_SR.rows != skeleton_count || box->X_SR.cols != redundant_count ||
+                        box->X_SR.lda != skeleton_count) {
+                        throw std::runtime_error(
+                            "emit_lazy_generators: X_SR mismatch for source " + std::to_string(morton));
+                    }
+                    generator->original_x_rn = box->X_RN.data;
+                    generator->x_sr = box->X_SR.data;
+                }
+            }
         }
 
         pending.generators[morton] = std::move(generator);
@@ -5078,6 +5111,18 @@ std::vector<int64_t> install_remote_generators(
                 box.X_RS.set_owned(
                     generator->r, generator->k,
                     std::move(generator->x_rs), MatrixStorage<DataType>::FULL);
+            }
+            // (a nonsymmetric matrix: X_RN holds temp4, as a finalized source)
+            if (!generator->temp4.empty()) {
+                box.X_RN.set_owned(
+                    generator->r, generator->total_rows,
+                    std::move(generator->temp4), MatrixStorage<DataType>::FULL);
+                box.lazy_original_x_rn = std::move(generator->original_x_rn);
+                if (generator->k > 0 && !generator->x_sr.empty()) {
+                    box.X_SR.set_owned(
+                        generator->k, generator->r,
+                        std::move(generator->x_sr), MatrixStorage<DataType>::FULL);
+                }
             }
         }
 
@@ -5408,6 +5453,232 @@ void form_near_updates_from_generators(
                 for (size_t i = 0; i < destination.data.size(); ++i) {
                     destination.data[i] += block.data[i];
                 }
+            }
+        }
+    }
+}
+
+// A nonsymmetric matrix: the near updates of the local boxes from installed
+// remote sources (lazy Schur mode 2), as the owner pass forms them for a
+// local source (apply_unstructured_owner_deferred_xnn_updates_nonsymmetric).
+// For each local neighbor L of a source B: the Schur update temp2[L]
+// X_RN[:, L] (X_RN the source's original), the replacements of L's two views
+// of B (A_NS[B] = K(S_B, L) + X_SR X_RN[:, L], A_SN[B] = K(L, S_B) + temp2[L]
+// X_RS, X_SR the solved and X_RS the original one), and for each neighbor N
+// of B one hop from L the deltas K(L, N) += temp2[L] X_RN[:, N] and K(N, L) +=
+// temp2[N] X_RN[:, L], once a pair (a local N above L takes them), oriented
+// (EdgeKey::rows_lo) for apply_updates_with_kernel_nonsymmetric.
+template<typename CoordType, typename DataType, typename KernelType>
+void form_near_updates_from_generators_nonsymmetric(
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const std::vector<int64_t>& installed,
+    int dimension,
+    PendingFactorUpdates<DataType>& incoming) {
+    if (installed.empty()) return;
+    if (kernel_entries(kernel, 0) != nullptr) {
+        throw std::logic_error(
+            "form_near_updates_from_generators_nonsymmetric: collective entries need a symmetric matrix");
+    }
+    auto are_one_hop = [&](int64_t first, int64_t second) {
+        uint32_t a[3] = {0, 0, 0};
+        uint32_t b[3] = {0, 0, 0};
+        morton::decode_nd(dimension, first, a[0], a[1], a[2]);
+        morton::decode_nd(dimension, second, b[0], b[1], b[2]);
+        for (int d = 0; d < dimension; ++d) {
+            if (std::abs(static_cast<int64_t>(a[d]) - static_cast<int64_t>(b[d])) > 1) return false;
+        }
+        return true;
+    };
+
+    struct FormedUpdates {
+        std::vector<std::pair<ReplaceKey, DenseBlock<DataType>>> replaces;
+        std::vector<std::pair<EdgeKey, DenseBlock<DataType>>> deltas;
+    };
+    std::vector<FormedUpdates> formed(installed.size());
+    std::exception_ptr form_exception;
+    std::mutex form_exception_mutex;
+    #pragma omp parallel for schedule(dynamic) if (installed.size() > 1)
+    for (int64_t s_idx = 0; s_idx < static_cast<int64_t>(installed.size()); ++s_idx) {
+        try {
+            const int64_t source_morton = installed[static_cast<size_t>(s_idx)];
+            BoxData<CoordType, DataType>* source = level.find_generator_box(source_morton);
+            if (source == nullptr) {
+                throw std::runtime_error("form_near_updates_from_generators_nonsymmetric: generator missing");
+            }
+            const int64_t r = source->X_NR.is_allocated() ? source->X_NR.cols : 0;
+            if (r == 0) continue;
+            const int64_t total = source->X_NR.rows;
+            const auto& neighbors = source->one_hop;
+            const auto& counts = source->deferred_xnn_neighbor_point_counts;
+            if (counts.size() != neighbors.size() ||
+                source->lazy_original_x_rn.size() != static_cast<size_t>(r * total)) {
+                throw std::runtime_error(
+                    "form_near_updates_from_generators_nonsymmetric: incomplete generator " +
+                    std::to_string(source_morton));
+            }
+            const DataType* temp2 = source->X_NR.data.data();            // total x r
+            const DataType* x_rn = source->lazy_original_x_rn.data();     // r x total
+            const int64_t k = static_cast<int64_t>(source->skeleton_indices.size());
+            std::vector<int64_t> offsets(neighbors.size() + 1, 0);
+            for (size_t i = 0; i < neighbors.size(); ++i) offsets[i + 1] = offsets[i] + counts[i];
+            // temp2[a rows] X_RN[:, b cols]
+            auto product = [&](int64_t a_off, int64_t a_rows, int64_t b_off, int64_t b_cols) {
+                DenseBlock<DataType> block;
+                block.rows = a_rows;
+                block.cols = b_cols;
+                block.data.resize(static_cast<size_t>(a_rows * b_cols));
+                int m = static_cast<int>(a_rows);
+                int n = static_cast<int>(b_cols);
+                int kk = static_cast<int>(r);
+                int lda = static_cast<int>(total);
+                int ldb = static_cast<int>(r);
+                int ldc = static_cast<int>(a_rows);
+                DataType alpha = 1.0;
+                DataType beta = 0.0;
+                gemm_("N", "N", &m, &n, &kk, &alpha, temp2 + a_off, &lda, x_rn + b_off * r, &ldb,
+                      &beta, block.data.data(), &ldc);
+                return block;
+            };
+            // the source's skeleton points (global indices), through its assisting data
+            std::vector<int64_t> source_skeleton_points;
+            auto skeleton_points = [&]() -> const std::vector<int64_t>& {
+                if (source_skeleton_points.empty() && k > 0) {
+                    auto it = level.assisting_box_points_for_kernel_evaluation.find(source_morton);
+                    if (it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                        throw std::runtime_error(
+                            "form_near_updates_from_generators_nonsymmetric: source assisting data missing");
+                    }
+                    const auto& assist = level.assisting_boxes[static_cast<size_t>(it->second)];
+                    source_skeleton_points.resize(static_cast<size_t>(k));
+                    for (int64_t i = 0; i < k; ++i) {
+                        source_skeleton_points[static_cast<size_t>(i)] =
+                            assist.indices[static_cast<size_t>(source->skeleton_indices[static_cast<size_t>(i)])];
+                    }
+                }
+                return source_skeleton_points;
+            };
+
+            auto& output = formed[static_cast<size_t>(s_idx)];
+            for (size_t l_idx = 0; l_idx < neighbors.size(); ++l_idx) {
+                const int64_t local_morton = neighbors[l_idx];
+                const int64_t n_l = counts[l_idx];
+                if (n_l == 0) continue;
+                BoxData<CoordType, DataType>* local = level.find_local_box(local_morton);
+                if (local == nullptr) continue;
+
+                output.deltas.emplace_back(EdgeKey{local_morton, local_morton, EdgeKind::Diag},
+                                           product(offsets[l_idx], n_l, offsets[l_idx], n_l));
+
+                if (k > 0) {
+                    // L's two views of B, at B's skeleton: its stored ones
+                    // (at B's full point set) or the kernel
+                    const int64_t n_b = r + k;
+                    std::vector<DataType> stored;
+                    std::vector<int64_t> local_points;
+                    auto local_current = [&]() -> const std::vector<int64_t>& {
+                        if (local_points.empty()) {
+                            local_points = directed_view_current_points(
+                                level, local_morton, local->point_indices, local->skeleton_indices, n_l);
+                        }
+                        return local_points;
+                    };
+                    // A_NS[B] = K(S_B, L) + X_SR X_RN[:, L]   (k x n_l)
+                    DenseBlock<DataType> ns;
+                    ns.rows = k;
+                    ns.cols = n_l;
+                    ns.data.resize(static_cast<size_t>(k * n_l));
+                    if (read_directed_view(level, *local, source_morton, EdgeKind::Near, false, n_l, n_b, stored)) {
+                        for (int64_t c = 0; c < n_l; ++c) {
+                            for (int64_t i = 0; i < k; ++i) {
+                                ns.data[static_cast<size_t>(i + c * k)] = stored[static_cast<size_t>(
+                                    source->skeleton_indices[static_cast<size_t>(i)] + c * n_b)];
+                            }
+                        }
+                    } else {
+                        kernel->evaluate_block_by_index(skeleton_points().data(), k, local_current().data(), n_l,
+                                                        ns.data.data(), k);
+                    }
+                    if (source->X_SR.is_allocated()) {
+                        int m = static_cast<int>(k);
+                        int n = static_cast<int>(n_l);
+                        int kk = static_cast<int>(r);
+                        int lda = static_cast<int>(source->X_SR.lda);
+                        int ldb = static_cast<int>(r);
+                        DataType alpha = 1.0;
+                        DataType beta = 1.0;
+                        gemm_("N", "N", &m, &n, &kk, &alpha, source->X_SR.data.data(), &lda,
+                              x_rn + offsets[l_idx] * r, &ldb, &beta, ns.data.data(), &m);
+                    }
+                    output.replaces.emplace_back(ReplaceKey{local_morton, source_morton, 0}, std::move(ns));
+
+                    // A_SN[B] = K(L, S_B) + temp2[L] X_RS   (n_l x k)
+                    DenseBlock<DataType> sn;
+                    sn.rows = n_l;
+                    sn.cols = k;
+                    sn.data.resize(static_cast<size_t>(n_l * k));
+                    if (read_directed_view(level, *local, source_morton, EdgeKind::Near, true, n_l, n_b, stored)) {
+                        for (int64_t c = 0; c < k; ++c) {
+                            const int64_t sc = source->skeleton_indices[static_cast<size_t>(c)];
+                            std::copy_n(&stored[static_cast<size_t>(sc * n_l)], n_l,
+                                        &sn.data[static_cast<size_t>(c * n_l)]);
+                        }
+                    } else {
+                        kernel->evaluate_block_by_index(local_current().data(), n_l, skeleton_points().data(), k,
+                                                        sn.data.data(), n_l);
+                    }
+                    if (source->X_RS.is_allocated()) {
+                        int m = static_cast<int>(n_l);
+                        int n = static_cast<int>(k);
+                        int kk = static_cast<int>(r);
+                        int lda = static_cast<int>(total);
+                        int ldb = static_cast<int>(source->X_RS.lda);
+                        DataType alpha = 1.0;
+                        DataType beta = 1.0;
+                        gemm_("N", "N", &m, &n, &kk, &alpha, temp2 + offsets[l_idx], &lda,
+                              source->X_RS.data.data(), &ldb, &beta, sn.data.data(), &m);
+                    }
+                    output.replaces.emplace_back(ReplaceKey{local_morton, source_morton, 1}, std::move(sn));
+                }
+
+                for (size_t n_idx = 0; n_idx < neighbors.size(); ++n_idx) {
+                    if (n_idx == l_idx) continue;
+                    const int64_t neighbor = neighbors[n_idx];
+                    const int64_t n_n = counts[n_idx];
+                    if (n_n == 0 || !are_one_hop(local_morton, neighbor)) continue;
+                    if (level.find_local_box(neighbor) != nullptr && neighbor < local_morton) continue;
+                    const int64_t lo = std::min(local_morton, neighbor);
+                    const int64_t hi = std::max(local_morton, neighbor);
+                    // K(L, N) and K(N, L)
+                    output.deltas.emplace_back(
+                        EdgeKey{lo, hi, EdgeKind::Near, static_cast<uint8_t>(local_morton == lo ? 1 : 0)},
+                        product(offsets[l_idx], n_l, offsets[n_idx], n_n));
+                    output.deltas.emplace_back(
+                        EdgeKey{lo, hi, EdgeKind::Near, static_cast<uint8_t>(neighbor == lo ? 1 : 0)},
+                        product(offsets[n_idx], n_n, offsets[l_idx], n_l));
+                }
+            }
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(form_exception_mutex);
+            if (!form_exception) form_exception = std::current_exception();
+        }
+    }
+    if (form_exception) std::rethrow_exception(form_exception);
+
+    for (auto& source_updates : formed) {
+        for (auto& [key, block] : source_updates.replaces) {
+            incoming.replace_blocks[key] = std::move(block);
+        }
+        for (auto& [key, block] : source_updates.deltas) {
+            auto& destination = incoming.accumulated_deltas[key];
+            if (destination.data.empty()) {
+                destination = std::move(block);
+            } else {
+                if (destination.rows != block.rows || destination.cols != block.cols) {
+                    throw std::runtime_error(
+                        "form_near_updates_from_generators_nonsymmetric: delta dimension mismatch");
+                }
+                for (size_t i = 0; i < destination.data.size(); ++i) destination.data[i] += block.data[i];
             }
         }
     }
@@ -5803,9 +6074,15 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     const std::vector<int64_t> installed_generators =
         install_remote_generators(lvl, incoming_total);
     if (generator_near_enabled()) {
-        form_near_updates_from_generators(
-            lvl, kernel, installed_generators, tree->dimension,
-            incoming_total);
+        if (kernel_symmetric(kernel, 0)) {
+            form_near_updates_from_generators(
+                lvl, kernel, installed_generators, tree->dimension,
+                incoming_total);
+        } else {
+            form_near_updates_from_generators_nonsymmetric(
+                lvl, kernel, installed_generators, tree->dimension,
+                incoming_total);
+        }
         // The source-time coupling is needed only while forming mode-2 near
         // updates. Release it before applying the updates so it does not stay
         // resident for the rest of the level; lazy far updates use X_NR,
@@ -5815,6 +6092,8 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
             if (generator_box != nullptr) {
                 std::vector<DataType>().swap(
                     generator_box->lazy_original_x_nr);
+                std::vector<DataType>().swap(
+                    generator_box->lazy_original_x_rn);
             }
         }
     }

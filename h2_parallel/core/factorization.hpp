@@ -3798,6 +3798,16 @@ void finalize_deferred_xnn_source_box(
     }
 
     std::vector<DataType>().swap(source_box->deferred_xnn_temp2);
+    // (a nonsymmetric matrix: temp4 replaces the original X_RN)
+    if (!source_box->deferred_xnn_temp4.empty()) {
+        if (!source_box->X_RN.is_allocated() ||
+            source_box->X_RN.data.size() != source_box->deferred_xnn_temp4.size()) {
+            throw std::runtime_error(
+                "finalize_deferred_xnn_source_box: source X_RN missing");
+        }
+        source_box->X_RN.data = std::move(source_box->deferred_xnn_temp4);
+    }
+    std::vector<DataType>().swap(source_box->deferred_xnn_temp4);
     if (lazy_far_field_mode() == LazyFarFieldMode::OFF) {
         std::vector<int64_t>().swap(
             source_box->deferred_xnn_neighbor_point_counts);
@@ -8006,7 +8016,13 @@ void compute_step_two_internal(
     if (!is_symmetric && !is_hermitian) {
         box->X_RS.data.assign(temp3.begin(), temp3.end());
         if (!temp4.empty()) {
-            box->X_RN.data.assign(temp4.begin(), temp4.end());
+            if (store) {
+                // (the owner pass and the generators read the original X_RN;
+                // finalize_deferred_xnn_source_box installs temp4)
+                box->deferred_xnn_temp4.assign(temp4.begin(), temp4.end());
+            } else {
+                box->X_RN.data.assign(temp4.begin(), temp4.end());
+            }
         }
     }
     
@@ -8157,6 +8173,50 @@ const DataType* lazy_far_source_temp2(const BoxData<CoordType, DataType>* source
     return source_box->deferred_xnn_temp2.data();
 }
 
+/**
+ * @brief A nonsymmetric source's temp4 (= -X_RR^{-1} X_RN, r x total_rows,
+ * one column slot per one_hop neighbor), or nullptr for a symmetric source
+ * (whose column side is temp2^T).  Pending in deferred_xnn_temp4 until
+ * finalize_deferred_xnn_source_box installs it into X_RN.
+ */
+template<typename CoordType, typename DataType>
+const DataType* lazy_far_source_temp4(const BoxData<CoordType, DataType>* source_box) {
+    if (!source_box->deferred_xnn_temp4.empty()) return source_box->deferred_xnn_temp4.data();
+    return source_box->X_RN.is_allocated() ? source_box->X_RN.data.data() : nullptr;
+}
+
+/**
+ * @brief The column side of a source's fill at an endpoint, (count x r)
+ * column-major: temp2's slot rows (symmetric), or temp4's slot columns
+ * transposed (nonsymmetric), so the fill of a block is
+ * -temp2[rows] X_RR_full side^T either way.
+ */
+template<typename CoordType, typename DataType>
+void lazy_far_gather_column_side(
+    const BoxData<CoordType, DataType>* source_box,
+    int64_t slot_offset,
+    const std::vector<int64_t>& positions,
+    int64_t count,
+    int64_t r,
+    std::vector<DataType>& out) {
+    out.resize(static_cast<size_t>(count * r));
+    if (const DataType* temp4 = lazy_far_source_temp4(source_box)) {
+        for (int64_t i = 0; i < count; ++i) {
+            const DataType* src = temp4 + (slot_offset + positions[static_cast<size_t>(i)]) * r;
+            for (int64_t j = 0; j < r; ++j) out[static_cast<size_t>(i + j * count)] = src[j];
+        }
+        return;
+    }
+    const DataType* temp2 = lazy_far_source_temp2(source_box);
+    const int64_t temp2_ld = source_box->X_NR.lda;
+    for (int64_t j = 0; j < r; ++j) {
+        const DataType* src_col = temp2 + j * temp2_ld + slot_offset;
+        for (int64_t i = 0; i < count; ++i) {
+            out[static_cast<size_t>(i + j * count)] = src_col[positions[static_cast<size_t>(i)]];
+        }
+    }
+}
+
 // ----- Endpoint row resolution ----------------------------------------------
 
 /**
@@ -8274,6 +8334,7 @@ bool lazy_far_locate_endpoint_rows(
  *
  * Writes the (row_end.wanted_count x col_end.wanted_count) column-major block
  *   K(rows, cols) - sum_E temp2_E[rows] * X_RR_full_E * temp2_E[cols]^T
+ * (temp4_E[:, cols] for a nonsymmetric source, lazy_far_gather_column_side)
  * into out (leading dimension out_ld). Sources must come from
  * collect_lazy_far_sources (canonical order).
  */
@@ -8368,13 +8429,7 @@ void regenerate_far_block_into(
                 Trow[i + j * a] = src_col[row_positions[static_cast<size_t>(i)]];
             }
         }
-        Tcol.resize(static_cast<size_t>(b * r));
-        for (int64_t j = 0; j < r; ++j) {
-            const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
-            for (int64_t i = 0; i < b; ++i) {
-                Tcol[i + j * b] = src_col[col_positions[static_cast<size_t>(i)]];
-            }
-        }
+        lazy_far_gather_column_side(source_box, col_slot_offset, col_positions, b, r, Tcol);
 
         // G = Trow * X_RR_full   (a x r)
         G.resize(static_cast<size_t>(a * r));
@@ -8535,13 +8590,7 @@ void lazy_far_apply_sources_cached(
                 continue;  // cache_slot (if any) stays empty as the memo
             }
 
-            Tcol.resize(static_cast<size_t>(c * r));
-            for (int64_t j = 0; j < r; ++j) {
-                const DataType* src_col = temp2 + j * temp2_ld + col_slot_offset;
-                for (int64_t i = 0; i < c; ++i) {
-                    Tcol[i + j * c] = src_col[col_positions[static_cast<size_t>(i)]];
-                }
-            }
+            lazy_far_gather_column_side(source_box, col_slot_offset, col_positions, c, r, Tcol);
 
             std::vector<DataType>& P_dst = cache_slot ? *cache_slot : P_local;
             P_dst.resize(static_cast<size_t>(r * c));
@@ -9390,6 +9439,373 @@ void gather_id_target_streamed(
     scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
     scratch.streamed_sketch_rows = sketch_rows;
+    scratch.streamed_sketch_valid = true;
+}
+
+/**
+ * @brief The streamed ID target of a nonsymmetric matrix (lazy fill): the
+ * sketch of the stacked [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T] (F the
+ * two-hop ring, T the training rows, the rows of gather_id_workspace in its
+ * order, with the same row sets and the same draws as its sparse sketch),
+ * never materialized.
+ *
+ * The fill of a ring block comes from the pair's eliminated common
+ * neighbors E: K(F, B) less temp2_E[F] P1_E, K(B, F)^T less
+ * temp4_E[:, F]^T P2_E, with P1_E = X_RR_E temp4_E[:, B] and P2_E =
+ * X_RR_E^T temp2_E[B]^T (r x n).  As in gather_id_target_streamed it is
+ * applied in sketch space, a source at a time: W1 (W2) gathers the sketched
+ * temp2_E rows (temp4_E columns) of the blocks listing E, and O' -= P1^T W1 +
+ * P2^T W2.  Outputs as gather_id_target_streamed's.
+ */
+template<typename CoordType, typename DataType, typename KernelType>
+void gather_id_target_streamed_nonsymmetric(
+    ParallelTree<CoordType, DataType>* tree,
+    BoxData<CoordType, DataType>* box,
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    FactorizationThreadScratch<CoordType, DataType>& scratch,
+    bool on_boundary) {
+
+    scratch.streamed_sketch_valid = false;
+    scratch.id_adaptive = IDAdaptiveStats{};
+    if (box == nullptr || box->num_points == 0) {
+        scratch.workspace_rows = 0;
+        scratch.workspace_cols = 0;
+        return;
+    }
+    if (lazy_far_field_mode() != LazyFarFieldMode::LAZY || kernel_sketches(kernel, 0)) {
+        throw std::logic_error(
+            "gather_id_target_streamed_nonsymmetric: needs the lazy fill and kernel rows");
+    }
+
+    const int dimension = tree->dimension;
+    const int64_t n = box->num_points;
+    const std::vector<int64_t> extra = select_static_id_training_indices(tree, box);
+    const int64_t n_extra = static_cast<int64_t>(extra.size());
+    for (size_t idx = 0; idx < box->one_hop.size(); ++idx) {
+        if (sketch_box_eliminated(level, box->one_hop[idx])) box->use_full_set[idx] = 0;
+    }
+    auto resolve_neighbor = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) nb = level.find_ghost_box(morton);
+        return nb;
+    };
+    auto resolve_source = [&](int64_t morton) -> BoxData<CoordType, DataType>* {
+        BoxData<CoordType, DataType>* nb = level.find_local_box(morton);
+        if (nb == nullptr) nb = level.find_ghost_box(morton);
+        if (nb == nullptr) nb = level.find_generator_box(morton);
+        return nb;
+    };
+
+    // ---- pass 1: the ring's row sets (as gather_id_target_streamed's) and
+    // each pair's fill sources ----
+    const size_t num_ring = box->two_hop.size();
+    auto& counts = scratch.stream_counts;
+    counts.clear();
+    auto& pair_src_mortons = scratch.stream_pair_source_mortons;
+    auto& pair_src_offsets = scratch.stream_pair_source_offsets;
+    pair_src_mortons.clear();
+    pair_src_offsets.assign(1, 0);
+    std::vector<int64_t> ring_full(num_ring, 0);
+    std::vector<const std::vector<int64_t>*> ring_skeleton(num_ring, nullptr);
+    std::vector<const std::vector<int64_t>*> ring_wanted(num_ring, nullptr);
+    std::vector<std::vector<int64_t>> ring_points(num_ring);
+    std::vector<LazyFarSource> pair_sources;
+    int64_t far_rows = 0;
+    for (size_t f = 0; f < num_ring; ++f) {
+        const int64_t morton = box->two_hop[f];
+        collect_lazy_far_sources(level, box, morton, dimension, pair_sources);
+        for (const auto& src : pair_sources) pair_src_mortons.push_back(src.morton);
+        pair_src_offsets.push_back(static_cast<int64_t>(pair_src_mortons.size()));
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        bool use_skeleton = false;
+        if (BoxData<CoordType, DataType>* nb = resolve_neighbor(morton)) {
+            points = &nb->point_indices;
+            skeleton = &nb->skeleton_indices;
+            const bool full_boundary_pair = on_boundary && nb->on_boundary && pair_sources.empty();
+            use_skeleton = !full_boundary_pair && sketch_box_eliminated(level, morton);
+        } else {
+            auto it = level.assisting_box_points_for_kernel_evaluation.find(morton);
+            if (it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: no points of ring box " + std::to_string(morton));
+            }
+            const auto& assist = level.assisting_boxes[static_cast<size_t>(it->second)];
+            points = &assist.indices;
+            skeleton = &assist.skel_indices;
+            use_skeleton = level.eliminated_boxes.count(morton) != 0 && !assist.skel_indices.empty();
+        }
+        ring_full[f] = static_cast<int64_t>(points->size());
+        ring_skeleton[f] = skeleton;
+        if (use_skeleton) {
+            ring_wanted[f] = skeleton;
+            ring_points[f].resize(skeleton->size());
+            for (size_t i = 0; i < skeleton->size(); ++i) {
+                ring_points[f][i] = (*points)[static_cast<size_t>((*skeleton)[i])];
+            }
+        } else {
+            ring_points[f] = *points;
+        }
+        const int64_t a = static_cast<int64_t>(ring_points[f].size());
+        if (a == 0) {
+            throw std::runtime_error(
+                "gather_id_target_streamed_nonsymmetric: ring box " + std::to_string(morton) + " has no points");
+        }
+        counts.push_back(a);
+        far_rows += a;
+    }
+    const int64_t total_rows = 2 * far_rows + 2 * n_extra;
+
+    // ---- sketch parameters and draws (compute_id_sparse_sketch's) ----
+    int64_t d = static_cast<int64_t>(std::ceil(1.0 * n));
+    d = std::min(d, total_rows);
+    d = std::max(d, n);
+    const int sk = std::min(4, static_cast<int>(d));
+    int block_starts[4];
+    int block_ranges[4];
+    {
+        const int block_size = static_cast<int>(d) / sk;
+        for (int b = 0; b < sk; ++b) {
+            block_starts[b] = b * block_size;
+            const int end = (b == sk - 1) ? static_cast<int>(d) : (b + 1) * block_size;
+            block_ranges[b] = end - block_starts[b];
+        }
+    }
+    using RealType = std::conditional_t<std::is_same_v<DataType, std::complex<double>>, double, DataType>;
+    const DataType norm_factor = DataType(1.0 / std::sqrt(static_cast<RealType>(sk)));
+    std::mt19937_64 rng(static_cast<uint64_t>(box->morton_index + 1));
+
+    auto& Oacc = scratch.stream_sketch_acc;  // O' = Y^T (n x d)
+    Oacc.assign(static_cast<size_t>(n * d), DataType{0.0});
+    // the draws of the ring rows (both stacks: K(F, B) rows at [0, far_rows),
+    // K(B, F)^T rows at [far_rows, 2 far_rows)), for the fill pass
+    auto& rec_idx = scratch.stream_row_idx;
+    auto& rec_sign = scratch.stream_row_sign;
+    rec_idx.resize(static_cast<size_t>(2 * far_rows * sk));
+    rec_sign.resize(static_cast<size_t>(2 * far_rows * sk));
+    auto& blk_idx = scratch.stream_blk_draw_idx;
+    auto& blk_sgn = scratch.stream_blk_draw_sign;
+    auto consume_rows = [&](const DataType* rows_rowmajor, int64_t a, int64_t rec_row0) {
+        const size_t nd = static_cast<size_t>(a * sk);
+        if (blk_idx.size() < nd) {
+            blk_idx.resize(nd);
+            blk_sgn.resize(nd);
+        }
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const uint64_t rand_val = rng();
+                const int idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                blk_idx[q] = static_cast<int32_t>(idx);
+                blk_sgn[q] = ((rand_val >> 63) & 1) != 0 ? int8_t{1} : int8_t{-1};
+                if (rec_row0 >= 0) {
+                    const size_t g = static_cast<size_t>((rec_row0 + jj) * sk + b);
+                    rec_idx[g] = blk_idx[q];
+                    rec_sign[g] = blk_sgn[q];
+                }
+            }
+        }
+        int n_int = static_cast<int>(n);
+        int inc_one = 1;
+        for (int64_t jj = 0; jj < a; ++jj) {
+            const DataType* row = rows_rowmajor + jj * n;
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                DataType sign = blk_sgn[q] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                DataType* ocol = Oacc.data() + static_cast<size_t>(blk_idx[q]) * n;
+                if constexpr (std::is_same_v<DataType, double>) {
+                    daxpy_(&n_int, &sign, const_cast<double*>(row), &inc_one, ocol, &inc_one);
+                } else {
+                    zaxpy_(&n_int, &sign, const_cast<std::complex<double>*>(row), &inc_one, ocol, &inc_one);
+                }
+            }
+        }
+    };
+
+    // ---- pass 2: the kernel rows, in the stacked order ----
+    auto& block_cm = scratch.stream_stored_tmp;  // (a x n) column-major
+    auto& block_rm = scratch.stream_block;       // row-major rows
+    auto rows_of = [&](const int64_t* row_points, int64_t a) {
+        // K(rows, B), (a x n), into row-major
+        block_cm.resize(static_cast<size_t>(a * n));
+        evaluate_block_by_index_split<DataType>(
+            kernel, row_points, a, box->point_indices.data(), n, block_cm.data(), a, scratch.split_threads);
+        block_rm.resize(static_cast<size_t>(a * n));
+        constexpr int64_t tile = 32;
+        for (int64_t i0 = 0; i0 < a; i0 += tile) {
+            for (int64_t c0 = 0; c0 < n; c0 += tile) {
+                for (int64_t c = c0; c < std::min(n, c0 + tile); ++c) {
+                    for (int64_t i = i0; i < std::min(a, i0 + tile); ++i) {
+                        block_rm[static_cast<size_t>(i * n + c)] = block_cm[static_cast<size_t>(i + c * a)];
+                    }
+                }
+            }
+        }
+    };
+    auto transposed_rows_of = [&](const int64_t* row_points, int64_t a) {
+        // K(B, rows) (n x a) column-major: the rows of K(B, rows)^T, row-major
+        block_rm.resize(static_cast<size_t>(a * n));
+        evaluate_block_by_index_split<DataType>(
+            kernel, box->point_indices.data(), n, row_points, a, block_rm.data(), n, scratch.split_threads);
+    };
+    std::vector<int64_t> row_base(num_ring + 1, 0);
+    for (size_t f = 0; f < num_ring; ++f) row_base[f + 1] = row_base[f] + counts[f];
+    for (size_t f = 0; f < num_ring; ++f) {
+        rows_of(ring_points[f].data(), counts[f]);
+        consume_rows(block_rm.data(), counts[f], pair_src_offsets[f + 1] > pair_src_offsets[f] ? row_base[f] : -1);
+    }
+    for (size_t f = 0; f < num_ring; ++f) {
+        transposed_rows_of(ring_points[f].data(), counts[f]);
+        consume_rows(block_rm.data(), counts[f],
+                     pair_src_offsets[f + 1] > pair_src_offsets[f] ? far_rows + row_base[f] : -1);
+    }
+    if (n_extra > 0) {
+        rows_of(extra.data(), n_extra);
+        consume_rows(block_rm.data(), n_extra, -1);
+        transposed_rows_of(extra.data(), n_extra);
+        consume_rows(block_rm.data(), n_extra, -1);
+    }
+
+    // ---- pass 3: the fill, in sketch space, a source at a time ----
+    if (!pair_src_mortons.empty()) {
+        LazyFarEndpoint<CoordType> b_end;
+        b_end.morton = box->morton_index;
+        b_end.full_size = n;
+        b_end.skeleton = &box->skeleton_indices;
+        b_end.wanted = nullptr;
+        b_end.wanted_count = n;
+        b_end.indices = box->point_indices.data();
+        std::vector<int64_t> sources;
+        for (int64_t candidate : box->one_hop) {
+            if (sketch_box_eliminated(level, candidate) &&
+                level.elimination_wave.find(candidate) != level.elimination_wave.end()) {
+                sources.push_back(candidate);
+            }
+        }
+        auto& positions = scratch.stream_positions;
+        std::vector<DataType> P1, P2, W1, W2, side;
+        for (int64_t src_morton : sources) {
+            BoxData<CoordType, DataType>* src = resolve_source(src_morton);
+            if (src == nullptr) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: fill source " + std::to_string(src_morton) + " not found");
+            }
+            const int64_t r = src->X_NR.is_allocated() ? src->X_NR.cols : 0;
+            if (r == 0) continue;
+            const DataType* temp4 = lazy_far_source_temp4(src);
+            if (temp4 == nullptr || !src->X_RR_full.is_allocated() || src->X_RR_full.rows != r) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: incomplete fill source " + std::to_string(src_morton));
+            }
+            const DataType* temp2 = lazy_far_source_temp2(src);
+            const int64_t temp2_ld = src->X_NR.lda;
+            int64_t b_off = 0, b_count = 0;
+            if (!lazy_far_locate_endpoint_rows(src, b_end, b_off, b_count, positions)) continue;
+
+            // W1 (W2): the sketched temp2_E rows (temp4_E columns) of the
+            // blocks listing E, (r x d) column-major
+            W1.assign(static_cast<size_t>(r * d), DataType{0.0});
+            W2.assign(static_cast<size_t>(r * d), DataType{0.0});
+            bool any = false;
+            int r_int = static_cast<int>(r);
+            int inc_one = 1;
+            for (size_t f = 0; f < num_ring; ++f) {
+                bool lists = false;
+                for (int64_t si = pair_src_offsets[f]; si < pair_src_offsets[f + 1]; ++si) {
+                    if (pair_src_mortons[static_cast<size_t>(si)] == src_morton) {
+                        lists = true;
+                        break;
+                    }
+                }
+                if (!lists) continue;
+                const int64_t a = counts[f];
+                LazyFarEndpoint<CoordType> f_end;
+                f_end.morton = box->two_hop[f];
+                f_end.full_size = ring_full[f];
+                f_end.skeleton = ring_skeleton[f];
+                f_end.wanted = ring_wanted[f];
+                f_end.wanted_count = a;
+                int64_t f_off = 0, f_count = 0;
+                if (!lazy_far_locate_endpoint_rows(src, f_end, f_off, f_count, positions)) continue;
+                any = true;
+                for (int64_t i = 0; i < a; ++i) {
+                    const int64_t row = f_off + positions[static_cast<size_t>(i)];
+                    // temp2_E row (strided) and temp4_E column (contiguous)
+                    side.resize(static_cast<size_t>(r));
+                    for (int64_t j = 0; j < r; ++j) side[static_cast<size_t>(j)] = temp2[row + j * temp2_ld];
+                    const DataType* t4 = temp4 + row * r;
+                    for (int b = 0; b < sk; ++b) {
+                        const size_t g1 = static_cast<size_t>((row_base[f] + i) * sk + b);
+                        const size_t g2 = static_cast<size_t>((far_rows + row_base[f] + i) * sk + b);
+                        DataType s1 = rec_sign[g1] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                        DataType s2 = rec_sign[g2] > 0 ? norm_factor : DataType{0.0} - norm_factor;
+                        DataType* w1 = W1.data() + static_cast<size_t>(rec_idx[g1]) * r;
+                        DataType* w2 = W2.data() + static_cast<size_t>(rec_idx[g2]) * r;
+                        if constexpr (std::is_same_v<DataType, double>) {
+                            daxpy_(&r_int, &s1, side.data(), &inc_one, w1, &inc_one);
+                            daxpy_(&r_int, &s2, const_cast<double*>(t4), &inc_one, w2, &inc_one);
+                        } else {
+                            zaxpy_(&r_int, &s1, side.data(), &inc_one, w1, &inc_one);
+                            zaxpy_(&r_int, &s2, const_cast<std::complex<double>*>(t4), &inc_one, w2, &inc_one);
+                        }
+                    }
+                }
+            }
+            if (!any) continue;
+
+            // P1 = X_RR_E temp4_E[:, B], P2 = X_RR_E^T temp2_E[B]^T (r x n);
+            // B's rows of a source are its full point set, in order
+            if (b_count != n) {
+                throw std::runtime_error(
+                    "gather_id_target_streamed_nonsymmetric: the box's slot in a fill source is not its full point set");
+            }
+            P1.resize(static_cast<size_t>(r * n));
+            P2.resize(static_cast<size_t>(r * n));
+            {
+                int m_i = static_cast<int>(r);
+                int k_i = static_cast<int>(r);
+                int lda = static_cast<int>(src->X_RR_full.lda);
+                DataType one = 1.0;
+                DataType zero = 0.0;
+                split_columns_chunked(n, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int n_t = static_cast<int>(c1 - c0);
+                    int ldb4 = static_cast<int>(r);
+                    gemm_("N", "N", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda,
+                          temp4 + (b_off + c0) * r, &ldb4, &zero, P1.data() + c0 * r, &m_i);
+                    int ldb2 = static_cast<int>(temp2_ld);
+                    gemm_("T", "T", &m_i, &n_t, &k_i, &one, src->X_RR_full.data.data(), &lda,
+                          temp2 + b_off + c0, &ldb2, &zero, P2.data() + c0 * r, &m_i);
+                });
+            }
+            // O' (n x d) -= P1^T W1 + P2^T W2
+            {
+                int m_i = static_cast<int>(n);
+                int k_i = static_cast<int>(r);
+                int ldp = static_cast<int>(r);
+                int ldc = static_cast<int>(n);
+                DataType minus_one = -1.0;
+                DataType one = 1.0;
+                split_columns_chunked(d, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int n_t = static_cast<int>(c1 - c0);
+                    gemm_("T", "N", &m_i, &n_t, &k_i, &minus_one, P1.data(), &ldp, W1.data() + c0 * r, &ldp,
+                          &one, Oacc.data() + c0 * n, &ldc);
+                    gemm_("T", "N", &m_i, &n_t, &k_i, &minus_one, P2.data(), &ldp, W2.data() + c0 * r, &ldp,
+                          &one, Oacc.data() + c0 * n, &ldc);
+                });
+            }
+        }
+    }
+
+    // Y (d x n) = O'^T
+    auto& Y = scratch.sketch_storage;
+    Y.resize(static_cast<size_t>(d * n));
+    for (int64_t j = 0; j < n; ++j) {
+        for (int64_t i = 0; i < d; ++i) Y[static_cast<size_t>(i + j * d)] = Oacc[static_cast<size_t>(i * n + j)];
+    }
+    scratch.workspace_rows = total_rows;
+    scratch.workspace_cols = n;
+    scratch.streamed_sketch_rows = d;
     scratch.streamed_sketch_valid = true;
 }
 

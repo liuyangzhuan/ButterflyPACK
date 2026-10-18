@@ -244,11 +244,15 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
             int64_t morton = -1;
             BoxData<CoordType, DataType>* box = nullptr;  // local or ghost
             std::vector<int64_t> skeleton;                  // global indices
+            int64_t full_size = 0;                          // (its points)
+            const std::vector<int64_t>* skeleton_positions = nullptr;
         };
         auto child_ref = [&](BoxData<CoordType, DataType>* box) {
             ChildRef ref;
             ref.morton = box->morton_index;
             ref.box = box;
+            ref.full_size = box->num_points;
+            ref.skeleton_positions = &box->skeleton_indices;
             ref.skeleton.resize(box->skeleton_indices.size());
             for (size_t s_idx = 0; s_idx < box->skeleton_indices.size(); ++s_idx) {
                 ref.skeleton[s_idx] = box->point_indices[static_cast<size_t>(box->skeleton_indices[s_idx])];
@@ -297,6 +301,30 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
             for (int d = 0; d < dimension; ++d) {
                 hops = std::max<int64_t>(
                     hops, std::abs(static_cast<int64_t>(ac[d]) - static_cast<int64_t>(bc[d])));
+            }
+            if (hops == 2 && lazy_far_field_mode() == LazyFarFieldMode::LAZY) {
+                // lazy fill: no far view is stored; the kernel less the
+                // fill of the pair's eliminated common neighbors
+                std::vector<LazyFarSource> sources;
+                if (a.box != nullptr) {
+                    collect_lazy_far_sources(child_level, a.box, b.morton, dimension, sources);
+                } else if (b.box != nullptr) {
+                    collect_lazy_far_sources(child_level, b.box, a.morton, dimension, sources);
+                }
+                auto endpoint = [](const ChildRef& c) {
+                    LazyFarEndpoint<CoordType> e;
+                    e.morton = c.morton;
+                    e.full_size = c.full_size;
+                    e.skeleton = c.skeleton_positions;
+                    e.wanted = c.skeleton_positions;
+                    e.wanted_count = static_cast<int64_t>(c.skeleton.size());
+                    e.indices = c.skeleton.data();
+                    return e;
+                };
+                C_block.resize(static_cast<size_t>(n_a * n_b));
+                regenerate_far_block_into(
+                    child_level, kernel, endpoint(a), endpoint(b), sources, C_block.data(), n_a);
+                return;
             }
             if (hops <= 2) {
                 const EdgeKind kind = hops <= 1 ? EdgeKind::Near : EdgeKind::Far;
@@ -663,10 +691,12 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
                             "build_parent_level: Child " + std::to_string(child_morton) +
                             " not found in ghost_boxes or assisting_boxes");
                     }
+                    const auto& assist = child_level.assisting_boxes[assist_it->second];
                     ChildRef ref;
                     ref.morton = child_morton;
-                    ref.skeleton = extract_skeleton_indices(
-                        child_level.assisting_boxes[assist_it->second], dimension);
+                    ref.skeleton = extract_skeleton_indices(assist, dimension);
+                    ref.full_size = static_cast<int64_t>(assist.indices.size());
+                    ref.skeleton_positions = &assist.skel_indices;
                     b2_children.push_back(std::move(ref));
                 }
 
