@@ -6750,8 +6750,25 @@ they are independent of the compression:
   uncompressed).  Its result moves 1.2e-7, as a symmetric run's does at
   0.25 (1.5e-6): the room-driven packing.  Symmetric runs are bitwise unchanged,
   compressed ones included (96^3 on 8 GPUs).
-  Left: the kept X_RS^T and X_RN^T are raw, and X_RN^T is the largest kept
-  factor once X_NR compresses 14x.
+- *The compressed kept X_RS^T and X_RN^T.*  keep_factor_sources transposes
+  temp3 and temp4 into a staging block (the transposes' list at its end; given
+  back once the gather has run) and compresses them in the batch with T, X_SR
+  and X_NR, X_RS^T at X_SR's step and X_RN^T at X_NR's.  Without room for the
+  staging they are transposed raw into the kept block, as before.  The solve
+  decompresses them with the box's other factors, segment by segment
+  (pending_xrs, pending_xrn; launch_patch_xnr points xrs_t and xrn_t at the
+  scratch).  materialize_host_factors and rescue_skipped_xnr decompress them on
+  the host before transposing back.  96^3 on 8 GPUs: kept factors at the peak
+  1.48 -> 0.05 GB, resident peak 3.55 -> 2.43 GB (11.81 GB uncompressed); the
+  logdet is unchanged (they enter the solve only), acc_forward 6.4e-3 ->
+  7.1e-3.  Symmetric runs and uncompressed nonsymmetric ones are unchanged.
+
+  N5 is complete.  Left for later: N6 ('T'/'C' and collective entries for a
+  nonsymmetric matrix); the logdet's thread-order sum
+  (hierarchical_logdet_parallel, see above); the sketch's P;W block, which
+  wants one contiguous range (a 0.25 heap at 96^3 uncompressed); a pledge of
+  the temp4 store as the kept X_RN^T, as temp2^T is for X_NR (saves the
+  kept copy, small once compressed).
 
 #### logdet of an operator after another one is built (2026-10-17)
 

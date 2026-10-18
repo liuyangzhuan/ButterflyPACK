@@ -160,6 +160,10 @@ struct SolveXnrWave {
     std::vector<void*> h_box_t_dsts, h_box_xsr_dsts;
     void** d_box_t_dsts = nullptr;
     void** d_box_xsr_dsts = nullptr;
+    // ... and (a nonsymmetric matrix) its X_RS^T and X_RN^T
+    std::vector<void*> h_box_xrs_dsts, h_box_xrn_dsts;
+    void** d_box_xrs_dsts = nullptr;
+    void** d_box_xrn_dsts = nullptr;
     // per chunk of the wave, in box order: the batch the decompression runs
     std::vector<const void*> h_srcs;   // compressed bytes, in the kept block
     std::vector<void*> h_dsts;         // into the level's scratch
@@ -391,13 +395,15 @@ inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t
     const size_t nc = w.h_srcs.size();   // chunks, the decompression batch
     const size_t chunk_span = align_up(nc * sizeof(void*));
     const size_t box_span = align_up(nb * sizeof(void*));
-    char* ptrs = heap.alloc_resident(chunk_span * 2 + box_span * 3 + align_up(nb * sizeof(int)));
+    char* ptrs = heap.alloc_resident(chunk_span * 2 + box_span * 5 + align_up(nb * sizeof(int)));
     w.d_srcs = reinterpret_cast<const void**>(ptrs);
     w.d_dsts = reinterpret_cast<void**>(ptrs + chunk_span);
     w.d_box_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2);
     w.d_box_t_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span);
     w.d_box_xsr_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span * 2);
-    w.d_box_idx = reinterpret_cast<int*>(ptrs + chunk_span * 2 + box_span * 3);
+    w.d_box_xrs_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span * 3);
+    w.d_box_xrn_dsts = reinterpret_cast<void**>(ptrs + chunk_span * 2 + box_span * 4);
+    w.d_box_idx = reinterpret_cast<int*>(ptrs + chunk_span * 2 + box_span * 5);
     check_cuda(cudaMemcpyAsync(w.d_srcs, w.h_srcs.data(), nc * sizeof(void*),
                                cudaMemcpyHostToDevice, stream), "xnr wave srcs");
     check_cuda(cudaMemcpyAsync(w.d_dsts, w.h_dsts.data(), nc * sizeof(void*),
@@ -415,6 +421,8 @@ inline bool build_solve_xnr_wave(SolveXnrWave& w, DeviceHeap& heap, cudaStream_t
     };
     box_ptrs(w.d_box_t_dsts, w.h_box_t_dsts, "xnr wave box T dsts");
     box_ptrs(w.d_box_xsr_dsts, w.h_box_xsr_dsts, "xnr wave box X_SR dsts");
+    box_ptrs(w.d_box_xrs_dsts, w.h_box_xrs_dsts, "xnr wave box X_RS dsts");
+    box_ptrs(w.d_box_xrn_dsts, w.h_box_xrn_dsts, "xnr wave box X_RN dsts");
     check_cuda(cudaMemcpyAsync(w.d_box_idx, w.boxes.data(), nb * sizeof(int),
                                cudaMemcpyHostToDevice, stream), "xnr wave box indices");
     check_cuda(cudaStreamSynchronize(stream), "xnr wave pointers");

@@ -2352,10 +2352,25 @@ private:
             check_cuda(cudaMemcpy(v.data(), src, count * sizeof(DataType), cudaMemcpyDeviceToHost), what);
             return v;
         };
-        // a kept X_RS^T or X_RN^T (rows x cols on the device) back as X_RS or X_RN (cols x rows)
-        auto transposed_copy = [&](const void* src, size_t rows, int cols) {
+        // a kept X_RS^T or X_RN^T (rows x cols on the device) back as X_RS or X_RN (cols x rows);
+        // compressed (bytes > 0): its bytes over and decompressed first
+        auto transposed_copy = [&](const void* src, size_t rows, int cols, size_t bytes = 0,
+                                   const KeptSolveLevel* level = nullptr, uint32_t chunk0 = 0, uint32_t nchunks = 0) {
             const size_t c = static_cast<size_t>(cols);
-            const std::vector<DataType> t = copy(src, rows * c, "X_RS / X_RN host copies");
+            std::vector<DataType> t;
+            if (bytes > 0) {
+#ifdef H2_HAVE_NVCOMP
+                std::vector<char> packed(bytes);
+                check_cuda(cudaMemcpy(packed.data(), src, bytes, cudaMemcpyDeviceToHost), "X_RS / X_RN host copies");
+                t.resize(rows * c);
+                decompress_xnr_host<S>(packed.data(), reinterpret_cast<S*>(t.data()),
+                                       level->chunk_strides.data() + chunk0, nchunks);
+#else
+                throw std::runtime_error("H2 GPU: compressed X_RS / X_RN on the host needs a build with nvCOMP");
+#endif
+            } else {
+                t = copy(src, rows * c, "X_RS / X_RN host copies");
+            }
             std::vector<DataType> v(rows * c);
             for (size_t j = 0; j < c; ++j)
                 for (size_t i = 0; i < rows; ++i) v[j + i * c] = t[i + j * rows];
@@ -2367,13 +2382,18 @@ private:
             for (Box* box : skipped_xnr_) {
                 if (box->X_RN.is_allocated()) continue;
                 const KeptSolveBox* kb = nullptr;
+                const KeptSolveLevel* kl = &kept_;
                 if (auto it = kept_.boxes.find(box->morton_index); it != kept_.boxes.end()) kb = &it->second;
                 if (kb == nullptr && committed != nullptr) {
-                    if (auto it = committed->boxes.find(box->morton_index); it != committed->boxes.end()) kb = &it->second;
+                    if (auto it = committed->boxes.find(box->morton_index); it != committed->boxes.end()) {
+                        kb = &it->second;
+                        kl = committed;
+                    }
                 }
                 if (kb != nullptr && kb->xrn_t != nullptr) {
                     box->X_RN.set_owned(kb->r, kb->ntot,
-                                        transposed_copy(kb->xrn_t, static_cast<size_t>(kb->ntot), kb->r),
+                                        transposed_copy(kb->xrn_t, static_cast<size_t>(kb->ntot), kb->r, kb->xrn_bytes,
+                                                        kl, kb->xrn_chunk0, kb->xrn_nchunks),
                                         MatrixStorage<DataType>::FULL);
                     continue;
                 }
@@ -2524,7 +2544,10 @@ private:
                 }
             }
             if (kb->xrs_t != nullptr && !box->X_RS.is_allocated()) {  // (a nonsymmetric matrix)
-                box->X_RS.set_owned(kb->r, kb->k, transposed_copy(kb->xrs_t, k, kb->r), MatrixStorage<DataType>::FULL);
+                box->X_RS.set_owned(kb->r, kb->k,
+                                    transposed_copy(kb->xrs_t, k, kb->r, kb->xrs_bytes, kept.level, kb->xrs_chunk0,
+                                                    kb->xrs_nchunks),
+                                    MatrixStorage<DataType>::FULL);
             }
             if (!box->X_RR.is_allocated()) {
                 box->X_RR.set_owned(kb->r, kb->r, copy(kb->lu, r * r, "LU host copies"),
@@ -9216,7 +9239,9 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
                   size_t xnr_bytes; double xnr_delta;
                   uint32_t xnr_chunk0; uint32_t xnr_nchunks; bool xnr_pledged;
                   size_t t_bytes, xsr_bytes; uint32_t t_chunk0, t_nchunks, xsr_chunk0, xsr_nchunks;
-                  size_t xrs_t = SIZE_MAX, xrn_t = SIZE_MAX; };
+                  size_t xrs_t = SIZE_MAX, xrn_t = SIZE_MAX;
+                  size_t xrs_bytes = 0, xrn_bytes = 0;
+                  uint32_t xrs_chunk0 = 0, xrs_nchunks = 0, xrn_chunk0 = 0, xrn_nchunks = 0; };
     std::vector<Made> made;
     // (a nonsymmetric matrix: X_RS and X_RN transposed into the block, after its spans)
     struct Flip { const char* src; size_t off; int m, n; };
@@ -9226,7 +9251,62 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
     std::vector<int> comp_at(srcs_in.size(), -1);  // box -> its block of comp
     std::vector<int> t_at(srcs_in.size(), -1), xsr_at(srcs_in.size(), -1);  // T and X_SR likewise
     bool compressed = false;
+    // A nonsymmetric matrix with compression: X_RS^T and X_RN^T transposed
+    // into a staging block first (their transposes' list at its end), so they
+    // go through the batch as the others do; without room, raw transposes
+    // into the kept block (the flips below)
+    char* xflip = nullptr;
+    // (back to the heap on the way out, once everything that reads it has run)
+    std::shared_ptr<void> xflip_back(nullptr, [&](void*) {
+        if (xflip == nullptr) return;
+        cudaStreamSynchronize(stream);
+        heap_.free(xflip);
+    });
+    std::vector<size_t> xrs_stage(srcs_in.size(), SIZE_MAX), xrn_stage(srcs_in.size(), SIZE_MAX);
+    std::vector<int> xrs_at(srcs_in.size(), -1), xrn_at(srcs_in.size(), -1);
 #ifdef H2_HAVE_NVCOMP
+    if (nonsym_ && compress_factors_ >= 1 && !srcs_in.empty()) {
+        size_t at = 0;
+        std::vector<TransposeItem> tr;
+        int tm = 0, tn = 0;
+        for (size_t bi = 0; bi < srcs_in.size(); ++bi) {
+            const KeptSource& ks = srcs_in[bi];
+            if (ks.xrs != nullptr && ks.k > 0) {
+                xrs_stage[bi] = at;
+                at = align_up(at + static_cast<size_t>(ks.k) * ks.r * D);
+            }
+            if (ks.xrn != nullptr && ks.ntot > 0) {
+                xrn_stage[bi] = at;
+                at = align_up(at + static_cast<size_t>(ks.ntot) * ks.r * D);
+            }
+        }
+        const size_t list_at = at;
+        size_t nitems = 0;
+        for (size_t bi = 0; bi < srcs_in.size(); ++bi) nitems += (xrs_stage[bi] != SIZE_MAX) + (xrn_stage[bi] != SIZE_MAX);
+        if (nitems > 0) xflip = heap_.try_alloc(list_at + nitems * sizeof(TransposeItem), ResidentKind::Codec);
+        if (xflip != nullptr) {
+            for (size_t bi = 0; bi < srcs_in.size(); ++bi) {
+                const KeptSource& ks = srcs_in[bi];
+                if (xrs_stage[bi] != SIZE_MAX) {
+                    tr.push_back(TransposeItem{reinterpret_cast<const S*>(ks.xrs), ks.r,
+                                               reinterpret_cast<S*>(xflip + xrs_stage[bi]), ks.k, ks.r, ks.k});
+                }
+                if (xrn_stage[bi] != SIZE_MAX) {
+                    tr.push_back(TransposeItem{reinterpret_cast<const S*>(ks.xrn), ks.r,
+                                               reinterpret_cast<S*>(xflip + xrn_stage[bi]), ks.ntot, ks.r, ks.ntot});
+                }
+                tm = std::max(tm, ks.r);
+                tn = std::max({tn, ks.k, ks.ntot});
+            }
+            check_cuda(cudaMemcpyAsync(xflip + list_at, tr.data(), tr.size() * sizeof(TransposeItem),
+                                       cudaMemcpyHostToDevice, stream), "kept X_RS, X_RN");
+            launch_transpose(reinterpret_cast<const TransposeItem*>(xflip + list_at), static_cast<int>(tr.size()), tm,
+                             tn, stream);
+        } else {
+            std::fill(xrs_stage.begin(), xrs_stage.end(), SIZE_MAX);
+            std::fill(xrn_stage.begin(), xrn_stage.end(), SIZE_MAX);
+        }
+    }
     if (compress_factors_ >= 1 && !srcs_in.empty()) {
         std::vector<const S*> srcs;
         std::vector<size_t> elems;
@@ -9249,6 +9329,18 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
             srcs.push_back(reinterpret_cast<const S*>(ks.xsr));
             elems.push_back(k * r);
             tols.push_back(tolerance_ * kSmallFactorToleranceFraction);
+            if (xrs_stage[bi] != SIZE_MAX) {   // (as X_SR)
+                xrs_at[bi] = static_cast<int>(srcs.size());
+                srcs.push_back(reinterpret_cast<const S*>(xflip + xrs_stage[bi]));
+                elems.push_back(k * r);
+                tols.push_back(tolerance_ * kSmallFactorToleranceFraction);
+            }
+            if (xrn_stage[bi] != SIZE_MAX) {   // (as X_NR)
+                xrn_at[bi] = static_cast<int>(srcs.size());
+                srcs.push_back(reinterpret_cast<const S*>(xflip + xrn_stage[bi]));
+                elems.push_back(nt * r);
+                tols.push_back(tolerance_ * kXnrToleranceFraction);
+            }
             if (ks.pledge) continue;
             comp_at[bi] = static_cast<int>(srcs.size());
             srcs.push_back(reinterpret_cast<const S*>(ks.xnr));
@@ -9309,12 +9401,16 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         }
         m.lu = total;  spans.push_back({total, ks.lu, r * r * D});   total = align_up(total + r * r * D);
         m.piv = total; spans.push_back({total, ks.piv, r * I});      total = align_up(total + r * I);
-        if (ks.xrs != nullptr && k > 0) {
+        if (xrs_stage[bi] != SIZE_MAX) {   // (from the staging: compressed, or its raw transposed bytes)
+            m.xrs_t = place(xrs_at[bi], xflip + xrs_stage[bi], k * r * D, m.xrs_bytes, m.xrs_chunk0, m.xrs_nchunks);
+        } else if (ks.xrs != nullptr && k > 0) {
             m.xrs_t = total;
             flips.push_back(Flip{ks.xrs, total, ks.r, ks.k});
             total = align_up(total + k * r * D);
         }
-        if (ks.xrn != nullptr && nt > 0) {
+        if (xrn_stage[bi] != SIZE_MAX) {
+            m.xrn_t = place(xrn_at[bi], xflip + xrn_stage[bi], nt * r * D, m.xrn_bytes, m.xrn_chunk0, m.xrn_nchunks);
+        } else if (ks.xrn != nullptr && nt > 0) {
             m.xrn_t = total;
             flips.push_back(Flip{ks.xrn, total, ks.r, ks.ntot});
             total = align_up(total + nt * r * D);
@@ -9438,6 +9534,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         kb.ipiv = reinterpret_cast<const int*>(block + m.piv);
         kb.xrs_t = m.xrs_t != SIZE_MAX ? block + m.xrs_t : nullptr;
         kb.xrn_t = m.xrn_t != SIZE_MAX ? block + m.xrn_t : nullptr;
+        kb.xrs_bytes = m.xrs_bytes;
+        kb.xrs_chunk0 = m.xrs_chunk0;
+        kb.xrs_nchunks = m.xrs_nchunks;
+        kb.xrn_bytes = m.xrn_bytes;
+        kb.xrn_chunk0 = m.xrn_chunk0;
+        kb.xrn_nchunks = m.xrn_nchunks;
         kb.k = m.k;
         kb.r = m.r;
         kb.ntot = m.ntot;

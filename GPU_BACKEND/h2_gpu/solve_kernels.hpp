@@ -132,8 +132,10 @@ void launch_copy_spans(const CopySpan* items, int count, int64_t max_words, cuda
 // xsr_dsts; a null entry leaves that pointer alone: read in place).  One tiny
 // kernel instead of re-uploading the whole box table for the few entries a
 // wave changes.
+// (xrs_dsts, xrn_dsts: a nonsymmetric matrix's X_RS^T and X_RN^T likewise; null: none)
 void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, void* const* t_dsts,
-                      void* const* xsr_dsts, int count, cudaStream_t stream);
+                      void* const* xsr_dsts, int count, cudaStream_t stream, void* const* xrs_dsts = nullptr,
+                      void* const* xrn_dsts = nullptr);
 
 // The multiply F x (the factorization applied), core/apply_mul.hpp:
 // forward W:  x_S += T x_R;  x_R -= X_SR^T x_S + X_NR^T x_N  (x_N gathered into work;
