@@ -6701,6 +6701,58 @@ P;W block wants 763 MB in one range and the largest free one is 738 MB.  That
 is N5f's (the memory features), with the host copies that a nonsymmetric level
 still keeps beside its kept factors.
 
+**N5f, the memory features (2026-10-18).**  In order of what they save (level 4
+of 96^3 on 8 GPUs at its peak: raw fill sources 7.1 GB, kept factors 4.0 GB, the
+owner pass's near blocks 1.2 GB): the compressed fill sources (temp2^T and
+temp4), the compressed kept factors with the solve's decompression, the packed
+near store and parent blocks, and the host copies.  The host copies first, as
+they are independent of the compression:
+- *Host copies.*  A kept nonsymmetric level downloads none of a kept box's
+  factors (skip_xnr_ as for a symmetric one): X_RN is fetched with X_NR, and X_RS
+  with the box's other factors, only where those are.  rescue_skipped_xnr brings
+  X_RN back with X_NR and X_RS with X_SR, transposed from the kept copies.  The
+  reclaimer's last resort rescues before it drops the kept factors.  Host
+  high-water: 48^3 on 1 GPU 5.76 -> 1.30 GB, 96^3 on 8 GPUs 9.05 -> 4.92 GB, the
+  128K CFIE 3.07 -> 2.02 GB.  Factor time 3.2 -> 2.3 s at 96^3 (the downloads
+  saved).  Results are unchanged; symmetric runs are bitwise unchanged.
+- *The compressed fill sources and the packed near store* (H2_compress_factors
+  for a nonsymmetric matrix).
+  - BoxState gains a temp4 store (t4_packed, t4_host, t4_slots, t4_strides)
+    in temp2^T's slots, indexed by the same t2t_rows.  A box is packed in both
+    or in neither: compress_fill_source_set(store, packed list) leaves the raw
+    blocks to the caller, and a box packed in one only keeps both raw (temp4 in
+    a block of its own).  temp4 is packed straight from the wave's block (it is
+    laid out as temp2^T), so no raw copy is made up front.
+  - The owner pass's second store is X_RN itself (no transpose): from the
+    stores, a nonsymmetric task is a temp2^T slot times an X_RN slot, which is
+    the symmetric product's (Trans, NoTrans) with ld r.
+  - The sketch decompresses a source's temp4 slots into a second region beside
+    its temp2^T ones, at the same offsets, and the two terms take their
+    operands from them.
+  - The transition puts temp4 back whole beside temp2^T.  A remote generator's
+    temp4 is packed from the receive buffer before its temp2^T, which stays raw
+    where temp4 did not pack.  rescue_skipped_xnr brings X_RN back from the
+    kept X_RN^T or the temp4 store.  The eviction records name their store.
+  - The near store: the nonsymmetric wave gather goes through gather_src (a
+    packed block windowed, as for a symmetric one: it was read as the
+    kernel's), step 5 hands its two blocks to the re-pack, and want_of_gen has
+    a nonsymmetric branch (process_gen_nonsym's reads).
+
+  Laplace 96^3 on 8 GPUs: resident peak 11.81 -> 3.55 GB, host 4.92 -> 1.57 GB,
+  factor 2.36 -> 2.43 s; fill sources 14x (3.66 -> 0.26 GB at the 48^3 leaf).
+  The lossy steps move the logdet and accuracy as for a symmetric matrix: 48^3
+  on 1 GPU 1.8e-10 relative and acc_forward 4.1e-3 -> 4.9e-3 (symmetric:
+  1.8e-9, 3.0e-3 -> 4.1e-3).  The column weights' identity holds to 4.4e-8, as
+  uncompressed.  The device solve against the host solve, now from different
+  lossy copies: 1.4e-4 (symmetric 1.3e-4).  EMSURF degrades as the symmetric
+  EFIE does under compression (the EFIE's acc_forward 9e-4 -> 0.64, the CFIE's
+  7e-5 -> 1e-2).  At 0.25 and 0.2 of the heap 96^3 now fits (it did not
+  uncompressed).  Its result moves 1.2e-7, as a symmetric run's does at
+  0.25 (1.5e-6): the room-driven packing.  Symmetric runs are bitwise unchanged,
+  compressed ones included (96^3 on 8 GPUs).
+  Left: the kept X_RS^T and X_RN^T are raw, and X_RN^T is the largest kept
+  factor once X_NR compresses 14x.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
