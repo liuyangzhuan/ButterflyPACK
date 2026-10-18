@@ -108,10 +108,11 @@ void h2_skeletonize_box(
     // against the materialized target, which is then sketched or not.
     const bool adaptive_on_sketch = use_sketch == 2 && tree->id_proxy_mode == 2;
     FactorizationThreadScratch<CoordType, DataType> scratch;
+    // (a nonsymmetric kernel: the stacked target, rows and columns of B)
     gather_id_workspace(
         tree,
         box, level, kernel, tolerance,
-        static_cast<const CoordType*>(nullptr), 0, CoordType{0}, true,
+        static_cast<const CoordType*>(nullptr), 0, CoordType{0}, kernel_symmetric(kernel, 0),
         scratch.workspace, scratch.workspace_rows, scratch.workspace_cols,
         0, box->on_boundary, false, &scratch.id_adaptive, !adaptive_on_sketch);
 

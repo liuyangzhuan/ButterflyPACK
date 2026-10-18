@@ -165,12 +165,26 @@ struct ProgramOptions {
     double kappa = 10.0;         // Yukawa screening parameter κ
     int cond_samples = 0;        // Power iteration samples for condition number estimate (0 = skip)
     int precon = 1;              // 1/3: RS-S factorization, 2: compression-only H2
+    // option%sym: 1 transpose-symmetric (also complex symmetric); 0 general
+    // (nonsymmetric: H2_unstructured=1 only, X_RR by LU, one skeleton and
+    // interpolation per box for rows and columns from an ID of the stacked
+    // [K(F,B); K(B,F)^T])
+    bool symmetric = true;
     int verbosity = 0;           // -1: quiet, 0: summaries, 1+: detailed progress
 };
 
 inline void validate_h2_backend_selection(const ProgramOptions& options) {
     if (options.unstructured < 0 || options.unstructured > 1) {
         throw std::invalid_argument("H2_unstructured must be 0 or 1");
+    }
+    if (!options.symmetric) {
+        if (options.unstructured != 1) {
+            throw std::invalid_argument("a nonsymmetric H2 (option%sym=0) needs H2_unstructured=1");
+        }
+        if (options.id_proxy_mode == 2) {
+            throw std::invalid_argument(
+                "H2_ID_proxy=2 (adaptive ID rows) is not supported for a nonsymmetric H2 (option%sym=0) yet");
+        }
     }
     if (options.unstructured == 0) return;
 
@@ -187,7 +201,9 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
 
 // Bunch-Kaufman reads the lower triangle of X_RR and LU reads the full square;
 // X_RR is assembled with both triangles, so either serves the symmetric path.
+// A nonsymmetric X_RR is always factored by LU.
 inline fmm::FactorizationMethod h2_xrr_factorization_method(const ProgramOptions& options) {
+    if (!options.symmetric) return fmm::FactorizationMethod::LU;
     switch (options.xrr_factor) {
         case 0: return fmm::FactorizationMethod::BUNCH_KAUFMAN;
         case 1: return fmm::FactorizationMethod::LU;
@@ -238,6 +254,9 @@ struct H2Kernel {
     // another one abandoning the item that made it.  Null: the callbacks
     // above, called when an entry is needed.
     std::shared_ptr<fmm::CollectiveEntries<DataType, kerData>> collective;
+    // K(i, j) == K(j, i) (option%sym=1); false: a general matrix, both
+    // orientations of a block evaluated (ProgramOptions::symmetric)
+    bool symmetric = true;
     // The application's sketch callback (c_bpack_set_sketch_callback): with
     // collective entries, the ID's sketches of kernel rows are fetched
     // sketched (sketch_block_by_index).  Null: their entries are.

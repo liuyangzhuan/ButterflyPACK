@@ -574,9 +574,11 @@ inline const Evaluator* evaluator_of(const std::shared_ptr<void>& registered) {
 
 // The registered evaluator if the H2 backend can use it for DataType (double
 // or complex<double>), else null and why: none, of the other value type, or
-// not symmetric (H2 factors symmetric matrices).
+// not symmetric for a symmetric matrix (a nonsymmetric one, option%sym=0,
+// takes any evaluator).
 template<typename DataType>
-const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, const char** why) {
+const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, const char** why,
+                                      bool symmetric_matrix = true) {
     const Evaluator* e = evaluator_of(registered);
     if (e == nullptr) {
         *why = "no GPU evaluator registered (doc/gpu_kernels.md)";
@@ -586,8 +588,8 @@ const Evaluator* registered_evaluator(const std::shared_ptr<void>& registered, c
         *why = "the GPU evaluator's value type does not match the matrix";
         return nullptr;
     }
-    if (!e->symmetric()) {
-        *why = "the GPU evaluator is not marked symmetric (BPACK_GPU_SYMMETRIC), which the H2 format requires";
+    if (symmetric_matrix && !e->symmetric()) {
+        *why = "the GPU evaluator is not marked symmetric (BPACK_GPU_SYMMETRIC), which a symmetric H2 requires";
         return nullptr;
     }
     return e;
@@ -611,9 +613,10 @@ bool device_sketch_supported(const Tree* tree, const Evaluator& evaluator) {
 // rank's first non-empty leaf box.  Its seconds (0: no usable evaluator, it
 // is warm already, or the rank has no points).
 template<typename DataType, typename Tree>
-double warm_up_registered_evaluator(const Tree* tree, const std::shared_ptr<void>& registered) {
+double warm_up_registered_evaluator(const Tree* tree, const std::shared_ptr<void>& registered,
+                                    bool symmetric_matrix = true) {
     const char* why = nullptr;
-    const Evaluator* evaluator = registered_evaluator<DataType>(registered, &why);
+    const Evaluator* evaluator = registered_evaluator<DataType>(registered, &why, symmetric_matrix);
     if (evaluator == nullptr || tree->num_levels < 1) return 0.0;
     const size_t dim = static_cast<size_t>(tree->dimension);
     std::vector<int64_t> ids;

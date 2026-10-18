@@ -82,7 +82,9 @@ bool compression_supported(const ParallelTree<CoordType, DataType>* tree, const 
         return fail("single precision is not run on the GPU");
     } else {
         const char* why = nullptr;
-        if (registered_evaluator<DataType>(kernel->gpu_evaluator, &why) == nullptr) return fail(why);
+        if (registered_evaluator<DataType>(kernel->gpu_evaluator, &why, kernel_symmetric(kernel, 0)) == nullptr) {
+            return fail(why);
+        }
         return true;
     }
 }
@@ -954,13 +956,14 @@ void build_level_blocks(ParallelTree<CoordType, DataType>* tree, int level_numbe
         }
     };
     const double keep_limit = kMatvecKeepFraction * static_cast<double>(heap.capacity());
-    // With an entry evaluator (symmetric for H2), the near block of local
+    // With an entry evaluator of a symmetric kernel, the near block of local
     // boxes t < s is not kept (the block of s, t serves both): such blocks
     // go in chunks of their own after the others, and those chunks only go
     // to the host.  A block or list evaluator keeps every block: its blocks
     // may be symmetric only approximately (the EMSURF example's near field,
     // to about 1e-6), and the host matvec applies each block as evaluated.
-    const bool symmetric = keep && near && evaluator.inline_entries();
+    // A nonsymmetric kernel keeps every block too.
+    const bool symmetric = keep && near && evaluator.inline_entries() && kernel_symmetric(kernel, 0);
     std::vector<size_t> order(blocks.size());
     std::iota(order.begin(), order.end(), size_t{0});
     size_t split = blocks.size();  // order[0, split): blocks the matvec keeps

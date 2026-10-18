@@ -29,6 +29,11 @@ extern "C" {
 /* Laplace3D_H2Test_Driver.cpp: scale / |x - y|, and `diagonal` when the ids
  * match (real, symmetric). */
 void laplace3d_gpu_register(void** bmat, double scale, double diagonal);
+/* The same with the driver's nonsymmetric forms: times 1 + skew (d . (x - y))
+ * / r off the diagonal (direction: d, 3 values), and every entry times w(y) =
+ * 1 + weight sin(2 pi (y0 + 2 y1 + 3 y2)); symmetric when both are 0. */
+void laplace3d_gpu_register_general(void** bmat, double scale, double diagonal, double skew,
+                                    const double* direction, double weight);
 
 /* RBF3D_H2Test_Driver.cpp: scale * exp(-|x - y|^2 / (2 l^2)) with length_scale > 0,
  * and scale / |x - y| otherwise; `diagonal` when the ids match (real, symmetric). */

@@ -724,6 +724,17 @@ bool kernel_entries_collective(const Kernel*, long) {
     return false;
 }
 
+// Whether a kernel's entries are transpose-symmetric (H2Kernel::symmetric;
+// true for kernels without the member).
+template<typename Kernel>
+auto kernel_symmetric(const Kernel* kernel, int) -> decltype(static_cast<bool>(kernel->symmetric)) {
+    return kernel == nullptr || kernel->symmetric;
+}
+template<typename Kernel>
+bool kernel_symmetric(const Kernel*, long) {
+    return true;
+}
+
 // Whether a kernel fetches the ID's sketches of kernel rows sketched (entries
 // through a collective callback with a sketch callback), and that request
 // (H2Kernel::sketch_block_by_index; false for kernels without one).

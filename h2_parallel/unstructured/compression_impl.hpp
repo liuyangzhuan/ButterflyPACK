@@ -300,7 +300,9 @@ void hierarchical_compression_unstructured(
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
         // (adaptive ID rows, H2_ID_proxy 2: on the device when they are
         // selected against the sketch, H2_use_sketch 2)
-        gpu_ids = gpu_blocks && use_sketch && (tree->id_proxy_mode != 2 || use_sketch == 2) &&
+        // (a nonsymmetric kernel: the IDs of the stacked targets on the host)
+        gpu_ids = gpu_blocks && use_sketch && kernel_symmetric(kernel, 0) &&
+                  (tree->id_proxy_mode != 2 || use_sketch == 2) &&
                   gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);
         // the application's evaluator before its first use (not in the
@@ -308,7 +310,8 @@ void hierarchical_compression_unstructured(
         double evaluator_warm_up = 0.0;
         if constexpr (gpu::gpu_data_type<DataType>) {
             if (gpu_blocks) {
-                evaluator_warm_up = gpu::warm_up_registered_evaluator<DataType>(tree, kernel->gpu_evaluator);
+                evaluator_warm_up = gpu::warm_up_registered_evaluator<DataType>(tree, kernel->gpu_evaluator,
+                                                                                kernel_symmetric(kernel, 0));
             }
         }
         h2_warmup_seconds() = evaluator_warm_up;

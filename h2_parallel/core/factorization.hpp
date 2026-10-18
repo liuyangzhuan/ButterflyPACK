@@ -5742,6 +5742,71 @@ void gather_id_workspace(
         current_row_offset += n_neighbor;
     }
 
+    // A nonsymmetric matrix: the ring's rows of K(B, N) too, transposed under
+    // the rows above, with the same row sets, so that one skeleton and
+    // interpolation of B serve its rows and its columns (the ID of the
+    // stacked [K(N, B); K(B, N)^T])
+    if (!is_symmetric) {
+        for (size_t neighbor_idx = 0; neighbor_idx < box->two_hop.size(); ++neighbor_idx) {
+            const int64_t neighbor_morton = box->two_hop[neighbor_idx];
+            const int64_t n_neighbor = neighbor_point_counts[neighbor_idx];
+            if (box->far_field_interaction_map.find(neighbor_morton) != box->far_field_interaction_map.end()) {
+                throw std::logic_error(
+                    "gather_id_workspace: a stored far block of a nonsymmetric matrix (box " +
+                    std::to_string(box->morton_index) + ", neighbor " + std::to_string(neighbor_morton) +
+                    ") is not supported yet");
+            }
+            // the neighbor's rows, as above: its skeleton once eliminated
+            std::vector<int64_t> ids;
+            ids.reserve(static_cast<size_t>(n_neighbor));
+            const BoxData<CoordType, DataType>* neighbor_box = level.find_local_box(neighbor_morton);
+            if (neighbor_box == nullptr) {
+                auto ghost_it = level.ghost_id_to_index.find(neighbor_morton);
+                if (ghost_it != level.ghost_id_to_index.end()) neighbor_box = &level.ghost_boxes[ghost_it->second];
+            }
+            if (neighbor_box != nullptr) {
+                const bool keep_full_boundary_neighbor =
+                    use_CA_boundary_semantics && on_boundary && neighbor_box->on_boundary;
+                if (sketch_box_eliminated(level, neighbor_morton) && !keep_full_boundary_neighbor) {
+                    for (int64_t src : neighbor_box->skeleton_indices) {
+                        ids.push_back(neighbor_box->point_indices[static_cast<size_t>(src)]);
+                    }
+                } else {
+                    ids.assign(neighbor_box->point_indices.begin(), neighbor_box->point_indices.end());
+                }
+            } else {
+                auto assist_it = level.assisting_box_points_for_kernel_evaluation.find(neighbor_morton);
+                if (assist_it == level.assisting_box_points_for_kernel_evaluation.end()) {
+                    throw std::runtime_error("gather_id_workspace: missing assisting data for neighbor " +
+                                             std::to_string(neighbor_morton));
+                }
+                const auto& req = level.assisting_boxes[static_cast<size_t>(assist_it->second)];
+                if (!use_CA_boundary_semantics && sketch_box_eliminated(level, neighbor_morton)) {
+                    for (int64_t i = 0; i < n_neighbor && i < static_cast<int64_t>(req.skel_indices.size()); ++i) {
+                        ids.push_back(req.indices[static_cast<size_t>(req.skel_indices[static_cast<size_t>(i)])]);
+                    }
+                } else {
+                    ids.assign(req.indices.begin(), req.indices.end());
+                }
+            }
+            if (static_cast<int64_t>(ids.size()) != n_neighbor) {
+                throw std::runtime_error("gather_id_workspace: transposed ring rows of neighbor " +
+                                         std::to_string(neighbor_morton) + ": " + std::to_string(ids.size()) +
+                                         " points, " + std::to_string(n_neighbor) + " expected");
+            }
+            std::vector<DataType> A_BN(static_cast<size_t>(workspace_cols * n_neighbor));
+            kernel->evaluate_block_by_index(box->point_indices.data(), workspace_cols, ids.data(), n_neighbor,
+                                            A_BN.data(), workspace_cols);
+            for (int64_t col = 0; col < workspace_cols; ++col) {
+                for (int64_t row = 0; row < n_neighbor; ++row) {
+                    workspace[(current_row_offset + row) + col * workspace_rows] =
+                        A_BN[static_cast<size_t>(col + row * workspace_cols)];
+                }
+            }
+            current_row_offset += n_neighbor;
+        }
+    }
+
     if (!additional_training_indices.empty()) {
         const int64_t additional_rows =
             static_cast<int64_t>(additional_training_indices.size());

@@ -65,6 +65,12 @@ struct DriverOptions {
   int gpu_evaluator = 1;
   int format = 7;
   int sym = 1;
+  // a nonsymmetric matrix (--sym 0; H2: --H2_unstructured 1): a dipole term
+  // c (d . (x - y)) / r along a fixed direction d, and column weights w(y) =
+  // 1 + a sin(2 pi (y0 + 2 y1 + 3 y2)) (exact checks: log det(A W) =
+  // log det(A) + sum log w, x = W^{-1} x_sym)
+  double skew = 0.0;
+  double column_weight = 0.0;
   int distributed64 = 0;
   bool show_help = false;
 };
@@ -282,6 +288,10 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.format = parse_int(value, "format");
     } else if (name == "sym") {
       options.sym = parse_int(value, "sym");
+    } else if (name == "skew") {
+      options.skew = std::stod(value);
+    } else if (name == "column_weight") {
+      options.column_weight = std::stod(value);
     } else {
       throw std::invalid_argument("unknown option: --" + name);
     }
@@ -387,8 +397,14 @@ DriverOptions parse_driver_options(int argc, char** argv) {
   if (options.sym != 0 && options.sym != 1) {
     throw std::invalid_argument("sym must be 0 or 1");
   }
-  if (options.format == 7 && options.sym != 1) {
-    throw std::invalid_argument("format=7 (H2) requires --sym 1");
+  if (options.format == 7 && options.sym != 1 && options.h2_unstructured != 1) {
+    throw std::invalid_argument("format=7 (H2) with --sym 0 requires --H2_unstructured 1");
+  }
+  if ((options.skew != 0.0 || options.column_weight != 0.0) && options.sym != 0) {
+    throw std::invalid_argument("--skew and --column_weight make the matrix nonsymmetric: pass --sym 0");
+  }
+  if (!(options.column_weight >= 0.0 && options.column_weight < 1.0)) {
+    throw std::invalid_argument("--column_weight must lie in [0, 1)");
   }
   if (options.distributed64 != 0 && options.distributed64 != 1) {
     throw std::invalid_argument("distributed64 must be 0 or 1");
@@ -470,7 +486,9 @@ void print_usage(const char* executable) {
          "                          the factored H2 again after a compression-only H2\n"
          "                          of the same kernel is built)\n"
       << "  --format <1|7>\n"
-      << "  --sym <0|1>          (0: unsymmetric HODLR, format=1 only)\n"
+      << "  --sym <0|1>          (0: nonsymmetric; format=7 needs --H2_unstructured 1)\n"
+      << "  --skew <c>           (a nonsymmetric dipole term c (d . (x - y)) / r; --sym 0)\n"
+      << "  --column_weight <a>  (columns times 1 + a sin(...), 0 <= a < 1; --sym 0)\n"
       << "  --distributed64 <0|1>\n"
       << "  --elem_extract <0|1|2>   (default 2; with --hodlr_extract_ranks: of\n"
          "                            the HODLR from the entries, default 1)\n"
@@ -517,11 +535,14 @@ double laplace_self_cell_integral(int64_t grid_size) {
 
 class Laplace3DApplication {
  public:
-  Laplace3DApplication(int64_t grid_size, bool materialize_locations)
+  Laplace3DApplication(int64_t grid_size, bool materialize_locations, double skew = 0.0,
+                       double column_weight = 0.0)
       : grid_size_(grid_size),
         point_count_(checked_cube(grid_size, "grid_size")),
         inverse_4pi_n_(1.0 / (4.0 * kPi * static_cast<double>(point_count_))),
-        diagonal_(laplace_self_cell_integral(grid_size)) {
+        diagonal_(laplace_self_cell_integral(grid_size)),
+        skew_(skew),
+        column_weight_(column_weight) {
     if (materialize_locations) {
       locations_.resize(static_cast<size_t>(point_count_) * 3);
       for (int64_t index = 0; index < point_count_; ++index) {
@@ -533,6 +554,26 @@ class Laplace3DApplication {
   double* locations() { return locations_.data(); }
   double diagonal() const { return diagonal_; }
   double inverse_4pi_n() const { return inverse_4pi_n_; }
+  double skew() const { return skew_; }
+  double column_weight() const { return column_weight_; }
+  const double* skew_direction() const { return kSkewDirection; }
+  bool symmetric() const { return skew_ == 0.0 && column_weight_ == 0.0; }
+
+  // w(y) of --column_weight
+  double weight(const double* y) const {
+    if (column_weight_ == 0.0) return 1.0;
+    return 1.0 + column_weight_ * std::sin(2.0 * kPi * (y[0] + 2.0 * y[1] + 3.0 * y[2]));
+  }
+  // sum over the points of log w (log det(A W) - log det(A))
+  double log_weight_sum() const {
+    double sum = 0.0;
+    for (int64_t index = 0; index < point_count_; ++index) {
+      double y[3];
+      coordinate(index, y);
+      sum += std::log(weight(y));
+    }
+    return sum;
+  }
 
   void coordinate(int64_t index, double* point) const {
     const int64_t k = index % grid_size_;
@@ -547,12 +588,16 @@ class Laplace3DApplication {
 
   double evaluate_coordinates(int64_t row_id, int64_t column_id,
                               const double* x, const double* y) const {
-    if (row_id == column_id) return diagonal_;
+    if (row_id == column_id) return diagonal_ * weight(y);
     const double dx = x[0] - y[0];
     const double dy = x[1] - y[1];
     const double dz = x[2] - y[2];
     const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-    return inverse_4pi_n_ / r;
+    double value = inverse_4pi_n_ / r;
+    if (skew_ != 0.0) {
+      value *= 1.0 + skew_ * (kSkewDirection[0] * dx + kSkewDirection[1] * dy + kSkewDirection[2] * dz) / r;
+    }
+    return value * weight(y);
   }
 
   double evaluate(int row, int column) const {
@@ -576,10 +621,14 @@ class Laplace3DApplication {
   }
 
  private:
+  // the dipole direction of --skew: (1, 2, 3) / sqrt(14)
+  static constexpr double kSkewDirection[3] = {0.2672612419124244, 0.5345224838248488, 0.8017837257372732};
   int64_t grid_size_;
   int64_t point_count_;
   double inverse_4pi_n_;
   double diagonal_;
+  double skew_;
+  double column_weight_;
   std::vector<double> locations_;
 };
 
@@ -783,7 +832,8 @@ int main(int argc, char** argv) {
         checked_cube(driver_options.grid_size, "grid_size");
     int dimension = 3;
     Laplace3DApplication application(
-        driver_options.grid_size, driver_options.distributed64 == 0);
+        driver_options.grid_size, driver_options.distributed64 == 0, driver_options.skew,
+        driver_options.column_weight);
 
     if (rank == 0) {
       std::cout << "=== ButterflyPACK H2 3D Laplace Test ===\n"
@@ -793,6 +843,12 @@ int main(int argc, char** argv) {
                 << "Total points: " << point_count_64 << "\n"
                 << "Format: " << driver_options.format << "\n"
                 << "sym: " << driver_options.sym << "\n"
+                << (driver_options.skew != 0.0 ? "Skew (dipole) term: " + std::to_string(driver_options.skew) + "\n" : "")
+                << (driver_options.column_weight != 0.0
+                        ? "Column weights: amplitude " + std::to_string(driver_options.column_weight) +
+                              ", sum of log w " + std::to_string(application.log_weight_sum()) +
+                              " (log det(A W) - log det(A))\n"
+                        : "")
                 << "C API: "
                 << (driver_options.distributed64 == 1
                         ? "distributed 64-bit"
@@ -977,8 +1033,9 @@ int main(int argc, char** argv) {
 #ifdef BPACK_EXAMPLE_GPU
       if ((driver_options.format == 7 ? driver_options.h2_use_gpu : driver_options.hodlr_use_gpu) > 0 &&
           driver_options.gpu_evaluator == 1) {
-        laplace3d_gpu_register(&source.matrix, application.inverse_4pi_n(),
-                               application.diagonal());
+        laplace3d_gpu_register_general(&source.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
       }
 #endif
       d_c_bpack_construct_element_compute(
@@ -1060,8 +1117,9 @@ int main(int argc, char** argv) {
       d_c_bpack_getoption(&resources.option, "H2_use_gpu", &h2_use_gpu);
       d_c_bpack_getoption(&resources.option, "HODLR_use_gpu", &hodlr_use_gpu);
       if (h2_use_gpu > 0 || hodlr_use_gpu > 0) {
-        laplace3d_gpu_register(&resources.matrix, application.inverse_4pi_n(),
-                               application.diagonal());
+        laplace3d_gpu_register_general(&resources.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
       }
     }
 #endif
@@ -1425,7 +1483,9 @@ int main(int argc, char** argv) {
       }
 #ifdef BPACK_EXAMPLE_GPU
       if (driver_options.h2_use_gpu > 0 && driver_options.gpu_evaluator == 1) {
-        laplace3d_gpu_register(&other.matrix, application.inverse_4pi_n(), application.diagonal());
+        laplace3d_gpu_register_general(&other.matrix, application.inverse_4pi_n(), application.diagonal(),
+                                       application.skew(), application.skew_direction(),
+                                       application.column_weight());
       }
 #endif
       if (driver_options.distributed64 == 1) {

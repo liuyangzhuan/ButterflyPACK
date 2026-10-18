@@ -330,11 +330,11 @@ int main(int argc, char** argv) {
     double h2_use_gpu = 0.0, hodlr_use_gpu = 0.0;
     z_c_bpack_getoption(&option, "H2_use_gpu", &h2_use_gpu);
     z_c_bpack_getoption(&option, "HODLR_use_gpu", &hodlr_use_gpu);
-    if ((h2_use_gpu > 0 || hodlr_use_gpu > 0) && (em_options.cfie_alpha == 1.0 || matrix_format == 1)) {
+    if (h2_use_gpu > 0 || hodlr_use_gpu > 0) {
       // GPU evaluator of the entries for H2_use_gpu / HODLR_use_gpu
       // (gpu/emsurf_gpu.cu): the EFIE by triangle pairs (a block
-      // evaluator), or the CFIE (an entry evaluator, not symmetric: HODLR
-      // only), from the mesh tables of Zelem_EMSURF
+      // evaluator), or the CFIE (an entry evaluator, not symmetric: HODLR,
+      // or an H2 with option%sym=0), from the mesh tables of Zelem_EMSURF
       int64_t nreals = 0;
       int64_t nints = 0;
       emsurf_get_gpu_table_sizes_c(&nreals, &nints);

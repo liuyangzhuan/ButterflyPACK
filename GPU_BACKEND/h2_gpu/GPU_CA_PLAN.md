@@ -6259,6 +6259,50 @@ compression-only run (precon 2, 128K, 7 levels) compresses to 1.0e-5 (2e-7
 with the old 5 levels) and its BiCGSTAB stalls at 1000 iterations as it did
 with the old tree (7.8e-3 vs 5.0e-3: the unpreconditioned CFIE).
 
+#### Nonsymmetric matrices, steps N1-N2 (2026-10-17)
+
+Plan (user decisions): unstructured Color only, CPU and GPU; one skeleton
+and one interpolation T per box for rows and columns, from an ID of the
+stacked [K(F, B); K(B, F)^T] (F: the two-hop ring and the training rows), so
+the compression-only H2 (T up and down) and the extraction stay as they are
+and only the blocks stop being each other's transposes.  N1 plumbing and
+tests, N2 compression only, N3 the CPU factorization without lazy fill
+(lazy_schur 0: the legacy nonsymmetric code, which never ran, fixed), N4 the
+CPU lazy and streamed modes (the GPU's, its reference), N5 the GPU
+factorization, N6 'T'/'C' and collective entries (until then they stop with
+a message).
+
+N1: option%sym=0 for format 7 with H2_unstructured=1
+(check_h2_symmetry_option, ProgramOptions::symmetric, H2Kernel::symmetric;
+X_RR by LU).  Not yet, with a clear error: the factorization (precon 1, 3),
+'T'/'C', elem_extract=1, H2_ID_proxy 2.  Test problems: the Laplace driver's
+--skew c (times 1 + c (d . (x - y)) / r, d = (1, 2, 3)/sqrt(14)) and
+--column_weight a (columns times 1 + a sin(2 pi (y0 + 2 y1 + 3 y2)): log
+det(A W) = log det(A) + sum log w, printed), both with their GPU entry
+evaluator (laplace3d_gpu_register_general); EMSURF's CFIE GPU evaluator
+registered for format 7 too (the driver's option is --cfie_alpha, lower
+case: em.sh's --CFIE_alpha is ignored, so its runs were the EFIE).
+
+N2: the stacked ID in gather_id_workspace (the ring's K(B, N) rows,
+transposed, with the same row sets); the compression takes the kernel's
+symmetry; on the GPU the nonsymmetric IDs run on the host, the blocks on the
+device, every near block kept (no pair kernel), and any evaluator is
+accepted.  Compression-only, BiCGSTAB:
+
+| | ranks | acc_mvp | BiCGSTAB | max rank (sym) |
+|---|---|---|---|---|
+| Laplace 32^3, --skew 0.5, CPU = GPU | 1 | 4.2e-4 (sym 4.8e-4) | 106 its | |
+| Laplace 48^3, --skew 0.5, CPU = GPU | 8 | 4.4e-4 | 134-136 | |
+| Laplace 64^3, --skew 0.5, GPU | 12 | 4.2e-4 (sym 5.0e-4) | 216 | 37 (32) |
+| Laplace 64^3, --column_weight 0.5, GPU | 12 | 6.6e-4 | 194 | 39 |
+| EMSURF CFIE alpha 0.5, 128K, CPU / GPU | 8 | 8.4e-8 both | 253 / 277 | |
+| the same, GPU | 12 | 8.4e-8 | 259 | |
+
+(CPU and GPU solutions agree to the BiCGSTAB tolerance.)  The GPU matvec
+applies both near blocks instead of a pair: 1.3x its symmetric time a call
+at 64^3, 1.3x its memory.  Symmetric runs bitwise as before (Laplace 192^3,
+the 128K sphere, the collective extraction; the extraction check).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

@@ -39,7 +39,9 @@ static inline int product(int arr[], int n) {
 #endif
 
 #ifdef HAVE_MPI
-static void require_symmetric_h2_option(
+// option%sym of a format-7 matrix: 1 (transpose-symmetric), or 0 (a general
+// matrix) with H2_unstructured=1.
+static void check_h2_symmetry_option(
     F2Cptr* option,
     MPI_Comm comm,
     const char* caller) {
@@ -47,10 +49,13 @@ static void require_symmetric_h2_option(
   c_bpack_getoption(option, "sym", &sym_d);
   const int sym = static_cast<int>(std::llround(sym_d));
   if (sym == 1) return;
+  double unstructured_d = 0.0;
+  c_bpack_getoption(option, "H2_unstructured", &unstructured_d);
+  if (sym == 0 && std::llround(unstructured_d) == 1) return;
 
   const std::string message = std::string(caller) +
-    ": ButterflyPACK H2 (format=7) currently requires option%sym=1 "
-    "for a transpose-symmetric matrix; received option%sym=" +
+    ": ButterflyPACK H2 (format=7) takes option%sym=1 (transpose-symmetric), "
+    "or option%sym=0 (nonsymmetric) with H2_unstructured=1; received option%sym=" +
     std::to_string(sym);
   int rank = 0;
   MPI_Comm_rank(comm, &rank);
@@ -70,15 +75,20 @@ int sync_h2_verbosity(
 }
 
 // The operation a trans argument asks of format 7 ('N', 'T' or 'C', either
-// case).  The H2 matrix is transpose-symmetric (option%sym=1), so 'T' is
-// 'N', and 'C' is 'N' on conjugated vectors: A^H x = conj(A conj(x)), and
-// A^{-H} x = conj(A^{-1} conj(x)) (for real data 'T' again).
-static char h2_trans_operation(char const* trans, const char* caller) {
+// case).  A transpose-symmetric H2 (option%sym=1) takes 'T' as 'N', and 'C'
+// as 'N' on conjugated vectors: A^H x = conj(A conj(x)), and A^{-H} x =
+// conj(A^{-1} conj(x)) (for real data 'T' again).  A nonsymmetric one takes
+// 'N' only for now.
+static char h2_trans_operation(char const* trans, const char* caller, bool symmetric = true) {
   const char given = (trans != nullptr && trans[0] != '\0') ? trans[0] : 'N';
   const char op = static_cast<char>(std::toupper(static_cast<unsigned char>(given)));
   if (op != 'N' && op != 'T' && op != 'C') {
     throw std::invalid_argument(std::string(caller) +
       ": trans must be 'N', 'T' or 'C'; got '" + std::string(1, given) + "'");
+  }
+  if (!symmetric && op != 'N') {
+    throw std::invalid_argument(std::string(caller) +
+      ": trans '" + std::string(1, given) + "' of a nonsymmetric H2 (option%sym=0) is not supported yet");
   }
   return op;
 }
@@ -340,6 +350,11 @@ static butterfly::ProgramOptions read_h2_program_options64(
   result.gemm_split = H2_GEMM_split;
   result.xrr_factor = H2_XRR_factor;
   result.use_gpu = H2_use_gpu != 0 ? 1 : 0;
+  {
+    double sym_d = 1.0;
+    c_bpack_getoption(option, "sym", &sym_d);
+    result.symmetric = std::llround(sym_d) != 0;
+  }
   result.ca_staged_halo = H2_CA_staged_halo;
   result.ca_owner_component = H2_CA_owner_component;
   result.ca_pack_shared = H2_CA_pack_shared;
@@ -1238,7 +1253,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	int fcomm;
 	c_bpack_get_comm(ptree, &fcomm);
 	MPI_Comm mpi_comm = MPI_Comm_f2c((MPI_Fint)fcomm);
-	require_symmetric_h2_option(option, mpi_comm, "c_bpack_construct_init");
+	check_h2_symmetry_option(option, mpi_comm, "c_bpack_construct_init");
 
 	// use datatype C_DT
     // construct H2 solver
@@ -1403,6 +1418,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       H2_options.precon = static_cast<int>(std::llround(precon_d));
       H2_options.verbosity = static_cast<int>(std::llround(verbosity_d));
       H2_options.unstructured = H2_unstructured;
+      {
+        double sym_d = 1.0;
+        c_bpack_getoption(option, "sym", &sym_d);
+        H2_options.symmetric = std::llround(sym_d) != 0;
+      }
       H2_options.use_sketch = H2_use_sketch;
       H2_options.lazy_schur = H2_lazy_schur;
       H2_options.compress_factors = H2_compress_factors;
@@ -1541,7 +1561,7 @@ void c_bpack_construct_init_distributed64(
           "c_bpack_construct_init_distributed64 currently supports only "
           "format=7; support for other ButterflyPACK formats is TODO");
     }
-    require_symmetric_h2_option(
+    check_h2_symmetry_option(
         option, comm, "c_bpack_construct_init_distributed64");
     if (*N_global <= 0 || *N_input_local < 0) {
       throw std::invalid_argument(
@@ -1636,7 +1656,7 @@ void c_bpack_construct_element_compute_distributed64(
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   auto* solver = get_h2_solver<H2Data>(
       bmat, "c_bpack_construct_element_compute_distributed64");
-  require_symmetric_h2_option(
+  check_h2_symmetry_option(
       option, solver->comm,
       "c_bpack_construct_element_compute_distributed64");
   if (!solver->distributed_layout) {
@@ -1655,6 +1675,7 @@ void c_bpack_construct_element_compute_distributed64(
       elem_extract == 2 ? C_FuncZmnBlock : nullptr;
   solver->kernel.quant = C_QuantApp;
   solver->kernel.dimension = solver->options.dimension;
+  solver->kernel.symmetric = solver->options.symmetric;
   MPI_Comm_rank(solver->comm, &solver->kernel.block_callback_pid);
   solver->kernel.register_level_coordinates(
       solver->tree->levels[solver->tree->num_levels - 1]);
@@ -1689,12 +1710,13 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	void* H2_raw = nullptr;
 	c_bpack_get_h2(*bmat, &H2_raw);
 	butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(
+	check_h2_symmetry_option(
 	  option, H2_solver->comm, "c_bpack_construct_element_compute");
 	H2_solver->kernel.kernel = C_FuncZmn;
 	H2_solver->kernel.kernel64 = nullptr;
 	H2_solver->kernel.block_kernel64 = nullptr;
 	H2_solver->kernel.dimension = H2_solver->options.dimension;
+	H2_solver->kernel.symmetric = H2_solver->options.symmetric;
 	double elem_extract_d = 0.0;
 	c_bpack_getoption(option, "elem_extract", &elem_extract_d);
 	const int elem_extract = static_cast<int>(std::llround(elem_extract_d));
@@ -1716,6 +1738,11 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 #endif
 	H2_solver->kernel.collective.reset();
 	if (elem_extract == 1 && C_FuncZmnBlock != nullptr) {
+	  if (!H2_solver->options.symmetric) {
+	    throw std::invalid_argument(
+	      "c_bpack_construct_element_compute: entries through a collective callback (elem_extract=1) are not "
+	      "supported for a nonsymmetric H2 (option%sym=0) yet");
+	  }
 	  H2_solver->kernel.collective =
 	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
 	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid);
@@ -2053,7 +2080,7 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_factor");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_factor");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -2066,6 +2093,11 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 	  if (H2_solver->options.precon == 2) {
 		compress_h2_and_update_stats(H2_solver, stats);
 	  } else {
+		if (!H2_solver->options.symmetric) {
+		  throw std::invalid_argument(
+		    "c_bpack_factor: the factorization of a nonsymmetric H2 (option%sym=0) is not supported yet; "
+		    "precon 2 (compression only) is");
+		}
 		double factorization_time = 0.0;
 		double entryeval_time = 0.0;
 		butterfly::dispatch_h2_factorization(
@@ -2130,7 +2162,7 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_solve");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_solve");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -2222,7 +2254,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_mult");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_mult");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
@@ -2234,7 +2266,7 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
     try {
       // F x, F^T x = F x, F^H x = conj(F conj(x)) (h2_trans_operation)
-      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)");
+      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)", H2_solver->options.symmetric);
       if (*Ninloc != *Noutloc) {
         throw std::invalid_argument(
           "c_bpack_mult (format 7): Ninloc must equal Noutloc");
@@ -2328,13 +2360,13 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_inv_mult");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_inv_mult");
 
     int rank = 0;
     MPI_Comm_rank(H2_solver->comm, &rank);
 
     try {
-      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)");
+      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)", H2_solver->options.symmetric);
       if (*Ncol <= 0) {
         throw std::invalid_argument(
           "c_bpack_inv_mult (format 7): Ncol must be positive");
@@ -2622,7 +2654,7 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
     butterfly::H2<double, H2Data>* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
-	require_symmetric_h2_option(option, H2_solver->comm, "c_bpack_logdet");
+	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_logdet");
 
 
 	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
