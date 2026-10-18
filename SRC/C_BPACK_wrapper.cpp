@@ -2093,10 +2093,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 	  if (H2_solver->options.precon == 2) {
 		compress_h2_and_update_stats(H2_solver, stats);
 	  } else {
-		if (!H2_solver->options.symmetric) {
+		if (!H2_solver->options.symmetric && H2_solver->options.use_gpu != 0) {
 		  throw std::invalid_argument(
-		    "c_bpack_factor: the factorization of a nonsymmetric H2 (option%sym=0) is not supported yet; "
-		    "precon 2 (compression only) is");
+		    "c_bpack_factor: the GPU factorization of a nonsymmetric H2 (option%sym=0) is not supported yet; "
+		    "the CPU one (H2_use_gpu=0) and precon 2 (compression only) are");
 		}
 		double factorization_time = 0.0;
 		double entryeval_time = 0.0;

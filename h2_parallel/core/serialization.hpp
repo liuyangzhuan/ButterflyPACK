@@ -483,27 +483,30 @@ inline const char* deserialize(GeneratorPayload<DataType>& g, const char* ptr) {
 }
 
 
-inline size_t bytes_key(const ReplaceKey&) { return sizeof(int64_t) + sizeof(int64_t); }
+inline size_t bytes_key(const ReplaceKey&) { return sizeof(int64_t) + sizeof(int64_t) + sizeof(uint8_t); }
 
 inline char* serialize(const ReplaceKey& k, char* ptr) {
     ptr = ser::write_pod(ptr, k.target_box);
     ptr = ser::write_pod(ptr, k.neighbor_box);
+    ptr = ser::write_pod(ptr, k.slot);
     return ptr;
 }
 
 inline const char* deserialize(ReplaceKey& k, const char* ptr) {
     ptr = ser::read_pod(ptr, k.target_box);
     ptr = ser::read_pod(ptr, k.neighbor_box);
+    ptr = ser::read_pod(ptr, k.slot);
     return ptr;
 }
 
-inline size_t bytes_key(const EdgeKey&) { return sizeof(int64_t) + sizeof(int64_t) + sizeof(uint8_t); }
+inline size_t bytes_key(const EdgeKey&) { return sizeof(int64_t) + sizeof(int64_t) + 2 * sizeof(uint8_t); }
 
 inline char* serialize(const EdgeKey& k, char* ptr) {
     ptr = ser::write_pod(ptr, k.lo);
     ptr = ser::write_pod(ptr, k.hi);
     uint8_t kind = static_cast<uint8_t>(k.kind);
     ptr = ser::write_pod(ptr, kind);
+    ptr = ser::write_pod(ptr, k.rows_lo);
     return ptr;
 }
 
@@ -513,6 +516,7 @@ inline const char* deserialize(EdgeKey& k, const char* ptr) {
     uint8_t kind = 0;
     ptr = ser::read_pod(ptr, kind);
     k.kind = static_cast<EdgeKind>(kind);
+    ptr = ser::read_pod(ptr, k.rows_lo);
     return ptr;
 }
 
@@ -3184,6 +3188,45 @@ static ModifiedBlock<DataType>* find_block_symmetric(
     return nullptr;
 }
 
+// The directed views of a nonsymmetric matrix: A_NS[N] = K(N, B) in the
+// near/far map, A_SN[N] = K(B, N) in the near/far *_nonsymmetry map, each
+// its own ModifiedBlock (kind Near or Far)
+template <typename CoordType, typename DataType>
+ModifiedBlock<DataType>* find_directed_block(
+    BoxData<CoordType, DataType>& box, int64_t neighbor_morton, EdgeKind kind, bool a_sn)
+{
+    if (kind != EdgeKind::Near && kind != EdgeKind::Far) {
+        throw std::runtime_error("find_directed_block: kind must be Near/Far");
+    }
+    const bool near = kind == EdgeKind::Near;
+    auto& map = near ? (a_sn ? box.near_field_interaction_map_nonsymmetry : box.near_field_interaction_map)
+                     : (a_sn ? box.far_field_interaction_map_nonsymmetry : box.far_field_interaction_map);
+    auto& blocks = near ? box.near_field_modified_interactions : box.far_field_modified_interactions;
+    auto it = map.find(neighbor_morton);
+    return it == map.end() ? nullptr : &blocks[static_cast<size_t>(it->second)];
+}
+
+template <typename CoordType, typename DataType>
+ModifiedBlock<DataType>& upsert_directed_block(
+    BoxData<CoordType, DataType>& box, int64_t neighbor_morton, EdgeKind kind, bool a_sn)
+{
+    if (auto* block = find_directed_block(box, neighbor_morton, kind, a_sn)) return *block;
+    const bool near = kind == EdgeKind::Near;
+    auto& map = near ? (a_sn ? box.near_field_interaction_map_nonsymmetry : box.near_field_interaction_map)
+                     : (a_sn ? box.far_field_interaction_map_nonsymmetry : box.far_field_interaction_map);
+    auto& blocks = near ? box.near_field_modified_interactions : box.far_field_modified_interactions;
+    ModifiedBlock<DataType> block;
+    block.neighbor_morton = neighbor_morton;
+    map[neighbor_morton] = static_cast<int64_t>(blocks.size());
+    blocks.push_back(std::move(block));
+    if (near) {
+        box.num_near_field_interactions = static_cast<int64_t>(blocks.size());
+    } else {
+        box.num_far_field_interactions = static_cast<int64_t>(blocks.size());
+    }
+    return blocks.back();
+}
+
 // Extract exactly n points worth of coords (point-major: [x0 y0 z0 x1 y1 z1 ...])
 template <typename CoordType, typename DataType>
 static std::vector<CoordType> coords_for_count_from_box(
@@ -3709,6 +3752,231 @@ std::chrono::high_resolution_clock::duration exchange_assisting_for_mortons_oneh
     return communication_time;
 }
 
+
+// The points and skeleton of a box of the level (a local or ghost box, or
+// assisting data), for the directed views below
+template <typename CoordType, typename DataType>
+void directed_view_endpoint(
+    TreeLevel<CoordType, DataType>& lvl, int64_t morton,
+    const std::vector<int64_t>*& points, const std::vector<int64_t>*& skeleton)
+{
+    const BoxData<CoordType, DataType>* nb = lvl.find_local_box(morton);
+    if (nb == nullptr) {
+        auto git = lvl.ghost_id_to_index.find(morton);
+        if (git != lvl.ghost_id_to_index.end()) nb = &lvl.ghost_boxes[static_cast<size_t>(git->second)];
+    }
+    if (nb != nullptr) {
+        points = &nb->point_indices;
+        skeleton = &nb->skeleton_indices;
+        return;
+    }
+    auto ait = lvl.assisting_box_points_for_kernel_evaluation.find(morton);
+    if (ait == lvl.assisting_box_points_for_kernel_evaluation.end()) {
+        throw std::runtime_error("directed view: no points of box " + std::to_string(morton));
+    }
+    const auto& assist = lvl.assisting_boxes[static_cast<size_t>(ait->second)];
+    points = &assist.indices;
+    skeleton = &assist.skel_indices;
+}
+
+// A nonsymmetric matrix: box B's directed view of its neighbor N (a_sn
+// false: A_NS[N] = K(N, B), n_nei x n_self; true: A_SN[N] = K(B, N), n_self
+// x n_nei) at the endpoints' current point counts (their skeletons once
+// eliminated), into `out` (column-major, packed).  A stored view still at an
+// endpoint's full point set is sliced to its skeleton.  False when B stores
+// no such view.
+template <typename CoordType, typename DataType>
+bool read_directed_view(
+    TreeLevel<CoordType, DataType>& lvl,
+    BoxData<CoordType, DataType>& box, int64_t neighbor_morton, EdgeKind kind, bool a_sn,
+    int64_t n_self, int64_t n_nei, std::vector<DataType>& out)
+{
+    ModifiedBlock<DataType>* mb = find_directed_block(box, neighbor_morton, kind, a_sn);
+    if (mb == nullptr || !(a_sn ? mb->A_SN.is_allocated() : mb->a_ns_is_allocated())) return false;
+
+    // the neighbor's points and skeleton: a local or ghost box, or assisting data
+    const std::vector<int64_t>* nei_points = nullptr;
+    const std::vector<int64_t>* nei_skeleton = nullptr;
+    directed_view_endpoint(lvl, neighbor_morton, nei_points, nei_skeleton);
+
+    // an endpoint's positions in a stored dimension of `stored` entries
+    auto positions = [&](const std::vector<int64_t>& points, const std::vector<int64_t>& skeleton,
+                         int64_t stored, int64_t n, int64_t morton) {
+        std::vector<int64_t> pos(static_cast<size_t>(n));
+        if (stored == n) {
+            std::iota(pos.begin(), pos.end(), int64_t{0});
+        } else if (stored == static_cast<int64_t>(points.size()) &&
+                   static_cast<int64_t>(skeleton.size()) == n) {
+            pos = skeleton;
+        } else {
+            throw std::runtime_error(
+                "read_directed_view: box " + std::to_string(morton) + " has " + std::to_string(stored) +
+                " stored entries, " + std::to_string(n) + " current (points " + std::to_string(points.size()) +
+                ", skeleton " + std::to_string(skeleton.size()) + ")");
+        }
+        return pos;
+    };
+
+    const int64_t rows = a_sn ? n_self : n_nei;
+    const int64_t cols = a_sn ? n_nei : n_self;
+    const int64_t stored_rows = a_sn ? mb->A_SN.rows : mb->a_ns_rows();
+    const int64_t stored_cols = a_sn ? mb->A_SN.cols : mb->a_ns_cols();
+    const auto row_pos = a_sn
+        ? positions(box.point_indices, box.skeleton_indices, stored_rows, rows, box.morton_index)
+        : positions(*nei_points, *nei_skeleton, stored_rows, rows, neighbor_morton);
+    const auto col_pos = a_sn
+        ? positions(*nei_points, *nei_skeleton, stored_cols, cols, neighbor_morton)
+        : positions(box.point_indices, box.skeleton_indices, stored_cols, cols, box.morton_index);
+    out.resize(static_cast<size_t>(rows * cols));
+    for (int64_t j = 0; j < cols; ++j) {
+        const int64_t sj = col_pos[static_cast<size_t>(j)];
+        for (int64_t i = 0; i < rows; ++i) {
+            const int64_t si = row_pos[static_cast<size_t>(i)];
+            out[static_cast<size_t>(i + j * rows)] = a_sn ? mb->A_SN(si, sj) : mb->a_ns(si, sj);
+        }
+    }
+    return true;
+}
+
+// A box's current points (global indices): its skeleton once eliminated
+template <typename CoordType, typename DataType>
+std::vector<int64_t> directed_view_current_points(
+    TreeLevel<CoordType, DataType>& lvl, int64_t morton, const std::vector<int64_t>& points,
+    const std::vector<int64_t>& skeleton, int64_t n)
+{
+    if (lvl.eliminated_boxes.count(morton) != 0 && static_cast<int64_t>(skeleton.size()) == n) {
+        std::vector<int64_t> out(static_cast<size_t>(n));
+        for (int64_t i = 0; i < n; ++i) {
+            out[static_cast<size_t>(i)] = points[static_cast<size_t>(skeleton[static_cast<size_t>(i)])];
+        }
+        return out;
+    }
+    if (static_cast<int64_t>(points.size()) == n) return points;
+    throw std::runtime_error(
+        "directed view: box " + std::to_string(morton) + " has no " + std::to_string(n) +
+        " current points (points " + std::to_string(points.size()) + ", skeleton " +
+        std::to_string(skeleton.size()) + ")");
+}
+
+// The kernel block K(rows box, cols box) at the two boxes' current points
+// (n_rows x n_cols, column-major)
+template <typename CoordType, typename DataType, typename KernelType>
+std::vector<DataType> directed_view_kernel_block(
+    TreeLevel<CoordType, DataType>& lvl, KernelType* kernel,
+    int64_t row_morton, int64_t n_rows, int64_t col_morton, int64_t n_cols)
+{
+    const std::vector<int64_t>* points = nullptr;
+    const std::vector<int64_t>* skeleton = nullptr;
+    directed_view_endpoint(lvl, row_morton, points, skeleton);
+    const auto row_points = directed_view_current_points(lvl, row_morton, *points, *skeleton, n_rows);
+    directed_view_endpoint(lvl, col_morton, points, skeleton);
+    const auto col_points = directed_view_current_points(lvl, col_morton, *points, *skeleton, n_cols);
+    std::vector<DataType> block(static_cast<size_t>(n_rows * n_cols));
+    kernel->evaluate_block_by_index(
+        row_points.data(), n_rows, col_points.data(), n_cols, block.data(), n_rows);
+    return block;
+}
+
+// A nonsymmetric matrix: add a delta to box B's directed view of its
+// neighbor N (as read_directed_view; the delta in the view's orientation,
+// column-major, leading dimension ld).  A view not stored yet starts from
+// `base` when given (the kernel block in the view's orientation, packed),
+// else from the kernel at the endpoints' current points.
+template <typename CoordType, typename DataType, typename KernelType>
+void add_to_directed_view(
+    TreeLevel<CoordType, DataType>& lvl, KernelType* kernel,
+    BoxData<CoordType, DataType>& box, int64_t neighbor_morton, EdgeKind kind, bool a_sn,
+    int64_t n_self, int64_t n_nei, const DataType* delta, int64_t ld,
+    const std::vector<DataType>* base = nullptr)
+{
+    const int64_t rows = a_sn ? n_self : n_nei;
+    const int64_t cols = a_sn ? n_nei : n_self;
+    // a view at the current points already: in place
+    if (ModifiedBlock<DataType>* mb = find_directed_block(box, neighbor_morton, kind, a_sn)) {
+        MatrixStorage<DataType>* own = a_sn ? &mb->A_SN
+                                            : (mb->a_ns_uses_symmetric_storage() ? nullptr : &mb->A_NS);
+        if (own != nullptr && own->is_allocated() && own->rows == rows && own->cols == cols) {
+            for (int64_t j = 0; j < cols; ++j) {
+                DataType* column = own->data.data() + j * own->lda;
+                const DataType* add = delta + j * ld;
+                for (int64_t i = 0; i < rows; ++i) column[i] += add[i];
+            }
+            return;
+        }
+        if (!a_sn && own == nullptr && mb->a_ns_is_allocated() && mb->a_ns_rows() == rows &&
+            mb->a_ns_cols() == cols) {
+            for (int64_t j = 0; j < cols; ++j) {
+                for (int64_t i = 0; i < rows; ++i) mb->a_ns(i, j) += delta[i + j * ld];
+            }
+            return;
+        }
+    }
+    std::vector<DataType> current;
+    if (!read_directed_view(lvl, box, neighbor_morton, kind, a_sn, n_self, n_nei, current)) {
+        if (base != nullptr && static_cast<int64_t>(base->size()) == rows * cols) {
+            current = *base;
+        } else {
+            current = a_sn ? directed_view_kernel_block(lvl, kernel, box.morton_index, n_self, neighbor_morton, n_nei)
+                           : directed_view_kernel_block(lvl, kernel, neighbor_morton, n_nei, box.morton_index, n_self);
+        }
+    }
+    for (int64_t j = 0; j < cols; ++j) {
+        for (int64_t i = 0; i < rows; ++i) {
+            current[static_cast<size_t>(i + j * rows)] += delta[i + j * ld];
+        }
+    }
+    auto& target = upsert_directed_block(box, neighbor_morton, kind, a_sn);
+    if (a_sn) {
+        target.A_SN.set_owned(rows, cols, std::move(current), MatrixStorage<DataType>::FULL);
+    } else {
+        target.set_a_ns_owned(rows, cols, std::move(current), MatrixStorage<DataType>::FULL);
+    }
+}
+
+// Add a delta (n x n, leading dimension ld) to box B's Schur block, which
+// starts from the kernel at B's current points (its skeleton once
+// eliminated) when not formed yet.
+template <typename CoordType, typename DataType, typename KernelType>
+void add_to_schur_block(
+    TreeLevel<CoordType, DataType>& lvl, KernelType* kernel,
+    BoxData<CoordType, DataType>& box, int64_t n, const DataType* delta, int64_t ld,
+    const std::vector<DataType>* base = nullptr)
+{
+    if (!box.schur_complement.is_allocated() && base != nullptr &&
+        static_cast<int64_t>(base->size()) == n * n) {
+        std::vector<DataType> A = *base;
+        box.schur_complement.set_owned(n, n, std::move(A), MatrixStorage<DataType>::FULL);
+    }
+    if (!box.schur_complement.is_allocated()) {
+        std::vector<int64_t> points;
+        if (lvl.eliminated_boxes.count(box.morton_index) != 0 &&
+            static_cast<int64_t>(box.skeleton_indices.size()) == n) {
+            points.resize(static_cast<size_t>(n));
+            for (int64_t i = 0; i < n; ++i) {
+                points[static_cast<size_t>(i)] =
+                    box.point_indices[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)])];
+            }
+        } else if (box.num_points == n) {
+            points = box.point_indices;
+        } else {
+            throw std::runtime_error("add_to_schur_block: box " + std::to_string(box.morton_index) +
+                                     " has no " + std::to_string(n) + " current points");
+        }
+        std::vector<DataType> A(static_cast<size_t>(n * n));
+        kernel->evaluate_block_by_index(points.data(), n, points.data(), n, A.data(), n);
+        box.schur_complement.set_owned(n, n, std::move(A), MatrixStorage<DataType>::FULL);
+    }
+    if (box.schur_complement.rows != n || box.schur_complement.cols != n) {
+        throw std::runtime_error("add_to_schur_block: box " + std::to_string(box.morton_index) + " Schur block " +
+                                 std::to_string(box.schur_complement.rows) + " x " +
+                                 std::to_string(box.schur_complement.cols) + ", delta " + std::to_string(n));
+    }
+    for (int64_t j = 0; j < n; ++j) {
+        for (int64_t i = 0; i < n; ++i) {
+            box.schur_complement(i, j) += delta[i + j * ld];
+        }
+    }
+}
 
 template <typename DataType>
 static void copy_contiguous_into(MatrixStorage<DataType>& dst,
@@ -4461,6 +4729,144 @@ static void apply_updates_with_kernel_symmetric(
         }
         share_symmetric_level_edges(lvl);
     }
+}
+
+/**
+ * @brief The nonsymmetric counterpart of apply_updates_with_kernel_symmetric.
+ *
+ * The local boxes' directed views (A_NS[N] = K(N, B) in the near/far map,
+ * A_SN[N] = K(B, N) in the *_nonsymmetry map) take the received updates;
+ * no view is shared:
+ *  - a replacement (Step 7) sets its target's view of slot 0 (A_NS) or 1
+ *    (A_SN);
+ *  - a delta (Step 9) K(hi, lo) (rows_lo 0) adds to lo's A_NS[hi] and hi's
+ *    A_SN[lo], a delta K(lo, hi) (rows_lo 1) to lo's A_SN[hi] and hi's
+ *    A_NS[lo], each where that endpoint is local, sliced to the endpoints'
+ *    current points; a diagonal one adds to the Schur block.
+ * A view or Schur block not formed yet starts from the kernel.
+ */
+template <typename KernelType, typename CoordType, typename DataType>
+static void apply_updates_with_kernel_nonsymmetric(
+    TreeLevel<CoordType, DataType>& lvl,
+    KernelType* kernel,
+    const PendingFactorUpdates<DataType>& incoming)
+{
+    struct Task {
+        int kind = 0;  // 0 replacement, 1 diagonal delta, 2 view delta
+        int64_t neighbor = -1;
+        EdgeKind edge = EdgeKind::Near;
+        bool a_sn = false;
+        const DenseBlock<DataType>* block = nullptr;
+    };
+    auto local_index = [&](int64_t morton) -> int64_t {
+        if (morton < lvl.local_morton_start || morton > lvl.local_morton_end) return -1;
+        return morton - lvl.local_morton_start;
+    };
+    std::vector<std::vector<Task>> tasks(lvl.local_boxes.size());
+    for (const auto& [rk, block] : incoming.replace_blocks) {
+        const int64_t idx = local_index(rk.target_box);
+        if (idx < 0) continue;
+        tasks[static_cast<size_t>(idx)].push_back(Task{0, rk.neighbor_box, EdgeKind::Near, rk.slot == 1, &block});
+    }
+    for (const auto& [ek, block] : incoming.accumulated_deltas) {
+        if (ek.kind == EdgeKind::Diag) {
+            const int64_t idx = local_index(ek.lo);
+            if (idx >= 0) tasks[static_cast<size_t>(idx)].push_back(Task{1, ek.lo, ek.kind, false, &block});
+            continue;
+        }
+        const int64_t idx_lo = local_index(ek.lo);
+        const int64_t idx_hi = local_index(ek.hi);
+        if (idx_lo >= 0) tasks[static_cast<size_t>(idx_lo)].push_back(Task{2, ek.hi, ek.kind, ek.rows_lo == 1, &block});
+        if (idx_hi >= 0) tasks[static_cast<size_t>(idx_hi)].push_back(Task{2, ek.lo, ek.kind, ek.rows_lo == 0, &block});
+    }
+
+    // a box's current point count: its skeleton once eliminated
+    auto current_count = [&](int64_t morton) -> int64_t {
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        directed_view_endpoint(lvl, morton, points, skeleton);
+        if (lvl.eliminated_boxes.count(morton) != 0 && !skeleton->empty()) {
+            return static_cast<int64_t>(skeleton->size());
+        }
+        return static_cast<int64_t>(points->size());
+    };
+    // a payload dimension's positions at an endpoint's current points
+    auto positions = [&](int64_t morton, int64_t stored, int64_t n) {
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        directed_view_endpoint(lvl, morton, points, skeleton);
+        std::vector<int64_t> pos(static_cast<size_t>(n));
+        if (stored == n) {
+            std::iota(pos.begin(), pos.end(), int64_t{0});
+        } else if (stored == static_cast<int64_t>(points->size()) &&
+                   static_cast<int64_t>(skeleton->size()) == n) {
+            pos = *skeleton;
+        } else {
+            throw std::runtime_error(
+                "apply nonsymmetric update: box " + std::to_string(morton) + " payload dimension " +
+                std::to_string(stored) + ", current " + std::to_string(n));
+        }
+        return pos;
+    };
+
+    std::exception_ptr apply_exception;
+    std::mutex apply_exception_mutex;
+    std::atomic<bool> apply_failed{false};
+    #pragma omp parallel for schedule(static) if (lvl.local_boxes.size() > 1)
+    for (int64_t local_idx = 0; local_idx < static_cast<int64_t>(lvl.local_boxes.size()); ++local_idx) {
+        if (apply_failed.load(std::memory_order_relaxed)) continue;
+        try {
+            auto& box = lvl.local_boxes[static_cast<size_t>(local_idx)];
+            std::vector<DataType> sliced;
+            for (const auto& task : tasks[static_cast<size_t>(local_idx)]) {
+                const auto* payload = task.block;
+                if (payload == nullptr || payload->rows <= 0 || payload->cols <= 0 ||
+                    static_cast<int64_t>(payload->data.size()) != payload->rows * payload->cols) {
+                    throw std::runtime_error("apply nonsymmetric update: invalid payload for box " +
+                                             std::to_string(box.morton_index));
+                }
+                if (task.kind == 0) {
+                    auto& block = upsert_directed_block(box, task.neighbor, EdgeKind::Near, task.a_sn);
+                    std::vector<DataType> replacement = payload->data;
+                    if (task.a_sn) {
+                        block.A_SN.set_owned(payload->rows, payload->cols, std::move(replacement),
+                                             MatrixStorage<DataType>::FULL);
+                    } else {
+                        block.set_a_ns_owned(payload->rows, payload->cols, std::move(replacement),
+                                             MatrixStorage<DataType>::FULL);
+                    }
+                    continue;
+                }
+                const int64_t n_self = current_count(box.morton_index);
+                const int64_t n_nei = task.kind == 1 ? n_self : current_count(task.neighbor);
+                const int64_t row_box = task.kind == 1 || task.a_sn ? box.morton_index : task.neighbor;
+                const int64_t col_box = task.kind == 1 || !task.a_sn ? box.morton_index : task.neighbor;
+                const int64_t rows = task.kind == 1 || task.a_sn ? n_self : n_nei;
+                const int64_t cols = task.kind == 1 || !task.a_sn ? n_self : n_nei;
+                const auto row_pos = positions(row_box, payload->rows, rows);
+                const auto col_pos = positions(col_box, payload->cols, cols);
+                sliced.resize(static_cast<size_t>(rows * cols));
+                for (int64_t j = 0; j < cols; ++j) {
+                    for (int64_t i = 0; i < rows; ++i) {
+                        sliced[static_cast<size_t>(i + j * rows)] = payload->data[static_cast<size_t>(
+                            row_pos[static_cast<size_t>(i)] + col_pos[static_cast<size_t>(j)] * payload->rows)];
+                    }
+                }
+                if (task.kind == 1) {
+                    add_to_schur_block(lvl, kernel, box, n_self, sliced.data(), n_self);
+                } else {
+                    add_to_directed_view(lvl, kernel, box, task.neighbor, task.edge, task.a_sn, n_self, n_nei,
+                                         sliced.data(), rows);
+                }
+            }
+        } catch (...) {
+            if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
+                std::lock_guard<std::mutex> lock(apply_exception_mutex);
+                apply_exception = std::current_exception();
+            }
+        }
+    }
+    if (apply_exception) std::rethrow_exception(apply_exception);
 }
 
 static inline const char* edgekind_name(EdgeKind k) {
@@ -5414,7 +5820,11 @@ std::chrono::high_resolution_clock::duration transport_and_apply_factor_updates_
     }
 
     // Step 6: Apply the merged updates to local boxes.
-    apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
+    if (kernel_symmetric(kernel, 0)) {
+        apply_updates_with_kernel_symmetric(tree, lvl, kernel, incoming_total, is_hermitian);
+    } else {
+        apply_updates_with_kernel_nonsymmetric(lvl, kernel, incoming_total);
+    }
     if (memory_diagnostic) {
         memory_diagnostic(
             "post_apply", merged_pending_bytes, payload_buffer_bytes);

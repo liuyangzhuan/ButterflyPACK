@@ -26,6 +26,8 @@ void hierarchical_solve_unstructured(
 
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
+    const fmm::MatrixProperty matrix_property = tree->factor_symmetric
+        ? fmm::MatrixProperty::SYMMETRIC : fmm::MatrixProperty::NONSYMMETRIC;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
     using clock = std::chrono::high_resolution_clock;
@@ -254,7 +256,7 @@ void hierarchical_solve_unstructured(
                         tree_level,
                         solve_box,
                         solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
+                        matrix_property,
                         local_pending,
                         is_ghost,
                         /*defer_local_updates=*/true,
@@ -337,7 +339,7 @@ void hierarchical_solve_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                fmm::MatrixProperty::SYMMETRIC,
+                                matrix_property,
                                 local_pending,
                                 /*is_ghost=*/false,
                                 /*defer_local_updates=*/true
@@ -636,7 +638,7 @@ void hierarchical_solve_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
+                            matrix_property,
                             is_ghost);
                     },
                     [](size_t, size_t) {},
@@ -667,7 +669,7 @@ void hierarchical_solve_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
+                            matrix_property,
                             is_ghost);
                     },
                     [&](size_t group_idx, size_t group_count) {
@@ -753,7 +755,7 @@ void hierarchical_solve_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                fmm::MatrixProperty::SYMMETRIC,
+                                matrix_property,
                                 /*is_ghost=*/false
                             );
                         } catch (...) {
@@ -902,6 +904,8 @@ void hierarchical_mul_unstructured(
 
     int rank;
     MPI_Comm_rank(tree->comm, &rank);
+    const fmm::MatrixProperty matrix_property = tree->factor_symmetric
+        ? fmm::MatrixProperty::SYMMETRIC : fmm::MatrixProperty::NONSYMMETRIC;
     using clock = std::chrono::high_resolution_clock;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -1033,7 +1037,7 @@ void hierarchical_mul_unstructured(
                         tree_level,
                         solve_box,
                         solve_data[level],
-                        fmm::MatrixProperty::SYMMETRIC,
+                        matrix_property,
                         is_ghost);
                 },
                 [](size_t, size_t) {},
@@ -1098,7 +1102,7 @@ void hierarchical_mul_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                fmm::MatrixProperty::SYMMETRIC,
+                                matrix_property,
                                 /*is_ghost=*/false);
                         } catch (...) {
                             if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
@@ -1345,7 +1349,7 @@ void hierarchical_mul_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
+                            matrix_property,
                             local_pending,
                             is_ghost,
                             /*local_or_ghost_targets_only=*/true);
@@ -1379,7 +1383,7 @@ void hierarchical_mul_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            fmm::MatrixProperty::SYMMETRIC,
+                            matrix_property,
                             local_pending,
                             is_ghost,
                             /*local_or_ghost_targets_only=*/true);
@@ -1460,7 +1464,7 @@ void hierarchical_mul_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                fmm::MatrixProperty::SYMMETRIC,
+                                matrix_property,
                                 local_pending,
                                 /*is_ghost=*/false);
                         } catch (...) {

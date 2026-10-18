@@ -126,8 +126,11 @@ enum class EdgeKind : uint8_t { Near, Far, Diag };
 struct ReplaceKey {
     int64_t target_box;   // G (the box to be updated on its owner rank)
     int64_t neighbor_box; // B (the eliminated box whose skeleton interaction is stored)
+    // the view of G it replaces: 0 its A_NS[B], 1 its A_SN[B] (a
+    // nonsymmetric matrix; a symmetric one has A_NS only)
+    uint8_t slot = 0;
     bool operator==(const ReplaceKey& o) const noexcept {
-        return target_box == o.target_box && neighbor_box == o.neighbor_box;
+        return target_box == o.target_box && neighbor_box == o.neighbor_box && slot == o.slot;
     }
 };
 
@@ -135,8 +138,12 @@ struct EdgeKey {
     int64_t lo;
     int64_t hi;
     EdgeKind kind;
+    // the delta's orientation: 0 the block K(hi, lo) (n_hi x n_lo; a
+    // symmetric matrix, and a diagonal one), 1 the block K(lo, hi) (a
+    // nonsymmetric matrix holds both)
+    uint8_t rows_lo = 0;
     bool operator==(const EdgeKey& o) const noexcept {
-        return lo == o.lo && hi == o.hi && kind == o.kind;
+        return lo == o.lo && hi == o.hi && kind == o.kind && rows_lo == o.rows_lo;
     }
 };
 
@@ -145,7 +152,7 @@ struct ReplaceKeyHash {
         // simple combine
         size_t h1 = std::hash<int64_t>{}(k.target_box);
         size_t h2 = std::hash<int64_t>{}(k.neighbor_box);
-        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
+        return (h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2))) + k.slot;
     }
 };
 
@@ -155,7 +162,7 @@ struct EdgeKeyHash {
         size_t h2 = std::hash<int64_t>{}(k.hi);
         size_t h3 = std::hash<uint8_t>{}(static_cast<uint8_t>(k.kind));
         size_t h = h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
-        return h ^ (h3 + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2));
+        return (h ^ (h3 + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2))) + k.rows_lo;
     }
 };
 
@@ -791,6 +798,16 @@ struct ModifiedBlock {
             for (int64_t row = 0; row < rows; ++row) {
                 result[static_cast<size_t>(row + col * rows)] =
                     a_ns(row, col);
+            }
+        }
+        return result;
+    }
+
+    std::vector<DataType> copy_a_sn_data() const {
+        std::vector<DataType> result(static_cast<size_t>(A_SN.rows * A_SN.cols));
+        for (int64_t col = 0; col < A_SN.cols; ++col) {
+            for (int64_t row = 0; row < A_SN.rows; ++row) {
+                result[static_cast<size_t>(row + col * A_SN.rows)] = A_SN(row, col);
             }
         }
         return result;
@@ -1540,6 +1557,7 @@ struct ParallelTree {
     ReductionPattern reduction_pattern;  ///< Reduction strategy
     int64_t reduction_threshold;         ///< Boxes/process threshold for reduction
     bool any_process_count = false;      ///< Any rank count (unstructured Color); else (2^dimension)^k
+    bool factor_symmetric = true;        ///< The RS-S factor's matrix: symmetric (X_RS = X_SR^T), else general
     int CA_level;                        ///< First factorization level using CA
     int id_neighborhood_radius;          ///< Diagnostic ID row-neighborhood radius
     int id_proxy_mode;                   ///< 0: none, 1: geometric surface, 2: adaptive sampling

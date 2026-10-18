@@ -25,6 +25,11 @@ void factorize(H2<CoordType, DataType>* solver,
             "color_unstructured: solver already contains a compression-only H2 representation");
     }
 
+    if (solver->kernel.symmetric != solver->options.symmetric) {
+        // (the transport's apply of the updates follows the kernel's flag)
+        throw std::logic_error("color_unstructured: kernel and options disagree on the symmetry");
+    }
+
     const auto occupied = prepare_occupied_topology(
         solver->tree.get(), solver->options.verbosity);
 
@@ -42,7 +47,8 @@ void factorize(H2<CoordType, DataType>* solver,
     fmm::HierarchicalFactorization<
         CoordType, DataType, butterfly::H2Kernel<CoordType, DataType>> factorizer(
             solver->options.N,
-            fmm::MatrixProperty::SYMMETRIC,
+            solver->options.symmetric ? fmm::MatrixProperty::SYMMETRIC
+                                      : fmm::MatrixProperty::NONSYMMETRIC,
             &solver->kernel,
             solver->options.dimension,
             factorization_method,
@@ -61,7 +67,7 @@ void factorize(H2<CoordType, DataType>* solver,
         &solver->kernel,
         solver->options.tolerance,
         solver->options.use_sketch,
-        true,
+        solver->options.symmetric,
         false,
         factorization_method,
         factorizer.get_unit_proxy_points(),

@@ -670,7 +670,8 @@ void apply_left_inverse_in_place(
     std::vector<DataType>& matrix,
     int64_t rows,
     int64_t cols,
-    const char* context) {
+    const char* context,
+    int split_threads = 1) {  // (LU: the columns split over that many tasks)
     if (rows == 0 || cols == 0) {
         return;
     }
@@ -700,11 +701,13 @@ void apply_left_inverse_in_place(
               matrix.data(), &m);
     } else if (factorization_method == FactorizationMethod::LU) {
         const int n = static_cast<int>(rows);
-        const int nrhs = static_cast<int>(cols);
         const int ldb = static_cast<int>(rows);
         char trans = 'N';
-        solve_lu_factored_system_in_place(
-            inverse_or_factor, pivots, trans, matrix.data(), n, nrhs, ldb, context);
+        split_columns_chunked(cols, split_threads, [&](int64_t c0, int64_t c1) {
+            solve_lu_factored_system_in_place(
+                inverse_or_factor, pivots, trans, matrix.data() + c0 * rows, n,
+                static_cast<int>(c1 - c0), ldb, context);
+        });
     } else if (factorization_method == FactorizationMethod::BUNCH_KAUFMAN) {
         const int n = static_cast<int>(rows);
         const int nrhs = static_cast<int>(cols);
@@ -5385,7 +5388,8 @@ void gather_id_workspace(
     bool on_boundary = false,
     bool use_CA_boundary_semantics = false,
     IDAdaptiveStats* adaptive_stats = nullptr,
-    bool adaptive_rows = true) {  // false: the caller selects them (against its sketch)
+    bool adaptive_rows = true,  // false: the caller selects them (against its sketch)
+    int split_threads = 1) {  // the kernel blocks split over that many tasks (a small wave)
 
     if (adaptive_stats != nullptr) *adaptive_stats = IDAdaptiveStats{};
     if (box == nullptr || box->num_points == 0) {
@@ -5605,11 +5609,12 @@ void gather_id_workspace(
                     }
                     
                     std::vector<DataType> A_NB(actual_n_neighbor * workspace_cols);
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         skeleton_indices.data(), actual_n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), actual_n_neighbor
-                    );
+                        A_NB.data(), actual_n_neighbor,
+                        split_threads);
                     
                     for (int64_t col = 0; col < workspace_cols; ++col) {
                         for (int64_t row = 0; row < actual_n_neighbor; ++row) {
@@ -5628,11 +5633,12 @@ void gather_id_workspace(
                     }
                     
                     std::vector<DataType> A_NB(n_neighbor * workspace_cols);
-                    kernel->evaluate_block_by_index(
+                    evaluate_block_by_index_split<DataType>(
+                        kernel,
                         neighbor_indices, n_neighbor,
                         box->point_indices.data(), workspace_cols,
-                        A_NB.data(), n_neighbor
-                    );
+                        A_NB.data(), n_neighbor,
+                        split_threads);
                     
                     for (int64_t col = 0; col < workspace_cols; ++col) {
                         for (int64_t row = 0; row < n_neighbor; ++row) {
@@ -5723,11 +5729,12 @@ void gather_id_workspace(
 
                 // Evaluate block A(neighbor, box_points)
                 std::vector<DataType> A_NB((size_t)n_neighbor * (size_t)workspace_cols);
-                kernel->evaluate_block_by_index(
+                evaluate_block_by_index_split<DataType>(
+                    kernel,
                     neighbor_indices_ptr, n_neighbor,
                     box->point_indices.data(), workspace_cols,
-                    A_NB.data(), n_neighbor
-                );
+                    A_NB.data(), n_neighbor,
+                    split_threads);
 
                 // Scatter into workspace (column-major)
                 for (int64_t col = 0; col < workspace_cols; ++col) {
@@ -5750,11 +5757,31 @@ void gather_id_workspace(
         for (size_t neighbor_idx = 0; neighbor_idx < box->two_hop.size(); ++neighbor_idx) {
             const int64_t neighbor_morton = box->two_hop[neighbor_idx];
             const int64_t n_neighbor = neighbor_point_counts[neighbor_idx];
+            // the far block K(B, N) the eliminations so far have updated (its
+            // A_SN view, box by neighbor), as the stored ring rows above
+            auto sn_it = box->far_field_interaction_map_nonsymmetry.find(neighbor_morton);
+            if (sn_it != box->far_field_interaction_map_nonsymmetry.end()) {
+                get_sliced_neighbor_block_into(
+                    neighbor_morton, box->far_field_modified_interactions[static_cast<size_t>(sn_it->second)],
+                    level, false, workspace_cols, sliced_block);
+                if (static_cast<int64_t>(sliced_block.size()) != workspace_cols * n_neighbor) {
+                    throw std::runtime_error(
+                        "gather_id_workspace: stored far-field column mismatch box=" +
+                        std::to_string(box->morton_index) + " neighbor=" + std::to_string(neighbor_morton));
+                }
+                for (int64_t col = 0; col < workspace_cols; ++col) {
+                    for (int64_t row = 0; row < n_neighbor; ++row) {
+                        workspace[(current_row_offset + row) + col * workspace_rows] =
+                            sliced_block[static_cast<size_t>(col + row * workspace_cols)];
+                    }
+                }
+                current_row_offset += n_neighbor;
+                continue;
+            }
             if (box->far_field_interaction_map.find(neighbor_morton) != box->far_field_interaction_map.end()) {
                 throw std::logic_error(
-                    "gather_id_workspace: a stored far block of a nonsymmetric matrix (box " +
-                    std::to_string(box->morton_index) + ", neighbor " + std::to_string(neighbor_morton) +
-                    ") is not supported yet");
+                    "gather_id_workspace: the far block K(N, B) of box " + std::to_string(box->morton_index) +
+                    " and neighbor " + std::to_string(neighbor_morton) + " is stored, K(B, N) is not");
             }
             // the neighbor's rows, as above: its skeleton once eliminated
             std::vector<int64_t> ids;
@@ -5795,8 +5822,9 @@ void gather_id_workspace(
                                          " points, " + std::to_string(n_neighbor) + " expected");
             }
             std::vector<DataType> A_BN(static_cast<size_t>(workspace_cols * n_neighbor));
-            kernel->evaluate_block_by_index(box->point_indices.data(), workspace_cols, ids.data(), n_neighbor,
-                                            A_BN.data(), workspace_cols);
+            evaluate_block_by_index_split<DataType>(
+                kernel, box->point_indices.data(), workspace_cols, ids.data(), n_neighbor,
+                A_BN.data(), workspace_cols, split_threads);
             for (int64_t col = 0; col < workspace_cols; ++col) {
                 for (int64_t row = 0; row < n_neighbor; ++row) {
                     workspace[(current_row_offset + row) + col * workspace_rows] =
@@ -5810,19 +5838,21 @@ void gather_id_workspace(
     if (!additional_training_indices.empty()) {
         const int64_t additional_rows =
             static_cast<int64_t>(additional_training_indices.size());
-        kernel->evaluate_block_by_index(
+        evaluate_block_by_index_split<DataType>(
+            kernel,
             additional_training_indices.data(), additional_rows,
             box->point_indices.data(), workspace_cols,
-            workspace.data() + current_row_offset, workspace_rows);
+            workspace.data() + current_row_offset, workspace_rows, split_threads);
         current_row_offset += additional_rows;
 
         if (!is_symmetric) {
             std::vector<DataType> transposed_block(
                 static_cast<size_t>(workspace_cols * additional_rows));
-            kernel->evaluate_block_by_index(
+            evaluate_block_by_index_split<DataType>(
+                kernel,
                 box->point_indices.data(), workspace_cols,
                 additional_training_indices.data(), additional_rows,
-                transposed_block.data(), workspace_cols);
+                transposed_block.data(), workspace_cols, split_threads);
             for (int64_t col = 0; col < workspace_cols; ++col) {
                 for (int64_t row = 0; row < additional_rows; ++row) {
                     workspace[(current_row_offset + row) + col * workspace_rows] =
@@ -6095,6 +6125,29 @@ void slice_far_field_blocks(
                     stored_rows, k, std::move(sliced),
                     MatrixStorage<DataType>::FULL);
             }
+
+            // A nonsymmetric matrix: the A_SN views K(B, N) too, their rows
+            if (block.A_SN.is_allocated() && block.A_SN.rows != k) {
+                const int64_t stored_rows = block.A_SN.rows;
+                const int64_t stored_cols = block.A_SN.cols;
+                std::vector<DataType> sliced(
+                    static_cast<size_t>(k * stored_cols));
+                for (int64_t col = 0; col < stored_cols; ++col) {
+                    for (int64_t row = 0; row < k; ++row) {
+                        const int64_t source_row =
+                            box.skeleton_indices[static_cast<size_t>(row)];
+                        if (source_row < 0 || source_row >= stored_rows) {
+                            throw std::runtime_error(
+                                "slice_far_field_blocks: skeleton row out of bounds");
+                        }
+                        sliced[static_cast<size_t>(row + col * k)] =
+                            block.A_SN(source_row, col);
+                    }
+                }
+                block.A_SN.set_owned(
+                    k, stored_cols, std::move(sliced),
+                    MatrixStorage<DataType>::FULL);
+            }
         }
 
         // ====================================================================
@@ -6113,9 +6166,37 @@ void slice_far_field_blocks(
                 continue;  // Not on this process
             }
 
-            auto& neighbor_far_map = (is_symmetric || is_hermitian)
-                ? neighbor_box->far_field_interaction_map
-                : neighbor_box->far_field_interaction_map_nonsymmetry;
+            // (a nonsymmetric matrix: G's A_SN[B] = K(G, B) too, its columns)
+            if (!(is_symmetric || is_hermitian)) {
+                auto sn_it = neighbor_box->far_field_interaction_map_nonsymmetry.find(box.morton_index);
+                if (sn_it != neighbor_box->far_field_interaction_map_nonsymmetry.end()) {
+                    auto& sn_block = neighbor_box->far_field_modified_interactions[
+                        static_cast<size_t>(sn_it->second)];
+                    if (sn_block.A_SN.is_allocated() && sn_block.A_SN.cols != k) {
+                        const int64_t stored_rows = sn_block.A_SN.rows;
+                        const int64_t stored_cols = sn_block.A_SN.cols;
+                        std::vector<DataType> sliced(
+                            static_cast<size_t>(stored_rows * k));
+                        for (int64_t col = 0; col < k; ++col) {
+                            const int64_t source_col =
+                                box.skeleton_indices[static_cast<size_t>(col)];
+                            if (source_col < 0 || source_col >= stored_cols) {
+                                throw std::runtime_error(
+                                    "slice_far_field_blocks: skeleton column out of bounds");
+                            }
+                            for (int64_t row = 0; row < stored_rows; ++row) {
+                                sliced[static_cast<size_t>(row + col * stored_rows)] =
+                                    sn_block.A_SN(row, source_col);
+                            }
+                        }
+                        sn_block.A_SN.set_owned(
+                            stored_rows, k, std::move(sliced),
+                            MatrixStorage<DataType>::FULL);
+                    }
+                }
+            }
+
+            auto& neighbor_far_map = neighbor_box->far_field_interaction_map;
 
             auto it = neighbor_far_map.find(box.morton_index);
             if (it == neighbor_far_map.end()) {
@@ -6453,7 +6534,7 @@ void compute_step_two_internal(
             
             apply_left_inverse_in_place(
                 box->X_RR, box->X_RR_pivots, factorization_method, temp4, r, total_neighbor_points,
-                "compute_step_two_internal temp4");
+                "compute_step_two_internal temp4", scratch.split_threads);
             
             for (int64_t i = 0; i < r * total_neighbor_points; ++i) {
                 temp4[i] = -temp4[i];
@@ -6463,13 +6544,16 @@ void compute_step_two_internal(
             auto& X_SN_update = scratch.x_sn_update;
             X_SN_update.resize(static_cast<size_t>(k * total_neighbor_points));
             
-            int m = k, n = total_neighbor_points, kk = r;
+            int m = k, kk = r;
             DataType alpha = 1.0, beta = 0.0;
             
-            gemm_("N", "N", &m, &n, &kk,
-                   &alpha, box->X_SR.data.data(), &m,
-                   temp4.data(), &kk,
-                   &beta, X_SN_update.data(), &m);
+            split_columns_chunked(total_neighbor_points, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                int n = static_cast<int>(c1 - c0);
+                gemm_("N", "N", &m, &n, &kk,
+                       &alpha, box->X_SR.data.data(), &m,
+                       temp4.data() + c0 * r, &kk,
+                       &beta, X_SN_update.data() + c0 * k, &m);
+            });
             
             // Segment and update each neighbor
             int64_t current_col = 0;
@@ -6625,12 +6709,21 @@ void compute_step_two_internal(
                     pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index}] =
                         DenseBlock<DataType>{k, n_neighbor, std::move(X_GS_transpose)};
                 } else {
-                    // Nonsymmetric: cache REPLACE into neighbor's A_SN
-                    std::vector<DataType> X_GS =
-                        modified_block.copy_a_ns_data(); // (n_neighbor x k)
-
-                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index}] =
-                        DenseBlock<DataType>{n_neighbor, k, std::move(X_GS)};
+                    // Nonsymmetric: G's two views of B, A_NS[B] = K(S_B, G)
+                    // from B's A_SN[G] (k x n_G), and A_SN[B] = K(G, S_B)
+                    // from B's A_NS[G] (n_G x k)
+                    auto sn_it = box->near_field_interaction_map_nonsymmetry.find(neighbor_morton);
+                    if (sn_it == box->near_field_interaction_map_nonsymmetry.end() ||
+                        !box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                             .A_SN.is_allocated()) {
+                        throw std::runtime_error("Step 7: A_SN should be allocated after step 6");
+                    }
+                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index, 0}] =
+                        DenseBlock<DataType>{k, n_neighbor,
+                            box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                                .copy_a_sn_data()};
+                    pending->replace_blocks[ReplaceKey{neighbor_morton, box->morton_index, 1}] =
+                        DenseBlock<DataType>{n_neighbor, k, modified_block.copy_a_ns_data()};
                 }
 
                 current_row += n_neighbor;
@@ -6761,32 +6854,27 @@ void compute_step_two_internal(
                 }
                 omp_unset_lock(box_locks.at(neighbor_morton));
             } else {
-                // ===== Nonsymmetric: Store X_GS in G's A_SN =====
-                // From B: X_GS is (n_neighbor × k) in A_NS
-                // From G: X_GS is (n_neighbor × k) in A_SN
-                std::vector<DataType> X_GS = modified_block.copy_a_ns_data();
-                
-                auto it_G = neighbor_box->near_field_interaction_map_nonsymmetry.find(box->morton_index);
-                
-                if (it_G != neighbor_box->near_field_interaction_map_nonsymmetry.end()) {
-                    // Block exists - replace with new view from B
-                    int64_t block_idx_G = it_G->second;
-                    auto& block_G = neighbor_box->near_field_modified_interactions[block_idx_G];
-                    
-                    block_G.A_SN.set_owned(
-                        n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
-                    
-                } else {
-                    // Create new block
-                    ModifiedBlock<DataType> new_block_G;
-                    new_block_G.neighbor_morton = box->morton_index;
-                    new_block_G.A_SN.set_owned(
-                        n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
-                    
-                    int64_t new_idx = neighbor_box->near_field_modified_interactions.size();
-                    neighbor_box->near_field_modified_interactions.push_back(std::move(new_block_G));
-                    neighbor_box->near_field_interaction_map_nonsymmetry[box->morton_index] = new_idx;
+                // ===== Nonsymmetric: G's two views of B, as the remote case
+                // above: A_SN[B] = K(G, S_B) from B's A_NS[G], A_NS[B] =
+                // K(S_B, G) from B's A_SN[G] =====
+                auto sn_it = box->near_field_interaction_map_nonsymmetry.find(neighbor_morton);
+                if (sn_it == box->near_field_interaction_map_nonsymmetry.end() ||
+                    !box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                         .A_SN.is_allocated()) {
+                    throw std::runtime_error(
+                        "compute_step_two_internal: A_SN should be allocated after step 6");
                 }
+                std::vector<DataType> X_SG =
+                    box->near_field_modified_interactions[static_cast<size_t>(sn_it->second)]
+                        .copy_a_sn_data();
+                std::vector<DataType> X_GS = modified_block.copy_a_ns_data();
+
+                omp_set_lock(box_locks.at(neighbor_morton));
+                upsert_directed_block(*neighbor_box, box->morton_index, EdgeKind::Near, true)
+                    .A_SN.set_owned(n_neighbor, k, std::move(X_GS), MatrixStorage<DataType>::FULL);
+                upsert_directed_block(*neighbor_box, box->morton_index, EdgeKind::Near, false)
+                    .set_a_ns_owned(k, n_neighbor, std::move(X_SG), MatrixStorage<DataType>::FULL);
+                omp_unset_lock(box_locks.at(neighbor_morton));
             }
             
             current_row += n_neighbor;
@@ -6858,13 +6946,17 @@ void compute_step_two_internal(
                 int ldc = m;
                 
                 // dgemm computes C = alpha * op(A) * op(B) + beta * C
-                // op(A) = temp2, op(B) = X_RN
-                gemm_("N", "N", &m, &n, &k,
-                    &alpha, 
-                    temp2.data(), &lda,
-                    box->X_RN.data.data(), &ldb,
-                    &beta, 
-                    X_NN_full.data(), &ldc);
+                // op(A) = temp2, op(B) = X_RN (its columns split over the
+                // threads a small wave leaves idle)
+                split_columns_chunked(total_neighbor_points, scratch.split_threads, [&](int64_t c0, int64_t c1) {
+                    int columns = static_cast<int>(c1 - c0);
+                    gemm_("N", "N", &m, &columns, &k,
+                        &alpha,
+                        temp2.data(), &lda,
+                        box->X_RN.data.data() + c0 * box->X_RN.lda, &ldb,
+                        &beta,
+                        X_NN_full.data() + c0 * total_neighbor_points, &ldc);
+                });
             }
         }
     
@@ -6897,7 +6989,118 @@ void compute_step_two_internal(
 
         
         
-        if (total_neighbor_points > 0 && !X_NN_full.empty()) {
+        if (total_neighbor_points > 0 && !X_NN_full.empty() && !(is_symmetric || is_hermitian)) {
+            // ===== Step 9, a nonsymmetric matrix: every ordered pair (LG,
+            // RG) of B's neighbors, X(LG, RG) untransposed into LG's A_SN[RG]
+            // = K(LG, RG) and RG's A_NS[LG] = K(LG, RG) (LG's Schur block on
+            // the diagonal).  A remote endpoint's share travels oriented
+            // (EdgeKey::rows_lo); the local ones read X_NN_full in place, each
+            // neighbor taking all its updates under one hold of its lock (the
+            // free ones first: several boxes of a wave update one neighbor).
+            // The wave's views are formed before it (form_nonsymmetric_wave_views).
+            if (pending == nullptr) {
+                throw std::logic_error(
+                    "compute_step_two_internal: a nonsymmetric matrix needs the Color transport (no CA)");
+            }
+            const int64_t T = total_neighbor_points;
+            const size_t num_neighbors = box->one_hop.size();
+            std::vector<int64_t> offsets(num_neighbors + 1, 0);
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                offsets[idx + 1] = offsets[idx] + neighbor_point_counts[idx];
+            }
+            const int dimension = level.dimension;
+            auto kind_of = [&](int64_t a, int64_t b) {
+                if (a == b) return EdgeKind::Diag;
+                uint32_t ac[3] = {0, 0, 0};
+                uint32_t bc[3] = {0, 0, 0};
+                morton::decode_nd(dimension, a, ac[0], ac[1], ac[2]);
+                morton::decode_nd(dimension, b, bc[0], bc[1], bc[2]);
+                for (int d = 0; d < dimension; ++d) {
+                    if (std::abs(static_cast<int64_t>(ac[d]) - static_cast<int64_t>(bc[d])) > 1) {
+                        return EdgeKind::Far;
+                    }
+                }
+                return EdgeKind::Near;
+            };
+            std::vector<BoxData<CoordType, DataType>*> local(num_neighbors, nullptr);
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                local[idx] = level.find_local_box(box->one_hop[idx]);
+                if (local[idx] == nullptr && find_assist(box->one_hop[idx]) == nullptr) {
+                    throw std::runtime_error("Step 9: nonlocal neighbor missing assisting data");
+                }
+            }
+
+            // the remote endpoints' shares
+            for (size_t j_idx = 0; j_idx < num_neighbors; ++j_idx) {
+                for (size_t i_idx = 0; i_idx < num_neighbors; ++i_idx) {
+                    if (local[i_idx] != nullptr && local[j_idx] != nullptr) continue;
+                    const int64_t LG_morton = box->one_hop[i_idx];
+                    const int64_t RG_morton = box->one_hop[j_idx];
+                    const int64_t n_LG = neighbor_point_counts[i_idx];
+                    const int64_t n_RG = neighbor_point_counts[j_idx];
+                    std::vector<DataType> X_LG_RG(static_cast<size_t>(n_LG * n_RG));
+                    for (int64_t col = 0; col < n_RG; ++col) {
+                        std::copy_n(&X_NN_full[static_cast<size_t>(offsets[i_idx] + (offsets[j_idx] + col) * T)],
+                                    n_LG, &X_LG_RG[static_cast<size_t>(col * n_LG)]);
+                    }
+                    const EdgeKind kind = kind_of(LG_morton, RG_morton);
+                    const int64_t lo = std::min(LG_morton, RG_morton);
+                    const int64_t hi = std::max(LG_morton, RG_morton);
+                    const uint8_t rows_lo = (kind != EdgeKind::Diag && LG_morton == lo) ? 1 : 0;
+                    accumulate_dense(pending->accumulated_deltas[EdgeKey{lo, hi, kind, rows_lo}],
+                                     n_LG, n_RG, X_LG_RG);
+                }
+            }
+
+            // the local ones, a neighbor at a time
+            auto apply_target = [&](size_t t) {
+                auto& target = *local[t];
+                const int64_t n_t = neighbor_point_counts[t];
+                for (size_t j_idx = 0; j_idx < num_neighbors; ++j_idx) {
+                    const DataType* X_t_j = &X_NN_full[static_cast<size_t>(offsets[t] + offsets[j_idx] * T)];
+                    if (j_idx == t) {
+                        add_to_schur_block(level, kernel, target, n_t, X_t_j, T);
+                    } else {
+                        add_to_directed_view(level, kernel, target, box->one_hop[j_idx],
+                                             kind_of(target.morton_index, box->one_hop[j_idx]), true,
+                                             n_t, neighbor_point_counts[j_idx], X_t_j, T);
+                    }
+                }
+                for (size_t i_idx = 0; i_idx < num_neighbors; ++i_idx) {
+                    if (i_idx == t) continue;
+                    add_to_directed_view(level, kernel, target, box->one_hop[i_idx],
+                                         kind_of(box->one_hop[i_idx], target.morton_index), false,
+                                         n_t, neighbor_point_counts[i_idx],
+                                         &X_NN_full[static_cast<size_t>(offsets[i_idx] + offsets[t] * T)], T);
+                }
+            };
+            std::vector<size_t> todo;
+            for (size_t idx = 0; idx < num_neighbors; ++idx) {
+                if (local[idx] != nullptr) todo.push_back(idx);
+            }
+            std::vector<size_t> busy;
+            while (!todo.empty()) {
+                busy.clear();
+                for (size_t t : todo) {
+                    omp_lock_t* lock = box_locks.at(box->one_hop[t]);
+                    if (omp_test_lock(lock)) {
+                        apply_target(t);
+                        omp_unset_lock(lock);
+                    } else {
+                        busy.push_back(t);
+                    }
+                }
+                if (!busy.empty() && busy.size() == todo.size()) {
+                    // none free: wait for one
+                    omp_lock_t* lock = box_locks.at(box->one_hop[busy.front()]);
+                    omp_set_lock(lock);
+                    apply_target(busy.front());
+                    omp_unset_lock(lock);
+                    busy.erase(busy.begin());
+                }
+                todo.swap(busy);
+            }
+        } else if (total_neighbor_points > 0 && !X_NN_full.empty()) {
 
             if (DEBUG) {
                 // Check for NaN in X_NN_full
@@ -6956,10 +7159,15 @@ void compute_step_two_internal(
                 
                     
                     // Precompute transpose used by LG-side storage (shape n_RG × n_LG, column-major)
-                    std::vector<DataType> X_LG_RG_for_LG(n_LG * n_RG);
-                    for (int64_t i = 0; i < n_LG; ++i) {
-                        for (int64_t j = 0; j < n_RG; ++j) {
-                            X_LG_RG_for_LG[j + i * n_RG] = X_LG_RG[i + j * n_LG];
+                    // (the symmetric views take it transposed; a
+                    // nonsymmetric matrix's take X(LG, RG) as is)
+                    std::vector<DataType> X_LG_RG_for_LG;
+                    if (is_symmetric || is_hermitian) {
+                        X_LG_RG_for_LG.resize(static_cast<size_t>(n_LG * n_RG));
+                        for (int64_t i = 0; i < n_LG; ++i) {
+                            for (int64_t j = 0; j < n_RG; ++j) {
+                                X_LG_RG_for_LG[j + i * n_RG] = X_LG_RG[i + j * n_LG];
+                            }
                         }
                     }
 
@@ -7082,6 +7290,7 @@ void compute_step_two_internal(
                     // ---- Step 9: accumulate canonical ADD delta for remote delivery ----
                     // Canonical key: (lo,hi). Stored block is ΔM_{lo→hi} with dims (n_hi × n_lo)
                     // i.e., "lo's view of hi" (rows=hi, cols=lo).
+
                     if (pending != nullptr) {
 
                         // Only worth caching if at least one endpoint is nonlocal (otherwise local update already did it)
@@ -10393,7 +10602,13 @@ void compute_and_modify(
                     // );
                     
                     int64_t actual_cols = A_SN_block.size() / workspace_cols;
-                    n_neighbor = actual_cols;
+                    if (actual_cols != n_neighbor) {
+                        throw std::runtime_error(
+                            "compute_and_modify: stored near-field column mismatch box=" +
+                            std::to_string(box->morton_index) + " neighbor=" + std::to_string(neighbor_morton) +
+                            " expected_cols=" + std::to_string(n_neighbor) +
+                            " actual_cols=" + std::to_string(actual_cols));
+                    }
                     
                     for (int64_t j = 0; j < actual_cols; ++j) {
                         for (int64_t i = 0; i < k; ++i) {
@@ -10438,15 +10653,38 @@ void compute_and_modify(
                     }
 
                     if (is_assisting) {
-                        // Assisting box: use full coords (no slicing, ignore eliminated status)
-                        n_neighbor = assisting_neighbor->indices.size();
+                        // Assisting box: its skeleton once eliminated, as
+                        // the rows of X_NR above (CA: its full point set)
+                        const bool neighbor_elim =
+                            !use_CA_redundant_assisting &&
+                            (level.eliminated_boxes.find(neighbor_morton) !=
+                             level.eliminated_boxes.end());
+                        const int64_t* nb_indices = assisting_neighbor->indices.data();
+                        int64_t n_use = static_cast<int64_t>(assisting_neighbor->indices.size());
+                        auto& skel_indices = scratch.index_buffer;
+                        if (neighbor_elim) {
+                            n_use = static_cast<int64_t>(assisting_neighbor->skel_indices.size());
+                            skel_indices.resize(static_cast<size_t>(n_use));
+                            for (int64_t i = 0; i < n_use; ++i) {
+                                skel_indices[static_cast<size_t>(i)] = assisting_neighbor->indices[
+                                    static_cast<size_t>(assisting_neighbor->skel_indices[static_cast<size_t>(i)])];
+                            }
+                            nb_indices = skel_indices.data();
+                        }
+                        if (n_use != n_neighbor) {
+                            throw std::runtime_error(
+                                "compute_and_modify: assisting column mismatch box=" +
+                                std::to_string(box->morton_index) + " neighbor=" +
+                                std::to_string(neighbor_morton) + " expected_cols=" +
+                                std::to_string(n_neighbor) + " actual_cols=" + std::to_string(n_use));
+                        }
                         
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
                         evaluate_block_by_index_split<DataType>(
                             kernel,
                             box->point_indices.data(), workspace_cols,
-                            assisting_neighbor->indices.data(), n_neighbor,
+                            nb_indices, n_neighbor,
                             A_BN.data(), workspace_cols,
                             scratch.split_threads
                         );
@@ -10508,10 +10746,12 @@ void compute_and_modify(
                         // Local or ghost box that has NOT been eliminated: use full coords
                         auto& A_BN = scratch.eval_buffer;
                         A_BN.resize(static_cast<size_t>(workspace_cols * n_neighbor));
-                        kernel->evaluate_block_by_index(
+                        evaluate_block_by_index_split<DataType>(
+                            kernel,
                             box->point_indices.data(), workspace_cols,
                             neighbor_box->point_indices.data(), n_neighbor,
-                            A_BN.data(), workspace_cols
+                            A_BN.data(), workspace_cols,
+                            scratch.split_threads
                         );
                         
                         for (int64_t j = 0; j < n_neighbor; ++j) {

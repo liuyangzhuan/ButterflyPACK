@@ -16,6 +16,114 @@ namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
 
+// A nonsymmetric matrix, before a wave: the views its boxes' Step 9 updates
+// and that are not formed yet (of each ordered pair of a wave box's one-hop
+// neighbors, the local endpoints' A_SN[RG] and A_NS[LG], each K(LG, RG), or
+// the Schur block on the diagonal), from the kernel once each and in parallel
+// over the pairs; the wave's boxes then only add to them (several boxes of a
+// wave update one pair).
+template<typename CoordType, typename DataType, typename KernelType>
+void form_nonsymmetric_wave_views(
+    TreeLevel<CoordType, DataType>& level,
+    KernelType* kernel,
+    const std::vector<int64_t>& wave,
+    const OccupiedTopology& occupied_topology) {
+    const int dimension = level.dimension;
+    auto current_count = [&](int64_t morton) {
+        const std::vector<int64_t>* points = nullptr;
+        const std::vector<int64_t>* skeleton = nullptr;
+        directed_view_endpoint(level, morton, points, skeleton);
+        return level.eliminated_boxes.count(morton) != 0 && !skeleton->empty()
+            ? static_cast<int64_t>(skeleton->size()) : static_cast<int64_t>(points->size());
+    };
+    auto kind_of = [&](int64_t a, int64_t b) {
+        if (a == b) return EdgeKind::Diag;
+        uint32_t ac[3] = {0, 0, 0};
+        uint32_t bc[3] = {0, 0, 0};
+        morton::decode_nd(dimension, a, ac[0], ac[1], ac[2]);
+        morton::decode_nd(dimension, b, bc[0], bc[1], bc[2]);
+        for (int d = 0; d < dimension; ++d) {
+            if (std::abs(static_cast<int64_t>(ac[d]) - static_cast<int64_t>(bc[d])) > 1) return EdgeKind::Far;
+        }
+        return EdgeKind::Near;
+    };
+    auto formed = [&](BoxData<CoordType, DataType>& owner, int64_t neighbor, EdgeKind kind, bool a_sn) {
+        if (kind == EdgeKind::Diag) return owner.schur_complement.is_allocated();
+        const auto* block = find_directed_block(owner, neighbor, kind, a_sn);
+        return block != nullptr && (a_sn ? block->A_SN.is_allocated() : block->a_ns_is_allocated());
+    };
+
+    struct Pair {
+        int64_t lg = -1;
+        int64_t rg = -1;
+        EdgeKind kind = EdgeKind::Near;
+        bool lg_view = false;  // LG's A_SN[RG] (or its Schur block) to form
+        bool rg_view = false;  // RG's A_NS[LG] to form
+        std::vector<DataType> block;
+    };
+    std::vector<Pair> pairs;
+    std::set<std::pair<int64_t, int64_t>> seen;
+    for (int64_t morton : wave) {
+        if (!occupied_topology.contains(level.level, morton)) continue;
+        const auto* box = level.find_local_box(morton);
+        if (box == nullptr || box->num_points == 0) continue;
+        for (int64_t lg : box->one_hop) {
+            for (int64_t rg : box->one_hop) {
+                if (!seen.insert({lg, rg}).second) continue;
+                Pair pair;
+                pair.lg = lg;
+                pair.rg = rg;
+                pair.kind = kind_of(lg, rg);
+                if (auto* lg_box = level.find_local_box(lg)) {
+                    pair.lg_view = !formed(*lg_box, rg, pair.kind, true);
+                }
+                if (lg != rg) {
+                    if (auto* rg_box = level.find_local_box(rg)) {
+                        pair.rg_view = !formed(*rg_box, lg, pair.kind, false);
+                    }
+                }
+                if (pair.lg_view || pair.rg_view) pairs.push_back(std::move(pair));
+            }
+        }
+    }
+
+    std::exception_ptr failure;
+    std::mutex failure_mutex;
+    #pragma omp parallel for schedule(dynamic) if (pairs.size() > 1)
+    for (int64_t p = 0; p < static_cast<int64_t>(pairs.size()); ++p) {
+        try {
+            auto& pair = pairs[static_cast<size_t>(p)];
+            pair.block = directed_view_kernel_block(
+                level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(failure_mutex);
+            if (!failure) failure = std::current_exception();
+        }
+    }
+    if (failure) std::rethrow_exception(failure);
+
+    for (auto& pair : pairs) {
+        const int64_t n_lg = current_count(pair.lg);
+        const int64_t n_rg = current_count(pair.rg);
+        if (pair.kind == EdgeKind::Diag) {
+            auto& owner = *level.find_local_box(pair.lg);
+            owner.schur_complement.set_owned(n_lg, n_lg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+            continue;
+        }
+        if (pair.lg_view && pair.rg_view) {
+            std::vector<DataType> copy = pair.block;
+            upsert_directed_block(*level.find_local_box(pair.rg), pair.lg, pair.kind, false)
+                .set_a_ns_owned(n_lg, n_rg, std::move(copy), MatrixStorage<DataType>::FULL);
+        } else if (pair.rg_view) {
+            upsert_directed_block(*level.find_local_box(pair.rg), pair.lg, pair.kind, false)
+                .set_a_ns_owned(n_lg, n_rg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+            continue;
+        }
+        upsert_directed_block(*level.find_local_box(pair.lg), pair.rg, pair.kind, true)
+            .A_SN.set_owned(n_lg, n_rg, std::move(pair.block), MatrixStorage<DataType>::FULL);
+    }
+}
+
 template<typename CoordType, typename DataType, typename KernelType>
 void hierarchical_factorization_unstructured(
     fmm::ParallelTree<CoordType, DataType>* tree,
@@ -46,6 +154,8 @@ void hierarchical_factorization_unstructured(
 
     int rank = tree->mpi_rank;
     int size = tree->mpi_size;
+    // (the solve, the multiply by the factors and the logdet read it)
+    tree->factor_symmetric = is_symmetric || is_hermitian;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
     const bool print_trace = verbosity >= 2;
@@ -839,6 +949,9 @@ void hierarchical_factorization_unstructured(
                 const int wave_team = std::max(1, omp_get_max_threads());
                 const int wave_split = split_threads_for(
                     static_cast<int64_t>(color_list.size()), wave_team);
+                if (!(is_symmetric || is_hermitian)) {
+                    form_nonsymmetric_wave_views(level, kernel, color_list, occupied_topology);
+                }
                 record_deep_phase(DEEP_WAVE_SETUP, wave_setup_start);
                 const auto primary_start = clock::now();
 
@@ -902,7 +1015,8 @@ void hierarchical_factorization_unstructured(
                                     scratch.workspace, scratch.workspace_rows,
                                     scratch.workspace_cols, 0,
                                     box.on_boundary, false,
-                                    &scratch.id_adaptive);
+                                    &scratch.id_adaptive, true,
+                                    scratch.split_threads);
                             }
 
                             compute_and_modify(dimension,

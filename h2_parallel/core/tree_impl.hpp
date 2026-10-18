@@ -116,6 +116,7 @@ void clear_modified_interaction_matrices(
         // Using the swap idiom is a guaranteed way to release the vector's capacity.
         std::vector<ModifiedBlock<DataType>>().swap(box.near_field_modified_interactions);
         box.near_field_interaction_map.clear();
+        box.near_field_interaction_map_nonsymmetry.clear();
 
         // Also reset the associated counter to maintain a consistent state.
         box.num_near_field_interactions = 0;
@@ -123,6 +124,7 @@ void clear_modified_interaction_matrices(
         // --- Clear Far-Field Interactions ---
         std::vector<ModifiedBlock<DataType>>().swap(box.far_field_modified_interactions);
         box.far_field_interaction_map.clear();
+        box.far_field_interaction_map_nonsymmetry.clear();
 
         // Reset the counter.
         box.num_far_field_interactions = 0;
@@ -169,6 +171,7 @@ void clear_ghosts(TreeLevel<CoordType, DataType>& level) {
         // Using the swap idiom is a guaranteed way to release the vector's capacity.
         std::vector<ModifiedBlock<DataType>>().swap(box.near_field_modified_interactions);
         box.near_field_interaction_map.clear();
+        box.near_field_interaction_map_nonsymmetry.clear();
 
         // Also reset the associated counter to maintain a consistent state.
         box.num_near_field_interactions = 0;
@@ -176,6 +179,7 @@ void clear_ghosts(TreeLevel<CoordType, DataType>& level) {
         // --- Clear Far-Field Interactions ---
         std::vector<ModifiedBlock<DataType>>().swap(box.far_field_modified_interactions);
         box.far_field_interaction_map.clear();
+        box.far_field_interaction_map_nonsymmetry.clear();
 
         // Reset the counter.
         box.num_far_field_interactions = 0;

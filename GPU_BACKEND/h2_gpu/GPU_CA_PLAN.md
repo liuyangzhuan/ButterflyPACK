@@ -6303,6 +6303,72 @@ applies both near blocks instead of a pair: 1.3x its symmetric time a call
 at 64^3, 1.3x its memory.  Symmetric runs bitwise as before (Laplace 192^3,
 the 128K sphere, the collective extraction; the extraction check).
 
+#### Nonsymmetric matrices, step N3: the CPU factorization (2026-10-17)
+
+A nonsymmetric matrix runs the eager Color levels (no streamed sketch, no lazy
+fill, no owner-deferred X_NN: lazy_schur 0 whatever is asked, until N4), on
+the CPU (H2_use_gpu=1 stops with a message until N5).  Each box holds two
+directed views of each neighbor N, A_NS[N] = K(N, B) in the near/far map and
+A_SN[N] = K(B, N) in the *_nonsymmetry map, each its own ModifiedBlock; no
+view is shared.  A box's elimination (X_RR = A_RR - T^T A_SR - A_RS T + T^T
+A_SS T, by LU): S += temp1 X_RS, A_NS += temp2 X_RS, A_SN += X_SR temp4, and
+X(LG, RG) = temp2 X_RN for every ordered pair of its neighbors.  The legacy
+nonsymmetric code had never run; what it took:
+
+- Step 7 set only G's A_SN[B], without G's lock: now both of G's views of B
+  under its lock (A_NS[B] from B's A_SN[G], A_SN[B] from B's A_NS[G]); a
+  remote G gets two replacements, ReplaceKey::slot 0 (A_NS) and 1 (A_SN).
+- Step 9 wrote transposed views into the wrong maps: now X(LG, RG)
+  untransposed into LG's A_SN[RG] and RG's A_NS[LG] (both K(LG, RG)), the
+  diagonal into the Schur block untransposed.  A remote endpoint's share
+  travels with EdgeKey::rows_lo (0: the block K(hi, lo), the symmetric
+  meaning; 1: K(lo, hi)), and apply_updates_with_kernel_nonsymmetric applies
+  it to the local endpoints' views (chosen by the kernel's symmetry).
+- The X_RN gather read an eliminated assisting neighbor at its full point set
+  (X_NR's at its skeleton).
+- The stacked ID reads a stored far K(B, N) (A_SN) for its transposed rows
+  (gather_id_workspace stopped there in N2); slice_far_field_blocks slices
+  the A_SN rows, and the neighbors' A_SN columns (it sliced their A_NS in the
+  wrong map).
+- The parent transition, rewritten: a parent's A_SN[B2] = K(B1, B2) and
+  A_NS[B2] = K(B2, B1) and its Schur block from the children's directed views
+  (a child on process, else the kernel); the lower of two parents on process
+  builds both's views; parallel over the parents.
+- The solve and the multiply by the factors take the backward kernel's
+  nonsymmetric branch (X_RS, X_RN; ParallelTree::factor_symmetric, set by the
+  factorization); the level teardown also clears the *_nonsymmetry maps.
+
+Speed: the views a wave updates are formed before it, each kernel block once
+and in parallel (form_nonsymmetric_wave_views: several boxes of a wave update
+one pair, and each evaluated it under a lock); Step 9 gives each neighbor all
+its updates under one hold of its lock, the free ones first, reading X_NN in
+place; the kernel blocks of the ID gather, of Step 9 and of the transition,
+and the X_NN and X_RR^-1 X_RN products, split over the threads a small wave
+leaves idle (EMSURF 9000 elements, 1 rank: 457 -> 133 s).
+
+| problem | ranks | logdet | check | acc_forward | factor (sym eager) |
+|---|---|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 | -1095138.28586 | sym -1087470.18152 + sum log w -7668.05825: 4e-8 | 4.2e-3 | 22.5 s (5.3) |
+| the same | 8 | -1095138.27686 | sym on 8: 5e-8 | 4.2e-3 | 12.0 s (5.0) |
+| the same | 12 | -1095138.27705 | sym on 12: 5e-8 | 4.1e-3 | 12.5 s |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8994 / .8958 / .8947 | | 3.0-3.2e-3 | 22.9 / 12.8 / 12.9 s |
+| Laplace 24^3, the symmetric matrix with sym 0 | 1 | -116686.16282 | sym -116686.16271 | 1.4e-3 | |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.5952412634 (both) | sym 1: acc_forward 1.1e-3 | 7.3e-5 | 133 / 111 s (82 s on 1) |
+| VIE3D 32^3, scaleGreen 0 (heterogeneous) | 1 / 8 | 340527.78217 / .78219 | sym 1: 340527.78214 | 1.9e-5 / 1.7e-5 | 29.7 / 19.3 s (15.9 / 11.4 with sym 1) |
+
+(acc_backward 1e-16 to 1e-15 throughout: the solve inverts the factors'
+product.)  The symmetric eager reference is --sym 1 --h2_lazy_schur 0; the
+default symmetric path (lazy, streamed) is 5.4 s at 48^3 on 1 rank and 97 s
+on the 9000 sphere.  With one thread the nonsymmetric factorization costs
+2.3x the symmetric eager one (Laplace 32^3: 60 vs 27 s; 1.9x on the 2300
+sphere), the work of both orientations; at the leaf of Laplace 48^3 it is
+5x, bound by memory: X_NN of a box with full neighbors is 26 x 216 points
+square (250 MB), written, read and added into two views of each pair that
+hold the same K(LG, RG).  N4's lazy fill and owner-deferred updates (or one
+storage for the two views of a pair) are where that goes.  Symmetric runs
+bitwise as before (Laplace 192^3 on the GPU, the 128K sphere, the collective
+extraction, the extraction check).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
