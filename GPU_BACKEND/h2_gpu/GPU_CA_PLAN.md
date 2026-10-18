@@ -6571,12 +6571,77 @@ The transitions take 0.1-0.3 s a level now.  Where the time goes:
   triangle pairs, while the CFIE's entry evaluator computes each entry alone,
   EFIE and MFIE parts apart, and the nonsymmetric sketch evaluates twice the
   rows.  The EFIE as a nonsymmetric matrix (--sym 0) does not run on the GPU
-  at all: the nonsymmetric sketch takes only entry evaluators.  A block
-  evaluator for the sketch's two orientations (evaluate K(F, B) and K(B, F)
-  as blocks) would cover both.
+  at all: the nonsymmetric sketch takes only entry evaluators.  Both are
+  done in the next section (block evaluators in the sketch, a CFIE block
+  evaluator): the 128K CFIE factors in 2.5 s.
 
 N5e (the device solve and the kept factors) and N5f (the compressed fill
 sources and the packed near store) are next.
+
+#### Nonsymmetric matrices: the sketch with block evaluators, and EMSURF's CFIE block evaluator (2026-10-18)
+
+The user asked for this before N5e.  It covers the two gaps the N5d profile
+showed.
+
+- **The library side** (Evaluator::sketch_rows).  The sketch of a block or list
+  evaluator evaluates an item's kernel rows into scratch first, as the block
+  K(B, F) (block(c, row) = K(B_c, F_row)).  An item's swap ranges (a
+  nonsymmetric matrix's K(F, B) rows) are split off as segments.  Each is
+  evaluated as K(F_rows, B) into scratch of its own and transposed into its
+  place (launch_transpose), and the stored-rows sketch reads them unchanged.
+  A symmetric item is one segment, the evaluation it had before.
+  level_eliminator_supported now refuses only the collective callback for a
+  nonsymmetric matrix, not every evaluator but the entry form.  A first
+  version sized an item's scratch as one aligned block for all its swapped
+  rows, but laid the segments out aligned one by one.  An item with both
+  swap ranges (ring and training rows) then wrote up to an alignment unit
+  past its group's scratch.  On one GPU that cost the 9000-element EFIE (sym
+  0) 1e-3 of its logdet, and the CFIE 1e-10 at 9000 elements and 2e-7 at
+  128K.  Eight GPUs happened to agree with the CPU.  The scratch is now
+  sized as laid out (scratch_of), and the layout checks it.
+- **The example side** (EXAMPLE/gpu/emsurf_gpu.cu).  The CFIE is a block
+  evaluator by triangle pairs like the EFIE: the EFIE's 9 sums a pair, and 27
+  more for the MFIE.  With (n x (a x g)) . b = (b . a)(n . g) - (b . g)(n .
+  a) and the test and source points relative to their triangles' third
+  vertices, the pair's MFIE term is -sT sS sum_pq [(F_p . E_q)(n_T . G_pq) -
+  (n_T . E_q)(F_p . G_pq)], with G_pq = sum_ij w_i w_j alpha_ip beta_jq dG_ij
+  (mfie_pairs_kernel).  A triangle with itself has only the identity term,
+  taken from its geometry (mfie_identity).  cfie_entries_kernel combines
+  both.  The entry-at-a-time EFIE, MFIE and CFIE entry evaluator are gone.  A
+  group whose pair sums do not fit splits a single block by its columns
+  instead of aborting.
+
+BPACK_CHECK=kernel against the host's Zelem: at 9000 elements self 2.6e-15,
+near 8.5e-15, far 2.7e-12; at 128K, far at most 6.9e-12.  The entry
+evaluator gives 2.6e-15, 6.0e-15, 1.9e-12 and 6.0e-12: the far error is the
+MFIE far term's own cancellation.
+
+| problem | GPUs | logdet (reference) | factor (entry evaluator; CPU) |
+|---|---|---|---|
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 | 3763.59519241470 (CPU ...472, 5e-15) | 0.85 s (4.17; 186) |
+| the same | 8 | 3763.59524126346 (CPU ...343, 9e-15) | 0.47 s (3.11; 98) |
+| EMSURF CFIE alpha 0.5, 128K | 8 | -286910.4505103347 (entry ...5185, 6e-16) | 2.54 s (15.2) |
+| EMSURF EFIE, sym 0, 9000 elements | 1 / 8 | 2203.19029478266 / 2203.19117538651 (CPU ...200 / ...416, 3e-13 / 1e-12) | 0.53 / 0.37 s (CPU 50 / 24.5) |
+| EMSURF EFIE, sym 0, 128K | 8 | -393630.886497571 (no CPU run) | 2.22 s |
+
+acc_mvp and acc_forward are the reference's.  The 128K CFIE's sketch rows take
+0.67 s at level 4, against 5.44 s with the entry evaluator.
+
+Symmetric runs: the library is bitwise unchanged.  The new library with the
+previous EMSURF binary gives the sphere's checksums as before.  The new
+EMSURF binary does not: the EFIE's source is unchanged, but its pair kernel
+compiles differently without the CFIE entry kernels, which called the same
+helpers (21 fewer DFMA, global instead of generic loads).  The sphere
+reference with the new binary is 2.6700219554585658e-01 -3.6809152728774222e+00
+(logdet -393629.113037164; acc_forward 0.127 against 0.113, the same
+ill-conditioned EFIE at 1e-3).  Laplace 192^3, s4 and the extraction check are
+bitwise unchanged.
+
+Found on the way, not from this change: the Laplace skew case on 8 GPUs
+(N5c, N5d and now) gives -1082910.8977820259 in about three runs of four and
+...0256 in the others.  The column-weight case gave the same digits in all 5
+runs.  The multi-rank nonsymmetric path has a nondeterministic summation
+order somewhere; it is to be found.
 
 #### logdet of an operator after another one is built (2026-10-17)
 

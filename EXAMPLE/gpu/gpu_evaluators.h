@@ -10,8 +10,8 @@
  *   vie3d_gpu.cu      entry evaluators (C++): Helmholtz, Helmholtz
  *                     scaled by a coefficient table on the device, and
  *                     Helmholtz plus a diagonal table on the device
- *   emsurf_gpu.cu     block evaluator: EFIE of RWG edges by triangle pairs;
- *                     entry evaluator: CFIE
+ *   emsurf_gpu.cu     block evaluators: EFIE and CFIE of RWG edges by
+ *                     triangle pairs
  *
  * The Python example (EXAMPLE/user_block_funcs_gp_gpu.py) shows the two
  * routes from Python: entry source text compiled with NVRTC, and an
@@ -59,10 +59,9 @@ void vie3d_gpu_register_diagonal(void** bmat, double k, double a_re, double a_im
                                  double four_pi, const double* diag, int64_t n);
 void vie3d_gpu_release(void);
 
-/* EMSURF_Driver.cpp: the EFIE (cfie_alpha == 1: a block evaluator, complex
- * symmetric) or CFIE (an entry evaluator, not symmetric: HODLR only) entry
- * of RWG edges, from the mesh tables of emsurf_get_gpu_tables_c
- * (EMSURF_C_Bindings.f90).  The tables stay on the device until
+/* EMSURF_Driver.cpp: the EFIE (cfie_alpha == 1: complex symmetric) or CFIE
+ * (not symmetric) entry of RWG edges, a block evaluator either way, from the
+ * mesh tables of emsurf_get_gpu_tables_c (EMSURF_C_Bindings.f90).  The tables stay on the device until
  * emsurf_gpu_release. */
 void emsurf_gpu_register(void** bmat, const double* params, int nparams, const double* reals, int64_t nreals,
                          const int* ints, int64_t nints, double cfie_alpha);

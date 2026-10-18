@@ -566,8 +566,9 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
     if (evaluator == nullptr) return fail(why);
     if (method != FactorizationMethod::LU) return fail("X_RR is factored by LU on the GPU (use H2_XRR_factor=1)");
     if (!symmetric) {
-        // (the device sketch evaluates K(F, B) rows as K(row, col): entries one at a time)
-        if (!evaluator->inline_entries()) return fail("a nonsymmetric matrix needs an entry evaluator on the GPU");
+        // (the device sketch evaluates the K(F, B) rows as K(row, col): inside
+        // the sketch with an entry evaluator, else as blocks of their own)
+        if (evaluator->collective()) return fail("entries through a collective callback need a symmetric matrix");
         if (ca) return fail("CA levels need a symmetric matrix");
         // (several ranks: the generators carry temp4 and X_RN, sent device to device only)
         if (level.num_active_processes != 1 && !device_exchange_enabled()) {
@@ -10864,11 +10865,12 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const Parent& q = parent(qm);
             if (occupancy_ && q.n == 0) continue;
             if (nonsym_) {
+                const int pn = static_cast<int>(parents[p].num_points);
                 DeviceMatrix& pq = out->edges[dkey(pm, qm)];
-                pq = DeviceMatrix{nullptr, parents[p].num_points, q.n};
+                pq = DeviceMatrix{nullptr, pn, q.n};
                 pairs_of[p].push_back(Pair{pm, qm, &pq, false});
                 DeviceMatrix& qp = out->edges[dkey(qm, pm)];
-                qp = DeviceMatrix{nullptr, q.n, parents[p].num_points};
+                qp = DeviceMatrix{nullptr, q.n, pn};
                 pairs_of[p].push_back(Pair{pm, qm, &qp, true});
                 continue;
             }

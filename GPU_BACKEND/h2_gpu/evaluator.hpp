@@ -182,51 +182,103 @@ public:
             check_launch("the entry evaluator's sketch");
             return;
         }
-        for (const OrderedSketchItemT<T>& it : host_items) {
-            if (it.swap_hi0 > it.swap_lo0 || it.swap_hi1 > it.swap_lo1) {
-                throw std::logic_error(
-                    "Evaluator::sketch_rows: K(row, col) rows (a nonsymmetric matrix) need an entry evaluator");
-            }
-        }
         if (collective_ && sketch_ready_ && sketch_ready_()) {
+            for (const OrderedSketchItemT<T>& it : host_items) {
+                if (it.swap_hi0 > it.swap_lo0 || it.swap_hi1 > it.swap_lo1) {
+                    throw std::logic_error(
+                        "Evaluator::sketch_rows: K(row, col) rows (a nonsymmetric matrix) through a collective "
+                        "sketch callback");
+                }
+            }
             collective_sketch_rows<T>(host_items, points, stream);
             return;
         }
         // the rows into scratch (ncols x rows per item, row by row), then
-        // their sketch, in groups within a budget
+        // their sketch, in groups within a budget.  The rows of an item's
+        // swap ranges (a nonsymmetric matrix's K(F, B) rows) are evaluated as
+        // the block K(rows, B) into scratch of their own and transposed into
+        // their places.
+        struct Segment { int r0, r1; bool swapped; };
+        auto segments_of = [](const OrderedSketchItemT<T>& it) {
+            std::vector<Segment> out;
+            std::pair<int, int> sw[2] = {{std::max(it.swap_lo0, 0), std::min(it.swap_hi0, it.rows)},
+                                         {std::max(it.swap_lo1, 0), std::min(it.swap_hi1, it.rows)}};
+            if (sw[0].first > sw[1].first) std::swap(sw[0], sw[1]);
+            int at = 0;
+            for (const auto& [lo, hi] : sw) {
+                if (hi <= lo) continue;
+                if (lo < at) throw std::logic_error("Evaluator::sketch_rows: overlapping swap ranges");
+                if (lo > at) out.push_back(Segment{at, lo, false});
+                out.push_back(Segment{lo, hi, true});
+                at = hi;
+            }
+            if (at < it.rows) out.push_back(Segment{at, it.rows, false});
+            return out;
+        };
+        // an item's scratch: its block, then a block for each swapped segment
+        // (as the layout below takes them)
+        auto scratch_of = [&](const OrderedSketchItemT<T>& it) {
+            const size_t cols = static_cast<size_t>(std::max(it.ncols, 0));
+            size_t b = align_up(cols * std::max(it.rows, 0) * sizeof(T));
+            if (it.ncols <= 0 || it.rows <= 0) return b;
+            for (const Segment& g : segments_of(it)) {
+                if (g.swapped) b += align_up(cols * static_cast<size_t>(g.r1 - g.r0) * sizeof(T));
+            }
+            return b;
+        };
         DeviceHeap& heap = DeviceHeap::instance();
         const size_t budget = scratch_budget(heap);
         size_t i = 0;
         while (i < host_items.size()) {
             size_t j = i, bytes = 0;
             while (j < host_items.size()) {
-                const OrderedSketchItemT<T>& it = host_items[j];
-                const size_t b = align_up(static_cast<size_t>(std::max(it.ncols, 0)) * std::max(it.rows, 0) * sizeof(T));
+                const size_t b = scratch_of(host_items[j]);
                 if (j > i && bytes + b > budget) break;
                 bytes += b;
                 ++j;
             }
             char* scratch = bytes > 0 ? heap.alloc(bytes) : nullptr;
             std::vector<EvalItemT<T>> evals;
+            std::vector<TransposeItemT<T>> transposes;
             std::vector<OrderedSketchItemT<T>> stored;
-            int max_m = 0, max_n = 0, md = 0, mc = 0;
+            int max_m = 0, max_n = 0, md = 0, mc = 0, max_tm = 0, max_tn = 0;
             size_t at = 0;
             for (size_t k = i; k < j; ++k) {
                 OrderedSketchItemT<T> s = host_items[k];
                 T* block = reinterpret_cast<T*>(scratch + at);
                 at += align_up(static_cast<size_t>(std::max(s.ncols, 0)) * std::max(s.rows, 0) * sizeof(T));
                 if (s.ncols > 0 && s.rows > 0) {
-                    // block(c, row) = K(point col_base + c, point row_slots[row])
-                    EvalItemT<T> e;
-                    e.out = block;
-                    e.ld = s.ncols;
-                    e.m = s.ncols;
-                    e.n = s.rows;
-                    e.rows = IndexList{-1, s.col_base, nullptr};
-                    e.cols = IndexList{-1, 0, s.row_slots};
-                    evals.push_back(e);
-                    max_m = std::max(max_m, e.m);
-                    max_n = std::max(max_n, e.n);
+                    for (const Segment& g : segments_of(s)) {
+                        const int len = g.r1 - g.r0;
+                        EvalItemT<T> e;
+                        if (!g.swapped) {
+                            // block(c, row) = K(point col_base + c, point row_slots[row])
+                            e.out = block + static_cast<size_t>(g.r0) * s.ncols;
+                            e.ld = s.ncols;
+                            e.m = s.ncols;
+                            e.n = len;
+                            e.rows = IndexList{-1, s.col_base, nullptr};
+                            e.cols = IndexList{-1, 0, s.row_slots + g.r0};
+                        } else {
+                            // tmp(r, c) = K(point row_slots[r0 + r], point col_base + c), then
+                            // block(c, r0 + r) = tmp(r, c)
+                            T* tmp = reinterpret_cast<T*>(scratch + at);
+                            at += align_up(static_cast<size_t>(len) * s.ncols * sizeof(T));
+                            e.out = tmp;
+                            e.ld = len;
+                            e.m = len;
+                            e.n = s.ncols;
+                            e.rows = IndexList{-1, 0, s.row_slots + g.r0};
+                            e.cols = IndexList{-1, s.col_base, nullptr};
+                            transposes.push_back(TransposeItemT<T>{tmp, len, block + static_cast<size_t>(g.r0) * s.ncols,
+                                                                   s.ncols, len, s.ncols});
+                            max_tm = std::max(max_tm, len);
+                            max_tn = std::max(max_tn, s.ncols);
+                        }
+                        evals.push_back(e);
+                        max_m = std::max(max_m, e.m);
+                        max_n = std::max(max_n, e.n);
+                    }
                 }
                 s.src = block;
                 s.row_stride = s.ncols;
@@ -235,10 +287,20 @@ public:
                 md = std::max(md, s.d);
                 mc = std::max(mc, s.ncols);
             }
+            if (at != bytes) {
+                if (scratch != nullptr) heap.free(scratch);
+                throw std::logic_error("Evaluator::sketch_rows: scratch layout and size disagree");
+            }
             if (!evals.empty()) {
                 EvalItemT<T>* d_evals = upload(heap, evals, stream);
                 eval_blocks(evals, d_evals, nullptr, points, stream);
                 heap.free(d_evals);
+            }
+            if (!transposes.empty()) {
+                TransposeItemT<T>* d_tr = upload(heap, transposes, stream);
+                launch_transpose(d_tr, static_cast<int>(transposes.size()), max_tm, max_tn, stream);
+                check_launch("the sketch's K(F, B) rows into their places");
+                heap.free(d_tr);
             }
             OrderedSketchItemT<T>* d_stored = upload(heap, stored, stream);
             launch_ordered_sketch_stored(d_stored, static_cast<int>(stored.size()), md, mc, stream);
