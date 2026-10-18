@@ -15,7 +15,9 @@
 //   diagonal  x_R = X_RR^{-1} x_R, right after the level's forward waves
 //             (it touches only redundant entries, final by then)
 //   backward  x_R += X_SR^T x_S + X_NR^T x_N;  x_S -= T x_R, waves reversed,
-//             other ranks' neighbor vectors refreshed before each wave
+//             other ranks' neighbor vectors refreshed before each wave (a
+//             nonsymmetric matrix: x_R += X_RS x_S + X_RN x_N, its X_RS and
+//             X_RN stored transposed as X_SR and X_NR are: SolveBox::xrs_t)
 // The hand-off between levels (gather_skeleton_to_parent,
 // scatter_solution_to_children, with the process reductions) and the root
 // solve stay on the host: a level's vectors go to the device and back once
@@ -200,6 +202,10 @@ struct KeptSolveBox {
     const void* T = nullptr;  // elements of the factorization's type
     const void* xsr = nullptr;
     const void* xnr = nullptr;
+    // a nonsymmetric matrix: X_RS^T (k x r) and X_RN^T (ntot x r), the
+    // backward sweep's factors laid out as X_SR and X_NR (SolveBox::xrs_t)
+    const void* xrs_t = nullptr;
+    const void* xrn_t = nullptr;
     const void* lu = nullptr;
     const int* ipiv = nullptr;
     int k = 0, r = 0, ntot = 0;
@@ -443,6 +449,8 @@ inline void stage_kept_level(KeptSolveLevel& kl, cudaStream_t stream, double& al
             inside(kb.T, 0, morton, "T");
             inside(kb.xsr, 0, morton, "X_SR");
             inside(kb.xnr, kb.xnr_bytes, morton, "X_NR");
+            inside(kb.xrs_t, 0, morton, "X_RS");
+            inside(kb.xrn_t, 0, morton, "X_RN");
             inside(kb.lu, 0, morton, "LU");
             inside(kb.ipiv, static_cast<size_t>(kb.r) * sizeof(int), morton, "pivots");
         }
@@ -523,6 +531,8 @@ inline void rebase_kept_level(KeptSolveLevel& kl, const std::vector<char*>& targ
         kb.T = move(kb.T);
         kb.xsr = move(kb.xsr);
         kb.xnr = move(kb.xnr);
+        kb.xrs_t = move(kb.xrs_t);
+        kb.xrn_t = move(kb.xrn_t);
         kb.lu = move(kb.lu);
         kb.ipiv = reinterpret_cast<const int*>(move(kb.ipiv));
     }
@@ -616,7 +626,7 @@ inline void plan_kept_streaming(KeptSolveLevel& kl, const std::vector<std::vecto
             auto it = kl.boxes.find(m);
             if (it == kl.boxes.end()) continue;
             const KeptSolveBox& kb = it->second;
-            for (const void* ptr : {kb.T, kb.xsr, kb.xnr, kb.lu, static_cast<const void*>(kb.ipiv)}) {
+            for (const void* ptr : {kb.T, kb.xsr, kb.xnr, kb.xrs_t, kb.xrn_t, kb.lu, static_cast<const void*>(kb.ipiv)}) {
                 if (ptr == nullptr) continue;
                 size_t i = 0;
                 if (kept_block_of(kl, ptr, &i) == nullptr) {
@@ -724,6 +734,8 @@ inline void upload_kept_level(KeptSolveLevel& kl, cudaStream_t stream) {
         kb.T = rebase(kb.T);
         kb.xsr = rebase(kb.xsr);
         kb.xnr = rebase(kb.xnr);
+        kb.xrs_t = rebase(kb.xrs_t);
+        kb.xrn_t = rebase(kb.xrn_t);
         kb.lu = rebase(kb.lu);
         kb.ipiv = reinterpret_cast<const int*>(rebase(kb.ipiv));
     }
@@ -874,7 +886,8 @@ std::vector<std::vector<int>> color_waves(const TreeLevel<CoordType, DataType>& 
 // Per-box byte layout of the factors in a device block.
 struct BoxLayout {
     size_t T = 0, xsr = 0, xnr = 0, lu = 0, ipiv = 0, skel = 0, red = 0, bytes = 0;
-    bool has_T = false, has_xsr = false;
+    size_t xrs_t = 0, xrn_t = 0;   // (a nonsymmetric matrix)
+    bool has_T = false, has_xsr = false, has_xrs = false;
 };
 
 }  // namespace solve_detail
@@ -1526,7 +1539,8 @@ size_t build_ca_solve_tables(ParallelTree<CoordType, DataType>* tree, TreeLevel<
 // eliminated before the box have shrunk to their skeletons): the keep
 // decision scales it (factorization_driver.hpp decide_solve_keep).
 template<typename CoordType, typename DataType>
-double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca, double xnr_divisor = 1.0) {
+double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca, double xnr_divisor = 1.0,
+                        bool nonsym = false) {
     const double D = static_cast<double>(sizeof(DataType)), I = sizeof(int);
     std::unordered_map<int64_t, int64_t> size;
     for (const auto& box : lvl.local_boxes) size.emplace(box.morton_index, box.num_points);
@@ -1542,7 +1556,8 @@ double solve_keep_bound(const TreeLevel<CoordType, DataType>& lvl, bool ca, doub
             const auto it = size.find(m);
             ntot += it != size.end() ? static_cast<double>(it->second) : n;
         }
-        bytes += (n * n + ntot * n / xnr_divisor) * D + n * I + 5.0 * 256.0;
+        // (a nonsymmetric matrix: X_RS and X_RN as well, as large as X_SR and X_NR)
+        bytes += (nonsym ? 2.0 : 1.0) * (n * n + ntot * n / xnr_divisor) * D + n * I + 7.0 * 256.0;
     };
     for (const auto& box : lvl.local_boxes) add(box);
     if (ca) {
@@ -1613,6 +1628,22 @@ void materialize_host_factors_level(ParallelTree<CoordType, DataType>* tree, int
 #endif
             } else
             box.X_SR.set_owned(kb.k, kb.r, copy(kb.xsr, k * r), MatrixStorage<DataType>::FULL);
+        }
+        // (a nonsymmetric matrix: X_RS (r x k) and X_RN (r x ntot), from their
+        // transposed kept copies)
+        auto transposed = [&](const void* src, size_t rows, size_t cols) {  // src rows x cols -> cols x rows
+            const std::vector<DataType> t = copy(src, rows * cols);
+            std::vector<DataType> v(rows * cols);
+            for (size_t j = 0; j < cols; ++j)
+                for (size_t i = 0; i < rows; ++i) v[j + i * cols] = t[i + j * rows];
+            return v;
+        };
+        if (kb.xrs_t != nullptr && !box.X_RS.is_allocated()) {
+            box.X_RS.set_owned(kb.r, kb.k, transposed(kb.xrs_t, k, r), MatrixStorage<DataType>::FULL);
+        }
+        if (kb.xrn_t != nullptr && kb.ntot > 0 && !box.X_RN.is_allocated()) {
+            box.X_RN.set_owned(kb.r, kb.ntot, transposed(kb.xrn_t, static_cast<size_t>(kb.ntot), r),
+                               MatrixStorage<DataType>::FULL);
         }
         if (!box.X_RR.is_allocated()) {
             box.X_RR.set_owned(kb.r, kb.r, copy(kb.lu, r * r), MatrixStorage<DataType>::LU_FACTORED);
@@ -1855,6 +1886,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
         const auto t0 = clock::now();
         const size_t D = sizeof(DataType), I = sizeof(int);
         const int leaf = tree->num_levels - 1;
+        // a nonsymmetric matrix: X_RS and X_RN too (the backward sweep's)
+        const bool nonsym = !tree->factor_symmetric;
         int rank = 0;
         MPI_Comm_rank(tree->comm, &rank);
 
@@ -1899,7 +1932,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     return;
                 }
                 const int64_t ntot = box.X_NR.is_allocated() ? box.X_NR.rows : 0;
-                need += static_cast<double>((kept_box ? 0 : (2 * k * r + ntot * r + r * r) * D) + (r + k + r) * I + 1024);
+                const int64_t factors = 2 * k * r + ntot * r + r * r + (nonsym ? k * r + ntot * r : 0);
+                need += static_cast<double>((kept_box ? 0 : factors * D) + (r + k + r) * I + 1024);
             };
             for (const auto& box : lvl.local_boxes) {
                 if (reason.empty()) check(box, kept_level);
@@ -2292,6 +2326,15 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 if (kb != nullptr && !box.X_NR.is_allocated() && !box.one_hop.empty()) ntot[b] = kb->ntot;
                 l.has_T = eliminated && (kb != nullptr ? kb->T != nullptr : box.interpolation_matrix.is_allocated());
                 l.has_xsr = eliminated && (kb != nullptr ? kb->xsr != nullptr : box.X_SR.is_allocated());
+                // a nonsymmetric matrix: X_RS (r x k) and X_RN (r x ntot) beside them
+                l.has_xrs = nonsym && eliminated && (kb != nullptr ? kb->xrs_t != nullptr : box.X_RS.is_allocated());
+                if (nonsym && eliminated && kb == nullptr &&
+                    ((l.has_xrs && (box.X_RS.rows != static_cast<int64_t>(r) || box.X_RS.cols != static_cast<int64_t>(k))) ||
+                     (ntot[b] > 0 && (!box.X_RN.is_allocated() || box.X_RN.rows != static_cast<int64_t>(r) ||
+                                      box.X_RN.cols != ntot[b])))) {
+                    throw std::runtime_error("device solve: X_RS / X_RN of box " + std::to_string(box.morton_index) +
+                                             " do not match");
+                }
                 if (kept != nullptr && eliminated) {
                     if (kb == nullptr || kb->k != static_cast<int>(k) || kb->r != static_cast<int>(r) ||
                         kb->ntot != ntot[b]) {
@@ -2305,6 +2348,10 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     l.T = at;    at = align_up(at + (l.has_T ? k * r * D : 0));
                     l.xsr = at;  at = align_up(at + (l.has_xsr ? k * r * D : 0));
                     l.xnr = at;  at = align_up(at + static_cast<size_t>(ntot[b]) * r * D);
+                    if (nonsym) {
+                        l.xrs_t = at;  at = align_up(at + (l.has_xrs ? k * r * D : 0));
+                        l.xrn_t = at;  at = align_up(at + static_cast<size_t>(ntot[b]) * r * D);
+                    }
                     l.lu = at;   at = align_up(at + r * r * D);
                     l.ipiv = at; at = align_up(at + r * I);
                 }
@@ -2339,7 +2386,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                 char* h = static_cast<char*>(pinned_pool().staging[turn].reserve(std::max<size_t>(chunk_bytes[c], 1)));
                 const auto tp = clock::now();
                 // pieces of about 1 MB (a matrix's column range, or a box's lists), so all threads copy
-                struct Piece { size_t box; int what; size_t col0, col1; };  // what: 0 T, 1 X_SR, 2 X_NR, 3 LU, 4 lists
+                struct Piece { size_t box; int what; size_t col0, col1; };  // what: 0 T, 1 X_SR, 2 X_NR, 3 LU, 4 lists,
+                                                                            // 5 X_RS^T, 6 X_RN^T
                 std::vector<Piece> pieces;
                 for (size_t b = chunk_first[c]; b < chunk_first[c + 1]; ++b) {
                     const Box& box = *bx[b];
@@ -2353,6 +2401,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     if (lay[b].has_T) split(0, k);
                     if (lay[b].has_xsr) split(1, k);
                     if (ntot[b] > 0) split(2, static_cast<size_t>(ntot[b]));
+                    if (lay[b].has_xrs) split(5, k);
+                    if (nonsym && ntot[b] > 0) split(6, static_cast<size_t>(ntot[b]));
                     split(3, r);
                 }
                 #pragma omp parallel for schedule(dynamic, 1)
@@ -2367,11 +2417,20 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                         for (size_t j = pc.col0; j < pc.col1; ++j)
                             std::memcpy(d + j * rows, m.data.data() + j * static_cast<size_t>(m.lda), rows * D);
                     };
+                    // m^T (m: cols x rows, ld m.lda) as rows x r, columns col0 .. col1
+                    auto put_t = [&](size_t at, const MatrixStorage<DataType>& m, size_t rows) {
+                        DataType* d = reinterpret_cast<DataType*>(p + at);
+                        const size_t ld = static_cast<size_t>(m.lda);
+                        for (size_t j = pc.col0; j < pc.col1; ++j)
+                            for (size_t i = 0; i < rows; ++i) d[i + j * rows] = m.data[j + i * ld];
+                    };
                     switch (pc.what) {
                         case 0: put(l.T, box.interpolation_matrix, k); break;
                         case 1: put(l.xsr, box.X_SR, k); break;
                         case 2: put(l.xnr, box.X_NR, static_cast<size_t>(ntot[pc.box])); break;
                         case 3: put(l.lu, box.X_RR, r); break;
+                        case 5: put_t(l.xrs_t, box.X_RS, k); break;
+                        case 6: put_t(l.xrn_t, box.X_RN, static_cast<size_t>(ntot[pc.box])); break;
                         default: {
                             if (k > 0 && r > 0 && kept_box[pc.box] == nullptr) {
                                 std::memcpy(p + l.ipiv, box.X_RR_pivots.data(), r * I);
@@ -2418,9 +2477,49 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                                                  std::to_string(box.morton_index) +
                                                  " was never transposed out of its fill source");
                     }
+                    if (device_solve_check() && nonsym && kb->xnr_bytes == 0) {
+                        // BPACK_CHECK=solve: a nonsymmetric box's kept factors against
+                        // its host copies (kept beside them), the largest difference
+                        // relative to the largest entry, per factor
+                        auto diff = [&](const void* dev, const MatrixStorage<DataType>& m, bool transposed,
+                                        size_t rows, size_t cols) -> double {   // dev: rows x cols
+                            if (dev == nullptr || !m.is_allocated() || rows * cols == 0) return -1.0;
+                            std::vector<DataType> d(rows * cols);
+                            check_cuda(cudaMemcpy(d.data(), dev, d.size() * D, cudaMemcpyDeviceToHost), "kept check");
+                            double e = 0.0, a = 0.0;
+                            for (size_t j = 0; j < cols; ++j) {
+                                for (size_t i = 0; i < rows; ++i) {
+                                    const DataType h = transposed ? m.data[j + i * static_cast<size_t>(m.lda)]
+                                                                  : m.data[i + j * static_cast<size_t>(m.lda)];
+                                    e = std::max(e, static_cast<double>(std::abs(d[i + j * rows] - h)));
+                                    a = std::max(a, static_cast<double>(std::abs(h)));
+                                }
+                            }
+                            return a > 0.0 ? e / a : e;
+                        };
+                        const size_t kk = static_cast<size_t>(kb->k), rr = static_cast<size_t>(kb->r),
+                                     nn = static_cast<size_t>(kb->ntot);
+                        const double e_t = diff(kb->T, box.interpolation_matrix, false, kk, rr);
+                        const double e_sr = diff(kb->xsr, box.X_SR, false, kk, rr);
+                        const double e_nr = diff(kb->xnr, box.X_NR, false, nn, rr);
+                        const double e_rs = diff(kb->xrs_t, box.X_RS, true, kk, rr);
+                        const double e_rn = diff(kb->xrn_t, box.X_RN, true, nn, rr);
+                        if (std::max({e_t, e_sr, e_nr, e_rs, e_rn}) > 1e-12) {
+                            std::printf("  [gpu] level %d box %lld kept vs host: T %.2e, X_SR %.2e, X_NR %.2e, "
+                                        "X_RS %.2e, X_RN %.2e\n", level, static_cast<long long>(box.morton_index), e_t,
+                                        e_sr, e_nr, e_rs, e_rn);
+                            std::fflush(stdout);
+                        }
+                    }
                     sb.T = l.has_T ? kb->T : nullptr;
                     sb.xsr = l.has_xsr ? kb->xsr : nullptr;
                     sb.xnr = kb->xnr;
+                    sb.xrs_t = l.has_xrs ? kb->xrs_t : nullptr;
+                    sb.xrn_t = nonsym ? kb->xrn_t : nullptr;
+                    if (nonsym && sb.ntot > 0 && sb.xrn_t == nullptr) {
+                        throw std::runtime_error("device solve: kept box " + std::to_string(box.morton_index) +
+                                                 " has no X_RN");
+                    }
                     sb.lu = kb->lu;
                     sb.ipiv = kb->ipiv;
                     // A compressed factor cannot be read in place: note it,
@@ -2448,6 +2547,8 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
                     sb.T = eliminated && l.has_T ? p + l.T : nullptr;
                     sb.xsr = eliminated && l.has_xsr ? p + l.xsr : nullptr;
                     sb.xnr = eliminated ? p + l.xnr : nullptr;
+                    sb.xrs_t = eliminated && l.has_xrs ? p + l.xrs_t : nullptr;
+                    sb.xrn_t = eliminated && nonsym ? p + l.xrn_t : nullptr;
                     sb.lu = eliminated ? p + l.lu : nullptr;
                     sb.ipiv = eliminated ? reinterpret_cast<const int*>(p + l.ipiv) : nullptr;
                 }
@@ -3558,7 +3659,7 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
     activate_operator(tree);  // (before the store is read: one per operator)
     // (a nonsymmetric factor: the host solve, whose backward sweep reads X_RS
     // and X_RN; the device kernels read X_SR^T and X_NR^T)
-    if (device_solve_suspended() || !color_gpu_enabled() || !tree->factor_symmetric) {
+    if (device_solve_suspended() || !color_gpu_enabled()) {
         materialize_host_factors(tree);  // (the host path reads them)
         return false;
     }

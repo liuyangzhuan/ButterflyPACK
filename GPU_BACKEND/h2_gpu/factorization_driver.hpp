@@ -674,11 +674,17 @@ public:
         if (level_) {
             const DeviceHeap& heap = DeviceHeap::instance();
             keep_bound_ = solve_keep_bound(tree_->levels[static_cast<size_t>(lvl)], ca,
-                                           opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0);
+                                           opt_.compress_factors >= 1 ? kXnrBoundDivisor : 1.0,
+                                           !opt_.is_symmetric);
             budget = kSolveKeepFraction * static_cast<double>(heap.capacity()) - static_cast<double>(heap.used());
             if (compression_ <= 0.0) compression_ = opt_.compress_factors >= 1 ? kFirstCompression : 1.0;
             kept_expected_ = keep_ratio_ * keep_bound_ / compression_;   // what the store will hold
-            ok = kept_expected_ <= budget ? 1 : 0;
+            // A nonsymmetric matrix's level also holds its fill sources raw
+            // (temp2^T and temp4, nothing compressed yet), about the bound
+            // itself (7.1 GB against a 9.2 GB bound at level 4 of 96^3 on 8
+            // ranks): they must fit beside the kept factors.
+            const double working = opt_.is_symmetric ? 0.0 : keep_bound_;
+            ok = kept_expected_ + working <= budget ? 1 : 0;
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
@@ -1501,6 +1507,8 @@ public:
                     kb.T = DeviceHeap::relocated(kb.T, moves);
                     kb.xsr = DeviceHeap::relocated(kb.xsr, moves);
                     kb.xnr = DeviceHeap::relocated(kb.xnr, moves);
+                    kb.xrs_t = DeviceHeap::relocated(kb.xrs_t, moves);
+                    kb.xrn_t = DeviceHeap::relocated(kb.xrn_t, moves);
                     kb.lu = DeviceHeap::relocated(kb.lu, moves);
                     kb.ipiv = DeviceHeap::relocated(kb.ipiv, moves);
                 }

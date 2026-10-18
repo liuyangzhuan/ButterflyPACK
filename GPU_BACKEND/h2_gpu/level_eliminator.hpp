@@ -758,7 +758,6 @@ public:
         }
     }
     void set_solve_keep(bool keep, double budget, double expected_kept = 0.0) override {
-        if (nonsym_) keep = false;  // (the device solve takes symmetric factors only)
         if (!keep) {
             drop_kept(true, "keep declined at the level's start");
             keep_solve_ = false;
@@ -768,7 +767,8 @@ public:
         kept_expected_ = keep ? expected_kept : 0.0;   // (the hold limit reserves it)
         // (the host copies stay where the host reads X_NR during the level:
         // generators sent through the host, the replica check)
-        skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() &&
+        // (a nonsymmetric matrix: kept as well, for now, with X_RS and X_RN)
+        skip_xnr_ = keep_solve_ && !ca_replica_check_enabled() && !nonsym_ &&
                     (device_exchange_ || ca_ || level_.num_active_processes == 1);
     }
     void restore_host_copies() override { rescue_skipped_xnr(); }
@@ -1295,8 +1295,11 @@ private:
     // state when the level's X_RR_full rebuild may read the kept LU (null for
     // a landed box, whose X_RR_full arrives with its payload); `pledge` keeps
     // no X_NR here, the transition makes it from the fill source.
+    // (a nonsymmetric matrix: xrs and xrn, X_RS (r x k) and X_RN (r x ntot),
+    // kept transposed)
     struct KeptSource { int64_t morton = -1; BoxState* st = nullptr; const char* t = nullptr; const char* xsr = nullptr;
                         const char* xnr = nullptr; const char* lu = nullptr; const char* piv = nullptr;
+                        const char* xrs = nullptr; const char* xrn = nullptr;
                         int k = 0, r = 0, ntot = 0; bool pledge = false; };
     bool keep_factor_sources(const std::vector<KeptSource>& srcs, cudaStream_t stream);
     bool keep_sources_or_halves(const std::vector<KeptSource>& srcs, cudaStream_t stream);
@@ -2993,6 +2996,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             std::vector<char*> done = copier_->wait_released();
             freed = !done.empty();
             free_copied_blocks(std::move(done));
+        }
+        if (!freed && nonsym_ && keep_solve_ && !keep_failed_ && !kept_.blocks.empty()) {
+            // A nonsymmetric level keeps its host copies (skip_xnr_ is off), so
+            // its kept factors can go when the level is short: the first solve
+            // uploads them from the host instead.  (Its X_RR_full stays with the
+            // fill sources: nothing has to be rebuilt from the LU here.)
+            drop_kept(false, "the heap is short (nonsymmetric: the host copies serve)");
+            keep_failed_ = true;
+            keep_failure_ = 2;
+            freed = true;
         }
         eliminator_stats().reclaim_wait += std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count();
         return freed;
@@ -6675,7 +6688,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             // back here - r x r a box, 0.90 GB of the 192^3 Color leaf's
             // resident set.  Only when the box owns the block: without
             // early_free_sources_ it belongs to level_allocs_.
-            if (st.xrr_lu != nullptr && st.persist != nullptr && st.persist == reinterpret_cast<char*>(wb.persist_xrr)) {
+            // (not for a nonsymmetric matrix, whose kept factors may go mid-level: see the reclaimer)
+            if (!nonsym_ && st.xrr_lu != nullptr && st.persist != nullptr &&
+                st.persist == reinterpret_cast<char*>(wb.persist_xrr)) {
                 auto& es = eliminator_stats();
                 es.persist_bytes -= static_cast<double>(st.persist_bytes);
                 heap_.free(st.persist);
@@ -8878,6 +8893,10 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_solve_factor_group(
         s.xnr = source + wb->off_temp2;
         s.lu = d_result + wb->off_xrr;
         s.piv = d_result + wb->off_piv;
+        if (nonsym_) {  // temp3 and temp4, the solve's X_RS and X_RN
+            s.xrs = d_result + wb->off_temp3;
+            s.xrn = source + wb->off_temp4;
+        }
         s.k = wb->k;
         s.r = wb->r;
         s.ntot = wb->ntot;
@@ -8905,8 +8924,12 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
     struct Made { int64_t morton; size_t T, xsr, xnr, lu, piv; int k, r, ntot;
                   size_t xnr_bytes; double xnr_delta;
                   uint32_t xnr_chunk0; uint32_t xnr_nchunks; bool xnr_pledged;
-                  size_t t_bytes, xsr_bytes; uint32_t t_chunk0, t_nchunks, xsr_chunk0, xsr_nchunks; };
+                  size_t t_bytes, xsr_bytes; uint32_t t_chunk0, t_nchunks, xsr_chunk0, xsr_nchunks;
+                  size_t xrs_t = SIZE_MAX, xrn_t = SIZE_MAX; };
     std::vector<Made> made;
+    // (a nonsymmetric matrix: X_RS and X_RN transposed into the block, after its spans)
+    struct Flip { const char* src; size_t off; int m, n; };
+    std::vector<Flip> flips;
 
     std::vector<CompressedXnr> comp;
     std::vector<int> comp_at(srcs_in.size(), -1);  // box -> its block of comp
@@ -8995,6 +9018,16 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         }
         m.lu = total;  spans.push_back({total, ks.lu, r * r * D});   total = align_up(total + r * r * D);
         m.piv = total; spans.push_back({total, ks.piv, r * I});      total = align_up(total + r * I);
+        if (ks.xrs != nullptr && k > 0) {
+            m.xrs_t = total;
+            flips.push_back(Flip{ks.xrs, total, ks.r, ks.k});
+            total = align_up(total + k * r * D);
+        }
+        if (ks.xrn != nullptr && nt > 0) {
+            m.xrn_t = total;
+            flips.push_back(Flip{ks.xrn, total, ks.r, ks.ntot});
+            total = align_up(total + nt * r * D);
+        }
         {
             auto& es = eliminator_stats();
             es.xnr_raw_bytes += static_cast<double>(align_up(nt * r * D));
@@ -9049,6 +9082,13 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         return false;
     }
     char* block = heap_.alloc_resident(total, ResidentKind::KeptFactors);
+    if (keep_failed_) {  // (the reclaimer dropped the kept store to find this room: a nonsymmetric level)
+#ifdef H2_HAVE_NVCOMP
+        if (compressed) xnr_compressor_.release();
+#endif
+        heap_.free(block);
+        return false;
+    }
     kept_.blocks.push_back(block);
     kept_.bytes += static_cast<double>(total);
     for (size_t bi = 0; bi < made.size(); ++bi) {  // the pledged X_NR is kept too
@@ -9063,14 +9103,31 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         items.push_back(CopySpan{sp.src, block + sp.off, static_cast<int64_t>(sp.bytes / 4)});
         max_words = std::max(max_words, static_cast<int64_t>(sp.bytes / 4));
     }
-    const size_t list_bytes = items.size() * sizeof(CopySpan);
+    // (a nonsymmetric matrix: X_RS and X_RN's transposes, their list after the spans')
+    std::vector<TransposeItem> tr;
+    int max_tm = 0, max_tn = 0;
+    for (const Flip& f : flips) {
+        tr.push_back(TransposeItem{reinterpret_cast<const S*>(f.src), f.m, reinterpret_cast<S*>(block + f.off), f.n,
+                                   f.m, f.n});
+        max_tm = std::max(max_tm, f.m);
+        max_tn = std::max(max_tn, f.n);
+    }
+    const size_t span_bytes = align_up(items.size() * sizeof(CopySpan));
+    const size_t list_bytes = span_bytes + tr.size() * sizeof(TransposeItem);
     if (list_bytes > solve_meta_device_.capacity()) {
         check_cuda(cudaStreamSynchronize(stream), "kept factors");  // the old list may still be read
         solve_meta_device_.reserve(list_bytes);
     }
-    auto* d_items = static_cast<CopySpan*>(solve_meta_device_.reserve(list_bytes));
-    check_cuda(cudaMemcpyAsync(d_items, items.data(), list_bytes, cudaMemcpyHostToDevice, stream), "kept factors");
-    launch_copy_spans(d_items, static_cast<int>(items.size()), max_words, stream);
+    char* d_list = static_cast<char*>(solve_meta_device_.reserve(list_bytes));
+    std::vector<char> h_list(list_bytes);
+    std::memcpy(h_list.data(), items.data(), items.size() * sizeof(CopySpan));
+    if (!tr.empty()) std::memcpy(h_list.data() + span_bytes, tr.data(), tr.size() * sizeof(TransposeItem));
+    check_cuda(cudaMemcpyAsync(d_list, h_list.data(), list_bytes, cudaMemcpyHostToDevice, stream), "kept factors");
+    launch_copy_spans(reinterpret_cast<const CopySpan*>(d_list), static_cast<int>(items.size()), max_words, stream);
+    if (!tr.empty()) {
+        launch_transpose(reinterpret_cast<const TransposeItem*>(d_list + span_bytes), static_cast<int>(tr.size()), max_tm,
+                         max_tn, stream);
+    }
 #ifdef H2_HAVE_NVCOMP
     if (compressed) {
         // the gather reads the compressor's staging: it may only go back to
@@ -9088,6 +9145,8 @@ bool LevelEliminator<CoordType, DataType, KernelType>::keep_factor_sources(
         kb.xnr_pending = m.xnr_pledged;
         kb.lu = block + m.lu;
         kb.ipiv = reinterpret_cast<const int*>(block + m.piv);
+        kb.xrs_t = m.xrs_t != SIZE_MAX ? block + m.xrs_t : nullptr;
+        kb.xrn_t = m.xrn_t != SIZE_MAX ? block + m.xrn_t : nullptr;
         kb.k = m.k;
         kb.r = m.r;
         kb.ntot = m.ntot;

@@ -6640,8 +6640,66 @@ bitwise unchanged.
 Found on the way, not from this change: the Laplace skew case on 8 GPUs
 (N5c, N5d and now) gives -1082910.8977820259 in about three runs of four and
 ...0256 in the others.  The column-weight case gave the same digits in all 5
-runs.  The multi-rank nonsymmetric path has a nondeterministic summation
-order somewhere; it is to be found.
+runs.  The factorization does not vary: every number the runs print before the
+logdet is the same (compression, skeletons, root size, accuracies).  The two
+logdets are 1 ulp apart.  It is hierarchical_logdet_parallel, as at C1 (below,
+2026-09-29): a thread sums its boxes in order (schedule static), but the 16
+threads' partial sums go into the level's sum with `omp atomic`, in the order
+the threads finish.  A symmetric GPU run seldom shows it, because its kept
+levels are summed from the device box by box (device_logdet_kept_level).  A
+nonsymmetric one keeps nothing on the device (until N5e), so every level goes
+through the atomics.  Whether the order changes the rounding depends on the
+values: column weights, as it happens, never did in these runs.  A fix is to
+sum the boxes' contributions in box order, as the device path does, which is
+independent of the thread count too.  It may move a reference's last digit once.
+
+**N5e, the device solve and the kept factors (2026-10-18).**  The nonsymmetric
+host solve differs from the symmetric one in its backward sweep only: x_R +=
+X_RS x_S + X_RN x_N with X_RS = temp3 (r x k) and X_RN = temp4 (r x ntot), in
+place of X_SR^T x_S + X_NR^T x_N.  The factored multiply's W sweep likewise.
+- SolveBox::xrs_t and xrn_t: X_RS^T (k x r) and X_RN^T (ntot x r), laid out as
+  X_SR and X_NR are.  The solve's backward kernels and the multiply's forward
+  ones read them in their place (null: a symmetric matrix, the same code), so
+  the work buffers, chunked X_N and wave tables need nothing new.
+- At the first solve: the upload transposes the host's X_RS and X_RN into the
+  box blocks (put_t).
+- Kept during the factorization: KeptSolveBox::xrs_t and xrn_t, launch_transpose
+  of temp3 and temp4 into the kept block after its spans.  Their item list goes
+  in the same metadata buffer as the spans.  A first version put it in a heap
+  block freed right after the launch, and the transposes then read reused
+  memory (NaN).
+- Every place that moves or rebases a kept box's pointers takes the two new
+  ones: staging, upload, streaming, the plan, and the device compaction between
+  levels (factorization_driver.hpp).  The compaction was the one missed at
+  first: the kept X_RS and X_RN pointed at the blocks' old ranges.  The new
+  BPACK_CHECK=solve comparison of a nonsymmetric level's kept factors with
+  their host copies at the solve's set-up found it.
+- A nonsymmetric level keeps its host copies too (skip_xnr_ off) and its
+  X_RR_full (not rebuilt from the kept LU).  So when the heap is short, the
+  reclaimer may drop the kept factors as a last resort, and the first solve
+  uploads them instead.  The keep decision counts the level's raw fill sources,
+  about the keep bound itself, beside the kept factors (decide_solve_keep).
+  Without that, 96^3 on 8 GPUs with a 0.3 heap ran out at level 4: 4.2 GB kept
+  next to 7.1 GB of fill sources.
+- The device solve no longer declines a nonsymmetric tree.
+
+| problem | GPUs | logdet | solve, device (host, N5d) |
+|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | as N5d | 0.042 / 0.036 / 0.032 s (0.140 / 0.072 / 0.063) |
+| Laplace 48^3, --skew 0.5 | 8 / 12 | as N5d | 0.040 / 0.036 s (0.074 / 0.069) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | -9990237.1958708651 / ...1370139793 | 0.093 / 0.085 s (0.292 / 0.209) |
+| EMSURF CFIE alpha 0.5, 9000 | 1 / 8 | CPU's to 5e-15 / 6e-15 | 0.023 / 0.023 s (0.029 / 0.032) |
+| EMSURF CFIE alpha 0.5, 128K | 8 | -286910.4505103347 | 0.060 s (0.119) |
+
+BPACK_CHECK=solve gives multiply 3e-16 and solve 4e-15 relative to the host on
+1 and 8 GPUs; it gives the same with 4 right-hand sides (Laplace, and EMSURF
+1.1e-14).  The factorization's time is unchanged within 5% (the keep's
+copies).  Symmetric runs are bitwise unchanged.
+
+The heap at 0.25 of the card fails at 96^3 on 8 GPUs, as N5d did: the sketch's
+P;W block wants 763 MB in one range and the largest free one is 738 MB.  That
+is N5f's (the memory features), with the host copies that a nonsymmetric level
+still keeps beside its kept factors.
 
 #### logdet of an operator after another one is built (2026-10-17)
 

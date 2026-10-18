@@ -35,6 +35,12 @@ struct SolveBox {
     const void* T;        // ld k (null: no step)
     const void* xsr;      // ld k (null: no step)
     const void* xnr;      // ld ntot
+    // a nonsymmetric matrix: X_RS (-X_RR^{-1} X_RS, r x k) and X_RN (-X_RR^{-1}
+    // X_RN, r x ntot), stored transposed as X_SR and X_NR are (ld k, ld ntot);
+    // the backward sweep and the multiply's forward one read them in their
+    // place.  Null: X_SR and X_NR serve (a symmetric matrix).
+    const void* xrs_t;
+    const void* xrn_t;
     const void* lu;       // ld r
     const int* ipiv;
     int slot0, nslots;    // its one-hop slots
@@ -105,6 +111,7 @@ template<typename T>
 void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
                           cudaStream_t stream);
 // backward: x_R += X_SR^T x_S + X_NR^T x_N;  x_S -= T x_R (x_N gathered into work)
+// (a nonsymmetric matrix: X_RS x_S + X_RN x_N, from xrs_t and xrn_t)
 template<typename T>
 void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                            const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
@@ -129,7 +136,8 @@ void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, void* 
                       void* const* xsr_dsts, int count, cudaStream_t stream);
 
 // The multiply F x (the factorization applied), core/apply_mul.hpp:
-// forward W:  x_S += T x_R;  x_R -= X_SR^T x_S + X_NR^T x_N  (x_N gathered into work)
+// forward W:  x_S += T x_R;  x_R -= X_SR^T x_S + X_NR^T x_N  (x_N gathered into work;
+//             a nonsymmetric matrix: X_RS x_S + X_RN x_N, from xrs_t and xrn_t)
 template<typename T>
 void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
                         const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);

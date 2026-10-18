@@ -211,8 +211,8 @@ __global__ void __launch_bounds__(kThreads) solve_backward_one_kernel(const Solv
     T* sh = shared_array<T>();
     const SolveBox b = boxes[wave[blockIdx.x]];
     const T* bT = static_cast<const T*>(b.T);
-    const T* bxsr = static_cast<const T*>(b.xsr);
-    const T* bxnr = static_cast<const T*>(b.xnr);
+    const T* bxsr = static_cast<const T*>(b.xrs_t != nullptr ? b.xrs_t : b.xsr);  // (X_RS^T, X_RN^T: nonsymmetric)
+    const T* bxnr = static_cast<const T*>(b.xrn_t != nullptr ? b.xrn_t : b.xnr);
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
@@ -299,8 +299,8 @@ __global__ void __launch_bounds__(kThreads) mul_forward_one_kernel(const SolveBo
     T* sh = shared_array<T>();
     const SolveBox b = boxes[wave[blockIdx.x]];
     const T* bT = static_cast<const T*>(b.T);
-    const T* bxsr = static_cast<const T*>(b.xsr);
-    const T* bxnr = static_cast<const T*>(b.xnr);
+    const T* bxsr = static_cast<const T*>(b.xrs_t != nullptr ? b.xrs_t : b.xsr);  // (X_RS^T, X_RN^T: nonsymmetric)
+    const T* bxnr = static_cast<const T*>(b.xrn_t != nullptr ? b.xrn_t : b.xnr);
     T* xs = sh;
     T* xr = sh + b.k;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, nwarps = blockDim.x >> 5;
@@ -667,8 +667,8 @@ __global__ void __launch_bounds__(kThreads) solve_backward_kernel(const SolveBox
     T* sh = kSharedXn ? chunk : chunk + kChunkRows * CB;
     const SolveBox b = boxes[wave[blockIdx.x]];
     const T* bT = static_cast<const T*>(b.T);
-    const T* bxsr = static_cast<const T*>(b.xsr);
-    const T* bxnr = static_cast<const T*>(b.xnr);
+    const T* bxsr = static_cast<const T*>(b.xrs_t != nullptr ? b.xrs_t : b.xsr);  // (X_RS^T, X_RN^T: nonsymmetric)
+    const T* bxnr = static_cast<const T*>(b.xrn_t != nullptr ? b.xrn_t : b.xnr);
     const int kr = b.k + b.r;
     const int stride = kSharedXn ? kr + b.ntot : kr;
     const int64_t xn_stride = kSharedXn ? stride : b.ntot;
@@ -816,8 +816,8 @@ __global__ void __launch_bounds__(kThreads) mul_forward_kernel(const SolveBox* b
     T* sh = kSharedXn ? chunk : chunk + kChunkRows * CB;
     const SolveBox b = boxes[wave[blockIdx.x]];
     const T* bT = static_cast<const T*>(b.T);
-    const T* bxsr = static_cast<const T*>(b.xsr);
-    const T* bxnr = static_cast<const T*>(b.xnr);
+    const T* bxsr = static_cast<const T*>(b.xrs_t != nullptr ? b.xrs_t : b.xsr);  // (X_RS^T, X_RN^T: nonsymmetric)
+    const T* bxnr = static_cast<const T*>(b.xrn_t != nullptr ? b.xrn_t : b.xnr);
     const int kr = b.k + b.r;
     const int stride = kSharedXn ? kr + b.ntot : kr;
     const int64_t xn_stride = kSharedXn ? stride : b.ntot;
