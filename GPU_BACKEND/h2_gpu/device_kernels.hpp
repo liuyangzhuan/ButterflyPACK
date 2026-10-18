@@ -116,6 +116,7 @@ struct RowSwapItemT {
     int cols;
     const int* piv;
     int r;
+    int forward;  // 0: the pivots undone (P A, A = P L U rebuilt); 1: applied (P^T A, as getrs)
 };
 using RowSwapItem = RowSwapItemT<double>;
 

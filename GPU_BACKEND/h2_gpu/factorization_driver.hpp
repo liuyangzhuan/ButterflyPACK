@@ -174,11 +174,11 @@ public:
         if constexpr (!gpu_data_type<DataType>) {
             return 0.0;
         } else {
-            if (!color_gpu_enabled() || opt_.use_sketch != 2 || !opt_.is_symmetric || opt_.is_hermitian ||
+            if (!color_gpu_enabled() || opt_.use_sketch != 2 || opt_.is_hermitian ||
                 opt_.method != FactorizationMethod::LU) {
                 return 0.0;
             }
-            return warm_up_registered_evaluator<DataType>(tree_, kernel_->gpu_evaluator);
+            return warm_up_registered_evaluator<DataType>(tree_, kernel_->gpu_evaluator, opt_.is_symmetric);
         }
     }
 
@@ -462,7 +462,7 @@ public:
             }
         }
         if (!(color_gpu_enabled() && use_streamed_level && lazy_far_field_mode() == LazyFarFieldMode::LAZY &&
-              opt_.is_symmetric && !opt_.is_hermitian)) {
+              !opt_.is_hermitian)) {
             return;
         }
         if (wave_trace_enabled()) trace_.start_begin();

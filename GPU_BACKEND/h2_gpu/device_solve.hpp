@@ -3556,7 +3556,9 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
                       bool multiply, int verbosity, HostRun&& host, const std::vector<MPI_Comm>* level_comms = nullptr,
                       const HostLevelStep* host_level = nullptr) {
     activate_operator(tree);  // (before the store is read: one per operator)
-    if (device_solve_suspended() || !color_gpu_enabled()) {
+    // (a nonsymmetric factor: the host solve, whose backward sweep reads X_RS
+    // and X_RN; the device kernels read X_SR^T and X_NR^T)
+    if (device_solve_suspended() || !color_gpu_enabled() || !tree->factor_symmetric) {
         materialize_host_factors(tree);  // (the host path reads them)
         return false;
     }

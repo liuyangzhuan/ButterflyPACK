@@ -6417,6 +6417,105 @@ symmetric matrix (97 vs 82 s): its endpoints and transition evaluate their
 far blocks from the kernel, which the eager path forms once.  Symmetric runs
 bitwise as before.
 
+#### Nonsymmetric matrices, step N5: the GPU factorization (2026-10-18)
+
+The user's choices: one device block per ordered pair; the stages N5a (gates),
+N5b (one-rank device levels; host transition and solve), N5c (several ranks:
+the generators), N5d (device transition), N5e (device solve, kept factors),
+N5f (the memory features: compressed fill sources, the packed near store),
+with those features off for a nonsymmetric matrix until N5f; and the device
+two-sided sketch (the host sketch is not an option for it).
+
+**N5a, the gates.**  C_BPACK_wrapper no longer refuses a nonsymmetric GPU
+factorization.  level_eliminator_supported takes a nonsymmetric matrix whose
+evaluator gives entries one at a time (inline_entries; the sketch reads K(F, B)
+rows as K(row, col)), not on CA levels.  The driver's start_level asks
+!is_hermitian rather than a symmetric matrix, and the warm-up registers the
+evaluator with the matrix's symmetry.  The device solve declines a
+nonsymmetric tree (materialize_host_factors, then the host solve).  The
+device transition (builds_parents, box_path_runs) stays symmetric-only, so a
+nonsymmetric level's transition runs on the host.
+
+**N5b, the level eliminator.**
+- Blocks: K(row, col) under dkey(row, col) = (col << 32) | row, both
+  orientations.  A symmetric level's edge_key(lo, hi) is dkey(hi, lo), so its
+  keys do not change.  begin() uploads a box's A_NS[N] = K(N, B) and A_SN[N] =
+  K(B, N) untransposed; download_blocks_to_host puts K(row, col) back into the
+  column box's A_NS[row] and the row box's A_SN[col] (no shared edges).
+- Elimination: X_RR = A_RR - A_RS T - T^T A_SR + T^T A_SS T (no
+  symmetrization), X_SR = A_SR - A_SS T, X_RS = A_RS - T^T A_SS, X_RN = A_RN -
+  T^T A_SN.  With X_RR = P L U and W = U^-1 L^-1: temp1 = -X_SR X_RR^-1 and
+  temp2 = -X_NR X_RR^-1 as for a symmetric matrix (W, then the column swaps);
+  temp3 = -X_RR^-1 X_RS and temp4 = -X_RR^-1 X_RN from P^T applied to copies
+  (row_swap_kernel's forward order, as getrs does) and then W.  S += temp1
+  X_RS, and the near store's two adds: K(N, B) += temp2 X_RS, K(B, N) += X_SR
+  temp4.  The host gets X_RS = temp3 and X_RN = temp4, the solve's factors.
+- Owner pass: every ordered pair K(x, y) += temp2[x] X_RN[:, y] (NN); the
+  lower candidate of a pair makes both blocks (the device needs no mirror).
+- Sketch: the stacked [K(F, B); K(B, F)^T; K(T, B); K(B, T)^T].  The sketch
+  kernel's chunk_values evaluates entry(B point, row point), the K(B, F)^T
+  rows, and inside an item's swap ranges (OrderedSketchItem swap_lo/hi)
+  entry(row point, B point), the K(F, B) and K(T, B) rows.  The fill has two
+  terms a source: W from temp2's rows with P1 = X_RR temp4[:, B] (NN), and W
+  from temp4's columns with P2 = X_RR^T temp2^T[B] (TN).  temp4 is a second
+  fill-source store (persist_temp4).
+- Off until N5f: H2_compress_factors (forced to 0) and the kept solve factors
+  (set_solve_keep).
+
+**N5c, several ranks.**  A box's generator for its neighbors' ranks carries,
+after the symmetric generator's temp2, X_RS and X_RR_full, the original X_RN
+whole, temp4, and the solved X_SR (temp1).  It carries X_RN whole because the
+pair updates K(L, N) read the columns of every N one hop from a destination
+box, not only the destination's.  It carries no X_NR, so the sender makes no
+copy of it.  The receiver (apply_remote_generators, process_gen_nonsym) forms
+what form_near_updates_from_generators_nonsymmetric forms on the host, all NN:
+- Schur(L) += temp2_L X_RN[:, L].
+- K(B, L) := K(S_B, L) + temp1 X_RN[:, L] and K(L, B) := K(L, S_B) + temp2_L
+  X_RS, from the stored blocks gathered at B's skeleton, else from the kernel.
+- K(L, N) += temp2_L X_RN[:, N] and K(N, L) += temp2_N X_RN[:, L].
+
+The receiver keeps temp4 as the remote source's fill side (BoxState::persist_t4)
+and copies it to the host generator box's X_RN for the host transition.
+persist_t4 is released with temp2^T once the source's local readers are
+eliminated, for the local sources too: early freeing now applies to them.  Only
+the device exchange (CUDA-aware MPI) carries these generators; without it a
+nonsymmetric level on several ranks runs on the host.
+
+The table compares H2_use_gpu 1 against the CPU N4 on the same ranks (GPU
+nodes, 16 threads a rank):
+
+| problem | GPUs | logdet GPU (CPU N4) | factor GPU (CPU N4) |
+|---|---|---|---|
+| Laplace 24^3, --column_weight 0.5 | 1 | -117644.67022630958 (...955) | 0.82 s |
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | -1095138.2896874286 (...282) / .2792582037 (...039) / .2772080074 (same) | 3.86 / 2.84 / 3.03 s (14.5 / 9.4 / 9.5) |
+| Laplace 48^3, --skew 0.5 | 1 / 8 / 12 | -1082910.8998527119 / .8977820259 (same) / .8957173009 (...007) | 4.02 / 2.73 / 3.29 s (14.1 / 10.1 / 10.3) |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.5951924148 (...147) / 3763.59524126339 (...343) | 34.9 / 51.1 s (186 / 98) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | -9990237.19587 / -9990237.13701 (sym + sum log w: 6.9e-8 / 7.1e-8) | 11.7 / 10.3 s (symmetric 1.31 / 1.32) |
+| EMSURF CFIE alpha 0.5, 128K elements | 8 | -286910.450510524 (no CPU run) | 165 s (EFIE symmetric 1.65) |
+
+acc_forward is the CPU's to all digits shown (4.1e-3, 2.9e-3, 7.3e-5); the
+128K CFIE gives 1.4e-3 (the symmetric EFIE 0.11).
+Symmetric runs are bitwise unchanged on 8 GPUs: Laplace 192^3, the collective
+entries (s4), the EFIE sphere 128K checksums, and the extraction check.  VIE3D
+(cvie3d_h2) registers no GPU evaluator and stays on the host.
+
+Where the nonsymmetric GPU time goes, and so what N5d-N5f are for:
+- The host transitions.  At 96^3 on 8 GPUs the three levels' transitions take
+  7.2 of the 11.7 s; the symmetric levels' device transitions take 0.1 s
+  together.  On the 9000-element EMSURF the one transition with the 8 -> 1
+  reduction takes 43 of the 51 s (the CPU's own 42.8 s); on the 128K CFIE the
+  three take 134 of the 165 s.  That is N5d.
+- The elimination is 1.8x the symmetric one (level 4 of 96^3: 0.66 vs 0.37 s),
+  about what the two orientations cost on the CPU.
+- The generators are 2.6x the symmetric bytes (level 4: 4.21 vs 1.62 GB sent a
+  rank).  Bandwidth is not the limit: rank 0's own exchanges add up to about
+  0.8 s, and the rest of the transport wall waits for slower peers.  But the
+  exchange arena reached 2.45 of 2.65 GB on rank 0, and past it a message goes
+  through the main heap, about 30x slower.  A larger case needs a larger arena,
+  or the receiver must release its buffers sooner.
+- Memory: resident peak 8.0 vs 6.0 GB at level 4 of 96^3, mostly temp4 beside
+  temp2^T (fill raw 6.35 vs 3.60 GB), with nothing compressed until N5f.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

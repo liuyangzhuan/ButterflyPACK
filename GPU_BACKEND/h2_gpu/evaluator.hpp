@@ -182,6 +182,12 @@ public:
             check_launch("the entry evaluator's sketch");
             return;
         }
+        for (const OrderedSketchItemT<T>& it : host_items) {
+            if (it.swap_hi0 > it.swap_lo0 || it.swap_hi1 > it.swap_lo1) {
+                throw std::logic_error(
+                    "Evaluator::sketch_rows: K(row, col) rows (a nonsymmetric matrix) need an entry evaluator");
+            }
+        }
         if (collective_ && sketch_ready_ && sketch_ready_()) {
             collective_sketch_rows<T>(host_items, points, stream);
             return;
