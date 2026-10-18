@@ -108,6 +108,12 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
         return mine_lo;
     };
     auto edge_key = [](int64_t lo, int64_t hi) { return (static_cast<uint64_t>(lo) << 32) | static_cast<uint64_t>(hi); };
+    // a nonsymmetric matrix: directed blocks, both of a pair under the
+    // contribution rule of the pair (lo, hi); a key goes as its two halves
+    const bool directed = !tree->factor_symmetric;
+    if (blocks && blocks->directed != directed) {
+        throw std::runtime_error("reduce_parent_blocks: blocks of the other symmetry");
+    }
 
     // ---- the sender's list (its blocks, kept in order), the owner's drops
     struct Head { int64_t kind, lo, hi, rows, cols; };  // kind 0: Schur block (lo == hi), 1: pair
@@ -134,7 +140,7 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
             const int64_t lo = static_cast<int64_t>(key >> 32), hi = static_cast<int64_t>(key & 0xffffffffu);
             const DeviceMatrixT<S>& m = blocks->edges.at(key);
             if (m.ptr == nullptr) continue;
-            if (!contributes(lo, hi)) {
+            if (!(directed ? contributes(std::min(lo, hi), std::max(lo, hi)) : contributes(lo, hi))) {
                 if (receiver) {  // (the owner's own copy: the lower parent's rank sends it)
                     heap.free(m.ptr);
                     blocks->edges.erase(key);
@@ -209,7 +215,10 @@ ReductionStats reduce_parent_blocks(ParallelTree<CoordType, DataType>* tree,
     recvs.assign(peers.size(), {});
     recv_dst.assign(peers.size(), {});
     if (receiver) {
-        if (!blocks) blocks = std::make_unique<DeviceLevelBlocks<DataType>>();
+        if (!blocks) {
+            blocks = std::make_unique<DeviceLevelBlocks<DataType>>();
+            blocks->directed = directed;
+        }
         for (size_t i = 0; i < peers.size(); ++i) {
             const std::vector<int64_t>& h = recv_heads[i];
             for (size_t j = 0; j + 5 <= h.size(); j += 5) {

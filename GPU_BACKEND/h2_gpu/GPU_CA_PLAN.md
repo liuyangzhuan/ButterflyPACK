@@ -6516,6 +6516,68 @@ Where the nonsymmetric GPU time goes, and so what N5d-N5f are for:
 - Memory: resident peak 8.0 vs 6.0 GB at level 4 of 96^3, mostly temp4 beside
   temp2^T (fill raw 6.35 vs 3.60 GB), with nothing compressed until N5f.
 
+**N5d, the device transition (2026-10-18).**  A nonsymmetric level's parents are
+built on the device (build_parent), and their blocks go to the next level's
+eliminator, through the device reduction, or to the host as for a symmetric
+matrix.
+- DeviceLevelBlocks::directed: the parent near blocks are K(P, Q) and K(Q, P)
+  under dkey (both from the lower local parent; this rank's copies of a pair
+  with another rank's parent).  The Schur block holds every ordered child pair.
+- A child block C(R, S) (rows R): the child's Schur block, the stored K(R, S)
+  for a one-hop pair (else the kernel), and for a two-hop pair K(R, S) -
+  sum_E temp2_E[R] X_RR_full_E temp4_E[:, S] = G_{E,R}^T P_{E,S}.  Here P_{E,S} =
+  X_RR_full_E temp4_E[:, S], with g_for's column side: temp4's columns, laid
+  out as temp2^T is, in a table of their own (g4_index).  The sources are R's
+  and S's common eliminated neighbors, in the host's order.
+- A fill source freed during the waves comes back from its host copies as
+  [G_all | X_RR_full | temp4 at the same points] (the staging's L grows by the
+  rows; temp4 from the host box's X_RN).
+- The next level's begin() checks that the adopted blocks have the matrix's
+  symmetry; the symmetric check of their shapes already reads a dkey right (the
+  key's low half is the rows' box).  download_level_blocks puts K(row, col) into
+  the column box's A_NS[row] and the row box's A_SN[col].
+  reduce_parent_blocks sends both blocks of a pair under the pair's
+  contribution rule (a key as its two halves), and a receiver without blocks
+  takes the tree's symmetry (ParallelTree::factor_symmetric).
+- The driver's builds_parents, box_path_runs and device_reduction_possible ask
+  !is_hermitian rather than a symmetric matrix; level_eliminator_would_run
+  tests the rest.
+
+| problem | GPUs | logdet | factor N5d (N5c) |
+|---|---|---|---|
+| Laplace 48^3, --column_weight 0.5 | 1 / 8 / 12 | as N5c (...4286 / ...2037 / ...0074) | 1.18 / 0.71 / 0.87 s (3.86 / 2.84 / 3.03) |
+| Laplace 48^3, --skew 0.5 | 8 / 12 | as N5c | 0.76 / 0.90 s (2.73 / 3.29) |
+| EMSURF CFIE alpha 0.5, 9000 elements | 1 / 8 | 3763.59519241477 / 3763.59524126339 (N5c: 1e-15) | 4.17 / 3.11 s (34.9 / 51.1) |
+| Laplace 96^3, --column_weight 0.5 | 8 / 16 | as N5c (...8651 / ...3983, 2e-16) | 3.10 / 2.68 s (11.7 / 10.3; symmetric 1.31 / 1.32) |
+| EMSURF CFIE alpha 0.5, 128K elements | 8 | -286910.4505105183 (N5c: 1.8e-14) | 15.2 s (165) |
+
+acc_forward is N5c's in all of them.  Checked besides:
+- The host restore: with BPACK_GPU_HEAP_FRACTION 0.35 / 0.28, 96^3 on 8 GPUs
+  restores 0.23 / 0.59 GB of freed sources at the level-4 transition (3 / 5
+  chunks), and the logdet stays bitwise -9990237.1958708651.
+- download_level_blocks: a test build that never kept the parents on the device
+  (not committed) gives the same logdets on 1/8/12 GPUs and EMSURF on 8.
+- Both device reductions run: 8 -> 1 ("merged on this device") and, on 12
+  ranks, "sent to their owner's device".
+- Symmetric runs are bitwise unchanged (192^3, s4, the sphere 128K checksums,
+  the extraction check, 96^3 on 16).
+
+The transitions take 0.1-0.3 s a level now.  Where the time goes:
+- 96^3 on 8 GPUs (3.1 s) is 2.4x the symmetric run, the two orientations in
+  the waves and the exchange.
+- On the 128K CFIE the sketch's kernel rows are 10 of the 15.2 s (5.44 s at
+  level 4, against 0.17 s for the symmetric EFIE).  That is the example's
+  evaluator: the EFIE has a block evaluator that shares an edge's four
+  triangle pairs, while the CFIE's entry evaluator computes each entry alone,
+  EFIE and MFIE parts apart, and the nonsymmetric sketch evaluates twice the
+  rows.  The EFIE as a nonsymmetric matrix (--sym 0) does not run on the GPU
+  at all: the nonsymmetric sketch takes only entry evaluators.  A block
+  evaluator for the sketch's two orientations (evaluate K(F, B) and K(B, F)
+  as blocks) would cover both.
+
+N5e (the device solve and the kept factors) and N5f (the compressed fill
+sources and the packed near store) are next.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

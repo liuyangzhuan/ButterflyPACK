@@ -436,6 +436,9 @@ template<typename T>
 struct DeviceLevelBlocksT {
     std::unordered_map<int64_t, DeviceMatrixT<T>> schur;
     std::unordered_map<uint64_t, DeviceMatrixT<T>> edges;
+    // a nonsymmetric matrix: the near-field blocks are directed, K(row, col)
+    // under (col << 32) | row (rows = row's points), both orientations
+    bool directed = false;
     // ... the same blocks compressed, when H2_compress_factors asked for it.
     // A key in both is stored raw and compressed (while the raw form is still
     // what the next level reads); a key only here is stored compressed.
@@ -3219,7 +3222,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
             st.schur = it->second;
             it->second.ptr = nullptr;  // st.schur owns it now, and only it
         }
+        if (adopt_->directed != nonsym_) {
+            throw std::runtime_error("LevelEliminator::begin: adopted blocks of the other symmetry");
+        }
         for (const auto& kv : adopt_->edges) {
+            // (rows = the key's low half: the higher box, or a directed block's row box)
             const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
             // a box of another rank is known only from its block here
             if ((is_interest(hi) && kv.second.rows != state_of(hi).n) ||
@@ -10819,12 +10826,15 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         return slot;
     };
     std::vector<int> g_index, p_index;  // per chunk: (source id, direction) -> its G, its P (-1: none yet)
+    std::vector<int> g4_index;          // ... and (a nonsymmetric matrix) its temp4 columns
 
     // Parent blocks: the Schur block of each local parent, and a near-field
     // block for each neighbor parent (a local pair once, from its lower
     // parent; a pair with a parent of another rank always: this rank's copy).
     auto out = std::make_unique<Blocks>();
-    struct Pair { int64_t pm, qm; DeviceMatrix* block; };  // qm == pm: Schur block
+    out->directed = nonsym_;
+    // (a nonsymmetric matrix: K(P, Q) and K(Q, P) of a pair, rows_q telling which)
+    struct Pair { int64_t pm, qm; DeviceMatrix* block; bool rows_q = false; };  // qm == pm: Schur block
     std::vector<std::vector<Pair>> pairs_of(np);
     for (size_t p = 0; p < np; ++p) {
         if (!built(p) || (occupancy_ && parents[p].num_points == 0)) continue;
@@ -10853,6 +10863,15 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             if (is_local_parent(qm) && qm <= pm) continue;
             const Parent& q = parent(qm);
             if (occupancy_ && q.n == 0) continue;
+            if (nonsym_) {
+                DeviceMatrix& pq = out->edges[dkey(pm, qm)];
+                pq = DeviceMatrix{nullptr, parents[p].num_points, q.n};
+                pairs_of[p].push_back(Pair{pm, qm, &pq, false});
+                DeviceMatrix& qp = out->edges[dkey(qm, pm)];
+                qp = DeviceMatrix{nullptr, q.n, parents[p].num_points};
+                pairs_of[p].push_back(Pair{pm, qm, &qp, true});
+                continue;
+            }
             const int64_t lo = std::min(pm, qm), hi = std::max(pm, qm);
             const int rows = hi == qm ? q.n : parents[p].num_points, cols = hi == qm ? parents[p].num_points : q.n;
             DeviceMatrix& em = out->edges[edge_key(lo, hi)];
@@ -10872,6 +10891,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     struct Restored {
         const S* gall = nullptr;
         const S* xrr = nullptr;
+        const S* g4all = nullptr;  // (nonsymmetric: temp4's columns at the same points as gall)
         std::unordered_map<int64_t, int> col_of;  // neighbor -> first column of its G
         char* block = nullptr;
         char* xrr_block = nullptr;   // (H2 host memory) its X_RR_full alone, restored from the host
@@ -10922,7 +10942,9 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const S* t2t = nullptr;   // resident temp2^T
             const S* gall = nullptr;  // restored G columns
             const S* xrr = nullptr;
-            size_t gall_off = SIZE_MAX, xrr_off = SIZE_MAX;  // in this chunk's restore block
+            const S* t4 = nullptr;    // (nonsymmetric) resident temp4, and
+            const S* g4all = nullptr; // its restored columns
+            size_t gall_off = SIZE_MAX, xrr_off = SIZE_MAX, g4_off = SIZE_MAX;  // in this chunk's restore block
             const std::unordered_map<int64_t, int>* col_of = nullptr;
             int r = 0;
             Box* box = nullptr;
@@ -10936,7 +10958,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         VBatch<S> xrr_gemm;
         int max_xrr_r = 0;
         // restored in this chunk, at increasing offsets of the staging buffer
-        struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; bool xrr_only = false; };
+        struct Pending { int64_t morton; Box* box; int r; size_t gall_off, xrr_off, end; size_t last_parent; std::vector<int64_t> rows; bool xrr_only = false; size_t g4_off = SIZE_MAX; };
         std::vector<Pending> pending;
         std::unordered_map<int64_t, std::unordered_map<int64_t, int>> pending_cols;
         size_t restore_bytes = 0;
@@ -10979,11 +11001,19 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             if (es.temp2t != nullptr) {
                 s.t2t = es.temp2t;
                 s.xrr = xrr_of_es;
+                if (nonsym_) {
+                    if (es.temp4 == nullptr) {
+                        throw std::runtime_error("LevelEliminator::build_parent: fill source " + std::to_string(em) +
+                                                 " has its temp2^T but not its temp4");
+                    }
+                    s.t4 = es.temp4;
+                }
                 return s;
             }
             auto rit = restored.find(em);
             if (rit != restored.end()) {
                 s.gall = rit->second.gall;
+                s.g4all = rit->second.g4all;
                 s.xrr = rit->second.xrr;
                 s.col_of = &rit->second.col_of;
                 if (rit->second.gall == nullptr) s.t2t = reinterpret_cast<const S*>(rit->second.block);
@@ -11044,7 +11074,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             // restore in this chunk: the skeleton rows of each neighbor with
             // point data here (the only ones a pair of this rank can read)
             Box* sb = s.box;
-            if (sb->X_NR.rows != es.ntot || sb->X_NR.cols != s.r || !host_xrr_available(*sb, s.r)) {
+            if (sb->X_NR.rows != es.ntot || sb->X_NR.cols != s.r || !host_xrr_available(*sb, s.r) ||
+                (nonsym_ && (sb->X_RN.rows != s.r || sb->X_RN.cols != es.ntot || sb->X_RN.lda != s.r))) {
 #ifdef H2_HAVE_NVCOMP
                 if (packed_of(es) != nullptr && es.ntot > 0 && es.r > 0 && !sb->X_NR.is_allocated()) {
                     // (no host copy under packed_restore_: the packed put-back
@@ -11085,10 +11116,15 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             pd.gall_off = restore_bytes;
             pd.xrr_off = restore_bytes + static_cast<size_t>(s.r) * pd.rows.size() * D;
             restore_bytes = align_up(pd.xrr_off + static_cast<size_t>(s.r) * s.r * D);
+            if (nonsym_) {  // [G_all | X_RR_full | temp4 at the same points]
+                pd.g4_off = pd.xrr_off + static_cast<size_t>(s.r) * s.r * D;
+                restore_bytes = align_up(pd.g4_off + static_cast<size_t>(s.r) * pd.rows.size() * D);
+            }
             pd.end = restore_bytes;
             pd.last_parent = last_reader(sb);
             s.gall_off = pd.gall_off;
             s.xrr_off = pd.xrr_off;
+            s.g4_off = pd.g4_off;
             s.col_of = &cols;
             pending.push_back(std::move(pd));
             return s;
@@ -11101,6 +11137,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         std::vector<size_t> p_offsets;    // its P blocks (buffer offsets), by g_index / p_index
         g_index.assign(num_source_ids * kDirections, -1);
         p_index.assign(num_source_ids * kDirections, -1);
+        if (nonsym_) g4_index.assign(num_source_ids * kDirections, -1);
         struct GPending { size_t offset; const S* src; int r; int k; IndexList cols; };
         std::vector<GPending> g_pending;
         struct PPending { size_t offset; int g; const S* xrr; size_t xrr_restore; int r; int k; };
@@ -11109,15 +11146,18 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         struct FillTask { int g_i; int p_j; S* out; int ld; int m; int n; int r; bool rows_i; };
         std::vector<std::vector<FillTask>> fills;  // per target child pair, in source order
 
-        // G_{E,x}: temp2_E rows of child x (its skeleton), as columns of temp2_E^T
-        auto g_for = [&](const SourceCandidate& e, int64_t xm, const int64_t x3[3]) -> int {
+        // G_{E,x}: temp2_E rows of child x (its skeleton), as columns of temp2_E^T.
+        // col_side (a nonsymmetric matrix): temp4_E's columns of x instead,
+        // laid out as temp2^T is.
+        auto g_for = [&](const SourceCandidate& e, int64_t xm, const int64_t x3[3], bool col_side = false) -> int {
             const size_t slot = static_cast<size_t>(e.id) * kDirections + static_cast<size_t>(direction(e.coords, x3));
-            if (g_index[slot] >= 0) return g_index[slot];
+            std::vector<int>& index = col_side ? g4_index : g_index;
+            if (index[slot] >= 0) return index[slot];
             const int64_t em = e.morton;
             auto record = [&](const GInfo& info) {
                 g_infos.push_back(info);
-                g_index[slot] = static_cast<int>(g_infos.size()) - 1;
-                return g_index[slot];
+                index[slot] = static_cast<int>(g_infos.size()) - 1;
+                return index[slot];
             };
             Source& s = source(em);
             BoxState& xs = state_of(xm);
@@ -11128,14 +11168,17 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 }
                 GInfo info;
                 info.ld = s.r;
+                const S* all = col_side ? s.g4all : s.gall;
+                const size_t all_off = col_side ? s.g4_off : s.gall_off;
                 if (s.gall != nullptr) {
-                    info.ptr = s.gall + static_cast<size_t>(cit->second) * s.r;
+                    info.ptr = all + static_cast<size_t>(cit->second) * s.r;
                 } else {
                     info.ptr = nullptr;
-                    info.restore = s.gall_off + static_cast<size_t>(cit->second) * s.r * D;
+                    info.restore = all_off + static_cast<size_t>(cit->second) * s.r * D;
                 }
                 return record(info);
             }
+            const S* base = col_side ? s.t4 : s.t2t;
             LazyFarEndpoint<CoordType> endpoint;
             endpoint.morton = xm;
             endpoint.full_size = host_full(xm);
@@ -11151,13 +11194,13 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             const int k = static_cast<int>(endpoint.skeleton->size());
             const bool by_skeleton = slot_count == endpoint.full_size && !xs.skeleton_identity;
             if (!by_skeleton) {  // contiguous columns
-                info.ptr = s.t2t + static_cast<size_t>(slot_offset) * s.r;
+                info.ptr = base + static_cast<size_t>(slot_offset) * s.r;
             } else {
                 IndexList cols = current_slots_in(xs, meta, wave_stamp_);
                 cols.base = static_cast<int>(slot_offset);
                 info.ptr = nullptr;
                 info.buffer = buffer_bytes;
-                g_pending.push_back(GPending{buffer_bytes, s.t2t, s.r, k, cols});
+                g_pending.push_back(GPending{buffer_bytes, base, s.r, k, cols});
                 buffer_bytes = align_up(buffer_bytes + static_cast<size_t>(s.r) * k * D);
             }
             return record(info);
@@ -11165,7 +11208,8 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
         auto p_for = [&](const SourceCandidate& e, int64_t jm, const int64_t j3[3]) -> int {
             const size_t slot = static_cast<size_t>(e.id) * kDirections + static_cast<size_t>(direction(e.coords, j3));
             if (p_index[slot] >= 0) return p_index[slot];
-            const int g = g_for(e, jm, j3);
+            // (a nonsymmetric matrix: P_{E,j} = X_RR_full_E temp4_E[:, j], the fill's column side)
+            const int g = g_for(e, jm, j3, nonsym_);
             const Source& s = source(e.morton);
             const int k = static_cast<int>(state_of(jm).skeleton.size());
             p_offsets.push_back(buffer_bytes);
@@ -11198,13 +11242,17 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     chunk_block_bytes += m_bytes;
                     const bool is_schur = pr.qm == pr.pm;
                     chunk_refs.push_back(ChunkRef{is_schur, pr.pm,
-                                                  is_schur ? 0 : edge_key(pr.pm, pr.qm), &M});
+                                                  is_schur ? 0
+                                                  : nonsym_ ? (pr.rows_q ? dkey(pr.qm, pr.pm) : dkey(pr.pm, pr.qm))
+                                                            : edge_key(pr.pm, pr.qm),
+                                                  &M});
                 }
                 const bool diag = pr.qm == pr.pm;
                 const Parent& pa = parent(pr.pm);
                 const Parent& qa = parent(pr.qm);
-                // rows of M: the higher parent (Q for a local pair)
-                const bool rows_q = !diag && pr.qm > pr.pm;
+                // rows of M: the higher parent (Q for a local pair); a
+                // nonsymmetric matrix's: the pair's orientation
+                const bool rows_q = nonsym_ ? pr.rows_q : !diag && pr.qm > pr.pm;
                 for (int ci = 0; ci < nc; ++ci) {
                     const int64_t im = pa.child[static_cast<size_t>(ci)];
                     for (int cj = 0; cj < nc; ++cj) {
@@ -11254,6 +11302,21 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                                 reaches_two = reaches_two || dist == 2;
                             }
                         }
+                        if (chebyshev <= 1 && nonsym_) {
+                            // the stored K(R, S) (rows = R's points), else the kernel
+                            auto it = edges_.find(dkey(Rm, Sm));
+                            if (it != edges_.end() && it->second.ptr == nullptr) {
+                                assert_not_packed(false, dkey(Rm, Sm), "build_parent");
+                            }
+                            if (it == edges_.end()) {
+                                eval();
+                                continue;
+                            }
+                            const DeviceMatrix& E = it->second;
+                            if (E.rows != kr || E.cols != ks) throw std::runtime_error("LevelEliminator::build_parent: child near block shape");
+                            gather(E.ptr, 1, E.rows);
+                            continue;
+                        }
                         if (chebyshev <= 1) {
                             auto it = edges_.find(edge_key(im, jm));
                             if (it != edges_.end() && it->second.ptr == nullptr) {
@@ -11284,6 +11347,21 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                         // and the sources come by Morton (the common eliminated
                         // neighbors, writable on both ranks).
                         sources_of(im, jm, cj3, sources);
+                        if (nonsym_) {
+                            // C(R, S) -= temp2_E[R] X_RR_full_E temp4_E[:, S] = G_{E,R}^T P_{E,S}
+                            const int64_t* r3 = rows_q ? cj3 : ci3;
+                            const int64_t* s3 = rows_q ? ci3 : cj3;
+                            size_t t = 0;
+                            for (const SourceCandidate* src : sources) {
+                                const BoxState& es = *src->state;
+                                if (es.r == 0) continue;
+                                if (fills.size() <= t) fills.resize(t + 1);
+                                fills[t].push_back(FillTask{g_for(*src, Rm, r3), p_for(*src, Sm, s3), target, M.rows, kr,
+                                                            ks, es.r, true});
+                                ++t;
+                            }
+                            continue;
+                        }
                         const bool i_first = !ca_ || im < jm;
                         const int64_t gi = i_first ? im : jm, pj = i_first ? jm : im;
                         const int64_t* gi3 = i_first ? ci3 : cj3;
@@ -11327,7 +11405,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             for (size_t q = 0; q < pending.size(); ++q) {
                 const Pending& pd = pending[q];
                 d_restore[q] = heap_.alloc_resident(pd.end - pd.gall_off, ResidentKind::Restore);
-                const int L = static_cast<int>(pd.rows.size()) + pd.r;
+                const int L = static_cast<int>(pd.rows.size()) * (nonsym_ && !pd.xrr_only ? 2 : 1) + pd.r;
                 restores.push_back(TransposeItem{reinterpret_cast<const S*>(d_raw + pd.gall_off), L,
                                                  reinterpret_cast<S*>(d_restore[q]), pd.r, L, pd.r});
                 max_rs_m = std::max(max_rs_m, L);
@@ -11340,6 +11418,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 }
                 rs.gall = restore_ptr(pd.gall_off);
                 rs.xrr = restore_ptr(pd.xrr_off);
+                if (nonsym_) rs.g4all = restore_ptr(pd.g4_off);
                 rs.col_of = std::move(pending_cols[pd.morton]);
                 rs.block = d_restore[q];
                 rs.last_parent = pd.last_parent;
@@ -11366,13 +11445,20 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                     const DataType* xrr = rebuilt.empty() ? pd.box->X_RR_full.data.data() : rebuilt.data();
                     const int64_t ldx = rebuilt.empty() ? pd.box->X_RR_full.lda : static_cast<int64_t>(pd.r);
                     const size_t nrows = pd.rows.size();
-                    const size_t L = nrows + static_cast<size_t>(pd.r);
+                    const bool with_t4 = nonsym_ && !pd.xrr_only;  // [temp2 rows; X_RR_full^T; temp4 columns^T]
+                    const size_t L = nrows * (with_t4 ? 2 : 1) + static_cast<size_t>(pd.r);
+                    const DataType* temp4 = with_t4 ? pd.box->X_RN.data.data() : nullptr;
+                    const size_t ld4 = with_t4 ? static_cast<size_t>(pd.box->X_RN.lda) : 0;
                     DataType* h = reinterpret_cast<DataType*>(h_stage + (pd.gall_off - base));
                     for (int t = 0; t < pd.r; ++t) {
                         DataType* col = h + static_cast<size_t>(t) * L;
                         const DataType* src = temp2 + static_cast<size_t>(t) * ld;
                         for (size_t c = 0; c < nrows; ++c) col[c] = src[pd.rows[c]];
                         for (int u = 0; u < pd.r; ++u) col[nrows + u] = xrr[t + static_cast<size_t>(u) * ldx];
+                        if (with_t4) {
+                            DataType* c4 = col + nrows + static_cast<size_t>(pd.r);
+                            for (size_t c = 0; c < nrows; ++c) c4[c] = temp4[static_cast<size_t>(t) + static_cast<size_t>(pd.rows[c]) * ld4];
+                        }
                     }
                 }
                 check_cuda(cudaMemcpyAsync(d_raw + base, h_stage, bytes, cudaMemcpyHostToDevice, stream),
@@ -11856,6 +11942,37 @@ void download_level_blocks(DeviceLevelBlocks<DataType>& blocks, std::vector<BoxD
     for (auto& kv : blocks.edges) {
         const int64_t lo = static_cast<int64_t>(kv.first >> 32), hi = static_cast<int64_t>(kv.first & 0xffffffffu);
         std::vector<DataType> block_data = std::move(data[piece++]);
+        if (blocks.directed) {
+            // K(row, col) (row = the low half): the column box's A_NS[row], the
+            // row box's A_SN[col]
+            const int64_t col = lo, row = hi;
+            auto* col_box = local_box(col);
+            auto* row_box = local_box(row);
+            if (col_box == nullptr && row_box == nullptr) {
+                throw std::runtime_error("download_level_blocks: near block without a local box");
+            }
+            if (col_box != nullptr) {
+                ModifiedBlock<DataType> view;
+                view.neighbor_morton = row;
+                std::vector<DataType> copy = row_box != nullptr ? block_data : std::vector<DataType>{};
+                view.set_a_ns_owned(kv.second.rows, kv.second.cols,
+                                    row_box != nullptr ? std::move(copy) : std::move(block_data),
+                                    MatrixStorage<DataType>::FULL);
+                col_box->near_field_interaction_map[row] =
+                    static_cast<int64_t>(col_box->near_field_modified_interactions.size());
+                col_box->near_field_modified_interactions.push_back(std::move(view));
+            }
+            if (row_box != nullptr) {
+                ModifiedBlock<DataType> view;
+                view.neighbor_morton = col;
+                view.A_SN.set_owned(kv.second.rows, kv.second.cols, std::move(block_data), MatrixStorage<DataType>::FULL);
+                row_box->near_field_interaction_map_nonsymmetry[col] =
+                    static_cast<int64_t>(row_box->near_field_modified_interactions.size());
+                row_box->near_field_modified_interactions.push_back(std::move(view));
+            }
+            heap.free(kv.second.ptr);
+            continue;
+        }
         if (local_box(lo) == nullptr || local_box(hi) == nullptr) {
             // a pair with a box of another rank: the local box's view
             // (rows = the other box's points)

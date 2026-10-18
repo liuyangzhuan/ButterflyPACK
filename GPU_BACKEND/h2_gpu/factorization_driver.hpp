@@ -269,7 +269,8 @@ public:
     bool box_path_runs(int lvl) const {
         if (!color_gpu_enabled() || lvl <= 1 || tree_->level_uses_CA(lvl)) return false;
         if (!tree_->levels[static_cast<size_t>(lvl)].is_process_active) return false;
-        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
+        // (a nonsymmetric matrix too: level_eliminator_would_run tests what it needs)
+        const bool streamed = opt_.use_sketch == 2 && !opt_.is_hermitian;
         if (!streamed || opt_.lazy_schur == 0) return false;
         // (with the level's own lazy mode: after a CA level the runtime still
         // has that level's, capped at 1)
@@ -309,7 +310,7 @@ public:
             return parent.num_active_processes == 1 && l0.num_active_processes == 1 &&
                    opt_.method == FactorizationMethod::LU && level_eliminator_would_run(tree_, 1, kernel_, opt_.method);
         }
-        const bool streamed = opt_.use_sketch == 2 && opt_.is_symmetric && !opt_.is_hermitian;
+        const bool streamed = opt_.use_sketch == 2 && !opt_.is_hermitian;
         if (!streamed) return false;
         if (tree_->level_uses_CA(parent_lvl)) {
             if (!ca_level_runs(parent_lvl) || !ca_level_supported(parent_lvl, nullptr)) return false;
@@ -999,7 +1000,7 @@ public:
     bool builds_parents(const Level& level, const Level& parent_level) const {
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
         return level_ && level.is_process_active && level_->can_build_parent() &&
-               (reduction_ahead || parent_level.is_process_active) && opt_.is_symmetric && !opt_.is_hermitian;
+               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
     }
 
     // Device transition: this level's blocks never leave the device, and the
