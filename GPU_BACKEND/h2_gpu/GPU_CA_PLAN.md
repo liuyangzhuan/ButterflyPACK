@@ -7140,7 +7140,51 @@ cost nothing measurable.  The EFIE sphere's solution checksum moves (norm
 and 11% after (acc_forward), so any change of the IDs moves its solution by
 that much; it was only ever a bitwise reference.
 
-#### logdet of an operator after another one is built (2026-10-17)
+#### A level's upload in 1 GiB chunks; the single-rank upper levels of a thin tree (2026-10-19)
+
+*The report.*  GPTune's GP fits on 400K space-time points ran out of GPU
+memory at level 3 (GPTune spatial_h2/upper_level_oom_repro; copied to
+upper_level_oom_repro/ here: K = 0.4537 exp(-|dx|^2/2) + 0.01302 I on the
+points divided by the length scales, 26 x 26 x 106 correlation lengths,
+tol 1e-10, H2_s_op 0.01302, nmin_leaf 32, 8 ranks on 80 GB A100s):
+"request 38.44 GB (other, transient) ... held: uploaded blocks 38.44 GB".
+
+*A second copy of the level.*  begin() uploads the blocks a level starts
+from on the host (here the parent blocks the level-4 reduction sent rank 0
+through the host: 56.3 GB beside its own 4.8 GB) into their device homes,
+and did it through one pageable host image and one device image of all of
+them, gathered into the homes: twice the level's blocks on the device (and
+on the host) for the copy.  It now stages them in chunks of at most 1 GiB
+(one block if a block is larger): a host image of the chunk, one copy, a
+gather.  The copies are the same, so results are bitwise unchanged (Laplace
+48^3 symmetric, weights, proxy 2, compressed factors, s4, CFIE 9K, 192^3;
+192^3 factor time and peak unchanged).
+
+*Why level 3 is on one rank.*  The region plan reduces the active ranks by
+the cube's box counts, and every rank builds whole parent boxes: with 8
+ranks the threshold 8 puts level 2 on 8 ranks (4 occupied level-2 boxes),
+64 puts level 3 on 8 ranks that must split those 4 boxes, and 512 is the
+first with even leaves (1.04): levels 0-3 on rank 0, with all 32 level-3
+boxes of about 4,950 DOFs (8 children x 619 skeleton points).
+
+*Why those blocks are so large.*  Not the kernel's far field (with the
+floor the kernel's own coupling of a level-4 box to its 2-hop ring has rank
+~110 at 400K, 0 at level 3) but the Schur fill: K_BE (K_EE + tau^2 I)^-1 K_ER
+through the neighbours eliminated before a box decays only exponentially
+(about 1.8 correlation lengths: 3.7e-3 across a level-4 box, 9.8e-5 across
+a level-3 one, at 100K), against K's Gaussian decay (8.6e-11 and 3e-43);
+resolving it to tol 1e-10 keeps 500-1000 points a box (100K, full-fill
+estimate: 1000 / 635 / 369 / 187 of 3,528 at level 3 for tol 1e-10 / 1e-8 /
+1e-6 / 1e-4).  The floor tol s_op = 1.3e-12 is far below the fill.
+
+*With the copy gone* (200K on 8 x 40 GB): before, level 3 asked for its
+second 19.66 GB at its start; now it starts, and runs out in its first wave
+(19.66 GB of uploaded blocks still held, 6.4 GB of the wave's X_NR and
+temp2).  With H2_compress_factors 1 the memory-pressure path chunks 3 of
+its 10 waves and packs the fill sources: 200K factors on 40 GB cards (level
+3 peak 26.0 GB, 52.8 s); at 100K H2_compress_factors 1 moves the logdet by
+1e-15.
+
 
 GPTune's GP training factors K, builds the derivative operators (compression
 only), then asks for K's logdet: "logdet: level 7: 1428 boxes without a host

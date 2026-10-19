@@ -3442,45 +3442,74 @@ void LevelEliminator<CoordType, DataType, KernelType>::begin() {
         }
     }
     if (!placements.empty()) {
-        // Pageable image: pinning a multi-GB buffer costs more than the
-        // slower pageable copy of a once-per-level upload.
-        std::unique_ptr<DataType[]> image_owner(new DataType[image_elems]);
-        DataType* h_image = image_owner.get();
-        #pragma omp parallel for schedule(dynamic)
-        for (int64_t i = 0; i < static_cast<int64_t>(placements.size()); ++i) {
-            const Placement& p = placements[static_cast<size_t>(i)];
-            DataType* out = h_image + p.offset;
-            const int rows = p.dst->rows, cols = p.dst->cols;
-            if (p.schur != nullptr) {
-                std::memcpy(out, p.schur->data.data(), static_cast<size_t>(rows) * cols * sizeof(DataType));
-            } else if (p.a_sn) {
-                for (int j = 0; j < cols; ++j)
-                    for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->A_SN(r, j);
-            } else if (!p.transpose) {
-                for (int j = 0; j < cols; ++j)
-                    for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->a_ns(r, j);
-            } else {
-                for (int j = 0; j < cols; ++j)
-                    for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->a_ns(j, r);
+        // In chunks of at most kUploadChunkBytes (one block, if a block is
+        // larger): a pageable host image of the chunk, one copy into a
+        // staging buffer, and a gather into the chunk's blocks.  (One image of
+        // all the blocks, on the host and on the device, doubled the level's
+        // footprint while it was uploaded: a single-rank level 3 holding
+        // 38.4 GB of blocks asked for 38.4 GB more.)  Pageable: pinning a
+        // multi-GB buffer costs more than the slower pageable copy of a
+        // once-per-level upload.
+        constexpr size_t kUploadChunkBytes = size_t{1} << 30;
+        auto elems_of = [](const Placement& p) {
+            return align_up(static_cast<size_t>(p.dst->rows) * static_cast<size_t>(p.dst->cols), 32);
+        };
+        std::vector<size_t> chunk_first{0};  // placements [chunk_first[c], chunk_first[c + 1])
+        size_t chunk_elems = 0, max_chunk_elems = 0;
+        for (size_t i = 0; i < placements.size(); ++i) {
+            const size_t e = elems_of(placements[i]);
+            if (chunk_elems > 0 && (chunk_elems + e) * sizeof(S) > kUploadChunkBytes) {
+                chunk_first.push_back(i);
+                chunk_elems = 0;
             }
+            chunk_elems += e;
+            max_chunk_elems = std::max(max_chunk_elems, chunk_elems);
         }
-        S* d_image = heap_.alloc<S>(image_elems * sizeof(S));
-        check_cuda(cudaMemcpyAsync(d_image, h_image, image_elems * sizeof(S), cudaMemcpyHostToDevice, stream),
-                   "upload blocks");
-        std::vector<GatherItem> copies;
-        int max_m = 0, max_n = 0;
-        for (const Placement& p : placements) {
-            copies.push_back(GatherItem{p.dst->ptr, p.dst->rows, p.dst->rows, p.dst->cols, d_image + p.offset, 1,
-                                        p.dst->rows, IndexList{}, IndexList{}});
-            max_m = std::max(max_m, p.dst->rows);
-            max_n = std::max(max_n, p.dst->cols);
+        chunk_first.push_back(placements.size());
+        std::unique_ptr<DataType[]> image_owner(new DataType[max_chunk_elems]);
+        DataType* h_image = image_owner.get();
+        S* d_image = heap_.alloc<S>(max_chunk_elems * sizeof(S));
+        for (size_t c = 0; c + 1 < chunk_first.size(); ++c) {
+            const size_t i0 = chunk_first[c], i1 = chunk_first[c + 1];
+            const size_t base = placements[i0].offset;
+            const size_t elems = placements[i1 - 1].offset + elems_of(placements[i1 - 1]) - base;
+            #pragma omp parallel for schedule(dynamic)
+            for (int64_t i = static_cast<int64_t>(i0); i < static_cast<int64_t>(i1); ++i) {
+                const Placement& p = placements[static_cast<size_t>(i)];
+                DataType* out = h_image + (p.offset - base);
+                const int rows = p.dst->rows, cols = p.dst->cols;
+                if (p.schur != nullptr) {
+                    std::memcpy(out, p.schur->data.data(), static_cast<size_t>(rows) * cols * sizeof(DataType));
+                } else if (p.a_sn) {
+                    for (int j = 0; j < cols; ++j)
+                        for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->A_SN(r, j);
+                } else if (!p.transpose) {
+                    for (int j = 0; j < cols; ++j)
+                        for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->a_ns(r, j);
+                } else {
+                    for (int j = 0; j < cols; ++j)
+                        for (int r = 0; r < rows; ++r) out[r + static_cast<size_t>(j) * rows] = p.block->a_ns(j, r);
+                }
+            }
+            check_cuda(cudaMemcpyAsync(d_image, h_image, elems * sizeof(S), cudaMemcpyHostToDevice, stream),
+                       "upload blocks");
+            std::vector<GatherItem> copies;
+            int max_m = 0, max_n = 0;
+            for (size_t i = i0; i < i1; ++i) {
+                const Placement& p = placements[i];
+                copies.push_back(GatherItem{p.dst->ptr, p.dst->rows, p.dst->rows, p.dst->cols,
+                                            d_image + (p.offset - base), 1, p.dst->rows, IndexList{}, IndexList{}});
+                max_m = std::max(max_m, p.dst->rows);
+                max_n = std::max(max_n, p.dst->cols);
+            }
+            meta_.clear();
+            const size_t off = meta_.append(copies);
+            char* md = meta_.upload(meta_device_, stream);
+            launch_gather(reinterpret_cast<const GatherItem*>(md + off), static_cast<int>(copies.size()), max_m,
+                          max_n, md, stream);
+            // (the next chunk overwrites the host image and the staging buffer)
+            check_cuda(cudaStreamSynchronize(stream), "block upload");
         }
-        meta_.clear();
-        const size_t off = meta_.append(copies);
-        char* md = meta_.upload(meta_device_, stream);
-        launch_gather(reinterpret_cast<const GatherItem*>(md + off), static_cast<int>(copies.size()), max_m, max_n,
-                      md, stream);
-        check_cuda(cudaStreamSynchronize(stream), "block upload");
         heap_.free(d_image);
         stats.bytes_up += static_cast<double>(image_elems * sizeof(S));
     }
