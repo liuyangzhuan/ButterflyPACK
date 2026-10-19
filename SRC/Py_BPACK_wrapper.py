@@ -131,7 +131,11 @@ def wait_for_flag(expected_flag, control_file, poll_interval=0.001):
 
 
 ####################### initialization and factorization
-def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
+# h2_s_op: this matrix's H2_s_op (format 7: the IDs' absolute floor tol_comp*h2_s_op;
+# at most ||A|| for compression-only H2, at most 1/||A^-1|| for the factorization,
+# e.g. tau^2 for K + tau^2 I).  None: the worker's command-line value (default 0, off).
+# The payload key "_butterflypack_H2_s_op" does the same.
+def bpack_factor(payload, verbosity=False, nofactor=False, fid=0, h2_s_op=None):
 
     MAX_ID_FILE = int(os.getenv("MAX_ID_FILE", "10"))
     if fid > MAX_ID_FILE:
@@ -150,6 +154,8 @@ def bpack_factor(payload, verbosity=False, nofactor=False, fid=0):
     DATA_FILE=os.getenv("DATA_FILE", "data.bin")
     request_payload = dict(payload)
     request_payload["_butterflypack_nofactor"] = bool(nofactor)
+    if h2_s_op is not None:
+        request_payload["_butterflypack_H2_s_op"] = float(h2_s_op)
     with open(f"{DATA_FILE}.{fid}", "wb") as f:
         pickle.dump(request_payload, f)
     with open(f"{CONTROL_FILE}.{fid}", "w") as f:

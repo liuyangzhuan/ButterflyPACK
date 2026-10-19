@@ -1575,6 +1575,7 @@ struct ParallelTree {
     int id_proxy_mode;                   ///< 0: none, 1: geometric surface, 2: adaptive sampling
     int id_proxy_points;                 ///< Geometric surface samples for mode 1
     int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
+    double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
     std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
     std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
     std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box

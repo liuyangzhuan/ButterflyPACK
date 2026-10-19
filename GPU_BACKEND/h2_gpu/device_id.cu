@@ -184,12 +184,13 @@ __device__ __forceinline__ bool solve_r11(const T* A, int lda, int rank, T* col,
 
 // One matrix per block.  Mirrors fmm::compute_id_complex: normalize by the
 // largest magnitude, factor A P = Q R with column pivoting (LAPACK dlaqp2's
-// pivot choice and norm downdating), stop at the first |R_ii| <= tol |R_00|,
-// and solve R11 T = R12 in place.  The factorization stops at the rank, so
+// pivot choice and norm downdating), stop at the first
+// |R_ii| <= max(tol |R_00|, abs_tol / amax) (abs_tol, the H2_s_op floor, in
+// the input's units; 0: off), and solve R11 T = R12 in place.  The factorization stops at the rank, so
 // the redundant columns keep the order of that step (the host's full
 // factorization permutes them further; the skeleton is the same).
 template<typename T, int kThreads>
-__global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* items, double tol) {
+__global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* items, double tol, double abs_tol) {
     constexpr int kWarps = kThreads / 32;
     extern __shared__ double smem[];
     const QrcpItemT<T> item = items[blockIdx.x];
@@ -244,6 +245,7 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
         T* col = A + static_cast<int64_t>(j) * lda;
         for (int r = lane; r < m; r += 32) col[r] /= amax;
     }
+    const double abs_floor = abs_tol / amax;  // (compute_id_complex: abs_tolerance / scale)
     __syncthreads();
 
     // ---- initial column norms
@@ -303,7 +305,7 @@ __global__ void __launch_bounds__(kThreads) qrcp_kernel(const QrcpItemT<T>* item
         const T tau = s_tau;
         const double beta = s_beta;
         if (i == 0) r00 = fabs(beta);
-        if (!(fabs(beta) > tol * r00)) break;  // rank rule of compute_id_complex
+        if (!(fabs(beta) > fmax(tol * r00, abs_floor))) break;  // rank rule of compute_id_complex
         rank = i + 1;
 
         // apply the reflector to the trailing columns and downdate their norms
@@ -396,7 +398,8 @@ __device__ void block_argmax_pair(double& v, int& idx, double* vscratch, int* is
 
 template<typename T>
 __global__ void __launch_bounds__(kCoopThreads)
-qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, double tol, double* dwork, int* iwork) {
+qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, double tol, double abs_tol, double* dwork,
+                 int* iwork) {
     namespace cg = cooperative_groups;
     cg::grid_group grid = cg::this_grid();
     constexpr int kWarps = kCoopThreads / 32;
@@ -461,6 +464,7 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
         bad = fmax(bad, ldg2(part_bad + c));
     }
     const bool zero = bad != 0.0 || amax == 0.0;
+    const double abs_floor = zero ? 0.0 : abs_tol / amax;  // as qrcp_kernel
     if (part == 0 && tid == 0) {
         double ssq = 0.0;
         for (int j = 0; j < n; ++j) ssq += ldg2(col_ssq + j);
@@ -556,7 +560,7 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
                         const double r00 = i == 0 ? fabs(beta) : ldg2(box_d + 3);
                         put_tau(box_d, tau);
                         box_d[2] = beta;
-                        if (!(fabs(beta) > tol * r00)) {  // rank rule of compute_id_complex
+                        if (!(fabs(beta) > fmax(tol * r00, abs_floor))) {  // rank rule of compute_id_complex
                             box_i[0] = 1;
                             box_i[1] = i;
                             atomicAdd(stopped_count, 1);
@@ -638,14 +642,15 @@ int coop_blocks_per_box(int count, int max_n) {
 }
 
 template<typename T, int kThreads>
-void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, double tol, cudaStream_t stream) {
+void launch_qrcp_with(const QrcpItemT<T>* items, int count, size_t shared, double tol, double abs_tol,
+                      cudaStream_t stream) {
     if (shared > 48 * 1024) {
         const cudaError_t attr = cudaFuncSetAttribute(qrcp_kernel<T, kThreads>,
                                                       cudaFuncAttributeMaxDynamicSharedMemorySize,
                                                       static_cast<int>(shared));
         if (attr != cudaSuccess) throw std::runtime_error("launch_qrcp: box too large for shared memory");
     }
-    qrcp_kernel<T, kThreads><<<static_cast<unsigned>(count), kThreads, shared, stream>>>(items, tol);
+    qrcp_kernel<T, kThreads><<<static_cast<unsigned>(count), kThreads, shared, stream>>>(items, tol, abs_tol);
 }
 
 }  // namespace
@@ -664,15 +669,15 @@ size_t qrcp_work_bytes(int count, int max_n) {
 // agree bitwise (see the top of the file); batch_independent always takes one
 // block of 256 threads per box (kept for tests/batch_determinism.cpp).
 template<typename T>
-void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream,
-                 bool batch_independent) {
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, double abs_tol, void* work,
+                 cudaStream_t stream, bool batch_independent) {
     if (count <= 0) return;
     int cpb = batch_independent ? 0 : coop_blocks_per_box<T>(count, max_n);
     if (cpb > 0) {
         if (work == nullptr) throw std::runtime_error("launch_qrcp: the cooperative path needs its work block");
         double* dwork = static_cast<double*>(work);
         int* iwork = reinterpret_cast<int*>(dwork + static_cast<size_t>(count) * coop_box_doubles(max_n, cpb));
-        void* args[] = {const_cast<QrcpItemT<T>**>(&items), &count, &cpb, &max_n, &tol, &dwork, &iwork};
+        void* args[] = {const_cast<QrcpItemT<T>**>(&items), &count, &cpb, &max_n, &tol, &abs_tol, &dwork, &iwork};
         const cudaError_t status = cudaLaunchCooperativeKernel(reinterpret_cast<const void*>(qrcp_coop_kernel<T>),
                                                                dim3(static_cast<unsigned>(count * cpb)),
                                                                dim3(kCoopThreads), args, 0, stream);
@@ -684,9 +689,9 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, vo
     const size_t shared = static_cast<size_t>(2 * max_n + kMaxWarps) * sizeof(double) +
                           static_cast<size_t>(kMaxWarps + max_n) * sizeof(int);
     if (count < 216 && !batch_independent) {
-        launch_qrcp_with<T, 1024>(items, count, shared, tol, stream);
+        launch_qrcp_with<T, 1024>(items, count, shared, tol, abs_tol, stream);
     } else {
-        launch_qrcp_with<T, 256>(items, count, shared, tol, stream);
+        launch_qrcp_with<T, 256>(items, count, shared, tol, abs_tol, stream);
     }
     const cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) {
@@ -696,8 +701,8 @@ void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, vo
 
 template size_t qrcp_work_bytes<double>(int, int);
 template size_t qrcp_work_bytes<dcomplex>(int, int);
-template void launch_qrcp<double>(const QrcpItemT<double>*, int, int, double, void*, cudaStream_t, bool);
-template void launch_qrcp<dcomplex>(const QrcpItemT<dcomplex>*, int, int, double, void*, cudaStream_t, bool);
+template void launch_qrcp<double>(const QrcpItemT<double>*, int, int, double, double, void*, cudaStream_t, bool);
+template void launch_qrcp<dcomplex>(const QrcpItemT<dcomplex>*, int, int, double, double, void*, cudaStream_t, bool);
 
 }  // namespace gpu
 }  // namespace fmm

@@ -859,6 +859,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         integer:: H2_ID_radius !< diagnostic H2 ID neighborhood radius; 2 keeps the standard workspace
         integer:: H2_ID_proxy !< H2 ID proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling
         integer:: H2_ID_proxy_points !< geometric surface samples for H2 ID proxy mode 1
+        real(kind=8):: H2_s_op !< H2 IDs: absolute floor tol_comp*H2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp H2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)
         integer:: use_fft_circulant !< 1: use reduced-kernel FFT circulant MVP, 2: build FFT circulant from fullmat then free fullmat
         integer:: fftw_plan_mode !< FFTW apply-plan mode: 0 estimate, 1 measure, 2 patient, 3 exhaustive
 

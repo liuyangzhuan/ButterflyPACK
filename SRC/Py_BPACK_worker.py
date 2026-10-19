@@ -167,6 +167,10 @@ while True:
             # H2 initializes its tree using precon, so this override must be
             # present before py_bpack_init_compute rather than at factor time.
             argv_tmp.extend(["--precon", "2"])
+        if payload.get("_butterflypack_H2_s_op") is not None:
+            # this matrix's H2_s_op (bpack_factor(..., h2_s_op=)), after the
+            # command line's: the later value wins
+            argv_tmp.extend(["--H2_s_op", repr(float(payload["_butterflypack_H2_s_op"]))])
         argv_tmp.append(compute_block)
         argv_tmp.append(meta)
 

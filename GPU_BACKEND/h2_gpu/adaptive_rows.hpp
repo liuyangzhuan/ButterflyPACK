@@ -98,7 +98,8 @@ public:
     };
 
     AdaptiveRowSelector(const Tree* tree, double tolerance, DeviceHeap& heap, Hooks hooks, bool nonsym = false)
-        : tree_(tree), tolerance_(tolerance), heap_(heap), hooks_(std::move(hooks)), nonsym_(nonsym) {}
+        : tree_(tree), tolerance_(tolerance), abs_tolerance_(id_absolute_tolerance(tree, tolerance)), heap_(heap),
+          hooks_(std::move(hooks)), nonsym_(nonsym) {}
     AdaptiveRowSelector(const AdaptiveRowSelector&) = delete;
     AdaptiveRowSelector& operator=(const AdaptiveRowSelector&) = delete;
     // (after the stream has run the last round)
@@ -408,8 +409,8 @@ public:
             if (items.empty()) return;
             char* work = nullptr;
             if (const size_t w = qrcp_work_bytes<S>(count(items), max_n)) work = heap_.alloc(w, ResidentKind::Adaptive);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_, work,
-                        stream);
+            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + offset), count(items), max_n, tolerance_,
+                        abs_tolerance_, work, stream);
             heap_.free(work);  // later launches are ordered after it
         };
         launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + off_grow_), count(grow_), max_copy_m_, max_copy_n_,
@@ -450,7 +451,7 @@ public:
                     st.stats.appended += selected;
                     st.rn = dstat[kResidualNorm];
                     st.ref = dstat[kTargetNorm];
-                    const bool converged = st.rn < st.ref * tolerance_;
+                    const bool converged = st.rn < threshold(st);
                     if (converged && !st.extras.empty()) {
                         ++st.stats.recomputes;
                         st.step = Step::Recheck;
@@ -462,7 +463,7 @@ public:
                 case Step::Recheck:
                     st.rn = dstat[kResidualNorm];
                     st.ref = dstat[kTargetNorm];
-                    judge(st, st.rn < st.ref * tolerance_, dstat[kHoldoutNorm], istat[kHoldoutSelected]);
+                    judge(st, st.rn < threshold(st), dstat[kHoldoutNorm], istat[kHoldoutSelected]);
                     break;
                 case Step::Extra: {
                     const int rank = istat[kExtraRank];
@@ -572,8 +573,10 @@ private:
     // After the residual of a node's sampled rows (norm rn against the
     // target's norm ref): the hold-out test of a converged node, then whether
     // the node is subdivided, as append_adaptive_id_training_rows decides.
+    // The residual tests' threshold: max(tol ||W||_F, tol s_op), as on the host.
+    double threshold(const State& st) const { return std::max(st.ref * tolerance_, abs_tolerance_); }
     void judge(State& st, bool converged, double holdout_norm, int holdout_selected) {
-        const double threshold = st.ref * tolerance_;
+        const double threshold = this->threshold(st);
         bool holdout_failed = false;
         if (converged && st.h > 0) {
             if (!st.holdout_valid) throw std::runtime_error("AdaptiveRowSelector: hold-out residual missing");
@@ -610,6 +613,7 @@ private:
 
     const Tree* tree_;
     double tolerance_;
+    double abs_tolerance_;  // the H2_s_op floor (id_absolute_tolerance), 0 off
     DeviceHeap& heap_;
     Hooks hooks_;
     bool nonsym_ = false;
