@@ -63,21 +63,35 @@ struct H2EntryMiss : std::exception {
 // goes on with zeros (discovery: the item's other requests are recorded in
 // the same pass), the item doomed; at its next checkpoint (before it changes
 // anything outside itself, and at its end) a doomed item is abandoned.
-// Outside an item such a request throws at once.
+// Outside an item such a request throws at once, and so does one after the
+// item's checkpoint (its changes have begun, so it could not run again): a
+// request the item should have made before it.
 struct EntryItemState {
     bool active = false;
     bool doomed = false;
+    bool committed = false;  // (past its checkpoint)
 };
 inline EntryItemState& entry_item() {
     thread_local EntryItemState state;
     return state;
 }
-inline void entry_item_begin() { entry_item() = EntryItemState{true, false}; }
+inline void entry_item_begin() { entry_item() = EntryItemState{true, false, false}; }
 inline void entry_checkpoint() {
     if (entry_item().doomed) {
         entry_item() = EntryItemState{};
         throw H2EntryMiss();
     }
+    entry_item().committed = entry_item().active;
+}
+// A request for a block not fetched yet (recorded by the caller): the item
+// is doomed and goes on with zeros; see above.
+inline void entry_item_miss() {
+    EntryItemState& state = entry_item();
+    if (!state.active) throw H2EntryMiss();
+    if (state.committed) {
+        throw std::logic_error("H2 entries: a block not fetched yet asked for after its item's checkpoint");
+    }
+    state.doomed = true;
 }
 inline void entry_item_end() {
     const bool doomed = entry_item().doomed;
@@ -123,8 +137,11 @@ public:
     static constexpr int kRoundActive = 2;   // (a section is running)
     static constexpr int kRoundBusy = 4;     // (a rank may still ask, in the device path's sense)
 
-    CollectiveEntries(MPI_Comm comm, Callback callback, void* quant, int callback_pid)
-        : callback_(callback), quant_(quant) {
+    // symmetric: the matrix is transpose-symmetric (option%sym=1), so a block
+    // also serves as its transpose's; a nonsymmetric matrix asks for both
+    // orientations of a pair of boxes, and each is fetched apart.
+    CollectiveEntries(MPI_Comm comm, Callback callback, void* quant, int callback_pid, bool symmetric = true)
+        : callback_(callback), quant_(quant), symmetric_(symmetric) {
         MPI_Comm_dup(comm, &comm_);
         MPI_Comm_size(comm_, &size_);
         pids_.resize(static_cast<size_t>(size_));
@@ -138,8 +155,8 @@ public:
     CollectiveEntries(const CollectiveEntries&) = delete;
     CollectiveEntries& operator=(const CollectiveEntries&) = delete;
 
-    // A[i + j lda] = K(x_i, y_j) if this block (or its transpose: the matrix
-    // is symmetric) was fetched; else false.  Thread safe.
+    // A[i + j lda] = K(x_i, y_j) if this block (or its transpose, for a
+    // symmetric matrix) was fetched; else false.  Thread safe.
     bool lookup(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny, DataType* A, int64_t lda) const {
         if (const Block* b = find(x, nx, y, ny)) {
             for (int64_t j = 0; j < ny; ++j) {
@@ -147,6 +164,7 @@ public:
             }
             return true;
         }
+        if (!symmetric_) return false;
         if (const Block* b = find(y, ny, x, nx)) {
             for (int64_t j = 0; j < ny; ++j) {
                 for (int64_t i = 0; i < nx; ++i) A[i + j * lda] = b->values[static_cast<size_t>(j + i * ny)];
@@ -156,10 +174,10 @@ public:
         return false;
     }
 
-    // Drops the block (or its transpose) once read: the device path reads
-    // each block it fetched once.  Not concurrent with lookups.
+    // Drops the block (or its transpose, as lookup) once read: the device
+    // path reads each block it fetched once.  Not concurrent with lookups.
     void release(const int64_t* x, int64_t nx, const int64_t* y, int64_t ny) {
-        for (int t = 0; t < 2; ++t) {
+        for (int t = 0; t < (symmetric_ ? 2 : 1); ++t) {
             const int64_t* a = t == 0 ? x : y;
             const int64_t* b = t == 0 ? y : x;
             const int64_t na = t == 0 ? nx : ny, nb = t == 0 ? ny : nx;
@@ -174,8 +192,13 @@ public:
         }
     }
 
-    // A sketch callback: sketched blocks are fetched through it.
-    void set_sketch(SketchCallback callback) { sketch_callback_ = callback; }
+    // A sketch callback: sketched blocks are fetched through it.  (Not for a
+    // nonsymmetric matrix, which fetches its kernel rows' blocks: the
+    // callback sketches A(rows, columns) from the left, and the stacked ID's
+    // K(B, F)^T rows would need A(B, F) sketched from the right.)
+    void set_sketch(SketchCallback callback) {
+        if (symmetric_) sketch_callback_ = callback;
+    }
     bool has_sketch() const { return sketch_callback_ != nullptr; }
 
     // A sketch request: Y = Omega K(x, y), Omega (d x nx) given by its nnz
@@ -658,6 +681,7 @@ private:
     std::vector<int> pids_;
     Callback callback_;
     void* quant_;
+    bool symmetric_ = true;
     std::mutex mutex_;
     std::vector<Block> pending_, blocks_;
     SketchCallback sketch_callback_ = nullptr;

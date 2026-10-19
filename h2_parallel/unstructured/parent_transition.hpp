@@ -178,13 +178,10 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
     // With entries through a collective callback, the parents that asked
     // for a block not fetched yet run again after a round, from a fresh box:
     // an iteration writes only its parent's Schur complement and near blocks
-    // (and its own deferred blocks for the others), which start empty.
+    // (and its own deferred blocks for the others, a nonsymmetric matrix's
+    // views of an on-process neighbor among them), which start empty.
     auto* entries = kernel_entries(kernel, 0);
     if (entries != nullptr) {
-        if (!(is_symmetric || is_hermitian)) {
-            throw std::invalid_argument(
-                "build_parent_level_interactions_unstructured: collective entries need a symmetric matrix");
-        }
         for (int64_t parent_index : occupied_parent_indices) {
             const auto& B = parent_boxes[static_cast<size_t>(parent_index)];
             if (B.schur_complement.is_allocated() || !B.near_field_modified_interactions.empty() ||

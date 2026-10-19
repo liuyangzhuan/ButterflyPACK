@@ -567,8 +567,8 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
     if (method != FactorizationMethod::LU) return fail("X_RR is factored by LU on the GPU (use H2_XRR_factor=1)");
     if (!symmetric) {
         // (the device sketch evaluates the K(F, B) rows as K(row, col): inside
-        // the sketch with an entry evaluator, else as blocks of their own)
-        if (evaluator->collective()) return fail("entries through a collective callback need a symmetric matrix");
+        // the sketch with an entry evaluator, else as blocks of their own,
+        // through a collective callback too, which then sketches nothing)
         if (ca) return fail("CA levels need a symmetric matrix");
         // (several ranks: the generators carry temp4 and X_RN, sent device to device only)
         if (level.num_active_processes != 1 && !device_exchange_enabled()) {

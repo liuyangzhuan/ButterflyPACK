@@ -134,7 +134,8 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
 typedef void (*c_bpack_func_zmn_sketch)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, C2Fptr C_QuantApp);
 // An H2 (format 7) whose entries come through a collective block callback (elem_extract=1) asks for the ID
 // sketches of its kernel rows through this callback (its C_QuantApp: that of the construction), set before
-// c_bpack_construct_element_compute; other formats ignore it.
+// c_bpack_construct_element_compute; other formats ignore it, and so does a nonsymmetric H2 (option%sym=0),
+// which asks for the rows' blocks (its ID would need A(B, F) sketched from the right too).
 void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch);
 // The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
 // compression-only H2 (format 7) sketches them from its representation; other formats extract the entries and

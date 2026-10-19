@@ -6831,6 +6831,67 @@ the 128K sphere, the extraction check, 96^3 compressed; the symmetric
 inv_mult check prints the same numbers), and so are the nonsymmetric
 factorizations.
 
+#### Nonsymmetric matrices, step N6b: entries through a collective callback (2026-10-18)
+
+A nonsymmetric H2 takes its entries through a collective block callback
+(elem_extract=1), on the CPU and the GPU, as STRUMPACK's fronts will.
+
+- CollectiveEntries knows the matrix's symmetry: a symmetric one serves a
+  block from its transpose's fetch (lookup, release), a nonsymmetric one
+  fetches each orientation of a pair of boxes apart.  It also takes no
+  sketch callback for a nonsymmetric matrix (set_sketch): the callback
+  sketches A(rows, columns) from the left, and the stacked ID's K(B, F)^T
+  rows would need A(B, F) sketched from the right, so the ID asks for its
+  kernel rows' blocks.
+- The host phases that evaluate the kernel outside an item became entry
+  phases or got a fetch first, as their symmetric twins are:
+  form_nonsymmetric_wave_views (its pairs evaluated as items, before the
+  wave changes anything; a rank with an empty wave runs an empty phase, as
+  for the wave's other phases), form_near_updates_from_generators_nonsymmetric
+  (as items, a source writing only its own updates),
+  apply_updates_with_kernel_nonsymmetric (the blocks it starts views and
+  Schur blocks from fetched first, the same blocks at the same points), and
+  the owner pass (apply_unstructured_owner_deferred_xnn_updates_nonsymmetric:
+  it adds to what it finds, so with collective entries a dry run asks for
+  the blocks it will start from, then a checkpoint before the candidate
+  changes).  The parent transition already ran as items from fresh boxes;
+  its nonsymmetric views of an on-process neighbor are deferred blocks, so
+  the gate there went.  On the device the collective evaluator serves the
+  sketch's K(F, B) segments like any block, and the eliminator's gate went.
+- A request for a block not fetched yet after an item's checkpoint now
+  throws (entry_item_miss) instead of dooming an item whose changes have
+  begun: the item could not run again, so it would have been silently
+  wrong.  No run here hits it.
+
+The H2 under test from the entries of a compression-only one (Laplace 48^3,
+the source on 4 ranks, the test on 8, the s4 set-up), column weights 0.5:
+
+| | logdet | factor | rounds | entries fetched |
+|---|---|---|---|---|
+| GPU | -1.09513833117441810e+06 | 8.2 s | 7.0 s | 2.8e9 |
+| CPU path (H2_use_gpu 0) | -1.09513833117441786e+06 | 19.3 s | 10.0 s | 2.7e9 |
+| CPU, lazy_schur 0 | -1.09513832842332823e+06 | 19.7 s | 11.8 s | 2.9e9 |
+| the CPU build | -1.09513833117441810e+06 | 19.8 s | | |
+| symmetric (s4), GPU | -1.08747022864894662e+06 | 3.2 s | 2.7 s | 4.1e8 |
+
+GPU and CPU agree to 2e-16 (the skew 0.5 matrix: to every digit printed,
+-1.08291090422541834e+06).  The column weights' identity holds as for the
+kernel: the logdet less the symmetric one is -7668.103 against sum log w
+-7668.058 (direct from the kernel: -7668.111).  The inv_mult check on it:
+transposes 8.8e-16 (F^{-1}) and 2.6e-15 (F), residuals 5e-15 to 8e-15.  The
+extraction from a nonsymmetric compressed H2 (precon 2, the extraction
+check): random blocks against the kernel 8.6e-4 (symmetric 6.3e-4), rows
+against the matvec 3.3e-17.
+
+The cost is the ID's kernel rows: 2.1e9 of the 2.8e9 entries (the symmetric
+H2 asks for 2.9e7 sketched values instead), and the transition's blocks,
+twice the symmetric count (88128 against 44064, both orientations).  A
+right sketch in the callback (Omega A(B, F)^T, which a compressed source
+can form with the transposed blocks of N6a) would bring the rows back to
+the symmetric volume; it is an addition to the callback's interface, left
+for now.  Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K
+sphere, the extraction check; the CPU path's s4 with lazy_schur 2 and 0).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

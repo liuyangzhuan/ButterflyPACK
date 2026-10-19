@@ -1744,15 +1744,13 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 #endif
 	H2_solver->kernel.collective.reset();
 	if (elem_extract == 1 && C_FuncZmnBlock != nullptr) {
-	  if (!H2_solver->options.symmetric) {
-	    throw std::invalid_argument(
-	      "c_bpack_construct_element_compute: entries through a collective callback (elem_extract=1) are not "
-	      "supported for a nonsymmetric H2 (option%sym=0) yet");
-	  }
+	  // (a nonsymmetric H2: each orientation of a pair of boxes fetched apart)
 	  H2_solver->kernel.collective =
 	    std::make_shared<fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>>(
-	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid);
-	  // (c_bpack_set_sketch_callback: the ID sketches of kernel rows fetched sketched)
+	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid,
+	      H2_solver->options.symmetric);
+	  // (c_bpack_set_sketch_callback: the ID sketches of kernel rows fetched
+	  // sketched; a nonsymmetric H2 fetches their blocks, CollectiveEntries::set_sketch)
 	  if (H2_solver->kernel.sketch_callback != nullptr) {
 	    H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
 	  }

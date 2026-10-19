@@ -610,6 +610,68 @@ void apply_unstructured_owner_deferred_xnn_updates_nonsymmetric(
     const int dimension = level.dimension;
     std::vector<DataType> delta;
 
+    // the pass's sources among the candidate's neighbors, and the candidate's
+    // position in each source's neighbor list (counts.size(): none)
+    auto source_of = [&](int64_t source_morton, size_t& c_idx) -> BoxData<CoordType, DataType>* {
+        if (wave_box_set.count(source_morton) == 0) return nullptr;
+        BoxData<CoordType, DataType>* source = level.find_local_box(source_morton);
+        if (source == nullptr || source->deferred_xnn_temp2.empty()) return nullptr;
+        c_idx = source->one_hop.size();
+        for (size_t idx = 0; idx < source->one_hop.size(); ++idx) {
+            if (source->one_hop[idx] == candidate_morton) c_idx = idx;
+        }
+        return source;
+    };
+    // Entries through a collective callback: the kernel blocks the pass
+    // starts the candidate's Schur block and views from (those not stored
+    // yet, nor made earlier in the pass) asked for first, the same blocks at
+    // the same points; abandoned here if one was not fetched, before the
+    // candidate changes (the pass adds to what it finds).
+    if (kernel_entries(kernel, 0) != nullptr) {
+        bool schur = candidate->schur_complement.is_allocated();
+        std::set<std::pair<int64_t, bool>> made;
+        auto stored = [&](int64_t neighbor, bool a_sn) {
+            if (made.count({neighbor, a_sn}) != 0) return true;
+            const auto* mb = find_directed_block(*candidate, neighbor, EdgeKind::Near, a_sn);
+            return mb != nullptr && (a_sn ? mb->A_SN.is_allocated() : mb->a_ns_is_allocated());
+        };
+        for (int64_t source_morton : candidate->one_hop) {
+            size_t c_idx = 0;
+            BoxData<CoordType, DataType>* source = source_of(source_morton, c_idx);
+            if (source == nullptr) continue;
+            const auto& counts = source->deferred_xnn_neighbor_point_counts;
+            if (counts.size() != source->one_hop.size() || c_idx >= counts.size()) continue;  // (the pass reports it)
+            const int64_t n_c = counts[c_idx];
+            if (n_c == 0) continue;
+            made.insert({source_morton, true});
+            made.insert({source_morton, false});
+            if (source->X_NR.cols == 0) continue;
+            for (size_t d_idx = 0; d_idx < counts.size(); ++d_idx) {
+                const int64_t n_d = counts[d_idx];
+                if (n_d == 0) continue;
+                const int64_t neighbor = source->one_hop[d_idx];
+                if (d_idx == c_idx) {
+                    if (!schur) {
+                        (void)directed_view_kernel_block(level, kernel, candidate_morton, n_c, candidate_morton, n_c);
+                    }
+                    schur = true;
+                    continue;
+                }
+                if (!deferred_xnn_boxes_are_one_hop(dimension, candidate_morton, neighbor)) continue;
+                if (neighbor < candidate_morton && level.find_local_box(neighbor) != nullptr) continue;
+                if (!stored(neighbor, true)) {
+                    (void)directed_view_kernel_block(level, kernel, candidate_morton, n_c, neighbor, n_d);
+                    made.insert({neighbor, true});
+                }
+                if (!stored(neighbor, false)) {
+                    (void)directed_view_kernel_block(level, kernel, neighbor, n_d, candidate_morton, n_c);
+                    made.insert({neighbor, false});
+                }
+            }
+        }
+        entry_checkpoint();
+    }
+
     for (int64_t source_morton : candidate->one_hop) {
         if (wave_box_set.count(source_morton) == 0) continue;
         BoxData<CoordType, DataType>* source = level.find_local_box(source_morton);

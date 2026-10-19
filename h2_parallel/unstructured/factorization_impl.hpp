@@ -92,20 +92,42 @@ void form_nonsymmetric_wave_views(
         }
     }
 
+    // (entries through a collective callback: the pairs that asked for a
+    // block not fetched yet evaluate it again after a round; a pair writes
+    // only its block.  A phase of every wave, an empty one's too: see the
+    // wave loop)
     std::exception_ptr failure;
     std::mutex failure_mutex;
-    #pragma omp parallel for schedule(dynamic) if (pairs.size() > 1)
-    for (int64_t p = 0; p < static_cast<int64_t>(pairs.size()); ++p) {
-        try {
-            auto& pair = pairs[static_cast<size_t>(p)];
-            pair.block = directed_view_kernel_block(
-                level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(failure_mutex);
-            if (!failure) failure = std::current_exception();
+    std::vector<int64_t> pair_items(pairs.size());
+    std::iota(pair_items.begin(), pair_items.end(), int64_t{0});
+    run_entry_phase(kernel_entries(kernel, 0), std::move(pair_items), [&](const std::vector<int64_t>& items) {
+        std::vector<int64_t> abandoned;
+        std::mutex abandoned_mutex;
+        #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
+        for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+            const int64_t p = items[static_cast<size_t>(item)];
+            try {
+                entry_item_begin();
+                auto& pair = pairs[static_cast<size_t>(p)];
+                pair.block = directed_view_kernel_block(
+                    level, kernel, pair.lg, current_count(pair.lg), pair.rg, current_count(pair.rg));
+                entry_item_end();
+            } catch (const H2EntryMiss&) {
+                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                abandoned.push_back(p);
+            } catch (...) {
+                if (entry_item_abandoned()) {
+                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                    abandoned.push_back(p);
+                    continue;
+                }
+                std::lock_guard<std::mutex> lock(failure_mutex);
+                if (!failure) failure = std::current_exception();
+            }
         }
-    }
-    if (failure) std::rethrow_exception(failure);
+        if (failure) std::rethrow_exception(failure);
+        return abandoned;
+    });
 
     for (auto& pair : pairs) {
         const int64_t n_lg = current_count(pair.lg);
@@ -881,6 +903,8 @@ void hierarchical_factorization_unstructured(
                     // device level has no phases here.)
                     if (auto* entries = kernel_entries(kernel, 0); entries != nullptr && !gpu_level_on) {
                         auto nothing = [](const std::vector<int64_t>&) { return std::vector<int64_t>{}; };
+                        // (a nonsymmetric matrix: form_nonsymmetric_wave_views's phase first)
+                        if (!(is_symmetric || is_hermitian)) run_entry_phase(entries, {}, nothing);
                         run_entry_phase(entries, {}, nothing);
                         if (use_owner_deferred_xnn) run_entry_phase(entries, {}, nothing);
                     }

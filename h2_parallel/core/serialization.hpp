@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <map>
+#include <tuple>
 #include <unordered_set>
 #include <vector>
 #include <chrono>
@@ -4821,6 +4822,68 @@ static void apply_updates_with_kernel_nonsymmetric(
         return pos;
     };
 
+    // Entries through a collective callback: the kernel blocks the apply
+    // starts views and Schur blocks from (those not stored yet, nor made by
+    // the box's earlier tasks) fetched first, as the symmetric apply does:
+    // the same blocks at the endpoints' current points.
+    if (auto* entries = kernel_entries(kernel, 0)) {
+        std::vector<int64_t> boxes(lvl.local_boxes.size());
+        std::iota(boxes.begin(), boxes.end(), int64_t{0});
+        run_entry_phase(entries, std::move(boxes), [&](const std::vector<int64_t>& items) {
+            std::vector<int64_t> abandoned;
+            std::mutex abandoned_mutex;
+            #pragma omp parallel for schedule(static) if (items.size() > 1)
+            for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+                const int64_t local_idx = items[static_cast<size_t>(item)];
+                auto& box = lvl.local_boxes[static_cast<size_t>(local_idx)];
+                try {
+                    entry_item_begin();
+                    bool schur_exists = box.schur_complement.is_allocated();
+                    std::set<std::tuple<int64_t, int, bool>> created;
+                    for (const auto& task : tasks[static_cast<size_t>(local_idx)]) {
+                        const auto* payload = task.block;
+                        if (payload == nullptr || payload->rows <= 0 || payload->cols <= 0) continue;
+                        if (task.kind == 0) {
+                            created.insert({task.neighbor, static_cast<int>(EdgeKind::Near), task.a_sn});
+                            continue;
+                        }
+                        const int64_t n_self = current_count(box.morton_index);
+                        if (task.kind == 1) {
+                            if (!schur_exists) {
+                                (void)directed_view_kernel_block(lvl, kernel, box.morton_index, n_self,
+                                                                 box.morton_index, n_self);
+                            }
+                            schur_exists = true;
+                            continue;
+                        }
+                        const std::tuple<int64_t, int, bool> view{task.neighbor, static_cast<int>(task.edge),
+                                                                  task.a_sn};
+                        const ModifiedBlock<DataType>* mb =
+                            find_directed_block(box, task.neighbor, task.edge, task.a_sn);
+                        if ((mb != nullptr && (task.a_sn ? mb->A_SN.is_allocated() : mb->a_ns_is_allocated())) ||
+                            created.count(view) != 0) {
+                            continue;
+                        }
+                        created.insert(view);
+                        const int64_t n_nei = current_count(task.neighbor);
+                        if (task.a_sn) {
+                            (void)directed_view_kernel_block(lvl, kernel, box.morton_index, n_self, task.neighbor,
+                                                             n_nei);
+                        } else {
+                            (void)directed_view_kernel_block(lvl, kernel, task.neighbor, n_nei, box.morton_index,
+                                                             n_self);
+                        }
+                    }
+                    entry_item_end();
+                } catch (const H2EntryMiss&) {
+                    std::lock_guard<std::mutex> lock(abandoned_mutex);
+                    abandoned.push_back(local_idx);
+                }
+            }
+            return abandoned;
+        });
+    }
+
     std::exception_ptr apply_exception;
     std::mutex apply_exception_mutex;
     std::atomic<bool> apply_failed{false};
@@ -5476,10 +5539,6 @@ void form_near_updates_from_generators_nonsymmetric(
     int dimension,
     PendingFactorUpdates<DataType>& incoming) {
     if (installed.empty()) return;
-    if (kernel_entries(kernel, 0) != nullptr) {
-        throw std::logic_error(
-            "form_near_updates_from_generators_nonsymmetric: collective entries need a symmetric matrix");
-    }
     auto are_one_hop = [&](int64_t first, int64_t second) {
         uint32_t a[3] = {0, 0, 0};
         uint32_t b[3] = {0, 0, 0};
@@ -5498,16 +5557,30 @@ void form_near_updates_from_generators_nonsymmetric(
     std::vector<FormedUpdates> formed(installed.size());
     std::exception_ptr form_exception;
     std::mutex form_exception_mutex;
-    #pragma omp parallel for schedule(dynamic) if (installed.size() > 1)
-    for (int64_t s_idx = 0; s_idx < static_cast<int64_t>(installed.size()); ++s_idx) {
+    // (entries through a collective callback: the sources that asked for a
+    // block not fetched yet form their updates again after a round; a source
+    // writes only its own entry of formed)
+    std::vector<int64_t> form_items(installed.size());
+    std::iota(form_items.begin(), form_items.end(), int64_t{0});
+    run_entry_phase(kernel_entries(kernel, 0), std::move(form_items), [&](const std::vector<int64_t>& items) {
+    std::vector<int64_t> abandoned;
+    std::mutex abandoned_mutex;
+    #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
+    for (int64_t item = 0; item < static_cast<int64_t>(items.size()); ++item) {
+        const int64_t s_idx = items[static_cast<size_t>(item)];
         try {
+            formed[static_cast<size_t>(s_idx)] = FormedUpdates{};
+            entry_item_begin();
             const int64_t source_morton = installed[static_cast<size_t>(s_idx)];
             BoxData<CoordType, DataType>* source = level.find_generator_box(source_morton);
             if (source == nullptr) {
                 throw std::runtime_error("form_near_updates_from_generators_nonsymmetric: generator missing");
             }
             const int64_t r = source->X_NR.is_allocated() ? source->X_NR.cols : 0;
-            if (r == 0) continue;
+            if (r == 0) {
+                entry_item_end();
+                continue;
+            }
             const int64_t total = source->X_NR.rows;
             const auto& neighbors = source->one_hop;
             const auto& counts = source->deferred_xnn_neighbor_point_counts;
@@ -5658,11 +5731,23 @@ void form_near_updates_from_generators_nonsymmetric(
                         product(offsets[n_idx], n_n, offsets[l_idx], n_l));
                 }
             }
+            entry_item_end();
+        } catch (const H2EntryMiss&) {
+            std::lock_guard<std::mutex> lock(abandoned_mutex);
+            abandoned.push_back(s_idx);
         } catch (...) {
+            if (entry_item_abandoned()) {
+                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                abandoned.push_back(s_idx);
+                continue;
+            }
             std::lock_guard<std::mutex> lock(form_exception_mutex);
             if (!form_exception) form_exception = std::current_exception();
         }
     }
+    if (form_exception) std::rethrow_exception(form_exception);
+    return abandoned;
+    });
     if (form_exception) std::rethrow_exception(form_exception);
 
     for (auto& source_updates : formed) {

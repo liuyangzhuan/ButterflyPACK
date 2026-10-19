@@ -412,8 +412,7 @@ struct H2Kernel {
                                                                                d, nnz, orow, odest, oval};
         if (collective->lookup_sketch(key, Y, ldy)) return true;
         collective->record_sketch(key);
-        if (!fmm::entry_item().active) throw fmm::H2EntryMiss();
-        fmm::entry_item().doomed = true;  // (zeros: see collective_entries.hpp)
+        fmm::entry_item_miss();  // (zeros: see collective_entries.hpp)
         for (int64_t j = 0; j < y_size; ++j) {
             for (int64_t i = 0; i < d; ++i) Y[i + j * ldy] = DataType{0};
         }
@@ -433,8 +432,7 @@ struct H2Kernel {
         if (collective) {
             if (collective->lookup(x_indices, x_size, y_indices, y_size, A, lda)) return;
             collective->record(x_indices, x_size, y_indices, y_size);
-            if (!fmm::entry_item().active) throw fmm::H2EntryMiss();
-            fmm::entry_item().doomed = true;  // (zeros: see collective_entries.hpp)
+            fmm::entry_item_miss();  // (zeros: see collective_entries.hpp)
             for (int64_t j = 0; j < y_size; ++j) {
                 for (int64_t i = 0; i < x_size; ++i) A[i + j * lda] = DataType{0};
             }
