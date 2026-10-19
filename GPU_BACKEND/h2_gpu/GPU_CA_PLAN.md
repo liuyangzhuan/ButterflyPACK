@@ -6892,6 +6892,55 @@ the symmetric volume; it is an addition to the callback's interface, left
 for now.  Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K
 sphere, the extraction check; the CPU path's s4 with lazy_schur 2 and 0).
 
+**The transposed sketch request (2026-10-18, user decision).**  The right
+sketch, as an addition that leaves the existing interface as it is:
+c_bpack_set_sketch_transpose_callback takes a second callback of the same
+type, whose request n asks for Y_n = Omega_n A(columns, rows)^T, and
+c_bpack_extractsketch_transpose_bridge serves it from a matrix on a subset
+of the ranks, as c_bpack_extractsketch_bridge does the plain one.  A
+nonsymmetric H2 sketches its kernel rows only with both callbacks set
+(CollectiveEntries::has_sketch); a symmetric one never asks the second.
+
+- CollectiveEntries: a sketch request carries `transposed`; a round fetches
+  the plain and the transposed ones in a call of their own callback each
+  (every rank makes the calls the global counts say).
+- The compressed source (extract_compressed_sketches, transposed): the
+  blocks of A(J, I) are stored on the column side's boxes s, so the owner of
+  a row side's box t forms M = U_t Omega^T (k_t x d) and sends it to the
+  owner of s, which sums (K(S_s, S_t) M)^T over the t and multiplies by U_s;
+  the near blocks K(B_s, B_t) are sketched on s's owner.  Other formats
+  extract A(J, I) and sketch it on the requests' owners.
+- The CPU ID (gather_id_target_streamed_nonsymmetric): the draws of the
+  K(F, B) rows become a plain request, those of the K(B, F)^T rows a
+  transposed one, each box's after its row pass (the draws as before).
+- The device sketch (Evaluator::collective_sketch_rows,
+  collective_sketches): an item's rows go to the request as before, its
+  swap ranges' rows (the K(F, B) rows) to a second part; the first part is
+  fetched transposed for a nonsymmetric matrix (the device's rows are K(B,
+  F)^T there), the second plain, and the two summed (a request of one part
+  is copied as it came).
+- The Laplace driver registers both callbacks, and its --extract_check
+  sketches the random blocks transposed too, against the sketch of their
+  extracted A(J, I): 2.2e-16 from a nonsymmetric source, 1.9e-16 from a
+  symmetric one (the plain sketch 2.1e-16, 1.7e-16).
+
+The s4 set-up with column weights again:
+
+| | logdet | factor | rounds | entries fetched |
+|---|---|---|---|---|
+| GPU, rows sketched | -1.09513833117441786e+06 | 6.3 s | 5.5 s | 8.0e8 |
+| CPU path, rows sketched | -1.09513833117441786e+06 | 16.1 s | 7.0 s | 8.0e8 |
+| GPU, rows' blocks (above) | -1.09513833117441810e+06 | 8.2 s | 7.0 s | 2.8e9 |
+| symmetric (s4), GPU | -1.08747022864894662e+06 | 3.2 s | 2.7 s | 4.1e8 |
+
+The ID's rows are 6.0e7 sketched values for their 2.1e9 entries (the
+symmetric H2: 2.9e7 for 1.0e9); the results move 2e-16 (skew 0.5: not in
+the digits printed).  What is left of the gap to the symmetric H2 is the
+other blocks, twice the symmetric volume each (both orientations of a pair
+of boxes: box regions, fill targets, remote generators, the transition).
+Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
+extraction check's earlier numbers; the CPU path's s4).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

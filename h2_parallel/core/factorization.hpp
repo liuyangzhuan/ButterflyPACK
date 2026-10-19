@@ -9473,9 +9473,8 @@ void gather_id_target_streamed_nonsymmetric(
         scratch.workspace_cols = 0;
         return;
     }
-    if (lazy_far_field_mode() != LazyFarFieldMode::LAZY || kernel_sketches(kernel, 0)) {
-        throw std::logic_error(
-            "gather_id_target_streamed_nonsymmetric: needs the lazy fill and kernel rows");
+    if (lazy_far_field_mode() != LazyFarFieldMode::LAZY) {
+        throw std::logic_error("gather_id_target_streamed_nonsymmetric: needs the lazy fill");
     }
 
     const int dimension = tree->dimension;
@@ -9586,7 +9585,8 @@ void gather_id_target_streamed_nonsymmetric(
     rec_sign.resize(static_cast<size_t>(2 * far_rows * sk));
     auto& blk_idx = scratch.stream_blk_draw_idx;
     auto& blk_sgn = scratch.stream_blk_draw_sign;
-    auto consume_rows = [&](const DataType* rows_rowmajor, int64_t a, int64_t rec_row0) {
+    // the draws of `a` rows (recorded from rec_row0 for the fill pass)
+    auto draw_rows = [&](int64_t a, int64_t rec_row0) {
         const size_t nd = static_cast<size_t>(a * sk);
         if (blk_idx.size() < nd) {
             blk_idx.resize(nd);
@@ -9606,6 +9606,9 @@ void gather_id_target_streamed_nonsymmetric(
                 }
             }
         }
+    };
+    auto consume_rows = [&](const DataType* rows_rowmajor, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
         int n_int = static_cast<int>(n);
         int inc_one = 1;
         for (int64_t jj = 0; jj < a; ++jj) {
@@ -9649,22 +9652,80 @@ void gather_id_target_streamed_nonsymmetric(
         evaluate_block_by_index_split<DataType>(
             kernel, box->point_indices.data(), n, row_points, a, block_rm.data(), n, scratch.split_threads);
     };
+    // Entries through a collective callback with both sketch callbacks: the
+    // kernel rows are not evaluated; their draws become Omega's entries, the
+    // K(F, B) rows' in a request sketched from the left (Omega A(F, B)), the
+    // K(B, F)^T rows' in a transposed one (Omega A(B, F)^T), each box's after
+    // the pass (CollectiveEntries; the same Y up to the order of the sums)
+    const bool sketch_kernel_rows = kernel_sketches(kernel, 0);
+    struct Deferred {
+        std::vector<int64_t> ids;
+        std::vector<int> orow, odest;
+        std::vector<double> oval;
+    };
+    Deferred deferred[2];  // K(F, B) rows, K(B, F)^T rows
+    const double sketch_scale = 1.0 / std::sqrt(static_cast<double>(sk));
+    auto defer_rows = [&](int part, const int64_t* ids, int64_t a, int64_t rec_row0) {
+        draw_rows(a, rec_row0);
+        Deferred& to = deferred[part];
+        const int64_t base = static_cast<int64_t>(to.ids.size());
+        to.ids.insert(to.ids.end(), ids, ids + a);
+        for (int64_t jj = 0; jj < a; ++jj) {
+            for (int b = 0; b < sk; ++b) {
+                const size_t q = static_cast<size_t>(jj * sk + b);
+                to.orow.push_back(static_cast<int>(base + jj));
+                to.odest.push_back(blk_idx[q]);
+                to.oval.push_back(blk_sgn[q] > 0 ? sketch_scale : -sketch_scale);
+            }
+        }
+    };
     std::vector<int64_t> row_base(num_ring + 1, 0);
     for (size_t f = 0; f < num_ring; ++f) row_base[f + 1] = row_base[f] + counts[f];
     for (size_t f = 0; f < num_ring; ++f) {
-        rows_of(ring_points[f].data(), counts[f]);
-        consume_rows(block_rm.data(), counts[f], pair_src_offsets[f + 1] > pair_src_offsets[f] ? row_base[f] : -1);
+        const int64_t rec = pair_src_offsets[f + 1] > pair_src_offsets[f] ? row_base[f] : -1;
+        if (sketch_kernel_rows) {
+            defer_rows(0, ring_points[f].data(), counts[f], rec);
+        } else {
+            rows_of(ring_points[f].data(), counts[f]);
+            consume_rows(block_rm.data(), counts[f], rec);
+        }
     }
     for (size_t f = 0; f < num_ring; ++f) {
-        transposed_rows_of(ring_points[f].data(), counts[f]);
-        consume_rows(block_rm.data(), counts[f],
-                     pair_src_offsets[f + 1] > pair_src_offsets[f] ? far_rows + row_base[f] : -1);
+        const int64_t rec = pair_src_offsets[f + 1] > pair_src_offsets[f] ? far_rows + row_base[f] : -1;
+        if (sketch_kernel_rows) {
+            defer_rows(1, ring_points[f].data(), counts[f], rec);
+        } else {
+            transposed_rows_of(ring_points[f].data(), counts[f]);
+            consume_rows(block_rm.data(), counts[f], rec);
+        }
     }
     if (n_extra > 0) {
-        rows_of(extra.data(), n_extra);
-        consume_rows(block_rm.data(), n_extra, -1);
-        transposed_rows_of(extra.data(), n_extra);
-        consume_rows(block_rm.data(), n_extra, -1);
+        if (sketch_kernel_rows) {
+            defer_rows(0, extra.data(), n_extra, -1);
+            defer_rows(1, extra.data(), n_extra, -1);
+        } else {
+            rows_of(extra.data(), n_extra);
+            consume_rows(block_rm.data(), n_extra, -1);
+            transposed_rows_of(extra.data(), n_extra);
+            consume_rows(block_rm.data(), n_extra, -1);
+        }
+    }
+    if (sketch_kernel_rows) {
+        // the kernel rows' sketches from the entries' source, into O' = Y^T
+        std::vector<DataType> Yk(static_cast<size_t>(d * n));
+        FMM_PHASE_SCOPE(SK_KERNEL);
+        for (int part = 0; part < 2; ++part) {
+            const Deferred& from = deferred[part];
+            if (from.ids.empty()) continue;
+            kernel_sketch_block(kernel, 0, from.ids.data(), static_cast<int64_t>(from.ids.size()),
+                                box->point_indices.data(), n, static_cast<int>(d),
+                                static_cast<int64_t>(from.orow.size()), from.orow.data(), from.odest.data(),
+                                from.oval.data(), Yk.data(), d, part == 1);
+            for (int64_t i = 0; i < d; ++i) {
+                DataType* ocol = Oacc.data() + static_cast<size_t>(i) * n;
+                for (int64_t c = 0; c < n; ++c) ocol[c] += Yk[static_cast<size_t>(i + c * d)];
+            }
+        }
     }
 
     // ---- pass 3: the fill, in sketch space, a source at a time ----

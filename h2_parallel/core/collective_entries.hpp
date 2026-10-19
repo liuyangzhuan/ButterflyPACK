@@ -20,7 +20,8 @@
 //
 // With a sketch callback too (c_bpack_set_sketch_callback) a round also
 // fetches sketched blocks, Omega A(rows, columns) for a sparse Omega the
-// asker gives: the ID's sketch of its kernel rows asks for those instead of
+// asker gives, and with a transposed one (c_bpack_set_sketch_transpose_callback)
+// Omega A(columns, rows)^T: the ID's sketch of its kernel rows asks for those instead of
 // the rows' entries (a d x n block for an m x n one, m >> d).
 //
 // A round is the same calls wherever a rank makes it, so the ranks need not
@@ -192,17 +193,21 @@ public:
         }
     }
 
-    // A sketch callback: sketched blocks are fetched through it.  (Not for a
-    // nonsymmetric matrix, which fetches its kernel rows' blocks: the
-    // callback sketches A(rows, columns) from the left, and the stacked ID's
-    // K(B, F)^T rows would need A(B, F) sketched from the right.)
-    void set_sketch(SketchCallback callback) {
-        if (symmetric_) sketch_callback_ = callback;
+    // A sketch callback: sketched blocks are fetched through it; the
+    // transposed sketches (Omega A(columns, rows)^T) through the transposed
+    // one.  A nonsymmetric matrix's ID needs both (its K(F, B) rows sketch
+    // A(F, B) from the left, its K(B, F)^T rows A(B, F) from the right), and
+    // fetches its kernel rows' blocks without them.
+    void set_sketch(SketchCallback callback) { sketch_callback_ = callback; }
+    void set_sketch_transposed(SketchCallback callback) { sketch_t_callback_ = callback; }
+    bool symmetric() const { return symmetric_; }
+    bool has_sketch() const {
+        return sketch_callback_ != nullptr && (symmetric_ || sketch_t_callback_ != nullptr);
     }
-    bool has_sketch() const { return sketch_callback_ != nullptr; }
 
     // A sketch request: Y = Omega K(x, y), Omega (d x nx) given by its nnz
-    // entries (orow: the position in x, odest: the row of Y, oval).
+    // entries (orow: the position in x, odest: the row of Y, oval); with
+    // transposed, Y = Omega K(y, x)^T.
     struct SketchKey {
         const int64_t* x;
         int64_t nx;
@@ -213,6 +218,7 @@ public:
         const int* orow;
         const int* odest;
         const double* oval;
+        bool transposed = false;
     };
     // Y (d x ny, leading dimension ldy) if this request was fetched; else
     // false.  Thread safe.
@@ -235,6 +241,7 @@ public:
         s.orow.assign(k.orow, k.orow + k.nnz);
         s.odest.assign(k.odest, k.odest + k.nnz);
         s.oval.assign(k.oval, k.oval + k.nnz);
+        s.transposed = k.transposed;
         const size_t o = static_cast<size_t>(entry_origin());
         origin_blocks_[o] += 1.0;
         origin_entries_[o] += static_cast<double>(k.d) * static_cast<double>(k.ny);
@@ -417,10 +424,12 @@ private:
         int d = 0;
         std::vector<int> orow, odest;
         std::vector<double> oval;
+        bool transposed = false;
         std::vector<DataType> values;
     };
     static uint64_t sketch_hash(const SketchKey& k) {
-        uint64_t h = hash(k.x, k.nx, k.y, k.ny) ^ (static_cast<uint64_t>(k.d) * 0x9e3779b97f4a7c15ULL);
+        uint64_t h = hash(k.x, k.nx, k.y, k.ny) ^ (static_cast<uint64_t>(k.d) * 0x9e3779b97f4a7c15ULL) ^
+                     (k.transposed ? 0x5bd1e995ULL : 0ULL);
         for (int64_t e = 0; e < k.nnz; ++e) {
             uint64_t bits = 0;
             std::memcpy(&bits, &k.oval[e], sizeof(bits));
@@ -430,7 +439,8 @@ private:
         return h;
     }
     static bool same_sketch(const Sketch& s, const SketchKey& k) {
-        if (s.d != k.d || static_cast<int64_t>(s.rows.size()) != k.nx || static_cast<int64_t>(s.cols.size()) != k.ny ||
+        if (s.d != k.d || s.transposed != k.transposed || static_cast<int64_t>(s.rows.size()) != k.nx ||
+            static_cast<int64_t>(s.cols.size()) != k.ny ||
             static_cast<int64_t>(s.orow.size()) != k.nnz) {
             return false;
         }
@@ -501,22 +511,30 @@ private:
     // rank, each block owned (a 1 x 1 process group) by the rank that asked.
     void fetch() {
         const double t_gather = MPI_Wtime();
-        int mine[2] = {checked(static_cast<int64_t>(pending_.size()), "blocks"),
-                       checked(static_cast<int64_t>(pending_sketches_.size()), "sketches")};
-        std::vector<int> both(static_cast<size_t>(2 * size_)), blocks(static_cast<size_t>(size_)),
-            sketches(static_cast<size_t>(size_));
-        MPI_Allgather(mine, 2, MPI_INT, both.data(), 2, MPI_INT, comm_);
-        int64_t nblocks = 0, nsketches = 0;
+        int64_t transposed = 0;
+        for (const Sketch& s : pending_sketches_) transposed += s.transposed ? 1 : 0;
+        int mine[3] = {checked(static_cast<int64_t>(pending_.size()), "blocks"),
+                       checked(static_cast<int64_t>(pending_sketches_.size()) - transposed, "sketches"),
+                       checked(transposed, "transposed sketches")};
+        std::vector<int> all(static_cast<size_t>(3 * size_)), blocks(static_cast<size_t>(size_)),
+            sketches(static_cast<size_t>(size_)), sketches_t(static_cast<size_t>(size_));
+        MPI_Allgather(mine, 3, MPI_INT, all.data(), 3, MPI_INT, comm_);
+        int64_t nblocks = 0, nsketches = 0, nsketches_t = 0;
         for (int p = 0; p < size_; ++p) {
-            blocks[static_cast<size_t>(p)] = both[static_cast<size_t>(2 * p)];
-            sketches[static_cast<size_t>(p)] = both[static_cast<size_t>(2 * p + 1)];
+            blocks[static_cast<size_t>(p)] = all[static_cast<size_t>(3 * p)];
+            sketches[static_cast<size_t>(p)] = all[static_cast<size_t>(3 * p + 1)];
+            sketches_t[static_cast<size_t>(p)] = all[static_cast<size_t>(3 * p + 2)];
             nblocks += blocks[static_cast<size_t>(p)];
             nsketches += sketches[static_cast<size_t>(p)];
+            nsketches_t += sketches_t[static_cast<size_t>(p)];
         }
         gather_seconds_ += MPI_Wtime() - t_gather;
         // (every rank skips the same calls: the counts are everyone's)
         if (nblocks > 0) fetch_blocks(blocks);
-        if (nsketches > 0) fetch_sketches(sketches);
+        if (nsketches > 0) fetch_sketches(sketches, false);
+        if (nsketches_t > 0) fetch_sketches(sketches_t, true);
+        pending_sketches_.clear();
+        pending_sketch_index_.clear();
     }
     void fetch_blocks(const std::vector<int>& counts) {
         const double t_gather = MPI_Wtime();
@@ -585,15 +603,23 @@ private:
         pending_index_.clear();
         store_seconds_ += MPI_Wtime() - t_store;
     }
-    // Every rank's recorded sketch requests, in one sketch callback call (as
-    // fetch_blocks; Omega's entries 1-based, as the indices).
-    void fetch_sketches(const std::vector<int>& counts) {
+    // Every rank's recorded sketch requests of one kind (transposed or not),
+    // in one call of that kind's callback (as fetch_blocks; Omega's entries
+    // 1-based, as the indices).
+    void fetch_sketches(const std::vector<int>& counts, bool transposed) {
         const double t_gather = MPI_Wtime();
+        SketchCallback callback = transposed ? sketch_t_callback_ : sketch_callback_;
+        if (callback == nullptr) throw std::logic_error("CollectiveEntries: a sketch request without its callback");
+        std::vector<Sketch*> mine;
+        for (Sketch& s : pending_sketches_) {
+            if (s.transposed == transposed) mine.push_back(&s);
+        }
         std::vector<int> my_sizes;  // rows, cols, d, nnz per request
         std::vector<int> my_ids;    // 1-based rows then columns per request
         std::vector<int> my_omega;  // 1-based (row, destination) per entry
         std::vector<double> my_values;
-        for (const Sketch& s : pending_sketches_) {
+        for (const Sketch* sp : mine) {
+            const Sketch& s = *sp;
             my_sizes.insert(my_sizes.end(), {checked(static_cast<int64_t>(s.rows.size()), "a sketch's rows"),
                                              checked(static_cast<int64_t>(s.cols.size()), "a sketch's columns"), s.d,
                                              checked(static_cast<int64_t>(s.orow.size()), "a sketch's entries")});
@@ -642,21 +668,22 @@ private:
             pmaps[static_cast<size_t>(2 * size_ + p)] = pids_[static_cast<size_t>(p)];
         }
         int64_t nloc = 0;
-        for (const Sketch& s : pending_sketches_) nloc += static_cast<int64_t>(s.d) * static_cast<int64_t>(s.cols.size());
+        for (const Sketch* s : mine) nloc += static_cast<int64_t>(s->d) * static_cast<int64_t>(s->cols.size());
         std::vector<CallbackValue> values(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
         int nallrows = checked(static_cast<int64_t>(allrows.size()), "the rows"),
             nallcols = checked(static_cast<int64_t>(allcols.size()), "the columns"), npmap = size_;
         int64_t nallomega = static_cast<int64_t>(omega_val.size());
         const double t_callback = MPI_Wtime();
         gather_seconds_ += t_callback - t_gather;
-        sketch_callback_(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(),
+        callback(&nsketch, &nallrows, &nallcols, &nallomega, &nloc, allrows.data(), allcols.data(),
                          rowidx.data(), colidx.data(), dims.data(), omegaidx.data(), omega_row.data(), omega_dest.data(),
                          const_cast<double*>(omega_val.data()), values.data(), pgidx.data(), &npmap, pmaps.data(),
                          quant_);
         const double t_store = MPI_Wtime();
         callback_seconds_ += t_store - t_callback;
         int64_t at = 0;
-        for (Sketch& s : pending_sketches_) {
+        for (Sketch* sp : mine) {
+            Sketch& s = *sp;
             const int64_t n = static_cast<int64_t>(s.d) * static_cast<int64_t>(s.cols.size());
             const DataType* v = reinterpret_cast<const DataType*>(values.data()) + at;
             s.values.assign(v, v + n);
@@ -667,12 +694,10 @@ private:
             sketch_covered_ += static_cast<double>(s.rows.size()) * static_cast<double>(s.cols.size());
             const SketchKey k{s.rows.data(), static_cast<int64_t>(s.rows.size()), s.cols.data(),
                               static_cast<int64_t>(s.cols.size()), s.d, static_cast<int64_t>(s.orow.size()),
-                              s.orow.data(), s.odest.data(), s.oval.data()};
+                              s.orow.data(), s.odest.data(), s.oval.data(), s.transposed};
             sketch_index_.emplace(sketch_hash(k), sketches_.size());
             sketches_.push_back(std::move(s));
         }
-        pending_sketches_.clear();
-        pending_sketch_index_.clear();
         store_seconds_ += MPI_Wtime() - t_store;
     }
 
@@ -684,7 +709,7 @@ private:
     bool symmetric_ = true;
     std::mutex mutex_;
     std::vector<Block> pending_, blocks_;
-    SketchCallback sketch_callback_ = nullptr;
+    SketchCallback sketch_callback_ = nullptr, sketch_t_callback_ = nullptr;
     std::vector<Sketch> pending_sketches_, sketches_;
     std::unordered_multimap<uint64_t, size_t> pending_sketch_index_, sketch_index_;
     double sketch_requests_ = 0.0, sketch_values_ = 0.0, sketch_covered_ = 0.0;

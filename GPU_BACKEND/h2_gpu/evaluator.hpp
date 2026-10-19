@@ -91,13 +91,20 @@ public:
     }
     // A sketch of kernel rows asked of the entries' source (the collective
     // evaluator with a sketch callback): out (d x cols, leading dimension
-    // ldo, on the device) = Omega K(rows, cols), Omega by its entries (orow:
-    // the position in rows, odest: the row of out, oval).
+    // ldo, on the device) = Omega K(cols, rows)^T (the rows' values K(col,
+    // row), as sketch_rows takes them: Omega K(rows, cols) for a symmetric
+    // matrix), Omega by its entries (orow: the position in rows, odest: the
+    // row of out, oval), plus Omega_k K(krows, cols) for the rows of an
+    // item's swap ranges (a nonsymmetric matrix's K(F, B) rows; korow,
+    // kodest, koval: Omega_k's entries).
     struct SketchRequest {
         std::vector<int64_t> rows, cols;
         int d = 0;
         std::vector<int> orow, odest;
         std::vector<double> oval;
+        std::vector<int64_t> krows;
+        std::vector<int> korow, kodest;
+        std::vector<double> koval;
         void* out = nullptr;
         int ldo = 0;
     };
@@ -183,13 +190,6 @@ public:
             return;
         }
         if (collective_ && sketch_ready_ && sketch_ready_()) {
-            for (const OrderedSketchItemT<T>& it : host_items) {
-                if (it.swap_hi0 > it.swap_lo0 || it.swap_hi1 > it.swap_lo1) {
-                    throw std::logic_error(
-                        "Evaluator::sketch_rows: K(row, col) rows (a nonsymmetric matrix) through a collective "
-                        "sketch callback");
-                }
-            }
             collective_sketch_rows<T>(host_items, points, stream);
             return;
         }
@@ -459,17 +459,27 @@ private:
             const BlockGatherItem& g = gather[q];
             SketchRequest& r = requests[q];
             r.cols.assign(h_ids.begin() + g.row_at, h_ids.begin() + g.row_at + s.ncols);
-            r.rows.assign(h_ids.begin() + g.col_at, h_ids.begin() + g.col_at + s.rows);
             r.d = s.d;
             r.out = s.out;
             r.ldo = s.ldo;
-            r.orow.reserve(entries[q].size());
-            r.odest.reserve(entries[q].size());
-            r.oval.reserve(entries[q].size());
+            // each row into its part, at its position there (the swap ranges'
+            // rows into krows)
+            auto swapped = [&](int row) {
+                return (row >= s.swap_lo0 && row < s.swap_hi0) || (row >= s.swap_lo1 && row < s.swap_hi1);
+            };
+            std::vector<int> at(static_cast<size_t>(s.rows));
+            for (int row = 0; row < s.rows; ++row) {
+                const int64_t id = h_ids[static_cast<size_t>(g.col_at + row)];
+                auto& part = swapped(row) ? r.krows : r.rows;
+                at[static_cast<size_t>(row)] = static_cast<int>(part.size());
+                part.push_back(id);
+            }
             for (int e : entries[q]) {
-                r.orow.push_back(e & kEntryRowMask);
-                r.odest.push_back((e >> kEntryRowBits) & kEntryDestMask);
-                r.oval.push_back((static_cast<unsigned>(e) & 0x80000000u) != 0 ? -s.scale : s.scale);
+                const int row = e & kEntryRowMask;
+                const bool k = swapped(row);
+                (k ? r.korow : r.orow).push_back(at[static_cast<size_t>(row)]);
+                (k ? r.kodest : r.odest).push_back((e >> kEntryRowBits) & kEntryDestMask);
+                (k ? r.koval : r.oval).push_back((static_cast<unsigned>(e) & 0x80000000u) != 0 ? -s.scale : s.scale);
             }
         }
         sketch_fetch_(requests, stream);

@@ -1750,10 +1750,10 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	      H2_solver->comm, C_FuncZmnBlock, C_QuantApp, H2_solver->kernel.block_callback_pid,
 	      H2_solver->options.symmetric);
 	  // (c_bpack_set_sketch_callback: the ID sketches of kernel rows fetched
-	  // sketched; a nonsymmetric H2 fetches their blocks, CollectiveEntries::set_sketch)
-	  if (H2_solver->kernel.sketch_callback != nullptr) {
-	    H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
-	  }
+	  // sketched; a nonsymmetric H2 needs c_bpack_set_sketch_transpose_callback
+	  // too, else it fetches their blocks, CollectiveEntries::set_sketch)
+	  H2_solver->kernel.collective->set_sketch(H2_solver->kernel.sketch_callback);
+	  H2_solver->kernel.collective->set_sketch_transposed(H2_solver->kernel.sketch_transpose_callback);
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
 	  if (H2_solver->options.use_gpu != 0) {
 	    H2_solver->kernel.gpu_evaluator =
@@ -2474,7 +2474,7 @@ static void h2_extract_elements(
 static void h2_extract_sketches(
     F2Cptr* bmat, MPI_Comm caller_comm, int* Nsketch, int* allrows, int* allcols, int* rowidx, int* colidx,
     int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc,
-    int* pgidx, int* Npmap, int* pmaps, const char* caller) {
+    int* pgidx, int* Npmap, int* pmaps, const char* caller, bool transposed) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
     single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
@@ -2491,7 +2491,7 @@ static void h2_extract_sketches(
   }
   butterfly::color_unstructured::extract_compressed_sketches(
     h2_of<H2Data>(bmat), caller_comm, *Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omega_off.data(),
-    orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc));
+    orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc), transposed);
 }
 #endif
 
@@ -2577,10 +2577,32 @@ void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmn
 #endif
 }
 
-void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT) {
+#ifdef HAVE_MPI
+  if (bmat == nullptr || *bmat == nullptr) {
+    throw std::invalid_argument("c_bpack_set_sketch_transpose_callback: null matrix handle");
+  }
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  butterfly::H2<double, H2Data>* solver = h2_of<H2Data>(bmat);
+  if (solver == nullptr) return;  // (not an H2: its entries are never sketched)
+  using Entries = fmm::CollectiveEntries<H2Data, typename butterfly::H2Kernel<double, H2Data>::kerData>;
+  solver->kernel.sketch_transpose_callback = reinterpret_cast<typename Entries::SketchCallback>(C_FuncZmnSketchT);
+  if (solver->kernel.collective) {
+    solver->kernel.collective->set_sketch_transposed(solver->kernel.sketch_transpose_callback);
+  }
+#else
+  (void)bmat;
+  (void)C_FuncZmnSketchT;
+#endif
+}
+
+// c_bpack_extractsketch_bridge and its transposed form: Y_n = Omega_n
+// A(rows, columns), or with transposed Omega_n A(columns, rows)^T.
+static void extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
 	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
 	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
-	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, bool transposed,
+	const char* caller){
 #ifdef HAVE_MPI
   (void)Nallomega;
   (void)Nalldat_loc;
@@ -2600,33 +2622,42 @@ void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr
   try {
     if (format == 7) {
       h2_extract_sketches(bmat, caller_comm, Nsketch, allrows, allcols, rowidx, colidx, sketchdim, omegaidx,
-                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps,
-                          "c_bpack_extractsketch_bridge");
+                          omega_row, omega_dest, omega_val, alldat_loc, pgidx, Npmap, pmaps, caller, transposed);
       return;
     }
-    // other formats: the requests' entries, sketched on their owners
+    // other formats: the requests' entries (transposed: A(columns, rows)),
+    // sketched on their owners
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
-    const std::vector<int> owner =
-      single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, "c_bpack_extractsketch_bridge");
+    const std::vector<int> owner = single_rank_owners(*Nsketch, pgidx, *Npmap, pmaps, caller);
     int64_t nentries = 0;
     for (int n = 0; n < *Nsketch; ++n) {
       if (owner[static_cast<size_t>(n)] == crank) nentries += static_cast<int64_t>(rowidx[n]) * colidx[n];
     }
     std::vector<H2Data> entries(static_cast<size_t>(std::max<int64_t>(nentries, 1)));
-    c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows,
-      Nallcols, &nentries, allrows, allcols, reinterpret_cast<C_DT*>(entries.data()), rowidx, colidx, pgidx,
-      Npmap, pmaps);
+    if (transposed) {
+      c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallcols,
+        Nallrows, &nentries, allcols, allrows, reinterpret_cast<C_DT*>(entries.data()), colidx, rowidx, pgidx,
+        Npmap, pmaps);
+    } else {
+      c_bpack_extractelement_bridge_fortran(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows,
+        Nallcols, &nentries, allrows, allcols, reinterpret_cast<C_DT*>(entries.data()), rowidx, colidx, pgidx,
+        Npmap, pmaps);
+    }
     H2Data* out = reinterpret_cast<H2Data*>(alldat_loc);
     int64_t at = 0, e0 = 0;
     for (int n = 0; n < *Nsketch; ++n) {
       const int64_t nr = rowidx[n], nc = colidx[n], d = sketchdim[n];
       if (owner[static_cast<size_t>(n)] == crank) {
         std::fill(out, out + d * nc, H2Data{0});
-        const H2Data* A = entries.data() + at;
+        const H2Data* A = entries.data() + at;  // nr x nc, or transposed nc x nr
         for (int64_t e = e0; e < e0 + omegaidx[n]; ++e) {
           const int64_t r = omega_row[e] - 1, i = omega_dest[e] - 1;
           const H2Data w = static_cast<H2Data>(omega_val[e]);
-          for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[r + j * nr];
+          if (transposed) {
+            for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[j + r * nc];
+          } else {
+            for (int64_t j = 0; j < nc; ++j) out[i + j * d] += w * A[r + j * nr];
+          }
         }
         at += nr * nc;
         out += d * nc;
@@ -2641,9 +2672,27 @@ void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr
   (void)bmat; (void)option; (void)msh; (void)stats; (void)ptree; (void)ptree_caller; (void)Nsketch;
   (void)Nallrows; (void)Nallcols; (void)Nallomega; (void)Nalldat_loc; (void)allrows; (void)allcols;
   (void)rowidx; (void)colidx; (void)sketchdim; (void)omegaidx; (void)omega_row; (void)omega_dest;
-  (void)omega_val; (void)alldat_loc; (void)pgidx; (void)Npmap; (void)pmaps;
-  throw std::runtime_error("c_bpack_extractsketch_bridge requires MPI");
+  (void)omega_val; (void)alldat_loc; (void)pgidx; (void)Npmap; (void)pmaps; (void)transposed;
+  throw std::runtime_error(std::string(caller) + " requires MPI");
 #endif
+}
+
+void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+  extractsketch_bridge(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows, Nallcols, Nallomega,
+    Nalldat_loc, allrows, allcols, rowidx, colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val,
+    alldat_loc, pgidx, Npmap, pmaps, false, "c_bpack_extractsketch_bridge");
+}
+
+void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
+	F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc,
+	int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row,
+	int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps){
+  extractsketch_bridge(bmat, option, msh, stats, ptree, ptree_caller, Nsketch, Nallrows, Nallcols, Nallomega,
+    Nalldat_loc, allrows, allcols, rowidx, colidx, sketchdim, omegaidx, omega_row, omega_dest, omega_val,
+    alldat_loc, pgidx, Npmap, pmaps, true, "c_bpack_extractsketch_transpose_bridge");
 }
 
 

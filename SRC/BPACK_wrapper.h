@@ -134,13 +134,19 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
 typedef void (*c_bpack_func_zmn_sketch)(int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps, C2Fptr C_QuantApp);
 // An H2 (format 7) whose entries come through a collective block callback (elem_extract=1) asks for the ID
 // sketches of its kernel rows through this callback (its C_QuantApp: that of the construction), set before
-// c_bpack_construct_element_compute; other formats ignore it, and so does a nonsymmetric H2 (option%sym=0),
-// which asks for the rows' blocks (its ID would need A(B, F) sketched from the right too).
+// c_bpack_construct_element_compute; other formats ignore it.  A nonsymmetric H2 (option%sym=0) asks for them
+// only with the transposed callback set too (its ID sketches A(B, F) from the right as well), else for the
+// rows' blocks.
 void c_bpack_set_sketch_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketch);
+// The transposed sketched blocks, for a nonsymmetric H2: request n asks for Y_n = Omega_n A(columns, rows)^T
+// (= Omega_n A^T(rows, columns)), the arguments as for the sketch callback (Omega_n over the rows).
+void c_bpack_set_sketch_transpose_callback(F2Cptr* bmat, c_bpack_func_zmn_sketch C_FuncZmnSketchT);
 // The sketched blocks from a matrix on a subset of the caller's ranks (as c_bpack_extractelement_bridge): a
 // compression-only H2 (format 7) sketches them from its representation; other formats extract the entries and
 // sketch them on their owners.
 void c_bpack_extractsketch_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
+// The same for the transposed sketches, Y_n = Omega_n A(columns, rows)^T.
+void c_bpack_extractsketch_transpose_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,F2Cptr* ptree_caller, int* Nsketch, int* Nallrows, int* Nallcols, int64_t* Nallomega, int64_t* Nalldat_loc, int* allrows, int* allcols, int* rowidx, int* colidx, int* sketchdim, int* omegaidx, int* omega_row, int* omega_dest, double* omega_val, C_DT* alldat_loc, int* pgidx, int* Npmap, int* pmaps);
 void c_bpack_inv_mult_fortran(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol, F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree);
 void c_bpack_set_entry_addend(F2Cptr* ker, F2Cptr* bf, F2Cptr* ptree);

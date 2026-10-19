@@ -25,7 +25,9 @@
 // Collective over the caller's communicator, every rank passing the same
 // list, and inside it over the source's, a subset of the caller's ranks (the
 // solver null elsewhere).  Indices are the user's, as the kernel callbacks
-// take them, 1-based.  The matrix is transpose-symmetric (option%sym=1).
+// take them, 1-based.  A nonsymmetric matrix's blocks are each box's own
+// rows' (K(S_t, S_s) on t, K(B_t, B_s) on t), as the representation keeps
+// them for any matrix.
 
 #include "core/butterfly_types.hpp"
 #include "core/blas_declare.hpp"
@@ -692,12 +694,18 @@ void extract_compressed_blocks(
 // summed on that rank over its boxes t, then over the ranks on the owner of
 // s, which multiplies by U_s of the columns; near blocks are sketched where
 // they are stored.
+//
+// transposed: Y_n = Omega_n A(J_n, I_n)^T (a nonsymmetric source; the
+// rows I_n still Omega's).  The blocks of A(J, I) are stored on the column
+// side's boxes s, so the owner of t forms M = U_t Omega^T (k_t x d) and sends
+// it to the owner of s, which sums (K(S_s, S_t) M)^T over the boxes t and
+// multiplies by U_s; the near blocks K(B_s, B_t) are sketched on s's owner.
 template<typename CoordType, typename DataType>
 void extract_compressed_sketches(
     H2<CoordType, DataType>* source, MPI_Comm caller_comm, int64_t nsketch,
     const int* allrows, const int* allcols, const int* rowidx, const int* colidx, const int* dims,
     const int64_t* omega_off, const int* omega_row, const int* omega_dest, const double* omega_val,
-    const std::vector<int>& owner, DataType* alldat_loc) {
+    const std::vector<int>& owner, DataType* alldat_loc, bool transposed = false) {
     using namespace extraction_detail;
     fmm::ExtractionProfile& profile = fmm::extraction_profile();
     ++profile.calls;
@@ -762,108 +770,220 @@ void extract_compressed_sketches(
             (void)d;
         };
 
-        // ---- far, on the row sides' owners: W(n, l, s) = sum over this
-        // rank's boxes t of (Omega U_t^T) K(S_t, S_s), d x k_s
+        // the row groups of each (n, l, s, t) on t's owner (the task's computer)
         std::map<std::tuple<int64_t, int, int64_t, int64_t>, std::vector<int64_t>> row_groups;  // (n, l, s, t) -> groups
         for (const Task& task : tasks) {
             if (task.near || task.computer != srank) continue;
             auto& g = row_groups[{task.inter, task.level, task.s, task.t}];
             if (g.empty() || g.back() != task.rgroup) g.push_back(task.rgroup);
         }
-        struct Partial {
-            int64_t n;
-            int l;
-            int64_t s, ks;
-            std::vector<std::pair<int64_t, const std::vector<int64_t>*>> boxes;  // t, its row groups
-            std::vector<DataType> w;
-        };
-        std::vector<Partial> partials;
-        for (const auto& [key, groups] : row_groups) {
-            const auto& [n, l, s, t] = key;
-            if (partials.empty() || partials.back().n != n || partials.back().l != l || partials.back().s != s) {
-                partials.push_back(Partial{n, l, s, 0, {}, {}});
-            }
-            partials.back().boxes.emplace_back(t, &groups);
-        }
-        std::exception_ptr failure;
-#pragma omp parallel for schedule(dynamic)
-        for (size_t q = 0; q < partials.size(); ++q) {
-            if (failure) continue;
-            try {
-                Partial& part = partials[q];
-                auto& level = tree->levels[static_cast<size_t>(part.l)];
-                const int64_t d = dims[part.n];
-                std::vector<DataType> M;
-                for (const auto& [t, groups] : part.boxes) {
-                    auto* tb = level.find_local_box(t);
-                    if (tb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
-                    const H2Block<DataType>* block = nullptr;
-                    for (const auto& b : tb->h2_interaction_blocks) {
-                        if (b.source_morton == part.s) block = &b;
-                    }
-                    const int64_t kt = static_cast<int64_t>(tb->skeleton_indices.size());
-                    if (block == nullptr || kt == 0 || d == 0) continue;  // no coupling
-                    const auto& K = block->matrix;
-                    if (K.rows != kt) throw std::logic_error("extract_compressed_sketches: inconsistent far data");
-                    if (part.w.empty()) {
-                        part.ks = K.cols;
-                        part.w.assign(static_cast<size_t>(d * part.ks), DataType{0});
-                    } else if (K.cols != part.ks) {
-                        throw std::logic_error("extract_compressed_sketches: inconsistent column skeletons");
-                    }
-                    auto& bv = vectors[static_cast<size_t>(part.l)].at(t);
-                    M.assign(static_cast<size_t>(kt * d), DataType{0});
-                    for (int64_t g : *groups) sketch_vectors(part.n, g, bv, d, M.data());
-                    // W += M^T K
-                    const int m = static_cast<int>(d), nn = static_cast<int>(part.ks), k = static_cast<int>(kt);
-                    const int lda = static_cast<int>(kt), ldb = static_cast<int>(K.lda), ldc = static_cast<int>(d);
-                    const DataType one{1};
-                    const char tr = 'T', no = 'N';
-                    if (m > 0 && nn > 0) {
-                        gemm_(&tr, &no, &m, &nn, &k, &one, M.data(), &lda, K.data.data(), &ldb, &one, part.w.data(), &ldc);
-                    }
-                }
-            } catch (...) {
-#pragma omp critical(extract_compressed_sketches_failure)
-                if (!failure) failure = std::current_exception();
-            }
-        }
-        if (failure) std::rethrow_exception(failure);
-        lap(fmm::ExtractionProfile::kCompute);
-
-        // ---- the partials to the column sides' owners, summed there
-        std::vector<std::vector<int64_t>> meta(static_cast<size_t>(p.ssize));
-        std::vector<std::vector<DataType>> data(static_cast<size_t>(p.ssize));
-        for (const Partial& part : partials) {
-            if (part.w.empty()) continue;
-            const int to = tree->levels[static_cast<size_t>(part.l)].owner_rank_of(part.s);
-            meta[static_cast<size_t>(to)].insert(meta[static_cast<size_t>(to)].end(), {part.n, part.l, part.s, part.ks});
-            data[static_cast<size_t>(to)].insert(data[static_cast<size_t>(to)].end(), part.w.begin(), part.w.end());
-        }
-        partials.clear();
-        const auto rmeta = exchange(tree->comm, meta, MPI_INT64_T);
-        const auto rdata = exchange(tree->comm, data, p.value_type);
         std::map<std::tuple<int64_t, int, int64_t>, std::pair<int64_t, std::vector<DataType>>> sums;  // (n, l, s) -> ks, W
-        for (int from = 0; from < p.ssize; ++from) {
-            const auto& mv = rmeta[static_cast<size_t>(from)];
-            const auto& dv = rdata[static_cast<size_t>(from)];
-            size_t di = 0;
-            for (size_t mi = 0; mi + 4 <= mv.size(); mi += 4) {
-                const int64_t n = mv[mi], s = mv[mi + 2], ks = mv[mi + 3];
-                const int l = static_cast<int>(mv[mi + 1]);
-                const size_t len = static_cast<size_t>(dims[n] * ks);
-                auto& [k, w] = sums[{n, l, s}];
-                if (w.empty()) {
-                    k = ks;
-                    w.assign(dv.begin() + static_cast<std::ptrdiff_t>(di), dv.begin() + static_cast<std::ptrdiff_t>(di + len));
-                } else {
-                    if (k != ks) throw std::logic_error("extract_compressed_sketches: inconsistent partials");
-                    for (size_t i = 0; i < len; ++i) w[i] += dv[di + i];
+        std::exception_ptr failure;
+        if (!transposed) {
+            // ---- far, on the row sides' owners: W(n, l, s) = sum over this
+            // rank's boxes t of (Omega U_t^T) K(S_t, S_s), d x k_s
+            struct Partial {
+                int64_t n;
+                int l;
+                int64_t s, ks;
+                std::vector<std::pair<int64_t, const std::vector<int64_t>*>> boxes;  // t, its row groups
+                std::vector<DataType> w;
+            };
+            std::vector<Partial> partials;
+            for (const auto& [key, groups] : row_groups) {
+                const auto& [n, l, s, t] = key;
+                if (partials.empty() || partials.back().n != n || partials.back().l != l || partials.back().s != s) {
+                    partials.push_back(Partial{n, l, s, 0, {}, {}});
                 }
-                di += len;
+                partials.back().boxes.emplace_back(t, &groups);
             }
+#pragma omp parallel for schedule(dynamic)
+            for (size_t q = 0; q < partials.size(); ++q) {
+                if (failure) continue;
+                try {
+                    Partial& part = partials[q];
+                    auto& level = tree->levels[static_cast<size_t>(part.l)];
+                    const int64_t d = dims[part.n];
+                    std::vector<DataType> M;
+                    for (const auto& [t, groups] : part.boxes) {
+                        auto* tb = level.find_local_box(t);
+                        if (tb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
+                        const H2Block<DataType>* block = nullptr;
+                        for (const auto& b : tb->h2_interaction_blocks) {
+                            if (b.source_morton == part.s) block = &b;
+                        }
+                        const int64_t kt = static_cast<int64_t>(tb->skeleton_indices.size());
+                        if (block == nullptr || kt == 0 || d == 0) continue;  // no coupling
+                        const auto& K = block->matrix;
+                        if (K.rows != kt) throw std::logic_error("extract_compressed_sketches: inconsistent far data");
+                        if (part.w.empty()) {
+                            part.ks = K.cols;
+                            part.w.assign(static_cast<size_t>(d * part.ks), DataType{0});
+                        } else if (K.cols != part.ks) {
+                            throw std::logic_error("extract_compressed_sketches: inconsistent column skeletons");
+                        }
+                        auto& bv = vectors[static_cast<size_t>(part.l)].at(t);
+                        M.assign(static_cast<size_t>(kt * d), DataType{0});
+                        for (int64_t g : *groups) sketch_vectors(part.n, g, bv, d, M.data());
+                        // W += M^T K
+                        const int m = static_cast<int>(d), nn = static_cast<int>(part.ks), k = static_cast<int>(kt);
+                        const int lda = static_cast<int>(kt), ldb = static_cast<int>(K.lda), ldc = static_cast<int>(d);
+                        const DataType one{1};
+                        const char tr = 'T', no = 'N';
+                        if (m > 0 && nn > 0) {
+                            gemm_(&tr, &no, &m, &nn, &k, &one, M.data(), &lda, K.data.data(), &ldb, &one, part.w.data(), &ldc);
+                        }
+                    }
+                } catch (...) {
+#pragma omp critical(extract_compressed_sketches_failure)
+                    if (!failure) failure = std::current_exception();
+                }
+            }
+            if (failure) std::rethrow_exception(failure);
+            lap(fmm::ExtractionProfile::kCompute);
+
+            // ---- the partials to the column sides' owners, summed there
+            std::vector<std::vector<int64_t>> meta(static_cast<size_t>(p.ssize));
+            std::vector<std::vector<DataType>> data(static_cast<size_t>(p.ssize));
+            for (const Partial& part : partials) {
+                if (part.w.empty()) continue;
+                const int to = tree->levels[static_cast<size_t>(part.l)].owner_rank_of(part.s);
+                meta[static_cast<size_t>(to)].insert(meta[static_cast<size_t>(to)].end(), {part.n, part.l, part.s, part.ks});
+                data[static_cast<size_t>(to)].insert(data[static_cast<size_t>(to)].end(), part.w.begin(), part.w.end());
+            }
+            partials.clear();
+            const auto rmeta = exchange(tree->comm, meta, MPI_INT64_T);
+            const auto rdata = exchange(tree->comm, data, p.value_type);
+            for (int from = 0; from < p.ssize; ++from) {
+                const auto& mv = rmeta[static_cast<size_t>(from)];
+                const auto& dv = rdata[static_cast<size_t>(from)];
+                size_t di = 0;
+                for (size_t mi = 0; mi + 4 <= mv.size(); mi += 4) {
+                    const int64_t n = mv[mi], s = mv[mi + 2], ks = mv[mi + 3];
+                    const int l = static_cast<int>(mv[mi + 1]);
+                    const size_t len = static_cast<size_t>(dims[n] * ks);
+                    auto& [k, w] = sums[{n, l, s}];
+                    if (w.empty()) {
+                        k = ks;
+                        w.assign(dv.begin() + static_cast<std::ptrdiff_t>(di), dv.begin() + static_cast<std::ptrdiff_t>(di + len));
+                    } else {
+                        if (k != ks) throw std::logic_error("extract_compressed_sketches: inconsistent partials");
+                        for (size_t i = 0; i < len; ++i) w[i] += dv[di + i];
+                    }
+                    di += len;
+                }
+            }
+            lap(fmm::ExtractionProfile::kColumns);
+        } else {
+            // ---- far, transposed: M = U_t Omega^T (k_t x d) on t's owner, to
+            // s's owner
+            struct Rows {
+                std::tuple<int64_t, int, int64_t, int64_t> key;  // (n, l, s, t)
+                const std::vector<int64_t>* groups;
+                int64_t kt = 0;
+                std::vector<DataType> m;
+            };
+            std::vector<Rows> rows;
+            for (const auto& [key, groups] : row_groups) rows.push_back(Rows{key, &groups, 0, {}});
+#pragma omp parallel for schedule(dynamic)
+            for (size_t q = 0; q < rows.size(); ++q) {
+                if (failure) continue;
+                try {
+                    Rows& row = rows[q];
+                    const auto& [n, l, s, t] = row.key;
+                    auto* tb = tree->levels[static_cast<size_t>(l)].find_local_box(t);
+                    if (tb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
+                    const int64_t kt = static_cast<int64_t>(tb->skeleton_indices.size()), d = dims[n];
+                    if (kt == 0 || d == 0) continue;  // no coupling
+                    auto& bv = vectors[static_cast<size_t>(l)].at(t);
+                    row.kt = kt;
+                    row.m.assign(static_cast<size_t>(kt * d), DataType{0});
+                    for (int64_t g : *row.groups) sketch_vectors(n, g, bv, d, row.m.data());
+                } catch (...) {
+#pragma omp critical(extract_compressed_sketches_failure)
+                    if (!failure) failure = std::current_exception();
+                }
+            }
+            if (failure) std::rethrow_exception(failure);
+            std::vector<std::vector<int64_t>> meta(static_cast<size_t>(p.ssize));
+            std::vector<std::vector<DataType>> data(static_cast<size_t>(p.ssize));
+            for (const Rows& row : rows) {
+                if (row.m.empty()) continue;
+                const auto& [n, l, s, t] = row.key;
+                const int to = tree->levels[static_cast<size_t>(l)].owner_rank_of(s);
+                meta[static_cast<size_t>(to)].insert(meta[static_cast<size_t>(to)].end(), {n, l, s, t, row.kt});
+                data[static_cast<size_t>(to)].insert(data[static_cast<size_t>(to)].end(), row.m.begin(), row.m.end());
+            }
+            rows.clear();
+            lap(fmm::ExtractionProfile::kCompute);
+            const auto rmeta = exchange(tree->comm, meta, MPI_INT64_T);
+            const auto rdata = exchange(tree->comm, data, p.value_type);
+            lap(fmm::ExtractionProfile::kColumns);
+            // ---- on s's owner: W(n, l, s) = sum over the boxes t of
+            // (K(S_s, S_t) M)^T, d x k_s
+            struct Received {
+                int64_t t, kt;
+                const DataType* m;
+            };
+            std::map<std::tuple<int64_t, int, int64_t>, std::vector<Received>> received;  // (n, l, s) -> its M
+            for (int from = 0; from < p.ssize; ++from) {
+                const auto& mv = rmeta[static_cast<size_t>(from)];
+                const auto& dv = rdata[static_cast<size_t>(from)];
+                size_t di = 0;
+                for (size_t mi = 0; mi + 5 <= mv.size(); mi += 5) {
+                    const int64_t n = mv[mi], s = mv[mi + 2], t = mv[mi + 3], kt = mv[mi + 4];
+                    const int l = static_cast<int>(mv[mi + 1]);
+                    received[{n, l, s}].push_back(Received{t, kt, dv.data() + di});
+                    di += static_cast<size_t>(kt * dims[n]);
+                }
+            }
+            std::vector<std::pair<std::tuple<int64_t, int, int64_t>, const std::vector<Received>*>> targets;
+            for (const auto& [key, list] : received) targets.emplace_back(key, &list);
+            std::vector<std::pair<int64_t, std::vector<DataType>>> formed(targets.size());
+#pragma omp parallel for schedule(dynamic)
+            for (size_t q = 0; q < targets.size(); ++q) {
+                if (failure) continue;
+                try {
+                    const auto& [n, l, s] = targets[q].first;
+                    auto* sb = tree->levels[static_cast<size_t>(l)].find_local_box(s);
+                    if (sb == nullptr) throw std::logic_error("extract_compressed_sketches: a column box is not local");
+                    const int64_t ks = static_cast<int64_t>(sb->skeleton_indices.size()), d = dims[n];
+                    if (ks == 0) continue;
+                    auto& [k, w] = formed[q];
+                    for (const Received& r : *targets[q].second) {
+                        const H2Block<DataType>* block = nullptr;
+                        for (const auto& b : sb->h2_interaction_blocks) {
+                            if (b.source_morton == r.t) block = &b;
+                        }
+                        if (block == nullptr) continue;  // no coupling
+                        const auto& K = block->matrix;
+                        if (K.rows != ks || K.cols != r.kt) {
+                            throw std::logic_error("extract_compressed_sketches: inconsistent transposed far data");
+                        }
+                        if (w.empty()) {
+                            k = ks;
+                            w.assign(static_cast<size_t>(d * ks), DataType{0});
+                        }
+                        // W += M^T K^T
+                        const int m = static_cast<int>(d), nn = static_cast<int>(ks), kk = static_cast<int>(r.kt);
+                        const int lda = static_cast<int>(r.kt), ldb = static_cast<int>(K.lda), ldc = static_cast<int>(d);
+                        const DataType one{1};
+                        const char tr = 'T';
+                        if (m > 0 && nn > 0 && kk > 0) {
+                            gemm_(&tr, &tr, &m, &nn, &kk, &one, r.m, &lda, K.data.data(), &ldb, &one, w.data(), &ldc);
+                        }
+                    }
+                } catch (...) {
+#pragma omp critical(extract_compressed_sketches_failure)
+                    if (!failure) failure = std::current_exception();
+                }
+            }
+            if (failure) std::rethrow_exception(failure);
+            for (size_t q = 0; q < targets.size(); ++q) {
+                if (!formed[q].second.empty()) sums[targets[q].first] = std::move(formed[q]);
+            }
+            lap(fmm::ExtractionProfile::kCompute);
         }
-        lap(fmm::ExtractionProfile::kColumns);
 
         // ---- the columns: Y = W U_s for each column group of n under s at l
         std::map<std::tuple<int64_t, int, int64_t>, std::vector<int64_t>> col_groups;  // (n, l, s) -> groups
@@ -885,9 +1005,13 @@ void extract_compressed_sketches(
             const auto& w = sums.at(key);
             for (int64_t g : groups) work.push_back(Columns{std::get<0>(key), std::get<1>(key), std::get<2>(key), g, &w});
         }
+        // (near: on the owner of the stored block's row box, t, or with
+        // transposed s)
         std::vector<size_t> near_tasks;
+        auto& leaf_level = tree->levels[static_cast<size_t>(p.leaf)];
         for (size_t i = 0; i < tasks.size(); ++i) {
-            if (tasks[i].near && tasks[i].computer == srank) near_tasks.push_back(i);
+            if (!tasks[i].near) continue;
+            if ((transposed ? leaf_level.owner_rank_of(tasks[i].s) : tasks[i].computer) == srank) near_tasks.push_back(i);
         }
         pieces.resize(work.size() + near_tasks.size());
 #pragma omp parallel for schedule(dynamic)
@@ -920,6 +1044,30 @@ void extract_compressed_sketches(
                 const int64_t d = dims[task.inter], nc = p.col_count(task.cgroup);
                 piece = Piece{task.inter, task.cgroup, d, nc, std::vector<DataType>(static_cast<size_t>(d * nc), DataType{0})};
                 auto& level = tree->levels[static_cast<size_t>(task.level)];
+                if (transposed) {
+                    // K(B_s, B_t), stored on s: Omega's columns of the rows
+                    // (t's points) times its columns
+                    auto* sb = level.find_local_box(task.s);
+                    if (sb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
+                    std::unordered_map<int64_t, int64_t> column_of;
+                    const auto& K = near_block(level, sb, task.t, column_of).matrix;
+                    std::vector<int64_t> spos;
+                    p.col_points(task.cgroup, [&](int64_t pt, int64_t) {
+                        spos.push_back(p.leaf_position[static_cast<size_t>(pt)]);
+                    });
+                    p.row_points(task.rgroup, [&](int64_t pt, int64_t stacked) {
+                        const int64_t c = column_of.at(p.distinct[static_cast<size_t>(pt)]);
+                        for (int64_t qq = row_omega[static_cast<size_t>(stacked)]; qq < row_omega[static_cast<size_t>(stacked) + 1]; ++qq) {
+                            const int64_t e = omega_of[static_cast<size_t>(qq)];
+                            const DataType w = static_cast<DataType>(omega_val[e]);
+                            DataType* y = piece.y.data() + omega_dest[e];
+                            for (int64_t j = 0; j < nc; ++j) {
+                                y[j * d] += w * K.data[static_cast<size_t>(spos[static_cast<size_t>(j)] + c * K.lda)];
+                            }
+                        }
+                    });
+                    continue;
+                }
                 auto* tb = level.find_local_box(task.t);
                 if (tb == nullptr) throw std::logic_error("extract_compressed_sketches: a task's box is not local");
                 std::unordered_map<int64_t, int64_t> column_of;

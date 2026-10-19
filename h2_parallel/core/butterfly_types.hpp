@@ -259,8 +259,11 @@ struct H2Kernel {
     bool symmetric = true;
     // The application's sketch callback (c_bpack_set_sketch_callback): with
     // collective entries, the ID's sketches of kernel rows are fetched
-    // sketched (sketch_block_by_index).  Null: their entries are.
+    // sketched (sketch_block_by_index).  Null: their entries are.  A
+    // nonsymmetric matrix needs the transposed one too
+    // (c_bpack_set_sketch_transpose_callback).
     typename fmm::CollectiveEntries<DataType, kerData>::SketchCallback sketch_callback = nullptr;
+    typename fmm::CollectiveEntries<DataType, kerData>::SketchCallback sketch_transpose_callback = nullptr;
 
 
     H2Kernel() = default;
@@ -401,15 +404,16 @@ struct H2Kernel {
     // y_size, leading dimension ldy) = Omega K(x_indices, y_indices), Omega
     // (d x x_size) given by its nnz entries (orow: the position in x_indices,
     // odest: the row of Y, oval), fetched in rounds as the blocks are (an
-    // item asking for one not fetched yet goes on with zeros, doomed).
-    // False, with Y untouched, without a sketch callback: the caller sketches
-    // the rows' entries itself.
+    // item asking for one not fetched yet goes on with zeros, doomed); with
+    // transposed, Y = Omega K(y_indices, x_indices)^T (a nonsymmetric
+    // matrix's K(B, F)^T rows).  False, with Y untouched, without a sketch
+    // callback: the caller sketches the rows' entries itself.
     bool sketch_block_by_index(const int64_t* x_indices, int64_t x_size, const int64_t* y_indices, int64_t y_size,
                                int d, int64_t nnz, const int* orow, const int* odest, const double* oval, DataType* Y,
-                               int64_t ldy) const {
+                               int64_t ldy, bool transposed = false) const {
         if (!collective || !collective->has_sketch()) return false;
-        const typename fmm::CollectiveEntries<DataType, kerData>::SketchKey key{x_indices, x_size, y_indices, y_size,
-                                                                               d, nnz, orow, odest, oval};
+        const typename fmm::CollectiveEntries<DataType, kerData>::SketchKey key{
+            x_indices, x_size, y_indices, y_size, d, nnz, orow, odest, oval, transposed};
         if (collective->lookup_sketch(key, Y, ldy)) return true;
         collective->record_sketch(key);
         fmm::entry_item_miss();  // (zeros: see collective_entries.hpp)
