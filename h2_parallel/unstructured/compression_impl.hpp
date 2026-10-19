@@ -500,7 +500,7 @@ void hierarchical_compression_unstructured(
 
 #ifdef H2_HAVE_GPU
     // the device matvec needs every rank's blocks on its device
-    if (gpu_blocks) gpu::commit_device_matvec(tree, verbose);
+    if (gpu_blocks) gpu::commit_device_matvec(tree, verbose, !kernel_symmetric(kernel, 0));
 #endif
 
     size_t local_memory = 0;

@@ -570,10 +570,6 @@ bool level_eliminator_supported(const TreeLevel<CoordType, DataType>& level, con
         // the sketch with an entry evaluator, else as blocks of their own,
         // through a collective callback too, which then sketches nothing)
         if (ca) return fail("CA levels need a symmetric matrix");
-        // (several ranks: the generators carry temp4 and X_RN, sent device to device only)
-        if (level.num_active_processes != 1 && !device_exchange_enabled()) {
-            return fail("a nonsymmetric matrix's levels on several ranks need the device exchange (CUDA-aware MPI)");
-        }
     }
     const bool lazy_far = lazy_schur < 0 ? lazy_far_field_mode() == LazyFarFieldMode::LAZY : lazy_schur > 0;
     const bool generator_near = lazy_schur < 0 ? generator_near_enabled() : lazy_schur > 1;
@@ -653,9 +649,6 @@ public:
                            gpu_sketch_;
         if (owner_mode_ && !device_exchange_) {
             throw std::runtime_error("LevelEliminator: owner levels need the device exchange (CUDA-aware MPI)");
-        }
-        if (nonsym_ && level_.num_active_processes > 1 && !device_exchange_) {
-            throw std::runtime_error("LevelEliminator: a nonsymmetric matrix's multi-rank levels need the device exchange");
         }
 #ifdef H2_HAVE_NVCOMP
         // H2 host memory (2026-10-10): with the fill sources stored compressed
@@ -5505,6 +5498,12 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 char* source = d_xnr != nullptr ? d_xnr : d_sources[static_cast<size_t>(wb.source_group)];
                 add_gather(copy_xnr, max_xnr_m, max_xnr_n, reinterpret_cast<S*>(source + wb.off_xnr_orig), nt, nt, r,
                            wb.xnr, 1, nt, identity, identity);
+            } else if (wb.has_remote && nt > 0 && !device_exchange_) {
+                // (a nonsymmetric generator through the host: the original
+                // X_RN, r x nt, in the place of X_NR's)
+                add_gather(copy_xnr, max_xnr_m, max_xnr_n,
+                           reinterpret_cast<S*>(d_sources[static_cast<size_t>(wb.source_group)] + wb.off_xnr_orig), r, r,
+                           nt, wb.xrn, 1, r, identity, identity);
             }
             // temp1 = -X_SR X_RR^{-1},  temp2 = -X_NR X_RR^{-1}: with X_RR = P L U,
             // W = U^{-1} L^{-1} from two small solves (tmp1 is free after the
@@ -6779,7 +6778,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 }
                 if (!skip_xrr) job.segments.push_back(Seg{&wb.box->X_RR_full.data, nullptr, wb.off_xrr_full, r * r * D});
                 if (wb.has_remote && nt > 0 && !device_exchange_) {
-                    job.segments.push_back(Seg{&wb.box->lazy_original_x_nr, nullptr, wb.off_xnr_orig, nt * r * D});
+                    job.segments.push_back(Seg{nonsym_ ? &wb.box->lazy_original_x_rn : &wb.box->lazy_original_x_nr,
+                                               nullptr, wb.off_xnr_orig, nt * r * D});
                 }
                 shapes->push_back({wb.box, skip || ghost_drop ? 0 : wb.ntot, wb.r, !skip_xrr});
             }
@@ -7436,9 +7436,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
         const S* xsr_solved = nullptr;
         const char* bulk = nullptr;  // received into device memory (GenLayout)
     };
-    if (nonsym_ && incoming == nullptr) {
-        throw std::runtime_error("LevelEliminator: a nonsymmetric matrix's generators come through the device exchange");
-    }
     std::vector<Gen> gens;
     std::vector<std::pair<BoxState*, const std::vector<int64_t>*>> skeletons;
     // (an owner level: the installed boxes are this rank's ghosts, or its
@@ -7473,8 +7470,16 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             if (g.r == 0) continue;  // full rank: nothing to add, no fill
             g.ntot = static_cast<int>(gb->X_NR.rows);
             g.k = gb->X_RS.is_allocated() ? static_cast<int>(gb->X_RS.cols) : 0;
+            // (a nonsymmetric generator through the host: the original X_RN
+            // in the place of X_NR, temp4 in X_RN, the solved X_SR;
+            // install_remote_generators)
+            const size_t nr_count = static_cast<size_t>(g.ntot) * g.r;
+            if (nonsym_ && (gb->lazy_original_x_rn.size() != nr_count || gb->X_RN.data.size() != nr_count ||
+                            (g.k > 0 && gb->X_SR.data.size() != static_cast<size_t>(g.k) * g.r))) {
+                throw std::runtime_error("LevelEliminator: incomplete nonsymmetric generator " + std::to_string(m));
+            }
             if (counts.size() != gb->one_hop.size() || gb->X_NR.lda != gb->X_NR.rows ||
-                gb->lazy_original_x_nr.size() != static_cast<size_t>(g.ntot) * g.r ||
+                (nonsym_ ? gb->lazy_original_x_rn.size() : gb->lazy_original_x_nr.size()) != nr_count ||
                 !gb->X_RR_full.is_allocated() || gb->X_RR_full.rows != g.r || gb->X_RR_full.cols != g.r ||
                 (g.k > 0 && (gb->X_RS.rows != g.r || gb->X_RS.lda != g.r)) ||
                 g.k != static_cast<int>(gb->skeleton_indices.size())) {
@@ -7535,14 +7540,18 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
     // | X_RS] for this pass, and [temp2^T | X_RR_full], kept as a fill
     // source of later sketches
     // (one sub-buffer per generator, in pieces: PiecedBuffer)
+    // (a nonsymmetric matrix: [temp2 | original X_RN | X_RS | temp4 | the
+    // solved X_SR], the device exchange's pieces of GenLayout)
     size_t tmp_bytes = 0;
     std::vector<size_t> tmp_off(gens.size()), tmp_starts;
     for (size_t i = 0; i < gens.size(); ++i) {
         if (gens[i].bulk != nullptr) continue;
         const size_t nr = static_cast<size_t>(gens[i].ntot) * gens[i].r * D;
+        const size_t rk = static_cast<size_t>(gens[i].r) * gens[i].k * D;
         tmp_off[i] = tmp_bytes;
         tmp_starts.push_back(tmp_bytes);
-        tmp_bytes = align_up(align_up(tmp_bytes + nr) + nr) + align_up(static_cast<size_t>(gens[i].r) * gens[i].k * D);
+        tmp_bytes = align_up(align_up(tmp_bytes + nr) + nr) + align_up(rk);
+        if (nonsym_) tmp_bytes = align_up(tmp_bytes + nr) + align_up(rk);
     }
     PiecedBuffer tmp;
     tmp.allocate(heap_, tmp_starts, tmp_bytes, ResidentKind::GenUpload);
@@ -7574,18 +7583,36 @@ void LevelEliminator<CoordType, DataType, KernelType>::apply_remote_generators(
             }
         } else {
             char* base = tmp.at(tmp_off[i]);
+            const size_t rk = static_cast<size_t>(g.r) * g.k * D;
             g.temp2 = reinterpret_cast<const S*>(base);
             g.xnr = reinterpret_cast<const S*>(base + align_up(nr));
             g.xrs = reinterpret_cast<const S*>(base + align_up(align_up(nr) + nr));
             // pageable copies: the host data is staged before each call returns
             check_cuda(cudaMemcpyAsync(base, gb->X_NR.data.data(), nr, cudaMemcpyHostToDevice, stream),
                        "generator temp2");
-            check_cuda(cudaMemcpyAsync(base + align_up(nr), gb->lazy_original_x_nr.data(), nr, cudaMemcpyHostToDevice,
-                                       stream), "generator X_NR");
+            check_cuda(cudaMemcpyAsync(base + align_up(nr),
+                                       nonsym_ ? gb->lazy_original_x_rn.data() : gb->lazy_original_x_nr.data(), nr,
+                                       cudaMemcpyHostToDevice, stream), "generator X_NR");
             if (g.k > 0) {
-                check_cuda(cudaMemcpyAsync(base + align_up(align_up(nr) + nr), gb->X_RS.data.data(),
-                                           static_cast<size_t>(g.r) * g.k * D, cudaMemcpyHostToDevice, stream),
+                check_cuda(cudaMemcpyAsync(base + align_up(align_up(nr) + nr), gb->X_RS.data.data(), rk,
+                                           cudaMemcpyHostToDevice, stream),
                            "generator X_RS");
+            }
+            if (nonsym_) {
+                // the original X_RN where X_NR was, then temp4 and the solved X_SR
+                const size_t at_t4 = align_up(align_up(align_up(nr) + nr) + rk);
+                g.xrn = g.xnr;
+                g.xnr = nullptr;
+                g.temp4 = reinterpret_cast<const S*>(base + at_t4);
+                g.xsr_solved = reinterpret_cast<const S*>(base + align_up(at_t4 + nr));
+                check_cuda(cudaMemcpyAsync(base + at_t4, gb->X_RN.data.data(), nr, cudaMemcpyHostToDevice, stream),
+                           "generator temp4");
+                if (g.k > 0) {
+                    check_cuda(cudaMemcpyAsync(base + align_up(at_t4 + nr), gb->X_SR.data.data(), rk,
+                                               cudaMemcpyHostToDevice, stream), "generator X_SR");
+                }
+                std::vector<DataType>().swap(gb->lazy_original_x_rn);
+                stats.bytes_up += static_cast<double>(nr + rk);
             }
             std::vector<DataType>().swap(gb->lazy_original_x_nr);  // needed only here (as on the host)
             stats.bytes_up += static_cast<double>(2 * nr + static_cast<size_t>(g.r) * (g.r + g.k) * D);
@@ -8447,9 +8474,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
         if (has_fill) {
             const int64_t r = box->X_NR.cols, rows = box->X_NR.rows;
             const int64_t k = static_cast<int64_t>(box->skeleton_indices.size());
+            // (a nonsymmetric matrix: the original X_RN in the place of X_NR,
+            // with temp4 (the host's X_RN) and the solved X_SR, as the host's
+            // emit_lazy_generators sends them)
+            const std::vector<DataType>& original = nonsym_ ? box->lazy_original_x_rn : box->lazy_original_x_nr;
             if (box->deferred_xnn_neighbor_point_counts.size() != box->one_hop.size() ||
-                static_cast<int64_t>(box->lazy_original_x_nr.size()) != rows * r ||
-                box->X_RR_full.rows != r || box->X_RS_entry.rows != r || box->X_RS_entry.cols != k) {
+                static_cast<int64_t>(original.size()) != rows * r ||
+                box->X_RR_full.rows != r || box->X_RS_entry.rows != r || box->X_RS_entry.cols != k ||
+                (nonsym_ && (static_cast<int64_t>(box->X_RN.data.size()) != rows * r ||
+                             static_cast<int64_t>(box->X_SR.data.size()) != k * r))) {
                 throw std::runtime_error("LevelEliminator::emit_generators: incomplete state for source " +
                                          std::to_string(m));
             }
@@ -8457,8 +8490,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::emit_generators(PendingFa
             generator->total_rows = rows;
             generator->neighbor_point_counts = box->deferred_xnn_neighbor_point_counts;
             generator->temp2.assign(box->X_NR.data.begin(), box->X_NR.data.begin() + rows * r);
-            generator->original_x_nr = std::move(box->lazy_original_x_nr);
-            box->lazy_original_x_nr.clear();
+            if (nonsym_) {
+                generator->original_x_rn = std::move(box->lazy_original_x_rn);
+                box->lazy_original_x_rn.clear();
+                generator->temp4.assign(box->X_RN.data.begin(), box->X_RN.data.begin() + rows * r);
+                generator->x_sr.assign(box->X_SR.data.begin(), box->X_SR.data.begin() + k * r);
+            } else {
+                generator->original_x_nr = std::move(box->lazy_original_x_nr);
+                box->lazy_original_x_nr.clear();
+            }
             generator->x_rr_full.assign(box->X_RR_full.data.begin(), box->X_RR_full.data.begin() + r * r);
             generator->k = k;
             generator->skeleton_indices = box->skeleton_indices;

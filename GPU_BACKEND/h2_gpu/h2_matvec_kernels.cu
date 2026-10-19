@@ -241,6 +241,54 @@ __global__ void __launch_bounds__(kThreads) h2_pack_kernel(const H2Span* spans, 
     }
 }
 
+// A target of the transposed products a thread block: warp w takes its
+// entries w, w + 8, ..., lane l the rows l, l + 32, ... of every block (in
+// order), the lanes' sums added by warp_sum: the result does not depend on
+// scheduling.
+template<typename T>
+__global__ void __launch_bounds__(kThreads) h2_accumulate_t_kernel(const H2TTarget* targets, const H2TBlock* blocks,
+                                                                   const T* x, int64_t ldx, T* local, T* send,
+                                                                   int nrhs) {
+    const H2TTarget t = targets[blockIdx.x];
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5, nwarps = blockDim.x >> 5;
+    T* out0 = (t.dest == 0 ? local : send) + t.base * nrhs + t.off;
+    for (int c = 0; c < nrhs; ++c) {
+        T* out = out0 + static_cast<int64_t>(c) * t.stride;
+        for (int i = warp; i < t.len; i += nwarps) {
+            T s = T(0.0);
+            for (int j = t.block0; j < t.block0 + t.nblocks; ++j) {
+                const H2TBlock b = blocks[j];
+                const T* col = static_cast<const T*>(b.K) + static_cast<int64_t>(i) * b.m;
+                const T* xs = x + static_cast<int64_t>(c) * ldx + b.x;
+                for (int r = lane; r < b.m; r += 32) s += col[r] * xs[r];
+            }
+            s = warp_sum(s);
+            if (lane == 0) out[i] += s;
+        }
+    }
+}
+
+template<typename T>
+__global__ void __launch_bounds__(kThreads) h2_unpack_add_kernel(const H2Span* spans, const T* dst, T* src, int nrhs) {
+    const H2Span sp = spans[blockIdx.x];
+    for (int c = 0; c < nrhs; ++c) {
+        T* s = src + static_cast<int64_t>(c) * sp.src_stride + sp.src;
+        const T* d = dst + sp.dst_base * nrhs + static_cast<int64_t>(c) * sp.dst_stride + sp.dst_off;
+        for (int i = threadIdx.x; i < sp.len; i += blockDim.x) s[i] += d[i];
+    }
+}
+
+template<typename T>
+__global__ void __launch_bounds__(kThreads) h2_scatter_add_q_kernel(const H2Box* boxes, const T* q, int64_t ldq, T* vec,
+                                                                    int64_t ld, int nrhs) {
+    const H2Box b = boxes[blockIdx.x];
+    for (int c = 0; c < nrhs; ++c) {
+        T* v = vec + static_cast<int64_t>(c) * ld + b.vec;
+        const T* p = q + static_cast<int64_t>(c) * ldq + b.q;
+        for (int i = threadIdx.x; i < b.k; i += blockDim.x) v[b.skel[i]] += p[i];
+    }
+}
+
 __device__ __forceinline__ double warp_reduce(double v) { return warp_sum(v); }
 __device__ __forceinline__ dcomplex warp_reduce(dcomplex v) { return warp_sum(v); }
 
@@ -819,6 +867,30 @@ void launch_h2_pack(const H2Span* spans, int count, const T* src, T* dst, int nr
     check_launch("h2_pack_kernel");
 }
 
+template<typename T>
+void launch_h2_accumulate_t(const H2TTarget* targets, int count, const H2TBlock* blocks, const T* x, int64_t ldx,
+                            T* local, T* send, int nrhs, cudaStream_t stream) {
+    if (count <= 0) return;
+    h2_accumulate_t_kernel<T><<<count, kThreads, 0, stream>>>(targets, blocks, x, ldx, local, send, nrhs);
+    check_launch("h2_accumulate_t_kernel");
+}
+
+template<typename T>
+void launch_h2_unpack_add(const H2Span* spans, int count, const T* dst, T* src, int nrhs, int max_len,
+                          cudaStream_t stream) {
+    if (count <= 0 || max_len <= 0) return;
+    h2_unpack_add_kernel<T><<<count, kThreads, 0, stream>>>(spans, dst, src, nrhs);
+    check_launch("h2_unpack_add_kernel");
+}
+
+template<typename T>
+void launch_h2_scatter_add_q(const H2Box* boxes, int count, const T* q, int64_t ldq, T* vec, int64_t ld, int nrhs,
+                             cudaStream_t stream) {
+    if (count <= 0) return;
+    h2_scatter_add_q_kernel<T><<<count, kThreads, 0, stream>>>(boxes, q, ldq, vec, ld, nrhs);
+    check_launch("h2_scatter_add_q_kernel");
+}
+
 #define H2_MATVEC_LAUNCHES(T)                                                                                     \
     template void launch_h2_upward<T>(const H2Box*, int, T*, int64_t, int, int, cudaStream_t);                   \
     template void launch_h2_gather_q<T>(const H2Box*, int, const T*, int64_t, T*, int64_t, int, cudaStream_t);   \
@@ -827,7 +899,11 @@ void launch_h2_pack(const H2Span* spans, int count, const T* src, T* dst, int nr
     template void launch_h2_pairs<T>(const H2Pair*, int, const T*, int64_t, T*, int64_t, int, int, cudaStream_t); \
     template void launch_h2_downward<T>(const H2Box*, int, T*, int64_t, int, int, cudaStream_t);                 \
     template void launch_h2_handoff<T>(const H2Handoff*, int, T*, int64_t, T*, int64_t, int, bool, cudaStream_t); \
-    template void launch_h2_pack<T>(const H2Span*, int, const T*, T*, int, int, cudaStream_t);
+    template void launch_h2_pack<T>(const H2Span*, int, const T*, T*, int, int, cudaStream_t);                   \
+    template void launch_h2_accumulate_t<T>(const H2TTarget*, int, const H2TBlock*, const T*, int64_t, T*, T*,  \
+                                            int, cudaStream_t);                                                  \
+    template void launch_h2_unpack_add<T>(const H2Span*, int, const T*, T*, int, int, cudaStream_t);            \
+    template void launch_h2_scatter_add_q<T>(const H2Box*, int, const T*, int64_t, T*, int64_t, int, cudaStream_t);
 H2_MATVEC_LAUNCHES(double)
 H2_MATVEC_LAUNCHES(dcomplex)
 #undef H2_MATVEC_LAUNCHES
