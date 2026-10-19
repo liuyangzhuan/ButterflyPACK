@@ -106,7 +106,9 @@ void plan_exchange(ParallelTree<CoordType, DataType>* tree, TreeLevel<CoordType,
         ex.recv_points += ex.recv_size[p];
     }
     // send: the boxes each peer asked for, in its order
+    ex.span_begin.assign(np + 1, static_cast<int>(spans.size()));
     for (size_t p = 0; p < np; ++p) {
+        ex.span_begin[p] = static_cast<int>(spans.size());
         ex.send_base[p] = ex.send_points;
         int64_t seg = 0;
         for (const auto& [morton, size] : requested[p]) seg += size;
@@ -129,15 +131,17 @@ void plan_exchange(ParallelTree<CoordType, DataType>* tree, TreeLevel<CoordType,
         }
         ex.send_points += seg;
     }
+    ex.span_begin[np] = static_cast<int>(spans.size());
 }
 
 }  // namespace matvec_detail
 
 // End of a compression: the device matvec runs only if every rank kept all
-// of its levels; then its messages and hand-offs are planned.  Collective
-// over the tree's ranks.
+// of its levels; then its messages and hand-offs are planned, and with
+// transposed_products (a nonsymmetric kernel) the transposed ones too.
+// Collective over the tree's ranks.
 template<typename CoordType, typename DataType>
-void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose) {
+void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose, bool transposed_products = false) {
     DeviceMatvecStore& store = device_matvec_store();
     const int leaf = tree->num_levels - 1;
     int ok = store.building && !store.failed && leaf >= 2 ? 1 : 0;
@@ -275,6 +279,55 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
                 }
             }
         }
+        // the transposed products: each target box (a local one, or a remote
+        // one in the receive layout) with the blocks of the local boxes it is
+        // the source of, in the boxes' order and theirs
+        std::vector<H2TTarget> tq_targets, tx_targets;
+        std::vector<H2TBlock> tq_blocks, tx_blocks;
+        if (transposed_products) {
+            auto build = [&](bool near, std::vector<H2TTarget>& targets, std::vector<H2TBlock>& tblocks) {
+                std::map<int64_t, std::vector<H2TBlock>> by_source;
+                std::map<int64_t, int> width;
+                for (const H2Box& hb : lv.boxes) {
+                    const int i0 = near ? hb.near0 : hb.block0, ni = near ? hb.nnear : hb.nblocks;
+                    for (int i = i0; i < i0 + ni; ++i) {
+                        if (lv.block_partial[static_cast<size_t>(i)] >= 0) {
+                            throw std::logic_error("device matvec: a pair's block in the transposed products");
+                        }
+                        by_source[lv.block_source[static_cast<size_t>(i)]].push_back(
+                            H2TBlock{lv.block_K[static_cast<size_t>(i)], near ? hb.n : hb.k, near ? hb.vec : hb.q});
+                        width[lv.block_source[static_cast<size_t>(i)]] = lv.block_cols[static_cast<size_t>(i)];
+                    }
+                }
+                for (const auto& [sm, list] : by_source) {
+                    H2TTarget t{};
+                    t.len = width.at(sm);
+                    auto it = local_index.find(sm);
+                    if (it != local_index.end()) {
+                        const H2Box& sb = lv.boxes[it->second];
+                        if (t.len != (near ? sb.n : sb.k)) {
+                            throw std::runtime_error("device matvec: a block's width is not its source's size");
+                        }
+                        t.dest = 0;
+                        t.base = 0;
+                        t.stride = near ? lv.points : lv.q_points;
+                        t.off = near ? sb.vec : sb.q;
+                    } else {
+                        const auto& w = (near ? where_x : where_q).at(sm);
+                        t.dest = 1;
+                        t.base = w.base;
+                        t.stride = w.stride;
+                        t.off = w.off;
+                    }
+                    t.block0 = static_cast<int>(tblocks.size());
+                    t.nblocks = static_cast<int>(list.size());
+                    tblocks.insert(tblocks.end(), list.begin(), list.end());
+                    if (t.len > 0) targets.push_back(t);
+                }
+            };
+            build(false, tq_targets, tq_blocks);
+            build(true, tx_targets, tx_blocks);
+        }
         // tables to the device
         size_t bytes = 0;
         const size_t o_refs = bytes;    bytes = align_up(bytes + refs.size() * sizeof(H2BlockRef));
@@ -282,6 +335,10 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
         const size_t o_x = bytes;       bytes = align_up(bytes + spans_x.size() * sizeof(H2Span));
         const size_t o_hand = bytes;    bytes = align_up(bytes + handoff.size() * sizeof(H2Handoff));
         const size_t o_pairs = bytes;   bytes = align_up(bytes + lv.pairs.size() * sizeof(H2Pair));
+        const size_t o_tqt = bytes;     bytes = align_up(bytes + tq_targets.size() * sizeof(H2TTarget));
+        const size_t o_tqb = bytes;     bytes = align_up(bytes + tq_blocks.size() * sizeof(H2TBlock));
+        const size_t o_txt = bytes;     bytes = align_up(bytes + tx_targets.size() * sizeof(H2TTarget));
+        const size_t o_txb = bytes;     bytes = align_up(bytes + tx_blocks.size() * sizeof(H2TBlock));
         char* d = DeviceHeap::instance().alloc_resident(std::max<size_t>(bytes, 1));
         lv.allocations.push_back(d);
         std::vector<char> image(std::max<size_t>(bytes, 1), 0);
@@ -293,6 +350,10 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
         put(o_x, spans_x.data(), spans_x.size() * sizeof(H2Span));
         put(o_hand, handoff.data(), handoff.size() * sizeof(H2Handoff));
         put(o_pairs, lv.pairs.data(), lv.pairs.size() * sizeof(H2Pair));
+        put(o_tqt, tq_targets.data(), tq_targets.size() * sizeof(H2TTarget));
+        put(o_tqb, tq_blocks.data(), tq_blocks.size() * sizeof(H2TBlock));
+        put(o_txt, tx_targets.data(), tx_targets.size() * sizeof(H2TTarget));
+        put(o_txb, tx_blocks.data(), tx_blocks.size() * sizeof(H2TBlock));
         check_cuda(cudaMemcpyAsync(d, image.data(), bytes, cudaMemcpyHostToDevice, stream), "matvec plan");
         check_cuda(cudaStreamSynchronize(stream), "matvec plan");
         lv.d_blocks = reinterpret_cast<const H2BlockRef*>(d + o_refs);
@@ -303,6 +364,12 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
         lv.d_handoff = reinterpret_cast<const H2Handoff*>(d + o_hand);
         lv.nhandoff = static_cast<int>(handoff.size());
         lv.d_pairs = reinterpret_cast<const H2Pair*>(d + o_pairs);
+        lv.d_tq_targets = reinterpret_cast<const H2TTarget*>(d + o_tqt);
+        lv.d_tq_blocks = reinterpret_cast<const H2TBlock*>(d + o_tqb);
+        lv.ntq = static_cast<int>(tq_targets.size());
+        lv.d_tx_targets = reinterpret_cast<const H2TTarget*>(d + o_txt);
+        lv.d_tx_blocks = reinterpret_cast<const H2TBlock*>(d + o_txb);
+        lv.ntx = static_cast<int>(tx_targets.size());
         lv.bytes += static_cast<double>(bytes);
     }
     double bytes = 0.0;
@@ -310,6 +377,7 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
     double max_bytes = bytes;
     MPI_Allreduce(MPI_IN_PLACE, &max_bytes, 1, MPI_DOUBLE, MPI_MAX, tree->comm);
     store.usable = true;
+    store.transposable = transposed_products;
     store.tree = tree;
     store.bytes = bytes;
     if (verbose && rank == 0) {
@@ -324,10 +392,14 @@ void commit_device_matvec(ParallelTree<CoordType, DataType>* tree, bool verbose)
 }
 
 // The matvec on the device.  Collective over the tree's ranks (the level
-// exchanges and the hand-offs across process reductions).
+// exchanges and the hand-offs across process reductions).  transposed: A^T
+// x (a nonsymmetric kernel; the store transposable): the passes up and
+// down are A's (one T per box), the blocks applied transposed where they
+// are stored, and the products for other ranks' boxes sent to their owners
+// (the level's exchanges backwards).
 template<typename CoordType, typename DataType>
 void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<DataType>& input,
-                   std::vector<DataType>& output, int nrhs) {
+                   std::vector<DataType>& output, int nrhs, bool transposed = false) {
     using S = typename DeviceScalar<DataType>::type;
     using clock = std::chrono::steady_clock;
     auto seconds_since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
@@ -420,6 +492,64 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
         }
         stats.mpi += seconds_since(t0);
         return recv;
+    };
+    // ... backwards (transposed): `send` (in the receive layout, the sums of
+    // this rank's products for the peers' boxes) to the peers; returns what
+    // they sent (in the send layout)
+    auto exchange_t = [&](const H2Exchange& ex, const S* send, int tag) -> S* {
+        if (ex.peers.empty()) return nullptr;
+        S* recv = alloc_message(ex.send_points);
+        check_cuda(cudaStreamSynchronize(stream), "matvec messages");
+        const auto t0 = clock::now();
+        const bool direct = (send == nullptr || arena.owns(send)) && (recv == nullptr || arena.owns(recv));
+        const S* sbuf = send;
+        S* rbuf = recv;
+        if (!direct) {
+            S* staged = static_cast<S*>(send_host->reserve(std::max<int64_t>(ex.recv_points, 1) * nrhs * sizeof(S)));
+            rbuf = static_cast<S*>(recv_host->reserve(std::max<int64_t>(ex.send_points, 1) * nrhs * sizeof(S)));
+            if (ex.recv_points > 0) {
+                check_cuda(cudaMemcpy(staged, send, static_cast<size_t>(ex.recv_points) * nrhs * sizeof(S),
+                                      cudaMemcpyDeviceToHost), "matvec messages");
+            }
+            sbuf = staged;
+        }
+        std::vector<MPI_Request> reqs;
+        for (size_t p = 0; p < ex.peers.size(); ++p) {
+            if (ex.send_size[p] > 0) {
+                reqs.emplace_back();
+                MPI_Irecv(rbuf + ex.send_base[p] * nrhs, static_cast<int>(ex.send_size[p] * nrhs * kWords), MPI_DOUBLE,
+                          ex.peers[p], tag, tree->comm, &reqs.back());
+            }
+        }
+        for (size_t p = 0; p < ex.peers.size(); ++p) {
+            if (ex.recv_size[p] > 0) {
+                reqs.emplace_back();
+                MPI_Isend(const_cast<S*>(sbuf) + ex.recv_base[p] * nrhs, static_cast<int>(ex.recv_size[p] * nrhs * kWords),
+                          MPI_DOUBLE, ex.peers[p], tag, tree->comm, &reqs.back());
+            }
+        }
+        MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+        if (!direct && ex.send_points > 0) {
+            check_cuda(cudaMemcpyAsync(recv, rbuf, static_cast<size_t>(ex.send_points) * nrhs * sizeof(S),
+                                       cudaMemcpyHostToDevice, stream), "matvec messages");
+        }
+        stats.mpi += seconds_since(t0);
+        return recv;
+    };
+    // the peers' products added, a peer at a time (in peer order)
+    auto add_received = [&](const H2Exchange& ex, const S* recv, S* into) {
+        if (recv == nullptr) return;
+        for (size_t p = 0; p < ex.peers.size(); ++p) {
+            const int b0 = ex.span_begin[p], b1 = ex.span_begin[p + 1];
+            launch_h2_unpack_add<S>(ex.d_spans + b0, b1 - b0, recv, into, nrhs, ex.max_len, stream);
+        }
+    };
+    auto zeroed_message = [&](int64_t points) -> S* {
+        S* p = alloc_message(points);
+        if (p != nullptr) {
+            check_cuda(cudaMemsetAsync(p, 0, static_cast<size_t>(points) * nrhs * sizeof(S), stream), "matvec zero");
+        }
+        return p;
     };
     // a level's device vector <-> host solve data (hand-offs across a reduction)
     auto to_host = [&](int level, const S* d, std::vector<SolveDataRequest<CoordType, DataType>>& data) {
@@ -529,10 +659,21 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
             S* q = alloc(L.q_points);
             launch_h2_gather_q<S>(L.d_boxes, static_cast<int>(L.boxes.size()), src[static_cast<size_t>(level)], L.points,
                                   q, L.q_points, nrhs, stream);
-            S* ghost = exchange(L.coupling, q, 900 + 2 * level);
-            launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks,
-                                    tgt[static_cast<size_t>(level)], L.points, q, ghost, nullptr, nrhs, false, L.max_k,
-                                    L.max_q_cols, stream);
+            if (transposed) {
+                // y_s[S] += sum K(S_t, S_s)^T q_t, into compact vectors (the
+                // remote boxes' sums to their owners), then to the skeletons
+                S* yq = zeroed(L.q_points);
+                S* send = zeroed_message(L.coupling.recv_points);
+                launch_h2_accumulate_t<S>(L.d_tq_targets, L.ntq, L.d_tq_blocks, q, L.q_points, yq, send, nrhs, stream);
+                add_received(L.coupling, exchange_t(L.coupling, send, 1900 + 2 * level), yq);
+                launch_h2_scatter_add_q<S>(L.d_boxes, static_cast<int>(L.boxes.size()), yq, L.q_points,
+                                           tgt[static_cast<size_t>(level)], L.points, nrhs, stream);
+            } else {
+                S* ghost = exchange(L.coupling, q, 900 + 2 * level);
+                launch_h2_accumulate<S>(L.d_boxes, static_cast<int>(L.boxes.size()), L.d_blocks,
+                                        tgt[static_cast<size_t>(level)], L.points, q, ghost, nullptr, nrhs, false,
+                                        L.max_k, L.max_q_cols, stream);
+            }
             launch_h2_downward<S>(L.d_boxes, static_cast<int>(L.boxes.size()), tgt[static_cast<size_t>(level)], L.points,
                                   nrhs, L.max_k, stream);
         }
@@ -569,7 +710,14 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
 
     // ---- leaf near blocks: y += sum K x
     t0 = clock::now();
-    if (active(leaf)) {
+    if (active(leaf) && transposed) {
+        // y_s += sum K(B_t, B_s)^T x_t (the remote boxes' sums to their owners)
+        const H2MatvecLevel& L = lv_of(leaf);
+        S* send = zeroed_message(L.near.recv_points);
+        launch_h2_accumulate_t<S>(L.d_tx_targets, L.ntx, L.d_tx_blocks, orig, L.points, tgt[static_cast<size_t>(leaf)],
+                                  send, nrhs, stream);
+        add_received(L.near, exchange_t(L.near, send, 1990), tgt[static_cast<size_t>(leaf)]);
+    } else if (active(leaf)) {
         const H2MatvecLevel& L = lv_of(leaf);
         S* ghost = exchange(L.near, orig, 990);
         S* partial = alloc(L.partial_points);  // the pairs' products, each block read once
@@ -596,19 +744,22 @@ void device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<Da
 
 // The device matvec when the compression kept the blocks on every rank's
 // device; false (nothing done) otherwise.
+// (transposed: A^T x, when the compression planned it)
 template<typename CoordType, typename DataType>
 bool run_device_h2_mul(ParallelTree<CoordType, DataType>* tree, const std::vector<DataType>& input,
-                       std::vector<DataType>& output, int nrhs) {
+                       std::vector<DataType>& output, int nrhs, bool transposed = false) {
     if constexpr (gpu_data_type<DataType>) {
         activate_operator(tree);
         if (!device_matvec_usable(tree)) return false;
-        device_h2_mul(tree, input, output, nrhs);
+        if (transposed && !device_matvec_store().transposable) return false;
+        device_h2_mul(tree, input, output, nrhs, transposed);
         return true;
     } else {
         (void)tree;
         (void)input;
         (void)output;
         (void)nrhs;
+        (void)transposed;
         return false;
     }
 }

@@ -171,13 +171,14 @@ void compressed_multiply(
 
 #ifdef H2_HAVE_GPU
     // the whole matvec on the device (h2_gpu/h2_matvec.hpp) when the
-    // compression kept the blocks there on every rank (the compression keeps
-    // their host copies too, which the transposed product reads)
-    if (!transposed && gpu::run_device_h2_mul(tree, input, output, nrhs)) {
+    // compression kept the blocks there on every rank, the transposed one
+    // too for a nonsymmetric kernel (the compression keeps the blocks' host
+    // copies, which the host's transposed product reads otherwise)
+    if (gpu::run_device_h2_mul(tree, input, output, nrhs, transposed)) {
         if (gpu::device_matvec_check()) {  // BPACK_CHECK=matvec: the host matvec as the reference
             std::vector<DataType> host_output;
             gpu::device_matvec_suspended() = true;
-            compressed_multiply(tree, input, host_output, nrhs, false);
+            compressed_multiply(tree, input, host_output, nrhs, false, transposed);
             gpu::device_matvec_suspended() = false;
             double sums[2] = {0.0, 0.0};
             for (size_t i = 0; i < output.size(); ++i) {
@@ -186,7 +187,7 @@ void compressed_multiply(
             }
             MPI_Allreduce(MPI_IN_PLACE, sums, 2, MPI_DOUBLE, MPI_SUM, tree->comm);
             if (rank == 0) {
-                std::printf("GPU matvec check: |y_gpu - y_host| / |y_host| = %.3e\n",
+                std::printf("GPU matvec check%s: |y_gpu - y_host| / |y_host| = %.3e\n", transposed ? " (transposed)" : "",
                             sums[1] > 0.0 ? std::sqrt(sums[0] / sums[1]) : 0.0);
                 std::fflush(stdout);
             }

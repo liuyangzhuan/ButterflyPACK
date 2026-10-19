@@ -276,6 +276,11 @@ void hierarchical_factorization_unstructured(
         std::cout << "Matrix property: " << (is_symmetric ? "Symmetric" : "Nonsymmetric") << std::endl;
         std::cout << "Factorization: " << factorization_name << std::endl;
         printf("max thread: %d\n", omp_get_max_threads());
+        if (!(is_symmetric || is_hermitian) && use_sketch == 2 && lazy_schur == 0) {
+            // (use_streamed_level below)
+            std::cout << "Note: a nonsymmetric H2 streams its ID sketches with H2_lazy_schur=2 only; with 0 its "
+                         "levels form each box's ID target in full (eager, more memory)" << std::endl;
+        }
         std::cout << "========================================\n" << std::endl;
     }
 

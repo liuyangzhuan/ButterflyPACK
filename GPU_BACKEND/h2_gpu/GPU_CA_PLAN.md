@@ -6997,6 +6997,59 @@ symmetric proxy-2 factorization and compression; the CPU path's proxy-2
 logdet as before, which one run flipped in the last digit: the logdet's
 thread-order sum).
 
+#### Nonsymmetric matrices: several GPUs without CUDA-aware MPI, and the transposed device matvec (2026-10-18)
+
+*Generators through the host.*  Without the device exchange (no CUDA-aware
+MPI, or BPACK_GPU_AWARE_MPI=0) a nonsymmetric level on several ranks ran on
+the host.  It runs on the device now, as a symmetric one does: the
+generators go through the host transport (emit_generators ->
+transport_and_apply_factor_updates_symmetric_onehop -> install_remote_generators)
+and the device applies them (apply_remote_generators from the generator
+boxes).  The pieces are the device exchange's: the eliminator copies a
+boundary box's original X_RN where the symmetric one copies X_NR (the source
+group's off_xnr_orig) and downloads it into the box's lazy_original_x_rn;
+its temp4 (the host's X_RN) and solved X_SR are host copies already (a level
+whose generators go through the host keeps them, skip_xnr_ off);
+emit_generators sends them as the host's emit_lazy_generators does; the
+receiver uploads [temp2 | original X_RN | X_RS | temp4 | X_SR] and reads them
+where the device exchange's GenLayout puts them.
+
+| case (column weights unless noted) | without CUDA-aware MPI | with it |
+|---|---|---|
+| Laplace 48^3, 8 GPUs | -1095138.2792582037, 2.61 s | ...039, 0.76 s |
+| the same, skew 0.5 | -1082910.8977820256 | ...259 |
+| Laplace 64^3, 12 GPUs | -2747101.4654117348, 10.1 s | the same, 3.15 s |
+| Laplace 48^3, H2_compress_factors 1 | -1095138.2815808542 | ...854 |
+| EMSURF CFIE 9K, 8 GPUs | 3.76359524126346014e+03 | ...059 |
+
+Both levels run on the device (the messages through the host); the solve
+check 4e-15, the inv_mult check's transposes 3e-16.  The host transport takes
+about 3x the device exchange's factor time here (a symmetric 48^3 on 8 GPUs
+without CUDA-aware MPI: 1.74 s).
+
+*The transposed device matvec.*  The compression-only H2's A^T x ran on the
+host (N6a).  For a nonsymmetric kernel commit_device_matvec now also plans
+the transposed products: per target box (a local one, or a remote one in
+the level's receive layout) the blocks of the local boxes it is the source
+of.  device_h2_mul(transposed) runs the passes up and down as A's and each
+level's products backwards: h2_accumulate_t (y_s += sum K^T x_t, a warp an
+entry, the blocks in order) into compact skeleton vectors and the send
+entries, the exchange in reverse (exchange_t: what a rank receives for A x,
+it sends for A^T x), the peers' sums added a peer at a time
+(h2_unpack_add, in peer order: deterministic), then into the skeletons
+(h2_scatter_add_q); the leaf's near blocks the same on the full vectors.
+BPACK_CHECK=matvec compares it with the host's transposed product:
+2.7e-16 (Laplace weights, 8 GPUs, with and without CUDA-aware MPI), 2.9e-16
+(skew, 12 GPUs), 5.3e-16 (CFIE 9K); the mult check's transposes 3e-16 to
+6e-16.  The check's multiplies (N, T and C on 8 columns, 8 GPUs) take 0.058 s
+against 0.44 s with the host's transposed product.
+
+Also: a nonsymmetric factorization with H2_use_sketch 2 and H2_lazy_schur 0
+prints a note that its levels do not stream (use_streamed_level).
+Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
+extraction check; without CUDA-aware MPI 48^3 on 8; compression-only with the
+inv_mult check).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
