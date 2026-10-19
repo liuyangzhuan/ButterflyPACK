@@ -7050,6 +7050,96 @@ Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
 extraction check; without CUDA-aware MPI 48^3 on 8; compression-only with the
 inv_mult check).
 
+#### The ID sketch: n + 4 rows, or the rows themselves (2026-10-19)
+
+*The report.*  GPTune's GP fits saw the determinant sign -1 for SPD
+covariance matrices (GPTune spatial_h2/near_block_too_wide.md; reproducer
+logdet_sign_repro/ in this checkout: K(i, j) = exp(-|x_i - x_j| / 0.01) +
+0.05 [i == j] on n of the KAUST 2023 dataset-2 locations, tol 1e-10,
+H2_ID_proxy 2, nmin_leaf 8, 16 GPUs): -1 at 100K and 400K, +1 at 20K and
+200K, log|det| and the solves seemingly right.
+
+*Not the sign bookkeeping.*  Every level from the leaf to level 2 has an
+even number of sign flips (BPACK_TRACE=wave); the root (839 points) has 7.
+Its block, dumped before the LU, has one negative eigenvalue (-0.029, next
+to 0.008, 0.009, ...); MAGMA's LU of it is exact (P L U - A 2e-16) and
+numpy's slogdet agrees.  By Sylvester's law the factored operator is
+indefinite: its determinant is negative.  The CPU path (eager) gives the
+same log|det| to 16 digits.  The quick verification cannot see it: it
+probes 20 point sources, and the reproducer's residual applies the factored
+operator itself.
+
+*The cause.*  The factorization's ID sketch had d = n rows (the box's point
+count; sketch factor 1, capped at the m target rows), no oversampling.  On
+this problem the boxes are nearly full rank (k/n 0.85-0.97 from level 4 to
+the leaf, m/n 11-20): the sketch of such a target is square, and its small
+singular values make the pivoted QR drop columns the target needs, with
+errors at those columns' size, not the tolerance's.  A box with m only a
+little above d gets a nearly square sparse mixing of its rows, which can be
+ill-conditioned too.  (CPU eager, use_sketch 2; "=" is the unsketched ID's
+log|det| to all printed digits; 20K against a dense Cholesky.)
+
+| sketch rows d | the rows themselves when | 20K error | 100K | 400K |
+|---|---|---|---|---|
+| n (before) | - | -3.2e-2 | sign -1 | sign -1 |
+| n + 16 (2n, 8n: the same) | - | -2.6e-3 | +1, 0.98 off | sign -1 (n + 16) |
+| n | m <= n | -3.0e-2 | sign -1 | +1, 9.7 off |
+| n + 1 | m <= d | = | +1, 0.026 off | +1, 0.22 off |
+| n + 1 | m <= 2d | = | = | = |
+| **n + 4** | **m <= d** | **-1.6e-4 (=)** | **=** | **=** |
+| n + 8, n + 16 | m <= 2d | = | = | = |
+| unsketched (use_sketch 0) | | -1.6e-4 | +1 | +1 |
+
+*The change.*  id_sketch_shape (core/id_decomposition.hpp): d = n + 4, 4
+nonzeros a target row; when m <= n + 4, the rows themselves (row q of the
+target is row q of Y, sign +1; d = max(m, n)).  One rule at every site:
+the streamed sketches (gather_id_target_streamed, its nonsymmetric
+version), the materialized one (use_sketch 1, id_sketch), the compression's
+(butterfly_matvec.hpp), and on the device the factorization's and the
+compression's plans; the device draws have a direct mode
+(sketch_draws_kernel: row q to row q).  The adaptive rows' selector takes
+the sketch's d rows (Target::d; first_capacity from d, not n).
+
+*The reproducer, GPU (16 A100s).*
+
+| n | sign | log\|det\| | vs the CPU path | acc_mvp before -> after |
+|---|---|---|---|---|
+| 20K | +1 | -23372.235681212151 (dense -23372.235520) | 1.6e-16 | 3.0e-8 -> 1.4e-8 |
+| 100K | +1 | -165002.534108074993 | 3.5e-16 | 3.2e-10 -> 1.9e-10 |
+| 200K | +1 | -368011.247353305575 | | 1.4e-10 -> 1.7e-10 |
+| 400K | +1 | -805774.992196830688 | identical | 6.0e-5 -> 3.4e-10 |
+
+The reproducer's whole run takes 1.6 s at 100K (1.8 before) and 4.0 s at
+400K (4.0).  Results of every sketched run change (the IDs do), so the
+regression compares the GPU with the CPU path, and the library before.
+
+*GPU against the CPU path* (8 GPUs unless noted; logdet, relative):
+
+| case | GPU - CPU |
+|---|---|
+| Laplace 48^3 symmetric, column weights, skew 0.5 | 0 (every digit) |
+| proxy 2, weights and symmetric | 0; k and adaptive statistics equal in 576/576 boxes |
+| weights without CUDA-aware MPI | 0 |
+| collective entries (s4, elem_extract 1) | 0 |
+| structured tree (H2_unstructured 0) | 0 |
+| a CA leaf (96^3, CA_level 4) | 2e-16 |
+| EMSURF CFIE 9K | 2.4e-14 |
+| compression only, device IDs vs host IDs (sym, weights, proxy 2) | k equal in 576/576 boxes |
+
+*Against the library before* (8 GPUs):
+
+| case | logdet before -> after | acc_mvp | factor time | peak |
+|---|---|---|---|---|
+| Laplace 192^3, compressed factors | -89253588.4723 -> .3186 | 2.09e-3 -> 1.99e-3 | 7.99 -> 7.39 s | 18.36 GB, the same |
+| Laplace 64^3 | -2728925.2615 -> .2604 | 4.91e-4 -> 4.73e-4 | 1.01 -> 0.99 s | |
+| EMSURF EFIE 128K | -393629.113 -> -393628.532 | 1.41e-4 -> 1.47e-4 | 1.05 -> 1.10 s | 1.66 GB, the same |
+
+On Laplace the change is at the tolerance's level, and the extra 4 rows
+cost nothing measurable.  The EFIE sphere's solution checksum moves (norm
+4.55 -> 3.80): that run is a direct solve whose forward error is 13% before
+and 11% after (acc_forward), so any change of the IDs moves its solution by
+that much; it was only ever a bitwise reference.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

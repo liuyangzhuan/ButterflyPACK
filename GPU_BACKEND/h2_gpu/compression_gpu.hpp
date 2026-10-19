@@ -5,9 +5,9 @@
 //           ring box, as gather_id_workspace forms it when no box is
 //           eliminated) and its static training rows (H2_ID_radius > 2,
 //           H2_ID_proxy 1), sketched on the device with the host's sparse sign
-//           draws (compute_id_sparse_sketch: std::mt19937_64 seeded with
-//           morton + 1, 4 per row, sketch size n) and factored by the device
-//           pivoted QR.  Skeleton, redundant and T go to the box as
+//           draws (id_sketch: std::mt19937_64 seeded with morton + 1, 4 per
+//           row, sketch size n + 4, or the rows themselves when there are no
+//           more) and factored by the device pivoted QR.  Skeleton, redundant and T go to the box as
 //           h2_skeletonize_box leaves them.  A box the device cannot sketch
 //           (sketch too large for the packed lists) is left to the caller.
 //           Adaptive rows (H2_ID_proxy 2 with H2_use_sketch 2) are selected
@@ -358,10 +358,11 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
 
     // ---- per box: its ring blocks (all points of each two-hop box, in
     // two_hop order), then its training rows, and the sketch shape
-    // (compute_id_sparse_sketch's); nonsym: each of the two again
+    // (id_sketch_shape); nonsym: each of the two again
     struct Plan {
         int64_t box = -1;
         int n = 0, d = 0, sk = 0, slot = 0;
+        bool direct = false;  // the rows themselves (id_sketch_shape)
         int64_t rows = 0;
         double scale = 0.0;
         std::vector<RowBlockDesc> blocks;
@@ -430,8 +431,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             }
             continue;
         }
-        p.d = static_cast<int>(std::max<int64_t>(std::min<int64_t>(p.n, p.rows), p.n));
-        p.sk = std::min(4, p.d);
+        const IdSketchShape shape = id_sketch_shape(p.rows, p.n);
+        p.d = static_cast<int>(shape.d);
+        p.sk = shape.sk;
+        p.direct = shape.direct;
         p.scale = 1.0 / std::sqrt(static_cast<double>(p.sk));
         if (p.rows > kEntryRowMask || p.d > kEntryDestMask) {
             host_boxes.push_back(p.box);  // too large for the packed list entries
@@ -453,7 +456,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     // the selected far rows join, and the ID runs in a copy of it
     using Selector = AdaptiveRowSelector<CoordType, DataType>;
     const bool adaptive = tree->id_proxy_mode == 2;
-    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.n, nonsym) : p.d; };
+    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.d, nonsym) : p.d; };
     auto y_bytes = [&](const Plan& p) {
         return (adaptive ? 2 : 1) * align_up(static_cast<size_t>(y_ld(p)) * p.n * D);
     };
@@ -513,6 +516,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             li.seed = static_cast<uint64_t>(box.morton_index + 1);
             li.d = p.d;
             li.sk = p.sk;
+            li.direct = p.direct ? 1 : 0;
             li.rows = static_cast<int>(p.rows);
             li.num_blocks = static_cast<int>(p.blocks.size());
             li.blocks_offset = static_cast<int64_t>(meta.append(p.blocks));
@@ -562,6 +566,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                 typename Selector::Target& target = targets[static_cast<size_t>(i)];
                 target.box = &level.local_boxes[static_cast<size_t>(p.box)];
                 target.n = p.n;
+                target.d = p.d;
                 target.cols.base = p.slot;
                 target.w = reinterpret_cast<S*>(block + off_y[static_cast<size_t>(i)]);
                 target.cap = y_ld(p);

@@ -136,21 +136,18 @@ void h2_skeletonize_box(
         return;
     }
 
-    constexpr double sketch_factor = 1.0;
-    constexpr int sketch_nonzeros = 4;
+    const uint64_t sketch_seed = static_cast<uint64_t>(box->morton_index + 1);
     std::string trace_tail;
     if (h2_id_trace_enabled()) {
-        // the norm of the ID input (the sketch, as compute_id_sparse_sketch
-        // forms it), for box-by-box comparisons with the device path
+        // the norm of the ID input (the sketch, as id_sketch forms it), for
+        // box-by-box comparisons with the device path
         const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
         int64_t d = m;
         double ssq = 0.0;
         if (use_sketch) {
-            d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
-            std::vector<DataType> sketch(static_cast<size_t>(d * n));
-            sketch_sparse_random(scratch.workspace.data(), m, n, m, sketch.data(), d, d,
-                                 std::min<int>(sketch_nonzeros, static_cast<int>(d)),
-                                 static_cast<uint64_t>(box->morton_index + 1));
+            std::vector<DataType> sketch;
+            id_sketch(scratch.workspace.data(), m, n, m, sketch, sketch_seed);
+            d = id_sketch_shape(m, n).d;
             for (const DataType& v : sketch) ssq += std::norm(v);
         } else {
             for (const DataType& v : scratch.workspace) ssq += std::norm(v);
@@ -162,21 +159,16 @@ void h2_skeletonize_box(
     IDResult<DataType> id;
     if (adaptive_on_sketch) {
         const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
-        const int64_t d = std::max<int64_t>(std::min<int64_t>(static_cast<int64_t>(std::ceil(sketch_factor * n)), m), n);
-        scratch.sketch_storage.assign(static_cast<size_t>(d * n), DataType{});
-        sketch_sparse_random(scratch.workspace.data(), m, n, m, scratch.sketch_storage.data(), d, d,
-                             std::min<int>(sketch_nonzeros, static_cast<int>(d)),
-                             static_cast<uint64_t>(box->morton_index + 1));
-        int64_t rows = d;
+        id_sketch(scratch.workspace.data(), m, n, m, scratch.sketch_storage, sketch_seed);
+        int64_t rows = id_sketch_shape(m, n).d;
         append_adaptive_id_training_rows(tree, box, kernel, tolerance, kernel_symmetric(kernel, 0),
                                          scratch.sketch_storage, rows, n, &scratch.id_adaptive);
         id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0);
     } else if (use_sketch) {
-        id = compute_id_sparse_sketch(
-            scratch.workspace.data(), scratch.sketch_storage,
-            scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
-            tolerance, sketch_factor, sketch_nonzeros,
-            static_cast<uint64_t>(box->morton_index + 1));
+        const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
+        id_sketch(scratch.workspace.data(), m, n, m, scratch.sketch_storage, sketch_seed);
+        const int64_t d = id_sketch_shape(m, n).d;
+        id = compute_id_complex(scratch.sketch_storage.data(), d, n, d, tolerance, 0);
     } else {
         id = compute_id_complex(
             scratch.workspace.data(),

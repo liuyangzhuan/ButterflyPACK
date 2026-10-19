@@ -3707,6 +3707,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     };
     struct Plan {
         int n = 0, d = 0, sk = 0;
+        bool direct = false;  // the rows themselves (id_sketch_shape)
         double scale = 0.0;
         int64_t total_rows = 0;
         // a nonsymmetric matrix: the K(F, B) and K(T, B) rows, of the stacked
@@ -3864,13 +3865,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 }
                 p.total_rows = row_base;
 
-                // sketch parameters (compute_id_sparse_sketch's); the draws
+                // sketch parameters (id_sketch's, as on the host); the draws
                 // themselves are generated on the device
-                int64_t d = static_cast<int64_t>(std::ceil(1.0 * p.n));
-                d = std::min<int64_t>(d, p.total_rows);
-                d = std::max<int64_t>(d, p.n);
-                p.d = static_cast<int>(d);
-                p.sk = std::min(4, p.d);
+                const IdSketchShape shape = id_sketch_shape(p.total_rows, p.n);
+                p.d = static_cast<int>(shape.d);
+                p.sk = shape.sk;
+                p.direct = shape.direct;
                 p.scale = 1.0 / std::sqrt(static_cast<double>(p.sk));
 
                 // fill sources of the box, in the host order (one_hop order),
@@ -4185,7 +4185,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     size_t y_bytes = 0;
     for (Plan& p : plans) {
         p.off_y = y_bytes;
-        p.ldy = adaptive ? Selector::first_capacity(tree_, p.n, nonsym_) : p.d;
+        p.ldy = adaptive ? Selector::first_capacity(tree_, p.d, nonsym_) : p.d;
         y_bytes = align_up(y_bytes + static_cast<size_t>(p.ldy) * p.n * D);
         for (Source& src : p.sources) {
             src.offset = p.fill_rank;
@@ -4227,6 +4227,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         li.seed = static_cast<uint64_t>(wave[bi] + 1);
         li.d = p.d;
         li.sk = p.sk;
+        li.direct = p.direct ? 1 : 0;
         li.rows = static_cast<int>(p.total_rows);
         li.num_blocks = static_cast<int>(p.blocks.size());
         li.blocks_offset = static_cast<int64_t>(meta_.append(p.blocks));
@@ -4494,6 +4495,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             typename Selector::Target& target = targets[bi];
             target.box = writable_box(wave[bi]);
             target.n = p.n;
+            target.d = p.d;
             target.cols.base = state_of(wave[bi]).slot;
             target.w = p.Y;
             target.f = reinterpret_cast<S*>(d_f + p.off_y);

@@ -145,12 +145,14 @@ constexpr int kMaxSourceRuns = 128;  // ring blocks listing one fill source
 // (the packing of the sketch list entries, kEntryRowBits etc., and the
 // owner warps: bpack_gpu_kernels.cuh)
 
-// One box: draws of its rows (std::mt19937_64 from seed, sk per row), point
-// slots of its rows, and the destination lists of its kernel rows.
+// One box: draws of its rows (std::mt19937_64 from seed, sk per row; direct:
+// row q of the target is row q of the sketch, id_sketch_shape), point slots
+// of its rows, and the destination lists of its kernel rows.
 struct SketchListsItem {
     uint64_t seed;
     int d;
     int sk;
+    int direct;
     int rows;
     int num_blocks;
     int64_t blocks_offset;  // RowBlockDesc array in the metadata

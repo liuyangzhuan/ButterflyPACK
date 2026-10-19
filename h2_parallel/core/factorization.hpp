@@ -8655,8 +8655,8 @@ void lazy_far_apply_sources_cached(
 /**
  * @brief Assemble-and-sketch the ID compression target without materializing it.
  *
- * Equivalent to gather_id_workspace followed by the sparse sign sketch inside
- * compute_id_sparse_sketch, but the (m x n) stacked target never exists: each
+ * Equivalent to gather_id_workspace followed by id_sketch (the sparse sign
+ * sketch, or the rows themselves), but the (m x n) stacked target never exists: each
  * 2-hop neighbor's row block is produced in a reusable buffer and immediately
  * accumulated into the (d x n) sketch using the same per-row stratified draws,
  * in the same row order, from the same box-keyed RNG stream. Rows from stored
@@ -8945,14 +8945,15 @@ void gather_id_target_streamed(
     };
 
     // ------------------------------------------------------------------
-    // Sketch accumulator: replicates compute_id_sparse_sketch's parameters
-    // (factor 1.0, sparsity 4, seed = morton + 1) and sketch_sparse_random's
-    // per-row draw sequence exactly, consuming rows in assembly order.
+    // Sketch accumulator: id_sketch's shape (d = n + 4 rows, sparsity 4,
+    // seed = morton + 1; or the rows themselves when there are no more than
+    // that) and sketch_sparse_random's per-row draw sequence exactly,
+    // consuming rows in assembly order.
     // ------------------------------------------------------------------
-    int64_t d = static_cast<int64_t>(std::ceil(1.0 * n));
-    d = std::min(d, total_rows);
-    d = std::max(d, n);
-    int sk = std::min(4, static_cast<int>(d));
+    const IdSketchShape shape = id_sketch_shape(total_rows, n);
+    const int64_t d = shape.d;
+    const int sk = shape.sk;
+    int64_t direct_row = 0;  // (direct: the next row's own row of Y)
 
     int block_starts[4];
     int block_ranges[4];
@@ -8997,10 +8998,16 @@ void gather_id_target_streamed(
         }
         for (int64_t jj = 0; jj < a; ++jj) {
             for (int b = 0; b < sk; ++b) {
-                const uint64_t rand_val = rng();
-                const int idx = block_starts[b] +
-                    static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
-                const bool positive = ((rand_val >> 63) & 1) != 0;
+                int idx;
+                bool positive = true;
+                if (shape.direct) {
+                    if (direct_row >= d) throw std::logic_error("gather_id_target_streamed: more rows than counted");
+                    idx = static_cast<int>(direct_row++);
+                } else {
+                    const uint64_t rand_val = rng();
+                    idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                    positive = ((rand_val >> 63) & 1) != 0;
+                }
                 const size_t q = static_cast<size_t>(jj * sk + b);
                 blk_idx[q] = static_cast<int32_t>(idx);
                 blk_sgn[q] = positive ? int8_t{1} : int8_t{-1};
@@ -9568,11 +9575,11 @@ void gather_id_target_streamed_nonsymmetric(
     }
     const int64_t total_rows = 2 * far_rows + 2 * n_extra;
 
-    // ---- sketch parameters and draws (compute_id_sparse_sketch's) ----
-    int64_t d = static_cast<int64_t>(std::ceil(1.0 * n));
-    d = std::min(d, total_rows);
-    d = std::max(d, n);
-    const int sk = std::min(4, static_cast<int>(d));
+    // ---- sketch parameters and draws (id_sketch's) ----
+    const IdSketchShape shape = id_sketch_shape(total_rows, n);
+    const int64_t d = shape.d;
+    const int sk = shape.sk;
+    int64_t direct_row = 0;  // (direct: the next row's own row of Y)
     int block_starts[4];
     int block_ranges[4];
     {
@@ -9606,11 +9613,19 @@ void gather_id_target_streamed_nonsymmetric(
         }
         for (int64_t jj = 0; jj < a; ++jj) {
             for (int b = 0; b < sk; ++b) {
-                const uint64_t rand_val = rng();
-                const int idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
                 const size_t q = static_cast<size_t>(jj * sk + b);
-                blk_idx[q] = static_cast<int32_t>(idx);
-                blk_sgn[q] = ((rand_val >> 63) & 1) != 0 ? int8_t{1} : int8_t{-1};
+                if (shape.direct) {
+                    if (direct_row >= d) {
+                        throw std::logic_error("gather_id_target_streamed_nonsymmetric: more rows than counted");
+                    }
+                    blk_idx[q] = static_cast<int32_t>(direct_row++);
+                    blk_sgn[q] = int8_t{1};
+                } else {
+                    const uint64_t rand_val = rng();
+                    const int idx = block_starts[b] + static_cast<int>(rand_val % static_cast<uint64_t>(block_ranges[b]));
+                    blk_idx[q] = static_cast<int32_t>(idx);
+                    blk_sgn[q] = ((rand_val >> 63) & 1) != 0 ? int8_t{1} : int8_t{-1};
+                }
                 if (rec_row0 >= 0) {
                     const size_t g = static_cast<size_t>((rec_row0 + jj) * sk + b);
                     rec_idx[g] = blk_idx[q];
@@ -9965,12 +9980,8 @@ void compute_and_modify(
     // compute ID
     
     // const bool force_id_diagnostics = (box->morton_index == 238736);
-    const double sketch_factor = 1.0;
-    const int sketch_nonzeros = 4;
-    int64_t sketch_rows = static_cast<int64_t>(
-        std::ceil(sketch_factor * static_cast<double>(workspace_cols)));
-    sketch_rows = std::min(sketch_rows, workspace_rows);
-    sketch_rows = std::max(sketch_rows, workspace_cols);
+    const IdSketchShape sketch_shape = id_sketch_shape(workspace_rows, workspace_cols);
+    const int64_t sketch_rows = sketch_shape.d;
     // if (force_id_diagnostics) {
     //     const auto workspace_summary =
     //         summarize_colmajor_matrix(workspace, workspace_rows, workspace_cols);
@@ -10010,11 +10021,10 @@ void compute_and_modify(
                 scratch.streamed_sketch_rows,
                 tolerance, 0);
         } else if (use_sketch != 0) {
-            id_result = fmm::compute_id_sparse_sketch(
-                workspace.data(), sketch_storage,
-                workspace_rows, workspace_cols, workspace_rows,
-                tolerance, sketch_factor, sketch_nonzeros, box->morton_index + 1
-            );
+            fmm::id_sketch(workspace.data(), workspace_rows, workspace_cols, workspace_rows, sketch_storage,
+                           static_cast<uint64_t>(box->morton_index + 1));
+            id_result = fmm::compute_id_complex(sketch_storage.data(), sketch_rows, workspace_cols, sketch_rows,
+                                                tolerance, 0);
         } else {
             id_result = fmm::compute_id_complex(
                 workspace.data(),
@@ -10050,8 +10060,8 @@ void compute_and_modify(
                 << (scratch.streamed_sketch_valid
                         ? scratch.streamed_sketch_rows : sketch_rows)
                 << ", sketch_cols=" << workspace_cols
-                << ", sketch_factor=" << sketch_factor
-                << ", sketch_nonzeros=" << sketch_nonzeros;
+                << ", sketch_nonzeros=" << sketch_shape.sk
+                << (sketch_shape.direct ? " (the rows themselves)" : "");
         }
         oss
             << ")\n  "

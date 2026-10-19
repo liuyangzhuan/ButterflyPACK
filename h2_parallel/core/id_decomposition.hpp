@@ -698,9 +698,55 @@ inline void sketch_sparse_random(
 }
 
 
+// The H2 ID's sketch of an m x n target (m rows, the box's n points as
+// columns), shared by the host and the device (h2_gpu/device_sketch.cu):
+// Y = S A of d = n + kIdSketchOversampling rows, S with sk = 4 nonzeros a
+// target row (sketch_sparse_random's draws, seed morton + 1); or, when the
+// target has no more rows than that, its rows themselves ("direct": row q of
+// A is row q of Y, sk = 1, sign +1; d = max(m, n), zero rows below m).
+// Without oversampling (d = n) the sketch of a nearly full-rank target is
+// square, and its small singular values make the ID drop columns the target
+// needs (errors far above the tolerance: an SPD matrix factored indefinite,
+// logdet sign -1, at 100K and 400K points of a 2D exponential kernel at
+// 1e-10); a sketch of m <= d rows would only mix them.
+constexpr int64_t kIdSketchOversampling = 4;
+
+struct IdSketchShape {
+    int64_t d = 0;        // rows of Y
+    int sk = 1;           // nonzeros a target row
+    bool direct = false;  // Y = A
+};
+
+inline IdSketchShape id_sketch_shape(int64_t m, int64_t n) {
+    IdSketchShape s;
+    const int64_t d = n + kIdSketchOversampling;
+    if (m <= d) {
+        s.d = std::max(m, n);
+        s.sk = 1;
+        s.direct = true;
+    } else {
+        s.d = d;
+        s.sk = static_cast<int>(std::min<int64_t>(4, d));
+    }
+    return s;
+}
+
+// Y (id_sketch_shape(m, n).d x n, column-major, resized) = the ID sketch of
+// A (m x n, leading dimension lda).
+template<typename DataType>
+void id_sketch(const DataType* A, int64_t m, int64_t n, int64_t lda, std::vector<DataType>& Y, uint64_t seed) {
+    const IdSketchShape s = id_sketch_shape(m, n);
+    Y.assign(static_cast<size_t>(s.d * n), DataType{0});
+    if (s.direct) {
+        for (int64_t j = 0; j < n; ++j) std::copy(A + j * lda, A + j * lda + m, Y.data() + j * s.d);
+        return;
+    }
+    sketch_sparse_random(A, m, n, lda, Y.data(), s.d, s.d, s.sk, seed);
+}
+
 /**
  * @brief Compute ID using sparse random sketching
- * 
+ *
  * For A (m × n) where m >> n:
  * 1. Sparse sketch: Y = S * A where S is (d × m) with k nonzeros per column
  * 2. Compute ID of Y to find skeleton columns

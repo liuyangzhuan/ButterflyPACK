@@ -72,11 +72,12 @@ public:
     using Box = BoxData<CoordType, DataType>;
 
     // One box: its points (the columns), its ID target w (cap x n: the
-    // sketch in rows 0..n-1), a block f of the same shape for the in-place
+    // sketch in rows 0..d-1), a block f of the same shape for the in-place
     // ID, and the outputs of its ID.
     struct Target {
         const Box* box = nullptr;
         int n = 0;
+        int d = 0;  // rows of the sketch
         IndexList cols;
         S* w = nullptr;
         S* f = nullptr;
@@ -113,10 +114,10 @@ public:
     static int holdout_count(const Tree* tree) {
         return static_cast<int>(std::min<int64_t>(4, std::max<int64_t>(1, sample_batch(tree) / 2)));
     }
-    // Rows of a box's target for its sketch and the rows its first node can
-    // add (nonsym: two a point).
-    static int first_capacity(const Tree* tree, int n, bool nonsym = false) {
-        return n + (nonsym ? 2 : 1) * (sample_batch(tree) + holdout_count(tree));
+    // Rows of a box's target for its sketch (d rows) and the rows its first
+    // node can add (nonsym: two a point).
+    static int first_capacity(const Tree* tree, int d, bool nonsym = false) {
+        return d + (nonsym ? 2 : 1) * (sample_batch(tree) + holdout_count(tree));
     }
 
     void start(std::vector<Target> targets) {
@@ -130,7 +131,7 @@ public:
             try {
                 State& st = states_[static_cast<size_t>(i)];
                 st.t = targets[static_cast<size_t>(i)];
-                st.rows = st.t.n;
+                st.rows = st.t.d;
                 st.stats.active = true;
                 const std::vector<IDAdaptiveFrame> far = make_initial_id_far_frames(tree_, st.t.box);
                 if (!far.empty()) {
