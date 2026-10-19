@@ -6941,6 +6941,62 @@ of boxes: box regions, fill targets, remote generators, the transition).
 Symmetric runs are bitwise unchanged (GPU: 192^3, s4, the 128K sphere, the
 extraction check's earlier numbers; the CPU path's s4).
 
+#### Nonsymmetric matrices: H2_ID_proxy 2, and the compression's IDs on the device (2026-10-18)
+
+The adaptive ID rows (H2_ID_proxy 2, GPU_PROXY2_PLAN.md) for a nonsymmetric
+matrix: a sampled or hold-out far point gives the two rows the stacked
+target holds of it, K(p, B) and K(B, p)^T (a node's rows: its sampled
+points' K(P, B), their K(B, P)^T, then the hold-out points' the same); the
+rest of the selection (residuals, row IDs, hold-out test, subdivision) is
+the symmetric one's over those rows.
+- Host: append_adaptive_id_training_rows evaluates both blocks; the
+  nonsymmetric streamed ID (gather_id_target_streamed_nonsymmetric) selects
+  against its sketch, as the symmetric one does.  The compression's
+  selection on the sketch (h2_skeletonize_box) passed a symmetric kernel
+  whatever the kernel was; it passes the kernel's symmetry now (unreachable
+  before: the option was refused for sym 0).
+- Device: AdaptiveRowSelector takes nonsym; K(B, P) of a node is evaluated
+  into its block and transposed into place before the residuals, and the
+  targets' first capacity counts two rows a point.
+- The compression's IDs on the device (compress_level_ids) for a
+  nonsymmetric kernel: the stacked rows as gather_id_workspace stacks them
+  (the ring blocks, the ring again, the training rows twice), the K(F, B)
+  and K(T, B) rows the sketch items' swap ranges, as the factorization's
+  device sketch has them (N5).
+
+Laplace 48^3 with column weights 0.5 on 8 ranks (H2_ID_proxy 2 takes the
+legacy input, --distributed64 0):
+
+| | logdet | factor |
+|---|---|---|
+| proxy 2, CPU path (H2_use_gpu 0) | -1095138.2791892029 | 9.60 s |
+| proxy 2, 8 GPUs | -1095138.2791892032 | 1.21 s |
+| symmetric, proxy 2, 8 GPUs | -1087470.169157051 | 0.49 s |
+
+k and the adaptive statistics are identical on CPU and GPU in all 576
+boxes; the column weights' identity: -7668.110 against sum log w -7668.058
+(proxy 0: -7668.111); acc_mvp 6.5e-4 (proxy 0: 7.5e-4).  Skew 0.5: CPU and
+GPU -1082910.8975613471 in every digit (10.4 / 0.79 s).  EMSURF CFIE alpha
+0.5, 9K, 8 GPUs: 3.76359516736682053e+03 against the CPU path's
+...687692 (1.5e-14), 0.61 s.  The inv_mult check on 1 GPU: transposes
+1.8e-15 (F^{-1}), 3.4e-15 (F).
+
+The compression-only H2 (precon 2) on 8 GPUs, IDs on the device against
+the host's:
+
+| | k vs host | compression check acc_mvp | construction: IDs on the host / device / CPU path |
+|---|---|---|---|
+| Laplace 48^3 weights | identical (576 boxes) | 6.9393585e-04 both | 0.98 / 0.41 / 1.02 s |
+| the same, proxy 2 | identical, adaptive statistics too | 6.9324034e-04 both | - / 0.50 / 1.06 s |
+| EMSURF CFIE 128K | | 8.3952718e-08 both | 358 / 2.37 / 458 s |
+
+(BiCGSTAB counts move by a few iterations between equal ranks: 161 / 149 /
+154 at 48^3, 275 / 273 / 253 for the CFIE.)  Symmetric runs are bitwise
+unchanged (GPU: 192^3, s4, the 128K sphere, the extraction check, the
+symmetric proxy-2 factorization and compression; the CPU path's proxy-2
+logdet as before, which one run flipped in the last digit: the logdet's
+thread-order sum).
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

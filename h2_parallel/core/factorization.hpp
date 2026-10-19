@@ -5203,6 +5203,9 @@ std::vector<DataType> compute_adaptive_id_residual(
     return residual;
 }
 
+// A nonsymmetric matrix (is_symmetric false): each sampled or hold-out far
+// point gives the two rows the stacked ID target holds of it, K(p, B) and
+// K(B, p)^T (the points' K(P, B) rows, then their K(B, P)^T rows).
 template<typename CoordType, typename DataType, typename KernelType>
 void append_adaptive_id_training_rows(
     const ParallelTree<CoordType, DataType>* tree,
@@ -5220,11 +5223,26 @@ void append_adaptive_id_training_rows(
     IDAdaptiveStats local_stats;
     IDAdaptiveStats& st = stats != nullptr ? *stats : local_stats;
     st.active = true;
-    if (!is_symmetric) {
-        throw std::runtime_error(
-            "adaptive H2 ID proxy selection currently requires a symmetric matrix");
-    }
     validate_id_source_index(tree);
+    // the far points' rows of the target (p x cols points: p, or 2 p rows)
+    auto far_rows = [&](const std::vector<int64_t>& points, std::vector<DataType>& rows) {
+        const int64_t p = static_cast<int64_t>(points.size());
+        const int64_t m = is_symmetric ? p : 2 * p;
+        rows.assign(static_cast<size_t>(m * workspace_cols), DataType{0});
+        kernel->evaluate_block_by_index(
+            points.data(), p, box->point_indices.data(), workspace_cols, rows.data(), m);
+        if (!is_symmetric) {
+            std::vector<DataType> kbp(static_cast<size_t>(workspace_cols * p));
+            kernel->evaluate_block_by_index(
+                box->point_indices.data(), workspace_cols, points.data(), p, kbp.data(), workspace_cols);
+            for (int64_t c = 0; c < workspace_cols; ++c) {
+                for (int64_t i = 0; i < p; ++i) {
+                    rows[static_cast<size_t>(p + i + c * m)] = kbp[static_cast<size_t>(c + i * workspace_cols)];
+                }
+            }
+        }
+        return m;
+    };
 
     const std::vector<IDAdaptiveFrame> far_frames =
         make_initial_id_far_frames(tree, box);
@@ -5263,22 +5281,18 @@ void append_adaptive_id_training_rows(
 
         const std::vector<int64_t> sample_positions = pick_evenly_spaced_unused(
             unused, frame.lo, frame.hi, sample_batch, true);
-        const int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
+        int64_t sample_rows = static_cast<int64_t>(sample_positions.size());
         ++st.frames;
-        st.sampled += sample_rows;
         std::vector<int64_t> sample_indices(static_cast<size_t>(sample_rows));
-        for (int64_t row = 0; row < sample_rows; ++row) {
+        for (int64_t row = 0; row < static_cast<int64_t>(sample_positions.size()); ++row) {
             sample_indices[static_cast<size_t>(row)] =
                 tree->id_source_point_order[static_cast<size_t>(
                     sample_positions[static_cast<size_t>(row)])];
         }
 
-        std::vector<DataType> sampled(
-            static_cast<size_t>(sample_rows * workspace_cols));
-        kernel->evaluate_block_by_index(
-            sample_indices.data(), sample_rows,
-            box->point_indices.data(), workspace_cols,
-            sampled.data(), sample_rows);
+        std::vector<DataType> sampled;
+        sample_rows = far_rows(sample_indices, sampled);
+        st.sampled += sample_rows;
 
         std::vector<DataType> residual = compute_adaptive_id_residual(
             sampled, sample_rows, workspace_cols, base_id, extra_ids);
@@ -5317,22 +5331,18 @@ void append_adaptive_id_training_rows(
                 pick_evenly_spaced_unused(
                     unused, frame.lo, frame.hi, holdout_count, false);
             if (!holdout_positions.empty()) {
-                const int64_t holdout_rows =
+                const int64_t holdout_points =
                     static_cast<int64_t>(holdout_positions.size());
-                st.holdout += holdout_rows;
                 std::vector<int64_t> holdout_indices(
-                    static_cast<size_t>(holdout_rows));
-                for (int64_t row = 0; row < holdout_rows; ++row) {
+                    static_cast<size_t>(holdout_points));
+                for (int64_t row = 0; row < holdout_points; ++row) {
                     holdout_indices[static_cast<size_t>(row)] =
                         tree->id_source_point_order[static_cast<size_t>(
                             holdout_positions[static_cast<size_t>(row)])];
                 }
-                std::vector<DataType> holdout(
-                    static_cast<size_t>(holdout_rows * workspace_cols));
-                kernel->evaluate_block_by_index(
-                    holdout_indices.data(), holdout_rows,
-                    box->point_indices.data(), workspace_cols,
-                    holdout.data(), holdout_rows);
+                std::vector<DataType> holdout;
+                const int64_t holdout_rows = far_rows(holdout_indices, holdout);
+                st.holdout += holdout_rows;
                 std::vector<DataType> holdout_residual =
                     compute_adaptive_id_residual(
                         holdout, holdout_rows, workspace_cols,
@@ -9455,7 +9465,8 @@ void gather_id_target_streamed(
  * X_RR_E^T temp2_E[B]^T (r x n).  As in gather_id_target_streamed it is
  * applied in sketch space, a source at a time: W1 (W2) gathers the sketched
  * temp2_E rows (temp4_E columns) of the blocks listing E, and O' -= P1^T W1 +
- * P2^T W2.  Outputs as gather_id_target_streamed's.
+ * P2^T W2.  Outputs as gather_id_target_streamed's, the adaptive far rows
+ * (H2_ID_proxy 2) too, each point's two rows.
  */
 template<typename CoordType, typename DataType, typename KernelType>
 void gather_id_target_streamed_nonsymmetric(
@@ -9464,7 +9475,8 @@ void gather_id_target_streamed_nonsymmetric(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
-    bool on_boundary) {
+    bool on_boundary,
+    double id_tolerance) {
 
     scratch.streamed_sketch_valid = false;
     scratch.id_adaptive = IDAdaptiveStats{};
@@ -9864,9 +9876,12 @@ void gather_id_target_streamed_nonsymmetric(
     for (int64_t j = 0; j < n; ++j) {
         for (int64_t i = 0; i < d; ++i) Y[static_cast<size_t>(i + j * d)] = Oacc[static_cast<size_t>(i * n + j)];
     }
-    scratch.workspace_rows = total_rows;
+    // adaptive far rows (H2_ID_proxy 2), as gather_id_target_streamed's
+    int64_t sketch_rows = d;
+    append_adaptive_id_training_rows(tree, box, kernel, id_tolerance, false, Y, sketch_rows, n, &scratch.id_adaptive);
+    scratch.workspace_rows = total_rows + (sketch_rows - d);
     scratch.workspace_cols = n;
-    scratch.streamed_sketch_rows = d;
+    scratch.streamed_sketch_rows = sketch_rows;
     scratch.streamed_sketch_valid = true;
 }
 

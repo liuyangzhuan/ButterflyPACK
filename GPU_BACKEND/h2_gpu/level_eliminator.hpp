@@ -4192,7 +4192,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     size_t y_bytes = 0;
     for (Plan& p : plans) {
         p.off_y = y_bytes;
-        p.ldy = adaptive ? Selector::first_capacity(tree_, p.n) : p.d;
+        p.ldy = adaptive ? Selector::first_capacity(tree_, p.n, nonsym_) : p.d;
         y_bytes = align_up(y_bytes + static_cast<size_t>(p.ldy) * p.n * D);
         for (Source& src : p.sources) {
             src.offset = p.fill_rank;
@@ -4494,7 +4494,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             int max_m, int max_n, cudaStream_t s) {
             eval_blocks(items, meta, image, offset, max_m, max_n, s);
         };
-        selector = std::make_unique<Selector>(tree_, tolerance_, heap_, std::move(hooks));
+        selector = std::make_unique<Selector>(tree_, tolerance_, heap_, std::move(hooks), nonsym_);
         std::vector<typename Selector::Target> targets(plans.size());
         for (size_t bi = 0; bi < plans.size(); ++bi) {
             const Plan& p = plans[bi];

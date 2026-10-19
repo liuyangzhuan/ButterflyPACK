@@ -181,10 +181,6 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
         if (options.unstructured != 1) {
             throw std::invalid_argument("a nonsymmetric H2 (option%sym=0) needs H2_unstructured=1");
         }
-        if (options.id_proxy_mode == 2) {
-            throw std::invalid_argument(
-                "H2_ID_proxy=2 (adaptive ID rows) is not supported for a nonsymmetric H2 (option%sym=0) yet");
-        }
     }
     if (options.unstructured == 0) return;
 

@@ -299,9 +299,9 @@ void hierarchical_compression_unstructured(
         std::string reason;
         gpu_blocks = gpu::compression_supported(tree, kernel, &reason);
         // (adaptive ID rows, H2_ID_proxy 2: on the device when they are
-        // selected against the sketch, H2_use_sketch 2)
-        // (a nonsymmetric kernel: the IDs of the stacked targets on the host)
-        gpu_ids = gpu_blocks && use_sketch && kernel_symmetric(kernel, 0) &&
+        // selected against the sketch, H2_use_sketch 2; a nonsymmetric
+        // kernel's stacked targets too)
+        gpu_ids = gpu_blocks && use_sketch &&
                   (tree->id_proxy_mode != 2 || use_sketch == 2) &&
                   gpu::device_sketch_supported(tree, *gpu::evaluator_of(kernel->gpu_evaluator));
         if (gpu_blocks) gpu::begin_device_compression(tree->num_levels);

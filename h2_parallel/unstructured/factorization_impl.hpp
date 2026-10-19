@@ -1038,7 +1038,7 @@ void hierarchical_factorization_unstructured(
                             if (use_streamed_level && !is_symmetric) {
                                 gather_id_target_streamed_nonsymmetric(
                                     tree, &box, level, kernel, scratch,
-                                    box.on_boundary);
+                                    box.on_boundary, tolerance);
                             } else if (use_streamed_level) {
                                 gather_id_target_streamed(
                                     tree, &box, level, kernel, scratch,

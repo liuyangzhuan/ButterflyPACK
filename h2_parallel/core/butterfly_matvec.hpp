@@ -168,8 +168,8 @@ void h2_skeletonize_box(
                              std::min<int>(sketch_nonzeros, static_cast<int>(d)),
                              static_cast<uint64_t>(box->morton_index + 1));
         int64_t rows = d;
-        append_adaptive_id_training_rows(tree, box, kernel, tolerance, true, scratch.sketch_storage, rows, n,
-                                         &scratch.id_adaptive);
+        append_adaptive_id_training_rows(tree, box, kernel, tolerance, kernel_symmetric(kernel, 0),
+                                         scratch.sketch_storage, rows, n, &scratch.id_adaptive);
         id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0);
     } else if (use_sketch) {
         id = compute_id_sparse_sketch(

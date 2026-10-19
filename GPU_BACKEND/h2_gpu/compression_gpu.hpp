@@ -305,6 +305,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     DeviceHeap& heap = DeviceHeap::instance();
     const Evaluator& evaluator = *evaluator_of(kernel->gpu_evaluator);
     const bool trace = h2_id_trace_enabled();
+    // a nonsymmetric kernel: the stacked [K(F, B); K(B, F)^T; K(T, B); K(B,
+    // T)^T] of gather_id_workspace, its K(F, B) and K(T, B) rows evaluated as
+    // K(row, col) (the sketch items' swap ranges)
+    const bool nonsym = !kernel_symmetric(kernel, 0);
 
     // ---- static training rows (H2_ID_radius > 2, H2_ID_proxy 1), as the
     // host selects them: their points after the level's, each once, and a
@@ -354,13 +358,14 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
 
     // ---- per box: its ring blocks (all points of each two-hop box, in
     // two_hop order), then its training rows, and the sketch shape
-    // (compute_id_sparse_sketch's)
+    // (compute_id_sparse_sketch's); nonsym: each of the two again
     struct Plan {
         int64_t box = -1;
         int n = 0, d = 0, sk = 0, slot = 0;
         int64_t rows = 0;
         double scale = 0.0;
         std::vector<RowBlockDesc> blocks;
+        int swap_lo0 = 0, swap_hi0 = 0, swap_lo1 = 0, swap_hi1 = 0;
     };
     std::vector<Plan> plans;
     for (size_t b = 0; b < nb; ++b) {
@@ -387,10 +392,28 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             p.blocks.push_back(RowBlockDesc{row_base, e->n, e->slot, nullptr});
             row_base += e->n;
         }
+        if (nonsym && row_base > 0) {  // the ring again: its K(B, F)^T rows
+            const int ring_rows = row_base;
+            const size_t ring_blocks = p.blocks.size();
+            for (size_t j = 0; j < ring_blocks; ++j) {
+                RowBlockDesc rb = p.blocks[j];
+                rb.row_base += ring_rows;
+                p.blocks.push_back(rb);
+            }
+            row_base += ring_rows;
+            p.swap_lo0 = 0;
+            p.swap_hi0 = ring_rows;
+        }
         // static training rows after the ring (their draws continue the box's stream, as on the host)
         if (!training[b].empty()) {
             const int nt = static_cast<int>(training[b].size());
             p.blocks.push_back(RowBlockDesc{row_base, nt, points.training_slot0(), d_training + training_at[b]});
+            if (nonsym) {
+                p.swap_lo1 = row_base;
+                p.swap_hi1 = row_base + nt;
+                p.blocks.push_back(RowBlockDesc{row_base + nt, nt, points.training_slot0(), d_training + training_at[b]});
+                row_base += nt;
+            }
             row_base += nt;
         }
         p.rows = row_base;
@@ -430,7 +453,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
     // the selected far rows join, and the ID runs in a copy of it
     using Selector = AdaptiveRowSelector<CoordType, DataType>;
     const bool adaptive = tree->id_proxy_mode == 2;
-    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.n) : p.d; };
+    auto y_ld = [&](const Plan& p) { return adaptive ? Selector::first_capacity(tree, p.n, nonsym) : p.d; };
     auto y_bytes = [&](const Plan& p) {
         return (adaptive ? 2 : 1) * align_up(static_cast<size_t>(y_ld(p)) * p.n * D);
     };
@@ -509,6 +532,10 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
             item.scale = p.scale;
             item.row_slots = d_rows;
             item.col_base = p.slot;
+            item.swap_lo0 = p.swap_lo0;
+            item.swap_hi0 = p.swap_hi0;
+            item.swap_lo1 = p.swap_lo1;
+            item.swap_hi1 = p.swap_hi1;
             row_items[static_cast<size_t>(i)] = item;
             id_items[static_cast<size_t>(i)] =
                 QrcpItemT<S>{Y, p.d, p.n, p.d, reinterpret_cast<int*>(d_id + id_jpvt[static_cast<size_t>(i)]),
@@ -528,7 +555,7 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
                 evaluator.eval<S>(items, reinterpret_cast<const EvalItemT<S>*>(image + offset), max_m, max_n_items,
                                   image, points.table(), s);
             };
-            selector = std::make_unique<Selector>(tree, tolerance, heap, std::move(hooks));
+            selector = std::make_unique<Selector>(tree, tolerance, heap, std::move(hooks), nonsym);
             std::vector<typename Selector::Target> targets(static_cast<size_t>(count));
             for (int i = 0; i < count; ++i) {
                 const Plan& p = plans[c0 + static_cast<size_t>(i)];
