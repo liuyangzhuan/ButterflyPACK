@@ -10,13 +10,20 @@ namespace butterfly {
 namespace color_unstructured {
 using namespace fmm;
 
+// transposed: A^T x = b with A's factors (a nonsymmetric matrix's 'T'; a
+// transpose-symmetric factorization is its own transpose).  With one T per
+// box for rows and columns, A^T's factors are A's transposed: its X_SR and
+// X_NR are A's X_RS^T and X_RN^T (the forward sweep reads those), its X_RS
+// and X_RN are A's X_SR^T and X_NR^T (the backward sweep's symmetric reads),
+// and its X_RR are A's transposed (the LUs solved transposed).
 template<typename CoordType, typename DataType>
 void hierarchical_solve_unstructured(
     ParallelTree<CoordType, DataType>* tree,
     const std::vector<DataType>& rhs,
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
     int nrhs,
-    int verbosity) {
+    int verbosity,
+    bool transposed = false) {
     if (nrhs <= 0 || rhs.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
             "hierarchical_solve_unstructured: invalid batched RHS dimensions");
@@ -28,6 +35,9 @@ void hierarchical_solve_unstructured(
     MPI_Comm_rank(tree->comm, &rank);
     const fmm::MatrixProperty matrix_property = tree->factor_symmetric
         ? fmm::MatrixProperty::SYMMETRIC : fmm::MatrixProperty::NONSYMMETRIC;
+    transposed = transposed && !tree->factor_symmetric;
+    const fmm::MatrixProperty backward_property =
+        transposed ? fmm::MatrixProperty::SYMMETRIC : matrix_property;
     const bool print_summary = verbosity >= 0;
     const bool print_detail = verbosity >= 1;
     using clock = std::chrono::high_resolution_clock;
@@ -120,8 +130,8 @@ void hierarchical_solve_unstructured(
     // the factors on the device from the first solve after a factorization.
     if constexpr (gpu::gpu_data_type<DataType>) {
         if (gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
-                hierarchical_solve_unstructured(tree, rhs, host_data, nrhs, -1);
-            })) {
+                hierarchical_solve_unstructured(tree, rhs, host_data, nrhs, -1, transposed);
+            }, nullptr, nullptr, transposed)) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);
@@ -260,7 +270,8 @@ void hierarchical_solve_unstructured(
                         local_pending,
                         is_ghost,
                         /*defer_local_updates=*/true,
-                        /*local_or_ghost_targets_only=*/true);
+                        /*local_or_ghost_targets_only=*/true,
+                        transposed);
                 },
                 [](size_t, size_t) {},
                 /*include_boundary=*/!owner_engine);
@@ -342,7 +353,9 @@ void hierarchical_solve_unstructured(
                                 matrix_property,
                                 local_pending,
                                 /*is_ghost=*/false,
-                                /*defer_local_updates=*/true
+                                /*defer_local_updates=*/true,
+                                /*local_or_ghost_targets_only=*/false,
+                                transposed
                             );
                         } catch (...) {
                             if (!forward_wave_failed.exchange(true, std::memory_order_relaxed)) {
@@ -480,7 +493,7 @@ void hierarchical_solve_unstructured(
                             throw std::runtime_error("Diagonal solve missing LU pivots for X_RR");
                         }
 
-                        char trans = 'N';
+                        char trans = transposed ? 'T' : 'N';
                         int n = static_cast<int>(r), rhs_columns = nrhs;
                         int lda = static_cast<int>(r), ldb = static_cast<int>(r), info = 0;
 
@@ -552,7 +565,7 @@ void hierarchical_solve_unstructured(
     // Solve root X_RR (level 0)
     auto& root_level = tree->levels[0];
     if (root_level.is_process_active && !root_level.local_boxes.empty()) {
-        apply_diagonal_solve(root_level, solve_data[0][0], false);
+        apply_diagonal_solve(root_level, solve_data[0][0], false, transposed);
         num_diagonal_solves++;
     }
 
@@ -638,7 +651,7 @@ void hierarchical_solve_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            matrix_property,
+                            backward_property,
                             is_ghost);
                     },
                     [](size_t, size_t) {},
@@ -669,7 +682,7 @@ void hierarchical_solve_unstructured(
                             tree_level,
                             solve_box,
                             solve_data[level],
-                            matrix_property,
+                            backward_property,
                             is_ghost);
                     },
                     [&](size_t group_idx, size_t group_count) {
@@ -755,7 +768,7 @@ void hierarchical_solve_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                matrix_property,
+                                backward_property,
                                 /*is_ghost=*/false
                             );
                         } catch (...) {
@@ -894,7 +907,8 @@ void hierarchical_mul_unstructured(
     const std::vector<DataType>& input_vec,
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
     int nrhs,
-    bool verbose) {
+    bool verbose,
+    bool transposed = false) {
     if (nrhs <= 0 || input_vec.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
             "hierarchical_mul_unstructured: invalid batched input dimensions");
@@ -906,6 +920,12 @@ void hierarchical_mul_unstructured(
     MPI_Comm_rank(tree->comm, &rank);
     const fmm::MatrixProperty matrix_property = tree->factor_symmetric
         ? fmm::MatrixProperty::SYMMETRIC : fmm::MatrixProperty::NONSYMMETRIC;
+    // transposed: A^T x with A's factors (hierarchical_solve_unstructured):
+    // W reads X_SR^T and X_NR^T (the symmetric reads), V reads X_RS^T and
+    // X_RN^T, and the X_RR are multiplied transposed
+    transposed = transposed && !tree->factor_symmetric;
+    const fmm::MatrixProperty forward_property =
+        transposed ? fmm::MatrixProperty::SYMMETRIC : matrix_property;
     using clock = std::chrono::high_resolution_clock;
     DynamicThreadingContext dynamic_threading =
         make_dynamic_threading_context(tree->comm);
@@ -980,8 +1000,8 @@ void hierarchical_mul_unstructured(
     // Device multiply (h2_gpu/device_solve.hpp), with the solve's factors.
     if constexpr (gpu::gpu_data_type<DataType>) {
         if (gpu::run_device_solve(tree, solve_data, nrhs, true, verbose ? 1 : -1, [&](auto& host_data) {
-                hierarchical_mul_unstructured(tree, input_vec, host_data, nrhs, false);
-            })) {
+                hierarchical_mul_unstructured(tree, input_vec, host_data, nrhs, false, transposed);
+            }, nullptr, nullptr, transposed)) {
             restore_base_process_affinity();
             clear_runtime_fmm_thread_count();
             destroy_solve_communicators(solve_comms);
@@ -1037,7 +1057,7 @@ void hierarchical_mul_unstructured(
                         tree_level,
                         solve_box,
                         solve_data[level],
-                        matrix_property,
+                        forward_property,
                         is_ghost);
                 },
                 [](size_t, size_t) {},
@@ -1102,7 +1122,7 @@ void hierarchical_mul_unstructured(
                                 tree_level,
                                 solve_data[level][static_cast<size_t>(local_idx)],
                                 solve_data[level],
-                                matrix_property,
+                                forward_property,
                                 /*is_ghost=*/false);
                         } catch (...) {
                             if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
@@ -1219,23 +1239,29 @@ void hierarchical_mul_unstructured(
                         }
                         int lda = static_cast<int>(r);
 
-                        char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-                        trmm_(&side, &uplo_U, &trans_N, &diag_N,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                        char uplo_L = 'L', diag_U = 'U';
-                        trmm_(&side, &uplo_L, &trans_N, &diag_U,
-                                   &n, &rhs_columns, &one,
-                                   box.X_RR.data.data(), &lda,
-                                   x_R.data(), &ldb);
-                        int k1 = 1, k2 = n, inc_rev = -1;
-                        if constexpr (std::is_same_v<DataType, double>) {
-                            dlaswp_(&rhs_columns, x_R.data(), &n,
-                                    &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
-                        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-                            zlaswp_(&rhs_columns, x_R.data(), &n,
-                                    &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
+                        if (transposed) {
+                            fmm::lu_transposed_multiply(
+                                n, box.X_RR.data.data(), lda,
+                                box.X_RR_pivots.data(), x_R.data(), ldb, rhs_columns);
+                        } else {
+                            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
+                            trmm_(&side, &uplo_U, &trans_N, &diag_N,
+                                       &n, &rhs_columns, &one,
+                                       box.X_RR.data.data(), &lda,
+                                       x_R.data(), &ldb);
+                            char uplo_L = 'L', diag_U = 'U';
+                            trmm_(&side, &uplo_L, &trans_N, &diag_U,
+                                       &n, &rhs_columns, &one,
+                                       box.X_RR.data.data(), &lda,
+                                       x_R.data(), &ldb);
+                            int k1 = 1, k2 = n, inc_rev = -1;
+                            if constexpr (std::is_same_v<DataType, double>) {
+                                dlaswp_(&rhs_columns, x_R.data(), &n,
+                                        &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
+                            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                                zlaswp_(&rhs_columns, x_R.data(), &n,
+                                        &k1, &k2, box.X_RR_pivots.data(), &inc_rev);
+                            }
                         }
                     } else if (box.X_RR.format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
                         if (box.X_RR_pivots.size() < static_cast<size_t>(r)) {
@@ -1280,7 +1306,7 @@ void hierarchical_mul_unstructured(
     // Root X_RR multiply
     auto& root_level = tree->levels[0];
     if (root_level.is_process_active && !root_level.local_boxes.empty()) {
-        fmm::apply_diagonal_multiply(root_level, solve_data[0][0], false);
+        fmm::apply_diagonal_multiply(root_level, solve_data[0][0], false, transposed);
         num_diagonal_muls++;
     }
 
@@ -1352,7 +1378,8 @@ void hierarchical_mul_unstructured(
                             matrix_property,
                             local_pending,
                             is_ghost,
-                            /*local_or_ghost_targets_only=*/true);
+                            /*local_or_ghost_targets_only=*/true,
+                            transposed);
                     },
                     [](size_t, size_t) {},
                     /*include_boundary=*/false);
@@ -1386,7 +1413,8 @@ void hierarchical_mul_unstructured(
                             matrix_property,
                             local_pending,
                             is_ghost,
-                            /*local_or_ghost_targets_only=*/true);
+                            /*local_or_ghost_targets_only=*/true,
+                            transposed);
                     },
                     [&](size_t group_idx, size_t group_count) {
                         if (tree_level.num_active_processes > 1 &&
@@ -1466,7 +1494,9 @@ void hierarchical_mul_unstructured(
                                 solve_data[level],
                                 matrix_property,
                                 local_pending,
-                                /*is_ghost=*/false);
+                                /*is_ghost=*/false,
+                                /*local_or_ghost_targets_only=*/false,
+                                transposed);
                         } catch (...) {
                             if (!wave_failed.exchange(true, std::memory_order_relaxed)) {
                                 std::lock_guard<std::mutex> lock(wave_exception_mutex);

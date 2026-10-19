@@ -539,6 +539,25 @@ inline void bunch_kaufman_multiply(
     }
 }
 
+// x = A^T x for A = P L U (getrf's LU and 1-based interchanges): U^T L^T P^T x,
+// the interchanges in order (as getrs 'N' starts), then the unit L and U
+// transposed
+template <typename DataType>
+inline void lu_transposed_multiply(int n, const DataType* lu, int lda, const int* ipiv, DataType* x, int ldx,
+                                   int nrhs) {
+    if (n == 0 || nrhs == 0) return;
+    int k1 = 1, k2 = n, inc = 1;
+    if constexpr (std::is_same_v<DataType, double>) {
+        dlaswp_(&nrhs, x, &ldx, &k1, &k2, ipiv, &inc);
+    } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+        zlaswp_(&nrhs, x, &ldx, &k1, &k2, ipiv, &inc);
+    }
+    const DataType one{1};
+    const char side = 'L', lower = 'L', upper = 'U', trans = 'T', unit = 'U', non_unit = 'N';
+    trmm_(&side, &lower, &trans, &unit, &n, &nrhs, &one, lu, &lda, x, &ldx);
+    trmm_(&side, &upper, &trans, &non_unit, &n, &nrhs, &one, lu, &lda, x, &ldx);
+}
+
 // ============================================================================
 // Phase 2: Diagonal multiply — multiply by D (X_RR blocks)
 // ============================================================================
@@ -549,11 +568,13 @@ inline void bunch_kaufman_multiply(
 //   LU_FACTORED: X_RR = P * L * U ->  y = U*x, z = L*y, w = P*z   (dtrmv + laswp)
 //   BUNCH_KAUFMAN: A = L*D*L^T with interleaved pivots (xSYTRF)
 
+//   transposed: X_RR^T x (an LU: U^T L^T P^T x; a symmetric X_RR is its transpose)
 template<typename CoordType, typename DataType>
 void apply_diagonal_multiply(
     TreeLevel<CoordType, DataType>& level,
     SolveDataRequest<CoordType, DataType>& solve_data,
-    bool is_ghost) {
+    bool is_ghost,
+    bool transposed = false) {
 
     const MatrixStorage<DataType>* X_RR = nullptr;
     const std::vector<int>* X_RR_pivots = nullptr;
@@ -622,19 +643,23 @@ void apply_diagonal_multiply(
 
         int lda = static_cast<int>(k);
 
-        char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
-        trmm_(&side, &uplo_U, &trans_N, &diag_N, &n, &nrhs, &one,
-              X_RR->data.data(), &lda, x_S.data(), &ldb);
-        char uplo_L = 'L', diag_U = 'U';
-        trmm_(&side, &uplo_L, &trans_N, &diag_U, &n, &nrhs, &one,
-              X_RR->data.data(), &lda, x_S.data(), &ldb);
-        int k1 = 1, k2 = n, inc_rev = -1;
-        if constexpr (std::is_same_v<DataType, double>) {
-            dlaswp_(&nrhs, x_S.data(), &n,
-                    &k1, &k2, X_RR_pivots->data(), &inc_rev);
-        } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
-            zlaswp_(&nrhs, x_S.data(), &n,
-                    &k1, &k2, X_RR_pivots->data(), &inc_rev);
+        if (transposed) {
+            lu_transposed_multiply(n, X_RR->data.data(), lda, X_RR_pivots->data(), x_S.data(), ldb, nrhs);
+        } else {
+            char uplo_U = 'U', trans_N = 'N', diag_N = 'N';
+            trmm_(&side, &uplo_U, &trans_N, &diag_N, &n, &nrhs, &one,
+                  X_RR->data.data(), &lda, x_S.data(), &ldb);
+            char uplo_L = 'L', diag_U = 'U';
+            trmm_(&side, &uplo_L, &trans_N, &diag_U, &n, &nrhs, &one,
+                  X_RR->data.data(), &lda, x_S.data(), &ldb);
+            int k1 = 1, k2 = n, inc_rev = -1;
+            if constexpr (std::is_same_v<DataType, double>) {
+                dlaswp_(&nrhs, x_S.data(), &n,
+                        &k1, &k2, X_RR_pivots->data(), &inc_rev);
+            } else if constexpr (std::is_same_v<DataType, std::complex<double>>) {
+                zlaswp_(&nrhs, x_S.data(), &n,
+                        &k1, &k2, X_RR_pivots->data(), &inc_rev);
+            }
         }
 
     } else if (X_RR->format == MatrixStorage<DataType>::BUNCH_KAUFMAN) {
@@ -675,6 +700,8 @@ void apply_diagonal_multiply(
 //   L^{-1} has +X_SR*X_RR^{-1} on (S,R), meaning x[S] += X_SR*X_RR^{-1}*x[R]
 //   = x[S] += (-stored_X_SR)*x[R] = x[S] -= stored_X_SR*x[R]
 // Similarly for X_NR.
+// transposed: V of A^T with A's factors (a nonsymmetric matrix's 'T'): A^T's
+// X_SR and X_NR are A's X_RS^T and X_RN^T (apply_forward_elimination).
 
 template<typename CoordType, typename DataType>
 void apply_mul_backward_V_with_pending(
@@ -684,12 +711,15 @@ void apply_mul_backward_V_with_pending(
     MatrixProperty matrix_property,
     PendingSolveUpdates<DataType>& pending_updates,
     bool is_ghost,
-    bool local_or_ghost_targets_only = false) {
+    bool local_or_ghost_targets_only = false,
+    bool transposed = false) {
     (void)matrix_property;
 
     const MatrixStorage<DataType>* T = nullptr;
     const MatrixStorage<DataType>* X_SR = nullptr;
     const MatrixStorage<DataType>* X_NR = nullptr;
+    const MatrixStorage<DataType>* X_RS = nullptr;
+    const MatrixStorage<DataType>* X_RN = nullptr;
     const std::vector<int64_t>* skeleton_indices = nullptr;
     const std::vector<int64_t>* redundant_indices = nullptr;
     const std::vector<int64_t>* one_hop = nullptr;
@@ -702,6 +732,8 @@ void apply_mul_backward_V_with_pending(
             T = &solve_data.interpolation_matrix;
             X_SR = &solve_data.X_SR;
             X_NR = &solve_data.X_NR;
+            X_RS = &solve_data.X_RS;
+            X_RN = &solve_data.X_RN;
             skeleton_indices = &solve_data.skeleton_indices;
             redundant_indices = &solve_data.redundant_indices;
             one_hop = &solve_data.one_hop;
@@ -710,6 +742,8 @@ void apply_mul_backward_V_with_pending(
             T = &box->interpolation_matrix;
             X_SR = &box->X_SR;
             X_NR = &box->X_NR;
+            X_RS = &box->X_RS;
+            X_RN = &box->X_RN;
             skeleton_indices = &box->skeleton_indices;
             redundant_indices = &box->redundant_indices;
             one_hop = &box->one_hop;
@@ -724,11 +758,19 @@ void apply_mul_backward_V_with_pending(
         T = &box->interpolation_matrix;
         X_SR = &box->X_SR;
         X_NR = &box->X_NR;
+        X_RS = &box->X_RS;
+        X_RN = &box->X_RN;
         skeleton_indices = &box->skeleton_indices;
         redundant_indices = &box->redundant_indices;
         one_hop = &box->one_hop;
         use_full_set = &box->use_full_set;
     }
+    // (transposed: X_SR and X_NR below are X_RS and X_RN, applied as op = 'T')
+    if (transposed) {
+        X_SR = X_RS;
+        X_NR = X_RN;
+    }
+    const char op = transposed ? 'T' : 'N';
 
     if (skeleton_indices->empty() || redundant_indices->empty()) {
         return;
@@ -760,7 +802,7 @@ void apply_mul_backward_V_with_pending(
         int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(r);
         int ldc = static_cast<int>(k);
         DataType alpha = 1.0, beta = 0.0;
-        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+        gemm_(&op, &trans, &m, &n, &inner, &alpha,
               X_SR->data.data(), &lda, x_R.data(), &ldb,
               &beta, result.data(), &ldc);
         for (int64_t column = 0; column < nrhs; ++column) {
@@ -778,7 +820,7 @@ void apply_mul_backward_V_with_pending(
     if (!(X_NR->is_allocated() && one_hop != nullptr && use_full_set != nullptr && !one_hop->empty())) {
         // No neighbor interaction; still do Step 2 below.
     } else {
-        const int64_t total_neighbor_points = X_NR->rows;
+        const int64_t total_neighbor_points = transposed ? X_NR->cols : X_NR->rows;
         std::vector<DataType> neighbor_updates(
             static_cast<size_t>(total_neighbor_points * nrhs), DataType{0.0});
 
@@ -788,7 +830,7 @@ void apply_mul_backward_V_with_pending(
         int lda = static_cast<int>(X_NR->lda), ldb = static_cast<int>(r);
         int ldc = static_cast<int>(total_neighbor_points);
         DataType alpha = 1.0, beta = 0.0;
-        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+        gemm_(&op, &trans, &m, &n, &inner, &alpha,
               X_NR->data.data(), &lda, x_R.data(), &ldb,
               &beta, neighbor_updates.data(), &ldc);
 

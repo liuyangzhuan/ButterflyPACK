@@ -6770,6 +6770,67 @@ they are independent of the compression:
   the temp4 store as the kept X_RN^T, as temp2^T is for X_NR (saves the
   kept copy, small once compressed).
 
+#### Nonsymmetric matrices, step N6a: 'T' and 'C' (2026-10-18)
+
+c_bpack_inv_mult and c_bpack_mult (format 7) take 'T' and 'C' for a
+nonsymmetric H2; 'C' is 'T' on conjugated vectors, as for a symmetric one.
+What N6 still leaves: collective entries (elem_extract=1) with sym 0.
+
+- *The factored matrix (inv_mult, and mult after a factorization).*  With
+  one T per box for rows and columns, A^T's factors are A's transposed: its
+  X_SR and X_NR are A's X_RS^T and X_RN^T, its X_RS and X_RN are A's X_SR^T
+  and X_NR^T, its X_RR (and the root) A's X_RR^T.  So the transposed sweeps
+  need no new data and no new messages:
+  - host (core/solver.hpp, core/apply_mul.hpp, unstructured/solver_impl.hpp):
+    `transposed` swaps apply_forward_elimination's and
+    apply_mul_backward_V_with_pending's X_SR, X_NR for X_RS, X_RN applied
+    with op 'T'; the backward sweep and the multiply's W take the symmetric
+    reads (X_SR^T, X_NR^T); getrs 'T'; lu_transposed_multiply for X_RR^T x
+    (laswp in order, then the unit L and U transposed).
+  - device (device_solve.hpp, solve_kernels.cu): DeviceSolveRun's
+    `transposed` goes to every sweep kernel, which reads xrs_t, xrn_t where
+    it read xsr, xnr and the other way round (forward_xsr/backward_xsr), and
+    to two new kernels, the LU solved transposed (U^T, unit L^T, the
+    interchanges in reverse) and multiplied transposed.  The kept factors,
+    compressed ones included, are decompressed per wave as before (all of a
+    wave's pieces, in either direction).  CA and host levels are refused for
+    a transposed run (require_color_levels; a nonsymmetric matrix has none).
+- *The compression-only matrix (mult with precon 2).*  The passes up and
+  down are A's (one T); only the blocks are applied transposed, and they
+  live with their row box: apply_compressed_transposed multiplies each
+  local box t's K(t, s)^T by t's vector and pushes the product to s (its
+  skeleton at a coupling level, all of its points at the leaf) through the
+  solve's update transport, whose one-hop process graph is the one the
+  pull exchange of 'N' uses.  On the host only: with H2_use_gpu the device
+  matvec serves 'N', and 'T' reads the compression's host copies of the
+  blocks.  A device version needs the reverse exchange planned and a
+  kernel that writes per-block products to be added in order.
+
+The drivers' --inv_mult_check now checks the transposes against 'N' for
+any matrix (u0^T F^{-T} u1 against u1^T F^{-1} u0, and the same with F), and
+'C' against conj(F^{-T} conj(U)) (bitwise the old reference for a
+symmetric matrix, whose 'T' is 'N'); with precon 2 it checks the
+transposed mult alone (check_mult_transpose).
+
+| case (sym 0) | transpose of F^{-1} | of F | residual T (N) |
+|---|---|---|---|
+| Laplace 48^3 column weights, 1 GPU | 1.3e-14 | 3.4e-15 | 4.6e-15 (4.0e-15) |
+| the same, 8 GPUs | 2.8e-16 | 0 | 3.8e-15 (4.7e-15) |
+| the same, H2_compress_factors 1 | 1.7e-15 | 2.0e-15 | 4.9e-15 (2.7e-15) |
+| the same, 8 columns (nrhs 4) | 2.8e-16 | 0 | 4.4e-15 |
+| the same, H2_use_gpu 0 / the CPU build | 8.5e-16 | 3.4e-16 | 1.0e-15 |
+| Laplace 48^3 skew 0.5, 8 GPUs | 2.2e-15 | 1.4e-15 | 3.6e-15 |
+| EMSURF CFIE alpha 0.5, 9K, 8 GPUs | 2.1e-16 | 9.1e-16 | 1.2e-14 (C 1.2e-14) |
+| precon 2: Laplace weights 1 / 8 GPUs, skew, CFIE | | 1.6e-14 / 1.7e-16, 1.2e-15, 3.6e-16 | |
+
+'C' against conj(F^{-T} conj(U)) is 0 in every case.  BPACK_CHECK=solve
+(every call of the 8-GPU weights run, 'T' among them): device against host
+solves 1.5e-15 to 9.4e-15, multiplies 3.5e-16 to 1.1e-15.  A transposed device solve costs what 'N' does (48^3 on 8 GPUs, 4
+columns: 0.053 s both).  Symmetric runs are bitwise unchanged (192^3, s4,
+the 128K sphere, the extraction check, 96^3 compressed; the symmetric
+inv_mult check prints the same numbers), and so are the nonsymmetric
+factorizations.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

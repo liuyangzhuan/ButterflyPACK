@@ -85,33 +85,40 @@ void dispatch_h2_iterative_solve(
         final_relative_residual, verbose);
 }
 
+// transposed: A^T x (a nonsymmetric H2, unstructured only)
 template<typename CoordType, typename DataType>
 void dispatch_h2_compressed_multiply(
     H2<CoordType, DataType>* solver,
     const std::vector<DataType>& input,
     std::vector<DataType>& output,
     int nrhs,
-    bool verbose) {
+    bool verbose,
+    bool transposed = false) {
     if (solver->options.unstructured == 1) {
         color_unstructured::compressed_multiply(
-            solver->tree.get(), input, output, nrhs, verbose);
+            solver->tree.get(), input, output, nrhs, verbose, transposed);
         return;
     }
+    if (transposed) throw std::logic_error("dispatch_h2_compressed_multiply: a transposed multiply of a structured H2");
     butterfly::hierarchical_h2_mul_parallel(
         solver->tree.get(), input, output, nrhs, verbose);
 }
 
+// transposed: A^T x = b with A's factors (a nonsymmetric matrix, which only
+// the unstructured backend factors)
 template<typename CoordType, typename DataType>
 void dispatch_h2_solve(
     H2<CoordType, DataType>* solver,
     const std::vector<DataType>& rhs,
     std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>>& solve_data,
     int nrhs,
-    int verbosity) {
+    int verbosity,
+    bool transposed = false) {
     if (solver->options.unstructured == 1) {
         color_unstructured::solve(
-            solver, rhs, solve_data, nrhs, verbosity);
+            solver, rhs, solve_data, nrhs, verbosity, transposed);
     } else {
+        if (transposed) throw std::logic_error("dispatch_h2_solve: a transposed solve of a structured H2");
         butterfly::hierarchical_solve_parallel(
             solver->tree.get(), rhs, solve_data, nrhs, verbosity);
     }
@@ -123,11 +130,13 @@ void dispatch_h2_multiply(
     const std::vector<DataType>& input,
     std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>>& multiply_data,
     int nrhs,
-    bool verbose) {
+    bool verbose,
+    bool transposed = false) {
     if (solver->options.unstructured == 1) {
         color_unstructured::multiply(
-            solver, input, multiply_data, nrhs, verbose);
+            solver, input, multiply_data, nrhs, verbose, transposed);
     } else {
+        if (transposed) throw std::logic_error("dispatch_h2_multiply: a transposed multiply of a structured H2");
         butterfly::hierarchical_mul_parallel(
             solver->tree.get(), input, multiply_data, nrhs, verbose);
     }

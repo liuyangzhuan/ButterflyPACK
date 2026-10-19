@@ -393,22 +393,26 @@ int main(int argc, char** argv) {
                            wavenumber, solution);
       }
 
-      // inv_mult 'N', 'T', 'C' and the transposed mult (bpack_inv_mult_check.hpp)
+      // inv_mult 'N', 'T', 'C' and the transposed mult (bpack_inv_mult_check.hpp;
+      // with precon 2 the transposed mult alone)
       double precon = 1.0;
       z_c_bpack_getoption(&option, "precon", &precon);
-      if (em_options.inv_mult_check > 0 && static_cast<int>(precon) != 2) {
-        using Z = std::complex<double>;
+      using Z = std::complex<double>;
+      auto mult = [&](char trans, const Z* in, Z* out, int ncol) {
+        int n_in = local_size, n_out = local_size;
+        z_c_bpack_mult(&trans, reinterpret_cast<const _Complex double*>(in),
+                       reinterpret_cast<_Complex double*>(out), &n_in, &n_out, &ncol,
+                       &matrix, &option, &statistics, &process_tree);
+      };
+      if (em_options.inv_mult_check > 0 && static_cast<int>(precon) == 2) {
+        bpack_example::check_mult_transpose<Z>(MPI_COMM_WORLD, local_size, em_options.inv_mult_check, mult,
+                                               matrix_format == 7 ? "H2" : "HODLR");
+      } else if (em_options.inv_mult_check > 0) {
         auto inv_mult = [&](char trans, const Z* in, Z* out, int ncol) {
           int n_in = local_size, n_out = local_size;
           z_c_bpack_inv_mult(&trans, reinterpret_cast<const _Complex double*>(in),
                              reinterpret_cast<_Complex double*>(out), &n_in, &n_out, &ncol,
                              &matrix, &option, &statistics, &process_tree);
-        };
-        auto mult = [&](char trans, const Z* in, Z* out, int ncol) {
-          int n_in = local_size, n_out = local_size;
-          z_c_bpack_mult(&trans, reinterpret_cast<const _Complex double*>(in),
-                         reinterpret_cast<_Complex double*>(out), &n_in, &n_out, &ncol,
-                         &matrix, &option, &statistics, &process_tree);
         };
         const Z* rhs_begin = reinterpret_cast<const Z*>(right_hand_side.data());
         const Z* solution_begin = reinterpret_cast<const Z*>(solution.data());

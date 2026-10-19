@@ -77,20 +77,24 @@ int sync_h2_verbosity(
 // The operation a trans argument asks of format 7 ('N', 'T' or 'C', either
 // case).  A transpose-symmetric H2 (option%sym=1) takes 'T' as 'N', and 'C'
 // as 'N' on conjugated vectors: A^H x = conj(A conj(x)), and A^{-H} x =
-// conj(A^{-1} conj(x)) (for real data 'T' again).  A nonsymmetric one takes
-// 'N' only for now.
-static char h2_trans_operation(char const* trans, const char* caller, bool symmetric = true) {
+// conj(A^{-1} conj(x)) (for real data 'T' again).  A nonsymmetric one
+// (option%sym=0) applies A^T, or its inverse, with A's factors for 'T' (the
+// transposed sweeps, h2_transposed), and 'C' as 'T' on conjugated vectors.
+static char h2_trans_operation(char const* trans, const char* caller) {
   const char given = (trans != nullptr && trans[0] != '\0') ? trans[0] : 'N';
   const char op = static_cast<char>(std::toupper(static_cast<unsigned char>(given)));
   if (op != 'N' && op != 'T' && op != 'C') {
     throw std::invalid_argument(std::string(caller) +
       ": trans must be 'N', 'T' or 'C'; got '" + std::string(1, given) + "'");
   }
-  if (!symmetric && op != 'N') {
-    throw std::invalid_argument(std::string(caller) +
-      ": trans '" + std::string(1, given) + "' of a nonsymmetric H2 (option%sym=0) is not supported yet");
-  }
   return op;
+}
+
+// Whether operation `op` (h2_trans_operation) runs the transposed sweeps: 'T'
+// and 'C' of a nonsymmetric H2.
+template<typename DataType>
+bool h2_transposed(const butterfly::H2<double, DataType>* solver, char op) {
+  return op != 'N' && !solver->options.symmetric;
 }
 
 template<typename DataType>
@@ -147,15 +151,17 @@ void h2_values_from_internal(
 // solution = A^{-1} rhs with the factorization (c_bpack_factor, precon != 2),
 // both in the tree's order: the direct solve, and c_bpack_inv_mult.
 // `seconds`: the sweeps (with the solve data's set-up) and the gather.
+// transposed: A^{-T} rhs (a nonsymmetric H2).
 template<typename DataType>
 void h2_apply_factorized_inverse(
     butterfly::H2<double, DataType>* solver,
     const std::vector<DataType>& rhs, std::vector<DataType>& solution,
-    int internal_nloc, int ncol, int verbosity, double* seconds = nullptr) {
+    int internal_nloc, int ncol, int verbosity, double* seconds = nullptr,
+    bool transposed = false) {
   const double t0 = MPI_Wtime();
   std::vector<std::vector<fmm::SolveDataRequest<double, DataType>>> solve_data(
     solver->options.num_levels);
-  butterfly::dispatch_h2_solve(solver, rhs, solve_data, ncol, verbosity);
+  butterfly::dispatch_h2_solve(solver, rhs, solve_data, ncol, verbosity, transposed);
   const double t1 = MPI_Wtime();
   solution.resize(static_cast<size_t>(internal_nloc) * static_cast<size_t>(ncol));
   butterfly::gather_local_solution(
@@ -421,7 +427,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"precon",          "the use mode of butterflypack: 1: as a direct solver 2: as an iterative solver (compress the matrix and use it without a preconditioner), 3: as a preconditioned iterative solver (compress and invert the matrix, using the approximate inverse as a preconditioner)"},
 		{"xyzsort",         "the hierarchical partitioning algorithm: 0: no permutation 1: permutation based on KD-tree 2: permutation based on cobble-like partitioning"},
 		{"lrlevel",         "the level in the hierarchical partitioning (top-down numbered) above which butterfly is used and below which low-rank is used"},
-		{"sym",             "matrix symmetry flag; sym=1 is required by format-7 H2 and selects symmetric HODLR when format=1"},
+		{"sym",             "matrix symmetry flag; format-7 H2 takes sym=1 (transpose-symmetric) or sym=0 with h2_unstructured=1, and sym=1 selects symmetric HODLR when format=1"},
 		{"reduction_threshold", "format-7 H2 boxes-per-process threshold for reducing the active MPI process count"},
 		{"h2_unstructured", "format-7 H2 backend: 0 structured Color/CA, 1 color_unstructured (Color only)"},
 		{"h2_use_sketch",   "format-7 H2 ID mode: 0 full workspace, 1 materialized sparse sketch, 2 streamed sparse sketch on color levels"},
@@ -2260,8 +2266,10 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
     }
 
     try {
-      // F x, F^T x = F x, F^H x = conj(F conj(x)) (h2_trans_operation)
-      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)", H2_solver->options.symmetric);
+      // F x, F^T x (= F x for a transpose-symmetric H2), F^H x = conj(F^T
+      // conj(x)) (h2_trans_operation)
+      const char op = h2_trans_operation(trans, "c_bpack_mult (format 7)");
+      const bool transposed = h2_transposed(H2_solver, op);
       if (*Ninloc != *Noutloc) {
         throw std::invalid_argument(
           "c_bpack_mult (format 7): Ninloc must equal Noutloc");
@@ -2290,12 +2298,12 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 	  if (H2_solver->build_state == butterfly::H2BuildState::H2_COMPRESSED) {
 		butterfly::dispatch_h2_compressed_multiply(
 		  H2_solver, lhs, compressed_output,
-		  *Ncol, verbosity >= 1);
+		  *Ncol, verbosity >= 1, transposed);
 	  } else {
 		mul_data.resize(H2_solver->options.num_levels);
 		butterfly::dispatch_h2_multiply(
 		  H2_solver, lhs, mul_data,
-		  *Ncol, verbosity >= 1);
+		  *Ncol, verbosity >= 1, transposed);
 	  }
 
 	  std::vector<H2Data> internal_output;
@@ -2345,7 +2353,8 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
   // xout = F^{-1} xin ('N'), F^{-T} xin ('T') or F^{-H} xin ('C'), F the
   // factorized matrix; repeated on blocks of vectors (Schur sampling), so
   // quiet below verbosity 1.  Format 7 applies the H2 factorization (the
-  // direct solve's sweeps): 'T' is 'N' and 'C' conjugates (h2_trans_operation).
+  // direct solve's sweeps, transposed for 'T' of a nonsymmetric H2; 'C'
+  // conjugates, h2_trans_operation).
   double tmp;
   c_bpack_getoption(option, "format", &tmp);
   int format=(int)tmp;
@@ -2361,7 +2370,8 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
     MPI_Comm_rank(H2_solver->comm, &rank);
 
     try {
-      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)", H2_solver->options.symmetric);
+      const char op = h2_trans_operation(trans, "c_bpack_inv_mult (format 7)");
+      const bool transposed = h2_transposed(H2_solver, op);
       if (*Ncol <= 0) {
         throw std::invalid_argument(
           "c_bpack_inv_mult (format 7): Ncol must be positive");
@@ -2388,7 +2398,7 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
       double t_apply[2] = {0.0, 0.0};
       h2_apply_factorized_inverse(
         H2_solver, rhs, solution, internal_nloc, *Ncol,
-        verbosity >= 1 ? verbosity : -1, t_apply);
+        verbosity >= 1 ? verbosity : -1, t_apply, transposed);
       const double t_out = MPI_Wtime();
       if (op == 'C') conjugate_h2_values(solution);
       h2_values_from_internal(

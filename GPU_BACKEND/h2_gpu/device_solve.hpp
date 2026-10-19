@@ -2716,7 +2716,11 @@ class DeviceSolveRun {
     static constexpr int kWords = static_cast<int>(sizeof(S) / sizeof(double));  // MPI_DOUBLE per element
 
 public:
-    DeviceSolveRun(ParallelTree<CoordType, DataType>* tree, int nrhs) : tree_(tree), nrhs_(nrhs) {}
+    // transposed: A^T's sweeps with A's factors (a nonsymmetric matrix's 'T';
+    // the kernels read X_RS^T, X_RN^T in the forward sweeps and X_SR, X_NR in
+    // the backward ones, and the LUs transposed)
+    DeviceSolveRun(ParallelTree<CoordType, DataType>* tree, int nrhs, bool transposed = false)
+        : tree_(tree), nrhs_(nrhs), trans_(transposed) {}
     ~DeviceSolveRun() {
         for (XnrSlot& s : xnr_slots_) {
             if (!s.made) continue;
@@ -3002,9 +3006,9 @@ public:
             prepare_wave_kept(L, wi, +1);
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
-                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+                launch_solve_forward(L.d_boxes, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_);
             }
-            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_);  // (with its wave: H2 8x)
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
             if (L.peers.empty()) continue;
@@ -3018,7 +3022,7 @@ public:
         free_message(inbox);
         times.forward += seconds_since(t0);
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        if (!L.streamed) launch_solve_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal solves");
         times.diagonal += seconds_since(t1);
     }
@@ -3038,7 +3042,7 @@ public:
             for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                 prepare_wave_xnr(L, W.seg0 + s, -1);
                 launch_solve_backward(L.d_boxes, L.d_slots, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
-                                  W.max_ntot, stream_);
+                                  W.max_ntot, stream_, trans_);
             }
         }
         check_cuda(cudaStreamSynchronize(stream_), "backward sweep");
@@ -3065,9 +3069,9 @@ public:
             for (size_t s = 0; s < W.segs.size(); ++s) {  // (H2 8x: the wave's segments, each through the scratch)
                 prepare_wave_xnr(L, W.seg0 + s, +1);
                 launch_mul_forward(L.d_boxes, L.d_slots, L.d_order + W.order0 + W.segs[s].first, W.segs[s].count, vec, ghost, work, nrhs_, L.max_n,
-                               W.max_ntot, stream_);
+                               W.max_ntot, stream_, trans_);
             }
-            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_);  // (with its wave: H2 8x)
+            if (L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag + W.diag0, W.ndiag, vec, nrhs_, L.max_r, stream_, trans_);  // (with its wave: H2 8x)
         }
         check_cuda(cudaStreamSynchronize(stream_), "multiply forward");
         free_points(work);
@@ -3076,7 +3080,7 @@ public:
         free_message(inbox);
         times.forward += seconds_since(t0);
         const auto t1 = std::chrono::steady_clock::now();
-        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_);
+        if (!L.streamed) launch_mul_diagonal(L.d_boxes, L.d_diag, L.ndiag, vec, nrhs_, L.max_r, stream_, trans_);
         check_cuda(cudaStreamSynchronize(stream_), "diagonal multiplies");
         times.diagonal += seconds_since(t1);
     }
@@ -3093,7 +3097,7 @@ public:
             prepare_wave_kept(L, static_cast<size_t>(w), -1);
             for (size_t s = W.segs.size(); s-- > 0;) {  // (H2 8x: the wave's segments, in reverse)
                 prepare_wave_xnr(L, W.seg0 + s, -1);
-                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_);
+                launch_mul_backward(L.d_boxes, L.d_rorder + W.order0 + (W.count - W.segs[s].first - W.segs[s].count), W.segs[s].count, vec, work, nrhs_, L.max_n, stream_, trans_);
             }
             launch_solve_accum(L.d_items + W.item0, L.d_parts, W.nitems, W.max_count, nrhs_, vec, work, outbox, inbox,
                                stream_);
@@ -3486,6 +3490,7 @@ private:
 
     ParallelTree<CoordType, DataType>* tree_;
     int nrhs_;
+    bool trans_ = false;
     DeviceHeap& heap_ = DeviceHeap::instance();
     cudaStream_t stream_ = Context::instance().stream();
     PinnedBuffer& host_vec_ = device_solve_store().host_vec;
@@ -3499,6 +3504,15 @@ private:
 enum class HostStep { SolveForward, SolveBackward, MulForward, MulBackward };
 using HostLevelStep = std::function<void(int, HostStep)>;
 
+// A transposed run has device Color levels only: the CA levels' and the
+// host levels' steps are those of a transpose-symmetric matrix.
+inline void require_color_levels(const DeviceSolveStore& store, bool transposed) {
+    if (!transposed) return;
+    for (const DeviceSolveLevel& L : store.levels) {
+        if (L.ca || L.host) throw std::logic_error("device solve: a transposed sweep over a CA or host level");
+    }
+}
+
 // A replicated CA level's communicator for the host gathers.
 inline MPI_Comm ca_comm(const std::vector<MPI_Comm>* level_comms, int level) {
     if (level_comms == nullptr || static_cast<size_t>(level) >= level_comms->size()) {
@@ -3508,11 +3522,13 @@ inline MPI_Comm ca_comm(const std::vector<MPI_Comm>* level_comms, int level) {
 }
 
 // The solve sweeps on the device (solve data initialized as by the host
-// solve).  Collective over the tree's ranks.
+// solve).  Collective over the tree's ranks.  transposed: A^T x = b
+// (DeviceSolveRun; the Color levels only, as a nonsymmetric matrix has).
 template<typename CoordType, typename DataType>
 void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
                          std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
-                         int verbosity, const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level) {
+                         int verbosity, const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level,
+                         bool transposed = false) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     Context::instance().activate();
@@ -3520,7 +3536,8 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
     const int leaf = tree->num_levels - 1;
     int rank = 0;
     MPI_Comm_rank(tree->comm, &rank);
-    DeviceSolveRun<CoordType, DataType> run(tree, nrhs);
+    DeviceSolveRun<CoordType, DataType> run(tree, nrhs, transposed);
+    require_color_levels(store, transposed);
     double host_seconds = 0.0;
     store.stream_seconds = store.stream_gb = 0.0;
     // forward (with each level's diagonal solves)
@@ -3547,7 +3564,7 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
     }
     const auto th = clock::now();
     auto& root = tree->levels[0];
-    if (root.is_process_active && !root.local_boxes.empty()) apply_diagonal_solve(root, solve_data[0][0], false);
+    if (root.is_process_active && !root.local_boxes.empty()) apply_diagonal_solve(root, solve_data[0][0], false, transposed);
     host_seconds += std::chrono::duration<double>(clock::now() - th).count();
     // backward
     for (int level = 1; level <= leaf; ++level) {
@@ -3600,10 +3617,12 @@ void device_solve_sweeps(ParallelTree<CoordType, DataType>* tree,
 
 // The multiply F x on the device (data initialized as by the host multiply;
 // hierarchical_mul_parallel).  Collective over the tree's ranks.
+// transposed: F^T x (device_solve_sweeps).
 template<typename CoordType, typename DataType>
 void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
                        std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& data, int nrhs, bool verbose,
-                       const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level) {
+                       const std::vector<MPI_Comm>* level_comms, const HostLevelStep* host_level,
+                       bool transposed = false) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     Context::instance().activate();
@@ -3611,7 +3630,8 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
     const int leaf = tree->num_levels - 1;
     int rank = 0;
     MPI_Comm_rank(tree->comm, &rank);
-    DeviceSolveRun<CoordType, DataType> run(tree, nrhs);
+    DeviceSolveRun<CoordType, DataType> run(tree, nrhs, transposed);
+    require_color_levels(store, transposed);
     double host_seconds = 0.0;
     store.stream_seconds = store.stream_gb = 0.0;
     // forward W (with each level's diagonal multiplies)
@@ -3638,7 +3658,7 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
     }
     const auto th = clock::now();
     auto& root = tree->levels[0];
-    if (root.is_process_active && !root.local_boxes.empty()) apply_diagonal_multiply(root, data[0][0], false);
+    if (root.is_process_active && !root.local_boxes.empty()) apply_diagonal_multiply(root, data[0][0], false, transposed);
     host_seconds += std::chrono::duration<double>(clock::now() - th).count();
     // backward V
     for (int level = 1; level <= leaf; ++level) {
@@ -3699,11 +3719,12 @@ void device_mul_sweeps(ParallelTree<CoordType, DataType>* tree,
 // gathers on replicated CA levels; null where there are none).
 // `host_level`: a CA level's step on the host, on solve_data (for the CA
 // levels whose factors do not fit in device memory; null: none can run so).
+// `transposed`: A^T's sweeps with A's factors (a nonsymmetric matrix's 'T').
 template<typename CoordType, typename DataType, typename HostRun>
 bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
                       std::vector<std::vector<SolveDataRequest<CoordType, DataType>>>& solve_data, int nrhs,
                       bool multiply, int verbosity, HostRun&& host, const std::vector<MPI_Comm>* level_comms = nullptr,
-                      const HostLevelStep* host_level = nullptr) {
+                      const HostLevelStep* host_level = nullptr, bool transposed = false) {
     activate_operator(tree);  // (before the store is read: one per operator)
     // (a nonsymmetric factor: the host solve, whose backward sweep reads X_RS
     // and X_RN; the device kernels read X_SR^T and X_NR^T)
@@ -3713,9 +3734,9 @@ bool run_device_solve(ParallelTree<CoordType, DataType>* tree,
     }
     if (!prepare_device_solve(tree, verbosity, host_level != nullptr)) return false;
     if (multiply) {
-        device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1, level_comms, host_level);
+        device_mul_sweeps(tree, solve_data, nrhs, verbosity >= 1, level_comms, host_level, transposed);
     } else {
-        device_solve_sweeps(tree, solve_data, nrhs, verbosity, level_comms, host_level);
+        device_solve_sweeps(tree, solve_data, nrhs, verbosity, level_comms, host_level, transposed);
     }
     if (device_solve_check()) {
         const int leaf = tree->num_levels - 1;

@@ -106,19 +106,24 @@ void launch_logdet_lu(const LogdetItem* items, int count, double* out, int* bad,
 // Largest per-box dynamic shared memory the solve kernels may use.
 constexpr size_t kSolveSharedLimit = 96 * 1024;
 
+// `transposed` (every sweep and diagonal step): A^T's step with A's factors
+// (a nonsymmetric matrix's 'T'): X_RS^T and X_RN^T where the step reads X_SR
+// and X_NR, X_SR and X_NR where it reads X_RS^T and X_RN^T, the LU transposed.
+
 // forward: x_R -= T^T x_S;  x_S += X_SR x_R;  work = X_NR x_R
 template<typename T>
 void launch_solve_forward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
-                          cudaStream_t stream);
+                          cudaStream_t stream, bool transposed = false);
 // backward: x_R += X_SR^T x_S + X_NR^T x_N;  x_S -= T x_R (x_N gathered into work)
 // (a nonsymmetric matrix: X_RS x_S + X_RN x_N, from xrs_t and xrn_t)
 template<typename T>
 void launch_solve_backward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
-                           const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
+                           const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream,
+                           bool transposed = false);
 // x_R = X_RR^{-1} x_R (the LU)
 template<typename T>
 void launch_solve_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
-                           cudaStream_t stream);
+                           cudaStream_t stream, bool transposed = false);
 template<typename T>
 void launch_solve_accum(const SolveAccum* items, const SolvePart* parts, int count, int max_count, int nrhs, T* vec,
                         const T* work, T* outbox, const T* inbox, cudaStream_t stream);
@@ -142,15 +147,16 @@ void launch_patch_xnr(SolveBox* boxes, const int* idx, void* const* dsts, void* 
 //             a nonsymmetric matrix: X_RS x_S + X_RN x_N, from xrs_t and xrn_t)
 template<typename T>
 void launch_mul_forward(const SolveBox* boxes, const SolveSlot* slots, const int* wave, int count, T* vec,
-                        const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream);
+                        const T* ghost, T* work, int nrhs, int max_n, int max_ntot, cudaStream_t stream,
+                        bool transposed = false);
 // x_R = X_RR x_R (P L U)
 template<typename T>
 void launch_mul_diagonal(const SolveBox* boxes, const int* list, int count, T* vec, int nrhs, int max_r,
-                         cudaStream_t stream);
+                         cudaStream_t stream, bool transposed = false);
 // backward V:  x_S -= X_SR x_R;  work = -X_NR x_R;  x_R += T^T x_S
 template<typename T>
 void launch_mul_backward(const SolveBox* boxes, const int* wave, int count, T* vec, T* work, int nrhs, int max_n,
-                         cudaStream_t stream);
+                         cudaStream_t stream, bool transposed = false);
 
 }  // namespace gpu
 }  // namespace fmm

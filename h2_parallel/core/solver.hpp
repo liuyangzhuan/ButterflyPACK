@@ -1086,6 +1086,9 @@ static inline void apply_pending_solve_updates_local_or_ghost(
  * 
  * Note: Stored X_SR = -X_SR*X_RR^{-1}, so we ADD instead of subtract
  *       use_full_set[i] indicates whether one_hop[i] should use full RHS (1) or skeleton (0)
+ *
+ * transposed: the sweep of A^T with A's factors (a nonsymmetric matrix's 'T';
+ * one T per box serves both): A^T's X_SR and X_NR are A's X_RS^T and X_RN^T.
  */
 template<typename CoordType, typename DataType>
 void apply_forward_elimination(
@@ -1096,7 +1099,8 @@ void apply_forward_elimination(
     PendingSolveUpdates<DataType>& pending_updates,
     bool is_ghost,
     bool defer_local_updates = false,
-    bool local_or_ghost_targets_only = false)
+    bool local_or_ghost_targets_only = false,
+    bool transposed = false)
 {
     (void)matrix_property;
 
@@ -1104,6 +1108,8 @@ void apply_forward_elimination(
     const MatrixStorage<DataType>* T = nullptr;
     const MatrixStorage<DataType>* X_SR = nullptr;
     const MatrixStorage<DataType>* X_NR = nullptr;
+    const MatrixStorage<DataType>* X_RS = nullptr;
+    const MatrixStorage<DataType>* X_RN = nullptr;
     const std::vector<int64_t>* skeleton_indices = nullptr;
     const std::vector<int64_t>* redundant_indices = nullptr;
     const std::vector<int64_t>* one_hop = nullptr;
@@ -1115,6 +1121,8 @@ void apply_forward_elimination(
             T = &box->interpolation_matrix;
             X_SR = &box->X_SR;
             X_NR = &box->X_NR;
+            X_RS = &box->X_RS;
+            X_RN = &box->X_RN;
             skeleton_indices = &box->skeleton_indices;
             redundant_indices = &box->redundant_indices;
             one_hop = &box->one_hop;
@@ -1123,6 +1131,8 @@ void apply_forward_elimination(
             T = &solve_data.interpolation_matrix;
             X_SR = &solve_data.X_SR;
             X_NR = &solve_data.X_NR;
+            X_RS = &solve_data.X_RS;
+            X_RN = &solve_data.X_RN;
             skeleton_indices = &solve_data.skeleton_indices;
             redundant_indices = &solve_data.redundant_indices;
             one_hop = &solve_data.one_hop;
@@ -1137,11 +1147,19 @@ void apply_forward_elimination(
         T = &box->interpolation_matrix;
         X_SR = &box->X_SR;
         X_NR = &box->X_NR;
+        X_RS = &box->X_RS;
+        X_RN = &box->X_RN;
         skeleton_indices = &box->skeleton_indices;
         redundant_indices = &box->redundant_indices;
         one_hop = &box->one_hop;
         use_full_set = &box->use_full_set;
     }
+    // (transposed: X_SR and X_NR below are X_RS and X_RN, applied as op = 'T')
+    if (transposed) {
+        X_SR = X_RS;
+        X_NR = X_RN;
+    }
+    const char op = transposed ? 'T' : 'N';
 
     if (!skeleton_indices || !redundant_indices || skeleton_indices->empty() || redundant_indices->empty())
         return;
@@ -1216,7 +1234,7 @@ void apply_forward_elimination(
         DataType alpha = DataType{1}, beta = DataType{0};
         int lda = static_cast<int>(X_SR->lda), ldb = static_cast<int>(r);
         int ldc = static_cast<int>(k);
-        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+        gemm_(&op, &trans, &m, &n, &inner, &alpha,
               X_SR->data.data(), &lda, x_R.data(), &ldb,
               &beta, tmp.data(), &ldc);
 
@@ -1238,7 +1256,7 @@ void apply_forward_elimination(
         level, level_solve_data, solve_data, *one_hop, *use_full_set,
         is_ghost);
 
-    const int64_t total_neighbor_points = X_NR->rows;
+    const int64_t total_neighbor_points = transposed ? X_NR->cols : X_NR->rows;
     std::vector<DataType> neighbor_updates(
         static_cast<size_t>(total_neighbor_points * nrhs), DataType{0});
 
@@ -1249,7 +1267,7 @@ void apply_forward_elimination(
         DataType alpha = DataType{1}, beta = DataType{0};
         int lda = static_cast<int>(X_NR->lda), ldb = static_cast<int>(r);
         int ldc = static_cast<int>(total_neighbor_points);
-        gemm_(&trans, &trans, &m, &n, &inner, &alpha,
+        gemm_(&op, &trans, &m, &n, &inner, &alpha,
               X_NR->data.data(), &lda, x_R.data(), &ldb,
               &beta, neighbor_updates.data(), &ldc);
     }
@@ -2380,12 +2398,14 @@ void apply_backward_substitution(
  * @param level Tree level
  * @param solve_data Solve data for the box
  * @param is_ghost True if box is a ghost box
+ * @param transposed X_RR^T x = b (an LU; a symmetric X_RR is its transpose)
  */
 template<typename CoordType, typename DataType>
 void apply_diagonal_solve(
     TreeLevel<CoordType, DataType>& level,
     SolveDataRequest<CoordType, DataType>& solve_data,
-    bool is_ghost) {
+    bool is_ghost,
+    bool transposed = false) {
     
     MatrixStorage<DataType>* X_RR = nullptr;
     const std::vector<int>* X_RR_pivots = nullptr;
@@ -2456,7 +2476,7 @@ void apply_diagonal_solve(
             throw std::runtime_error("X_RR LU solve is missing pivot data");
         }
 
-        char trans = 'N';
+        char trans = transposed ? 'T' : 'N';
         if constexpr (std::is_same_v<DataType, double>) {
             dgetrs_(&trans, &n, &nrhs,
                     const_cast<double*>(X_RR->data.data()), &lda,

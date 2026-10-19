@@ -478,7 +478,8 @@ void print_usage(const char* executable) {
       << "  --precon <1|2|3>\n"
       << "  --nrhs <count>\n"
       << "  --inv_mult_check <columns>   (after the solve: inv_mult N/T/C and the\n"
-         "                                transposed mult; not with precon 2)\n"
+         "                                transposed mult; with precon 2 the\n"
+         "                                transposed mult alone)\n"
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
          "                             against the kernel and its matvec)\n"
@@ -1427,18 +1428,22 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (driver_options.inv_mult_check > 0 && driver_options.precon != 2) {
+    auto mult = [&](char trans, const double* in, double* out, int ncol) {
+      int n_in = local_points, n_out = local_points;
+      d_c_bpack_mult(&trans, in, out, &n_in, &n_out, &ncol,
+                     &resources.matrix, &resources.option, &resources.stats,
+                     &resources.process_tree);
+    };
+    if (driver_options.inv_mult_check > 0 && driver_options.precon == 2) {
+      bpack_example::check_mult_transpose<double>(
+          MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, mult,
+          driver_options.format == 7 ? "H2" : "HODLR");
+    } else if (driver_options.inv_mult_check > 0) {
       auto inv_mult = [&](char trans, const double* in, double* out, int ncol) {
         int n_in = local_points, n_out = local_points;
         d_c_bpack_inv_mult(&trans, in, out, &n_in, &n_out, &ncol,
                            &resources.matrix, &resources.option, &resources.stats,
                            &resources.process_tree);
-      };
-      auto mult = [&](char trans, const double* in, double* out, int ncol) {
-        int n_in = local_points, n_out = local_points;
-        d_c_bpack_mult(&trans, in, out, &n_in, &n_out, &ncol,
-                       &resources.matrix, &resources.option, &resources.stats,
-                       &resources.process_tree);
       };
       bpack_example::check_inv_mult<double>(
           MPI_COMM_WORLD, local_points, driver_options.inv_mult_check, 5,
