@@ -3617,7 +3617,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::run_ids(
                 boundary += box->on_boundary ? 1 : 0;
                 IDResult<DataType> id = fmm::compute_id_complex(
                     scratch.sketch_storage.data(), scratch.streamed_sketch_rows, scratch.workspace_cols,
-                    scratch.streamed_sketch_rows, tolerance_, 0);
+                    scratch.streamed_sketch_rows, tolerance_, 0, id_absolute_tolerance(tree_, tolerance_));
                 ensure_nonempty_box_id_rank(id, scratch.workspace_cols);
                 box->skeleton_indices = id.skeleton_indices;
                 box->redundant_indices = id.redundant_indices;
@@ -4619,7 +4619,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
             d_qrcp_work = heap_.alloc(w, ResidentKind::Adaptive);
         }
         launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_id), static_cast<int>(id_items.size()), max_id_n,
-                    tolerance_, d_qrcp_work, stream);  // (every launch variant gives the same bits)
+                    tolerance_, id_absolute_tolerance(tree_, tolerance_), d_qrcp_work,
+                    stream);  // (every launch variant gives the same bits)
         heap_.free(d_qrcp_work);  // later launches are ordered after the ID
     }
     marks.mark(stream);

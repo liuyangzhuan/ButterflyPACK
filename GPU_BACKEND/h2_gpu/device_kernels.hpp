@@ -201,7 +201,9 @@ using TransposeItem = TransposeItemT<double>;
 // the skeleton first; T = R11^{-1} R12 in rows 0..K-1 of columns K..n-1 (for
 // K = 0, row 0 of columns 1..n-1 is zero); norm, the Frobenius norm of the
 // input; flag 1 for a non-finite input, 2 for a non-finite T.  tol >= 0: the
-// item's own rank tolerance instead of the launch's.
+// item's own rank tolerance instead of the launch's.  The rank rule is
+// compute_id_complex's: |R_kk| > max(tol |R_11|, abs_tol) on the input's scale
+// (abs_tol, launch_qrcp's: the H2_s_op floor, 0 off).
 template<typename T>
 struct QrcpItemT {
     T* a;
@@ -223,8 +225,8 @@ size_t qrcp_work_bytes(int count, int max_n);
 // batch_independent: each box's result independent of its batch (one fixed
 // configuration), for replicated CA levels.
 template<typename T>
-void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, void* work, cudaStream_t stream,
-                 bool batch_independent = false);
+void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, double abs_tol, void* work,
+                 cudaStream_t stream, bool batch_independent = false);
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays

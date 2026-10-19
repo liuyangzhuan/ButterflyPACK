@@ -5090,7 +5090,8 @@ IDResult<DataType> compute_id_from_workspace(
     const std::vector<DataType>& workspace,
     int64_t rows,
     int64_t cols,
-    double tolerance) {
+    double tolerance,
+    double abs_tolerance) {
 
     if (rows == 0) {
         IDResult<DataType> empty_id;
@@ -5103,7 +5104,7 @@ IDResult<DataType> compute_id_from_workspace(
     }
     std::vector<DataType> factored = workspace;
     return compute_id_complex(
-        factored.data(), rows, cols, rows, tolerance, 0);
+        factored.data(), rows, cols, rows, tolerance, 0, abs_tolerance);
 }
 
 template<typename DataType>
@@ -5142,7 +5143,8 @@ std::vector<int64_t> select_independent_residual_rows(
     const std::vector<DataType>& residual,
     int64_t rows,
     int64_t cols,
-    double tolerance) {
+    double tolerance,
+    double abs_tolerance) {
 
     if (rows == 0 || cols == 0) return {};
     std::vector<DataType> transpose(static_cast<size_t>(rows * cols));
@@ -5153,7 +5155,7 @@ std::vector<int64_t> select_independent_residual_rows(
         }
     }
     IDResult<DataType> row_id = compute_id_complex(
-        transpose.data(), cols, rows, cols, tolerance, 0);
+        transpose.data(), cols, rows, cols, tolerance, 0, abs_tolerance);
     return std::move(row_id.skeleton_indices);
 }
 
@@ -5220,6 +5222,9 @@ void append_adaptive_id_training_rows(
 
     if (stats != nullptr) *stats = IDAdaptiveStats{};
     if (tree->id_proxy_mode != 2 || workspace_cols == 0) return;
+    // H2_s_op: the IDs' absolute floor, and the residual tests' floor
+    // (threshold = max(tol ||W||_F, tol s_op))
+    const double abs_tolerance = id_absolute_tolerance(tree, tolerance);
     IDAdaptiveStats local_stats;
     IDAdaptiveStats& st = stats != nullptr ? *stats : local_stats;
     st.active = true;
@@ -5261,14 +5266,14 @@ void append_adaptive_id_training_rows(
     size_t queue_head = 0;
 
     IDResult<DataType> base_id = compute_id_from_workspace(
-        workspace, workspace_rows, workspace_cols, tolerance);
+        workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
     std::vector<IDResult<DataType>> extra_ids;
     int64_t extra_rank = 0;
     const int64_t sample_batch = std::max<int64_t>(1, tree->id_adaptive_batch);
 
     auto recompute_clean_id = [&]() {
         base_id = compute_id_from_workspace(
-            workspace, workspace_rows, workspace_cols, tolerance);
+            workspace, workspace_rows, workspace_cols, tolerance, abs_tolerance);
         extra_ids.clear();
         extra_rank = 0;
         ++st.recomputes;
@@ -5300,11 +5305,11 @@ void append_adaptive_id_training_rows(
             residual, sample_rows, workspace_cols);
         double reference_norm = id_frobenius_norm(
             workspace, workspace_rows, workspace_cols);
-        double threshold = reference_norm * tolerance;
+        double threshold = std::max(reference_norm * tolerance, abs_tolerance);
 
         const std::vector<int64_t> retained_rows =
             select_independent_residual_rows(
-                residual, sample_rows, workspace_cols, tolerance);
+                residual, sample_rows, workspace_cols, tolerance, abs_tolerance);
         append_selected_workspace_rows(
             workspace, workspace_rows, workspace_cols,
             sampled, sample_rows, retained_rows);
@@ -5319,7 +5324,7 @@ void append_adaptive_id_training_rows(
                 residual, sample_rows, workspace_cols);
             reference_norm = id_frobenius_norm(
                 workspace, workspace_rows, workspace_cols);
-            threshold = reference_norm * tolerance;
+            threshold = std::max(reference_norm * tolerance, abs_tolerance);
             converged = residual_norm < threshold;
         }
 
@@ -5354,7 +5359,7 @@ void append_adaptive_id_training_rows(
                     const std::vector<int64_t> retained_holdout =
                         select_independent_residual_rows(
                             holdout_residual, holdout_rows,
-                            workspace_cols, tolerance);
+                            workspace_cols, tolerance, abs_tolerance);
                     append_selected_workspace_rows(
                         workspace, workspace_rows, workspace_cols,
                         holdout, holdout_rows, retained_holdout);
@@ -5373,8 +5378,10 @@ void append_adaptive_id_training_rows(
         if (!holdout_failed && residual_norm > 0.0) {
             const double residual_tolerance = std::min(
                 1.0, reference_norm / residual_norm * tolerance);
+            // (the residual is in the matrix's units: the floor applies as it is)
             IDResult<DataType> extra_id = compute_id_from_workspace(
-                residual, sample_rows, workspace_cols, residual_tolerance);
+                residual, sample_rows, workspace_cols, residual_tolerance,
+                abs_tolerance);
             if (extra_id.rank > 0 &&
                 extra_rank + extra_id.rank <= workspace_cols) {
                 extra_rank += extra_id.rank;
@@ -9909,7 +9916,7 @@ void compute_and_modify(
     TreeLevel<CoordType, DataType>& level,
     KernelType* kernel,
     FactorizationThreadScratch<CoordType, DataType>& scratch,
-    double tolerance,
+    IdTolerance tolerance,  // make_id_tolerance(tree, tol): tol and the H2_s_op floor
     int use_sketch,
     bool is_symmetric,
     bool is_hermitian,
@@ -10019,17 +10026,17 @@ void compute_and_modify(
                 scratch.streamed_sketch_rows,
                 workspace_cols,
                 scratch.streamed_sketch_rows,
-                tolerance, 0);
+                tolerance.relative, 0, tolerance.absolute);
         } else if (use_sketch != 0) {
             fmm::id_sketch(workspace.data(), workspace_rows, workspace_cols, workspace_rows, sketch_storage,
                            static_cast<uint64_t>(box->morton_index + 1));
             id_result = fmm::compute_id_complex(sketch_storage.data(), sketch_rows, workspace_cols, sketch_rows,
-                                                tolerance, 0);
+                                                tolerance.relative, 0, tolerance.absolute);
         } else {
             id_result = fmm::compute_id_complex(
                 workspace.data(),
                 workspace_rows, workspace_cols, workspace_rows,
-                tolerance, 0
+                tolerance.relative, 0, tolerance.absolute
             );
         }
         ensure_nonempty_box_id_rank(id_result, workspace_cols);
@@ -11324,7 +11331,7 @@ void compute_and_modify(
     std::vector<DataType>& workspace,
     int64_t workspace_rows,
     int64_t workspace_cols,
-    double tolerance,
+    IdTolerance tolerance,
     int use_sketch,
     bool is_symmetric,
     bool is_hermitian,

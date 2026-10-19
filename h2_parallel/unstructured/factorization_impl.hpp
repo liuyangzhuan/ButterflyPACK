@@ -1065,7 +1065,7 @@ void hierarchical_factorization_unstructured(
                             compute_and_modify(dimension,
                                 &box, level, kernel,
                                 scratch,
-                                tolerance, use_sketch, is_symmetric, is_hermitian,
+                                make_id_tolerance(tree, tolerance), use_sketch, is_symmetric, is_hermitian,
                                 &thread_pending[tid],
                                 factorization_method, use_owner_deferred_xnn
                             );

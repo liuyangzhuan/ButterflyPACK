@@ -1095,6 +1095,10 @@ contains
          val_d = option%H2_ID_proxy_points
          valid_opt = 1
       endif
+      if (trim(str) == 'H2_s_op' .or. trim(str) == 'h2_s_op') then
+         val_d = option%H2_s_op
+         valid_opt = 1
+      endif
 
       if (valid_opt == 0) write (*, *) 'invalid BPACK option: '//trim(str)
       deallocate (str)
@@ -1470,6 +1474,11 @@ contains
       if (trim(str) == 'tol_comp') then
          call c_f_pointer(val_Cptr, val_d)
          option%tol_comp = val_d
+         valid_opt = 1
+      endif
+      if (trim(str) == 'H2_s_op' .or. trim(str) == 'h2_s_op') then
+         call c_f_pointer(val_Cptr, val_d)
+         option%H2_s_op = val_d
          valid_opt = 1
       endif
       if (trim(str) == 'tol_rdetect' .or. trim(str) == 'tol_Rdetect') then

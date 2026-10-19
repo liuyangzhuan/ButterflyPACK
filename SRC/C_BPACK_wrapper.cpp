@@ -224,6 +224,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_ID_proxy_d = 0.0;
   double H2_ID_proxy_points_d = 0.0;
   double BACA_Batch_d = 0.0;
+  double H2_s_op = 0.0;
   c_bpack_getoption(option, "tol_comp", &tolerance);
   c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
   c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -246,6 +247,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
   c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
   c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
+  c_bpack_getoption(option, "H2_s_op", &H2_s_op);
 
   const int64_t reduction_threshold =
       static_cast<int64_t>(reduction_threshold_d);
@@ -373,6 +375,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   } else if (H2_ID_proxy == 2) {
     result.id_adaptive_batch = BACA_Batch;
   }
+  result.s_op = H2_s_op;
   if (result.precon == 2) result.CA_level = result.num_levels;
   butterfly::validate_h2_backend_selection(result);
   return result;
@@ -447,6 +450,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
+		{"h2_s_op",         "format-7 H2 IDs: an absolute floor tol_comp*h2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp h2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
 		{"reclr_leaf",      "low-rank compression algorithms 1:SVD 2:RRQR 3:ACA 4:BACA 5:BACA_improved 6:Pseudo-skeleton 7: ACA with naive parallelization"},
@@ -574,6 +578,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		// through here too)
 		{"h2_compress_factors", required_argument, 0, 1001},
 		{"H2_compress_factors", required_argument, 0, 1001},
+		{"h2_s_op", required_argument, 0, 1004},
+		{"H2_s_op", required_argument, 0, 1004},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -898,6 +904,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		else if (v == "home") opt_i = 1;
 		else { std::istringstream iss(v); iss >> opt_i; }
 		c_bpack_set_I_option(&option0, "H2_CA_solve", opt_i);
+		} break;
+		case 1004: {
+		std::istringstream iss(optarg);
+		iss >> opt_d;
+		c_bpack_set_D_option(&option0, "H2_s_op", opt_d);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -1311,6 +1322,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_ID_proxy_d;
       double H2_ID_proxy_points_d;
       double BACA_Batch_d;
+      double H2_s_op = 0.0;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -1333,6 +1345,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_ID_proxy", &H2_ID_proxy_d);
       c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
       c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
+      c_bpack_getoption(option, "H2_s_op", &H2_s_op);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
@@ -1447,6 +1460,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       } else if (H2_ID_proxy == 2) {
         H2_options.id_adaptive_batch = BACA_Batch;
       }
+      H2_options.s_op = H2_s_op;
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -1477,7 +1491,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_ca_solve=" << H2_options.ca_solve
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
-                  << ", h2_id_proxy=" << H2_options.id_proxy_mode;
+                  << ", h2_id_proxy=" << H2_options.id_proxy_mode
+                  << ", h2_s_op=" << H2_options.s_op;
         if (H2_options.id_proxy_mode == 1) {
           std::cout << ", h2_id_proxy_points=" << H2_options.id_proxy_points;
         } else if (H2_options.id_proxy_mode == 2) {

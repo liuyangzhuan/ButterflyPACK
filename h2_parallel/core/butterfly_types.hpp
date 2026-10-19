@@ -128,6 +128,11 @@ struct ProgramOptions {
     int64_t N = 0;
     int64_t grid_size = 0;
     double tolerance = 0.0;
+    // H2_s_op: an ID keeps column k while |R_kk| > max(tol |R_11|, tol s_op),
+    // tol s_op a global absolute tolerance (0: off, the relative rule only).
+    // At most ||A|| for compression-only H2, at most 1/||A^-1|| for the
+    // factorization (K + tau^2 I: tau^2).
+    double s_op = 0.0;
     //To DO:NumberKind and KernelKind are not used, probably can delete in future
     KernelKind kernel_kind = KernelKind::LAPLACE;
     NumberKind number_kind = NumberKind::REAL;
@@ -174,6 +179,9 @@ struct ProgramOptions {
 };
 
 inline void validate_h2_backend_selection(const ProgramOptions& options) {
+    if (!(options.s_op >= 0.0 && std::isfinite(options.s_op))) {
+        throw std::invalid_argument("H2_s_op must be finite and >= 0 (0: off)");
+    }
     if (options.unstructured < 0 || options.unstructured > 1) {
         throw std::invalid_argument("H2_unstructured must be 0 or 1");
     }

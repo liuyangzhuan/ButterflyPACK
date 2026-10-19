@@ -137,6 +137,7 @@ void h2_skeletonize_box(
     }
 
     const uint64_t sketch_seed = static_cast<uint64_t>(box->morton_index + 1);
+    const double abs_tolerance = id_absolute_tolerance(tree, tolerance);  // H2_s_op
     std::string trace_tail;
     if (h2_id_trace_enabled()) {
         // the norm of the ID input (the sketch, as id_sketch forms it), for
@@ -163,17 +164,17 @@ void h2_skeletonize_box(
         int64_t rows = id_sketch_shape(m, n).d;
         append_adaptive_id_training_rows(tree, box, kernel, tolerance, kernel_symmetric(kernel, 0),
                                          scratch.sketch_storage, rows, n, &scratch.id_adaptive);
-        id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0);
+        id = compute_id_complex(scratch.sketch_storage.data(), rows, n, rows, tolerance, 0, abs_tolerance);
     } else if (use_sketch) {
         const int64_t m = scratch.workspace_rows, n = scratch.workspace_cols;
         id_sketch(scratch.workspace.data(), m, n, m, scratch.sketch_storage, sketch_seed);
         const int64_t d = id_sketch_shape(m, n).d;
-        id = compute_id_complex(scratch.sketch_storage.data(), d, n, d, tolerance, 0);
+        id = compute_id_complex(scratch.sketch_storage.data(), d, n, d, tolerance, 0, abs_tolerance);
     } else {
         id = compute_id_complex(
             scratch.workspace.data(),
             scratch.workspace_rows, scratch.workspace_cols, scratch.workspace_rows,
-            tolerance, 0);
+            tolerance, 0, abs_tolerance);
     }
     ensure_nonempty_box_id_rank(id, scratch.workspace_cols);
     if (h2_id_trace_enabled()) {

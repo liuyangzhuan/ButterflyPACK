@@ -858,6 +858,7 @@ int bpack_initiate_distributed64(
   tree->id_proxy_mode = options.id_proxy_mode;
   tree->id_proxy_points = options.id_proxy_points;
   tree->id_adaptive_batch = options.id_adaptive_batch;
+  tree->id_s_op = options.s_op;
 
   auto layout = std::make_unique<DistributedLayout64>();
   assign_distributed_points(
@@ -939,6 +940,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   H2_solver->tree->id_proxy_mode = options.id_proxy_mode;
   H2_solver->tree->id_proxy_points = options.id_proxy_points;
   H2_solver->tree->id_adaptive_batch = options.id_adaptive_batch;
+  H2_solver->tree->id_s_op = options.s_op;
 
   idxs = 0;
   idxe = -1;

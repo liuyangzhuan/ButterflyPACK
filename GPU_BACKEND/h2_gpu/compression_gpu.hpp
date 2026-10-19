@@ -613,7 +613,8 @@ std::vector<int64_t> compress_level_ids(ParallelTree<CoordType, DataType>* tree,
         } else {
             char* d_qrcp_work = nullptr;
             if (const size_t w = qrcp_work_bytes<S>(count, max_n)) d_qrcp_work = heap.alloc(w);
-            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance, d_qrcp_work, stream);
+            launch_qrcp(reinterpret_cast<const QrcpItemT<S>*>(md + off_id), count, max_n, tolerance,
+                        id_absolute_tolerance(tree, tolerance), d_qrcp_work, stream);
             heap.free(d_qrcp_work);
             check_cuda(cudaMemcpyAsync(h_id.data(), d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "compression ids");
             check_cuda(cudaStreamSynchronize(stream), "compression ids");

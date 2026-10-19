@@ -69,6 +69,7 @@ struct DriverOptions {
   int h2_id_radius = -1;  // -1: the library default
   int h2_id_proxy = -1;
   int h2_id_proxy_points = -1;
+  double h2_s_op = 0.0;  // H2_s_op: the IDs' absolute floor tol_comp * h2_s_op (0 off)
   int h2_ca_staged_halo = 0;
   int h2_ca_owner_component = 0;
   int h2_ca_pack_shared = 0;  // 0 auto, 1 always, 2 never
@@ -243,6 +244,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_id_proxy = parse_int(value, "H2_ID_proxy");
     } else if (name == "h2_id_proxy_points") {
       options.h2_id_proxy_points = parse_int(value, "H2_ID_proxy_points");
+    } else if (name == "h2_s_op") {
+      options.h2_s_op = parse_double(value, "H2_s_op");
     } else if (name == "h2_ca_staged_halo") {
       options.h2_ca_staged_halo = parse_int(value, "H2_CA_staged_halo");
     } else if (name == "h2_ca_owner_component") {
@@ -469,6 +472,7 @@ void print_usage(const char* executable) {
       << "  --H2_ID_radius <n>   (ID neighborhood radius; default 2)\n"
       << "  --H2_ID_proxy <0|1|2>   (0: none, 1: geometric surface, 2: adaptive row sampling; needs --distributed64 0)\n"
       << "  --H2_ID_proxy_points <n>   (surface samples of --H2_ID_proxy 1)\n"
+      << "  --H2_s_op <s>   (IDs: absolute floor tol_comp*s on the rank rule; at most ||A|| for --precon 2, at most 1/||A^-1|| factored; 0 off)\n"
       << "  --H2_CA_staged_halo <0|2>\n"
       << "  --H2_CA_owner_component <0|3>\n"
       << "  --H2_CA_pack_shared <auto|always|never>\n"
@@ -933,6 +937,7 @@ int main(int argc, char** argv) {
             option_handle, "H2_ID_proxy_points",
             driver_options.h2_id_proxy_points);
       }
+      d_c_bpack_set_D_option(option_handle, "H2_s_op", driver_options.h2_s_op);
       d_c_bpack_set_I_option(
           option_handle, "H2_CA_staged_halo",
           driver_options.h2_ca_staged_halo);

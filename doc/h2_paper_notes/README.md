@@ -129,6 +129,7 @@ is useful only for interpretation.
 | `H2_CA_owner_component=0` | replicated CA boundary elimination |
 | `H2_CA_owner_component=3` | asynchronous component-owner elimination |
 | `H2_CA_owner_serial=1` | serialize mode-3 scheduling as a correctness oracle |
+| `H2_s_op=s` | every ID keeps column `k` while `\|R_kk\| > max(tol \|R_11\|, tol s)`: `tol s` is a global absolute floor on top of the relative rule; `0` (default) is the relative rule only |
 
 Important interactions in the current integration:
 
@@ -145,6 +146,19 @@ Important interactions in the current integration:
 5. Distributed CA is used only when a rank has enough local geometry: at
    least `7^3=343` boxes in 3D or `5^2=25` in 2D.  Otherwise that level
    automatically runs Color.  One-dimensional problems always run Color.
+6. `H2_s_op` is in the units of the matrix's entries.  Choose it at most
+   `||A||` for compression-only H2 (`precon=2`) and at most `1/||A^-1||` for
+   the factorization (for `K + tau^2 I` with `K` positive semidefinite,
+   `tau^2`).  The floor applies to every ID: compression and factorization,
+   CPU and GPU, structured and unstructured, Color and CA, symmetric and
+   nonsymmetric, and to the residual tests of `H2_ID_proxy=2`
+   (`max(tol ||W||_F, tol s)`).  An ID input that is a sketch or sampled
+   rows is compared as it is (the sketches keep column norms in
+   expectation; sampled rows have smaller norms than the full target).  With
+   the floor a box can come out at rank 0, which keeps one column with a zero
+   interpolation, as a zero target does.  The GPU's lossy factor compression
+   (`H2_compress_factors`) stays relative to each block.  From Python,
+   `bpack_factor(payload, ..., h2_s_op=s)` sets the value of one matrix.
 
 ## Execution Assumptions
 

@@ -169,8 +169,9 @@ std::vector<T> download(const T* d, size_t n) {
 }
 
 // ---- device ID: column-pivoted QR, rank, T (launch_qrcp)
+// abs_tol > 0: the H2_s_op floor (both kernels must apply it the same way)
 template<typename T>
-void test_qrcp(int boxes, std::mt19937_64& g, double tol, bool batch_independent) {
+void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool batch_independent) {
     cudaStream_t stream = Context::instance().stream();
     std::uniform_int_distribution<int> sizes(16, 600);
     std::vector<int> n(static_cast<size_t>(boxes));
@@ -208,7 +209,7 @@ void test_qrcp(int boxes, std::mt19937_64& g, double tol, bool batch_independent
             QrcpItemT<T>* d_items = upload(items);
             void* work = nullptr;
             if (const size_t w = qrcp_work_bytes<T>(count, max_n)) check_cuda(cudaMalloc(&work, w), "cudaMalloc");
-            launch_qrcp<T>(d_items, count, max_n, tol, work, stream, batch_independent);
+            launch_qrcp<T>(d_items, count, max_n, tol, abs_tol, work, stream, batch_independent);
             check_cuda(cudaStreamSynchronize(stream), "qrcp");
             const std::vector<int> rank = download(d_rank, count), flag = download(d_flag, count);
             const std::vector<double> norm = download(d_norm, count);
@@ -241,9 +242,11 @@ void test_qrcp(int boxes, std::mt19937_64& g, double tol, bool batch_independent
             compare(ref[b].rank, got[b].rank, b, pivots, "rank");
             compare(ref[b].norm, got[b].norm, b, norms, "traced norm");
         }
-        print(batch_independent ? "ID: pivots and rank (fixed)" : "ID: pivots and rank", Scalar<T>::name(), all[k].name, pivots, boxes);
-        print(batch_independent ? "ID: R and T (fixed)" : "ID: R and T", Scalar<T>::name(), all[k].name, factors, boxes);
-        print(batch_independent ? "ID: traced sketch norm (fixed)" : "ID: traced sketch norm", Scalar<T>::name(), all[k].name, norms, boxes);
+        const std::string tag = batch_independent ? (abs_tol > 0.0 ? " (fixed, floor)" : " (fixed)")
+                                                  : (abs_tol > 0.0 ? " (floor)" : "");
+        print(("ID: pivots and rank" + tag).c_str(), Scalar<T>::name(), all[k].name, pivots, boxes);
+        print(("ID: R and T" + tag).c_str(), Scalar<T>::name(), all[k].name, factors, boxes);
+        print(("ID: traced sketch norm" + tag).c_str(), Scalar<T>::name(), all[k].name, norms, boxes);
     }
 }
 
@@ -477,8 +480,10 @@ void test_gemm(int boxes, std::mt19937_64& g, magma_trans_t ta, magma_trans_t tb
 template<typename T>
 void test_type(int boxes, uint64_t seed) {
     std::mt19937_64 g(seed);
-    test_qrcp<T>(boxes, g, 1e-4, false);
-    test_qrcp<T>(boxes, g, 1e-4, true);
+    test_qrcp<T>(boxes, g, 1e-4, 0.0, false);
+    test_qrcp<T>(boxes, g, 1e-4, 0.0, true);
+    test_qrcp<T>(boxes, g, 1e-4, 1e-3, false);  // with an H2_s_op floor
+    test_qrcp<T>(boxes, g, 1e-4, 1e-3, true);
     test_getrf<T>(boxes, g, false);
     test_getrf<T>(boxes, g, true);
     test_trsm<T>(boxes, g, MagmaUpper, MagmaNonUnit, "trsm (right, upper)");
