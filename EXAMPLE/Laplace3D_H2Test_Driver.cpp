@@ -1525,6 +1525,63 @@ int main(int argc, char** argv) {
           driver_options.format == 7 ? "H2" : "HODLR");
     }
 
+    // The Fortran entry points must reach the same H2 code as the C++ ones:
+    // BPACK_Inv_Mult and BPACK_Mult have no format-7 case, so C_BPACK_Inv_Mult
+    // and C_BPACK_Mult hand an H2 straight to the C++ wrapper.  This is the
+    // path c_bf_schur_deterministic takes to F11's inverse, and before it
+    // existed an H2 there returned its output array untouched.
+    if (driver_options.inv_mult_check > 0 && driver_options.format == 7 &&
+        driver_options.precon != 2) {
+      const int ncol = 2;
+      const size_t n = static_cast<size_t>(local_points) * ncol;
+      std::vector<double> u(n), a(n, 0.0), b(n, 0.0);
+      for (size_t i = 0; i < n; ++i)
+        u[i] = std::sin(0.37 * static_cast<double>(i + 1) + 0.11 * rank);
+      int n_in = local_points, n_out = local_points, nc = ncol;
+      double worst = 0.0;
+      for (char trans : {'N', 'T'}) {
+        std::fill(a.begin(), a.end(), 0.0);
+        std::fill(b.begin(), b.end(), 0.0);
+        d_c_bpack_inv_mult(&trans, u.data(), a.data(), &n_in, &n_out, &nc,
+                           &resources.matrix, &resources.option,
+                           &resources.stats, &resources.process_tree);
+        d_c_bpack_inv_mult_fortran(&trans, u.data(), b.data(), &n_in, &n_out, &nc,
+                                   &resources.matrix, &resources.option,
+                                   &resources.stats, &resources.process_tree);
+        double d2 = 0.0, r2 = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+          d2 += (a[i] - b[i]) * (a[i] - b[i]);
+          r2 += a[i] * a[i];
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        const double rel = r2 > 0.0 ? std::sqrt(d2 / r2) : std::sqrt(d2);
+        worst = std::max(worst, rel);
+        std::fill(a.begin(), a.end(), 0.0);
+        std::fill(b.begin(), b.end(), 0.0);
+        d_c_bpack_mult(&trans, u.data(), a.data(), &n_in, &n_out, &nc,
+                       &resources.matrix, &resources.option,
+                       &resources.stats, &resources.process_tree);
+        d_c_bpack_mult_fortran(&trans, u.data(), b.data(), &n_in, &n_out, &nc,
+                               &resources.matrix, &resources.option,
+                               &resources.stats, &resources.process_tree);
+        d2 = 0.0; r2 = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+          d2 += (a[i] - b[i]) * (a[i] - b[i]);
+          r2 += a[i] * a[i];
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        worst = std::max(worst, r2 > 0.0 ? std::sqrt(d2 / r2) : std::sqrt(d2));
+      }
+      if (rank == 0) {
+        std::cout << "H2 Fortran entry check (inv_mult and mult, N and T): "
+                  << "worst relative difference from the C++ entry = "
+                  << std::setprecision(3) << worst << std::setprecision(6)
+                  << std::endl;
+      }
+    }
+
     // --logdet_check: the log-determinant and a solve of the factored H2
     // again after another H2 operator was built in the process (a
     // compression-only H2 of the same kernel on all ranks): the device data

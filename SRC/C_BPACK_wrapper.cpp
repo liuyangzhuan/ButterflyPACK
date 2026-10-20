@@ -1507,8 +1507,17 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  int idxe = -1;
 
       butterfly::h2_initiate<double, H2Data>(H2_solver, H2_options, Locations, rank, new2old, idxs, idxe);
-	  // convert to perms and Npo_loc
-	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, msh);
+	  // convert to perms and Npo_loc.  The ranks' ranges go with it, so the
+	  // mesh carries a basis_group reproducing this distribution and a
+	  // butterfly block built on it (c_bf_construct_init, for an F12/F21 or a
+	  // Schur complement beside this matrix) is distributed the same way.
+	  int nproc_h2 = 1;
+	  MPI_Comm_size(H2_solver->comm, &nproc_h2);
+	  std::vector<int> rank_idxs(nproc_h2, 0), rank_idxe(nproc_h2, -1);
+	  MPI_Allgather(&idxs, 1, MPI_INT, rank_idxs.data(), 1, MPI_INT, H2_solver->comm);
+	  MPI_Allgather(&idxe, 1, MPI_INT, rank_idxe.data(), 1, MPI_INT, H2_solver->comm);
+	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, &nproc_h2,
+	                      rank_idxs.data(), rank_idxe.data(), msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);
@@ -2238,7 +2247,12 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 	  c_bpack_setstats(stats, "Time_Solve", &t_solve);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
     }
 #else
 	format7_requires_mpi("c_bpack_solve");
@@ -2349,7 +2363,12 @@ void c_bpack_mult(char const * trans, C_DT const * xin,
 
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
     }
 #else
 	format7_requires_mpi("c_bpack_mult");
@@ -2431,13 +2450,52 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
       c_bpack_setstats(stats, "Time_C_Mult_Wrapper", &t_inv_mult);
     } catch (const std::exception& e) {
         std::cerr << "Error on rank " << rank << ": " << e.what() << std::endl;
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        // Rethrown, not MPI_Abort(MPI_COMM_WORLD): these entries are called
+        // from C++ (no Fortran frame to unwind through), and a host solver
+        // compressing one front of many decides for itself what a failure
+        // means.  c_bpack_h2_inv_mult and c_bpack_h2_mult below catch again
+        // for the Fortran callers.
+        throw;
     }
 #else
 	format7_requires_mpi("c_bpack_inv_mult");
 #endif
   }else{
 	c_bpack_inv_mult_fortran(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  }
+}
+
+// Fortran-facing wrappers of c_bpack_inv_mult and c_bpack_mult.  BPACK_Inv_Mult
+// and BPACK_Mult have no format-7 case, so C_BPACK_Inv_Mult and C_BPACK_Mult
+// (BPACK_wrapper.f90) send an H2 matrix here instead; c_bf_schur_deterministic
+// reaches its F11 inverse this way.  An exception must not unwind through the
+// Fortran frame that called this, so a failure is fatal here.
+static void h2_fortran_bridge_failed(const char* who, const std::exception& e) {
+  std::cerr << who << ": " << e.what() << std::endl;
+  std::cerr.flush();
+#ifdef HAVE_MPI
+  MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
+  std::abort();
+}
+
+void c_bpack_h2_inv_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+  try {
+    c_bpack_inv_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  } catch (const std::exception& e) {
+    h2_fortran_bridge_failed("c_bpack_h2_inv_mult", e);
+  }
+}
+
+void c_bpack_h2_mult(char const * trans, C_DT const * xin,
+	C_DT* xout, int* Ninloc, int* Noutloc, int* Ncol,
+	F2Cptr* bmat,F2Cptr* option,F2Cptr* stats,F2Cptr* ptree){
+  try {
+    c_bpack_mult(trans, xin, xout, Ninloc, Noutloc, Ncol, bmat, option, stats, ptree);
+  } catch (const std::exception& e) {
+    h2_fortran_bridge_failed("c_bpack_h2_mult", e);
   }
 }
 
