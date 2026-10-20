@@ -191,9 +191,13 @@ void compress_h2_and_update_stats(
   double rank_max = static_cast<double>(solver->last_factor_rankmax);
   c_bpack_setstats(stats, "Rank_max_Constr", &rank_max);
 
-  double compression_memory_mb =
-    solver->factorization_memory / (1024.0 * 1024.0);
+  // bytes / 1024e3, the unit the Fortran paths report memory in.  Mem_Fill
+  // is the name a caller reads for the size of a compressed matrix (they set
+  // it as Mem_Comp_for + Mem_Direct_for); without it a compression-only H2
+  // reported no memory at all.
+  double compression_memory_mb = solver->factorization_memory / 1024.0e3;
   c_bpack_setstats(stats, "Mem_Comp_for", &compression_memory_mb);
+  c_bpack_setstats(stats, "Mem_Fill", &compression_memory_mb);
 
   if (solver->options.verbosity >= 0) {
     (void)butterfly::dispatch_h2_compression_verification(solver);
@@ -2131,7 +2135,10 @@ void c_bpack_factor(F2Cptr*bmat, F2Cptr*option, F2Cptr*stats, F2Cptr*ptree, F2Cp
 		double rank_max = static_cast<double>(H2_solver->last_factor_rankmax);
 		c_bpack_setstats(stats, "Rank_max", &rank_max);
 
-		double factorization_memory_MB = H2_solver->factorization_memory/(1024.0 * 1024.0);
+		// bytes / 1024e3, as the Fortran paths.  Mem_Fill stays unset: an H2
+		// compresses and factors in one pass and keeps no separate compressed
+		// form, so its whole size is the factor's.
+		double factorization_memory_MB = H2_solver->factorization_memory / 1024.0e3;
 		c_bpack_setstats(stats, "Mem_Factor", &factorization_memory_MB);
 	  }
 
