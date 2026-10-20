@@ -1952,7 +1952,7 @@ bool prepare_device_solve(ParallelTree<CoordType, DataType>* tree, int verbosity
             auto check = [&](const BoxData<CoordType, DataType>& box, bool kept_box) {
                 const int64_t n = box.num_points, k = static_cast<int64_t>(box.skeleton_indices.size()),
                               r = static_cast<int64_t>(box.redundant_indices.size());
-                if (static_cast<size_t>(n) * D > kSolveSharedLimit) {
+                if ((static_cast<size_t>(n) + kSolveChunkRows) * D > kSolveSharedLimit) {
                     reason = "boxes too large";
                     return;
                 }

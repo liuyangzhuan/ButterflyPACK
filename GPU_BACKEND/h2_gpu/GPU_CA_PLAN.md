@@ -7185,6 +7185,40 @@ its 10 waves and packs the fill sources: 200K factors on 40 GB cards (level
 3 peak 26.0 GB, 52.8 s); at 100K H2_compress_factors 1 moves the logdet by
 1e-15.
 
+#### The device solve's shared memory: the plan and the kernels agree (2026-10-19)
+
+*The report.*  The 400K space-time fit at its second point (GPTune
+upper_level_oom_repro, "Second problem": tol 1e-8, H2_compress_factors 1,
+l = (0.036476, 0.036623, 0.009465), amplitude 0.4662, noise 0.012561; 8 x
+80 GB) factored (logdet -1458658.8309091697) and the GPU solve's first
+multiply threw "device solve: box too large for shared memory"; GPTune saw
+the same at a Matern-3/2 point at 100K.
+
+*The mismatch.*  The device-solve plan (device_solve.hpp) took a box when
+its n entries fit kSolveSharedLimit (96 KB: n <= 12,288 doubles), else the
+host solve ("boxes too large").  Two kernels needed more: the factored
+multiply's diagonal step (mul_diagonal_*: x and y = U x, 2 r entries, so r
+<= 6,144) and the chunked sweeps (solve_backward / mul_forward with x_N
+through shared memory: n + kChunkRows).  This tree's level-2 boxes keep 22
+of several thousand points (average skeleton 22.4), so r passes 6,144.
+
+*The change.*  mul_diagonal_large_kernel (N and T, a column at a time) when
+2 r entries do not fit: x in shared memory, each triangle's product written
+to the box's own redundant entries of the vector and read back as the other
+buffer - r entries, so r <= n is enough; the sums are mul_diagonal_kernel's.
+The plan takes a box when n + kSolveChunkRows entries fit (kSolveChunkRows
+= 256, solve_kernels.hpp, the chunked kernels' kChunkRows), which every
+kernel then fits.  allow_shared's message names the kernel, its request
+and the box dimension, should a launch still not fit.
+
+*Checks.*  The large kernel forced on every box (a test build): bitwise the
+regular kernels' results (Laplace 48^3 symmetric, weights, compressed
+factors, s4; CFIE 9K complex; the inv_mult check's transposed multiply,
+1 rank).  The reproducer (80 GB, job 60021619): factors and solves, sign +1,
+logdet -1458658.8309091697 (as before), solve residual 1.6e-13, 68.5 s;
+the solve and the multiply on the device (6.1 s and 3.8 s).
+
+#### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
 only), then asks for K's logdet: "logdet: level 7: 1428 boxes without a host

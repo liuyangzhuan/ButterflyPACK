@@ -105,6 +105,12 @@ void launch_logdet_lu(const LogdetItem* items, int count, double* out, int* bad,
 
 // Largest per-box dynamic shared memory the solve kernels may use.
 constexpr size_t kSolveSharedLimit = 96 * 1024;
+// Rows of x_N a chunked sweep stages in shared memory beside a box's n
+// entries: a box takes the device solve when (n + kSolveChunkRows) of its
+// elements fit kSolveSharedLimit (device_solve.hpp), which every solve and
+// multiply kernel then fits (the multiply's diagonal step with 2 r entries
+// when they fit, else with r).
+constexpr int kSolveChunkRows = 256;
 
 // `transposed` (every sweep and diagonal step): A^T's step with A's factors
 // (a nonsymmetric matrix's 'T'): X_RS^T and X_RN^T where the step reads X_SR
