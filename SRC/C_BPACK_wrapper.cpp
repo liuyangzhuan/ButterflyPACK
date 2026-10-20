@@ -1756,7 +1756,12 @@ void c_bpack_construct_element_compute(F2Cptr* bmat, F2Cptr* option,F2Cptr* stat
 	const int elem_extract = static_cast<int>(std::llround(elem_extract_d));
 	H2_solver->kernel.block_kernel =
 	  (elem_extract == 2) ? C_FuncZmnBlock : nullptr;
-	MPI_Comm_rank(MPI_COMM_WORLD, &H2_solver->kernel.block_callback_pid);
+	// the rank within this matrix's own communicator, not the world's: the
+	// block callback's pmaps name the owner of an intersection, and a caller
+	// that builds an H2 on a sub-communicator (a STRUMPACK front on
+	// MPI_COMM_SELF inside a larger job) resolves that id against the
+	// matrix's process tree, where a world rank is out of range
+	MPI_Comm_rank(H2_solver->comm, &H2_solver->kernel.block_callback_pid);
 	H2_solver->kernel.quant = C_QuantApp;
 	// elem_extract=1 with a block callback: the callback is collective (it
 	// may communicate, as c_bpack_extractelement_bridge does), so the blocks
