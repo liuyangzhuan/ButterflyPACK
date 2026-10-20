@@ -112,21 +112,32 @@ void build_h2_blocks_for_level_unstructured(
     bool build_leaf_near,
     const OccupiedTopology& occupied_topology) {
     auto& level = tree->levels[level_number];
-    if (!level.is_process_active) return;
 
     std::exception_ptr build_exception;
     std::mutex build_exception_mutex;
     std::atomic<bool> build_failed{false};
 
-    const auto occupied_indices = occupied_local_indices(level);
-    #pragma omp parallel for schedule(dynamic) if (occupied_indices.size() > 1)
+    // Entries through a collective callback are fetched in rounds that every
+    // rank takes part in, so a rank with no boxes here runs the phase with no
+    // items rather than returning.  A box that asks for a block nobody has
+    // fetched yet is abandoned and runs again after the round; it clears its
+    // own blocks first, so running it twice is the same as running it once.
+    std::vector<int64_t> occupied_indices;
+    if (level.is_process_active) {
+        occupied_indices = occupied_local_indices(level);
+    }
+    run_entry_phase(kernel_entries(kernel, 0), std::move(occupied_indices),
+                    [&](const std::vector<int64_t>& items) {
+    std::vector<int64_t> abandoned;
+    std::mutex abandoned_mutex;
+    #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
     for (int64_t occupied_slot = 0;
-         occupied_slot < static_cast<int64_t>(occupied_indices.size());
+         occupied_slot < static_cast<int64_t>(items.size());
          ++occupied_slot) {
         if (build_failed.load(std::memory_order_relaxed)) continue;
+        const int64_t box_index = items[static_cast<size_t>(occupied_slot)];
         try {
-            const int64_t box_index =
-                occupied_indices[static_cast<size_t>(occupied_slot)];
+            entry_item_begin();
             auto& target = level.local_boxes[static_cast<size_t>(box_index)];
             target.h2_interaction_blocks.clear();
             target.h2_near_blocks.clear();
@@ -185,7 +196,16 @@ void build_h2_blocks_for_level_unstructured(
                     target.h2_near_blocks.push_back(std::move(block));
                 }
             }
+            entry_item_end();
+        } catch (const H2EntryMiss&) {
+            std::lock_guard<std::mutex> lock(abandoned_mutex);
+            abandoned.push_back(box_index);
         } catch (...) {
+            if (entry_item_abandoned()) {
+                std::lock_guard<std::mutex> lock(abandoned_mutex);
+                abandoned.push_back(box_index);
+                continue;
+            }
             if (!build_failed.exchange(true, std::memory_order_relaxed)) {
                 std::lock_guard<std::mutex> lock(build_exception_mutex);
                 build_exception = std::current_exception();
@@ -193,6 +213,8 @@ void build_h2_blocks_for_level_unstructured(
         }
     }
     if (build_exception) std::rethrow_exception(build_exception);
+    return abandoned;
+    });
 }
 
 template<typename CoordType, typename DataType>
@@ -354,14 +376,14 @@ void hierarchical_compression_unstructured(
                 occupied_topology);
             kernel->register_level_coordinates(level);
 
+            std::exception_ptr id_exception;
+            std::mutex id_exception_mutex;
+            std::atomic<bool> id_failed{false};
+            std::vector<int64_t> occupied_indices;
+            // boxes whose ID runs here: the occupied ones, or those the device left
+            std::vector<int64_t> host_boxes;
             if (level.is_process_active) {
-                std::exception_ptr id_exception;
-                std::mutex id_exception_mutex;
-                std::atomic<bool> id_failed{false};
-
-                const auto occupied_indices = occupied_local_indices(level);
-                // boxes whose ID runs here: the occupied ones, or those the device left
-                std::vector<int64_t> host_boxes;
+                occupied_indices = occupied_local_indices(level);
 #ifdef H2_HAVE_GPU
                 if (gpu_ids) {
                     gpu::compression_stats() = gpu::CompressionStats{};
@@ -371,20 +393,39 @@ void hierarchical_compression_unstructured(
                 {
                     host_boxes = occupied_indices;
                 }
-                #pragma omp parallel for schedule(dynamic) if (host_boxes.size() > 1)
+            }
+            // as the block build above: the rounds are collective, so every
+            // rank runs the phase, and a box abandoned on a missing block runs
+            // again afterwards.  h2_skeletonize_box writes to the box only
+            // once gather_id_workspace has returned, so an abandoned box is
+            // left as it was.
+            run_entry_phase(kernel_entries(kernel, 0), std::move(host_boxes),
+                            [&](const std::vector<int64_t>& items) {
+                std::vector<int64_t> abandoned;
+                std::mutex abandoned_mutex;
+                #pragma omp parallel for schedule(dynamic) if (items.size() > 1)
                 for (int64_t host_slot = 0;
-                     host_slot < static_cast<int64_t>(host_boxes.size());
+                     host_slot < static_cast<int64_t>(items.size());
                      ++host_slot) {
                     if (id_failed.load(std::memory_order_relaxed)) continue;
+                    const int64_t box_index = items[static_cast<size_t>(host_slot)];
                     try {
-                        const int64_t box_index =
-                            host_boxes[static_cast<size_t>(host_slot)];
+                        entry_item_begin();
                         auto& box = level.local_boxes[static_cast<size_t>(box_index)];
                         h2_skeletonize_box(
                             tree,
                             &box,
                             level, kernel, tolerance, use_sketch);
+                        entry_item_end();
+                    } catch (const H2EntryMiss&) {
+                        std::lock_guard<std::mutex> lock(abandoned_mutex);
+                        abandoned.push_back(box_index);
                     } catch (...) {
+                        if (entry_item_abandoned()) {
+                            std::lock_guard<std::mutex> lock(abandoned_mutex);
+                            abandoned.push_back(box_index);
+                            continue;
+                        }
                         if (!id_failed.exchange(true, std::memory_order_relaxed)) {
                             std::lock_guard<std::mutex> lock(id_exception_mutex);
                             id_exception = std::current_exception();
@@ -392,7 +433,10 @@ void hierarchical_compression_unstructured(
                     }
                 }
                 if (id_exception) std::rethrow_exception(id_exception);
+                return abandoned;
+            });
 
+            if (level.is_process_active) {
                 for (int64_t local_index : occupied_indices) {
                     const auto& box =
                         level.local_boxes[static_cast<size_t>(local_index)];

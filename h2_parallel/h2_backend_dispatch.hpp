@@ -36,10 +36,10 @@ template<typename CoordType, typename DataType>
 void dispatch_h2_compression(H2<CoordType, DataType>* solver,
                              double* compression_time,
                              double* entryeval_time) {
-    if (solver->kernel.collective) {
+    if (solver->kernel.collective && solver->options.unstructured != 1) {
         throw std::runtime_error(
-            "H2: entries through a collective callback (elem_extract=1 with a block callback) build a "
-            "factored H2, not a compression-only one (precon 2)");
+            "H2: entries through a collective callback (elem_extract=1 with a block callback) need "
+            "H2_unstructured=1 for a compression-only H2 (precon 2)");
     }
     if (solver->options.unstructured == 1) {
         color_unstructured::compress(
