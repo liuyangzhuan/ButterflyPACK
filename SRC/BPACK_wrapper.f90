@@ -2032,7 +2032,9 @@ contains
       integer rank_idxs(nproc), rank_idxe(nproc)
       type(c_ptr) :: msh_Cptr
       type(mesh), pointer::msh
-      integer ii, level, Lrank, Maxlevel, extra, minsize, group, nper, r0, r1, head, tail, mid
+      integer ii, level, Lrank, Maxlevel, extra, minsize, group, head, tail, mid
+      integer rh, rt, rmid, minleaf, ngrp
+      integer, allocatable :: rhd(:), rtl(:), th(:), tt(:)
 
       allocate(msh)
       msh%Nunk = N
@@ -2048,41 +2050,71 @@ contains
       !>**** The index tree a butterfly block built on this mesh needs:
       !> C_BF_Construct_Init reads Maxgroup and basis_group, and
       !> ComputeParallelIndices derives the block's M_p/N_p from the groups at
-      !> the level of the process tree.  Those levels therefore carry the ranks'
-      !> own ranges, so the block comes out distributed exactly as this H2 is;
-      !> the levels below split evenly and only give the depth other code
-      !> asserts on.  Without this the mesh reached C_BF_Construct_Init with
-      !> Maxgroup undefined.
+      !> the level of the process tree, so those levels have to carry the
+      !> ranks' own ranges for the block to come out distributed exactly as
+      !> this H2 is.  Without this the mesh reached C_BF_Construct_Init with
+      !> Maxgroup undefined.  The process tree splits a group's ranks the way
+      !> NumberingPtree does: ranks [rh,rt] bisect at (rh+rt)/2, and a group
+      !> left with a single rank hands that rank to both children.  Mirroring
+      !> that here makes basis_group agree with pgrp at every level for any
+      !> rank count, not only a power of two; a one-rank group still splits its
+      !> index range, or the index tree would not partition 1..N.  The levels
+      !> below the process tree split evenly and only give the depth other
+      !> code asserts on.
       Lrank = 0
       do while (2**Lrank < nproc)
          Lrank = Lrank + 1
       enddo
-      call BPACK_require(2**Lrank == nproc, &
-         'c_bpack_set_mesh_h2: an H2 serving as the row/column mesh of a butterfly block needs a power-of-two rank count')
       minsize = N
       do ii = 1, nproc
          minsize = min(minsize, rank_idxe(ii) - rank_idxs(ii) + 1)
       enddo
       call BPACK_require(minsize >= 1, &
          'c_bpack_set_mesh_h2: a rank holds no points; it cannot carry a share of a butterfly block')
+      call BPACK_require(rank_idxs(1) == 1 .and. rank_idxe(nproc) == N, &
+         'c_bpack_set_mesh_h2: the ranks index ranges do not tile 1..N')
+
+      ngrp = 2**(Lrank + 1) - 1
+      allocate (rhd(ngrp), rtl(ngrp), th(ngrp), tt(ngrp))
+      rhd(1) = 0; rtl(1) = nproc - 1
+      th(1) = 1; tt(1) = N
+      do level = 0, Lrank - 1
+         do group = 2**level, 2**(level + 1) - 1
+            rh = rhd(group); rt = rtl(group)
+            head = th(group); tail = tt(group)
+            if (rh == rt) then
+               rhd(2*group) = rh; rtl(2*group) = rt
+               rhd(2*group + 1) = rh; rtl(2*group + 1) = rt
+               mid = head + (tail - head + 1)/2 - 1
+            else
+               rmid = (rh + rt)/2
+               rhd(2*group) = rh; rtl(2*group) = rmid
+               rhd(2*group + 1) = rmid + 1; rtl(2*group + 1) = rt
+               mid = rank_idxe(rmid + 1)
+            endif
+            th(2*group) = head; tt(2*group) = mid
+            th(2*group + 1) = mid + 1; tt(2*group + 1) = tail
+         enddo
+      enddo
+
+      minleaf = N
+      do group = 2**Lrank, 2**(Lrank + 1) - 1
+         minleaf = min(minleaf, tt(group) - th(group) + 1)
+      enddo
+      call BPACK_require(minleaf >= 1, &
+         'c_bpack_set_mesh_h2: a leaf of the rank-level index tree is empty')
       extra = 0
-      do while (extra < 2 .and. minsize/(2**(extra + 1)) >= 1)
+      do while (extra < 2 .and. minleaf/(2**(extra + 1)) >= 1)
          extra = extra + 1
       enddo
       Maxlevel = Lrank + extra
       msh%Maxgroup = 2**(Maxlevel + 1) - 1
       allocate (msh%basis_group(msh%Maxgroup))
-      do level = 0, Lrank
-         nper = 2**(Lrank - level)
-         do group = 2**level, 2**(level + 1) - 1
-            r0 = (group - 2**level)*nper + 1
-            r1 = r0 + nper - 1
-            msh%basis_group(group)%head = rank_idxs(r0)
-            msh%basis_group(group)%tail = rank_idxe(r1)
-         enddo
+      do group = 1, ngrp
+         msh%basis_group(group)%head = th(group)
+         msh%basis_group(group)%tail = tt(group)
       enddo
-      call BPACK_require(msh%basis_group(1)%head == 1 .and. msh%basis_group(1)%tail == N, &
-         'c_bpack_set_mesh_h2: the ranks index ranges do not tile 1..N')
+      deallocate (rhd, rtl, th, tt)
       do level = Lrank, Maxlevel - 1
          do group = 2**level, 2**(level + 1) - 1
             head = msh%basis_group(group)%head
