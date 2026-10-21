@@ -1256,6 +1256,32 @@ public:
             if (e.og_mat + e.og_win + e.og_stage + e.og_launch + e.og_pack > 0.0) {
                 std::printf("  [gpu] level %d owner pass host: materialize %.2f, window %.2f, stage %.2f, launch+sync %.2f, "
                             "pack %.2f s\n", level.level, e.og_mat, e.og_win, e.og_stage, e.og_launch, e.og_pack);
+                double gemm_s = 0.0, gemm_flops = 0.0;
+                for (int j = 0; j < EliminatorStats::kOwnerDepthBins; ++j) {
+                    gemm_s += e.og_dev_gemm[j];
+                    gemm_flops += e.og_gemm_flops[j];
+                }
+                std::printf("  [gpu] level %d owner pass device: kernel values %.2f s, GEMMs %.2f s (%.0f GF/s); by "
+                            "source position j [launches, GEMMs, GFLOP, s, GF/s, (mean m n)^1/2, mean k]:", level.level, e.og_dev_eval,
+                            gemm_s, gemm_s > 0.0 ? gemm_flops / gemm_s / 1e9 : 0.0);
+                for (int j = 0; j < EliminatorStats::kOwnerDepthBins; ++j) {
+                    if (e.og_gemm_launches[j] == 0) continue;
+                    std::printf(" %d%s [%lld, %lld, %.0f, %.2f, %.0f, %.0f, %.0f]", j + 1,
+                                j + 1 == EliminatorStats::kOwnerDepthBins ? "+" : "",
+                                static_cast<long long>(e.og_gemm_launches[j]), static_cast<long long>(e.og_gemm_count[j]),
+                                e.og_gemm_flops[j] / 1e9, e.og_dev_gemm[j],
+                                e.og_dev_gemm[j] > 0.0 ? e.og_gemm_flops[j] / e.og_dev_gemm[j] / 1e9 : 0.0,
+                                std::sqrt(e.og_gemm_mn[j] / static_cast<double>(std::max<int64_t>(e.og_gemm_count[j], 1))),
+                                e.og_gemm_mn[j] > 0.0 ? e.og_gemm_flops[j] / (2.0 * e.og_gemm_mn[j]) : 0.0);
+                }
+                std::printf("; targets by sources:");
+                for (int d = 1; d < EliminatorStats::kOwnerDepthBins; ++d) {
+                    if (e.og_targets_by_depth[d] > 0) {
+                        std::printf(" %d%s %lld", d, d + 1 == EliminatorStats::kOwnerDepthBins ? "+" : "",
+                                    static_cast<long long>(e.og_targets_by_depth[d]));
+                    }
+                }
+                std::printf("\n");
             }
             if (e.np_gen_blocks > 0 || e.np_gen_fresh_blocks > 0) {
                 std::printf("  [gpu] level %d packed after the generator passes: %lld adopted blocks (%.2f GB raw), "

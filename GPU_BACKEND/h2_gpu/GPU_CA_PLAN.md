@@ -7218,6 +7218,142 @@ factors, s4; CFIE 9K complex; the inv_mult check's transposed multiply,
 logdet -1458658.8309091697 (as before), solve residual 1.6e-13, 68.5 s;
 the solve and the multiply on the device (6.1 s and 3.8 s).
 
+#### The leaf's computation, item by item (2026-10-20)
+
+*Where the leaf goes.*  768^3 on 64 x 80 GB, CA0 with the shared blocks
+never packed (A_x80_ca0np.log), the slowest leaf rank (35): 43.7 s of waves
+= device 36.7 (sketch 10.1, elimination 26.6) + idle 7.0.  The "owner GEMMs"
+mark (16.8 s) is the whole owner group loop, which synchronizes after each
+part, so its host laps are device times: launch+sync (GEMMs and the new
+targets' kernel values) 6.9, pack 4.6, window 1.7, materialize 1.6, stage
+(device idle) 1.2, the owner plan before the loop ~0.8.  The "GF/s: owner"
+figure (2672 on rank 0) divides by the whole mark; the GEMMs themselves run
+at >= 6.4 TF/s.  All the packing is in the 8 interior waves (31.4 of the
+43.7 s): the raw near set needs up to 74 GB against 41 GB under the hold
+limit, and Color packs as much (rank 0: 197 GB raw -> 37 GB a level).  The
+idle 7.0 s matches the two host plans a wave (sketch plan 3.35 + elimination
+plan 3.65).  Three items, in this order: (1) the owner GEMMs, (2) the GPU
+idle, (3) the kernels without floating-point work (near-store churn, the
+window, the 5.4 s of mark 6).
+
+*Item 1, the owner GEMMs, measured.*  These already run on the FP64 tensor
+cores (H2_use_gpu 1/2, launch_dgemm_vbatched_tc), so the lever left is the
+structure: a group launches one sub-batch per source position j (every
+target's j-th source), and a target with d sources is read and written d
+times.  The group loop now records events around the kernel values and each
+sub-batch ("owner pass device" line, always printed with the host laps).
+384^3 on 8 x 40 GB (a 768^3/64 rank's boxes), lib_og1, the leaf, rank 0:
+
+| | Color | CA0 |
+|---|---|---|
+| owner mark | 16.92 s | 19.80 s |
+| GEMMs (events) | 6.01 s, 5.6 TF/s | 6.89 s, 5.5 TF/s |
+| kernel values of new targets | 0.19 s | 0.23 s |
+| materialize / window / stage / pack (host laps) | 3.11 / 1.20 / 1.03 / 4.73 | 3.69 / 1.34 / 1.16 / 5.75 |
+
+By source position (Color): j = 1 3.53 s at 5.2 TF/s (2.8M GEMMs, mean
+(m n)^1/2 135, k 178), j = 2 1.77 s at 5.9, j = 3-4 0.55 s at 7.5, j = 5-8
+0.16 s at ~5.  Targets by their sources: 1.36M with 1, 1.19M with 2, 0.24M
+with 4, 22K with 8.  So a fused kernel (a target's sources summed in turn,
+each from zero and added to C as today, so bitwise the same; C written once,
+one launch a group) can only save the later positions' tile set-up and C
+traffic: their 2.5 s carry 15.4 TFLOP, ~1.8 s at the tile rate, so ~0.7 s
+of the leaf.  The rest of the GEMM rate is the shapes: the one-source
+targets include the pairs with eliminated boxes (fewer rows), whose tiles
+are partly empty.  Not built; items 2 and 3 hold more (the owner pass alone
+spends 7.8 s putting back and re-packing blocks at this size).  The
+references for the next items (lib_og1, job 60077587): Color logdet
+-792567583.48678172, factor 77.4 s, leaf 45.0 s; CA0 -792567539.63804078,
+78.7 s, leaf 45.7 s.
+
+*Item 2, the GPU idle: a timeline.*  The marks undercount it - a mark
+interval spans the gaps inside it - so rank 0 ran under Nsight Systems
+(h2_c1_work/stepOG2.sh: rank 0 under `nsys profile -t cuda,nvtx`, the
+other ranks plain) with NVTX ranges on the host phases (HostRange,
+gpu_runtime.hpp; no-ops without a profiler): the sketch's plan (its box
+loop and its fill part), launch, wait and ID store; the wave's plan, each
+chunk's plan, launch, outputs (fill sources, generators, keep, near plan,
+near stores, np5 pack), the owner plan and each group's put back, window,
+stage, launch and pack (compress, homes, scatter, free); the codec's
+maxabs and sizes waits; a "level N wave" range around each wave.
+h2_c1_work/nsys_idle.py charges each instant the device runs nothing (no
+kernel, copy or memset on any stream) to the innermost host range open
+then; nsys_cpu.py reads the CPU samples (--sample=process-tree
+--backtrace=dwarf --sampling-period=4000000) inside a range.  Color leaf,
+384^3 on 8 x 40 GB, rank 0: 44.3 s of waves, the device busy 27.6 and
+idle 16.7 s (37%), where the marks had said ~7.  The idle, by host range:
+pack homes 3.78 (46 cudaHostRegister calls, 1.49 s, as the near store's
+pinned arena grows during the waves, and the faults around them), between
+waves 2.44 (Color's exchange; CA0 0.01), the sketch plan's box loop 2.25,
+the near plan 1.23 (a heap allocation and map entries per fresh block),
+group stage 1.01, chunk plan 0.83, then the owner plan 0.55, the sketch
+plan's fill part 0.55, the wave store 0.48 and smaller.  The codec's two
+blocking round trips are not idle (the device is busy through them).  The
+kernels, summed: the tensor-core GEMMs 7.7 s (the owner GEMMs 4.4 of it,
+7.7 TF/s), copy_spans 6.6 (the near store's scatters and gathers over
+PCIe), the ordered sketch 3.5, bitcomp decode 3.1 and encode 2.0, qrcp
+0.9, transposes 0.65, abs_max 0.6, gathers 0.5.
+
+The samples named a common cause in four of those ranges: statistics kept
+on every wave whatever was asked for.  note_write (three hash operations
+a target write: the "near-block writes" and "go final" lines), the
+waves' Schur and edge read sets (std::set inserts in the chunk plan: the
+"blocks a wave reads" line), and the sketch plan's fill-source sets,
+updated under a mutex the box loop's 16 threads shared (the loop ran at
+the speed of ~3).  None feeds a decision.  They now run only under
+BPACK_TRACE=memory (LevelEliminator::memory_trace_), and their lines
+print only then.  Bitwise the same (Color -792567583.48678172, CA0
+-792567539.63804078, as in three earlier runs each), and:
+
+| 384^3, 8 x 40 GB, rank 0 | Color leaf | Color factor | CA0 leaf | CA0 factor |
+|---|---|---|---|---|
+| before (lib_og1/og1b/og2np) | 45.0-45.1 s | 77.4 s | 45.5-45.7 s | 78.2-78.7 s |
+| statistics under BPACK_TRACE=memory (lib_og4) | 41.6 s | 73.5 s | 42.0 s | 74.1 s |
+
+A side finding of the profiled runs: with rank 0 slowed by the profiler
+the logdet moves in the 9th digit (Color -792567580.24108958, CA0
+-792567541.30439973), while every unprofiled run is bitwise the same.  So
+some decision under memory pressure depends on timing - plausibly the
+heap's level when a pressure test runs, with the background copier's
+frees landing earlier or later - and the packing it picks is lossy.  It
+may be the one-off CA0 logdet of 2026-10-12 (...543.56).  Not chased.
+
+*The pinning inside pack homes.*  The near store's compact extents double
+up to kCompactMax (512 MB), past the pinned pool's 256 MB chunks, and
+PinnedChunkPool::take pinned any request above a chunk on the spot - on
+the main thread, inside the owner group's pack, with the device idle: 46
+such pins at the 384^3 leaf (fault-in and cudaHostRegister, 0.15 s a GB).
+The chunks pinned ahead (std::async) now take the size of the largest
+request seen, up to kAheadSizeMax = 512 MB, and a request is served from
+them when it fits.  The leaf's "levels waited" for pinning: 3.19 -> 0.15 s
+(pinning 5.08 -> 6.11 s in all, now on the worker threads).
+
+| 384^3, 8 x 40 GB, rank 0 | Color leaf | Color factor | CA0 leaf | CA0 factor |
+|---|---|---|---|---|
+| statistics under BPACK_TRACE=memory (lib_og4) | 41.6 s | 73.5 s | 42.0 s | 74.1 s |
+| + pinned ahead at the request size (lib_og5) | 40.3 s | 72.0 s | 40.9 s | 73.0 s |
+
+The 384^3 logdets moved (Color -792567582.15925455, CA0
+-792567541.69171584): that size packs under pressure, and rank 0's first
+difference is at level 5, 55,740 against 55,738 near blocks packed - the
+timing dependence above, now with a cause.  The pressure tests read
+heap_.used() (under_pressure, the owner group's arena, the wave's chunking,
+the keep's split) and heap_.largest_free(), and both move with the
+background copier's frees (take_finished after the sketch and at the wave
+store, the reclaimer on a full heap), which land when the copies happen to
+finish.  So the gate for these changes is 192^3 on 8 ranks, where nothing
+packs: lib_og4 and lib_og5 bitwise the same (Color -89253588.318572894,
+CA0 -89253588.863782644).  A deterministic pressure test - the heap's level
+as if every block handed to a copier were already freed, and the
+reclaimer's frees not counted - would restore the 384^3 gate; not done.
+
+What is left of the idle at the Color leaf (lib_og4 timeline, 13.0 s):
+pack homes 3.81 (fixed above), between waves 2.35 (the exchange), then
+each under a second: the near plan 0.91 (a heap allocation a fresh block),
+chunk plan 0.66, the sketch plan's fill part 0.60, sketch launch 0.58,
+owner plan 0.56, group window 0.42, pack free 0.37, chunk launch 0.37,
+group stage 0.35, wave store 0.33, fill sources 0.30.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

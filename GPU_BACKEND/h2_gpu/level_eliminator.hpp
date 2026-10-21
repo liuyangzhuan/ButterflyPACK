@@ -139,6 +139,16 @@ struct EliminatorStats {
     int64_t og_arena_groups = 0, og_arena_blocks = 0, og_arena_declined = 0, og_arena_moved = 0;
     // the owner pass's host time by part of the group loop
     double og_mat = 0.0, og_win = 0.0, og_stage = 0.0, og_launch = 0.0, og_pack = 0.0;
+    // ... and its device time from events around the launches: the new
+    // targets' kernel values, and the GEMMs by source position (sub-batch j
+    // holds every target's j-th source; the last bin takes the rest) with
+    // their launches, products, flops and output entries (m n); the targets
+    // by their number of sources
+    static constexpr int kOwnerDepthBins = 12;
+    double og_dev_eval = 0.0;
+    double og_dev_gemm[kOwnerDepthBins] = {}, og_gemm_flops[kOwnerDepthBins] = {}, og_gemm_mn[kOwnerDepthBins] = {};
+    int64_t og_gemm_launches[kOwnerDepthBins] = {}, og_gemm_count[kOwnerDepthBins] = {};
+    int64_t og_targets_by_depth[kOwnerDepthBins] = {};
     double pb_near = 0.0, pb_near_alloc = 0.0;  // step 5's near blocks (after the box region's launch), their allocations
     double po_candidates = 0.0, po_pairs = 0.0, po_order = 0.0, po_batches = 0.0;
     // The fill sources kept for later waves' sketches (keep_fill_source: per
@@ -1539,7 +1549,7 @@ private:
     // A near-field block this window writes, keyed by its map slot (stable
     // across the replacement of the block it holds).
     void note_write(const void* slot, size_t bytes) {
-        if (slot == nullptr || bytes == 0) return;
+        if (!memory_trace_ || slot == nullptr || bytes == 0) return;
         if (wave_writes_.insert(slot).second) wave_write_bytes_ += bytes;
         size_t& seen = level_writes_[slot];
         seen = std::max(seen, bytes);
@@ -2051,6 +2061,7 @@ private:
         if (srcs.empty()) return;
         auto& stats = eliminator_stats();
         const auto t0 = std::chrono::steady_clock::now();
+        HostRange phase("pack compress");
         std::vector<CompressedXnr> comp;
         // the tighter tolerance: these feed the fill GEMMs, not just the solve
         // (tol_scale < 1: a pack that would otherwise add a quantization of
@@ -2063,6 +2074,7 @@ private:
         }
         const auto& cks = fill_compressor_.chunks();
         const char* staging = fill_compressor_.staging();
+        phase.next("pack homes");
         std::vector<CopySpan> spans;
         int64_t max_words = 0;
         std::vector<bool> ok(which.size(), false);
@@ -2150,7 +2162,9 @@ private:
         // the staging is complete); the raw blocks were read by the
         // compression and go back now, and the staging is held until the
         // scatter is done (hold_staging).
+        phase.next("pack scatter");
         scatter_near_async(spans, max_words);
+        phase.next("pack free");
         for (size_t j = 0; j < which.size(); ++j) {
             if (!ok[j]) continue;
             TargetT& t = targets[which[j]];
@@ -2668,6 +2682,12 @@ private:
     std::unique_ptr<Blocks> adopt_;  // blocks from the device transition, if any
     std::unordered_set<const void*> lsch_seen_, ledge_seen_;  // blocks any wave read (the stats)
     std::unordered_set<int64_t> sk_src_all_;         // fill sources any wave read (the stats)
+    // BPACK_TRACE=memory: those read and write statistics (the waves' block
+    // unions, the writes a block takes, the fill sources a sketch reads).
+    // Their sets and maps took ~1.5 s of host time at the 384^3 leaf (rank 0,
+    // 8 ranks) while the device waited - the sketch plan's under a mutex its
+    // threads shared - so they are kept only when asked for.
+    const bool memory_trace_ = env::trace("memory");
     std::unordered_set<const void*> tr_block_seen_;  // transition blocks a chunk has written (the stats)
     std::vector<char*> level_allocs_;            // level-lifetime allocations besides the blocks
     bool gpu_sketch_ = false;
@@ -3708,6 +3728,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     cudaStream_t stream = ctx.stream();
     magma_queue_t queue = ctx.queue();
     auto t0 = clock::now();
+    HostRange phase("sketch plan");   // (the host's phases on a profiler's timeline)
 
     struct Source {
         int64_t morton = -1;
@@ -3803,6 +3824,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
     } src_stats{src_seen, src_slice_bytes, src_run_bytes, src_runs_count, src_union_bytes, sk_src_all_};
 
+    phase.next("sketch plan boxes");
     // ---- host plans (index lists only)
     {
         std::exception_ptr failure;
@@ -3921,14 +3943,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             throw std::runtime_error("LevelEliminator: fill source " + std::to_string(cm) + " not found");
                         }
                         if (ss.r == 0 || !has_fill_source(ss)) continue;  // no Schur contribution
-                        {
+                        if (memory_trace_) {
                             std::lock_guard<std::mutex> lock(src_seen_mutex);
                             src_seen.emplace(cm, static_cast<size_t>(ss.ntot) * static_cast<size_t>(ss.r) * sizeof(S));
                         }
                         int64_t slot_offset = 0, slot_count = 0;
                         if (!lazy_far_locate_endpoint_rows(src_box, col_end, slot_offset, slot_count, positions)) continue;
                         if (slot_count != p.n) throw std::runtime_error("LevelEliminator: fill source holds a sliced box");
-                        {
+                        if (memory_trace_) {
                             std::lock_guard<std::mutex> lock(src_seen_mutex);
                             src_slice_bytes += static_cast<size_t>(slot_count) * static_cast<size_t>(ss.r) * sizeof(S);
                             if (src_union.emplace(cm, static_cast<int>(slot_offset)).second) {
@@ -3960,7 +3982,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                             src.entries += static_cast<int64_t>(blk.a) * p.sk;
                         }
                         if (src.runs.empty()) continue;
-                        {
+                        if (memory_trace_) {
                             // the W side reads a contiguous run of E's temp2^T
                             // per ring block, on top of the P side's own slot
                             size_t run_rows = 0;
@@ -3999,6 +4021,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         if (owner_ != nullptr && owner_->set_sketch_context) owner_->set_sketch_context(-1);
     }
 
+    phase.next("sketch plan fills");
     // ---- H2_compress_factors: the slots this wave reads out of fill sources
     // that are stored compressed, decompressed into a scratch.
     //
@@ -4202,6 +4225,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
 
     stats.sketch_plan += std::chrono::duration<double>(clock::now() - t0).count();
     const auto t_gpu = clock::now();
+    phase.next("sketch launch");
 
     // ---- device buffers and launch items
     ++wave_stamp_;
@@ -4663,9 +4687,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     marks.mark(stream);
     {
         // also waits for the previous wave's elimination, queued before
+        phase.next("sketch wait");
         const auto tw = clock::now();
         check_cuda(cudaStreamSynchronize(stream), "device sketch");
         stats.sk_wait += std::chrono::duration<double>(clock::now() - tw).count();
+        phase.next("ID store");
     }
     // BPACK_TRACE=wave at the top levels: the ID's R diagonal per box, which
     // tells a rank set by the matrix (the diagonal falls through the tolerance)
@@ -4831,6 +4857,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     const auto t_wave0 = clock::now();
     const double w_sketch0 = stats.sketch, w_plan0 = stats.plan, w_launch0 = stats.launch, w_store0 = stats.store,
                  w_wait0 = stats.sk_wait;
+    const HostRange wave_range(("level " + std::to_string(level_index_) + " wave").c_str());
     Context& ctx = Context::instance();
     ctx.activate();
     cudaStream_t stream = ctx.stream();
@@ -4881,6 +4908,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
 
     // ---- 2. plan: shapes, buffers, launch items
     t0 = clock::now();
+    HostRange phase("wave plan");   // (the host's phases on a profiler's timeline)
     ++wave_stamp_;
     meta_.clear();
     std::unordered_map<int64_t, size_t> wave_index_of;  // morton -> index in boxes
@@ -5088,6 +5116,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // the previous chunk's launch, so its compressions and keeps with
         // their syncs were counted as buffers)
         if (chunk > 0) t0 = clock::now();
+        phase.next("chunk plan");
         const auto t_chunk = clock::now();
         const bool gpu_idle_at_plan = cudaStreamQuery(stream) == cudaSuccess;
         const double heap_s0 = heap_.op_seconds();
@@ -5369,7 +5398,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             // A_RR, A_SR, A_SS from the Schur block or the kernel
             const S* schur_src = gather_src(st.schur, true, static_cast<uint64_t>(box->morton_index));
             if (schur_src != nullptr) {
-                if (wave_schur.insert(schur_src).second) {
+                if (memory_trace_ && wave_schur.insert(schur_src).second) {
                     wave_schur_bytes += static_cast<size_t>(st.schur.rows) * st.schur.cols * D;
                 }
                 if (st.schur.rows != n || st.schur.cols != n) throw std::runtime_error("LevelEliminator: Schur block shape");
@@ -5403,7 +5432,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     if (src_ns != nullptr) {
                         const DeviceMatrix& e = it_ns->second;
                         if (e.rows != c || e.cols != n) throw std::runtime_error("LevelEliminator: K(N, B) block shape");
-                        if (wave_edge.insert(src_ns).second) wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
+                        if (memory_trace_ && wave_edge.insert(src_ns).second) wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
                         add_gather(fills, max_fill_m, max_fill_n, wb.ans + wb.row0[a], nt, c, k, src_ns, 1, e.rows,
                                    identity, skel_local);
                         add_gather(fills, max_fill_m, max_fill_n, wb.xnr + wb.row0[a], nt, c, r, src_ns, 1, e.rows,
@@ -5422,7 +5451,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     if (src_sn != nullptr) {
                         const DeviceMatrix& e = it_sn->second;
                         if (e.rows != n || e.cols != c) throw std::runtime_error("LevelEliminator: K(B, N) block shape");
-                        if (wave_edge.insert(src_sn).second) wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
+                        if (memory_trace_ && wave_edge.insert(src_sn).second) wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
                         add_gather(fills, max_fill_m, max_fill_n, asn_cols, k, k, c, src_sn, 1, e.rows, skel_local,
                                    identity);
                         add_gather(fills, max_fill_m, max_fill_n, arn_cols, r, r, c, src_sn, 1, e.rows, red_local,
@@ -5444,7 +5473,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                                         : gather_src(it->second, false, edge_key(box->morton_index, nm));
                 if (it != edges_.end() && edge_src != nullptr) {
                     const DeviceMatrix& e = it->second;
-                    if (wave_edge.insert(edge_src).second) {
+                    if (memory_trace_ && wave_edge.insert(edge_src).second) {
                         wave_edge_bytes += static_cast<size_t>(e.rows) * e.cols * D;
                     }
                     int64_t rs = 1, cs = e.rows;  // view rows = neighbor, cols = this box
@@ -5641,6 +5670,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // pass, planned on the host while the box region runs.  Nothing waits
         // for the device here: the next wave's sketch synchronizes.
         t0 = clock::now();
+        phase.next("chunk launch");
         char* md = meta_.upload(meta_device_, stream);
         stats.bytes_up += static_cast<double>(meta_.size() + t_bytes);
         if (t_bytes > 0) {
@@ -5773,6 +5803,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         if (!g7n.entries.empty()) g7n.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
         marks.mark(stream);  // 5: transposes, Schur
         stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
+        phase.next("chunk outputs");
 
         // ---- the wave's fill sources, compressed a slot at a time (the readers
         // take one slot's rows, so a slot is the block that decompresses alone).
@@ -5780,7 +5811,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // compression is ordered after them.  Nothing reads the compressed form
         // yet: this measures the ratio and, with BPACK_CHECK=fillsrc, checks the
         // round trip against the original.
+        phase.next("fill sources");
         if (compress_factors_ >= 1 && gpu_sketch_) compress_fill_sources(boxes, chunk_active, stream);
+        phase.next("generators");
 
         // ---- The generators, this wave's kept factors, and then the raw outputs.
         //
@@ -5809,7 +5842,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             factor_bytes_ += static_cast<double>(2 * align_up(k * r * sizeof(S)) + align_up(nt * r * sizeof(S)) +
                                                  align_up(r * r * sizeof(S)) + align_up(r * sizeof(int)));
         }
+        phase.next("keep factors");
         if (keep_solve_ && !keep_failed_) keep_solve_factors(boxes, chunk_active, d_result, d_temp2, stream);
+        phase.next("chunk outputs");
         // Whether the host still wants a group's X_NR: with the factors kept on
         // the device it does not (rescue_skipped_xnr reads them back if it ever
         // needs them), and then temp2 has no reader left outside its store.
@@ -5858,6 +5893,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // thousands of block allocations per wave kept the device idle when they
         // came before the launches above; they may now take the blocks those
         // launches retired.  The items go with the owner pass's image.
+        phase.next("near plan");
         {
             const auto t_near = clock::now();
             for (int i : chunk_active) {
@@ -5918,6 +5954,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
 
         // The near pass's stores first, in an image of their own: they write the
         // fresh blocks of step 5 and carry no metadata offsets.
+        phase.next("near stores");
         {
             owner_meta_.clear();
             const size_t off_stores = owner_meta_.append(stores);
@@ -5936,6 +5973,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // the owner pass writes pairs of a source's neighbours, and these are
         // the source's own.  A later wave's owner group puts one back exactly
         // as it puts back any other packed target.
+        phase.next("np5 pack");
         const bool np5_pressure = under_pressure();
         if (kHoldNearBlocksPacked && compress_factors_ >= 1 && !fresh_near.empty() && (np5_pressure || pack_shared_)) {
             const auto t_np5 = std::chrono::steady_clock::now();
@@ -5960,6 +5998,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
 #endif
         marks.mark(stream);  // 6: step 5 (near blocks)
+        phase.next("chunk end");
         // A_NS and X_NS were the last of this chunk's raw output with a
         // reader, and the stores above have been launched and waited for.
         for (size_t b = work_first; b < work_blocks.size(); ++b) heap_.free(work_blocks[b]);
@@ -5987,6 +6026,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
 
 
     const auto t_owner = clock::now();
+    phase.next("owner plan");
     // The slot each neighbor position holds in the two stores: both skip the
     // neighbors with no rows, so a position is not a slot index.
     for (WaveBox& wb : boxes) {
@@ -6031,9 +6071,9 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         std::sort(candidates.begin(), candidates.end());
     }
     auto t_phase = clock::now();
-    auto owner_lap = [&](double& phase) {
+    auto owner_lap = [&](double& acc) {
         const auto now = clock::now();
-        phase += std::chrono::duration<double>(now - t_phase).count();
+        acc += std::chrono::duration<double>(now - t_phase).count();
         t_phase = now;
     };
     stats.po_candidates += std::chrono::duration<double>(t_phase - t_owner).count();
@@ -6352,6 +6392,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     std::optional<GatherPlan> next_plan;   // the next group's gather, run under this group's GEMMs
     for (size_t gi = 0; gi < owner_groups.size(); ++gi) {
         const auto [first, last] = owner_groups[gi];
+        phase.next("group put back");
         auto tg = clock::now();   // the group's host time, by part
         auto lap = [&](double& acc) {
             const auto now = clock::now();
@@ -6461,6 +6502,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         lap(stats.og_mat);
+        phase.next("group window");
         // The group's source slots, decompressed into a window of their own.
         // This is what replaces holding the wave's two n_tot x r outputs raw:
         // a slot is one neighbor's rows, which is exactly what a task reads,
@@ -6521,6 +6563,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             ++stats.ow_groups;
         }
         lap(stats.og_win);
+        phase.next("group stage");
         owner_meta_.clear();
         ++owner_group_stamp_;
         std::vector<EvalItem> evals;
@@ -6530,6 +6573,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             Target& t = targets[i];
             note_write(t.block, static_cast<size_t>(t.rows) * t.cols * D);
             depth = std::max(depth, t.tasks.size());
+            ++stats.og_targets_by_depth[std::min<size_t>(t.tasks.size(), EliminatorStats::kOwnerDepthBins - 1)];
             if (!t.fresh) continue;
             evals.push_back(EvalItem{t.block->ptr, t.rows, t.rows, t.cols,
                                      current_slots_in(*t.row_box, owner_meta_, owner_group_stamp_),
@@ -6565,20 +6609,31 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         char* gmd = owner_meta_.upload(owner_meta_device_, stream);
         stats.bytes_up += static_cast<double>(owner_meta_.size());
         lap(stats.og_stage);
+        phase.next("group launch");
         check_items(evals, "group evals");
         for (const auto& b : gb) check_batch(b, "group gemms");
+        StreamMarks gmarks;   // the kernel values, then each sub-batch (read after the group's sync)
+        gmarks.mark(stream);
         {
             EntryOriginScope origin(EntryOrigin::fill);  // (collective entries' profile)
             eval_blocks(evals, owner_meta_, gmd, off_ev, ev_m, ev_n, stream);
         }
-        for (const auto& b : gb) {
+        gmarks.mark(stream);
+        for (size_t j = 0; j < gb.size(); ++j) {
+            const auto& b = gb[j];
             // (a nonsymmetric matrix: temp2 rows times X_RN columns)
             b.gemm(gmd, from_store ? MagmaTrans : MagmaNoTrans,
                    from_store || nonsym_ ? MagmaNoTrans : MagmaTrans, 1.0, 1.0, queue);
+            gmarks.mark(stream);
+            const size_t bin = std::min<size_t>(j, EliminatorStats::kOwnerDepthBins - 1);
             stats.owner_gemms += static_cast<int64_t>(b.count());
+            stats.og_gemm_count[bin] += static_cast<int64_t>(b.count());
+            ++stats.og_gemm_launches[bin];
             for (const auto& e : b.entries) {
                 stats.owner_flops += kFlopScale * 2.0 * e.m * e.n * e.k;
                 stats.fl_box[7] += kFlopScale * 2.0 * e.m * e.n * e.k;
+                stats.og_gemm_flops[bin] += kFlopScale * 2.0 * e.m * e.n * e.k;
+                stats.og_gemm_mn[bin] += static_cast<double>(e.m) * e.n;
             }
             ++stats.owner_batches;
         }
@@ -6607,8 +6662,13 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         check_cuda(cudaStreamSynchronize(stream), "owner group");  // the image is reused
+        stats.og_dev_eval += gmarks.seconds(0);
+        for (size_t j = 0; j < gb.size(); ++j) {
+            stats.og_dev_gemm[std::min<size_t>(j, EliminatorStats::kOwnerDepthBins - 1)] += gmarks.seconds(j + 1);
+        }
         heap_.free(window);
         lap(stats.og_launch);
+        phase.next("group pack");
         // The policy the store exists for: every near block this group just
         // wrote goes back compressed, so the resident near-field set is the
         // packed one (9.47 -> 3.25 GB at the 192^3 Color leaf) and raw copies
@@ -6878,6 +6938,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     }
     stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
     t0 = clock::now();
+    phase.next("wave store");
     if (!gpu_sketch_) {
         free_copied_blocks(copier_->wait_all());  // the host sketch of the next wave reads them
     } else {

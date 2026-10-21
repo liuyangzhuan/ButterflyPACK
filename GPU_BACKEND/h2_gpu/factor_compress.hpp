@@ -287,6 +287,7 @@ public:
         auto* d_csz = reinterpret_cast<size_t*>(p);               p += align_up(nc * sizeof(size_t));
         auto* d_delta = reinterpret_cast<double*>(p);
 
+        HostRange phase("codec maxabs");
         std::vector<AbsMaxItem> absmax(n);
         for (size_t i = 0; i < n; ++i) {
             absmax[i].a = reinterpret_cast<const double*>(srcs[i]);
@@ -300,9 +301,11 @@ public:
         // maxabs comes back so the deltas (and the solve's dequantization)
         // are known on the host; a wave is a few hundred doubles.
         std::vector<double> maxabs(n, 0.0);
+        phase.next("codec maxabs wait");
         check_cuda(cudaMemcpyAsync(maxabs.data(), d_maxabs, n * sizeof(double),
                                    cudaMemcpyDeviceToHost, stream_), "xnr maxabs");
         check_cuda(cudaStreamSynchronize(stream_), "xnr maxabs");
+        phase.next("codec launch");
 
         if (group_of != nullptr && group_of->size() == n) {
             std::unordered_map<int, double> gmax;
@@ -336,6 +339,7 @@ public:
         H2_BK(bitcompBatchCompressLossy_fp64(plan_, d_in, d_out, d_nb, d_csz, d_delta));
 
         std::vector<size_t> csizes(nc, 0);
+        phase.next("codec sizes wait");
         check_cuda(cudaMemcpyAsync(csizes.data(), d_csz, nc * sizeof(size_t),
                                    cudaMemcpyDeviceToHost, stream_), "xnr sizes");
         check_cuda(cudaStreamSynchronize(stream_), "xnr sizes");
