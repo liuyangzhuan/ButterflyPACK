@@ -32,6 +32,8 @@ cmake .. \
 	-DCMAKE_C_COMPILER=cc \
 	-DCMAKE_INSTALL_PREFIX=. \
 	-DCMAKE_BUILD_TYPE=Release \
+	-DTPL_H2_NVCOMP_INCLUDE_DIRS="/global/cfs/cdirs/m2957/lib/lib/PrgEnv-gnu/nvcomp-linux-x86_64-5.3.0.16_cuda13-archive/include" \
+	-DTPL_H2_NVCOMP_LIBRARIES="/global/cfs/cdirs/m2957/lib/lib/PrgEnv-gnu/nvcomp-linux-x86_64-5.3.0.16_cuda13-archive/lib/libnvcomp.so;/global/cfs/cdirs/m2957/lib/lib/PrgEnv-gnu/nvcomp-linux-x86_64-5.3.0.16_cuda13-archive/lib/libnvcomp_cpu.so"\
 	-DPaRSEC_DIR=/global/cfs/cdirs/m2957/liuyangz/my_software/parsec_pr759/install/share/cmake/parsec \
 	-DTPL_BLAS_LIBRARIES="$LIBDIR/OpenBLAS_sequential/build/install/lib/libopenblas.so" \
 	-DTPL_LAPACK_LIBRARIES="$LIBDIR/OpenBLAS_sequential/build/install/lib/libopenblas.so" \
