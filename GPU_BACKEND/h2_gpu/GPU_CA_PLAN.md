@@ -7354,6 +7354,137 @@ chunk plan 0.66, the sketch plan's fill part 0.60, sketch launch 0.58,
 owner plan 0.56, group window 0.42, pack free 0.37, chunk launch 0.37,
 group stage 0.35, wave store 0.33, fill sources 0.30.
 
+*Item 3, the near store's PCIe traffic: the store on the device by spare
+room (2026-10-21).*  Host staging (c) put every extent of the near store
+in pinned host memory, so each pack's scatter and each put-back's gather
+crossed PCIe (copy_spans 6.6 s at the 384^3 leaf).  First a test with a
+fixed cap (the first N GB of a level's extents in the device heap, counted
+in the pressure tests), 384^3 on 8 x 80 GB, job 60092604:
+
+| near store | Color factor / leaf | CA0 factor / leaf |
+|---|---|---|
+| host (lib_og5) | 64.5 / 35.7 s | 64.4 / 34.7 s |
+| first 8 GB on the device (lib_nd8) | 61.5 / 32.6 s | 63.6 / 33.8 s |
+| first 24 GB on the device | heap exhausted (a 1.4 GB transient; 30 GB free, the largest range 1.31) | the same |
+
+The 8 GB cap packed more (367 -> 450 owner groups) since the store took the
+raw blocks' room, and still gained.  The 24 GB cap is the risk the room
+brings: extents held for the level fragmented the heap.  A cap is a
+property of one problem, so the rule that went in has none:
+
+- An extent goes to the device when the heap has a range for it as it
+  stands (try_alloc_resident without spilling, ResidentKind::NearStore),
+  else to the host region as before.
+- The extents do not count where the heap's level decides anything
+  (decision_used: the pressure tests, the owner group's arena, the wave's
+  chunking, the fill store's step, the shared-packing estimate, the keep's
+  budget), so what is packed is what the host store would pack.
+- A request the heap cannot otherwise meet - after the reclaimer, and in
+  the try_ allocations, whose callers would take a fallback - calls the
+  heap's spiller (DeviceHeap::set_spiller): spill_near_device moves
+  extents to the host, the one whose release leaves the largest free range
+  first, until a range of the request's size is free; the chunk homes,
+  tail and compact extents in them are rewritten.  The streams are
+  synchronized first, and every reader takes the homes' addresses after
+  its own heap allocation (the scatter's span list and the gathers'
+  staging; span lists are cudaMalloc'd), so no address is held across a
+  spill; the store's own extents never spill.  After a spill the level's
+  later extents go to the host (no back and forth).
+- The keep's range check spills before it splits or fails over a range.
+- The level-end compaction reads device extents one at a time through a
+  host buffer (no heap allocation there) and frees them, so the transition
+  has the card as before.
+
+Gate, 192^3 on 8 x 40 GB, where nothing packs under pressure and CA0 with
+H2_CA_pack_shared 1 packs its shared blocks by rule: the host store
+(lib_nd0) and lib_sp1 bitwise the same (CA0 -89253576.918982744, its whole
+2.70 GB store on the device, no spill, the leaf 4.95 -> 4.46 s; Color
+-89253588.318572894).  384^3 on 8 x 40 GB, same job and nodes (60094601):
+
+| 384^3, 40 GB, rank 0 | Color leaf | CA0 leaf | on the device at most | spills |
+|---|---|---|---|---|
+| host store (lib_nd0) | 40.2 s | 40.9 s | - | - |
+| by spare room (lib_sp1) | 39.0 s | 39.6 s | 12.4 / 11.3 GB | 10 / 7, 7.5 / 9.1 GB in 0.8 s |
+
+Even at 8x boxes on 40 GB the reserve above the hold limit holds 11-12 GB
+of the store for part of the level.  The spills' host extents are pinned
+when they happen: the levels' wait for pinning 0.2 -> 2.2 s (Color).
+Tried and reverted: pinning host chunks ahead in the background as the
+device extents grow (PinnedChunkPool::reserve_ahead, the spill then takes
+idle chunks).  Same job, lib_sp1 against it: the wait for pinning rose
+2.27 -> 3.02 s (Color) and 2.50 -> 3.71 (CA0), the spills 0.80 -> 1.34 s,
+the leaf 39.2 -> 39.7 s and 39.4 -> 40.1 s - the pinning threads' register
+calls stall the main thread's CUDA calls, as measured before (pinning
+cannot be hidden behind a thread).  A second lib_sp1 run: Color leaf 39.2,
+CA0 39.4 s (39.0 / 39.6 in the first).
+
+*Dropped (2026-10-22).*  At 768^3: on 64 x 80 GB the leaf gained 1.4-3.4 s
+but the level-end compaction (every device extent copied whole) and the
+transition and level 6 gave most of it back (Color factor 80.4 -> 78.8,
+CA0 81.4 -> 82.6 s); on 64 x 40 GB CA0 died in the leaf's waves, first
+with the owner pass's 1 GB window finding no range once every extent had
+spilled (extents placed best-fit among the resident blocks had moved the
+level's long-lived blocks and left a hole each), and, with the extents
+placed from the top while the transient reserve stayed contiguous (and the
+compaction gathering only the live pieces), with a 1.4 GB wave result
+finding no range at 10.6 GB used of 33.4: 4,193 free ranges on that rank
+against 141 at the host-store leaf's end.  A store that lives for the
+level perturbs where everything else lands, and spilling cannot undo
+fragmentation in the other blocks.  Color on 40 GB had gained 1.6 s
+(90.7 -> 89.1).  The attempt is kept as
+h2_c1_work/near_store_device_attempt.diff; what stays is the teardown
+that reports instead of throwing (the "free of an unknown pointer" was the
+destructor freeing a half-updated level over the real error).  The
+32^3-brick replay model (h2_c1_work/near_replay.py: a block's reads and
+writes from the geometry, calibrated to the run's pack count) says a
+"pack the block written furthest ahead first" rule would cut the codec
+traffic 17% on 80 GB (481 -> 398 GB) and 2% on 40 GB, where nearly every
+block must be packed between uses whatever the rule.
+
+*Item 2 again: the two plans under the launches (2026-10-22).*  The
+timeline's remaining idle, by host range (lib_og4, Color 384^3 leaf):
+near plan 0.91 s, owner plan 0.56, group stage 0.35.  Both plans had been
+placed to run under the device's work and no longer did: the fill-source
+and kept-factor compressions, added later between the box-region launches
+and step 5, synchronize the stream, so step 5's allocations and then the
+owner plan (after the last chunk) ran with the queue empty.  Now: step
+5's planning (the allocations and store items) right after the box
+region's launches, before those compressions; the owner plan as a lambda
+(plan_owner) called under the first chunk's launches when the operands
+come from the stores (entries built with null bases, each group points
+them at its window) and after the chunks otherwise, or again if a store
+failed; and the owner window's bitcomp plan and pointer lists released
+after the group's end sync instead of a sync of their own, so the window's
+decompression runs under the group's staging.  192^3 bitwise (Color
+-89253588.318572894, CA0 -89253576.918982744; leaf 3.43 -> 3.11 and 4.98
+-> 4.69 s).  384^3 on 8 x 40 GB, same job: Color leaf 40.2 -> 39.4 s,
+factor 71.7 -> 71.0; CA0 leaf 40.8 -> 39.7, factor 73.0 -> 71.8.
+
+*Item 3: the sketch of stored rows, measured (2026-10-22).*  The timeline's
+3.5 s of ordered_sketch_kernel at the 384^3 leaf is two things: the sketch
+of kernel rows (the evaluator's, compute) and the sketch of stored rows
+(temp2^T slots).  The latter now counts its items, the bytes its kernel
+streams (every row of each item's rows x ncols slice, whatever the draws)
+and its own device time (events around each group's launch; the "sketch of
+stored rows" line).  Color, 384^3 on 8 x 40 GB, rank 0:
+
+| level | items | bytes read | kernel | rate |
+|---|---|---|---|---|
+| 6 (leaf) | 415,679 | 1,083 GB | 1.77 s | 611 GB/s |
+| 5 | 50,655 | 336 GB | 0.86 s | 392 GB/s |
+| 4 | 5,999 | 93 GB | 0.48 s | 195 GB/s |
+
+So the stored sketch is 1.8 s of the leaf, at 40-45% of the card's
+bandwidth, and it reads 6.5x the level's raw fill sources (165 GB): a
+source's slot rows are streamed once per box that reads them.  Neither a
+kernel rewrite (at most ~0.9 s if it reached the bandwidth) nor a
+per-source pass (reads the slots once, applies every reader's draws in one
+sweep; the apply work is unchanged) is clearly worth it at the leaf; the
+upper levels run at a third of the rate on larger, fewer items (level 4:
+6,000 items, 195 GB/s), which a per-item tile over a 32-column warp
+explains, and would gain more from a different block shape than the leaf
+would.  Left as measured.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

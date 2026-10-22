@@ -1725,6 +1725,12 @@ public:
                     "ID %.2f, ranks down %.2f), background copies: busy %.2f s, level-end wait %.2f s\n",
                     lvl, e.sketch_plan, e.sketch_gpu, e.sk_meta, e.sk_upload, e.sk_rows,
                     e.sk_stored, e.sk_p, e.sk_fill, e.sk_id, e.sk_download, e.finish_store, e.finish_sources);
+        if (e.sk_stored_items > 0) {
+            std::printf("  [gpu] level %d sketch of stored rows: %lld items, %.1f GB read (rows x ncols, every row), "
+                        "%.2f s of kernel, %.0f GB/s\n", lvl, static_cast<long long>(e.sk_stored_items),
+                        e.sk_stored_bytes / 1e9, e.sk_stored_kernel,
+                        e.sk_stored_kernel > 0.0 ? e.sk_stored_bytes / e.sk_stored_kernel / 1e9 : 0.0);
+        }
         if (e.adaptive_rounds > 0) {
             std::printf("  [gpu] level %d adaptive ID rows: %lld rounds over the waves, later rounds %.2f s, "
                         "%lld boxes sampled more than one node\n",

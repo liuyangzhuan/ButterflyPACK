@@ -114,6 +114,10 @@ struct EliminatorStats {
     double sk_wait = 0.0;     // host blocked on the sketch (and the previous wave's device work)
     double sk_meta = 0.0, sk_upload = 0.0, sk_rows = 0.0, sk_stored = 0.0, sk_p = 0.0, sk_fill = 0.0,
            sk_id = 0.0, sk_download = 0.0;  //   ... its parts (device times from events)
+    // the sketch of stored rows alone (the kernel streams each item's rows x
+    // ncols source slice): its items, the bytes they read, its device time
+    int64_t sk_stored_items = 0;
+    double sk_stored_bytes = 0.0, sk_stored_kernel = 0.0;
     double el[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // device: fills, X_RR/X_SR, LU, X_NR, solves, Schur+step 5, owner targets, owner GEMMs
     double finish_sources = 0.0;  // level end: wait for the background copies
     double finish_store = 0.0;    // background copier: busy time (overlapped)
@@ -707,8 +711,19 @@ public:
                 std::fflush(stdout);
             }
         }
-        drop_kept(false, "teardown");
-        release_level_data();
+        // A throw during the waves gets here with the level half updated - a
+        // block the fills retired is still named until step 5 replaces it -
+        // and the release would free it again: an exception out of the
+        // destructor ends the process before the first error is reported
+        // (768^3 CA0 on 40 GB: "free of an unknown pointer" over a heap
+        // exhaustion, 2026-10-22).
+        try {
+            drop_kept(false, "teardown");
+            release_level_data();
+        } catch (const std::exception& e) {
+            std::printf("[gpu] level %d: teardown: %s\n", level_index_, e.what());
+            std::fflush(stdout);
+        }
         if (near_copy_stream_ != nullptr) {   // (release_level_data waited for the last scatter)
             fill_compressor_.hold_staging(nullptr);
             if (near_scatter_done_ != nullptr) cudaEventDestroy(near_scatter_done_);
@@ -4482,6 +4497,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
                 w.row_stride = r;
                 w.row_index = src.row_index;
                 stored_by_group[gi].push_back(w);
+                ++stats.sk_stored_items;
+                stats.sk_stored_bytes += static_cast<double>(src.rows) * r * sizeof(S);
                 max_r = std::max(max_r, r);
                 terms.push_back(Term{gi, src.morton, off_g, r});
             }
@@ -4628,6 +4645,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
     // H2_compress_factors: a group's slots are decompressed into the scratch,
     // then the batches that read them run, then the next group overwrites it.
     // Everything is on one stream, so that order holds without any waiting.
+    StreamMarks smarks;   // around each group's sketch of stored rows
     for (size_t g = 0; g < num_groups; ++g) {
 #ifdef H2_HAVE_NVCOMP
         if (g < fill_groups.size() && fill_groups[g].have_plan) {
@@ -4639,8 +4657,10 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         }
 #endif
         if (!stored_by_group[g].empty()) {
+            smarks.mark(stream);
             launch_ordered_sketch_stored(reinterpret_cast<const OrderedSketchItem*>(md + off_stored[g]),
                                          static_cast<int>(stored_by_group[g].size()), max_d, max_r, stream);
+            smarks.mark(stream);
         }
         if (!xrr_split[g].empty()) {  // X_RR_full = P L U, before its readers
             launch_lu_split(reinterpret_cast<const LuSplitItemT<S>*>(md + off_xrr_split[g]),
@@ -4691,6 +4711,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         const auto tw = clock::now();
         check_cuda(cudaStreamSynchronize(stream), "device sketch");
         stats.sk_wait += std::chrono::duration<double>(clock::now() - tw).count();
+        for (size_t i = 0; i + 1 < smarks.count(); i += 2) stats.sk_stored_kernel += smarks.seconds(i);
         phase.next("ID store");
     }
     // BPACK_TRACE=wave at the top levels: the ID's R diagonal per box, which
@@ -5108,6 +5129,377 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         }
     }
     const int nchunks = can_chunk ? static_cast<int>(std::min(wave_chunks, std::max<size_t>(active.size(), 1))) : 1;
+    // ---- The owner pass's plan: its candidates, targets and groups.  Run
+    // under the first chunk's box-region launches when the operands come from
+    // the stores (the entries are built with null bases and each group points
+    // them at its window), else after the chunks, when the raw outputs are
+    // still named: planned after the last chunk's outputs it ran with the
+    // device idle (0.6 s at the 384^3 leaf, 2026-10-22).  Planned early and a
+    // store then failing, it is planned again with the raw pointers.
+    auto win_key = [](int32_t src, int32_t slot, int which) {
+        return (static_cast<uint64_t>(src) << 33) | (static_cast<uint64_t>(slot) << 1) |
+               static_cast<uint64_t>(which);
+    };
+    // the slot's uncompressed bytes, which is where it lands in the window
+    auto slot_bytes = [&](int32_t src, int32_t slot, int which) -> size_t {
+        const WaveBox& sb = boxes[static_cast<size_t>(src)];
+        const auto& slots = which == 0 ? sb.state->t2t_slots : sb.state->xnrt_slots;
+        if (static_cast<size_t>(slot) >= slots.size()) return 0;
+        return align_up(static_cast<size_t>(slots[static_cast<size_t>(slot)].rows) *
+                        static_cast<size_t>(sb.r) * D);
+    };
+    struct SrcSlot { int32_t src = -1; int32_t sa = -1; int32_t sb = -1; };
+    struct Target {
+        DeviceMatrix* block = nullptr;
+        std::vector<typename VBatch<S>::Entry> tasks;
+        uint64_t key = 0;
+        int rows = 0, cols = 0;
+        BoxState* row_box = nullptr;
+        BoxState* col_box = nullptr;
+        bool fresh = false;   // allocated by its group: its kernel values first
+        std::vector<SrcSlot> src_slots;
+    };
+    std::vector<Target> targets;
+    std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
+    bool owner_planned = false;
+    auto plan_owner = [&]() {
+        const auto t_owner = clock::now();
+        phase.next("owner plan");
+        targets.clear();
+        owner_groups.clear();
+        owner_planned = true;
+        // The slot each neighbor position holds in the two stores: both skip the
+        // neighbors with no rows, so a position is not a slot index.
+        for (WaveBox& wb : boxes) {
+            wb.slot_of_pos.assign(wb.counts.size(), -1);
+            int32_t next = 0;
+            for (size_t a = 0; a < wb.counts.size(); ++a) {
+                if (wb.counts[a] > 0) wb.slot_of_pos[a] = next++;
+            }
+        }
+        // ---- deferred X_NN owner pass: for every source E of the wave and every
+        // pair of its neighbors, target(lo, hi) += temp2_E[hi rows] X_NR_E[lo rows]^T,
+        // and Schur(C) += temp2_E[C rows] X_NR_E[C rows]^T.  Contributions to a
+        // target arrive in the CPU order: sources in the owner's one_hop order.
+        // CA levels: the candidates are the writable boxes (local and ghosts); a
+        // pair of two eliminated ghosts is never read here and is skipped.  A
+        // pair's contributions arrive by source Morton there: its copies on other
+        // ranks may be reached from the other endpoint.
+        std::vector<int64_t> candidates;
+        {
+            std::unordered_set<int64_t> seen;
+            for (int i : active) {
+                const WaveBox& wb = boxes[static_cast<size_t>(i)];
+                if (wb.ntot == 0) continue;
+                for (int64_t c : wb.box->one_hop) {
+                    if (is_interest(c) && wave_index_of.count(c) == 0 && seen.insert(c).second) candidates.push_back(c);
+                }
+            }
+            std::sort(candidates.begin(), candidates.end());
+        }
+        auto t_phase = clock::now();
+        auto owner_lap = [&](double& acc) {
+            const auto now = clock::now();
+            acc += std::chrono::duration<double>(now - t_phase).count();
+            t_phase = now;
+        };
+        stats.po_candidates += std::chrono::duration<double>(t_phase - t_owner).count();
+        std::vector<EvalItem> owner_evals;
+        int max_owner_m = 0, max_owner_n = 0;
+        // Every target belongs to one candidate (its Schur block; a pair with a
+        // higher box, or with another rank's box): the candidates' targets and
+        // tasks are found in parallel, each in the order of the sequential loop,
+        // then created (blocks, their kernel values, the edge map) and joined in
+        // candidate order, which is the sequential loop's target order.
+        // Which slot of which source box a task's two operands are, so its group
+        // can point them at the window it decompressed into.
+        struct CandidateTarget {
+            uint64_t key = 0;
+            DeviceMatrix* block = nullptr;  // the Schur block or an existing near block; else created at the join
+            BoxState* row_box = nullptr;
+            BoxState* col_box = nullptr;
+            int rows = 0, cols = 0;
+            std::vector<typename VBatch<S>::Entry> tasks;  // C set at the join
+            std::vector<int64_t> sources;                 // of the tasks
+            std::vector<SrcSlot> src_slots;               // ... and their slots
+        };
+        std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
+        // (per candidate, summed after the loop: the dead updates not made, by kind
+        // - two eliminated ghosts, an eliminated ghost's Schur block, with a box
+        // beyond the halo - flops and tasks)
+        std::vector<std::array<double, 6>> dead_by_candidate(candidates.size(), std::array<double, 6>{});
+        std::exception_ptr owner_failure;
+        std::mutex owner_failure_mutex;
+        #pragma omp parallel for schedule(dynamic, 4)
+        for (int64_t ci = 0; ci < static_cast<int64_t>(candidates.size()); ++ci) {
+            try {
+                const int64_t cm = candidates[static_cast<size_t>(ci)];
+                auto& mine = candidate_targets[static_cast<size_t>(ci)];
+                Box* cbox = held_box(cm);
+                BoxState& cs = state_of(cm);
+                // (a pair of two eliminated ghosts is never read; an owner level:
+                // of two eliminated boxes of other ranks)
+                const bool eliminated_ghost = cs.eliminated && (owner_ != nullptr ? !is_local(cm) : cs.ghost);
+                auto target_for = [&](uint64_t key, DeviceMatrix* block, int rows, int cols, BoxState& row_box,
+                                      BoxState& col_box) -> CandidateTarget& {
+                    for (CandidateTarget& t : mine) {
+                        if (t.key == key) return t;
+                    }
+                    if (block != nullptr && block->ptr != nullptr && (block->rows != rows || block->cols != cols)) {
+                        std::ostringstream oss;
+                        oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
+                            << ", expected " << rows << " x " << cols;
+                        throw std::runtime_error(oss.str());
+                    }
+                    mine.push_back(CandidateTarget{key, block, &row_box, &col_box, rows, cols, {}, {}});
+                    return mine.back();
+                };
+                auto near_block = [&](uint64_t key) -> DeviceMatrix* {
+                    auto it = edges_.find(key);
+                    return it != edges_.end() ? &it->second : nullptr;
+                };
+                for (int64_t em : cbox->one_hop) {
+                    auto wit = wave_index_of.find(em);
+                    if (wit == wave_index_of.end()) continue;
+                    const int32_t src_idx = static_cast<int32_t>(wit->second);
+                    const WaveBox& src = boxes[wit->second];
+                    if (src.r == 0 || src.ntot == 0) continue;
+                    // the raw outputs are gone when the operands come from the
+                    // stores, so the entries are built with null bases and the
+                    // group loop points them at its window
+                    auto op = [](const S* base, int row) -> const S* {
+                        return base == nullptr ? nullptr : base + row;
+                    };
+                    const auto& src_hop = src.box->one_hop;
+                    const size_t c_pos = static_cast<size_t>(std::find(src_hop.begin(), src_hop.end(), cm) - src_hop.begin());
+                    if (c_pos == src_hop.size()) throw std::runtime_error("LevelEliminator: asymmetric one_hop lists");
+                    const int n_c = static_cast<int>(src.counts[c_pos]);
+                    if (n_c == 0) continue;
+                    const S* x_nr_c = op(src.xnr, src.row0[c_pos]);
+                    for (size_t a = 0; a < src_hop.size(); ++a) {
+                        const int64_t am = src_hop[a];
+                        const int n_a = static_cast<int>(src.counts[a]);
+                        if (n_a == 0) continue;
+                        auto& dead = dead_by_candidate[static_cast<size_t>(ci)];
+                        const double task_flops = 2.0 * n_c * n_a * src.r;
+                        if (eliminated_ghost && am != cm) {
+                            const BoxState& as = state_of(am);
+                            if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) {
+                                if (cm < am || !is_interest(am)) { dead[0] += task_flops; dead[1] += 1; }  // (once a pair)
+                                continue;
+                            }
+                        }
+                        // A replicated level: nor an eliminated ghost's own Schur block,
+                        // nor its pairs with boxes beyond this rank's halo.  Its
+                        // parent is another rank's, and the transition builds only
+                        // this rank's parents (pairs with a box of this rank); the
+                        // box beyond the halo is never eliminated here.  The owner
+                        // makes both for real.
+                        if (eliminated_ghost && owner_ == nullptr && ca_ && (am == cm || !is_interest(am))) {
+                            const int k = am == cm ? 2 : 4;
+                            dead[k] += task_flops;
+                            dead[k + 1] += 1;
+                            continue;
+                        }
+                        CandidateTarget* target = nullptr;
+                        // (an owner level: a block is updated here only if it is read
+                        // here, see apply_remote_generators; an owned ghost's blocks
+                        // are spent after its elimination here)
+                        if (owner_ != nullptr && !is_local(cm) && cs.eliminated) {
+                            if (am == cm || !is_local(am)) {
+                                if (am == cm || !(is_writable(am) && !state_of(am).eliminated)) continue;
+                            }
+                        }
+                        if (nonsym_) {
+                            // every ordered pair: K(x, y) += temp2_E[x rows] X_RN_E[:, y cols] (NN)
+                            // (from the stores: the temp2^T slot of x and the X_RN slot of y)
+                            auto task = [&](CandidateTarget& t, size_t x_pos, int nx, size_t y_pos, int ny) {
+                                t.tasks.push_back({op(src.temp2, src.row0[x_pos]),
+                                                   src.xrn == nullptr ? nullptr
+                                                                      : src.xrn + static_cast<size_t>(src.row0[y_pos]) * src.r,
+                                                   nullptr, nx, ny, src.r, src.ntot, src.r, nx});
+                                t.sources.push_back(em);
+                                t.src_slots.push_back(SrcSlot{src_idx, slot_at(src, x_pos), slot_at(src, y_pos)});
+                            };
+                            if (am == cm) {
+                                if (!is_writable(cm) && !(is_local(cm) && cs.eliminated)) continue;
+                                task(target_for(~static_cast<uint64_t>(cm), &cs.schur, n_c, n_c, cs, cs), c_pos, n_c,
+                                     c_pos, n_c);
+                            } else if (deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am) &&
+                                       (cm < am || !is_interest(am))) {
+                                // both of the pair's blocks, with the lower candidate (or this
+                                // rank's copies of a pair with another rank's box)
+                                BoxState& as = state_of(am);
+                                task(target_for(dkey(am, cm), near_block(dkey(am, cm)), n_a, n_c, as, cs), a, n_a, c_pos,
+                                     n_c);
+                                task(target_for(dkey(cm, am), near_block(dkey(cm, am)), n_c, n_a, cs, as), c_pos, n_c, a,
+                                     n_a);
+                            }
+                            continue;
+                        }
+                        if (am == cm) {
+                            // (a box eliminated elsewhere: its Schur block is read once its
+                            // owner's has landed here, i.e. once it is eliminated)
+                            if (!is_writable(cm) && !(is_local(cm) && cs.eliminated)) continue;
+                            target = &target_for(~static_cast<uint64_t>(cm), &cs.schur, n_c, n_c, cs, cs);
+                        } else if (cm < am && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
+                            BoxState& as = state_of(am);
+                            const uint64_t key = edge_key(cm, am);
+                            target = &target_for(key, near_block(key), n_a, n_c, as, cs);
+                        } else if (!is_interest(am) && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
+                            // A pair with a lower box of another rank: this rank's
+                            // copy (the other rank's comes from the generator), rows =
+                            // the candidate (hi): temp2_E[c rows] X_NR_E[a rows]^T, as
+                            // every pair (the transpose of the lo-rows product would
+                            // round differently: its terms differ)
+                            BoxState& as = state_of(am);
+                            const uint64_t key = edge_key(cm, am);
+                            target = &target_for(key, near_block(key), n_c, n_a, cs, as);
+                            target->tasks.push_back({op(src.temp2, src.row0[c_pos]), op(src.xnr, src.row0[a]), nullptr,
+                                                     n_c, n_a, src.r, src.ntot, src.ntot, n_c});
+                            target->sources.push_back(em);
+                            target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, c_pos), slot_at(src, a)});
+                            continue;
+                        } else {
+                            continue;  // owned by the other endpoint, or a lazy far pair
+                        }
+                        target->tasks.push_back({op(src.temp2, src.row0[a]), x_nr_c, nullptr,
+                                                 n_a, n_c, src.r, src.ntot, src.ntot, n_a});
+                        target->sources.push_back(em);
+                        target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, a), slot_at(src, c_pos)});
+                    }
+                }
+                if (ca_) {  // (a pair's contributions by source Morton)
+                    for (CandidateTarget& t : mine) {
+                        if (t.tasks.size() < 2) continue;
+                        std::vector<size_t> order(t.tasks.size());
+                        std::iota(order.begin(), order.end(), size_t{0});
+                        std::stable_sort(order.begin(), order.end(),
+                                         [&](size_t x, size_t y) { return t.sources[x] < t.sources[y]; });
+                        std::vector<typename VBatch<S>::Entry> sorted;
+                        sorted.reserve(order.size());
+                        for (size_t x : order) sorted.push_back(t.tasks[x]);
+                        t.tasks.swap(sorted);
+                        // The sources and their slots travel with their tasks.  A
+                        // task's operands are named by its slot pair, so
+                        // permuting the tasks alone hands the GEMM another box's
+                        // rows - which is what it did: NaN in the next level's ID
+                        // input, on the CA path only, because only it sorts.
+                        if (t.src_slots.size() == t.tasks.size()) {
+                            std::vector<SrcSlot> ss;
+                            ss.reserve(order.size());
+                            for (size_t x : order) ss.push_back(t.src_slots[x]);
+                            t.src_slots.swap(ss);
+                        }
+                        std::vector<int64_t> src;
+                        src.reserve(order.size());
+                        for (size_t x : order) src.push_back(t.sources[x]);
+                        t.sources.swap(src);
+                    }
+                }
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(owner_failure_mutex);
+                if (!owner_failure) owner_failure = std::current_exception();
+            }
+        }
+        if (owner_failure) std::rethrow_exception(owner_failure);
+        for (const auto& d : dead_by_candidate) {
+            stats.dead_pair_flops += kFlopScale * d[0];
+            stats.dead_pair_tasks += static_cast<int64_t>(d[1]);
+            stats.dead_schur_flops += kFlopScale * d[2];
+            stats.dead_schur_tasks += static_cast<int64_t>(d[3]);
+            stats.dead_beyond_flops += kFlopScale * d[4];
+            stats.dead_beyond_tasks += static_cast<int64_t>(d[5]);
+        }
+        owner_lap(stats.po_pairs);
+        // the join: blocks of new targets (their kernel values first), in the
+        // sequential loop's order
+        // The join records a target; its block is allocated or materialized, its
+        // kernel values evaluated and its C pointers filled in when its group
+        // runs, so that only one group's blocks need to be raw at a time.
+        // (piece 4 put every adopted block back here, before the join, because the
+        // join allocated them.  Step 3b-i moved allocation into the group loop
+        // and the join only records shapes, so that pre-pass became redundant -
+        // and harmful: it decompressed the whole set up front, 6.16 GB live at
+        // the 192^3 leaf, which is exactly the bounding the groups exist to do.)
+        for (size_t ci = 0; ci < candidates.size(); ++ci) {
+            for (CandidateTarget& t : candidate_targets[ci]) {
+                DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
+                if (block->ptr == nullptr) {
+                    // allocated, or put back, when its group runs
+                } else if (block->rows != t.rows || block->cols != t.cols) {
+                    std::ostringstream oss;
+                    oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
+                        << ", expected " << t.rows << " x " << t.cols;
+                    throw std::runtime_error(oss.str());
+                }
+                targets.push_back(Target{block, std::move(t.tasks), t.key, t.rows, t.cols, t.row_box, t.col_box,
+                                         false, std::move(t.src_slots)});
+            }
+        }
+        owner_lap(stats.po_order);
+        // Sub-batch j holds the j-th contribution of every target, so no launch
+        // writes a block twice and each block sees its contributions in order.
+        //
+        // In groups of a bounded set of blocks, so that holding the near-field
+        // blocks compressed needs one group decompressed at a time rather than
+        // the 10.61 GB a wave touches.  Each target lies wholly within one group
+        // and keeps its contributions' order inside that group's sub-batches, so
+        // every block still sees the same contributions in the same order and the
+        // bits do not move; only which GEMMs share a launch changes, which the
+        // kernels' batch-independence covers (tests/batch_determinism.cpp).  The
+        // group boundaries follow the targets' canonical order and their shapes,
+        // both rank-independent, so replicas group alike.
+        // Holding the near blocks packed is **off**: measured at 192^3 it raises
+        // the leaf peak (20.72 -> 21.01 GB Color, 22.51 -> 23.48 CA0) and costs
+        // 0.76 / 1.70 s, because the per-wave materialization is still unbounded
+        // (6.16 GB of decompressed copies at the peak) while the store itself
+        // works (near blocks 9.47 -> 3.24 GB).  GPU_CA_PLAN.md step 3c lists what
+        // remains: bounded windows for the three readers, and a group budget
+        // chosen for the GEMM launch count rather than guessed.
+        //
+        // With it off the targets form a single group, which is the launch
+        // structure the owner pass had before any of this: the budget alone takes
+        // the leaf from 120 batched GEMM calls to 730 and costs 0.64 s, whether
+        // anything is compressed or not.
+
+        {
+            // Two budgets: the targets the group writes, and - when the operands
+            // come from their stores - the source slots it has to decompress, so
+            // the window is bounded by construction rather than by what the data
+            // happens to need.
+            std::unordered_set<uint64_t> seen;
+            const size_t group_budget = near_group_budget(), window_budget = owner_window_bytes();
+            size_t at = 0;
+            while (at < targets.size()) {
+                size_t bytes = 0, win = 0, end = at;
+                seen.clear();
+                while (end < targets.size()) {
+                    if (end > at && (bytes >= group_budget || win >= window_budget)) break;
+                    bytes += static_cast<size_t>(targets[end].rows) * targets[end].cols * D;
+                    if (from_store) {
+                        for (const SrcSlot& ss : targets[end].src_slots) {
+                            for (int which = 0; which < 2; ++which) {
+                                const int32_t slot = which == 0 ? ss.sa : ss.sb;
+                                if (ss.src < 0 || slot < 0) continue;
+                                if (!seen.insert(win_key(ss.src, slot, which)).second) continue;
+                                win += slot_bytes(ss.src, slot, which);
+                            }
+                        }
+                    }
+                    ++end;
+                }
+                owner_groups.push_back({at, end});
+                stats.owner_groups += 1;
+                at = end;
+            }
+        }
+
+        owner_lap(stats.po_batches);
+        stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
+        stats.plan += std::chrono::duration<double>(clock::now() - t_owner).count();
+    };
+
     for (int chunk = 0; chunk < nchunks; ++chunk) {
         const size_t c0 = std::min(active.size(), static_cast<size_t>(chunk) * chunk_boxes);
         const size_t c1 = nchunks == 1 ? active.size() : std::min(active.size(), c0 + chunk_boxes);
@@ -5803,6 +6195,75 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         if (!g7n.entries.empty()) g7n.gemm(md, MagmaNoTrans, MagmaNoTrans, 1.0, 0.0, queue);
         marks.mark(stream);  // 5: transposes, Schur
         stats.launch += std::chrono::duration<double>(clock::now() - t0).count();
+        // ---- Step 5, planned while the device runs the box region: the near
+        // block of every neighbor becomes A_NS + update (current neighbor rows x
+        // this box's skeleton), stored in the canonical orientation.  Its tens of
+        // thousands of block allocations per wave kept the device idle when they
+        // came before the launches above; they may now take the blocks those
+        // launches retired.  The items go with the owner pass's image.  Planned
+        // here, under the launches just made: the fill-source and kept-factor
+        // compressions below synchronize the stream, and after them the device
+        // sat idle through these allocations (0.9 s at the 384^3 leaf,
+        // 2026-10-22).  Nothing below changes what the plan reads.
+        phase.next("near plan");
+        {
+            const auto t_near = clock::now();
+            for (int i : chunk_active) {
+                WaveBox& wb = boxes[static_cast<size_t>(i)];
+                Box* box = wb.box;
+                const int k = wb.k, nt = wb.ntot;
+                for (size_t a = 0; a < box->one_hop.size(); ++a) {
+                    const int64_t nm = box->one_hop[a];
+                    const int c = static_cast<int>(wb.counts[a]);
+                    if (c == 0) continue;
+                    if (nonsym_) {
+                        // K(N, B) = A_NS + temp2 X_RS (c x k), K(B, N) = A_SN + X_SR temp4 (k x c)
+                        DeviceMatrix ns_block{heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur),
+                                              c, k};
+                        DeviceMatrix sn_block{heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur),
+                                              k, c};
+                        stores.push_back(AddStoreItem{ns_block.ptr, 1, c, c, k, wb.ans + wb.row0[a], nt,
+                                                      wb.xns + wb.row0[a], nt});
+                        const size_t col0 = static_cast<size_t>(wb.row0[a]) * k;
+                        stores.push_back(AddStoreItem{sn_block.ptr, 1, k, k, c, wb.asn + col0, k, wb.xsn + col0, k});
+                        max_store_m = std::max({max_store_m, c, k});
+                        max_store_n = std::max({max_store_n, c, k});
+                        for (const auto& [key, block] : {std::make_pair(dkey(nm, box->morton_index), ns_block),
+                                                         std::make_pair(dkey(box->morton_index, nm), sn_block)}) {
+                            edges_[key] = block;
+                            note_write(&edges_[key], static_cast<size_t>(block.rows) * block.cols * D);
+                            fresh_near.push_back(FreshNear{&edges_[key], key, block.rows, block.cols});
+                        }
+                        continue;
+                    }
+                    DeviceMatrix fresh;
+                    const auto t_alloc = clock::now();
+                    fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur);
+                    stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
+                    int64_t ors = 1, ocs = c;
+                    if (box->morton_index < nm) {
+                        fresh.rows = c;  // rows = neighbor (hi)
+                        fresh.cols = k;
+                    } else {
+                        fresh.rows = k;  // rows = this box (hi)
+                        fresh.cols = c;
+                        ors = k;
+                        ocs = 1;
+                    }
+                    stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
+                    max_store_m = std::max(max_store_m, c);
+                    max_store_n = std::max(max_store_n, k);
+                    const uint64_t fkey = edge_key(box->morton_index, nm);
+                    edges_[fkey] = fresh;
+                    note_write(&edges_[fkey], static_cast<size_t>(fresh.rows) * fresh.cols * D);
+                    fresh_near.push_back(FreshNear{&edges_[fkey], fkey, fresh.rows, fresh.cols});
+                }
+            }
+            const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
+            stats.pb_near += seconds;
+            stats.plan += seconds;
+        }
+        if (chunk == 0 && from_store) plan_owner();
         phase.next("chunk outputs");
 
         // ---- the wave's fill sources, compressed a slot at a time (the readers
@@ -5887,71 +6348,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 wb.temp4 = nullptr;   //  temp4 with temp2's group)
             }
         }
-        // ---- Step 5, planned while the device runs the box region: the near
-        // block of every neighbor becomes A_NS + update (current neighbor rows x
-        // this box's skeleton), stored in the canonical orientation.  Its tens of
-        // thousands of block allocations per wave kept the device idle when they
-        // came before the launches above; they may now take the blocks those
-        // launches retired.  The items go with the owner pass's image.
-        phase.next("near plan");
-        {
-            const auto t_near = clock::now();
-            for (int i : chunk_active) {
-                WaveBox& wb = boxes[static_cast<size_t>(i)];
-                Box* box = wb.box;
-                const int k = wb.k, nt = wb.ntot;
-                for (size_t a = 0; a < box->one_hop.size(); ++a) {
-                    const int64_t nm = box->one_hop[a];
-                    const int c = static_cast<int>(wb.counts[a]);
-                    if (c == 0) continue;
-                    if (nonsym_) {
-                        // K(N, B) = A_NS + temp2 X_RS (c x k), K(B, N) = A_SN + X_SR temp4 (k x c)
-                        DeviceMatrix ns_block{heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur),
-                                              c, k};
-                        DeviceMatrix sn_block{heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur),
-                                              k, c};
-                        stores.push_back(AddStoreItem{ns_block.ptr, 1, c, c, k, wb.ans + wb.row0[a], nt,
-                                                      wb.xns + wb.row0[a], nt});
-                        const size_t col0 = static_cast<size_t>(wb.row0[a]) * k;
-                        stores.push_back(AddStoreItem{sn_block.ptr, 1, k, k, c, wb.asn + col0, k, wb.xsn + col0, k});
-                        max_store_m = std::max({max_store_m, c, k});
-                        max_store_n = std::max({max_store_n, c, k});
-                        for (const auto& [key, block] : {std::make_pair(dkey(nm, box->morton_index), ns_block),
-                                                         std::make_pair(dkey(box->morton_index, nm), sn_block)}) {
-                            edges_[key] = block;
-                            note_write(&edges_[key], static_cast<size_t>(block.rows) * block.cols * D);
-                            fresh_near.push_back(FreshNear{&edges_[key], key, block.rows, block.cols});
-                        }
-                        continue;
-                    }
-                    DeviceMatrix fresh;
-                    const auto t_alloc = clock::now();
-                    fresh.ptr = heap_.alloc_resident<S>(static_cast<size_t>(c) * k * D, ResidentKind::LevelSchur);
-                    stats.pb_near_alloc += std::chrono::duration<double>(clock::now() - t_alloc).count();
-                    int64_t ors = 1, ocs = c;
-                    if (box->morton_index < nm) {
-                        fresh.rows = c;  // rows = neighbor (hi)
-                        fresh.cols = k;
-                    } else {
-                        fresh.rows = k;  // rows = this box (hi)
-                        fresh.cols = c;
-                        ors = k;
-                        ocs = 1;
-                    }
-                    stores.push_back(AddStoreItem{fresh.ptr, ors, ocs, c, k, wb.ans + wb.row0[a], nt, wb.xns + wb.row0[a], nt});
-                    max_store_m = std::max(max_store_m, c);
-                    max_store_n = std::max(max_store_n, k);
-                    const uint64_t fkey = edge_key(box->morton_index, nm);
-                    edges_[fkey] = fresh;
-                    note_write(&edges_[fkey], static_cast<size_t>(fresh.rows) * fresh.cols * D);
-                    fresh_near.push_back(FreshNear{&edges_[fkey], fkey, fresh.rows, fresh.cols});
-                }
-            }
-            const double seconds = std::chrono::duration<double>(clock::now() - t_near).count();
-            stats.pb_near += seconds;
-            stats.plan += seconds;
-        }
-
         // The near pass's stores first, in an image of their own: they write the
         // fresh blocks of step 5 and carry no metadata offsets.
         phase.next("near stores");
@@ -6025,365 +6421,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
     marks.mark(stream);  // where the production ends
 
 
-    const auto t_owner = clock::now();
-    phase.next("owner plan");
-    // The slot each neighbor position holds in the two stores: both skip the
-    // neighbors with no rows, so a position is not a slot index.
-    for (WaveBox& wb : boxes) {
-        wb.slot_of_pos.assign(wb.counts.size(), -1);
-        int32_t next = 0;
-        for (size_t a = 0; a < wb.counts.size(); ++a) {
-            if (wb.counts[a] > 0) wb.slot_of_pos[a] = next++;
-        }
-    }
-    auto win_key = [](int32_t src, int32_t slot, int which) {
-        return (static_cast<uint64_t>(src) << 33) | (static_cast<uint64_t>(slot) << 1) |
-               static_cast<uint64_t>(which);
-    };
-    // the slot's uncompressed bytes, which is where it lands in the window
-    auto slot_bytes = [&](int32_t src, int32_t slot, int which) -> size_t {
-        const WaveBox& sb = boxes[static_cast<size_t>(src)];
-        const auto& slots = which == 0 ? sb.state->t2t_slots : sb.state->xnrt_slots;
-        if (static_cast<size_t>(slot) >= slots.size()) return 0;
-        return align_up(static_cast<size_t>(slots[static_cast<size_t>(slot)].rows) *
-                        static_cast<size_t>(sb.r) * D);
-    };
-    owner_meta_.clear();
-    const uint64_t owner_stamp = ~wave_stamp_;  // skeleton lists of this image
-    // ---- deferred X_NN owner pass: for every source E of the wave and every
-    // pair of its neighbors, target(lo, hi) += temp2_E[hi rows] X_NR_E[lo rows]^T,
-    // and Schur(C) += temp2_E[C rows] X_NR_E[C rows]^T.  Contributions to a
-    // target arrive in the CPU order: sources in the owner's one_hop order.
-    // CA levels: the candidates are the writable boxes (local and ghosts); a
-    // pair of two eliminated ghosts is never read here and is skipped.  A
-    // pair's contributions arrive by source Morton there: its copies on other
-    // ranks may be reached from the other endpoint.
-    std::vector<int64_t> candidates;
-    {
-        std::unordered_set<int64_t> seen;
-        for (int i : active) {
-            const WaveBox& wb = boxes[static_cast<size_t>(i)];
-            if (wb.ntot == 0) continue;
-            for (int64_t c : wb.box->one_hop) {
-                if (is_interest(c) && wave_index_of.count(c) == 0 && seen.insert(c).second) candidates.push_back(c);
-            }
-        }
-        std::sort(candidates.begin(), candidates.end());
-    }
-    auto t_phase = clock::now();
-    auto owner_lap = [&](double& acc) {
-        const auto now = clock::now();
-        acc += std::chrono::duration<double>(now - t_phase).count();
-        t_phase = now;
-    };
-    stats.po_candidates += std::chrono::duration<double>(t_phase - t_owner).count();
-    std::vector<EvalItem> owner_evals;
-    int max_owner_m = 0, max_owner_n = 0;
-    // Every target belongs to one candidate (its Schur block; a pair with a
-    // higher box, or with another rank's box): the candidates' targets and
-    // tasks are found in parallel, each in the order of the sequential loop,
-    // then created (blocks, their kernel values, the edge map) and joined in
-    // candidate order, which is the sequential loop's target order.
-    // Which slot of which source box a task's two operands are, so its group
-    // can point them at the window it decompressed into.
-    struct SrcSlot { int32_t src = -1; int32_t sa = -1; int32_t sb = -1; };
-    struct CandidateTarget {
-        uint64_t key = 0;
-        DeviceMatrix* block = nullptr;  // the Schur block or an existing near block; else created at the join
-        BoxState* row_box = nullptr;
-        BoxState* col_box = nullptr;
-        int rows = 0, cols = 0;
-        std::vector<typename VBatch<S>::Entry> tasks;  // C set at the join
-        std::vector<int64_t> sources;                 // of the tasks
-        std::vector<SrcSlot> src_slots;               // ... and their slots
-    };
-    std::vector<std::vector<CandidateTarget>> candidate_targets(candidates.size());
-    // (per candidate, summed after the loop: the dead updates not made, by kind
-    // - two eliminated ghosts, an eliminated ghost's Schur block, with a box
-    // beyond the halo - flops and tasks)
-    std::vector<std::array<double, 6>> dead_by_candidate(candidates.size(), std::array<double, 6>{});
-    std::exception_ptr owner_failure;
-    std::mutex owner_failure_mutex;
-    #pragma omp parallel for schedule(dynamic, 4)
-    for (int64_t ci = 0; ci < static_cast<int64_t>(candidates.size()); ++ci) {
-        try {
-            const int64_t cm = candidates[static_cast<size_t>(ci)];
-            auto& mine = candidate_targets[static_cast<size_t>(ci)];
-            Box* cbox = held_box(cm);
-            BoxState& cs = state_of(cm);
-            // (a pair of two eliminated ghosts is never read; an owner level:
-            // of two eliminated boxes of other ranks)
-            const bool eliminated_ghost = cs.eliminated && (owner_ != nullptr ? !is_local(cm) : cs.ghost);
-            auto target_for = [&](uint64_t key, DeviceMatrix* block, int rows, int cols, BoxState& row_box,
-                                  BoxState& col_box) -> CandidateTarget& {
-                for (CandidateTarget& t : mine) {
-                    if (t.key == key) return t;
-                }
-                if (block != nullptr && block->ptr != nullptr && (block->rows != rows || block->cols != cols)) {
-                    std::ostringstream oss;
-                    oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
-                        << ", expected " << rows << " x " << cols;
-                    throw std::runtime_error(oss.str());
-                }
-                mine.push_back(CandidateTarget{key, block, &row_box, &col_box, rows, cols, {}, {}});
-                return mine.back();
-            };
-            auto near_block = [&](uint64_t key) -> DeviceMatrix* {
-                auto it = edges_.find(key);
-                return it != edges_.end() ? &it->second : nullptr;
-            };
-            for (int64_t em : cbox->one_hop) {
-                auto wit = wave_index_of.find(em);
-                if (wit == wave_index_of.end()) continue;
-                const int32_t src_idx = static_cast<int32_t>(wit->second);
-                const WaveBox& src = boxes[wit->second];
-                if (src.r == 0 || src.ntot == 0) continue;
-                // the raw outputs are gone when the operands come from the
-                // stores, so the entries are built with null bases and the
-                // group loop points them at its window
-                auto op = [](const S* base, int row) -> const S* {
-                    return base == nullptr ? nullptr : base + row;
-                };
-                const auto& src_hop = src.box->one_hop;
-                const size_t c_pos = static_cast<size_t>(std::find(src_hop.begin(), src_hop.end(), cm) - src_hop.begin());
-                if (c_pos == src_hop.size()) throw std::runtime_error("LevelEliminator: asymmetric one_hop lists");
-                const int n_c = static_cast<int>(src.counts[c_pos]);
-                if (n_c == 0) continue;
-                const S* x_nr_c = op(src.xnr, src.row0[c_pos]);
-                for (size_t a = 0; a < src_hop.size(); ++a) {
-                    const int64_t am = src_hop[a];
-                    const int n_a = static_cast<int>(src.counts[a]);
-                    if (n_a == 0) continue;
-                    auto& dead = dead_by_candidate[static_cast<size_t>(ci)];
-                    const double task_flops = 2.0 * n_c * n_a * src.r;
-                    if (eliminated_ghost && am != cm) {
-                        const BoxState& as = state_of(am);
-                        if (as.eliminated && (owner_ != nullptr ? !is_local(am) : as.ghost)) {
-                            if (cm < am || !is_interest(am)) { dead[0] += task_flops; dead[1] += 1; }  // (once a pair)
-                            continue;
-                        }
-                    }
-                    // A replicated level: nor an eliminated ghost's own Schur block,
-                    // nor its pairs with boxes beyond this rank's halo.  Its
-                    // parent is another rank's, and the transition builds only
-                    // this rank's parents (pairs with a box of this rank); the
-                    // box beyond the halo is never eliminated here.  The owner
-                    // makes both for real.
-                    if (eliminated_ghost && owner_ == nullptr && ca_ && (am == cm || !is_interest(am))) {
-                        const int k = am == cm ? 2 : 4;
-                        dead[k] += task_flops;
-                        dead[k + 1] += 1;
-                        continue;
-                    }
-                    CandidateTarget* target = nullptr;
-                    // (an owner level: a block is updated here only if it is read
-                    // here, see apply_remote_generators; an owned ghost's blocks
-                    // are spent after its elimination here)
-                    if (owner_ != nullptr && !is_local(cm) && cs.eliminated) {
-                        if (am == cm || !is_local(am)) {
-                            if (am == cm || !(is_writable(am) && !state_of(am).eliminated)) continue;
-                        }
-                    }
-                    if (nonsym_) {
-                        // every ordered pair: K(x, y) += temp2_E[x rows] X_RN_E[:, y cols] (NN)
-                        // (from the stores: the temp2^T slot of x and the X_RN slot of y)
-                        auto task = [&](CandidateTarget& t, size_t x_pos, int nx, size_t y_pos, int ny) {
-                            t.tasks.push_back({op(src.temp2, src.row0[x_pos]),
-                                               src.xrn == nullptr ? nullptr
-                                                                  : src.xrn + static_cast<size_t>(src.row0[y_pos]) * src.r,
-                                               nullptr, nx, ny, src.r, src.ntot, src.r, nx});
-                            t.sources.push_back(em);
-                            t.src_slots.push_back(SrcSlot{src_idx, slot_at(src, x_pos), slot_at(src, y_pos)});
-                        };
-                        if (am == cm) {
-                            if (!is_writable(cm) && !(is_local(cm) && cs.eliminated)) continue;
-                            task(target_for(~static_cast<uint64_t>(cm), &cs.schur, n_c, n_c, cs, cs), c_pos, n_c,
-                                 c_pos, n_c);
-                        } else if (deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am) &&
-                                   (cm < am || !is_interest(am))) {
-                            // both of the pair's blocks, with the lower candidate (or this
-                            // rank's copies of a pair with another rank's box)
-                            BoxState& as = state_of(am);
-                            task(target_for(dkey(am, cm), near_block(dkey(am, cm)), n_a, n_c, as, cs), a, n_a, c_pos,
-                                 n_c);
-                            task(target_for(dkey(cm, am), near_block(dkey(cm, am)), n_c, n_a, cs, as), c_pos, n_c, a,
-                                 n_a);
-                        }
-                        continue;
-                    }
-                    if (am == cm) {
-                        // (a box eliminated elsewhere: its Schur block is read once its
-                        // owner's has landed here, i.e. once it is eliminated)
-                        if (!is_writable(cm) && !(is_local(cm) && cs.eliminated)) continue;
-                        target = &target_for(~static_cast<uint64_t>(cm), &cs.schur, n_c, n_c, cs, cs);
-                    } else if (cm < am && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
-                        BoxState& as = state_of(am);
-                        const uint64_t key = edge_key(cm, am);
-                        target = &target_for(key, near_block(key), n_a, n_c, as, cs);
-                    } else if (!is_interest(am) && deferred_xnn_boxes_are_one_hop(level_.dimension, cm, am)) {
-                        // A pair with a lower box of another rank: this rank's
-                        // copy (the other rank's comes from the generator), rows =
-                        // the candidate (hi): temp2_E[c rows] X_NR_E[a rows]^T, as
-                        // every pair (the transpose of the lo-rows product would
-                        // round differently: its terms differ)
-                        BoxState& as = state_of(am);
-                        const uint64_t key = edge_key(cm, am);
-                        target = &target_for(key, near_block(key), n_c, n_a, cs, as);
-                        target->tasks.push_back({op(src.temp2, src.row0[c_pos]), op(src.xnr, src.row0[a]), nullptr,
-                                                 n_c, n_a, src.r, src.ntot, src.ntot, n_c});
-                        target->sources.push_back(em);
-                        target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, c_pos), slot_at(src, a)});
-                        continue;
-                    } else {
-                        continue;  // owned by the other endpoint, or a lazy far pair
-                    }
-                    target->tasks.push_back({op(src.temp2, src.row0[a]), x_nr_c, nullptr,
-                                             n_a, n_c, src.r, src.ntot, src.ntot, n_a});
-                    target->sources.push_back(em);
-                    target->src_slots.push_back(SrcSlot{src_idx, slot_at(src, a), slot_at(src, c_pos)});
-                }
-            }
-            if (ca_) {  // (a pair's contributions by source Morton)
-                for (CandidateTarget& t : mine) {
-                    if (t.tasks.size() < 2) continue;
-                    std::vector<size_t> order(t.tasks.size());
-                    std::iota(order.begin(), order.end(), size_t{0});
-                    std::stable_sort(order.begin(), order.end(),
-                                     [&](size_t x, size_t y) { return t.sources[x] < t.sources[y]; });
-                    std::vector<typename VBatch<S>::Entry> sorted;
-                    sorted.reserve(order.size());
-                    for (size_t x : order) sorted.push_back(t.tasks[x]);
-                    t.tasks.swap(sorted);
-                    // The sources and their slots travel with their tasks.  A
-                    // task's operands are named by its slot pair, so
-                    // permuting the tasks alone hands the GEMM another box's
-                    // rows - which is what it did: NaN in the next level's ID
-                    // input, on the CA path only, because only it sorts.
-                    if (t.src_slots.size() == t.tasks.size()) {
-                        std::vector<SrcSlot> ss;
-                        ss.reserve(order.size());
-                        for (size_t x : order) ss.push_back(t.src_slots[x]);
-                        t.src_slots.swap(ss);
-                    }
-                    std::vector<int64_t> src;
-                    src.reserve(order.size());
-                    for (size_t x : order) src.push_back(t.sources[x]);
-                    t.sources.swap(src);
-                }
-            }
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(owner_failure_mutex);
-            if (!owner_failure) owner_failure = std::current_exception();
-        }
-    }
-    if (owner_failure) std::rethrow_exception(owner_failure);
-    for (const auto& d : dead_by_candidate) {
-        stats.dead_pair_flops += kFlopScale * d[0];
-        stats.dead_pair_tasks += static_cast<int64_t>(d[1]);
-        stats.dead_schur_flops += kFlopScale * d[2];
-        stats.dead_schur_tasks += static_cast<int64_t>(d[3]);
-        stats.dead_beyond_flops += kFlopScale * d[4];
-        stats.dead_beyond_tasks += static_cast<int64_t>(d[5]);
-    }
-    owner_lap(stats.po_pairs);
-    // the join: blocks of new targets (their kernel values first), in the
-    // sequential loop's order
-    // The join records a target; its block is allocated or materialized, its
-    // kernel values evaluated and its C pointers filled in when its group
-    // runs, so that only one group's blocks need to be raw at a time.
-    struct Target {
-        DeviceMatrix* block = nullptr;
-        std::vector<typename VBatch<S>::Entry> tasks;
-        uint64_t key = 0;
-        int rows = 0, cols = 0;
-        BoxState* row_box = nullptr;
-        BoxState* col_box = nullptr;
-        bool fresh = false;   // allocated by its group: its kernel values first
-        std::vector<SrcSlot> src_slots;
-    };
-    std::vector<Target> targets;
-    // (piece 4 put every adopted block back here, before the join, because the
-    // join allocated them.  Step 3b-i moved allocation into the group loop
-    // and the join only records shapes, so that pre-pass became redundant -
-    // and harmful: it decompressed the whole set up front, 6.16 GB live at
-    // the 192^3 leaf, which is exactly the bounding the groups exist to do.)
-    for (size_t ci = 0; ci < candidates.size(); ++ci) {
-        for (CandidateTarget& t : candidate_targets[ci]) {
-            DeviceMatrix* block = t.block != nullptr ? t.block : &edges_[t.key];
-            if (block->ptr == nullptr) {
-                // allocated, or put back, when its group runs
-            } else if (block->rows != t.rows || block->cols != t.cols) {
-                std::ostringstream oss;
-                oss << "LevelEliminator: owner target is " << block->rows << " x " << block->cols
-                    << ", expected " << t.rows << " x " << t.cols;
-                throw std::runtime_error(oss.str());
-            }
-            targets.push_back(Target{block, std::move(t.tasks), t.key, t.rows, t.cols, t.row_box, t.col_box,
-                                     false, std::move(t.src_slots)});
-        }
-    }
-    owner_lap(stats.po_order);
-    // Sub-batch j holds the j-th contribution of every target, so no launch
-    // writes a block twice and each block sees its contributions in order.
-    //
-    // In groups of a bounded set of blocks, so that holding the near-field
-    // blocks compressed needs one group decompressed at a time rather than
-    // the 10.61 GB a wave touches.  Each target lies wholly within one group
-    // and keeps its contributions' order inside that group's sub-batches, so
-    // every block still sees the same contributions in the same order and the
-    // bits do not move; only which GEMMs share a launch changes, which the
-    // kernels' batch-independence covers (tests/batch_determinism.cpp).  The
-    // group boundaries follow the targets' canonical order and their shapes,
-    // both rank-independent, so replicas group alike.
-    // Holding the near blocks packed is **off**: measured at 192^3 it raises
-    // the leaf peak (20.72 -> 21.01 GB Color, 22.51 -> 23.48 CA0) and costs
-    // 0.76 / 1.70 s, because the per-wave materialization is still unbounded
-    // (6.16 GB of decompressed copies at the peak) while the store itself
-    // works (near blocks 9.47 -> 3.24 GB).  GPU_CA_PLAN.md step 3c lists what
-    // remains: bounded windows for the three readers, and a group budget
-    // chosen for the GEMM launch count rather than guessed.
-    //
-    // With it off the targets form a single group, which is the launch
-    // structure the owner pass had before any of this: the budget alone takes
-    // the leaf from 120 batched GEMM calls to 730 and costs 0.64 s, whether
-    // anything is compressed or not.
-
-    std::vector<std::pair<size_t, size_t>> owner_groups;  // [first, last) of targets
-    {
-        // Two budgets: the targets the group writes, and - when the operands
-        // come from their stores - the source slots it has to decompress, so
-        // the window is bounded by construction rather than by what the data
-        // happens to need.
-        std::unordered_set<uint64_t> seen;
-        const size_t group_budget = near_group_budget(), window_budget = owner_window_bytes();
-        size_t at = 0;
-        while (at < targets.size()) {
-            size_t bytes = 0, win = 0, end = at;
-            seen.clear();
-            while (end < targets.size()) {
-                if (end > at && (bytes >= group_budget || win >= window_budget)) break;
-                bytes += static_cast<size_t>(targets[end].rows) * targets[end].cols * D;
-                if (from_store) {
-                    for (const SrcSlot& ss : targets[end].src_slots) {
-                        for (int which = 0; which < 2; ++which) {
-                            const int32_t slot = which == 0 ? ss.sa : ss.sb;
-                            if (ss.src < 0 || slot < 0) continue;
-                            if (!seen.insert(win_key(ss.src, slot, which)).second) continue;
-                            win += slot_bytes(ss.src, slot, which);
-                        }
-                    }
-                }
-                ++end;
-            }
-            owner_groups.push_back({at, end});
-            stats.owner_groups += 1;
-            at = end;
-        }
-    }
-
-    owner_lap(stats.po_batches);
-    stats.plan_owner += std::chrono::duration<double>(clock::now() - t_owner).count();
-    stats.plan += std::chrono::duration<double>(clock::now() - t_owner).count();
+    if (!owner_planned || !from_store) plan_owner();
     t0 = clock::now();
     // Then one group at a time: its blocks raw, its kernel values, its GEMMs.
     // Each group stages its own image, because a slot list is an offset into
@@ -6509,6 +6547,8 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
         // and the group's union of them is bounded by kOwnerWindowBytes.
         char* window = nullptr;
         std::unordered_map<uint64_t, size_t> win_at;
+        SolveXnrWave w;   // (its plan and lists released after the group's sync: the
+                          //  decompression then runs under the group's staging)
         if (from_store) {
             struct Need { int32_t src; int32_t slot; int which; size_t off; };
             std::vector<Need> needs;   // in traversal order, so every rank agrees
@@ -6530,7 +6570,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                 throw std::runtime_error("H2 GPU: no room for the owner pass's source window (" +
                                          std::to_string(need_bytes / (1u << 20)) + " MB)");
             }
-            SolveXnrWave w;
             for (const Need& nd : needs) {
                 const WaveBox& sb = boxes[static_cast<size_t>(nd.src)];
                 const BoxState* sst = sb.state;
@@ -6553,9 +6592,6 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
                     throw std::runtime_error("H2 GPU: could not plan the owner window's decompression");
                 }
                 decompress_solve_xnr_wave(w, stream);
-                check_cuda(cudaStreamSynchronize(stream), "owner window");
-                release_solve_xnr_wave(w);
-                heap_.free(reinterpret_cast<char*>(const_cast<void**>(w.d_srcs)));
             }
             stats.ow_bytes += static_cast<double>(need_bytes);
             stats.ow_max = std::max(stats.ow_max, static_cast<double>(need_bytes));
@@ -6662,6 +6698,10 @@ int LevelEliminator<CoordType, DataType, KernelType>::eliminate_wave(
             }
         }
         check_cuda(cudaStreamSynchronize(stream), "owner group");  // the image is reused
+        if (!w.h_srcs.empty()) {
+            release_solve_xnr_wave(w);
+            heap_.free(reinterpret_cast<char*>(const_cast<void**>(w.d_srcs)));
+        }
         stats.og_dev_eval += gmarks.seconds(0);
         for (size_t j = 0; j < gb.size(); ++j) {
             stats.og_dev_gemm[std::min<size_t>(j, EliminatorStats::kOwnerDepthBins - 1)] += gmarks.seconds(j + 1);
