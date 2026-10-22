@@ -53,6 +53,25 @@
   parameter ( mpi_min = 3 )
   integer mpi_prod
   parameter ( mpi_prod = 4 )
+  integer mpi_lor
+  parameter ( mpi_lor = 5 )
+  integer mpi_land
+  parameter ( mpi_land = 6 )
+  integer mpi_maxloc
+  parameter ( mpi_maxloc = 7 )
+  integer mpi_minloc
+  parameter ( mpi_minloc = 8 )
+
+  ! (value, index) pairs of MPI_MAXLOC / MPI_MINLOC
+  integer mpi_2double_precision
+  parameter ( mpi_2double_precision = 46 )
+
+  integer MPI_COMM_TYPE_SHARED
+  parameter ( MPI_COMM_TYPE_SHARED = 1 )
+  integer MPI_INFO_NULL
+  parameter ( MPI_INFO_NULL = 0 )
+  integer MPI_STATUSES_IGNORE(mpi_status_size,1)
+  parameter ( MPI_STATUSES_IGNORE = 0 )
 
 
   integer MPI_THREAD_SINGLE

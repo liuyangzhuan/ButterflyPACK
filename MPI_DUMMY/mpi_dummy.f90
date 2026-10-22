@@ -296,6 +296,12 @@ subroutine mpi_allreduce ( data1, data2, n, datatype, operation, comm, ierror )
   else if ( datatype == mpi_double_complex ) then
 
     call mpi_reduce_double_complex ( data1, data2, n, operation, ierror )    
+  else if ( datatype == mpi_2double_precision ) then
+    ! MPI_MAXLOC / MPI_MINLOC on (value, index) pairs: one process holds the result
+    call mpi_copy_double_precision ( data1, data2, 2*n, ierror )
+  else if ( datatype == mpi_logical ) then
+    ! MPI_LOR / MPI_LAND: one process holds the result
+    call mpi_copy_integer ( data1, data2, n, ierror )
   else
 
     ierror = MPI_FAILURE
@@ -337,6 +343,67 @@ subroutine MPI_ALLTOALL(SENDBUF, SENDCOUNT, SENDTYPE, RECVBUF, RECVCOUNT,RECVTYP
 
 
 end subroutine MPI_ALLTOALL
+
+
+subroutine MPI_ALLTOALLV(SENDBUF, SENDCOUNTS, SDISPLS, SENDTYPE, RECVBUF, RECVCOUNTS, RDISPLS, RECVTYPE, COMM, IERROR)
+  ! One process: its own block, sendbuf(sdispls(1)+1:) to recvbuf(rdispls(1)+1:),
+  ! copied as default-integer words (the datatype's size in words)
+  implicit none
+
+  include "mpi_dummy.fi"
+
+    integer    SENDBUF(*), RECVBUF(*)
+    integer    SENDCOUNTS(*), SDISPLS(*), RECVCOUNTS(*), RDISPLS(*)
+    integer    SENDTYPE, RECVTYPE, COMM, IERROR
+    integer    words
+
+    if(RECVTYPE/=SENDTYPE)then
+      write ( *, '(a)' ) ' '
+      write ( *, '(a)' ) 'MPI_ALLTOALLV - Error!'
+      write ( *, '(a)' )  '  RECVTYPE needs to match SENDTYPE in mpi_dummy. '
+    endif
+
+  if ( sendtype == mpi_integer .or. sendtype == mpi_real .or. sendtype == mpi_logical ) then
+    words = 1
+  else if ( sendtype == mpi_double_precision .or. sendtype == mpi_complex ) then
+    words = 2
+  else if ( sendtype == mpi_double_complex ) then
+    words = 4
+  else
+    ierror = MPI_FAILURE
+    return
+  end if
+  call mpi_copy_integer ( sendbuf(sdispls(1)*words+1), recvbuf(rdispls(1)*words+1), sendcounts(1)*words, ierror )
+
+end subroutine MPI_ALLTOALLV
+
+
+subroutine MPI_COMM_SPLIT_TYPE(COMM, SPLIT_TYPE, KEY, INFO, NEWCOMM, IERROR)
+  ! One process: the shared-memory group is the communicator itself
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer COMM, SPLIT_TYPE, KEY, INFO, NEWCOMM, IERROR
+
+  NEWCOMM = COMM
+  IERROR = MPI_SUCCESS
+
+end subroutine MPI_COMM_SPLIT_TYPE
+
+
+subroutine MPI_ABORT(COMM, ERRORCODE, IERROR)
+  implicit none
+
+  include "mpi_dummy.fi"
+
+  integer COMM, ERRORCODE, IERROR
+
+  write ( *, '(a,i0)' ) 'MPI_ABORT (mpi_dummy): error code ', ERRORCODE
+  IERROR = MPI_SUCCESS
+  error stop 1
+
+end subroutine MPI_ABORT
 
 
 
