@@ -7485,6 +7485,60 @@ upper levels run at a third of the rate on larger, fewer items (level 4:
 explains, and would gain more from a different block shape than the leaf
 would.  Left as measured.
 
+#### The CPU's CA3 margin, looked at the same way (2026-10-22)
+
+Runs only (h2_c1_work/cpu/, the Oct 19 CPU build frozen as
+build/gpu_prep/frozen_cpu_1022; 64 ranks on 16 GPU nodes, 4 x 16 threads).
+A perf profile of rank 0 (192^3, Nmin 216): OpenBLAS 40%, libgomp spin 30%
+plus sched_yield 6%, libc 9%, ButterflyPACK 8%, MPI 5%, Color and CA3
+alike.  The phase lines place the spin: box-phase thread utilization 81% at
+the leaf, 64% at level 5 (27-37 boxes a wave), 17% at level 4 (1-7 a wave),
+~5% at levels 3-2 (one box a wave), a box being single-threaded.  Levels
+4-2 are 46 of Color's 105 s at 320^3/64 (Nmin 64), 32 s of it "staged"
+(the exchange and the wait on neighbours) - where the 343-box rule forbids
+CA.
+
+320^3 on 64 ranks, one job, longest rank's level times (L6 = leaf):
+
+| | factor | L6 | L5 | L4 | L3 | L2 |
+|---|---|---|---|---|---|---|
+| Color (lazy_schur 2) | 105 | 15.7 | 22.7 | 19.7 | 13.5 | 13.4 |
+| CA3 at the leaf | 96.2 | 12.7 | 18.5 | 19.7 | 13.4 | 12.6 |
+| CA3 at the leaf and level 5 | 97.2 | 12.8 | 19.3 | 17.9 | 13.8 | 13.0 |
+| CA0 at the leaf | 106 | 17.7 | 22.7 | 18.9 | 13.6 | 13.1 |
+| CA0 at the leaf and level 5 | 123 | 17.7 | 41.1 | 15.2 | 11.2 | 12.7 |
+| Color, lazy_schur 1 | 106 | 18.1 | 25.1 | 20.4 | 12.4 | 11.0 |
+| CA3 at the leaf, lazy_schur 1 | **87.7** | 12.8 | 20.4 | 15.6 | 9.4 | 10.2 |
+
+Three things in it.  (1) CA3's own level gains 3 s; its 8.4 s margin is
+mostly the *Color* level above running 4.2 s faster after a CA3 leaf than
+after a Color leaf (192^3/64: leaf -0.8 s, levels 4-3 -3.1 s of the 4.6 s
+margin).  The minor faults say why: level 5 takes 1,670 faults a box after
+a Color leaf and 240 after a CA3 leaf, and every part of it (box 6.1 ->
+5.5, owner 3.7 -> 3.5, staged 11.9 -> 8.8 s) is faster.  Not the allocator
+returning memory (TCMALLOC_RELEASE_RATE=0: unchanged, 1,610 faults a box),
+not the lazy_schur clamp of CA levels (lazy_schur 1 for both: unchanged,
+1,669).  What remains: CA3's leaf maps more memory (payloads sent and
+received, 1.6-1.8 GB a rank, and their staging) and the next levels reuse
+it without faulting, while after Color's leaner leaf each level grows the
+heap and 16 threads fault its pages in at once.  Under lazy_schur 1 the
+effect reaches levels 4-2 (faults a box 3,806 / 1,122 / 9,660 against 67 /
+23 / 21; those levels 20.4 / 12.4 / 11.0 against 15.6 / 9.4 / 10.2 s).  A
+transient pool kept across levels (the CPU twin of the GPU heap) would
+give Color the same, and the margin to report is best-against-best after
+it; today's best-against-best is Color 105 (lazy 2) against CA3 87.7 (lazy
+1), 16.5%, of which CA3's own level is ~3 s.  Accuracy the same (acc_forward
+5.14e-3 / 5.24e-3).  (2) CA3 at level 5 does what it should - box wall 6.1
+-> 4.1 s, the 8.5 s of per-colour waits gone - and gives it back in 3.4 s
+of component passes and a 4.4 s cross-rank wait (elimination 14.9-19.3 s):
+19.3 s against 18.5 after a CA3 leaf.  CA0 at level 5 replicates an 8^3
+brick's halo: 41 s.  (3) Where a real CA gap could come from: levels 4-2,
+44% of the time and nearly all of it waiting in one-box waves, the shape
+CA3's arrival-driven schedule is for, forbidden by
+minimum_CA_boxes_per_active_process (343, set for CA0's halo; CA3
+replicates nothing).  Intra-box threading at those levels would cut both
+variants' time by more than the gap.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
