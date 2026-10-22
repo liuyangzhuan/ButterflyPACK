@@ -7539,6 +7539,30 @@ minimum_CA_boxes_per_active_process (343, set for CA0's halo; CA3
 replicates nothing).  Intra-box threading at those levels would cut both
 variants' time by more than the gap.
 
+*The box's threading above the leaf, measured (2026-10-22).*  A wave is
+an `omp for` over its boxes, one thread a box; when a wave has fewer boxes
+than threads, split_threads_for gives the box threads/boxes (capped by
+h2_gemm_split 16) and a few loops use `omp taskloop`: kernel evaluation by
+column range, the P and fill GEMMs in 256-column chunks, the right-inverse
+solves in 512-row chunks, the step-2 temp GEMMs by neighbour columns.  Not
+split: the gathers, the QRCP, the LU, the assembly, every GEMM under a
+chunk.  In the 192^3/64 profile's upper-level window (levels 3-2) the main
+thread is on-CPU 57% of the time and each worker 18%, 46% of all samples
+libgomp spin.  Color 320^3/64 with h2_gemm_split 1 against 16 (one job):
+factor 118 against 105 s; box walls L4 5.7 / 5.2, L3 2.9 / 1.7, L2 6.2 /
+3.1 s (L6, L5 unchanged: the split does not engage with boxes >= threads);
+the per-colour waits of the slower ranks grow with it (staged L3 15.1 /
+11.6).  So the split is live and worth ~2x at levels 3-2, and the other
+half of a box (0.39 s a box at level 2 with 16 threads) is serial.
+Proposed, not built: for waves with fewer than ~2x threads boxes, run the
+boxes one at a time with the whole team inside each - orphaned `omp for`
+in the sketch, the owner updates and the near/step-2 work, partitioned by
+output columns (each thread its column range of Y, looping over the fill
+sources in the existing Morton order), so the accumulation order and the
+bits are unchanged; the gathers by ring-row block; the QRCP serial.  Worth
+~8-10 s of Color's 105 s at 320^3/64 (box 16 s + owner 7 s at levels 5-2
+towards ~5 s), the same for CA3; nothing of the 27 s of per-colour waits.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
