@@ -4,7 +4,15 @@
 // precision; the double and double complex libraries of a GPU build
 // (enable_h2_gpu) get the backend, the others stubs that report its absence.
 
+#ifdef HAVE_MPI
 #include <mpi.h>
+#else
+// A build without MPI (enable_mpi=OFF) only has the stubs below; the Fortran
+// communicator arguments are plain integers there, as in BPACK_wrapper.h.
+#ifndef MPI_Fint
+#define MPI_Fint int
+#endif
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -20,6 +28,9 @@
 #include "gpu_common/bpack_env.hpp"
 
 #if defined(H2_HAVE_GPU) && defined(DAT) && (DAT == 0 || DAT == 1)
+#ifndef HAVE_MPI
+#error "ButterflyPACK's GPU backend needs a build with MPI support (enable_mpi=ON)"
+#endif
 #define BPACK_GPU_ENABLED 1
 #include "hodlr_gpu/gpu_state.hpp"
 #endif
@@ -29,7 +40,9 @@ namespace {
 [[noreturn]] void gpu_fail(const char* where, const char* what) {
   std::fprintf(stderr, "ButterflyPACK GPU backend error in %s: %s\n", where, what);
   std::fflush(stderr);
+#ifdef HAVE_MPI
   MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
   std::abort();
 }
 
@@ -565,8 +578,13 @@ void c_bpack_hodlr_gpu_add_shared_level(void* gpu, const int* level, const MPI_F
 // *share: how many ranks use this rank's GPU.  Also the report of the
 // environment variables (GPU_BACKEND/gpu_common/bpack_env.hpp).
 void c_bpack_gpu_share_device(const MPI_Fint* comm_f, int* share) {
+#ifdef HAVE_MPI
   MPI_Comm comm = MPI_Comm_f2c(*comm_f);
   fmm::env::report_environment(comm);
+#else
+  (void)comm_f;
+  fmm::env::report_environment_as(0);  // a build without MPI is one rank
+#endif
 #ifdef BPACK_GPU_ENABLED
   try {
     *share = fmm::gpu::share_device(comm);

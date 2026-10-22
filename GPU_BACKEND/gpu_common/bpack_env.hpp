@@ -12,9 +12,12 @@
 //
 // report_environment() names, once per process, the variables earlier
 // versions read (they are ignored now) and the values of the two lists that
-// are not known.
+// are not known.  Only that report needs MPI (to let one rank print), so a
+// build without MPI (enable_mpi=OFF) gets report_environment_as() alone.
 
+#ifdef HAVE_MPI
 #include <mpi.h>
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -114,15 +117,20 @@ inline std::string trace_argument(std::string_view value) {
     return {};
 }
 
-// Once per process, collective over comm (its rank 0 prints): the checks and
-// traces that are on, the unknown values of the two lists, and the
-// variables of earlier versions that are set (no longer read).
-inline void report_environment(MPI_Comm comm) {
+namespace detail {
+inline bool& environment_reported() {
     static bool done = false;
+    return done;
+}
+}  // namespace detail
+
+// Once per process, from the process that is rank `rank` of the run (rank 0
+// prints): the checks and traces that are on, the unknown values of the two
+// lists, and the variables of earlier versions that are set (no longer read).
+inline void report_environment_as(int rank) {
+    bool& done = detail::environment_reported();
     if (done) return;
     done = true;
-    int rank = 0;
-    MPI_Comm_rank(comm, &rank);
     if (rank != 0) return;
     struct Old {
         const char* name;
@@ -186,6 +194,16 @@ inline void report_environment(MPI_Comm comm) {
     }
     std::fflush(stdout);
 }
+
+#ifdef HAVE_MPI
+// The same, collective over comm: its rank 0 prints.
+inline void report_environment(MPI_Comm comm) {
+    if (detail::environment_reported()) return;
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    report_environment_as(rank);
+}
+#endif
 
 }  // namespace env
 }  // namespace fmm

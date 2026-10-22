@@ -2070,6 +2070,27 @@ void c_bpack_input_to_internal(
 #endif
 }
 
+/*
+ * The batched-extraction profile of this process (unstructured/extraction.hpp,
+ * core/extraction_profile.hpp): seconds of the eight steps (resolve, tasks,
+ * vectors up, column side, compute, pack, route, unpack), then the route's
+ * MPI seconds, the entries computed, the bytes routed and the calls, summed
+ * over every compressed H2 this process served since the start (or since a
+ * CollectiveEntries::report, which resets it).  Local, not collective.
+ */
+void c_bpack_get_extraction_profile(double* vals) {
+#ifdef HAVE_MPI
+  const fmm::ExtractionProfile& p = fmm::extraction_profile();
+  for (int s = 0; s < fmm::ExtractionProfile::kSteps; ++s) vals[s] = p.seconds[s];
+  vals[8] = p.route_mpi;
+  vals[9] = p.entries_computed;
+  vals[10] = p.bytes_routed;
+  vals[11] = static_cast<double>(p.calls);
+#else
+  for (int s = 0; s < 12; ++s) vals[s] = 0.0;
+#endif
+}
+
 /* Inverse of c_bpack_input_to_internal, with the same batched layout. */
 void c_bpack_internal_to_input(
     F2Cptr* bmat, const int* nrhs,
