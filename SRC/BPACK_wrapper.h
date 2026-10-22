@@ -70,6 +70,7 @@ typedef void (*c_bpack_func_zmn64)(const int64_t*, const int64_t*, const double*
 typedef void (*c_bpack_func_zmn_block64)(const int64_t*, const int64_t*, const int64_t*, const int64_t*, const double*, const double*, const int*, C_DT*, const int64_t*, C2Fptr);
 void c_bpack_construct_init_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int* Ndim, const int64_t* input_global_ids, const double* input_locations, const int* bounds_provided, const double* global_bounds, int64_t* N_internal_local, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree);
 void c_bpack_construct_element_compute_distributed64(F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* msh, F2Cptr* ker, F2Cptr* ptree, c_bpack_func_zmn64 C_FuncZmn, c_bpack_func_zmn_block64 C_FuncZmnBlock, C2Fptr C_QuantApp);
+void c_bpack_get_extraction_profile(double* vals);
 void c_bpack_get_distributed_layout64(F2Cptr* bmat, int64_t* N_global, int64_t* N_input_local, int64_t* N_internal_local, int64_t* internal_global_start);
 /*
  * The matrix's entries on the GPU (H2 with H2_use_gpu, HODLR with
