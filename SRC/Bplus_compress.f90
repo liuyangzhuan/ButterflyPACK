@@ -35,6 +35,7 @@ contains
       implicit none
 
       integer Nboundall, Ninadmissible, statflag
+      integer myflag_drain
       integer boundary_map(:,:)
       integer groupm_start
 
@@ -226,9 +227,17 @@ contains
                deallocate(alldat_loc_in)
             endif
 
+            !>**** the adaptive tree sampler (forwardN15flag 3) makes a
+            !> data-dependent number of rounds per rank, so a rank that has
+            !> finished its own blocks may only leave the level once every
+            !> rank is done requesting (myflag 2): waiting at a common sync
+            !> point (myflag 1) lets it out while a peer still samples, and
+            !> the two then deadlock between a round and the level-end
+            !> collectives.  The fixed-round paths keep myflag 1.
+            myflag_drain = merge(2, 1, option%forwardN15flag == 3)
             passflag = 0
-            do while (passflag == 0)
-               call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, 1, passflag, ptree, stats)
+            do while (passflag < myflag_drain)
+               call element_Zmn_blocklist_user(submats_dummy, 0, msh, option, ker, myflag_drain, passflag, ptree, stats)
             enddo
 
             if (level /= level_butterfly + 1) then
