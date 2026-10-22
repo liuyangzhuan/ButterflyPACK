@@ -72,6 +72,10 @@ add_executable(ie3d ${FZEXM3})
 target_link_libraries(ie3d ${all_link_libs_z})
 add_dependencies(ie3d ie2deigen)
 
+# The C++ EMSURF driver drives MPI itself (mpi.h, MPI_Init_thread,
+# MPI_Allreduce, MPI_Comm_c2f) and bpack_inv_mult_check.hpp includes mpi.h,
+# so it only exists in an MPI build; MPI_DUMMY stubs the Fortran side only.
+if(enable_mpi)
 set(CZEXM3 EMSURF_Driver.cpp EMSURF_Module.f90 EMSURF_C_Bindings.f90)
 add_executable(cie3d ${CZEXM3})
 target_link_libraries(cie3d ${all_link_libs_z})
@@ -79,6 +83,7 @@ bpack_example_gpu_evaluators(cie3d)
 set_target_properties(cie3d PROPERTIES
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cie3d_modules")
 install(TARGETS cie3d RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/EXAMPLE")
+endif()
 
 set(FZEXM4 EMSURF_Eigen_Driver.f90 EMSURF_Module.f90)
 add_executable(ie3deigen ${FZEXM4})
