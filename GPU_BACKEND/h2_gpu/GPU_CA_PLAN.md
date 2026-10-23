@@ -7615,6 +7615,33 @@ of per-colour waits at levels 4-2 with 64 ranks would need a colouring
 for thin bricks (a different decomposition, not a parameter), or fewer
 ranks at those levels, which costs more compute than the waits.
 
+*CA3's owner choice by cost, measured (2026-10-23): dropped.*  Owners are
+chosen largest-first by box count (assign_owners, LPT_CUMULATIVE), so a
+corner rank of the 4^3 rank grid owns as many boxes as an interior one but
+many of them on the domain's surface.  Two diagnostics (frozen_cpu_dg1:
+BPACK_TRACE=phase bins each box's time by the boxes within two of it;
+BPACK_TRACE=skew writes every rank's CA3 timings, owner_<job>.<step>_level<L>.csv),
+one job (60148080), logdets as before (the 320^3 CA3 one in the 16th digit,
+...4980 against tt1's ...4992, the layout sensitivity seen between builds).
+A box's time grows about linearly with its neighbourhood (320^3 leaf, Color:
+2.3 ms + 0.18 ms a box within two): inside 24.1 ms, on a face 15.3 (0.63),
+an edge 11.1 (0.46), a corner 9.4 (0.39), one layer in from a face 20.4
+(0.85); CA3 and 192^3 alike (faces 0.61-0.66).  The earlier two-cost fit
+(a surface box a third of an inner one) had put every rank-to-rank
+difference on the surface boxes.  CA3's ranks by neighbour ranks, slowest
+class (26) minus fastest (7):
+
+| leaf | elimination gap | owned work (box region + passes) | taking in (install, replays, pack) | waits | interior and rest |
+|---|---|---|---|---|---|
+| 320^3 on 64 | +1.46 s | +0.86 | +0.69 | -0.59 | +0.49 |
+| 192^3 on 64 | +1.44 s | +0.73 | +0.79 | -0.37 | +0.29 |
+
+Owned work is about half the gap; an interior rank installs 19 components
+against a corner rank's 11.  Balancing owned work perfectly would take the
+slowest class's excess over the mean, 0.39 s at 320^3 and 0.20 s at 192^3,
+less the installs the shed components add: under 0.5% of either
+factorization.  The diagnostics are in the working tree, not committed.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

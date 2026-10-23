@@ -1089,7 +1089,10 @@ void hierarchical_factorization_parallel(
                             }
 
                             auto& box = *box_ptr;
-                            FMM_PHASE_BOX_SCOPE();
+                            // (binned by its neighbourhood when it has the thread to itself)
+                            FMM_PHASE_BOX_SCOPE_NB(scratch.split_threads == 1
+                                                       ? static_cast<int>(box.one_hop.size() + box.two_hop.size())
+                                                       : -1);
                             FMM_PHASE_LAP_BEGIN(sketch_lap);
 
                             if (use_streamed_level) {
@@ -1501,6 +1504,15 @@ void hierarchical_factorization_parallel(
             if (skew_probe.on) {
                 level_skew_report(skew_probe, tree, level, current_level, level_comm,
                                   std::chrono::duration<double, std::milli>(elim_end - elim_start).count());
+                if (use_CA_level && ca_owner_component == 3) {
+                    // a component-owner level: each rank's schedule timings
+                    std::vector<int> nbrs = compute_one_hop_neighbor_ranks(tree, level, current_level);
+                    nbrs.erase(std::remove(nbrs.begin(), nbrs.end(), tree->mpi_rank), nbrs.end());
+                    owner_schedule_rank_report(owner_schedule, current_level, level_comm, tree->mpi_rank,
+                                               static_cast<int>(nbrs.size()),
+                                               std::chrono::duration<double, std::milli>(elim_end - elim_start).count(),
+                                               print_detail);
+                }
             }
         } else {
             // Level 1: Skip elimination (only 4/8 boxes, no far-field)
