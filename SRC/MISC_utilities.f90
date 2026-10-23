@@ -4403,8 +4403,7 @@ contains
                         nc(dim_i) = nc(dim_i)/2
                         nr(dim_i) = nr(dim_i)*2
                      else         ! otherwise double row increments
-                        write(*,*)'nc(dim_i) == 1 should not happen for GetLocalBlockRange_MD'
-                        stop
+                        call BPACK_require(.false., 'GetLocalBlockRange_MD: nc(dim_i) == 1 should not happen')
                      endif
                   endif
                enddo
@@ -4423,8 +4422,7 @@ contains
                         nr(dim_i) = nr(dim_i)/2
                         nc(dim_i) = nc(dim_i)*2
                      else
-                        write(*,*)'nr(dim_i) == 1 should not happen for GetLocalBlockRange_MD'
-                        stop
+                        call BPACK_require(.false., 'GetLocalBlockRange_MD: nr(dim_i) == 1 should not happen')
                      endif
                   endif
                enddo
@@ -4437,8 +4435,9 @@ contains
                idx_c(dim_i) = 0
                inc_c(dim_i) = 0
                nc(dim_i) = 0
-               write(*,*)'pgno1 should only have 1 rank in GetLocalBlockRange_MD'
-               stop
+               ! (an abort, not stop: the other ranks would wait for this one forever)
+               call BPACK_require(.false., 'GetLocalBlockRange_MD: a kernel-level block is shared by several ranks '// &
+                                  '(pgno1 should only have 1 rank): too many MPI ranks for the tree depth of this tensor')
             endif
          enddo
 
