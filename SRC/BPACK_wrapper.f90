@@ -791,6 +791,10 @@ contains
          val_d = option%iter_solver
          valid_opt = 1
       endif
+      if (trim(str) == 'gmres_restart') then
+         val_d = option%gmres_restart
+         valid_opt = 1
+      endif
       if (trim(str) == 'xyzsort') then
          val_d = option%xyzsort
          valid_opt = 1
@@ -1149,6 +1153,11 @@ contains
       if (trim(str) == 'iter_solver') then
          call c_f_pointer(val_Cptr, val_i)
          option%iter_solver = val_i
+         valid_opt = 1
+      endif
+      if (trim(str) == 'gmres_restart') then
+         call c_f_pointer(val_Cptr, val_i)
+         option%gmres_restart = val_i
          valid_opt = 1
       endif
       if (trim(str) == 'xyzsort') then

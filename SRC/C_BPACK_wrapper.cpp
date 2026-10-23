@@ -370,6 +370,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         "whether to use qtt compression"},
 		{"hextralevel",         "HMAT: extra levels for top partitioning of the H matrix based on MPI counts. BLR: Maxlevel-hextralevel is the level for defining B-LR/B-BF blocks"},
 		{"iter_solver",         "The choice of iterative solvers. 1: TFQMR, 2: GMRES, 3: IterativeRefinement, or 4: CG"},
+		{"gmres_restart",       "The restart length of GMRES (iter_solver 2), default 30"},
 		{"help",            "print this help message"}
 	};
 
@@ -424,6 +425,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"use_qtt",         required_argument, 0, 37},
 		{"hextralevel",         required_argument, 0, 38},
 		{"iter_solver",         required_argument, 0, 39},
+		{"gmres_restart",       required_argument, 0, 1004},
 		{"trans_invariant",         required_argument, 0, 40},
 			{"htensor_mvp_level_batch", required_argument, 0, 41},
 		{"use_fft_circulant",         required_argument, 0, 42},
@@ -813,6 +815,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_i;
 		c_bpack_set_I_option(&option0, "iter_solver", opt_i);
+		} break;
+		case 1004: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "gmres_restart", opt_i);
 		} break;
 		default: break;
 		}

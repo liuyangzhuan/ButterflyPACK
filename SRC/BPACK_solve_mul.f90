@@ -979,7 +979,8 @@ contains
       if (iter .eq. 0) itmax = ntotal
       if (itmax <= 0) itmax = max(1, ntotal)
 
-      restart = 30
+      restart = option%gmres_restart
+      if (restart <= 0) restart = 30
       if (present(restart_in)) restart = restart_in
       restart = max(1, min(restart, itmax))
       breakdown_tol = 1d-300
@@ -2046,7 +2047,8 @@ contains
       if (iter .eq. 0) itmax = ntotal
       if (itmax <= 0) itmax = max(1, ntotal)
 
-      restart = 30
+      restart = option%gmres_restart
+      if (restart <= 0) restart = 30
       if (present(restart_in)) restart = restart_in
       restart = max(1, min(restart, itmax))
       breakdown_tol = 1d-300

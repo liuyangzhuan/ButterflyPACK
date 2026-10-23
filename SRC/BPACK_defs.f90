@@ -868,6 +868,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) tol_rand     !< tolerance for randomized contruction, mostly used in matrix inversion
         real(kind=8) jitter     !< jittering for dense diagonal blocks
         integer iter_solver     !< the choice of iterative solvers (GMRES, TFQMR, IterativeRefinement or CG)
+        integer gmres_restart   !< the restart length of GMRES (iter_solver 2)
         integer powiter     !< order of power iteration in randomized LR
         integer less_adapt     !< 0 for rank adaptation for all BF levels, 1 for rank adaptation for the outtermost BF levels
         integer::schulzorder !< order (>=2) of schultz iteration
