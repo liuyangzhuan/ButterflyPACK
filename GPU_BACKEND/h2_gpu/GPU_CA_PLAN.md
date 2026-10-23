@@ -7563,6 +7563,37 @@ bits are unchanged; the gathers by ring-row block; the QRCP serial.  Worth
 ~8-10 s of Color's 105 s at 320^3/64 (box 16 s + owner 7 s at levels 5-2
 towards ~5 s), the same for CA3; nothing of the 27 s of per-colour waits.
 
+*Built (2026-10-22): the fill pass in two phases, and finer split chunks.*
+Two things, both in the small-wave path only (split_threads > 1, so the
+leaf's code and bits are untouched): (1) split_columns_chunked makes as
+many tasks as the split allows at >= 64 columns each (the 256-column chunks
+gave two tasks on a 500-column box); (2) the sketch's fill pass over a
+box's sources runs as phase 1, a task a source computing P_E and W_E into
+per-source buffers (FactorizationThreadScratch::stream_fill_sources;
+compute_P_into and accumulate_W take their buffers as arguments), and
+phase 2, the fold O' -= sum_E P_E^T W_E by column chunks across the
+threads, each chunk taking the sources in their order - every entry sees
+the same operations in the same sequence as the serial loop.  The gathers
+and axpys stay serial per source (an earlier column-ownership split of
+them is recorded as slower), as do the ring-row consume, the QRCP and the
+LU.  192^3/64 Color bitwise (-89253588.025574505), 42.1 -> 39.6 s.
+320^3/64, one job each:
+
+| | Color factor | L6 | L5 | L4 | L3 | L2 | CA3 at the leaf |
+|---|---|---|---|---|---|---|---|
+| Oct 19 build | 105 | 15.7 | 22.7 | 19.7 | 13.5 | 13.4 | 96.2 |
+| two-phase fill + 64-column tasks | 101 | 15.6 | 22.6 | 18.5 | 12.7 | 12.4 | 93.3 |
+
+Box walls L4 5.2 -> 4.0, L3 1.7 -> 1.2, L2 3.1 -> 2.2 s.  The 320^3 logdet's
+last digit (...778.77657938 / ...944) follows the build and the allocator,
+not the code path (the new build with h2_gemm_split 1 gives ...944, the old
+build under TCMALLOC_RELEASE_RATE=0 did too).  Tried and dropped: the
+split engaged for waves under 3x threads boxes (level 5: 27-37 boxes), to
+take the 4.4 s chain of each wave's slowest box - no change (6.2 s, 4.5),
+since taskloop pieces are run only by threads already at the barrier.
+Left at those levels: the ring-row consume and kernel rows, the ID, the
+near updates - and the 27 s of per-colour waits.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression

@@ -355,7 +355,15 @@ inline size_t h2_diag_factorization_scratch_bytes(
            h2_diag_vector_bytes(scratch.stream_blk_full_size) +
            h2_diag_vector_bytes(scratch.stream_blk_skeleton) +
            h2_diag_vector_bytes(scratch.stream_blk_wanted) +
-           h2_diag_vector_bytes(scratch.stream_positions);
+           h2_diag_vector_bytes(scratch.stream_positions) +
+           [&] {
+               size_t b = 0;
+               for (const auto& t : scratch.stream_fill_sources) {
+                   b += h2_diag_vector_bytes(t.P) + h2_diag_vector_bytes(t.W) + h2_diag_vector_bytes(t.Trow) +
+                        h2_diag_vector_bytes(t.TrowT) + h2_diag_vector_bytes(t.positions);
+               }
+               return b;
+           }();
 }
 
 template<typename DataType>
