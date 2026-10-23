@@ -229,6 +229,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   double H2_ID_proxy_points_d = 0.0;
   double BACA_Batch_d = 0.0;
   double H2_s_op = 0.0;
+  double H2_partial_d = 0.0;
   c_bpack_getoption(option, "tol_comp", &tolerance);
   c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
   c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -252,6 +253,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
   c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
   c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
   c_bpack_getoption(option, "H2_s_op", &H2_s_op);
+  c_bpack_getoption(option, "H2_partial", &H2_partial_d);
 
   const int64_t reduction_threshold =
       static_cast<int64_t>(reduction_threshold_d);
@@ -380,6 +382,7 @@ static butterfly::ProgramOptions read_h2_program_options64(
     result.id_adaptive_batch = BACA_Batch;
   }
   result.s_op = H2_s_op;
+  result.partial_count = static_cast<int64_t>(std::llround(H2_partial_d));
   if (result.precon == 2) result.CA_level = result.num_levels;
   butterfly::validate_h2_backend_selection(result);
   return result;
@@ -454,6 +457,7 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"h2_id_radius",    "format-7 H2 mandatory ID neighborhood radius; 2 keeps the standard workspace"},
 		{"h2_id_proxy",     "format-7 H2 proxy mode: 0 none, 1 geometric surface, 2 adaptive row sampling"},
 		{"h2_id_proxy_points", "geometric surface samples when h2_id_proxy=1"},
+		{"h2_partial",      "format-7 H2 (H2_unstructured 1, sym 0): partial factorization - the first h2_partial points in input order (F11) are eliminated, the rest (F22) retained; the object then serves the partial solves and the Schur complement F22 - F21 F11^-1 F12 (c_bpack_partial_*); 0 off"},
 		{"h2_s_op",         "format-7 H2 IDs: an absolute floor tol_comp*h2_s_op on the rank rule, |R_kk| > max(tol_comp |R_11|, tol_comp h2_s_op); 0 off (default). At most ||A|| for compression-only H2 (precon 2), at most 1/||A^-1|| for the factorization (K + tau^2 I: tau^2)"},
 		{"errfillfull",     "errfillfull: a slow (n^2), thorough error checking is performed after the compression of each block"},
 		{"baca_batch",      "block size in batched ACA when reclr_leaf=4 or 5; adaptive H2 rows per spatial node when h2_id_proxy=2"},
@@ -584,6 +588,8 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		{"H2_compress_factors", required_argument, 0, 1001},
 		{"h2_s_op", required_argument, 0, 1004},
 		{"H2_s_op", required_argument, 0, 1004},
+		{"h2_partial", required_argument, 0, 1005},
+		{"H2_partial", required_argument, 0, 1005},
 		{"H2_use_gpu", required_argument, 0, 59},
 		{"hodlr_use_gpu", required_argument, 0, 60},
 		{"HODLR_use_gpu", required_argument, 0, 60},
@@ -913,6 +919,11 @@ void c_bpack_set_option_from_command_line(int argc, const char* const* cargv,F2C
 		std::istringstream iss(optarg);
 		iss >> opt_d;
 		c_bpack_set_D_option(&option0, "H2_s_op", opt_d);
+		} break;
+		case 1005: {
+		std::istringstream iss(optarg);
+		iss >> opt_i;
+		c_bpack_set_I_option(&option0, "H2_partial", opt_i);
 		} break;
 		case 61: {
 		std::istringstream iss(optarg);
@@ -1327,6 +1338,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       double H2_ID_proxy_points_d;
       double BACA_Batch_d;
       double H2_s_op = 0.0;
+      double H2_partial_d = 0.0;
       c_bpack_getoption(option, "tol_comp", &tolerance);
       c_bpack_getoption(option, "reduction_threshold", &reduction_threshold_d);
       c_bpack_getoption(option, "Nmin_leaf", &Nmin_leaf_d);
@@ -1350,6 +1362,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
       c_bpack_getoption(option, "H2_ID_proxy_points", &H2_ID_proxy_points_d);
       c_bpack_getoption(option, "BACA_Batch", &BACA_Batch_d);
       c_bpack_getoption(option, "H2_s_op", &H2_s_op);
+      c_bpack_getoption(option, "H2_partial", &H2_partial_d);
       int64_t reduction_threshold = (int64_t)reduction_threshold_d;
       int64_t Nmin_leaf = (int64_t)Nmin_leaf_d;
       const int CA_level = static_cast<int>(std::llround(CA_level_d));
@@ -1465,6 +1478,7 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
         H2_options.id_adaptive_batch = BACA_Batch;
       }
       H2_options.s_op = H2_s_op;
+      H2_options.partial_count = static_cast<int64_t>(std::llround(H2_partial_d));
       if (H2_options.precon == 2) {
         H2_options.CA_level = H2_options.num_levels;
       }
@@ -1496,7 +1510,8 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
                   << ", h2_ca_owner_serial=" << H2_options.ca_owner_serial
                   << ", h2_id_radius=" << H2_options.id_neighborhood_radius
                   << ", h2_id_proxy=" << H2_options.id_proxy_mode
-                  << ", h2_s_op=" << H2_options.s_op;
+                  << ", h2_s_op=" << H2_options.s_op
+                  << ", h2_partial=" << H2_options.partial_count;
         if (H2_options.id_proxy_mode == 1) {
           std::cout << ", h2_id_proxy_points=" << H2_options.id_proxy_points;
         } else if (H2_options.id_proxy_mode == 2) {
@@ -2259,6 +2274,11 @@ void c_bpack_solve(C_DT*x, C_DT*b, int*Nloc, int*Nrhs, F2Cptr*bmat, F2Cptr*optio
 		  tolerance, static_cast<int>(std::llround(max_iterations_d)),
 		  &iterations, &residual, verbosity >= 1);
 	  } else {
+		if (H2_solver->build_state == butterfly::H2BuildState::RS_PARTIAL) {
+		  throw std::runtime_error(
+			"c_bpack_solve (format 7): a partial factorization (H2_partial) is applied by "
+			"c_bpack_partial_forward / c_bpack_partial_backward");
+		}
 		if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
 		  throw std::runtime_error(
 			"c_bpack_solve (format 7): direct solve requires c_bpack_factor first");
@@ -2445,6 +2465,11 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin,
         throw std::invalid_argument(
           "c_bpack_inv_mult (format 7): Ninloc must equal Noutloc");
       }
+      if (H2_solver->build_state == butterfly::H2BuildState::RS_PARTIAL) {
+        throw std::runtime_error(
+          "c_bpack_inv_mult (format 7): a partial factorization (H2_partial) is applied by "
+          "c_bpack_partial_forward / c_bpack_partial_backward");
+      }
       if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
         throw std::runtime_error(
           "c_bpack_inv_mult (format 7): applies the factorization; call "
@@ -2600,6 +2625,125 @@ static void h2_extract_sketches(
     orow.data(), odest.data(), omega_val, owner, reinterpret_cast<H2Data*>(alldat_loc), transposed);
 }
 #endif
+
+#ifdef HAVE_MPI
+template<typename H2Data>
+static butterfly::H2<double, H2Data>* h2_partial_of(F2Cptr* bmat, F2Cptr* option, const char* caller) {
+  double tmp = 0.0;
+  c_bpack_getoption(option, "format", &tmp);
+  if (static_cast<int>(tmp) != 7) throw std::invalid_argument(std::string(caller) + ": format 7 (H2) only");
+  void* H2_raw = nullptr;
+  c_bpack_get_h2(*bmat, &H2_raw);
+  auto* H2_solver = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+  if (H2_solver == nullptr || H2_solver->build_state != butterfly::H2BuildState::RS_PARTIAL) {
+    throw std::runtime_error(std::string(caller) + ": needs a partial factorization (H2_partial > 0, c_bpack_factor)");
+  }
+  return H2_solver;
+}
+#endif
+
+// The partial factorization's entries (BPACK_wrapper.h; unstructured/partial.hpp).
+void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option,
+	F2Cptr* stats, F2Cptr* ptree){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_forward");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*Nrhs <= 0) throw std::invalid_argument("c_bpack_partial_forward: Nrhs must be positive");
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_forward: N22 must be N - H2_partial");
+  const int verbosity = sync_h2_verbosity(option, H2_solver);
+  const double t0 = MPI_Wtime();
+  std::vector<H2Data> rhs;
+  h2_values_to_internal(H2_solver, reinterpret_cast<const H2Data*>(b), *Nloc, *Nrhs, rhs, "c_bpack_partial_forward");
+  auto& solve_data = H2_solver->tree->partial_solve_data;
+  solve_data.clear();
+  solve_data.resize(static_cast<size_t>(H2_solver->options.num_levels));
+  std::vector<H2Data> result;
+  butterfly::color_unstructured::hierarchical_solve_unstructured(
+    H2_solver->tree.get(), rhs, solve_data, *Nrhs, verbosity, false, 1,
+    static_cast<const std::vector<H2Data>*>(nullptr), &result);
+  H2_solver->tree->partial_solve_nrhs = *Nrhs;
+  std::copy(result.begin(), result.end(), reinterpret_cast<H2Data*>(out2));
+  double t = MPI_Wtime() - t0;
+  MPI_Allreduce(MPI_IN_PLACE, &t, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+  c_bpack_setstats(stats, "Time_Solve", &t);
+  (void)ptree;
+#else
+  format7_requires_mpi("c_bpack_partial_forward");
+#endif
+}
+
+void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option,
+	F2Cptr* stats, F2Cptr* ptree){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_backward");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_backward: N22 must be N - H2_partial");
+  auto& solve_data = H2_solver->tree->partial_solve_data;
+  if (solve_data.empty() || H2_solver->tree->partial_solve_nrhs != *Nrhs) {
+    throw std::runtime_error("c_bpack_partial_backward: call c_bpack_partial_forward with the same Nrhs first");
+  }
+  const int verbosity = sync_h2_verbosity(option, H2_solver);
+  const double t0 = MPI_Wtime();
+  const std::vector<H2Data> x2v(reinterpret_cast<const H2Data*>(x2),
+                                reinterpret_cast<const H2Data*>(x2) + static_cast<size_t>(n22) * static_cast<size_t>(*Nrhs));
+  // (the rhs argument only sizes the local vectors)
+  int internal_nloc = *Nloc;
+  if (const auto* layout = H2_solver->distributed_layout.get()) internal_nloc = static_cast<int>(layout->internal_local_size);
+  std::vector<H2Data> sized(static_cast<size_t>(internal_nloc) * static_cast<size_t>(*Nrhs), H2Data(0.0));
+  butterfly::color_unstructured::hierarchical_solve_unstructured(
+    H2_solver->tree.get(), sized, solve_data, *Nrhs, verbosity, false, 2, &x2v,
+    static_cast<std::vector<H2Data>*>(nullptr));
+  std::vector<H2Data> internal_solution(sized.size());
+  butterfly::gather_local_solution(H2_solver->tree.get(), solve_data, internal_solution.data(), &internal_nloc, *Nrhs);
+  h2_values_from_internal(H2_solver, internal_solution, reinterpret_cast<H2Data*>(x), *Nrhs);
+  double t = MPI_Wtime() - t0;
+  MPI_Allreduce(MPI_IN_PLACE, &t, 1, MPI_DOUBLE, MPI_MAX, H2_solver->comm);
+  c_bpack_setstats(stats, "Time_Solve", &t);
+  (void)ptree;
+#else
+  format7_requires_mpi("c_bpack_partial_backward");
+#endif
+}
+
+void c_bpack_partial_schur_extract(C_DT* out, int const* rows, int* nrows, int const* cols, int* ncols, F2Cptr* bmat,
+	F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_extract");
+  std::vector<int64_t> r(rows, rows + std::max(*nrows, 0)), c(cols, cols + std::max(*ncols, 0));
+  butterfly::color_unstructured::partial_schur_entries(
+    *H2_solver->tree, r.data(), static_cast<int64_t>(r.size()), c.data(), static_cast<int64_t>(c.size()),
+    reinterpret_cast<H2Data*>(out));
+#else
+  format7_requires_mpi("c_bpack_partial_schur_extract");
+#endif
+}
+
+void c_bpack_partial_schur_mult(C_DT* y2, C_DT const* x2, int* N22, int* Ncol, F2Cptr* bmat, F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_mult");
+  const int64_t n22 = H2_solver->tree->num_points - H2_solver->tree->partial_count;
+  if (*N22 != n22) throw std::invalid_argument("c_bpack_partial_schur_mult: N22 must be N - H2_partial");
+  if (*Ncol <= 0) throw std::invalid_argument("c_bpack_partial_schur_mult: Ncol must be positive");
+  butterfly::color_unstructured::partial_schur_multiply(
+    *H2_solver->tree, reinterpret_cast<const H2Data*>(x2), reinterpret_cast<H2Data*>(y2), *Ncol);
+#else
+  format7_requires_mpi("c_bpack_partial_schur_mult");
+#endif
+}
+
+void c_bpack_partial_schur_release(F2Cptr* bmat, F2Cptr* option){
+#ifdef HAVE_MPI
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  auto* H2_solver = h2_partial_of<H2Data>(bmat, option, "c_bpack_partial_schur_release");
+  butterfly::color_unstructured::partial_schur_release(*H2_solver->tree);
+#else
+  format7_requires_mpi("c_bpack_partial_schur_release");
+#endif
+}
 
 void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree,
 	int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols,
@@ -2815,7 +2959,9 @@ void c_bpack_logdet(C_DT* phase, C_RDT* logabsdet, F2Cptr* option, F2Cptr* bmat)
 	check_h2_symmetry_option(option, H2_solver->comm, "c_bpack_logdet");
 
 
-	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED) {
+	// (a partial factorization: the log-determinant of F11)
+	if (H2_solver->build_state != butterfly::H2BuildState::RS_FACTORIZED &&
+	    H2_solver->build_state != butterfly::H2BuildState::RS_PARTIAL) {
 	  throw std::runtime_error(
 		"c_bpack_logdet (format 7): log-determinant requires an RS-S factorization");
 	}

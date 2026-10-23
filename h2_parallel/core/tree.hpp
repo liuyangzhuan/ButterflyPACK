@@ -1016,6 +1016,26 @@ struct BoxData {
     // ===== Neighbor Information =====
     std::vector<int64_t> one_hop; ///< Morton indices of 1-hop neighbors
     std::vector<int64_t> use_full_set; ///< whether to use full set or skeleton for each neighbor
+
+    // ===== H2_partial: the F22 part (unstructured/partial.hpp) =====
+    /// The live set the F11 factors (T, X_SR, X_RS, schur at elimination
+    /// time) index: the skeleton before the level's F22 phase sparsified the
+    /// box; empty when the box has no F22 part (then skeleton_indices).
+    std::vector<int64_t> skeleton_before_f22;
+    struct F22Part {
+        bool sparsified = false;
+        std::vector<int64_t> skeleton;     ///< S22 (box slots)
+        std::vector<int64_t> redundant;    ///< R22 (box slots)
+        MatrixStorage<DataType> T;         ///< k' x r22 over skeleton_indices (S' = S11, S22), zero rows on S11
+        MatrixStorage<DataType> X_RR;      ///< r22 x r22 (the transformed R22 block)
+        MatrixStorage<DataType> X_RS;      ///< r22 x k'
+        MatrixStorage<DataType> X_SR;      ///< k' x r22
+        MatrixStorage<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
+        MatrixStorage<DataType> X_NR;      ///< (the neighbours' raw F22 points) x r22
+        std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot
+        std::vector<std::vector<int64_t>> neighbor_f22_slots; ///< per one_hop slot: those points as the neighbour's box slots
+        bool released = false;
+    } f22;
     std::vector<int64_t> two_hop; ///< Morton indices of 2-hop neighbors
     bool on_boundary; ///< if this box is on the boundary
     
@@ -1152,6 +1172,7 @@ struct BoxData {
  */
 template<typename CoordType, typename DataType = CoordType>
 struct TreeLevel {
+    int64_t partial_count = 0;  ///< H2_partial (ParallelTree::partial_count), set by the factorization
     int32_t level;                   ///< Level number (0 = root)
     int64_t num_boxes_global;        ///< Total number of boxes at this level (global)
     int64_t num_boxes_local;         ///< Number of boxes owned by this process
@@ -1550,6 +1571,34 @@ enum class ReductionPattern {
  * - Box size = max(dimension ranges) / grid_size
  * - Rectangular domains waste some boxes but simplify proxy geometry
  */
+/// The skeleton a box's F11 factors index (H2_partial: the skeleton before
+/// the F22 phase; otherwise the skeleton).
+template<typename CoordType, typename DataType>
+const std::vector<int64_t>& factor_skeleton(const BoxData<CoordType, DataType>& box) {
+    return box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
+}
+
+/**
+ * @brief The partial factorization's root (H2_partial, unstructured/partial.hpp):
+ * the root matrix split by point id, A11's LU in the root box's X_RR, and
+ * W = A11^-1 A12, A21, CB = A22 - A21 W.
+ */
+template<typename DataType>
+struct PartialRootFactor {
+    bool active = false;                 ///< this rank holds the root
+    int64_t n11 = 0, n22 = 0;            ///< root slots of F11 / F22 points
+    int64_t n22_global = 0;              ///< N - partial_count
+    std::vector<int64_t> slots11, slots22;
+    std::vector<int64_t> ids22;          ///< point ids of slots22
+    std::vector<int64_t> f22_slot;       ///< F22 index (id - partial_count) -> position in slots22
+    MatrixStorage<DataType> w;           ///< A11^-1 A12 (n11 x n22)
+    MatrixStorage<DataType> a21;         ///< n22 x n11
+    MatrixStorage<DataType> cb;          ///< the Schur complement on the F22 points (n22 x n22)
+    bool cb_released = false;
+    std::vector<int64_t> leaf_box;       ///< F22 index -> local leaf box (the CB entries; built on first use)
+    std::vector<int64_t> leaf_slot;      ///< F22 index -> slot in that leaf box
+};
+
 template<typename CoordType, typename DataType = CoordType>
 struct ParallelTree {
     int dimension;            ///< 1, 2, or 3
@@ -1576,6 +1625,13 @@ struct ParallelTree {
     int id_proxy_points;                 ///< Geometric surface samples for mode 1
     int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
     double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
+    int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
+    bool partial() const { return partial_count > 0; }
+    bool partial_f11(int64_t point_id) const { return point_id < partial_count; }
+    PartialRootFactor<DataType> partial_root;  ///< the root of a partial factorization
+    /// the forward partial solve's swept vectors, for the backward one
+    std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> partial_solve_data;
+    int partial_solve_nrhs = 0;
     std::vector<CoordType> id_source_point_coords; ///< Retained global coordinates only for ID diagnostics
     std::vector<int64_t> id_source_point_order; ///< Global point indices in spatial Morton order
     std::vector<int64_t> id_source_leaf_offsets; ///< Point offsets for every finest-level Morton box

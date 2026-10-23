@@ -133,6 +133,10 @@ struct ProgramOptions {
     // At most ||A|| for compression-only H2, at most 1/||A^-1|| for the
     // factorization (K + tau^2 I: tau^2).
     double s_op = 0.0;
+    // H2_partial: the partial factorization (unstructured/PARTIAL_FACTORIZATION_PLAN.md):
+    // the first partial_count points in input order (F11) are eliminated, the
+    // rest (F22) retained; 0: the full factorization.
+    int64_t partial_count = 0;
     //To DO:NumberKind and KernelKind are not used, probably can delete in future
     KernelKind kernel_kind = KernelKind::LAPLACE;
     NumberKind number_kind = NumberKind::REAL;
@@ -190,6 +194,22 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
             throw std::invalid_argument("a nonsymmetric H2 (option%sym=0) needs H2_unstructured=1");
         }
     }
+    if (options.partial_count < 0 || options.partial_count > options.N) {
+        throw std::invalid_argument("H2_partial must lie in [0, N]");
+    }
+    if (options.partial_count > 0) {
+        // the production configuration only (the plan's decision)
+        if (options.unstructured != 1) throw std::invalid_argument("H2_partial needs H2_unstructured=1");
+        if (options.symmetric) throw std::invalid_argument("H2_partial needs a nonsymmetric factorization (sym=0)");
+        if (options.use_sketch != 2 || options.lazy_schur != 2) {
+            throw std::invalid_argument("H2_partial needs H2_use_sketch=2 and H2_lazy_schur=2");
+        }
+        if (options.xrr_factor != 1) throw std::invalid_argument("H2_partial needs H2_XRR_factor=1 (LU)");
+        if (options.precon == 2) throw std::invalid_argument("H2_partial is a factorization (precon 1 or 3)");
+        if (options.id_proxy_mode != 0) throw std::invalid_argument("H2_partial needs H2_ID_proxy=0");
+        if (options.use_gpu != 0) throw std::invalid_argument("H2_partial: the GPU path is not implemented yet (H2_use_gpu=0)");
+        if (options.compress_factors != 0) throw std::invalid_argument("H2_partial: H2_compress_factors is not supported yet");
+    }
     if (options.unstructured == 0) return;
 
     if (options.lazy_schur != 0 && options.lazy_schur != 2) {
@@ -220,7 +240,8 @@ inline fmm::FactorizationMethod h2_xrr_factorization_method(const ProgramOptions
 enum class H2BuildState {
     UNBUILT,
     H2_COMPRESSED,
-    RS_FACTORIZED
+    RS_FACTORIZED,
+    RS_PARTIAL   ///< H2_partial: F11 factored, the Schur complement on F22 held (unstructured/partial.hpp)
 };
 
 template<typename CoordType, typename DataType>

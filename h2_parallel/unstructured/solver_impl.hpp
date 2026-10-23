@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/butterfly_types.hpp"
+#include "partial.hpp"
 #include "core/butterfly_ca_level.hpp"
 #include "core/butterfly_communicators.hpp"
 
@@ -23,10 +24,28 @@ void hierarchical_solve_unstructured(
     std::vector<std::vector<SolveDataRequest<CoordType, DataType>>> &solve_data,
     int nrhs,
     int verbosity,
-    bool transposed = false) {
+    bool transposed = false,
+    int partial_mode = 0,
+    const std::vector<DataType>* partial_x2 = nullptr,
+    std::vector<DataType>* partial_out2 = nullptr) {
+    // partial_mode (H2_partial, unstructured/partial.hpp): 1, the forward
+    // partial solve: the forward sweep and the root's L part; on return
+    // *partial_out2 = b2 - F21 F11^-1 b1 (F22 index order, replicated) and
+    // solve_data holds the swept vectors.  2, the backward one: solve_data
+    // from mode 1, *partial_x2 the F22 solution (F22 index order,
+    // replicated); the root's U part, the diagonal solves and the backward
+    // sweep give the F11 solution in solve_data (rhs unused but sized).
     if (nrhs <= 0 || rhs.size() % static_cast<size_t>(nrhs) != 0) {
         throw std::invalid_argument(
             "hierarchical_solve_unstructured: invalid batched RHS dimensions");
+    }
+    if (partial_mode != 0) {
+        if (!tree->partial()) throw std::logic_error("hierarchical_solve_unstructured: a partial solve of a full factorization");
+        if (transposed) throw std::invalid_argument("hierarchical_solve_unstructured: no transposed partial solve");
+        if (partial_mode == 1 && partial_out2 == nullptr) throw std::logic_error("partial forward: no output");
+        if (partial_mode == 2 && (partial_x2 == nullptr || solve_data.size() != static_cast<size_t>(tree->num_levels))) {
+            throw std::logic_error("partial backward: call the forward partial solve first");
+        }
     }
     const int64_t local_points =
         static_cast<int64_t>(rhs.size() / static_cast<size_t>(nrhs));
@@ -74,6 +93,7 @@ void hierarchical_solve_unstructured(
     // ===== Initialize solve data structures =====
 
 
+    if (partial_mode != 2)  // (the backward partial solve continues the forward one's vectors)
     for (int level = 0; level < num_levels; ++level) {
         auto& tree_level = tree->levels[level];
 
@@ -93,7 +113,7 @@ void hierarchical_solve_unstructured(
             // solve_box.left_side.resize(box.num_points, DataType{0.0});
             solve_box.initialize(box.morton_index, rank, box.num_points, nrhs);
 
-            solve_box.skeleton_indices = box.skeleton_indices;
+            solve_box.skeleton_indices = factor_skeleton(box);
             solve_box.redundant_indices = box.redundant_indices;
 
 
@@ -129,7 +149,7 @@ void hierarchical_solve_unstructured(
     // Device solve (h2_gpu/device_solve.hpp): decided collectively, with
     // the factors on the device from the first solve after a factorization.
     if constexpr (gpu::gpu_data_type<DataType>) {
-        if (gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
+        if (partial_mode == 0 && gpu::run_device_solve(tree, solve_data, nrhs, false, verbosity, [&](auto& host_data) {
                 hierarchical_solve_unstructured(tree, rhs, host_data, nrhs, -1, transposed);
             }, nullptr, nullptr, transposed)) {
             restore_base_process_affinity();
@@ -150,6 +170,7 @@ void hierarchical_solve_unstructured(
     auto forward_start = std::chrono::high_resolution_clock::now();
     PendingSolveUpdates<DataType> pending_solve;
 
+    if (partial_mode != 2)
     for (int level = leaf_level; level >= 1; level--) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -382,6 +403,9 @@ void hierarchical_solve_unstructured(
 
 
         // Gather skeleton to parent level
+        if (tree->partial() && level >= 2 && tree_level.is_process_active) {
+            partial_f22_forward_level(tree_level, solve_data[level], nrhs);
+        }
         auto& parent_level = tree->levels[level - 1];
         get_data_start = clock::now();
         gather_skeleton_to_parent(
@@ -417,6 +441,7 @@ void hierarchical_solve_unstructured(
     int64_t num_diagonal_solves = 0;
 
     // Solve all X_RR blocks (levels N-1 down to 2)
+    if (partial_mode != 1)
     for (int level = leaf_level; level >= 2; level--) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -564,8 +589,36 @@ void hierarchical_solve_unstructured(
 
     // Solve root X_RR (level 0)
     auto& root_level = tree->levels[0];
-    if (root_level.is_process_active && !root_level.local_boxes.empty()) {
-        apply_diagonal_solve(root_level, solve_data[0][0], false, transposed);
+    if (partial_mode == 0) {
+        if (root_level.is_process_active && !root_level.local_boxes.empty()) {
+            apply_diagonal_solve(root_level, solve_data[0][0], false, transposed);
+            num_diagonal_solves++;
+        }
+    } else {
+        // the root's partial solve (partial.hpp): the F22 vectors replicated
+        const auto& pr = tree->partial_root;
+        const int owner = partial_root_rank(*tree);
+        const int64_t n22 = tree->num_points - tree->partial_count;
+        if (partial_mode == 1) {
+            if (rank == owner) {
+                auto& root_box = root_level.local_boxes[0];
+                auto& v = solve_data[0][0].left_side;
+                partial_root_forward(pr, root_box.X_RR, root_box.X_RR_pivots, v, root_box.num_points, nrhs);
+            }
+            // b2 - F21 F11^-1 b1 in the original F22 variables (partial.hpp)
+            partial_forward_output(tree, solve_data, nrhs, *partial_out2);
+        } else {
+            if (partial_x2->size() != static_cast<size_t>(n22) * static_cast<size_t>(nrhs)) {
+                throw std::invalid_argument("partial backward: the F22 solution has the wrong size");
+            }
+            // x2 into every level's F22 slots in the transformed variables (partial.hpp)
+            partial_backward_input(tree, solve_data, nrhs, *partial_x2);
+            if (rank == owner) {
+                auto& root_box = root_level.local_boxes[0];
+                auto& v = solve_data[0][0].left_side;
+                partial_root_backward(pr, v, root_box.num_points, nrhs);
+            }
+        }
         num_diagonal_solves++;
     }
 
@@ -586,6 +639,7 @@ void hierarchical_solve_unstructured(
 
     auto backward_start = std::chrono::high_resolution_clock::now();
 
+    if (partial_mode != 1)
     for (int level = 1; level <= leaf_level; level++) {
         auto& tree_level = tree->levels[level];
         const int level_print_rank = smallest_active_rank(tree_level);
@@ -631,6 +685,9 @@ void hierarchical_solve_unstructured(
 
         if (print_detail && rank == level_print_rank) {
             std::cout << "    ← Scattered from level " << (level - 1) << std::endl;
+        }
+        if (tree->partial() && level >= 2 && tree_level.is_process_active) {
+            partial_f22_backward_level(tree_level, solve_data[level], nrhs);
         }
 
         if (level >= 2 && tree_level.is_process_active &&
@@ -969,7 +1026,7 @@ void hierarchical_mul_unstructured(
             auto& solve_box = solve_data[level][box_idx];
 
             solve_box.initialize(box.morton_index, rank, box.num_points, nrhs);
-            solve_box.skeleton_indices = box.skeleton_indices;
+            solve_box.skeleton_indices = factor_skeleton(box);
             solve_box.redundant_indices = box.redundant_indices;
 
             if (level == leaf_level) {

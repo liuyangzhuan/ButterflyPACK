@@ -58,6 +58,8 @@ struct DriverOptions {
   int nrhs = 1;
   int inv_mult_check = 0;  // columns of the inv_mult / transposed mult check (bpack_inv_mult_check.hpp); 0: none
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
+  int64_t h2_partial = 0;  // H2_partial: the first h2_partial points (the grid's first planes) form F11
+  int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 20000, distributed64 1)
   int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
@@ -254,6 +256,10 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.nrhs = parse_int(value, "nrhs");
     } else if (name == "inv_mult_check") {
       options.inv_mult_check = parse_int(value, "inv_mult_check");
+    } else if (name == "h2_partial") {
+      options.h2_partial = parse_int64(value, "H2_partial");
+    } else if (name == "partial_check") {
+      options.partial_check = parse_int(value, "partial_check");
     } else if (name == "extract_check") {
       options.extract_check = parse_int(value, "extract_check");
     } else if (name == "logdet_check") {
@@ -484,6 +490,10 @@ void print_usage(const char* executable) {
       << "  --inv_mult_check <columns>   (after the solve: inv_mult N/T/C and the\n"
          "                                transposed mult; with precon 2 the\n"
          "                                transposed mult alone)\n"
+      << "  --H2_partial <n>   (format=7, H2_unstructured 1, sym 0: eliminate the first n points only;\n"
+         "                            the Schur complement on the rest is served by c_bpack_partial_*)\n"
+      << "  --partial_check <0|1>   (with --H2_partial, distributed64 1, N <= 20000: the partial solves\n"
+         "                            and the Schur complement against dense LAPACK on rank 0)\n"
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
          "                             random blocks extracted from the compressed H2,\n"
          "                             against the kernel and its matvec)\n"
@@ -828,6 +838,193 @@ struct ButterflyResources {
 
 extern "C" void Cblacs_exit(int);
 
+extern "C" {
+void dgetrf_(const int*, const int*, double*, const int*, int*, int*);
+void dgetrs_(const char*, const int*, const int*, const double*, const int*, const int*, double*, const int*, int*);
+void dgemm_(const char*, const char*, const int*, const int*, const int*, const double*, const double*, const int*,
+            const double*, const int*, const double*, double*, const int*);
+}
+
+// --H2_partial: the partial solves and the Schur complement CB = F22 - F21
+// F11^-1 F12 through the C API, and with --partial_check against dense
+// LAPACK on rank 0 (the kernel over all points; distributed64 1, whose
+// local input rows are [first, first + count) in input order).
+void partial_checks(const DriverOptions& o, const Laplace3DApplication& application, ButterflyResources& resources,
+                    int rank, int mpi_size, int local_points, const DistributedInput& input) {
+  const int64_t N = checked_cube(o.grid_size, "grid_size");
+  const int n11 = static_cast<int>(o.h2_partial), n22 = static_cast<int>(N - o.h2_partial);
+  const int nrhs = o.nrhs;
+  if (o.distributed64 != 1) throw std::invalid_argument("--H2_partial in this driver needs --distributed64 1");
+  if (n22 == 0) {
+    if (rank == 0) std::cout << "H2 partial: no F22 points (H2_partial = N), nothing more to check" << std::endl;
+    return;
+  }
+  // b: a function of the global row (so rank 0 can regenerate it), x2 random
+  std::vector<double> b(static_cast<size_t>(local_points) * nrhs);
+  for (int c = 0; c < nrhs; ++c)
+    for (int r = 0; r < local_points; ++r)
+      b[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points] =
+          1.0 + 0.125 * c + 0.001 * ((input.first + r) % 97);
+  std::mt19937_64 rng(20261022);
+  std::uniform_real_distribution<double> uni(-1.0, 1.0);
+  std::vector<double> x2(static_cast<size_t>(n22) * nrhs);
+  for (double& v : x2) v = uni(rng);
+  std::vector<double> out2(x2.size(), 0.0), x(b.size(), 0.0), y2(x2.size(), 0.0);
+  int nloc = local_points, N22 = n22, Nrhs = nrhs;
+  const double t0 = MPI_Wtime();
+  d_c_bpack_partial_forward(out2.data(), b.data(), &nloc, &N22, &Nrhs, &resources.matrix, &resources.option,
+                            &resources.stats, &resources.process_tree);
+  const double t1 = MPI_Wtime();
+  d_c_bpack_partial_backward(x.data(), x2.data(), &nloc, &N22, &Nrhs, &resources.matrix, &resources.option,
+                             &resources.stats, &resources.process_tree);
+  const double t2 = MPI_Wtime();
+  d_c_bpack_partial_schur_mult(y2.data(), x2.data(), &N22, &Nrhs, &resources.matrix, &resources.option);
+  const double t3 = MPI_Wtime();
+  // the F22 entries of x come back as given
+  double x2_diff = 0.0;
+  for (int c = 0; c < nrhs; ++c)
+    for (int r = 0; r < local_points; ++r) {
+      const int64_t g = input.first + r;
+      if (g >= n11) x2_diff = std::max(x2_diff, std::abs(x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points] -
+                                                        x2[static_cast<size_t>(g - n11) + static_cast<size_t>(c) * n22]));
+    }
+  MPI_Allreduce(MPI_IN_PLACE, &x2_diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  // three random blocks of the Schur complement, and one over a run of
+  // consecutive F22 indices (neighbouring points: the near-field entries)
+  constexpr int nblocks = 4;
+  std::vector<int> rows, cols;
+  std::vector<int> nr(nblocks), nc(nblocks);
+  for (int k = 0; k < 3; ++k) {
+    nr[k] = 1 + static_cast<int>(rng() % 40);
+    nc[k] = 1 + static_cast<int>(rng() % 40);
+    for (int i = 0; i < nr[k]; ++i) rows.push_back(static_cast<int>(rng() % static_cast<uint64_t>(n22)));
+    for (int j = 0; j < nc[k]; ++j) cols.push_back(static_cast<int>(rng() % static_cast<uint64_t>(n22)));
+  }
+  nr[3] = nc[3] = std::min(40, n22 - n22 / 3);
+  for (int i = 0; i < nr[3]; ++i) rows.push_back(n22 / 3 + i);
+  for (int j = 0; j < nc[3]; ++j) cols.push_back(n22 / 3 + j);
+  std::vector<std::vector<double>> blocks(nblocks);
+  {
+    int ra = 0, ca = 0;
+    for (int k = 0; k < nblocks; ++k) {
+      blocks[k].assign(static_cast<size_t>(nr[k]) * nc[k], 0.0);
+      d_c_bpack_partial_schur_extract(blocks[k].data(), rows.data() + ra, &nr[k], cols.data() + ca, &nc[k],
+                                      &resources.matrix, &resources.option);
+      ra += nr[k];
+      ca += nc[k];
+    }
+  }
+  const double t4 = MPI_Wtime();
+  double times[4] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3};
+  MPI_Allreduce(MPI_IN_PLACE, times, 4, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  if (rank == 0) {
+    std::cout << std::setprecision(3) << "H2 partial solves: forward " << times[0] << " s, backward " << times[1]
+              << " s, Schur mult " << times[2] << " s, Schur extract " << times[3] << " s; x2 returned to "
+              << x2_diff << std::endl;
+  }
+  if (o.partial_check == 0) return;
+  if (N > 40000) throw std::invalid_argument("--partial_check: N <= 40000");
+  // rank 0: the dense kernel, A11 = P L U, W = A11^-1 A12, CB = A22 - A21 W
+  const int n = static_cast<int>(N);
+  std::vector<double> x1d(static_cast<size_t>(n11) * nrhs, 0.0);
+  double err_mult = 0.0, err_extract = 0.0, err_forward = 0.0;
+  if (rank == 0) {
+    std::vector<double> A(static_cast<size_t>(n) * n);
+    for (int j = 0; j < n; ++j) {
+      double y[3];
+      application.coordinate(j, y);
+      for (int i = 0; i < n; ++i) {
+        double xx[3];
+        application.coordinate(i, xx);
+        A[static_cast<size_t>(i) + static_cast<size_t>(j) * n] = application.evaluate_coordinates(i + 1, j + 1, xx, y);
+      }
+    }
+    auto block = [&](int r0, int nrow, int c0, int ncol) {
+      std::vector<double> B(static_cast<size_t>(nrow) * ncol);
+      for (int j = 0; j < ncol; ++j)
+        for (int i = 0; i < nrow; ++i)
+          B[static_cast<size_t>(i) + static_cast<size_t>(j) * nrow] = A[static_cast<size_t>(r0 + i) + static_cast<size_t>(c0 + j) * n];
+      return B;
+    };
+    std::vector<double> A11 = block(0, n11, 0, n11), A12 = block(0, n11, n11, n22), A21 = block(n11, n22, 0, n11),
+                        CB = block(n11, n22, n11, n22);
+    std::vector<int> piv(static_cast<size_t>(std::max(n11, 1)));
+    int info = 0;
+    dgetrf_(&n11, &n11, A11.data(), &n11, piv.data(), &info);
+    if (info != 0) throw std::runtime_error("partial_check: dense LU of A11 failed");
+    const char no = 'N';
+    std::vector<double> W = A12;
+    dgetrs_(&no, &n11, &n22, A11.data(), &n11, piv.data(), W.data(), &n11, &info);
+    const double one = 1.0, minus = -1.0, zero = 0.0;
+    dgemm_(&no, &no, &n22, &n22, &n11, &minus, A21.data(), &n22, W.data(), &n11, &one, CB.data(), &n22);
+    // y2 = CB x2
+    std::vector<double> y2d(static_cast<size_t>(n22) * nrhs, 0.0);
+    dgemm_(&no, &no, &n22, &nrhs, &n22, &one, CB.data(), &n22, x2.data(), &n22, &zero, y2d.data(), &n22);
+    double d2 = 0.0, r2 = 0.0;
+    for (size_t i = 0; i < y2d.size(); ++i) {
+      d2 += (y2[i] - y2d[i]) * (y2[i] - y2d[i]);
+      r2 += y2d[i] * y2d[i];
+    }
+    err_mult = std::sqrt(d2 / r2);
+    // the blocks
+    {
+      int ra = 0, ca = 0;
+      double bd2 = 0.0, br2 = 0.0;
+      for (int k = 0; k < nblocks; ++k) {
+        for (int j = 0; j < nc[k]; ++j)
+          for (int i = 0; i < nr[k]; ++i) {
+            const double ref = CB[static_cast<size_t>(rows[static_cast<size_t>(ra + i)]) +
+                                  static_cast<size_t>(cols[static_cast<size_t>(ca + j)]) * n22];
+            const double v = blocks[k][static_cast<size_t>(i) + static_cast<size_t>(j) * nr[k]];
+            bd2 += (v - ref) * (v - ref);
+            br2 += ref * ref;
+          }
+        ra += nr[k];
+        ca += nc[k];
+      }
+      err_extract = std::sqrt(bd2 / br2);
+    }
+    // the forward solve: out2 = b2 - A21 A11^-1 b1; the backward: x1 = A11^-1 (b1 - A12 x2)
+    std::vector<double> b1(static_cast<size_t>(n11) * nrhs), b2(static_cast<size_t>(n22) * nrhs);
+    for (int c = 0; c < nrhs; ++c) {
+      for (int r = 0; r < n11; ++r) b1[static_cast<size_t>(r) + static_cast<size_t>(c) * n11] = 1.0 + 0.125 * c + 0.001 * (r % 97);
+      for (int r = 0; r < n22; ++r) b2[static_cast<size_t>(r) + static_cast<size_t>(c) * n22] = 1.0 + 0.125 * c + 0.001 * ((r + n11) % 97);
+    }
+    std::vector<double> y1 = b1;
+    dgetrs_(&no, &n11, &nrhs, A11.data(), &n11, piv.data(), y1.data(), &n11, &info);
+    dgemm_(&no, &no, &n22, &nrhs, &n11, &minus, A21.data(), &n22, y1.data(), &n11, &one, b2.data(), &n22);
+    d2 = r2 = 0.0;
+    for (size_t i = 0; i < b2.size(); ++i) {
+      d2 += (out2[i] - b2[i]) * (out2[i] - b2[i]);
+      r2 += b2[i] * b2[i];
+    }
+    err_forward = std::sqrt(d2 / r2);
+    x1d = b1;
+    dgemm_(&no, &no, &n11, &nrhs, &n22, &minus, A12.data(), &n11, x2.data(), &n22, &one, x1d.data(), &n11);
+    dgetrs_(&no, &n11, &nrhs, A11.data(), &n11, piv.data(), x1d.data(), &n11, &info);
+  }
+  MPI_Bcast(x1d.data(), static_cast<int>(x1d.size()), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  double d2 = 0.0, r2 = 0.0;
+  for (int c = 0; c < nrhs; ++c)
+    for (int r = 0; r < local_points; ++r) {
+      const int64_t g = input.first + r;
+      if (g >= n11) continue;
+      const double v = x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points];
+      const double ref = x1d[static_cast<size_t>(g) + static_cast<size_t>(c) * n11];
+      d2 += (v - ref) * (v - ref);
+      r2 += ref * ref;
+    }
+  MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  const double err_backward = std::sqrt(d2 / r2);
+  if (rank == 0) {
+    std::cout << std::scientific << std::setprecision(3) << "H2 partial dense check (N " << n << ", F11 " << n11
+              << "): schur_mult " << err_mult << "  schur_extract " << err_extract << "  forward " << err_forward
+              << "  backward " << err_backward << std::defaultfloat << std::endl;
+  }
+  (void)mpi_size;
+}
+
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
 
@@ -1000,6 +1197,7 @@ int main(int argc, char** argv) {
           option_handle, "H2_CA_owner_serial",
           driver_options.h2_ca_owner_serial);
       d_c_bpack_set_I_option(option_handle, "precon", driver_options.precon);
+      d_c_bpack_set_I_option(option_handle, "H2_partial", static_cast<int>(driver_options.h2_partial));
       d_c_bpack_set_I_option(
           option_handle, "verbosity", driver_options.verbosity);
       d_c_bpack_set_I_option(
@@ -1421,6 +1619,7 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (driver_options.h2_partial == 0) {
     int number_of_rhs = driver_options.nrhs;
     const size_t value_count = static_cast<size_t>(local_points) *
         static_cast<size_t>(number_of_rhs);
@@ -1653,6 +1852,9 @@ int main(int argc, char** argv) {
                   << "; the solve again: max difference " << difference / scale << " (relative)"
                   << std::setprecision(6) << std::endl;
       }
+    }
+    } else {
+      partial_checks(driver_options, application, resources, rank, mpi_size, local_points, distributed_input);
     }
 
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);

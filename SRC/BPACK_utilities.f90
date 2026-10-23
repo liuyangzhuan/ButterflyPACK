@@ -1333,6 +1333,7 @@ contains
       option%H2_ID_proxy=0
       option%H2_ID_proxy_points=8
       option%H2_s_op=0d0
+      option%H2_partial=0
 
    end subroutine SetDefaultOptions
 
@@ -1429,6 +1430,8 @@ contains
                   read (strings1, *) option%H2_ID_proxy_points
                else if (trim(strings) == '--h2_s_op' .or. trim(strings) == '--H2_s_op') then
                   read (strings1, *) option%H2_s_op
+               else if (trim(strings) == '--h2_partial' .or. trim(strings) == '--H2_partial') then
+                  read (strings1, *) option%H2_partial
                else if (trim(strings) == '--iter_solver') then
                   read (strings1, *) option%iter_solver
                else if (trim(strings) == '--xyzsort') then
@@ -1568,6 +1571,7 @@ contains
       option1%H2_ID_proxy = option%H2_ID_proxy
       option1%H2_ID_proxy_points = option%H2_ID_proxy_points
       option1%H2_s_op = option%H2_s_op
+      option1%H2_partial = option%H2_partial
       option1%tol_comp = option%tol_comp
       option1%tol_Rdetect = option%tol_Rdetect
       option1%tol_LS = option%tol_LS
@@ -1668,6 +1672,7 @@ contains
                write (*, '(A18,I8)') 'baca_batch', option%BACA_Batch
             endif
             write (*, '(A18,Es14.7)') 'h2_s_op', option%H2_s_op
+            write (*, '(A18,I8)') 'h2_partial', option%H2_partial
             write (*, '(A18,I8)') 'n_iter', option%n_iter
             write (*, '(A18,I8)') 'precon', option%precon
             write (*, '(A18,I8)') 'verbosity', option%verbosity

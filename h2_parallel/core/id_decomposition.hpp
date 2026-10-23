@@ -510,6 +510,50 @@ IDResult<DataType> compute_id_complex(
 
 
 /**
+ * @brief The ID of a box's F11 columns only (H2_partial): the F22 columns
+ * (point id >= partial_count) are forced into the skeleton, with zero rows
+ * of T.  A box without F11 columns is all skeleton (rank 0 for the F11 part).
+ *
+ * The input is the ID target (rows x cols, column c = the box's point c);
+ * the F11 columns are gathered into a contiguous copy and factored as
+ * compute_id_complex does.  The result's indices are the box's slots.
+ */
+template<typename DataType>
+IDResult<DataType> compute_id_partial(
+    const DataType* A, int64_t m, int64_t n, int64_t lda,
+    double tolerance, double abs_tolerance,
+    const std::vector<int64_t>& point_ids, int64_t partial_count) {
+    std::vector<int64_t> keep, forced;
+    for (int64_t c = 0; c < n; ++c) {
+        if (point_ids[static_cast<size_t>(c)] < partial_count) keep.push_back(c);
+        else forced.push_back(c);
+    }
+    IDResult<DataType> result;
+    const int64_t nk = static_cast<int64_t>(keep.size());
+    if (nk > 0 && m > 0) {
+        std::vector<DataType> sub(static_cast<size_t>(m * nk));
+        for (int64_t j = 0; j < nk; ++j) {
+            std::copy_n(A + keep[static_cast<size_t>(j)] * lda, m, sub.data() + j * m);
+        }
+        IDResult<DataType> id = compute_id_complex(sub.data(), m, nk, m, tolerance, 0, abs_tolerance);
+        ensure_nonempty_box_id_rank(id, nk);
+        const int64_t k11 = static_cast<int64_t>(id.skeleton_indices.size());
+        const int64_t r = static_cast<int64_t>(id.redundant_indices.size());
+        for (int64_t s : id.skeleton_indices) result.skeleton_indices.push_back(keep[static_cast<size_t>(s)]);
+        for (int64_t s : id.redundant_indices) result.redundant_indices.push_back(keep[static_cast<size_t>(s)]);
+        result.interpolation.allocate(k11 + static_cast<int64_t>(forced.size()), r);
+        for (int64_t j = 0; j < r; ++j) {
+            for (int64_t i = 0; i < k11; ++i) result.interpolation(i, j) = id.interpolation(i, j);
+        }
+    } else {
+        result.interpolation.allocate(static_cast<int64_t>(forced.size()), 0);
+    }
+    for (int64_t c : forced) result.skeleton_indices.push_back(c);
+    result.rank = static_cast<int64_t>(result.skeleton_indices.size());
+    return result;
+}
+
+/**
  * @brief Generate sparse sketch of matrix using stratified random projection
  * 
  * Computes B = S * A where S is a (d × m) sparse random matrix.

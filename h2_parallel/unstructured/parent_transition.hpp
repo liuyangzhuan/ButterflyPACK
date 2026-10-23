@@ -243,6 +243,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
             std::vector<int64_t> skeleton;                  // global indices
             int64_t full_size = 0;                          // (its points)
             const std::vector<int64_t>* skeleton_positions = nullptr;
+            const std::vector<int64_t>* skeleton_before = nullptr;  // (H2_partial: before the F22 phase)
         };
         auto child_ref = [&](BoxData<CoordType, DataType>* box) {
             ChildRef ref;
@@ -250,6 +251,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
             ref.box = box;
             ref.full_size = box->num_points;
             ref.skeleton_positions = &box->skeleton_indices;
+            ref.skeleton_before = &box->skeleton_before_f22;
             ref.skeleton.resize(box->skeleton_indices.size());
             for (size_t s_idx = 0; s_idx < box->skeleton_indices.size(); ++s_idx) {
                 ref.skeleton[s_idx] = box->point_indices[static_cast<size_t>(box->skeleton_indices[s_idx])];
@@ -313,6 +315,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
                     e.morton = c.morton;
                     e.full_size = c.full_size;
                     e.skeleton = c.skeleton_positions;
+                    e.skeleton_before = c.skeleton_before;
                     e.wanted = c.skeleton_positions;
                     e.wanted_count = static_cast<int64_t>(c.skeleton.size());
                     e.indices = c.skeleton.data();
