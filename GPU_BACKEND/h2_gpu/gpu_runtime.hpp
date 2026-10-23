@@ -13,7 +13,9 @@
 #include "gpu_common/bpack_env.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <complex>
+#include <cstdlib>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -51,18 +53,36 @@ public:
     Context& operator=(const Context&) = delete;
 
 private:
+    // No collective is permitted here: the first GPU call may belong to a
+    // front whose communicator contains only a subset of MPI_COMM_WORLD.
+    static int device_rank() {
+        for (const char* name : {"SLURM_LOCALID", "OMPI_COMM_WORLD_LOCAL_RANK", "MPI_LOCALRANKID",
+                                 "MV2_COMM_WORLD_LOCAL_RANK", "PMI_LOCAL_RANK"}) {
+            if (const char* value = std::getenv(name)) {
+                int rank = 0;
+                const char* end = value + std::strlen(value);
+                const auto parsed = std::from_chars(value, end, rank);
+                if (parsed.ec != std::errc() || parsed.ptr != end || rank < 0) {
+                    throw std::runtime_error(std::string("H2 GPU backend: invalid local rank in ") + name);
+                }
+                return rank;
+            }
+        }
+        // Without a launcher's node-local rank, use the world rank as a
+        // noncollective fallback. Uneven ranks per node may then need an
+        // explicit CUDA_VISIBLE_DEVICES binding for the desired placement.
+        int rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        return rank;
+    }
+
     Context() {
         int count = 0;
         check_cuda(cudaGetDeviceCount(&count), "cudaGetDeviceCount");
         if (count <= 0) {
             throw std::runtime_error("H2 GPU backend: no CUDA device visible to this rank");
         }
-        MPI_Comm node_comm;
-        MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node_comm);
-        int local_rank = 0;
-        MPI_Comm_rank(node_comm, &local_rank);
-        MPI_Comm_free(&node_comm);
-        device_ = local_rank % count;
+        device_ = count == 1 ? 0 : device_rank() % count;
         activate();
         magma_init();
         magma_queue_create(device_, &queue_);
