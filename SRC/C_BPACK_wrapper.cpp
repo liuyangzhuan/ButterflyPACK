@@ -1520,8 +1520,11 @@ void c_bpack_construct_init(int* Npo, int* Ndim, double* Locations, int* nns, in
 	  std::vector<int> rank_idxs(nproc_h2, 0), rank_idxe(nproc_h2, -1);
 	  MPI_Allgather(&idxs, 1, MPI_INT, rank_idxs.data(), 1, MPI_INT, H2_solver->comm);
 	  MPI_Allgather(&idxe, 1, MPI_INT, rank_idxe.data(), 1, MPI_INT, H2_solver->comm);
+	  // the index tree goes down to the leaf size this H2 was given, so a
+	  // butterfly built on this mesh has real depth (c_bpack_set_mesh_h2)
+	  int nmin_leaf_mesh = static_cast<int>(std::max<int64_t>(H2_options.nmin_leaf, 1));
 	  c_bpack_set_mesh_h2(Npo, new2old.data(), &idxs, &idxe, &nproc_h2,
-	                      rank_idxs.data(), rank_idxe.data(), msh);
+	                      rank_idxs.data(), rank_idxe.data(), &nmin_leaf_mesh, msh);
 	  *Npo_loc=idxe-idxs+1;
 	  if (perms != nullptr) {
 		std::copy(new2old.begin(), new2old.end(), perms);

@@ -402,6 +402,14 @@ contains
          val_d = stats%Flop_C_Mult
          valid_opt = 1
       endif
+      if (trim(str) == 'Cnt_Extract_Gemm') then
+         val_d = stats%Cnt_Extract_Gemm
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Extract_Gemm') then
+         val_d = stats%Time_Extract_Gemm
+         valid_opt = 1
+      endif
       if (trim(str) == 'Flop_C_Extract') then
          val_d = stats%Flop_C_Extract
          valid_opt = 1
@@ -2024,9 +2032,9 @@ contains
    end subroutine C_BPACK_Set_Gpu
 
 
-   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe, nproc, rank_idxs, rank_idxe, msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
+   subroutine C_BPACK_Set_Mesh_H2(N, new2old, idxs, idxe, nproc, rank_idxs, rank_idxe, nmin_leaf, msh_Cptr) bind(c, name="c_bpack_set_mesh_h2")
       implicit none
-      integer N, nproc
+      integer N, nproc, nmin_leaf
       integer new2old(N)
       integer idxs, idxe
       integer rank_idxs(nproc), rank_idxe(nproc)
@@ -2103,8 +2111,17 @@ contains
       enddo
       call BPACK_require(minleaf >= 1, &
          'c_bpack_set_mesh_h2: a leaf of the rank-level index tree is empty')
+      !>**** How far below the process tree the index tree goes.  It used to
+      !> stop at 2 extra levels, which only gave the depth other code asserts
+      !> on; but a butterfly block built on this mesh takes its depth from
+      !> here (level_butterfly = Maxlevel - 1 in C_BF_Construct_Init), so that
+      !> cap pinned F12/F21/S at about log2(nproc)+3 levels however large the
+      !> matrix was, leaving few blocks per level to spread over the threads
+      !> and a high rank in each.  Go down to nmin_leaf points a group
+      !> instead, which is what the caller's leaf size asks for, and keep a
+      !> hard stop so a tiny nmin_leaf cannot run the tree away.
       extra = 0
-      do while (extra < 2 .and. minleaf/(2**(extra + 1)) >= 1)
+      do while (extra < 16 .and. minleaf/(2**(extra + 1)) >= max(nmin_leaf, 1))
          extra = extra + 1
       enddo
       Maxlevel = Lrank + extra

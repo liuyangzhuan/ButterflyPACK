@@ -50,7 +50,7 @@ void c_bpack_construct_init_fortran(int* Npo, int* Ndim, double* Locations, int*
 // the mesh can carry a basis_group reproducing the H2's own distribution; a
 // butterfly block built on this mesh (c_bf_construct_init) then lands on the
 // same rows.
-void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, F2Cptr* msh_Cptr);
+void c_bpack_set_mesh_h2(int* Npo, int* new2old, int* idxs, int* idxe, int* nproc, int* rank_idxs, int* rank_idxe, int* nmin_leaf, F2Cptr* msh_Cptr);
 void c_bpack_set_mesh_distributed64(const int64_t* N_global, const int64_t* N_input_local, const int64_t* N_internal_local, const int64_t* internal_global_start, F2Cptr* msh_Cptr);
 void c_bpack_wrap_h2(F2Cptr* bmat_Cptr, C2Fptr h2_ptr);
 void c_bpack_get_h2(C2Fptr bmat_Cptr, F2Cptr* h2_ptr);
