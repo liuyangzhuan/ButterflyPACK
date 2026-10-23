@@ -7640,7 +7640,31 @@ Owned work is about half the gap; an interior rank installs 19 components
 against a corner rank's 11.  Balancing owned work perfectly would take the
 slowest class's excess over the mean, 0.39 s at 320^3 and 0.20 s at 192^3,
 less the installs the shed components add: under 0.5% of either
-factorization.  The diagnostics are in the working tree, not committed.
+factorization.  The diagnostics were committed in 318d04c.
+
+*32^3 bricks on CPU nodes: memory and a first comparison (2026-10-23).*
+320^3 (Nmin 64) on 8 ranks has the bricks and per-rank data of 640^3 on 64
+ranks.  One rank per Perlmutter CPU node (128 cores, 503 GB; account m4484,
+premium, build/gpu_prep/run_cpu_nodes.sh), 128 threads, frozen_cpu_dg1,
+BPACK_TRACE=memory,phase,skew, job 60163096 (h2_c1_work/cpu8):
+
+| variant | peak RSS a rank (sacct) | factor time | levels 6 / 5 / 4 / 3 / 2 | acc_forward |
+|---|---|---|---|---|
+| Color | 144.8 GB | 251 s | 55.9 / 66.6 / 44.8 / 28.1 / 10.7 | 5.19e-3 |
+| CA3 at the leaf | 160.5 GB | 195 s | 37.5 / 52.2 / 29.6 / 18.6 / 10.3 | 5.25e-3 |
+| CA0 at the leaf | 152.8 GB | 209 s | 37.7 / 52.3 / 34.3 / 28.5 / 10.7 | 5.07e-3 |
+
+The peak is above the leaf (levels 5-4: the kept factors of the levels
+below, 58-87 GB, plus ~40 GB the memory trace does not attribute), not 8x
+the 320^3/64 peak (30.8-34.3 GB) as projected.  On 64 ranks the interior
+ranks peaked ~25% above the average at 320^3, so 640^3 on 64 ranks needs
+up to ~180-200 GB a rank: 2 ranks a node, 32 nodes.  Both CA variants beat
+Color here (all 8 ranks are corner ranks): the leaf by a third (Color's
+owner pass 17.1 s and transport 20.2 s at 128 threads), and the Color
+levels above run 9-15 s faster after a CA leaf, where they fault a tenth
+of the pages (level 5: 8.45M minor faults after the Color leaf, 0.86M
+after CA3's) - the after-effect of the 16-thread runs, much larger at
+128 threads a rank.
 
 #### logdet of an operator after another one is built (2026-10-17)
 
