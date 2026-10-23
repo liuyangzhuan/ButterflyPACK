@@ -20317,6 +20317,7 @@ end subroutine BF_block_MVP_dat_batch_magma
 subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,ptree,stats)
 
     implicit none
+    real(kind=8) :: gt1, gt2
     type(matrixblock)::blocks
     type(proctree)::ptree
     type(Hstat):: stats
@@ -20382,9 +20383,20 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
 
             allocate (mat1(mm + 2, nvec1))
             if (nvec1 > 0) then
-                mat1 = 0
+                !>**** no zeroing: rows 1:2 are assigned below and the
+                !> gemm writes rows 3:mm+2 of every column with beta=0
                 mat1(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
+                gt1 = MPI_Wtime()
                 call gemmf77('N', 'N', mm, nvec1, nn1, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn1 + 2, BPACK_czero, mat1(3, 1), mm + 2)
+                gt2 = MPI_Wtime()
+#ifdef HAVE_TASKLOOP
+                !$omp atomic
+#endif
+                stats%Time_Extract_Gemm = stats%Time_Extract_Gemm + gt2 - gt1
+#ifdef HAVE_TASKLOOP
+                !$omp atomic
+#endif
+                stats%Cnt_Extract_Gemm = stats%Cnt_Extract_Gemm + 1
 #ifdef HAVE_TASKLOOP
                 !$omp atomic
 #endif
@@ -20396,9 +20408,20 @@ subroutine BF_block_extraction_multiply_oneblock_right(blocks, BFvec, level,nn,p
 
             allocate (mat2(mm + 2, nvec2))
             if (nvec2 > 0) then
-                mat2 = 0
+                !>**** no zeroing: rows 1:2 are assigned below and the
+                !> gemm writes rows 3:mm+2 of every column with beta=0
                 mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(1:2, :)
+                gt1 = MPI_Wtime()
                 call gemmf77('N', 'N', mm, nvec2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc + 1)%matrix(3, 1), nn2 + 2, BPACK_czero, mat2(3, 1), mm + 2)
+                gt2 = MPI_Wtime()
+#ifdef HAVE_TASKLOOP
+                !$omp atomic
+#endif
+                stats%Time_Extract_Gemm = stats%Time_Extract_Gemm + gt2 - gt1
+#ifdef HAVE_TASKLOOP
+                !$omp atomic
+#endif
+                stats%Cnt_Extract_Gemm = stats%Cnt_Extract_Gemm + 1
 #ifdef HAVE_TASKLOOP
                 !$omp atomic
 #endif
@@ -20538,6 +20561,7 @@ end subroutine BF_MD_block_extraction_multiply_oneblock_right
 subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,ptree,stats)
 
    implicit none
+    real(kind=8) :: gt1, gt2
    type(matrixblock)::blocks
    type(proctree)::ptree
    type(Hstat):: stats
@@ -20578,9 +20602,20 @@ subroutine BF_block_extraction_multiply_oneblock_left(blocks, BFvec, level,nn,pt
             nvec2 = size(BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix, 2)
 
             allocate (mat2(mm + 2, nvec2))
-            mat2 = 0
+            !>**** no zeroing: as in the right pass, rows 1:2 are assigned
+            !> below and the gemm writes rows 3:mm+2 of every column
             mat2(1:2, :) = BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(1:2, :)
+            gt1 = MPI_Wtime()
             call gemmf77('N', 'N', mm, nvec2, nn2, BPACK_cone, blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix, mm, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, 1), nn2 + 2, BPACK_czero, mat2(3, 1), mm + 2)
+            gt2 = MPI_Wtime()
+#ifdef HAVE_TASKLOOP
+            !$omp atomic
+#endif
+            stats%Time_Extract_Gemm = stats%Time_Extract_Gemm + gt2 - gt1
+#ifdef HAVE_TASKLOOP
+            !$omp atomic
+#endif
+            stats%Cnt_Extract_Gemm = stats%Cnt_Extract_Gemm + 1
 
 #ifdef HAVE_TASKLOOP
             !$omp atomic
@@ -21192,6 +21227,7 @@ end subroutine BF_block_extraction_sort_oneblock
 subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, level,nn,ptree,msh,stats)
 
    implicit none
+    real(kind=8) :: gt1, gt2
    type(matrixblock)::blocks
    type(proctree)::ptree
    type(Hstat):: stats
@@ -21268,7 +21304,17 @@ subroutine BF_block_extraction_multiply_oneblock_last(blocks, BFvec, inters, lev
          mat(ii, :) = blocks%ButterflyU%blocks(index_i_loc_s)%matrix(ri, :)
       enddo
 
+      gt1 = MPI_Wtime()
       call gemmf77('N', 'N', nr, nc, rank, BPACK_cone, mat, nr, BFvec%vec(level)%blocks(index_ii_loc, index_jj_loc)%matrix(3, idxc + 1), rank + 2, BPACK_czero, Vpartial, nr)
+      gt2 = MPI_Wtime()
+#ifdef HAVE_TASKLOOP
+      !$omp atomic
+#endif
+      stats%Time_Extract_Gemm = stats%Time_Extract_Gemm + gt2 - gt1
+#ifdef HAVE_TASKLOOP
+      !$omp atomic
+#endif
+      stats%Cnt_Extract_Gemm = stats%Cnt_Extract_Gemm + 1
 #ifdef HAVE_TASKLOOP
       !$omp atomic
 #endif

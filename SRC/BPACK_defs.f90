@@ -914,6 +914,10 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         real(kind=8) Time_Direct_LU, Time_Add_Multiply, Time_Multiply, Time_XLUM, Time_Split, Time_Comm, Time_Idle, Time_Factor
         real(kind=8) Mem_Current, Mem_peak, Mem_Sblock, Mem_SMW, Mem_Direct_inv, Mem_Direct_for, Mem_int_vec, Mem_Comp_for, Mem_Fill, Mem_Factor
         real(kind=8) Flop_Fill, Flop_Factor, Flop_Sol, Flop_C_Mult, Flop_C_Extract, Flop_BF_MVP_Gemm_Leaf, Flop_BF_MVP_Gemm_Kernel, Flop_Tmp
+        !< the butterfly extraction's gemms (BF_block_extraction): how many
+        !< and the seconds inside them, to separate the arithmetic from the
+        !< per-block work around it.  Reset with Flop_Tmp.
+        real(kind=8) :: Cnt_Extract_Gemm = 0d0, Time_Extract_Gemm = 0d0
         integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
