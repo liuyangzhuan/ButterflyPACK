@@ -7594,6 +7594,27 @@ since taskloop pieces are run only by threads already at the barrier.
 Left at those levels: the ring-row consume and kernel rows, the ID, the
 near updates - and the 27 s of per-colour waits.
 
+*CA3 above the leaf, tried (2026-10-22): a design limit, not a rule.*  The
+floor of minimum_CA_boxes_per_active_process (343, a 7^3 brick) was
+lowered to 8 for the owner-component mode and 320^3/64 run with CA_level
+4, 3 and 2.  Every run died at level 4's schedule setup: first
+"auxiliary_components: boundary box 512 outside the graph's
+neighbourhood" (the local graph construction), then, with the global
+construction (BPACK_CHECK=globalgraph), "shared box 0 of component 0 not
+held by rank 45".  The standalone graph build
+(h2_c1_work/cpu/small_bricks_graph.cpp, from tests/owner_graph_test.cpp)
+shows why: at a 4^3 brick the CA classifier makes one blue component of
+3,584 boxes shared by all 64 ranks (no purple, no green), at 2^3 one of
+512; at 8^3 the intended 27 blue corner clusters, 54 purple edge runs and
+36 green faces, at most 8 sharers each.  The colour classes are bands of
+fixed width about a brick's corners, edges and faces; a brick narrower
+than about six boxes is all corner band, the grid's whole boundary becomes
+one component, and the arrival-driven schedule has nothing to schedule.
+That is what the 7^3 floor encodes; it stays.  Reverted.  Reaching the 26 s
+of per-colour waits at levels 4-2 with 64 ranks would need a colouring
+for thin bricks (a different decomposition, not a parameter), or fewer
+ranks at those levels, which costs more compute than the waits.
+
 #### logdet of an operator after another one is built (2026-10-17)
 
 GPTune's GP training factors K, builds the derivative operators (compression
