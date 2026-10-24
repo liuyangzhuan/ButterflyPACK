@@ -443,6 +443,9 @@ void write_tensor_slices_file(const string& filename, int nx, int ny, int nz, do
 
 
 
+// ivelo 9: factor on the velocity gradient (g1, g2, g3) below; 1 keeps the profile (--ivelo9_grad_scale)
+double ivelo9_grad_scale = 1.0;
+
 double slowness(double x,double y, double z, double slow_x0, double slow_y0,double slow_z0, int ivelo, const double* slowness_array, double h, int I, int J, int K)
 {
   double g1, g2, g3, s0;
@@ -455,7 +458,7 @@ double slowness(double x,double y, double z, double slow_x0, double slow_y0,doub
       s0 = 1.0;
   #else
       s0 = 1.68;
-      s0 =1/((1.0/s0+g1*(x-slow_x0)+g2*(y-slow_y0)+g3*(z-slow_z0)));
+      s0 =1/((1.0/s0+ivelo9_grad_scale*(g1*(x-slow_x0)+g2*(y-slow_y0)+g3*(z-slow_z0))));
   #endif
   }else if(ivelo==10){
       s0=2.0*sqrt(1+A*z);
@@ -2015,6 +2018,7 @@ if(myrank==master_rank){
       {"bdiag_elem_extract",        required_argument, 0, 43},
       {"bdiag_format",        required_argument, 0, 44},
       {"bdiag_overlap",        required_argument, 0, 45},
+      {"ivelo9_grad_scale",        required_argument, 0, 46},
       {"use_fft_circulant",        required_argument, 0, 100},
       {"fftw_plan_mode",        required_argument, 0, 101},
       {"fft_plan_mode",        required_argument, 0, 102},
@@ -2207,6 +2211,10 @@ if(myrank==master_rank){
     case 45: {
       std::istringstream iss(optarg);
       iss >> bdiag_overlap;
+    } break;
+    case 46: {
+      std::istringstream iss(optarg);
+      iss >> ivelo9_grad_scale;
     } break;
     case 100: {
       // BPACK consumes this option from the original argv below.
@@ -2568,6 +2576,7 @@ if(myrank==master_rank){
     if(myrank==0){
       cout<<"smax: "<<smax<<" PPW: "<<2*pi/(w*smax)/h<<" PPW(s0): "<<2*pi/(w*s0)/h<<" From: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s <<" To: "<< Nx_s <<" x "<< Ny_s <<" x "<< Nz_s<<endl;
       cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
+      if(ivelo==9 && ivelo9_grad_scale != 1.0) cout<<"ivelo 9 velocity gradient scaled by "<<ivelo9_grad_scale<<endl;
     }
 
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
