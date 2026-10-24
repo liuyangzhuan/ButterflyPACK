@@ -1582,6 +1582,34 @@ const std::vector<int64_t>& factor_skeleton(const BoxData<CoordType, DataType>& 
 }
 
 /**
+ * H2_partial: one box's F22 step as the device takes it
+ * (unstructured/partial.hpp plans the box, LevelEliminator::f22_boxes
+ * returns the step's ID and records).  Positions are within the box's live
+ * slots before the step (S_old), a neighbour's within its own.
+ */
+/// H2_partial: the boxes the F22 step sparsified (this rank's and the copies'),
+/// by Morton index: the old live set's size and the kept positions in it
+using PartialF22Kept = std::unordered_map<int64_t, std::pair<int64_t, std::vector<int64_t>>>;
+
+template<typename DataType>
+struct PartialF22Work {
+    int64_t morton = -1;
+    std::vector<int64_t> S_old;         ///< the box's live slots before the step
+    std::vector<int64_t> pos11, pos22;  ///< the F11 / F22 positions of S_old
+    struct Near {
+        int64_t morton = -1;
+        const std::vector<int64_t>* S_old = nullptr;  ///< the neighbour's live slots before the step
+        std::vector<int64_t> q11, q22;                ///< its F11 / F22 positions
+    };
+    std::vector<Near> near;             ///< the box's one_hop order
+    // ---- results
+    bool done = false;                  ///< the device took the box
+    std::vector<int64_t> skel22, red22; ///< the ID's F22 skeleton and redundant columns (indices of pos22), sorted
+    MatrixStorage<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
+    MatrixStorage<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;
+};
+
+/**
  * @brief The partial factorization's root (H2_partial, unstructured/partial.hpp):
  * the root matrix split by point id, A11's LU in the root box's X_RR, and
  * W = A11^-1 A12, A21, CB = A22 - A21 W.

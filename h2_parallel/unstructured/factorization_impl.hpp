@@ -1532,8 +1532,19 @@ void hierarchical_factorization_unstructured(
             const auto occupied_indices = occupied_local_indices(level);
             if (tree->partial() && current_level > 1) {
                 // H2_partial (partial.hpp): the F22 parts skeletonized and
-                // sparsified, the live sets reduced to S11, S22
+                // sparsified, the live sets reduced to S11, S22 (on a device
+                // level its boxes' steps on the device)
                 const auto f22_start = clock::now();
+#ifdef H2_HAVE_GPU
+                if (gpu_driver.f22_on_device()) {
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_boxes(works); };
+                    const std::function<void(const PartialF22Kept&)> blocks_back =
+                        [&](const PartialF22Kept& kept) { gpu_driver.end_partial_level(kept); };
+                    partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
+                                      print_detail && rank == level_print_rank, level_comm, on_device, blocks_back);
+                } else
+#endif
                 partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
                                   print_detail && rank == level_print_rank, level_comm);
                 if (print_detail && rank == level_print_rank) {

@@ -215,5 +215,70 @@ point set and on a plain cube split, dense checks at small N.
     and the same errors (before the fix about half of the 4- and 8-rank
     runs were wrong).
     `H2_partial = N` stays bitwise equal to the full factorization.
-- Next: P3 (GPU), then P4 (release API, `H2_compress_factors` on the
-  records) and P5 (the STRUMPACK hand-off).
+- **P3** GPU (H2_use_gpu 1), in steps:
+  - **P3a** the F11 waves on the device, everything partial on the host.
+    The device ID of a box takes its F11 columns only, as
+    `compute_id_partial`: the sketch's columns are permuted to the F11
+    ones first, the QRCP runs over those, and T's rows of the F22 slots
+    are zeroed; the skeleton lists [F11 skeleton in pivot order, F22
+    slots] go to the device for the later waves' sketches.  A partial
+    level keeps no solve factors on the device; at its end its blocks and
+    factors come back to the host, and the F22 step, the transition, the
+    root, the partial solves and the CB run on the host as on the CPU
+    path.  A box the device never formed a self block for (nothing
+    eliminated, no update) takes the kernel's in the F22 step.  The
+    level-end download of the blocks goes in chunks (one buffer for all
+    of them doubled the level's device footprint).
+    Done 2026-10-23: GPU = CPU to the printed digits of every dense check
+    (16^3 to 32^3, 1, 2, 4 and 8 ranks), logdets within 1e-15 to 2e-14;
+    `H2_partial = N` within 4e-15; the full GPU factorization unchanged.
+    64^3, F11 = 16384, A100 40 GB:
+
+    | ranks | CPU | GPU | F22 steps (host) | F11 waves CPU / GPU |
+    |---|---|---|---|---|
+    | 1 | 211 s | 144 s | 86 s | 84 / 19 s |
+    | 4 | 126 s | 74 s | 27 s | |
+    | 8 | 147 s | 97 s | 41 s | |
+
+    The host F22 step (BPACK_TRACE=phase, 64^3 one rank, thread-seconds
+    at levels 3 / 2): sketch 576 / 625, ID 96 / 477, records 295 / 266,
+    the target's near and own rows 6 / 6.
+  - **P3b** the F22 step on the device (`LevelEliminator::f22_boxes`),
+    done 2026-10-24.  `partial_f22_phase` plans the boxes on the host (S_old,
+    the F11 / F22 positions, the neighbours' positions) and hands them to
+    the device, which per chunk of boxes:
+    - copies the boxes' S_old points to the point table's scratch and
+      sketches them with `sketch_wave`'s F22 columns: the columns are those
+      copies, a fill source that recorded the box's full point set has its
+      P operand gathered at S_old, and the sketch returns after the fill (the
+      same draws and sources as the host's `column_slots` gather);
+    - assembles each ID target from the sketch, the device near blocks
+      K(nb, b) and K(b, nb) and the self block (the kernel where the device
+      never formed one), runs the QRCP, and sorts the ID's columns on the
+      host as `compute_id_complex`'s callers do;
+    - forms T and the records in four batched GEMM passes and downloads
+      them.
+    The host then publishes the kept slots, the level's blocks come back
+    sliced to the new live sets as they are gathered for the download (the
+    host slices nothing), and the host transition runs.  A partial level's
+    fill sources stay on the device to its end (the F22 step reads them
+    all).  The root's W solve and CB product now run a column block a thread
+    (they were single-threaded: 25 s of the 62 at 64^3).
+    GPU = CPU to the printed digits of every dense check, 1 to 8 ranks; at
+    64^3 the same F22 ranks and errors as P3a.  64^3, F11 = 16384, A100 40 GB
+    (CPU: 64 threads a node; both with the parallel root):
+
+    | ranks | CPU | GPU, P3b |
+    |---|---|---|
+    | 1 | 189 s | 40 s |
+    | 4 | 105 s | 30 s |
+    | 8 | 129 s | 36 s |
+
+    Left at 64^3 on one GPU (40 s): the host transitions and the next
+    levels' block uploads (about 18 s), the F22 records' download and
+    unpacking (6 s), the device QRCP of the F22 targets (4 s).
+  - **P3c** (next) a device transition from the sliced device blocks (no
+    download, host transition and upload), the records kept on the device
+    for the partial solves and the CB product.
+- Next: P3, then P4 (release API, `H2_compress_factors` on the records)
+  and P5 (the STRUMPACK hand-off).

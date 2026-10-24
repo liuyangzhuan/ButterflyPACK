@@ -207,7 +207,6 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
         if (options.xrr_factor != 1) throw std::invalid_argument("H2_partial needs H2_XRR_factor=1 (LU)");
         if (options.precon == 2) throw std::invalid_argument("H2_partial is a factorization (precon 1 or 3)");
         if (options.id_proxy_mode != 0) throw std::invalid_argument("H2_partial needs H2_ID_proxy=0");
-        if (options.use_gpu != 0) throw std::invalid_argument("H2_partial: the GPU path is not implemented yet (H2_use_gpu=0)");
         if (options.compress_factors != 0) throw std::invalid_argument("H2_partial: H2_compress_factors is not supported yet");
     }
     if (options.unstructured == 0) return;

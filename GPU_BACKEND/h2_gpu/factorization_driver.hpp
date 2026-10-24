@@ -685,6 +685,7 @@ public:
             // ranks): they must fit beside the kept factors.
             const double working = opt_.is_symmetric ? 0.0 : keep_bound_;
             ok = kept_expected_ + working <= budget ? 1 : 0;
+            if (tree_->partial()) ok = 0;  // (H2_partial: the partial solves run on the host)
         }
         MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, level_comm);
         if (level_) level_->set_solve_keep(ok != 0, budget, kept_expected_);
@@ -1005,8 +1006,21 @@ public:
     // This rank builds the parents of its boxes on the device (transition).
     bool builds_parents(const Level& level, const Level& parent_level) const {
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
+        // (H2_partial: the host transition, from the blocks the F22 step sliced)
         return level_ && level.is_process_active && level_->can_build_parent() &&
-               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
+               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian && !tree_->partial();
+    }
+
+    // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
+    // the boxes' steps on the device, then the level's blocks and factors
+    // back to the host, where the step finishes and the transition runs
+    bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
+    void f22_boxes(std::vector<PartialF22Work<DataType>>& works) { level_->f22_boxes(works); }
+    void end_partial_level(const PartialF22Kept& kept) {
+        if (!level_) return;
+        level_->restore_host_copies();
+        level_->download_blocks_sliced(kept);
+        level_.reset();
     }
 
     // Device transition: this level's blocks never leave the device, and the
