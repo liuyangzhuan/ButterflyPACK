@@ -4,6 +4,7 @@
 #include "tree.hpp"
 #include "halo_geometry.hpp"
 #include "blas_declare.hpp"
+#include "omp_region.hpp"
 #include <cstring>
 #include <map>
 #include <unordered_set>
@@ -4008,268 +4009,333 @@ static void apply_updates_with_kernel_symmetric(
 
     // Each local box is owned by exactly one loop iteration, so the apply phase
     // can mutate interaction maps and matrices without locks.
-    #pragma omp parallel for schedule(static) if (lvl.local_boxes.size() > 1)
-    for (int64_t local_idx = 0; local_idx < static_cast<int64_t>(lvl.local_boxes.size()); ++local_idx) {
-        if (apply_failed.load(std::memory_order_relaxed)) {
-            continue;
-        }
+    omp_parallel_if(lvl.local_boxes.size() > 1, [&] {
+        #pragma omp for schedule(static)
+        for (int64_t local_idx = 0; local_idx < static_cast<int64_t>(lvl.local_boxes.size()); ++local_idx) {
+            if (apply_failed.load(std::memory_order_relaxed)) {
+                continue;
+            }
 
-        try {
-            auto& target_box = lvl.local_boxes[static_cast<size_t>(local_idx)];
-            const auto& tasks = tasks_per_box[static_cast<size_t>(local_idx)];
+            try {
+                auto& target_box = lvl.local_boxes[static_cast<size_t>(local_idx)];
+                const auto& tasks = tasks_per_box[static_cast<size_t>(local_idx)];
 
-            for (const auto& task : tasks) {
-                if (apply_failed.load(std::memory_order_relaxed)) {
-                    break;
-                }
-
-                const auto* payload = task.block;
-                if (payload == nullptr) {
-                    throw std::runtime_error("apply task: missing payload");
-                }
-                if (payload->rows <= 0 || payload->cols <= 0 ||
-                    static_cast<int64_t>(payload->data.size()) != payload->rows * payload->cols) {
-                    throw std::runtime_error(
-                        "apply task: invalid DenseBlock payload for target " +
-                        std::to_string(task.target_morton));
-                }
-
-                if (task.kind == IncomingApplyTaskKind::Replace) {
-                    auto& mb = upsert_block_symmetric(target_box, task.neighbor_morton, EdgeKind::Near);
-                    if (task.transpose_delta) {
-                        auto replacement = transpose_colmajor(
-                            payload->data, payload->rows, payload->cols,
-                            /*do_conj=*/is_hermitian);
-                        mb.set_a_ns_owned(
-                            payload->cols, payload->rows,
-                            std::move(replacement),
-                            MatrixStorage<DataType>::FULL);
-                    } else {
-                        std::vector<DataType> replacement = payload->data;
-                        mb.set_a_ns_owned(
-                            payload->rows, payload->cols,
-                            std::move(replacement),
-                            MatrixStorage<DataType>::FULL);
-                    }
-                    continue;
-                }
-
-                if (task.kind == IncomingApplyTaskKind::Diag) {
-                    if (task.target_morton != task.neighbor_morton) {
-                        throw std::runtime_error("apply diag task: lo!=hi");
-                    }
-                    if (!target_box.schur_complement.is_allocated()) {
-                        if (payload->rows != payload->cols) {
-                            throw std::runtime_error(
-                                "apply diag task: nonsquare delta at morton " +
-                                std::to_string(task.target_morton));
-                        }
-
-                        auto indices = indices_for_count_from_box(target_box, payload->rows, dim);
-                        std::vector<DataType> A(static_cast<size_t>(payload->rows * payload->rows));
-                        kernel->evaluate_block_by_index(
-                            indices.data(), payload->rows,
-                            indices.data(), payload->rows,
-                            A.data(), payload->rows);
-
-                        target_box.schur_complement.allocate(
-                            payload->rows, payload->cols, MatrixStorage<DataType>::FULL);
-                        copy_contiguous_into(
-                            target_box.schur_complement, A, payload->rows, payload->cols);
+                for (const auto& task : tasks) {
+                    if (apply_failed.load(std::memory_order_relaxed)) {
+                        break;
                     }
 
-                    if (!target_box.schur_complement.is_allocated() ||
-                        target_box.schur_complement.rows != payload->rows ||
-                        target_box.schur_complement.cols != payload->cols) {
+                    const auto* payload = task.block;
+                    if (payload == nullptr) {
+                        throw std::runtime_error("apply task: missing payload");
+                    }
+                    if (payload->rows <= 0 || payload->cols <= 0 ||
+                        static_cast<int64_t>(payload->data.size()) != payload->rows * payload->cols) {
                         throw std::runtime_error(
-                            "apply diag task: dim mismatch at morton " +
+                            "apply task: invalid DenseBlock payload for target " +
                             std::to_string(task.target_morton));
                     }
 
-                    add_contiguous_into(
-                        target_box.schur_complement,
-                        payload->data,
-                        payload->rows,
-                        payload->cols);
-                    continue;
-                }
-
-                const int64_t current_self =
-                    (lvl.eliminated_boxes.find(task.target_morton) != lvl.eliminated_boxes.end() &&
-                     !target_box.skeleton_indices.empty())
-                        ? static_cast<int64_t>(target_box.skeleton_indices.size())
-                        : target_box.num_points;
-                const int64_t current_neighbor = current_point_count(task.neighbor_morton);
-
-                const std::vector<DataType>* payload_data = &payload->data;
-                std::vector<DataType> sliced_payload;
-                int64_t payload_rows = payload->rows;
-                int64_t payload_cols = payload->cols;
-
-                if (task.transpose_delta) {
-                    const bool need_row_slice = (payload_rows != current_self);
-                    const bool need_col_slice = (payload_cols != current_neighbor);
-                    if (need_row_slice || need_col_slice) {
-                        if (payload_rows < current_self || payload_cols < current_neighbor) {
-                            std::ostringstream oss;
-                            oss << "apply offdiag task: payload smaller than current view"
-                                << " target=" << task.target_morton
-                                << " neighbor=" << task.neighbor_morton
-                                << " payload_rows=" << payload_rows
-                                << " payload_cols=" << payload_cols
-                                << " current_self=" << current_self
-                                << " current_neighbor=" << current_neighbor
-                                << " transpose_delta=" << task.transpose_delta;
-                            throw std::runtime_error(oss.str());
+                    if (task.kind == IncomingApplyTaskKind::Replace) {
+                        auto& mb = upsert_block_symmetric(target_box, task.neighbor_morton, EdgeKind::Near);
+                        if (task.transpose_delta) {
+                            auto replacement = transpose_colmajor(
+                                payload->data, payload->rows, payload->cols,
+                                /*do_conj=*/is_hermitian);
+                            mb.set_a_ns_owned(
+                                payload->cols, payload->rows,
+                                std::move(replacement),
+                                MatrixStorage<DataType>::FULL);
+                        } else {
+                            std::vector<DataType> replacement = payload->data;
+                            mb.set_a_ns_owned(
+                                payload->rows, payload->cols,
+                                std::move(replacement),
+                                MatrixStorage<DataType>::FULL);
                         }
-                        const auto* neighbor_skeleton = need_col_slice ? endpoint_skeleton(task.neighbor_morton) : nullptr;
-                        if (need_row_slice && static_cast<int64_t>(target_box.skeleton_indices.size()) < current_self) {
-                            throw std::runtime_error(
-                                "apply offdiag task: target skeleton too small for transpose slice target=" +
-                                std::to_string(task.target_morton));
-                        }
-                        if (need_col_slice &&
-                            (neighbor_skeleton == nullptr ||
-                             static_cast<int64_t>(neighbor_skeleton->size()) < current_neighbor)) {
-                            throw std::runtime_error(
-                                "apply offdiag task: neighbor skeleton too small for transpose slice neighbor=" +
-                                std::to_string(task.neighbor_morton));
-                        }
-
-                        sliced_payload.resize(static_cast<size_t>(current_self * current_neighbor));
-                        for (int64_t j = 0; j < current_neighbor; ++j) {
-                            const int64_t src_col = need_col_slice
-                                ? (*neighbor_skeleton)[static_cast<size_t>(j)]
-                                : j;
-                            if (src_col < 0 || src_col >= payload_cols) {
-                                throw std::runtime_error(
-                                    "apply offdiag task: transpose slice neighbor index out of bounds");
-                            }
-                            for (int64_t i = 0; i < current_self; ++i) {
-                                const int64_t src_row = need_row_slice
-                                    ? target_box.skeleton_indices[static_cast<size_t>(i)]
-                                    : i;
-                                if (src_row < 0 || src_row >= payload_rows) {
-                                    throw std::runtime_error(
-                                        "apply offdiag task: transpose slice target index out of bounds");
-                                }
-                                sliced_payload[static_cast<size_t>(i + j * current_self)] =
-                                    payload->data[static_cast<size_t>(src_row + src_col * payload_rows)];
-                            }
-                        }
-                        payload_data = &sliced_payload;
-                        payload_rows = current_self;
-                        payload_cols = current_neighbor;
+                        continue;
                     }
-                } else {
-                    const bool need_row_slice = (payload_rows != current_neighbor);
-                    const bool need_col_slice = (payload_cols != current_self);
-                    if (need_row_slice || need_col_slice) {
-                        if (payload_rows < current_neighbor || payload_cols < current_self) {
+
+                    if (task.kind == IncomingApplyTaskKind::Diag) {
+                        if (task.target_morton != task.neighbor_morton) {
+                            throw std::runtime_error("apply diag task: lo!=hi");
+                        }
+                        if (!target_box.schur_complement.is_allocated()) {
+                            if (payload->rows != payload->cols) {
+                                throw std::runtime_error(
+                                    "apply diag task: nonsquare delta at morton " +
+                                    std::to_string(task.target_morton));
+                            }
+
+                            auto indices = indices_for_count_from_box(target_box, payload->rows, dim);
+                            std::vector<DataType> A(static_cast<size_t>(payload->rows * payload->rows));
+                            kernel->evaluate_block_by_index(
+                                indices.data(), payload->rows,
+                                indices.data(), payload->rows,
+                                A.data(), payload->rows);
+
+                            target_box.schur_complement.allocate(
+                                payload->rows, payload->cols, MatrixStorage<DataType>::FULL);
+                            copy_contiguous_into(
+                                target_box.schur_complement, A, payload->rows, payload->cols);
+                        }
+
+                        if (!target_box.schur_complement.is_allocated() ||
+                            target_box.schur_complement.rows != payload->rows ||
+                            target_box.schur_complement.cols != payload->cols) {
+                            throw std::runtime_error(
+                                "apply diag task: dim mismatch at morton " +
+                                std::to_string(task.target_morton));
+                        }
+
+                        add_contiguous_into(
+                            target_box.schur_complement,
+                            payload->data,
+                            payload->rows,
+                            payload->cols);
+                        continue;
+                    }
+
+                    const int64_t current_self =
+                        (lvl.eliminated_boxes.find(task.target_morton) != lvl.eliminated_boxes.end() &&
+                         !target_box.skeleton_indices.empty())
+                            ? static_cast<int64_t>(target_box.skeleton_indices.size())
+                            : target_box.num_points;
+                    const int64_t current_neighbor = current_point_count(task.neighbor_morton);
+
+                    const std::vector<DataType>* payload_data = &payload->data;
+                    std::vector<DataType> sliced_payload;
+                    int64_t payload_rows = payload->rows;
+                    int64_t payload_cols = payload->cols;
+
+                    if (task.transpose_delta) {
+                        const bool need_row_slice = (payload_rows != current_self);
+                        const bool need_col_slice = (payload_cols != current_neighbor);
+                        if (need_row_slice || need_col_slice) {
+                            if (payload_rows < current_self || payload_cols < current_neighbor) {
+                                std::ostringstream oss;
+                                oss << "apply offdiag task: payload smaller than current view"
+                                    << " target=" << task.target_morton
+                                    << " neighbor=" << task.neighbor_morton
+                                    << " payload_rows=" << payload_rows
+                                    << " payload_cols=" << payload_cols
+                                    << " current_self=" << current_self
+                                    << " current_neighbor=" << current_neighbor
+                                    << " transpose_delta=" << task.transpose_delta;
+                                throw std::runtime_error(oss.str());
+                            }
+                            const auto* neighbor_skeleton = need_col_slice ? endpoint_skeleton(task.neighbor_morton) : nullptr;
+                            if (need_row_slice && static_cast<int64_t>(target_box.skeleton_indices.size()) < current_self) {
+                                throw std::runtime_error(
+                                    "apply offdiag task: target skeleton too small for transpose slice target=" +
+                                    std::to_string(task.target_morton));
+                            }
+                            if (need_col_slice &&
+                                (neighbor_skeleton == nullptr ||
+                                 static_cast<int64_t>(neighbor_skeleton->size()) < current_neighbor)) {
+                                throw std::runtime_error(
+                                    "apply offdiag task: neighbor skeleton too small for transpose slice neighbor=" +
+                                    std::to_string(task.neighbor_morton));
+                            }
+
+                            sliced_payload.resize(static_cast<size_t>(current_self * current_neighbor));
+                            for (int64_t j = 0; j < current_neighbor; ++j) {
+                                const int64_t src_col = need_col_slice
+                                    ? (*neighbor_skeleton)[static_cast<size_t>(j)]
+                                    : j;
+                                if (src_col < 0 || src_col >= payload_cols) {
+                                    throw std::runtime_error(
+                                        "apply offdiag task: transpose slice neighbor index out of bounds");
+                                }
+                                for (int64_t i = 0; i < current_self; ++i) {
+                                    const int64_t src_row = need_row_slice
+                                        ? target_box.skeleton_indices[static_cast<size_t>(i)]
+                                        : i;
+                                    if (src_row < 0 || src_row >= payload_rows) {
+                                        throw std::runtime_error(
+                                            "apply offdiag task: transpose slice target index out of bounds");
+                                    }
+                                    sliced_payload[static_cast<size_t>(i + j * current_self)] =
+                                        payload->data[static_cast<size_t>(src_row + src_col * payload_rows)];
+                                }
+                            }
+                            payload_data = &sliced_payload;
+                            payload_rows = current_self;
+                            payload_cols = current_neighbor;
+                        }
+                    } else {
+                        const bool need_row_slice = (payload_rows != current_neighbor);
+                        const bool need_col_slice = (payload_cols != current_self);
+                        if (need_row_slice || need_col_slice) {
+                            if (payload_rows < current_neighbor || payload_cols < current_self) {
+                                std::ostringstream oss;
+                                oss << "apply offdiag task: payload smaller than current view"
+                                    << " target=" << task.target_morton
+                                    << " neighbor=" << task.neighbor_morton
+                                    << " payload_rows=" << payload_rows
+                                    << " payload_cols=" << payload_cols
+                                    << " current_neighbor=" << current_neighbor
+                                    << " current_self=" << current_self
+                                    << " transpose_delta=" << task.transpose_delta;
+                                throw std::runtime_error(oss.str());
+                            }
+                            const auto* neighbor_skeleton = need_row_slice ? endpoint_skeleton(task.neighbor_morton) : nullptr;
+                            if (need_col_slice && static_cast<int64_t>(target_box.skeleton_indices.size()) < current_self) {
+                                throw std::runtime_error(
+                                    "apply offdiag task: target skeleton too small for direct slice target=" +
+                                    std::to_string(task.target_morton));
+                            }
+                            if (need_row_slice &&
+                                (neighbor_skeleton == nullptr ||
+                                 static_cast<int64_t>(neighbor_skeleton->size()) < current_neighbor)) {
+                                throw std::runtime_error(
+                                    "apply offdiag task: neighbor skeleton too small for direct slice neighbor=" +
+                                    std::to_string(task.neighbor_morton));
+                            }
+
+                            sliced_payload.resize(static_cast<size_t>(current_neighbor * current_self));
+                            for (int64_t j = 0; j < current_self; ++j) {
+                                const int64_t src_col = need_col_slice
+                                    ? target_box.skeleton_indices[static_cast<size_t>(j)]
+                                    : j;
+                                if (src_col < 0 || src_col >= payload_cols) {
+                                    throw std::runtime_error(
+                                        "apply offdiag task: direct slice target index out of bounds");
+                                }
+                                for (int64_t i = 0; i < current_neighbor; ++i) {
+                                    const int64_t src_row = need_row_slice
+                                        ? (*neighbor_skeleton)[static_cast<size_t>(i)]
+                                        : i;
+                                    if (src_row < 0 || src_row >= payload_rows) {
+                                        throw std::runtime_error(
+                                            "apply offdiag task: direct slice neighbor index out of bounds");
+                                    }
+                                    sliced_payload[static_cast<size_t>(i + j * current_neighbor)] =
+                                        payload->data[static_cast<size_t>(src_row + src_col * payload_rows)];
+                                }
+                            }
+                            payload_data = &sliced_payload;
+                            payload_rows = current_neighbor;
+                            payload_cols = current_self;
+                        }
+                    }
+
+                    const int64_t n_self = task.transpose_delta ? payload_rows : payload_cols;
+                    const int64_t n_nei = task.transpose_delta ? payload_cols : payload_rows;
+
+                    ModifiedBlock<DataType>* mb =
+                        find_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
+
+                    if (!mb || !mb->a_ns_is_allocated()) {
+                        auto& newb =
+                            upsert_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
+
+                        auto indices_self = indices_for_count_from_box(target_box, n_self, dim);
+
+                        std::vector<int64_t> indices_nei;
+                        const int64_t neighbor_local_idx = local_box_index(task.neighbor_morton);
+                        if (neighbor_local_idx >= 0) {
+                            indices_nei = indices_for_count_from_box(
+                                lvl.local_boxes[static_cast<size_t>(neighbor_local_idx)], n_nei, dim);
+                        } else {
+                            const auto* assist = get_assist(task.neighbor_morton);
+                            if (!assist) {
+                                throw std::runtime_error(
+                                    "apply task: missing assisting indices for morton " +
+                                    std::to_string(task.neighbor_morton));
+                            }
+                            indices_nei = indices_for_count_from_assist(*assist, n_nei, dim);
+                        }
+
+                        std::vector<DataType> A_self_nei(static_cast<size_t>(n_self * n_nei));
+                        kernel->evaluate_block_by_index(
+                            indices_self.data(), n_self,
+                            indices_nei.data(), n_nei,
+                            A_self_nei.data(), n_self);
+
+                        auto stored = transpose_colmajor(
+                            A_self_nei,
+                            n_self,
+                            n_nei,
+                            /*do_conj=*/is_hermitian);
+
+                        newb.set_a_ns_owned(
+                            n_nei, n_self, std::move(stored),
+                            MatrixStorage<DataType>::FULL);
+                        mb = &newb;
+                    }
+
+                    if (mb->a_ns_is_allocated() &&
+                        (mb->a_ns_rows() != n_nei ||
+                         mb->a_ns_cols() != n_self)) {
+                        if (mb->a_ns_rows() < n_nei ||
+                            mb->a_ns_cols() < n_self) {
                             std::ostringstream oss;
-                            oss << "apply offdiag task: payload smaller than current view"
+                            oss << "apply offdiag task: existing block smaller than current view"
                                 << " target=" << task.target_morton
                                 << " neighbor=" << task.neighbor_morton
-                                << " payload_rows=" << payload_rows
-                                << " payload_cols=" << payload_cols
-                                << " current_neighbor=" << current_neighbor
-                                << " current_self=" << current_self
+                                << " existing_rows=" << mb->a_ns_rows()
+                                << " existing_cols=" << mb->a_ns_cols()
+                                << " expected_rows=" << n_nei
+                                << " expected_cols=" << n_self
                                 << " transpose_delta=" << task.transpose_delta;
                             throw std::runtime_error(oss.str());
                         }
-                        const auto* neighbor_skeleton = need_row_slice ? endpoint_skeleton(task.neighbor_morton) : nullptr;
-                        if (need_col_slice && static_cast<int64_t>(target_box.skeleton_indices.size()) < current_self) {
+
+                        const bool need_row_slice_existing =
+                            (mb->a_ns_rows() != n_nei);
+                        const bool need_col_slice_existing =
+                            (mb->a_ns_cols() != n_self);
+                        const auto* neighbor_skeleton =
+                            need_row_slice_existing ? endpoint_skeleton(task.neighbor_morton) : nullptr;
+
+                        if (need_col_slice_existing &&
+                            static_cast<int64_t>(target_box.skeleton_indices.size()) < n_self) {
                             throw std::runtime_error(
-                                "apply offdiag task: target skeleton too small for direct slice target=" +
+                                "apply offdiag task: target skeleton too small for existing-block slice target=" +
                                 std::to_string(task.target_morton));
                         }
-                        if (need_row_slice &&
+                        if (need_row_slice_existing &&
                             (neighbor_skeleton == nullptr ||
-                             static_cast<int64_t>(neighbor_skeleton->size()) < current_neighbor)) {
+                             static_cast<int64_t>(neighbor_skeleton->size()) < n_nei)) {
                             throw std::runtime_error(
-                                "apply offdiag task: neighbor skeleton too small for direct slice neighbor=" +
+                                "apply offdiag task: neighbor skeleton too small for existing-block slice neighbor=" +
                                 std::to_string(task.neighbor_morton));
                         }
 
-                        sliced_payload.resize(static_cast<size_t>(current_neighbor * current_self));
-                        for (int64_t j = 0; j < current_self; ++j) {
-                            const int64_t src_col = need_col_slice
+                        std::vector<DataType> sliced_existing(
+                            static_cast<size_t>(n_nei * n_self));
+                        for (int64_t j = 0; j < n_self; ++j) {
+                            const int64_t src_col = need_col_slice_existing
                                 ? target_box.skeleton_indices[static_cast<size_t>(j)]
                                 : j;
-                            if (src_col < 0 || src_col >= payload_cols) {
+                            if (src_col < 0 || src_col >= mb->a_ns_cols()) {
                                 throw std::runtime_error(
-                                    "apply offdiag task: direct slice target index out of bounds");
+                                    "apply offdiag task: existing-block target index out of bounds");
                             }
-                            for (int64_t i = 0; i < current_neighbor; ++i) {
-                                const int64_t src_row = need_row_slice
+                            for (int64_t i = 0; i < n_nei; ++i) {
+                                const int64_t src_row = need_row_slice_existing
                                     ? (*neighbor_skeleton)[static_cast<size_t>(i)]
                                     : i;
-                                if (src_row < 0 || src_row >= payload_rows) {
+                                if (src_row < 0 || src_row >= mb->a_ns_rows()) {
                                     throw std::runtime_error(
-                                        "apply offdiag task: direct slice neighbor index out of bounds");
+                                        "apply offdiag task: existing-block neighbor index out of bounds");
                                 }
-                                sliced_payload[static_cast<size_t>(i + j * current_neighbor)] =
-                                    payload->data[static_cast<size_t>(src_row + src_col * payload_rows)];
+                                sliced_existing[static_cast<size_t>(i + j * n_nei)] =
+                                    mb->a_ns(src_row, src_col);
                             }
                         }
-                        payload_data = &sliced_payload;
-                        payload_rows = current_neighbor;
-                        payload_cols = current_self;
-                    }
-                }
 
-                const int64_t n_self = task.transpose_delta ? payload_rows : payload_cols;
-                const int64_t n_nei = task.transpose_delta ? payload_cols : payload_rows;
-
-                ModifiedBlock<DataType>* mb =
-                    find_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
-
-                if (!mb || !mb->a_ns_is_allocated()) {
-                    auto& newb =
-                        upsert_block_symmetric(target_box, task.neighbor_morton, task.edge_kind);
-
-                    auto indices_self = indices_for_count_from_box(target_box, n_self, dim);
-
-                    std::vector<int64_t> indices_nei;
-                    const int64_t neighbor_local_idx = local_box_index(task.neighbor_morton);
-                    if (neighbor_local_idx >= 0) {
-                        indices_nei = indices_for_count_from_box(
-                            lvl.local_boxes[static_cast<size_t>(neighbor_local_idx)], n_nei, dim);
-                    } else {
-                        const auto* assist = get_assist(task.neighbor_morton);
-                        if (!assist) {
-                            throw std::runtime_error(
-                                "apply task: missing assisting indices for morton " +
-                                std::to_string(task.neighbor_morton));
-                        }
-                        indices_nei = indices_for_count_from_assist(*assist, n_nei, dim);
+                        mb->set_a_ns_owned(
+                            n_nei, n_self, std::move(sliced_existing),
+                            MatrixStorage<DataType>::FULL);
                     }
 
-                    std::vector<DataType> A_self_nei(static_cast<size_t>(n_self * n_nei));
-                    kernel->evaluate_block_by_index(
-                        indices_self.data(), n_self,
-                        indices_nei.data(), n_nei,
-                        A_self_nei.data(), n_self);
-
-                    auto stored = transpose_colmajor(
-                        A_self_nei,
-                        n_self,
-                        n_nei,
-                        /*do_conj=*/is_hermitian);
-
-                    newb.set_a_ns_owned(
-                        n_nei, n_self, std::move(stored),
-                        MatrixStorage<DataType>::FULL);
-                    mb = &newb;
-                }
-
-                if (mb->a_ns_is_allocated() &&
-                    (mb->a_ns_rows() != n_nei ||
-                     mb->a_ns_cols() != n_self)) {
-                    if (mb->a_ns_rows() < n_nei ||
-                        mb->a_ns_cols() < n_self) {
+                    if (!mb->a_ns_is_allocated() ||
+                        mb->a_ns_rows() != n_nei ||
+                        mb->a_ns_cols() != n_self) {
                         std::ostringstream oss;
-                        oss << "apply offdiag task: existing block smaller than current view"
+                        oss << "apply offdiag task: dim mismatch"
                             << " target=" << task.target_morton
                             << " neighbor=" << task.neighbor_morton
                             << " existing_rows=" << mb->a_ns_rows()
@@ -4280,96 +4346,33 @@ static void apply_updates_with_kernel_symmetric(
                         throw std::runtime_error(oss.str());
                     }
 
-                    const bool need_row_slice_existing =
-                        (mb->a_ns_rows() != n_nei);
-                    const bool need_col_slice_existing =
-                        (mb->a_ns_cols() != n_self);
-                    const auto* neighbor_skeleton =
-                        need_row_slice_existing ? endpoint_skeleton(task.neighbor_morton) : nullptr;
-
-                    if (need_col_slice_existing &&
-                        static_cast<int64_t>(target_box.skeleton_indices.size()) < n_self) {
-                        throw std::runtime_error(
-                            "apply offdiag task: target skeleton too small for existing-block slice target=" +
-                            std::to_string(task.target_morton));
-                    }
-                    if (need_row_slice_existing &&
-                        (neighbor_skeleton == nullptr ||
-                         static_cast<int64_t>(neighbor_skeleton->size()) < n_nei)) {
-                        throw std::runtime_error(
-                            "apply offdiag task: neighbor skeleton too small for existing-block slice neighbor=" +
-                            std::to_string(task.neighbor_morton));
-                    }
-
-                    std::vector<DataType> sliced_existing(
-                        static_cast<size_t>(n_nei * n_self));
-                    for (int64_t j = 0; j < n_self; ++j) {
-                        const int64_t src_col = need_col_slice_existing
-                            ? target_box.skeleton_indices[static_cast<size_t>(j)]
-                            : j;
-                        if (src_col < 0 || src_col >= mb->a_ns_cols()) {
-                            throw std::runtime_error(
-                                "apply offdiag task: existing-block target index out of bounds");
-                        }
-                        for (int64_t i = 0; i < n_nei; ++i) {
-                            const int64_t src_row = need_row_slice_existing
-                                ? (*neighbor_skeleton)[static_cast<size_t>(i)]
-                                : i;
-                            if (src_row < 0 || src_row >= mb->a_ns_rows()) {
-                                throw std::runtime_error(
-                                    "apply offdiag task: existing-block neighbor index out of bounds");
+                    if (task.transpose_delta) {
+                        for (int64_t col = 0; col < payload_rows; ++col) {
+                            for (int64_t row = 0; row < payload_cols; ++row) {
+                                mb->a_ns(row, col) += maybe_conj(
+                                    (*payload_data)[static_cast<size_t>(
+                                        col + row * payload_rows)],
+                                    is_hermitian);
                             }
-                            sliced_existing[static_cast<size_t>(i + j * n_nei)] =
-                                mb->a_ns(src_row, src_col);
                         }
-                    }
-
-                    mb->set_a_ns_owned(
-                        n_nei, n_self, std::move(sliced_existing),
-                        MatrixStorage<DataType>::FULL);
-                }
-
-                if (!mb->a_ns_is_allocated() ||
-                    mb->a_ns_rows() != n_nei ||
-                    mb->a_ns_cols() != n_self) {
-                    std::ostringstream oss;
-                    oss << "apply offdiag task: dim mismatch"
-                        << " target=" << task.target_morton
-                        << " neighbor=" << task.neighbor_morton
-                        << " existing_rows=" << mb->a_ns_rows()
-                        << " existing_cols=" << mb->a_ns_cols()
-                        << " expected_rows=" << n_nei
-                        << " expected_cols=" << n_self
-                        << " transpose_delta=" << task.transpose_delta;
-                    throw std::runtime_error(oss.str());
-                }
-
-                if (task.transpose_delta) {
-                    for (int64_t col = 0; col < payload_rows; ++col) {
-                        for (int64_t row = 0; row < payload_cols; ++row) {
-                            mb->a_ns(row, col) += maybe_conj(
-                                (*payload_data)[static_cast<size_t>(
-                                    col + row * payload_rows)],
-                                is_hermitian);
-                        }
-                    }
-                } else {
-                    for (int64_t col = 0; col < n_self; ++col) {
-                        for (int64_t row = 0; row < n_nei; ++row) {
-                            mb->a_ns(row, col) +=
-                                (*payload_data)[static_cast<size_t>(
-                                    row + col * n_nei)];
+                    } else {
+                        for (int64_t col = 0; col < n_self; ++col) {
+                            for (int64_t row = 0; row < n_nei; ++row) {
+                                mb->a_ns(row, col) +=
+                                    (*payload_data)[static_cast<size_t>(
+                                        row + col * n_nei)];
+                            }
                         }
                     }
                 }
-            }
-        } catch (...) {
-            if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(apply_exception_mutex);
-                apply_exception = std::current_exception();
+            } catch (...) {
+                if (!apply_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(apply_exception_mutex);
+                    apply_exception = std::current_exception();
+                }
             }
         }
-    }
+    });
 
     if (apply_exception) {
         std::rethrow_exception(apply_exception);
@@ -4662,233 +4665,235 @@ void form_near_updates_from_generators(
     std::mutex form_exception_mutex;
     std::atomic<bool> form_failed{false};
 
-    #pragma omp parallel for schedule(dynamic) if (source_order.size() > 1)
-    for (int64_t source_index = 0;
-         source_index < static_cast<int64_t>(source_order.size());
-         ++source_index) {
-        if (form_failed.load(std::memory_order_relaxed)) continue;
-        try {
-            const int64_t source_morton =
-                source_order[static_cast<size_t>(source_index)];
-            BoxData<CoordType, DataType>* source =
-                level.find_generator_box(source_morton);
-            if (source == nullptr) {
-                throw std::runtime_error(
-                    "form_near_updates_from_generators: generator missing");
-            }
-
-            const int64_t redundant_count =
-                source->X_NR.is_allocated() ? source->X_NR.cols : 0;
-            if (redundant_count == 0) continue;
-
-            const auto& neighbors = source->one_hop;
-            const auto& counts = source->deferred_xnn_neighbor_point_counts;
-            if (counts.size() != neighbors.size()) {
-                throw std::runtime_error(
-                    "form_near_updates_from_generators: count metadata mismatch");
-            }
-
-            const DataType* temp2 = source->X_NR.data.data();
-            const int64_t temp2_ld = source->X_NR.lda;
-            if (source->lazy_original_x_nr.size() !=
-                static_cast<size_t>(source->X_NR.rows * redundant_count)) {
-                throw std::runtime_error(
-                    "form_near_updates_from_generators: original X_NR missing");
-            }
-            const DataType* original_x_nr =
-                source->lazy_original_x_nr.data();
-            const int64_t skeleton_count =
-                source->X_RS.is_allocated() ? source->X_RS.cols : 0;
-            std::vector<int64_t> offsets(neighbors.size() + 1, 0);
-            for (size_t i = 0; i < neighbors.size(); ++i) {
-                offsets[i + 1] = offsets[i] + counts[i];
-            }
-
-            auto& output = formed[static_cast<size_t>(source_index)];
-            std::vector<DataType> pair_product;
-
-            for (size_t local_index = 0;
-                 local_index < neighbors.size(); ++local_index) {
-                const int64_t local_morton = neighbors[local_index];
-                const int64_t local_count = counts[local_index];
-                if (local_count == 0) continue;
-                BoxData<CoordType, DataType>* local_box =
-                    level.find_local_box(local_morton);
-                if (local_box == nullptr) continue;
-
-                const DataType* local_temp2 = temp2 + offsets[local_index];
-                const DataType* local_original_x_nr =
-                    original_x_nr + offsets[local_index];
-
-                {
-                    DenseBlock<DataType> block;
-                    block.rows = local_count;
-                    block.cols = local_count;
-                    block.data.resize(static_cast<size_t>(
-                        local_count * local_count));
-                    int m = static_cast<int>(local_count);
-                    int n = static_cast<int>(local_count);
-                    int k = static_cast<int>(redundant_count);
-                    DataType alpha = DataType{1.0};
-                    DataType beta = DataType{0.0};
-                    int lda = static_cast<int>(temp2_ld);
-                    int ldb = static_cast<int>(temp2_ld);
-                    int ldc = static_cast<int>(local_count);
-                    gemm_("N", "T", &m, &n, &k, &alpha,
-                          local_temp2, &lda, local_original_x_nr, &ldb,
-                          &beta, block.data.data(), &ldc);
-                    output.deltas.emplace_back(
-                        EdgeKey{local_morton, local_morton, EdgeKind::Diag},
-                        std::move(block));
+    omp_parallel_if(source_order.size() > 1, [&] {
+        #pragma omp for schedule(dynamic)
+        for (int64_t source_index = 0;
+             source_index < static_cast<int64_t>(source_order.size());
+             ++source_index) {
+            if (form_failed.load(std::memory_order_relaxed)) continue;
+            try {
+                const int64_t source_morton =
+                    source_order[static_cast<size_t>(source_index)];
+                BoxData<CoordType, DataType>* source =
+                    level.find_generator_box(source_morton);
+                if (source == nullptr) {
+                    throw std::runtime_error(
+                        "form_near_updates_from_generators: generator missing");
                 }
 
-                if (skeleton_count > 0) {
-                    DenseBlock<DataType> block;
-                    block.rows = skeleton_count;
-                    block.cols = local_count;
-                    block.data.resize(static_cast<size_t>(
-                        skeleton_count * local_count));
+                const int64_t redundant_count =
+                    source->X_NR.is_allocated() ? source->X_NR.cols : 0;
+                if (redundant_count == 0) continue;
 
-                    auto near_it =
-                        local_box->near_field_interaction_map.find(source_morton);
-                    const ModifiedBlock<DataType>* stored_block =
-                        near_it == local_box->near_field_interaction_map.end()
-                            ? nullptr
-                            : &local_box->near_field_modified_interactions[
-                                  static_cast<size_t>(near_it->second)];
-                    if (stored_block != nullptr &&
-                        stored_block->a_ns_is_allocated()) {
-                        if (stored_block->a_ns_rows() !=
-                                redundant_count + skeleton_count ||
-                            stored_block->a_ns_cols() != local_count) {
-                            throw std::runtime_error(
-                                "form_near_updates_from_generators: stored block dimension mismatch");
-                        }
-                        for (int64_t column = 0; column < local_count; ++column) {
-                            for (int64_t row = 0; row < skeleton_count; ++row) {
-                                block.data[static_cast<size_t>(
-                                    row + column * skeleton_count)] =
-                                    stored_block->a_ns(
-                                        source->skeleton_indices[
-                                            static_cast<size_t>(row)],
-                                        column);
-                            }
-                        }
-                    } else {
-                        auto assist_it =
-                            level.assisting_box_points_for_kernel_evaluation.find(
-                                source_morton);
-                        if (assist_it ==
-                            level.assisting_box_points_for_kernel_evaluation.end()) {
-                            throw std::runtime_error(
-                                "form_near_updates_from_generators: source assisting data missing");
-                        }
-                        const auto& assist = level.assisting_boxes[
-                            static_cast<size_t>(assist_it->second)];
-                        std::vector<int64_t> source_indices(
-                            static_cast<size_t>(skeleton_count));
-                        for (int64_t row = 0; row < skeleton_count; ++row) {
-                            const int64_t source_row = source->skeleton_indices[
-                                static_cast<size_t>(row)];
-                            if (source_row < 0 ||
-                                source_row >= static_cast<int64_t>(assist.indices.size())) {
-                                throw std::runtime_error(
-                                    "form_near_updates_from_generators: skeleton index out of range");
-                            }
-                            source_indices[static_cast<size_t>(row)] =
-                                assist.indices[static_cast<size_t>(source_row)];
-                        }
-                        const std::vector<int64_t> local_indices =
-                            indices_for_count_from_box(
-                                *local_box, local_count, dimension);
-                        kernel->evaluate_block_by_index(
-                            source_indices.data(), skeleton_count,
-                            local_indices.data(), local_count,
-                            block.data.data(), skeleton_count);
-                    }
-
-                    int m = static_cast<int>(skeleton_count);
-                    int n = static_cast<int>(local_count);
-                    int k = static_cast<int>(redundant_count);
-                    DataType alpha = DataType{1.0};
-                    DataType beta = DataType{1.0};
-                    int lda = static_cast<int>(source->X_RS.lda);
-                    int ldb = static_cast<int>(temp2_ld);
-                    int ldc = static_cast<int>(skeleton_count);
-                    gemm_("T", "T", &m, &n, &k, &alpha,
-                          source->X_RS.data.data(), &lda,
-                          local_temp2, &ldb,
-                          &beta, block.data.data(), &ldc);
-                    output.replaces.emplace_back(
-                        ReplaceKey{local_morton, source_morton},
-                        std::move(block));
+                const auto& neighbors = source->one_hop;
+                const auto& counts = source->deferred_xnn_neighbor_point_counts;
+                if (counts.size() != neighbors.size()) {
+                    throw std::runtime_error(
+                        "form_near_updates_from_generators: count metadata mismatch");
                 }
 
-                for (size_t neighbor_index = 0;
-                     neighbor_index < neighbors.size(); ++neighbor_index) {
-                    if (neighbor_index == local_index) continue;
-                    const int64_t neighbor_morton = neighbors[neighbor_index];
-                    const int64_t neighbor_count = counts[neighbor_index];
-                    if (neighbor_count == 0 ||
-                        !are_one_hop(local_morton, neighbor_morton)) {
-                        continue;
-                    }
-                    const bool neighbor_local =
-                        level.find_local_box(neighbor_morton) != nullptr;
-                    if (neighbor_local && neighbor_morton < local_morton) continue;
+                const DataType* temp2 = source->X_NR.data.data();
+                const int64_t temp2_ld = source->X_NR.lda;
+                if (source->lazy_original_x_nr.size() !=
+                    static_cast<size_t>(source->X_NR.rows * redundant_count)) {
+                    throw std::runtime_error(
+                        "form_near_updates_from_generators: original X_NR missing");
+                }
+                const DataType* original_x_nr =
+                    source->lazy_original_x_nr.data();
+                const int64_t skeleton_count =
+                    source->X_RS.is_allocated() ? source->X_RS.cols : 0;
+                std::vector<int64_t> offsets(neighbors.size() + 1, 0);
+                for (size_t i = 0; i < neighbors.size(); ++i) {
+                    offsets[i + 1] = offsets[i] + counts[i];
+                }
 
-                    const DataType* neighbor_temp2 =
-                        temp2 + offsets[neighbor_index];
-                    pair_product.resize(static_cast<size_t>(
-                        neighbor_count * local_count));
+                auto& output = formed[static_cast<size_t>(source_index)];
+                std::vector<DataType> pair_product;
+
+                for (size_t local_index = 0;
+                     local_index < neighbors.size(); ++local_index) {
+                    const int64_t local_morton = neighbors[local_index];
+                    const int64_t local_count = counts[local_index];
+                    if (local_count == 0) continue;
+                    BoxData<CoordType, DataType>* local_box =
+                        level.find_local_box(local_morton);
+                    if (local_box == nullptr) continue;
+
+                    const DataType* local_temp2 = temp2 + offsets[local_index];
+                    const DataType* local_original_x_nr =
+                        original_x_nr + offsets[local_index];
+
                     {
-                        int m = static_cast<int>(neighbor_count);
+                        DenseBlock<DataType> block;
+                        block.rows = local_count;
+                        block.cols = local_count;
+                        block.data.resize(static_cast<size_t>(
+                            local_count * local_count));
+                        int m = static_cast<int>(local_count);
                         int n = static_cast<int>(local_count);
                         int k = static_cast<int>(redundant_count);
                         DataType alpha = DataType{1.0};
                         DataType beta = DataType{0.0};
                         int lda = static_cast<int>(temp2_ld);
                         int ldb = static_cast<int>(temp2_ld);
-                        int ldc = static_cast<int>(neighbor_count);
+                        int ldc = static_cast<int>(local_count);
                         gemm_("N", "T", &m, &n, &k, &alpha,
-                              neighbor_temp2, &lda,
-                              local_original_x_nr, &ldb,
-                              &beta, pair_product.data(), &ldc);
+                              local_temp2, &lda, local_original_x_nr, &ldb,
+                              &beta, block.data.data(), &ldc);
+                        output.deltas.emplace_back(
+                            EdgeKey{local_morton, local_morton, EdgeKind::Diag},
+                            std::move(block));
                     }
 
-                    const int64_t lo =
-                        std::min(local_morton, neighbor_morton);
-                    const int64_t hi =
-                        std::max(local_morton, neighbor_morton);
-                    DenseBlock<DataType> block;
-                    if (local_morton == lo) {
-                        block.rows = neighbor_count;
+                    if (skeleton_count > 0) {
+                        DenseBlock<DataType> block;
+                        block.rows = skeleton_count;
                         block.cols = local_count;
-                        block.data = pair_product;
-                    } else {
-                        block.rows = local_count;
-                        block.cols = neighbor_count;
-                        block.data.resize(pair_product.size());
-                        for (int64_t column = 0; column < local_count; ++column) {
-                            for (int64_t row = 0; row < neighbor_count; ++row) {
-                                block.data[static_cast<size_t>(
-                                    column + row * local_count)] =
-                                    pair_product[static_cast<size_t>(
-                                        row + column * neighbor_count)];
+                        block.data.resize(static_cast<size_t>(
+                            skeleton_count * local_count));
+
+                        auto near_it =
+                            local_box->near_field_interaction_map.find(source_morton);
+                        const ModifiedBlock<DataType>* stored_block =
+                            near_it == local_box->near_field_interaction_map.end()
+                                ? nullptr
+                                : &local_box->near_field_modified_interactions[
+                                      static_cast<size_t>(near_it->second)];
+                        if (stored_block != nullptr &&
+                            stored_block->a_ns_is_allocated()) {
+                            if (stored_block->a_ns_rows() !=
+                                    redundant_count + skeleton_count ||
+                                stored_block->a_ns_cols() != local_count) {
+                                throw std::runtime_error(
+                                    "form_near_updates_from_generators: stored block dimension mismatch");
+                            }
+                            for (int64_t column = 0; column < local_count; ++column) {
+                                for (int64_t row = 0; row < skeleton_count; ++row) {
+                                    block.data[static_cast<size_t>(
+                                        row + column * skeleton_count)] =
+                                        stored_block->a_ns(
+                                            source->skeleton_indices[
+                                                static_cast<size_t>(row)],
+                                            column);
+                                }
+                            }
+                        } else {
+                            auto assist_it =
+                                level.assisting_box_points_for_kernel_evaluation.find(
+                                    source_morton);
+                            if (assist_it ==
+                                level.assisting_box_points_for_kernel_evaluation.end()) {
+                                throw std::runtime_error(
+                                    "form_near_updates_from_generators: source assisting data missing");
+                            }
+                            const auto& assist = level.assisting_boxes[
+                                static_cast<size_t>(assist_it->second)];
+                            std::vector<int64_t> source_indices(
+                                static_cast<size_t>(skeleton_count));
+                            for (int64_t row = 0; row < skeleton_count; ++row) {
+                                const int64_t source_row = source->skeleton_indices[
+                                    static_cast<size_t>(row)];
+                                if (source_row < 0 ||
+                                    source_row >= static_cast<int64_t>(assist.indices.size())) {
+                                    throw std::runtime_error(
+                                        "form_near_updates_from_generators: skeleton index out of range");
+                                }
+                                source_indices[static_cast<size_t>(row)] =
+                                    assist.indices[static_cast<size_t>(source_row)];
+                            }
+                            const std::vector<int64_t> local_indices =
+                                indices_for_count_from_box(
+                                    *local_box, local_count, dimension);
+                            kernel->evaluate_block_by_index(
+                                source_indices.data(), skeleton_count,
+                                local_indices.data(), local_count,
+                                block.data.data(), skeleton_count);
+                        }
+
+                        int m = static_cast<int>(skeleton_count);
+                        int n = static_cast<int>(local_count);
+                        int k = static_cast<int>(redundant_count);
+                        DataType alpha = DataType{1.0};
+                        DataType beta = DataType{1.0};
+                        int lda = static_cast<int>(source->X_RS.lda);
+                        int ldb = static_cast<int>(temp2_ld);
+                        int ldc = static_cast<int>(skeleton_count);
+                        gemm_("T", "T", &m, &n, &k, &alpha,
+                              source->X_RS.data.data(), &lda,
+                              local_temp2, &ldb,
+                              &beta, block.data.data(), &ldc);
+                        output.replaces.emplace_back(
+                            ReplaceKey{local_morton, source_morton},
+                            std::move(block));
+                    }
+
+                    for (size_t neighbor_index = 0;
+                         neighbor_index < neighbors.size(); ++neighbor_index) {
+                        if (neighbor_index == local_index) continue;
+                        const int64_t neighbor_morton = neighbors[neighbor_index];
+                        const int64_t neighbor_count = counts[neighbor_index];
+                        if (neighbor_count == 0 ||
+                            !are_one_hop(local_morton, neighbor_morton)) {
+                            continue;
+                        }
+                        const bool neighbor_local =
+                            level.find_local_box(neighbor_morton) != nullptr;
+                        if (neighbor_local && neighbor_morton < local_morton) continue;
+
+                        const DataType* neighbor_temp2 =
+                            temp2 + offsets[neighbor_index];
+                        pair_product.resize(static_cast<size_t>(
+                            neighbor_count * local_count));
+                        {
+                            int m = static_cast<int>(neighbor_count);
+                            int n = static_cast<int>(local_count);
+                            int k = static_cast<int>(redundant_count);
+                            DataType alpha = DataType{1.0};
+                            DataType beta = DataType{0.0};
+                            int lda = static_cast<int>(temp2_ld);
+                            int ldb = static_cast<int>(temp2_ld);
+                            int ldc = static_cast<int>(neighbor_count);
+                            gemm_("N", "T", &m, &n, &k, &alpha,
+                                  neighbor_temp2, &lda,
+                                  local_original_x_nr, &ldb,
+                                  &beta, pair_product.data(), &ldc);
+                        }
+
+                        const int64_t lo =
+                            std::min(local_morton, neighbor_morton);
+                        const int64_t hi =
+                            std::max(local_morton, neighbor_morton);
+                        DenseBlock<DataType> block;
+                        if (local_morton == lo) {
+                            block.rows = neighbor_count;
+                            block.cols = local_count;
+                            block.data = pair_product;
+                        } else {
+                            block.rows = local_count;
+                            block.cols = neighbor_count;
+                            block.data.resize(pair_product.size());
+                            for (int64_t column = 0; column < local_count; ++column) {
+                                for (int64_t row = 0; row < neighbor_count; ++row) {
+                                    block.data[static_cast<size_t>(
+                                        column + row * local_count)] =
+                                        pair_product[static_cast<size_t>(
+                                            row + column * neighbor_count)];
+                                }
                             }
                         }
+                        output.deltas.emplace_back(
+                            EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
                     }
-                    output.deltas.emplace_back(
-                        EdgeKey{lo, hi, EdgeKind::Near}, std::move(block));
+                }
+            } catch (...) {
+                if (!form_failed.exchange(true, std::memory_order_relaxed)) {
+                    std::lock_guard<std::mutex> lock(form_exception_mutex);
+                    form_exception = std::current_exception();
                 }
             }
-        } catch (...) {
-            if (!form_failed.exchange(true, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(form_exception_mutex);
-                form_exception = std::current_exception();
-            }
         }
-    }
+    });
 
     if (form_exception) std::rethrow_exception(form_exception);
 

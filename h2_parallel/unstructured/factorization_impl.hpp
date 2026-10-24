@@ -10,6 +10,7 @@
 #include "owner_deferred.hpp"
 #include "verification.hpp"
 #include "h2_gpu/factorization_driver.hpp"
+#include "core/omp_region.hpp"
 
 namespace butterfly {
 namespace color_unstructured {
@@ -935,8 +936,7 @@ void hierarchical_factorization_unstructured(
                     std::mutex candidate_exception_mutex;
                     std::atomic<bool> candidate_failed{false};
 
-                    #pragma omp parallel default(shared) if (color_list.size() > 1)
-                    {
+                    omp_parallel_if(color_list.size() > 1, [&] {
                         const int tid = omp_get_thread_num();
                         auto& local_candidates =
                             thread_xnn_candidate_boxes[static_cast<size_t>(tid)];
@@ -970,7 +970,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (candidate_exception) {
                         std::rethrow_exception(candidate_exception);
@@ -1097,8 +1097,7 @@ void hierarchical_factorization_unstructured(
                     std::mutex mirror_exception_mutex;
                     std::atomic<bool> mirror_failed{false};
 
-                    #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
-                    {
+                    omp_parallel_if(wave_xnn_candidate_boxes.size() > 1, [&] {
                         #pragma omp for schedule(static)
                         for (int64_t idx = 0; idx < static_cast<int64_t>(wave_xnn_candidate_boxes.size()); ++idx) {
                             if (mirror_failed.load(std::memory_order_relaxed)) {
@@ -1128,7 +1127,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (mirror_exception) {
                         std::rethrow_exception(mirror_exception);
@@ -1164,8 +1163,7 @@ void hierarchical_factorization_unstructured(
                     std::mutex finalize_exception_mutex;
                     std::atomic<bool> finalize_failed{false};
 
-                    #pragma omp parallel default(shared) if (color_list.size() > 1)
-                    {
+                    omp_parallel_if(color_list.size() > 1, [&] {
                         #pragma omp for schedule(static)
                         for (int64_t bi = 0; bi < static_cast<int64_t>(color_list.size()); ++bi) {
                             if (finalize_failed.load(std::memory_order_relaxed)) {
@@ -1191,7 +1189,7 @@ void hierarchical_factorization_unstructured(
                                 }
                             }
                         }
-                    }
+                    });
 
                     if (finalize_exception) {
                         std::rethrow_exception(finalize_exception);

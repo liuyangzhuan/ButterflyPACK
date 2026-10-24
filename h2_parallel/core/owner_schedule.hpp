@@ -114,6 +114,7 @@
 #include <omp.h>
 
 #include "owner_exchange.hpp"
+#include "omp_region.hpp"
 
 namespace fmm {
 
@@ -1434,8 +1435,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
         std::exception_ptr ex;
         std::mutex ex_mutex;
         std::atomic<bool> failed{false};
-        #pragma omp parallel default(shared) if (sources.size() > 1)
-        {
+        omp_parallel_if(sources.size() > 1, [&] {
             auto& local = thread_candidates[static_cast<size_t>(omp_get_thread_num())];
             #pragma omp for schedule(static)
             for (int64_t i = 0; i < static_cast<int64_t>(sources.size()); ++i) {
@@ -1451,7 +1451,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
                     if (!failed.exchange(true)) { std::lock_guard<std::mutex> l(ex_mutex); ex = std::current_exception(); }
                 }
             }
-        }
+        });
         if (ex) std::rethrow_exception(ex);
     }
     std::vector<int64_t> candidates;
@@ -1496,8 +1496,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
         std::exception_ptr ex;
         std::mutex ex_mutex;
         std::atomic<bool> failed{false};
-        #pragma omp parallel default(shared) if (candidates.size() > 1)
-        {
+        omp_parallel_if(candidates.size() > 1, [&] {
             #pragma omp for schedule(static)
             for (int64_t i = 0; i < static_cast<int64_t>(candidates.size()); ++i) {
                 if (failed.load(std::memory_order_relaxed)) continue;
@@ -1512,7 +1511,7 @@ void owner_schedule_run_passes(OwnerScheduleState<CoordType, DataType>& st, Tree
                     if (!failed.exchange(true)) { std::lock_guard<std::mutex> l(ex_mutex); ex = std::current_exception(); }
                 }
             }
-        }
+        });
         if (ex) std::rethrow_exception(ex);
     }
     FMM_PHASE_LAP(pass_lap, WALL_MIRROR);

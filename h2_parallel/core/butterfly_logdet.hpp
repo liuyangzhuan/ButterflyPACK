@@ -20,6 +20,7 @@
 #include <mpi.h>
 
 #include "tree.hpp"
+#include "omp_region.hpp"
 
 #ifdef H2_HAVE_GPU
 namespace fmm {
@@ -161,8 +162,7 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
         std::mutex diagonal_exception_mutex;
         std::atomic<bool> diagonal_failed{false};
 
-        #pragma omp parallel default(shared) if (tree_level.num_boxes_local > 1)
-        {
+        omp_parallel_if(tree_level.num_boxes_local > 1, [&] {
             double t_logabs = 0.0, t_arg = 0.0;   // thread-local
 
             // iterate through all the boxes (in parallel)
@@ -223,7 +223,7 @@ void hierarchical_logdet_parallel(fmm::ParallelTree<CoordType, DataType>* tree,
             logabs_local += t_logabs;
             #pragma omp atomic
             arg_local    += t_arg;
-        }
+        });
         if (diagonal_exception) {
             std::rethrow_exception(diagonal_exception);
         }
