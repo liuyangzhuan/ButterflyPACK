@@ -126,10 +126,10 @@ still needed, so the F22 serving cost stays.
 Test driver: `Laplace3D_H2Test_Driver --H2_partial n11` on a slab-plus-faces
 point set and on a plain cube split, dense checks at small N.
 
-## Status (2026-10-22)
+## Status (2026-10-23)
 
 - **P1** done (CPU, 1 and 4 ranks).
-- **P2a** done on one rank (CPU), in `partial.hpp`:
+- **P2a** done (CPU), in `partial.hpp`:
   - The F22 step runs once per level, after the level's last wave.  The
     owner-deferred replays of step 7 land only after a wave, so a box's
     F22 step inside its wave would read stale neighbour blocks.  Every box
@@ -145,10 +145,13 @@ point set and on a plain cube split, dense checks at small N.
 
     | grid, F11 | F22 at root | CB product | CB entries | forward | backward |
     |---|---|---|---|---|---|
-    | 16^3, 1024 | 2945 of 3072 | 1.8e-6 | 5.1e-7 | 8.9e-7 | 1.3e-5 |
-    | 20^3, 1200 | 5530 of 6800 | 7.2e-7 | 1.4e-6 | 7.0e-7 | 4.3e-6 |
-    | 24^3, 2304 | 7217 of 11520 | 5.2e-7 | 8.8e-7 | 4.7e-7 | 6.3e-6 |
-    | 32^3, 4096 | 10615 of 28672 | 2.0e-6 | 8.0e-7 | 1.4e-6 | 2.9e-5 |
+    | 16^3, 1024 | 2945 of 3072 | 1.8e-6 | 5.1e-8 | 8.9e-7 | 1.3e-5 |
+    | 20^3, 1200 | 5530 of 6800 | 7.2e-7 | 2.6e-7 | 7.0e-7 | 4.3e-6 |
+    | 24^3, 2304 | 7217 of 11520 | 5.2e-7 | 1.9e-7 | 4.7e-7 | 6.3e-6 |
+    | 32^3, 4096 | 10387 of 28672 | 2.0e-6 | 1.5e-7 | 1.4e-6 | 2.9e-5 |
+
+    (after the P2b fix; the backward error is the conditioning of
+    A11, cond1 360-710 here: its residual is at the tolerance)
 
     `H2_partial = N` stays bitwise equal to the full factorization.
   - CB entries are batched: the requested points' chains go up as blocks
@@ -161,6 +164,56 @@ point set and on a plain cube split, dense checks at small N.
     reads every record once: 49 GB at 64^3 (levels 3 and 2, F11 = 16384),
     about 1.5 s per product at the 35-40 GB/s that 16 or 32 threads reach
     (6.9 s single-threaded before); 3 right-hand sides cost the same as 1.
-  - Multi-rank partial runs stop with an error until P2b.
-- Next: P2b (multi-rank: the skeleton-update exchange, remote view
-  slicing, distributed up/down passes), P3 (GPU).
+- **P2b** done (CPU, any rank count; the F11 waves' Color/CA machinery
+  unchanged):
+  - The F22 step reads a remote neighbour through its copy (an assisting
+    box on a Color level, a ghost on a CA level) and its views of this box,
+    else the neighbour's views (a local neighbour), else the kernel (a pair
+    no elimination touched).  After the step each rank publishes its
+    sparsified boxes' S_old and kept slots to the ranks within three hops;
+    the receivers reduce their copies' live sets (`skel_before`,
+    `skeleton_before_f22` keep S_old for the records' row lookup).
+  - Solves: the F22 steps between the level transfers
+    (`scatter_solution_to_children`, `gather_skeleton_to_parent`), the
+    outputs summed over ranks.
+  - The CB product and CB entries are collective over the level
+    communicators: a level's chains or vectors go to the owners of the
+    remote one-hop neighbours, each record term is formed by the box that
+    owns it, the result is summed and replicated.  Every rank passes the
+    same request lists.
+  - The bug behind wrong x1 or NaN in about half the 64^3 runs on 4 and 8
+    ranks (and small run-to-run differences on one rank): the F22 step's
+    far sketch located the box's rows in a fill source into a scratch
+    vector that the ring loop then reused, so the box's columns read the
+    last ring box's positions and, past its length, stale values from the
+    thread's earlier boxes.  Fixed by keeping the box's positions apart.
+    The fix also sparsifies more at the coarse levels (64^3: level 3 kept
+    86475 -> 85647, level 2 17601 -> 16320) at the same accuracy.  Found by
+    dumping each box's F22 target per run (sketch, near and own parts, per
+    neighbour and per fill source) and comparing runs: levels that agree
+    bitwise isolate the step that does not.  (Take such norms before
+    compute_id_complex: its QR overwrites the target, and the overwritten
+    rows mix in the sketch.)
+  - Also made safe, not a cause: the nonsymmetric owner-deferred mirror
+    could create a box's view inside its parallel pass while another
+    mirror reads that box's block list.  Every mirror target's views are
+    now made before the parallel pass, as the symmetric mirror already
+    requires.  Counted in the old code: no view was ever created there
+    (64^3 partial, 40^3 full, 8 ranks).
+  - Validation (tol 1e-6, skew Laplace; dense LAPACK where N allows, else
+    the in-library checks against the kernel):
+
+    | grid, F11 | ranks | F22 at root | CB product | CB entries | forward | backward |
+    |---|---|---|---|---|---|---|
+    | 20^3, 1200 | 2, 3, 4, 8 | 5528 of 6800 | 6.9e-7 | 2.3e-7 | 6.7e-7 | 4.2e-6 |
+    | 32^3, 4096 | 8 | 10405 of 28672 | 2.0e-6 | 1.1e-7 | 1.4e-6 | 3.0e-5 |
+    | 48^3, 9216 | 1 / 8 | 14155 / 14150 | 1.1e-6 / 1.2e-6 | | 8.6e-6 / 8.7e-6 | |
+    | 64^3, 16384 | 1 / 4, 8 | 16317 / 16320 | 2.4e-6 / 2.3e-6 | | 4.6e-5 | |
+
+    The 20^3 numbers agree to the printed digits on 2 to 8 ranks.  At
+    64^3, repeated runs on 1, 4 and 8 ranks each give the same F22 ranks
+    and the same errors (before the fix about half of the 4- and 8-rank
+    runs were wrong).
+    `H2_partial = N` stays bitwise equal to the full factorization.
+- Next: P3 (GPU), then P4 (release API, `H2_compress_factors` on the
+  records) and P5 (the STRUMPACK hand-off).

@@ -763,9 +763,28 @@ void apply_unstructured_owner_deferred_xnn_updates_nonsymmetric(
     }
 }
 
+// Before the mirrors run in parallel: every view a mirror writes made in its
+// box, so that the mirrors only fill blocks.  A view made inside the parallel
+// pass grows its box's block list (and map) while another mirror reads a view
+// of that box: the reader then copies freed memory.
+template<typename CoordType, typename DataType>
+void prepare_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+    TreeLevel<CoordType, DataType>& level,
+    const std::vector<std::vector<DeferredXnnTargetKey>>& mirror_targets) {
+    for (const auto& targets : mirror_targets) {
+        for (const auto& mirror : targets) {
+            BoxData<CoordType, DataType>* box = level.find_local_box(mirror.box_morton);
+            if (box == nullptr) continue;  // (the mirror reports it)
+            upsert_directed_block(*box, mirror.neighbor_morton, EdgeKind::Near, true);
+            upsert_directed_block(*box, mirror.neighbor_morton, EdgeKind::Near, false);
+        }
+    }
+}
+
 // After every candidate's pass: a candidate's views of a lower local
 // candidate, copied from that one's (its A_SN[D] = D's A_NS[C], its A_NS[D]
-// = D's A_SN[C]).  Reads only views no mirror writes.
+// = D's A_SN[C]).  Reads only views no mirror writes; the views it writes are
+// made beforehand (prepare_unstructured_owner_deferred_xnn_mirror_nonsymmetric).
 template<typename CoordType, typename DataType>
 void apply_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
     TreeLevel<CoordType, DataType>& level,

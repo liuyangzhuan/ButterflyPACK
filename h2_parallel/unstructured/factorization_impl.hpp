@@ -1336,6 +1336,10 @@ void hierarchical_factorization_unstructured(
                     std::exception_ptr mirror_exception;
                     std::mutex mirror_exception_mutex;
                     std::atomic<bool> mirror_failed{false};
+                    if (!is_symmetric) {
+                        prepare_unstructured_owner_deferred_xnn_mirror_nonsymmetric(
+                            level, wave_xnn_mirror_targets);
+                    }
 
                     #pragma omp parallel default(shared) if (wave_xnn_candidate_boxes.size() > 1)
                     {
@@ -1531,7 +1535,7 @@ void hierarchical_factorization_unstructured(
                 // sparsified, the live sets reduced to S11, S22
                 const auto f22_start = clock::now();
                 partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
-                                  print_detail && rank == level_print_rank);
+                                  print_detail && rank == level_print_rank, level_comm);
                 if (print_detail && rank == level_print_rank) {
                     std::cout << "  F22 phase time: "
                               << std::chrono::duration<double, std::milli>(clock::now() - f22_start).count()

@@ -840,6 +840,8 @@ extern "C" void Cblacs_exit(int);
 
 extern "C" {
 void dgetrf_(const int*, const int*, double*, const int*, int*, int*);
+double dlange_(const char*, const int*, const int*, const double*, const int*, double*);
+void dgecon_(const char*, const int*, const double*, const int*, const double*, double*, double*, int*, int*);
 void dgetrs_(const char*, const int*, const int*, const double*, const int*, const int*, double*, const int*, int*);
 void dgemm_(const char*, const char*, const int*, const int*, const int*, const double*, const double*, const int*,
             const double*, const int*, const double*, double*, const int*);
@@ -928,6 +930,9 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   const int n = static_cast<int>(N);
   std::vector<double> x1d(static_cast<size_t>(n11) * nrhs, 0.0);
   double err_mult = 0.0, err_extract = 0.0, err_forward = 0.0;
+  // kept for the backward solve's residual: A11 before its LU, A12, b1; A11's 1-norm condition estimate
+  std::vector<double> A11k, A12k, b1k;
+  double cond11 = 0.0;
   if (rank == 0) {
     std::vector<double> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
@@ -950,8 +955,17 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
                         CB = block(n11, n22, n11, n22);
     std::vector<int> piv(static_cast<size_t>(std::max(n11, 1)));
     int info = 0;
+    A11k = A11;
+    A12k = A12;
+    const char one_norm = '1';
+    std::vector<double> lwork(static_cast<size_t>(4) * std::max(n11, 1));
+    std::vector<int> liwork(static_cast<size_t>(std::max(n11, 1)));
+    const double anorm = dlange_(&one_norm, &n11, &n11, A11.data(), &n11, lwork.data());
     dgetrf_(&n11, &n11, A11.data(), &n11, piv.data(), &info);
     if (info != 0) throw std::runtime_error("partial_check: dense LU of A11 failed");
+    double rcond = 0.0;
+    dgecon_(&one_norm, &n11, A11.data(), &n11, &anorm, &rcond, lwork.data(), liwork.data(), &info);
+    cond11 = rcond > 0.0 ? 1.0 / rcond : 0.0;
     const char no = 'N';
     std::vector<double> W = A12;
     dgetrs_(&no, &n11, &n22, A11.data(), &n11, piv.data(), W.data(), &n11, &info);
@@ -1000,6 +1014,7 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
     }
     err_forward = std::sqrt(d2 / r2);
     x1d = b1;
+    b1k = b1;
     dgemm_(&no, &no, &n11, &nrhs, &n22, &minus, A12.data(), &n11, x2.data(), &n22, &one, x1d.data(), &n11);
     dgetrs_(&no, &n11, &nrhs, A11.data(), &n11, piv.data(), x1d.data(), &n11, &info);
   }
@@ -1017,10 +1032,32 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   MPI_Allreduce(MPI_IN_PLACE, &d2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(MPI_IN_PLACE, &r2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
   const double err_backward = std::sqrt(d2 / r2);
+  // the backward solve's residual against the dense blocks, ||b1 - A12 x2 - A11 x1|| / ||b1 - A12 x2||:
+  // its error is at most about cond(A11) times this
+  std::vector<double> x1h(static_cast<size_t>(n11) * nrhs, 0.0);
+  for (int c = 0; c < nrhs; ++c)
+    for (int r = 0; r < local_points; ++r) {
+      const int64_t g = input.first + r;
+      if (g < n11) x1h[static_cast<size_t>(g) + static_cast<size_t>(c) * n11] = x[static_cast<size_t>(r) + static_cast<size_t>(c) * local_points];
+    }
+  MPI_Allreduce(MPI_IN_PLACE, x1h.data(), static_cast<int>(x1h.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
   if (rank == 0) {
+    const char no = 'N';
+    const double one = 1.0, minus = -1.0;
+    std::vector<double> rhs = b1k;
+    dgemm_(&no, &no, &n11, &nrhs, &n22, &minus, A12k.data(), &n11, x2.data(), &n22, &one, rhs.data(), &n11);
+    std::vector<double> res = rhs;
+    dgemm_(&no, &no, &n11, &nrhs, &n11, &minus, A11k.data(), &n11, x1h.data(), &n11, &one, res.data(), &n11);
+    double rr = 0.0, bb = 0.0;
+    for (size_t i = 0; i < res.size(); ++i) {
+      rr += res[i] * res[i];
+      bb += rhs[i] * rhs[i];
+    }
+    const double residual = std::sqrt(rr / bb);
     std::cout << std::scientific << std::setprecision(3) << "H2 partial dense check (N " << n << ", F11 " << n11
               << "): schur_mult " << err_mult << "  schur_extract " << err_extract << "  forward " << err_forward
-              << "  backward " << err_backward << std::defaultfloat << std::endl;
+              << "  backward " << err_backward << " (residual " << residual << ", cond1(A11) " << cond11 << ")"
+              << std::defaultfloat << std::endl;
   }
   (void)mpi_size;
 }

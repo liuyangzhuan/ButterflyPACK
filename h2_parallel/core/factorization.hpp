@@ -9820,6 +9820,7 @@ void gather_id_target_streamed_nonsymmetric(
             }
         }
         auto& positions = scratch.stream_positions;
+        std::vector<int64_t> b_positions;  // (column_slots: the box's rows; positions is reused for the ring's)
         std::vector<DataType> P1, P2, W1, W2, side;
         for (int64_t src_morton : sources) {
             BoxData<CoordType, DataType>* src = resolve_source(src_morton);
@@ -9838,6 +9839,13 @@ void gather_id_target_streamed_nonsymmetric(
             const int64_t temp2_ld = src->X_NR.lda;
             int64_t b_off = 0, b_count = 0;
             if (!lazy_far_locate_endpoint_rows(src, b_end, b_off, b_count, positions)) continue;
+            if (column_slots != nullptr) {
+                b_positions.assign(positions.begin(), positions.end());
+                if (static_cast<int64_t>(b_positions.size()) != n) {
+                    throw std::logic_error("gather_id_target_streamed_nonsymmetric: the columns' rows in fill source " +
+                                           std::to_string(src_morton) + " not located");
+                }
+            }
 
             // W1 (W2): the sketched temp2_E rows (temp4_E columns) of the
             // blocks listing E, (r x d) column-major
@@ -9910,7 +9918,7 @@ void gather_id_target_streamed_nonsymmetric(
                     // the columns' rows of the source gathered contiguously
                     std::vector<DataType> t4g(static_cast<size_t>(r * n)), t2g(static_cast<size_t>(n * r));
                     for (int64_t c = 0; c < n; ++c) {
-                        const int64_t row = b_off + positions[static_cast<size_t>(c)];
+                        const int64_t row = b_off + b_positions[static_cast<size_t>(c)];
                         std::copy_n(temp4 + row * r, r, t4g.data() + c * r);
                         for (int64_t j = 0; j < r; ++j) t2g[static_cast<size_t>(c + j * n)] = temp2[row + j * temp2_ld];
                     }
@@ -12596,6 +12604,7 @@ std::vector<DataType> extract_or_evaluate_child_interaction_for_assisting(
             target_endpoint.full_size =
                 static_cast<int64_t>(assist.indices.size());
             target_endpoint.skeleton = &assist.skel_indices;
+            target_endpoint.skeleton_before = &assist.skel_before;
             target_endpoint.wanted = &assist.skel_indices;
         }
 

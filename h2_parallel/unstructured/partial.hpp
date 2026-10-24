@@ -27,18 +27,28 @@
 // down-pass (x_R22 += T22^T x_S'), the backward one takes x2 through an
 // up-pass (x_S' += T22 x_R22).
 //
-// Milestone P2a: one rank (the neighbours and parents local).
+// Many ranks: a level's neighbours on other ranks are read through their
+// copies (ghosts on a CA level, assisting boxes on a Color one), the F22
+// phase publishes each sparsified box's kept slots to the ranks holding a
+// copy, and the CB entries and products are collective over the level
+// communicators, their results replicated.
 
 #include "core/tree.hpp"
 #include "core/blas_declare.hpp"
 #include "core/factorization.hpp"
 #include "core/id_decomposition.hpp"
+#include "core/morton.hpp"
+#include "core/solver.hpp"
 
 #include <mpi.h>
 
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -80,13 +90,6 @@ void partial_gemm(char ta, char tb, int64_t m, int64_t n, int64_t k, DataType al
     }
 }
 
-template<typename CoordType, typename DataType>
-void partial_require_single_rank(const fmm::ParallelTree<CoordType, DataType>& tree, const char* what) {
-    if (tree.mpi_size != 1) {
-        throw std::runtime_error(std::string("H2_partial: ") + what + " runs on one rank for now (milestone P2a)");
-    }
-}
-
 // A box's offset in its parent's point list (the children's skeletons in Morton order).
 template<typename CoordType, typename DataType>
 int64_t partial_child_offset(fmm::TreeLevel<CoordType, DataType>& child_level, int64_t morton, int dimension) {
@@ -99,6 +102,114 @@ int64_t partial_child_offset(fmm::TreeLevel<CoordType, DataType>& child_level, i
 }
 
 // =====================================================================
+// The F22 phase's new live sets to the other ranks: each sparsified box's
+// kept positions within its skeleton before the phase go to the owners of
+// the boxes within three hops (its ghost copies are one-hop neighbours'
+// ranks, its assisting copies up to two hops for the IDs and three for
+// the parent transition, which reads a parent neighbour's children); a
+// receiver brings its ghost and assisting copies to the new live sets
+// (the old ones kept, for the lazy fill's rows) and adds the boxes to
+// kept_of (morton -> the old live set's size and the kept positions).
+// Collective over level_comm (the level's active ranks).
+// =====================================================================
+template<typename CoordType, typename DataType>
+void partial_f22_publish(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLevel<CoordType, DataType>& level,
+                         MPI_Comm level_comm, std::unordered_map<int64_t, std::pair<int64_t, std::vector<int64_t>>>& kept_of) {
+    int me = 0, lsize = 0;
+    MPI_Comm_rank(tree->comm, &me);
+    MPI_Comm_size(level_comm, &lsize);
+    MPI_Group tree_group, level_group;
+    MPI_Comm_group(tree->comm, &tree_group);
+    MPI_Comm_group(level_comm, &level_group);
+    std::unordered_map<int, int> level_rank_of;
+    auto to_level = [&](int r) {
+        auto it = level_rank_of.find(r);
+        if (it != level_rank_of.end()) return it->second;
+        int out = MPI_UNDEFINED;
+        MPI_Group_translate_ranks(tree_group, 1, &r, level_group, &out);
+        if (out == MPI_UNDEFINED) throw std::runtime_error("F22 phase: a box owner outside the level's communicator");
+        level_rank_of.emplace(r, out);
+        return out;
+    };
+    const int dimension = tree->dimension;
+    const int64_t side = int64_t(1) << level.level;  // boxes per dimension
+    std::vector<std::vector<int64_t>> send(static_cast<size_t>(lsize));
+    for (const auto& kv : kept_of) {
+        const int64_t morton = kv.first;
+        const int64_t n_old = kv.second.first;
+        const auto& kept = kv.second.second;
+        uint32_t c[3] = {0, 0, 0};
+        morton::decode_nd(dimension, static_cast<uint64_t>(morton), c[0], c[1], c[2]);
+        std::set<int> dest;
+        const int lo[3] = {-3, dimension > 1 ? -3 : 0, dimension > 2 ? -3 : 0};
+        const int hi[3] = {3, dimension > 1 ? 3 : 0, dimension > 2 ? 3 : 0};
+        for (int dz = lo[2]; dz <= hi[2]; ++dz)
+            for (int dy = lo[1]; dy <= hi[1]; ++dy)
+                for (int dx = lo[0]; dx <= hi[0]; ++dx) {
+                    const int64_t x = int64_t(c[0]) + dx, y = int64_t(c[1]) + dy, z = int64_t(c[2]) + dz;
+                    if (x < 0 || y < 0 || z < 0 || x >= side || y >= side || z >= side) continue;
+                    const int64_t m = static_cast<int64_t>(morton::encode_nd(
+                        dimension, static_cast<uint32_t>(x), static_cast<uint32_t>(y), static_cast<uint32_t>(z)));
+                    const int r = level.owner_rank_of(m);
+                    if (r != me) dest.insert(r);
+                }
+        const auto* box = level.find_local_box(morton);
+        for (int r : dest) {
+            auto& buf = send[static_cast<size_t>(to_level(r))];
+            buf.push_back(morton);
+            buf.push_back(n_old);
+            buf.push_back(static_cast<int64_t>(kept.size()));
+            buf.insert(buf.end(), box->skeleton_before_f22.begin(), box->skeleton_before_f22.end());
+            buf.insert(buf.end(), kept.begin(), kept.end());
+        }
+    }
+    MPI_Group_free(&tree_group);
+    MPI_Group_free(&level_group);
+    std::vector<int> scount(static_cast<size_t>(lsize)), rcount(static_cast<size_t>(lsize)), sdispl(static_cast<size_t>(lsize)),
+        rdispl(static_cast<size_t>(lsize));
+    for (int q = 0; q < lsize; ++q) scount[static_cast<size_t>(q)] = static_cast<int>(send[static_cast<size_t>(q)].size());
+    MPI_Alltoall(scount.data(), 1, MPI_INT, rcount.data(), 1, MPI_INT, level_comm);
+    std::vector<int64_t> sbuf, rbuf;
+    for (int q = 0; q < lsize; ++q) {
+        sdispl[static_cast<size_t>(q)] = static_cast<int>(sbuf.size());
+        sbuf.insert(sbuf.end(), send[static_cast<size_t>(q)].begin(), send[static_cast<size_t>(q)].end());
+    }
+    int rtotal = 0;
+    for (int q = 0; q < lsize; ++q) {
+        rdispl[static_cast<size_t>(q)] = rtotal;
+        rtotal += rcount[static_cast<size_t>(q)];
+    }
+    rbuf.resize(static_cast<size_t>(rtotal));
+    MPI_Alltoallv(sbuf.data(), scount.data(), sdispl.data(), MPI_INT64_T, rbuf.data(), rcount.data(), rdispl.data(),
+                  MPI_INT64_T, level_comm);
+    // a copy's live sets from its owner's: S_old before the phase, S' after
+    auto reduce = [&](std::vector<int64_t>& now, std::vector<int64_t>& before, const int64_t* old, int64_t n_old,
+                      const int64_t* kept, int64_t nk) {
+        before.assign(old, old + n_old);
+        now.resize(static_cast<size_t>(nk));
+        for (int64_t i = 0; i < nk; ++i) now[static_cast<size_t>(i)] = before[static_cast<size_t>(kept[i])];
+    };
+    for (size_t at = 0; at < rbuf.size();) {
+        const int64_t morton = rbuf[at], n_old = rbuf[at + 1], nk = rbuf[at + 2];
+        const int64_t* old = rbuf.data() + at + 3;
+        const int64_t* kept = old + n_old;
+        at += 3 + static_cast<size_t>(n_old + nk);
+        bool held = false;
+        if (auto* g = level.find_ghost_box(morton)) {
+            reduce(g->skeleton_indices, g->skeleton_before_f22, old, n_old, kept, nk);
+            held = true;
+        }
+        auto ait = level.assisting_box_points_for_kernel_evaluation.find(morton);
+        if (ait != level.assisting_box_points_for_kernel_evaluation.end()) {
+            auto& a = level.assisting_boxes[static_cast<size_t>(ait->second)];
+            reduce(a.skel_indices, a.skel_before, old, n_old, kept, nk);
+            held = true;
+        }
+        if (held) kept_of[morton] = {n_old, std::vector<int64_t>(kept, kept + nk)};
+    }
+}
+
+// =====================================================================
 // The F22 phase of a level (after its F11 waves): every local box's F22
 // part is skeletonized against the far ring and the near field's live F11
 // points, its R22 sparsified, the box's live set reduced to S' = S11, S22.
@@ -106,10 +217,9 @@ int64_t partial_child_offset(fmm::TreeLevel<CoordType, DataType>& child_level, i
 template<typename CoordType, typename DataType, typename KernelType>
 void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLevel<CoordType, DataType>& level,
                        KernelType* kernel, double tolerance, const std::vector<int64_t>& occupied_local,
-                       bool print_detail) {
+                       bool print_detail, MPI_Comm level_comm) {
     using Box = fmm::BoxData<CoordType, DataType>;
     using MS = fmm::MatrixStorage<DataType>;
-    partial_require_single_rank(*tree, "the F22 phase");
     const double abs_tol = fmm::id_absolute_tolerance(tree, tolerance);
     // the live sets before the phase, for every box (the records read the
     // neighbours' raw layouts while they may already have been transformed)
@@ -167,16 +277,92 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     throw std::runtime_error("F22 phase: no streamed sketch for box " + std::to_string(b.morton_index));
                 }
                 const int64_t d = scratch.streamed_sketch_rows;
-                struct NearF11 { Box* nb; std::vector<int64_t> q11, q22; };  // positions within nb's S_old
+                // a neighbour's skeleton before the phase and its point ids: a
+                // local box's, or its remote copy's (a ghost on a CA level, an
+                // assisting box on a Color one; the copies change only after
+                // the phase)
+                // K(nb, b) and K(b, nb) over the two boxes' skeletons before the
+                // phase: this box's views, else the neighbour's views of this box
+                // (a local neighbour), else the kernel - a pair no elimination
+                // touched keeps no view, and the transition reads it the same way
+                struct NearF11 {
+                    const std::vector<int64_t>* S_old = nullptr;
+                    const std::vector<int64_t>* ids = nullptr;
+                    std::vector<int64_t> q11, q22;
+                    const fmm::ModifiedBlock<DataType>* nb_b = nullptr;  // K(nb, b)
+                    bool nb_b_own = true;                                // b's A_NS[nb], else nb's A_SN[b]
+                    const fmm::ModifiedBlock<DataType>* b_nb = nullptr;  // K(b, nb)
+                    bool b_nb_own = true;                                // b's A_SN[nb], else nb's A_NS[b]
+                };
                 std::vector<NearF11> near(b.one_hop.size());
                 int64_t near_rows = 0;
                 for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {
-                    Box* nb = level.find_local_box(b.one_hop[idx]);
-                    if (nb == nullptr) throw std::runtime_error("F22 phase: a neighbour is not local");
-                    near[idx].nb = nb;
-                    const auto& nS = nb->skeleton_before_f22;
+                    const int64_t nm = b.one_hop[idx];
+                    const std::vector<int64_t>* nS_ptr = nullptr;
+                    const std::vector<int64_t>* ids = nullptr;
+                    if (const Box* nb = level.find_local_box(nm)) {
+                        nS_ptr = &nb->skeleton_before_f22;
+                        ids = &nb->point_indices;
+                    } else if (const Box* g = level.find_ghost_box(nm)) {
+                        nS_ptr = &g->skeleton_indices;
+                        ids = &g->point_indices;
+                    } else {
+                        auto ait = level.assisting_box_points_for_kernel_evaluation.find(nm);
+                        if (ait == level.assisting_box_points_for_kernel_evaluation.end()) {
+                            throw std::runtime_error("F22 phase: neighbour " + std::to_string(nm) + " of box " +
+                                                     std::to_string(b.morton_index) + " has no local or remote copy");
+                        }
+                        const auto& a = level.assisting_boxes[static_cast<size_t>(ait->second)];
+                        nS_ptr = &a.skel_indices;
+                        ids = &a.indices;
+                    }
+                    if (nS_ptr->empty()) {
+                        throw std::runtime_error("F22 phase: neighbour " + std::to_string(nm) + " of box " +
+                                                 std::to_string(b.morton_index) + " has no published skeleton");
+                    }
+                    near[idx].S_old = nS_ptr;
+                    near[idx].ids = ids;
+                    {
+                        const int64_t n_nb = static_cast<int64_t>(nS_ptr->size());
+                        auto* ns = a_ns_block(b, nm);
+                        auto* sn = a_sn_block(b, nm);
+                        Box* nb_local = level.find_local_box(nm);
+                        if (ns != nullptr && ns->a_ns_is_allocated()) {
+                            if (ns->a_ns_rows() != n_nb || ns->a_ns_cols() != k_old) {
+                                throw std::runtime_error("F22 phase: box " + std::to_string(b.morton_index) + "'s view of " +
+                                                         std::to_string(nm) + " is not over the two skeletons");
+                            }
+                            near[idx].nb_b = ns;
+                        } else if (nb_local != nullptr) {
+                            if (auto* o = a_sn_block(*nb_local, b.morton_index); o != nullptr && o->A_SN.is_allocated()) {
+                                if (o->A_SN.rows != n_nb || o->A_SN.cols != k_old) {
+                                    throw std::runtime_error("F22 phase: box " + std::to_string(nm) + "'s view of " +
+                                                             std::to_string(b.morton_index) + " is not over the two skeletons");
+                                }
+                                near[idx].nb_b = o;
+                                near[idx].nb_b_own = false;
+                            }
+                        }
+                        if (sn != nullptr && sn->A_SN.is_allocated()) {
+                            if (sn->A_SN.rows != k_old || sn->A_SN.cols != n_nb) {
+                                throw std::runtime_error("F22 phase: box " + std::to_string(b.morton_index) + "'s view of " +
+                                                         std::to_string(nm) + " is not over the two skeletons");
+                            }
+                            near[idx].b_nb = sn;
+                        } else if (nb_local != nullptr) {
+                            if (auto* o = a_ns_block(*nb_local, b.morton_index); o != nullptr && o->a_ns_is_allocated()) {
+                                if (o->a_ns_rows() != k_old || o->a_ns_cols() != n_nb) {
+                                    throw std::runtime_error("F22 phase: box " + std::to_string(nm) + "'s view of " +
+                                                             std::to_string(b.morton_index) + " is not over the two skeletons");
+                                }
+                                near[idx].b_nb = o;
+                                near[idx].b_nb_own = false;
+                            }
+                        }
+                    }
+                    const auto& nS = *nS_ptr;
                     for (int64_t q = 0; q < static_cast<int64_t>(nS.size()); ++q) {
-                        if (tree->partial_f11(nb->point_indices[static_cast<size_t>(nS[static_cast<size_t>(q)])])) near[idx].q11.push_back(q);
+                        if (tree->partial_f11((*ids)[static_cast<size_t>(nS[static_cast<size_t>(q)])])) near[idx].q11.push_back(q);
                         else near[idx].q22.push_back(q);
                     }
                     near_rows += static_cast<int64_t>(near[idx].q11.size());
@@ -188,37 +374,74 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     std::copy_n(scratch.sketch_storage.data() + col * d, d, target.data() + c * rows);
                 }
                 int64_t at = d;
-                for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {  // K(F11_nb, F22_b)
-                    auto* blk = a_ns_block(b, b.one_hop[idx]);
-                    if (blk == nullptr || !blk->a_ns_is_allocated()) continue;
-                    if (blk->a_ns_cols() != k_old) throw std::runtime_error("F22 phase: a neighbour's rows are not over the skeleton");
-                    if (blk->a_ns_rows() != static_cast<int64_t>(near[idx].q11.size() + near[idx].q22.size())) {
-                        throw std::runtime_error("F22 phase: a neighbour's rows are not over its skeleton (" +
-                                                 std::to_string(blk->a_ns_rows()) + " rows, box " +
-                                                 std::to_string(b.morton_index) + ")");
+                // the point ids of a neighbour's positions and of this box's
+                auto nb_ids_of = [&](size_t idx, const std::vector<int64_t>& qs) {
+                    std::vector<int64_t> out(qs.size());
+                    for (size_t i = 0; i < qs.size(); ++i)
+                        out[i] = (*near[idx].ids)[static_cast<size_t>((*near[idx].S_old)[static_cast<size_t>(qs[i])])];
+                    return out;
+                };
+                auto b_ids_of = [&](const std::vector<int64_t>& ps) {
+                    std::vector<int64_t> out(ps.size());
+                    for (size_t i = 0; i < ps.size(); ++i) out[i] = b.point_indices[static_cast<size_t>(S_old[static_cast<size_t>(ps[i])])];
+                    return out;
+                };
+                // K(nb, b)(qs, ps) and K(b, nb)(ps, qs), column-major
+                auto coupling_nb_b = [&](size_t idx, const std::vector<int64_t>& qs, const std::vector<int64_t>& ps) {
+                    const int64_t m = static_cast<int64_t>(qs.size()), n = static_cast<int64_t>(ps.size());
+                    std::vector<DataType> out(static_cast<size_t>(m * n));
+                    const auto* v = near[idx].nb_b;
+                    if (v == nullptr) {
+                        if (m > 0 && n > 0) {
+                            const auto ri = nb_ids_of(idx, qs), ci = b_ids_of(ps);
+                            kernel->evaluate_block_by_index(ri.data(), m, ci.data(), n, out.data(), m);
+                        }
+                        return out;
                     }
+                    for (int64_t c = 0; c < n; ++c)
+                        for (int64_t i = 0; i < m; ++i)
+                            out[static_cast<size_t>(i + c * m)] = near[idx].nb_b_own ? v->a_ns(qs[static_cast<size_t>(i)], ps[static_cast<size_t>(c)])
+                                                                                     : v->A_SN(qs[static_cast<size_t>(i)], ps[static_cast<size_t>(c)]);
+                    return out;
+                };
+                auto coupling_b_nb = [&](size_t idx, const std::vector<int64_t>& ps, const std::vector<int64_t>& qs) {
+                    const int64_t m = static_cast<int64_t>(ps.size()), n = static_cast<int64_t>(qs.size());
+                    std::vector<DataType> out(static_cast<size_t>(m * n));
+                    const auto* v = near[idx].b_nb;
+                    if (v == nullptr) {
+                        if (m > 0 && n > 0) {
+                            const auto ri = b_ids_of(ps), ci = nb_ids_of(idx, qs);
+                            kernel->evaluate_block_by_index(ri.data(), m, ci.data(), n, out.data(), m);
+                        }
+                        return out;
+                    }
+                    for (int64_t c = 0; c < n; ++c)
+                        for (int64_t i = 0; i < m; ++i)
+                            out[static_cast<size_t>(i + c * m)] = near[idx].b_nb_own ? v->A_SN(ps[static_cast<size_t>(i)], qs[static_cast<size_t>(c)])
+                                                                                     : v->a_ns(ps[static_cast<size_t>(i)], qs[static_cast<size_t>(c)]);
+                    return out;
+                };
+                for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {  // K(F11_nb, F22_b)
+                    const int64_t m = static_cast<int64_t>(near[idx].q11.size());
+                    if (m == 0) continue;
+                    const auto blk = coupling_nb_b(idx, near[idx].q11, pos22);
                     for (int64_t c = 0; c < n22; ++c)
-                        for (size_t i = 0; i < near[idx].q11.size(); ++i)
-                            target[static_cast<size_t>(at + static_cast<int64_t>(i) + c * rows)] =
-                                blk->a_ns(near[idx].q11[i], pos22[static_cast<size_t>(c)]);
-                    at += static_cast<int64_t>(near[idx].q11.size());
+                        for (int64_t i = 0; i < m; ++i)
+                            target[static_cast<size_t>(at + i + c * rows)] = blk[static_cast<size_t>(i + c * m)];
+                    at += m;
                 }
                 for (int64_t c = 0; c < n22; ++c)  // the box's own S11 rows
                     for (int64_t i = 0; i < k11; ++i)
                         target[static_cast<size_t>(at + i + c * rows)] = Aat(pos11[static_cast<size_t>(i)], pos22[static_cast<size_t>(c)]);
                 at += k11;
                 for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {  // K(F22_b, F11_nb)^T
-                    auto* blk = a_sn_block(b, b.one_hop[idx]);
-                    if (blk == nullptr || !blk->A_SN.is_allocated()) continue;
-                    if (blk->A_SN.rows != k_old) throw std::runtime_error("F22 phase: the box's rows are not over the skeleton");
-                    if (blk->A_SN.cols != static_cast<int64_t>(near[idx].q11.size() + near[idx].q22.size())) {
-                        throw std::runtime_error("F22 phase: a neighbour's columns are not over its skeleton");
-                    }
+                    const int64_t m = static_cast<int64_t>(near[idx].q11.size());
+                    if (m == 0) continue;
+                    const auto blk = coupling_b_nb(idx, pos22, near[idx].q11);  // n22 x m
                     for (int64_t c = 0; c < n22; ++c)
-                        for (size_t i = 0; i < near[idx].q11.size(); ++i)
-                            target[static_cast<size_t>(at + static_cast<int64_t>(i) + c * rows)] =
-                                blk->A_SN(pos22[static_cast<size_t>(c)], near[idx].q11[i]);
-                    at += static_cast<int64_t>(near[idx].q11.size());
+                        for (int64_t i = 0; i < m; ++i)
+                            target[static_cast<size_t>(at + i + c * rows)] = blk[static_cast<size_t>(c + i * n22)];
+                    at += m;
                 }
                 for (int64_t c = 0; c < n22; ++c)
                     for (int64_t i = 0; i < k11; ++i)
@@ -229,19 +452,37 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 fmm::ensure_nonempty_box_id_rank(id, n22);
                 const int64_t k22 = static_cast<int64_t>(id.skeleton_indices.size());
                 const int64_t r22 = static_cast<int64_t>(id.redundant_indices.size());
-                // ---- the new live set S' = S11 (its order), S22 (the ID's) and R22, as positions and slots
+                // nothing to sparsify: the box stays as it is (its live set
+                // unchanged, no records)
+                if (r22 == 0) {
+                    kept_points += k22;
+                    continue;
+                }
+                // the ID's skeleton and redundant columns in their order in S_old
+                // (T's rows and columns permuted alike): S_old is S11 then F22
+                // (compute_id_partial), so S' = S11, S22 keeps S_old's order, and
+                // with nothing sparsified S' is S_old - a live set the same size
+                // as before is then the same list, as the lazy fill's row lookup
+                // assumes
+                std::vector<int64_t> ps(static_cast<size_t>(k22)), pr_(static_cast<size_t>(r22));
+                for (int64_t i = 0; i < k22; ++i) ps[static_cast<size_t>(i)] = i;
+                for (int64_t j = 0; j < r22; ++j) pr_[static_cast<size_t>(j)] = j;
+                std::sort(ps.begin(), ps.end(), [&](int64_t x, int64_t y) { return id.skeleton_indices[static_cast<size_t>(x)] < id.skeleton_indices[static_cast<size_t>(y)]; });
+                std::sort(pr_.begin(), pr_.end(), [&](int64_t x, int64_t y) { return id.redundant_indices[static_cast<size_t>(x)] < id.redundant_indices[static_cast<size_t>(y)]; });
+                // ---- the new live set S' = S11, S22 and R22, as positions and slots
                 std::vector<int64_t> posS(pos11), posR;
-                for (int64_t s : id.skeleton_indices) posS.push_back(pos22[static_cast<size_t>(s)]);
-                for (int64_t s : id.redundant_indices) posR.push_back(pos22[static_cast<size_t>(s)]);
+                for (int64_t i = 0; i < k22; ++i) posS.push_back(pos22[static_cast<size_t>(id.skeleton_indices[static_cast<size_t>(ps[static_cast<size_t>(i)])])]);
+                for (int64_t j = 0; j < r22; ++j) posR.push_back(pos22[static_cast<size_t>(id.redundant_indices[static_cast<size_t>(pr_[static_cast<size_t>(j)])])]);
                 const int64_t kp = static_cast<int64_t>(posS.size());
                 auto& f = b.f22;
                 f.sparsified = true;
-                for (int64_t s : id.skeleton_indices) f.skeleton.push_back(S_old[static_cast<size_t>(pos22[static_cast<size_t>(s)])]);
-                for (int64_t s : id.redundant_indices) f.redundant.push_back(S_old[static_cast<size_t>(pos22[static_cast<size_t>(s)])]);
+                for (int64_t i = 0; i < k22; ++i) f.skeleton.push_back(S_old[static_cast<size_t>(posS[static_cast<size_t>(k11 + i)])]);
+                for (int64_t j = 0; j < r22; ++j) f.redundant.push_back(S_old[static_cast<size_t>(posR[static_cast<size_t>(j)])]);
                 // T over S' rows (zero on S11)
                 f.T.allocate(kp, r22, MS::FULL);
                 for (int64_t j = 0; j < r22; ++j)
-                    for (int64_t i = 0; i < k22; ++i) f.T.data[static_cast<size_t>(k11 + i + j * kp)] = id.interpolation(i, j);
+                    for (int64_t i = 0; i < k22; ++i)
+                        f.T.data[static_cast<size_t>(k11 + i + j * kp)] = id.interpolation(ps[static_cast<size_t>(i)], pr_[static_cast<size_t>(j)]);
                 const DataType* T = f.T.data.data();
                 // ---- the box's own blocks over (S', R): X_RR = A_RR - T^T A_SR - A_RS T + T^T A_SS T,
                 // X_RS = A_RS - T^T A_SS, X_SR = A_SR - A_SS T
@@ -271,7 +512,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 f.neighbor_f22_slots.assign(b.one_hop.size(), {});
                 int64_t total = 0;
                 for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {
-                    const auto& nS = near[idx].nb->skeleton_before_f22;
+                    const auto& nS = *near[idx].S_old;
                     for (int64_t q : near[idx].q22) f.neighbor_f22_slots[idx].push_back(nS[static_cast<size_t>(q)]);
                     f.neighbor_f22_counts[idx] = static_cast<int64_t>(near[idx].q22.size());
                     total += f.neighbor_f22_counts[idx];
@@ -282,21 +523,11 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {
                     const int64_t m = f.neighbor_f22_counts[idx];
                     if (m == 0) continue;
-                    auto* ns = a_ns_block(b, b.one_hop[idx]);
-                    auto* sn = a_sn_block(b, b.one_hop[idx]);
-                    if (ns == nullptr || sn == nullptr || !ns->a_ns_is_allocated() || !sn->A_SN.is_allocated()) {
-                        throw std::runtime_error("F22 phase: a near pair's views are missing (box " +
-                                                 std::to_string(b.morton_index) + ")");
-                    }
-                    std::vector<DataType> A_NR(static_cast<size_t>(m * r22)), A_NS(static_cast<size_t>(m * kp)),
-                        A_RN(static_cast<size_t>(r22 * m)), A_SN(static_cast<size_t>(kp * m));
-                    for (int64_t i = 0; i < m; ++i) {
-                        const int64_t q = near[idx].q22[static_cast<size_t>(i)];
-                        for (int64_t j = 0; j < r22; ++j) A_NR[static_cast<size_t>(i + j * m)] = ns->a_ns(q, posR[static_cast<size_t>(j)]);
-                        for (int64_t j = 0; j < kp; ++j) A_NS[static_cast<size_t>(i + j * m)] = ns->a_ns(q, posS[static_cast<size_t>(j)]);
-                        for (int64_t j = 0; j < r22; ++j) A_RN[static_cast<size_t>(j + i * r22)] = sn->A_SN(posR[static_cast<size_t>(j)], q);
-                        for (int64_t j = 0; j < kp; ++j) A_SN[static_cast<size_t>(j + i * kp)] = sn->A_SN(posS[static_cast<size_t>(j)], q);
-                    }
+                    // K(nb raw F22, b) over (posR, posS), K(b, nb raw F22) over (posR, posS)
+                    const auto& q22 = near[idx].q22;
+                    const auto KR = coupling_nb_b(idx, q22, posR), KS = coupling_nb_b(idx, q22, posS);    // m x r22, m x kp
+                    const auto LR = coupling_b_nb(idx, posR, q22), LS = coupling_b_nb(idx, posS, q22);    // r22 x m, kp x m
+                    std::vector<DataType> A_NR = KR, A_NS = KS, A_RN = LR, A_SN = LS;
                     partial_gemm<DataType>('N', 'N', m, r22, kp, DataType(-1), A_NS.data(), m, T, kp, DataType(1), A_NR.data(), m);
                     partial_gemm<DataType>('T', 'N', r22, m, kp, DataType(-1), T, kp, A_SN.data(), kp, DataType(1), A_RN.data(), r22);
                     for (int64_t j = 0; j < r22; ++j)
@@ -351,24 +582,30 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
         b.skeleton_indices.clear();
         for (int64_t q : posS) b.skeleton_indices.push_back(b.skeleton_before_f22[static_cast<size_t>(q)]);
     }
-    // ---- the neighbours' copies of the views: the sparsified boxes' rows
-    // and columns to their new live sets
+    // ---- the new live sets: this rank's boxes, and (several ranks) the
+    // other ranks' boxes this rank holds copies of
+    // morton -> the old live set's size and the kept positions in it
+    std::unordered_map<int64_t, std::pair<int64_t, std::vector<int64_t>>> kept_of;
+    for (size_t oi = 0; oi < occupied_local.size(); ++oi) {
+        const Box& b = level.local_boxes[static_cast<size_t>(occupied_local[oi])];
+        if (b.f22.sparsified) kept_of.emplace(b.morton_index, std::make_pair(static_cast<int64_t>(b.skeleton_before_f22.size()), kept[oi]));
+    }
+    if (tree->mpi_size > 1) partial_f22_publish(tree, level, level_comm, kept_of);
+    // ---- every box's views of its sparsified neighbours: their rows and
+    // columns to the new live sets
     for (int64_t li : occupied_local) {
         Box& c = level.local_boxes[static_cast<size_t>(li)];
         for (size_t idx = 0; idx < c.one_hop.size(); ++idx) {
-            Box* nb = level.find_local_box(c.one_hop[idx]);
-            if (nb == nullptr || !nb->f22.sparsified) continue;
-            std::vector<int64_t> pos;  // nb's new skeleton within its old one
-            const auto& old = nb->skeleton_before_f22;
-            for (int64_t s : nb->skeleton_indices) {
-                const auto it = std::find(old.begin(), old.end(), s);
-                if (it == old.end()) throw std::logic_error("F22 phase: a skeleton slot outside the old skeleton");
-                pos.push_back(static_cast<int64_t>(it - old.begin()));
-            }
+            const int64_t nm = c.one_hop[idx];
+            const auto kit = kept_of.find(nm);
+            if (kit == kept_of.end()) continue;
+            const int64_t n_old = kit->second.first;
+            const auto& pos = kit->second.second;
             const int64_t kn = static_cast<int64_t>(pos.size());
-            if (auto* sn = a_sn_block(c, nb->morton_index); sn != nullptr && sn->A_SN.is_allocated()) {  // c rows x nb cols
-                if (sn->A_SN.cols != static_cast<int64_t>(old.size())) {
-                    throw std::runtime_error("F22 phase: a neighbour's view is not over its old skeleton (columns)");
+            if (auto* sn = a_sn_block(c, nm); sn != nullptr && sn->A_SN.is_allocated()) {  // c rows x nb cols
+                if (sn->A_SN.cols != n_old) {
+                    throw std::runtime_error("F22 phase: box " + std::to_string(c.morton_index) + "'s view of " +
+                                             std::to_string(nm) + " is not over its old skeleton (columns)");
                 }
                 const int64_t m = sn->A_SN.rows;
                 std::vector<DataType> v(static_cast<size_t>(m * kn));
@@ -376,9 +613,10 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     for (int64_t i = 0; i < m; ++i) v[static_cast<size_t>(i + j * m)] = sn->A_SN(i, pos[static_cast<size_t>(j)]);
                 sn->A_SN.set_owned(m, kn, std::move(v), MS::FULL);
             }
-            if (auto* ns = a_ns_block(c, nb->morton_index); ns != nullptr && ns->a_ns_is_allocated()) {  // nb rows x c cols
-                if (ns->a_ns_rows() != static_cast<int64_t>(old.size())) {
-                    throw std::runtime_error("F22 phase: a neighbour's view is not over its old skeleton (rows)");
+            if (auto* ns = a_ns_block(c, nm); ns != nullptr && ns->a_ns_is_allocated()) {  // nb rows x c cols
+                if (ns->a_ns_rows() != n_old) {
+                    throw std::runtime_error("F22 phase: box " + std::to_string(c.morton_index) + "'s view of " +
+                                             std::to_string(nm) + " is not over its old skeleton (rows)");
                 }
                 const int64_t m = ns->a_ns_cols();
                 std::vector<DataType> v(static_cast<size_t>(kn * m));
@@ -388,10 +626,11 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
             }
         }
     }
+    int64_t counts[3] = {sparsified_boxes, sparsified_points, kept_points};
+    if (tree->mpi_size > 1) MPI_Allreduce(MPI_IN_PLACE, counts, 3, MPI_INT64_T, MPI_SUM, level_comm);
     if (print_detail) {
-        std::printf("  F22 phase: %lld boxes, %lld points sparsified, %lld kept\n",
-                    static_cast<long long>(sparsified_boxes), static_cast<long long>(sparsified_points),
-                    static_cast<long long>(kept_points));
+        std::printf("  F22 phase: %lld boxes, %lld points sparsified, %lld kept\n", static_cast<long long>(counts[0]),
+                    static_cast<long long>(counts[1]), static_cast<long long>(counts[2]));
     }
 }
 
@@ -575,124 +814,187 @@ void partial_f22_backward_level(fmm::TreeLevel<CoordType, DataType>& level,
     }
 }
 
+// Scratch solve records over a level's local boxes (the solve's layout:
+// the box's points x nrhs), zero or a copy of the solve's vectors.
+template<typename CoordType, typename DataType>
+std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>> partial_scratch(
+    fmm::ParallelTree<CoordType, DataType>* tree,
+    const std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>>* copy_of, int nrhs) {
+    int rank = 0;
+    MPI_Comm_rank(tree->comm, &rank);
+    std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>> v(static_cast<size_t>(tree->num_levels));
+    for (int l = 0; l < tree->num_levels; ++l) {
+        auto& level = tree->levels[static_cast<size_t>(l)];
+        if (!level.is_process_active) continue;
+        v[static_cast<size_t>(l)].resize(static_cast<size_t>(level.num_boxes_local));
+        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+            auto& r = v[static_cast<size_t>(l)][static_cast<size_t>(bi)];
+            r.initialize(box.morton_index, rank, box.num_points, nrhs);
+            if (copy_of != nullptr) r.left_side = (*copy_of)[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+        }
+    }
+    return v;
+}
+
 // The forward partial solve's output: from the swept vectors (kept), a
-// down-pass applying P22^T (x_R22 += T22^T x_S') to a copy, the leaves' F22
-// entries in F22 index order (replicated).
+// down-pass applying P22^T (x_R22 += T22^T x_S') to a copy, through the
+// solve's parent-to-children scatter (which places a parent's values at
+// its children's live sets, on their ranks); the leaves' F22 entries in
+// F22 index order, replicated.
 template<typename CoordType, typename DataType>
 void partial_forward_output(fmm::ParallelTree<CoordType, DataType>* tree,
                             const std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>>& solve_data,
                             int nrhs, std::vector<DataType>& out2) {
-    partial_require_single_rank(*tree, "the forward partial solve's output");
     const int64_t pc = tree->partial_count, n22 = tree->num_points - pc;
-    const int dimension = tree->dimension;
     const int leaf = tree->num_levels - 1;
-    std::vector<std::vector<std::vector<DataType>>> v(static_cast<size_t>(tree->num_levels));
-    for (int l = 0; l <= leaf; ++l) {
-        auto& level = tree->levels[static_cast<size_t>(l)];
-        v[static_cast<size_t>(l)].resize(static_cast<size_t>(level.num_boxes_local));
-        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi)
-            v[static_cast<size_t>(l)][static_cast<size_t>(bi)] = solve_data[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
-    }
+    auto v = partial_scratch(tree, &solve_data, nrhs);
     for (int l = 1; l <= leaf; ++l) {
         auto& level = tree->levels[static_cast<size_t>(l)];
-        auto& parent_level = tree->levels[static_cast<size_t>(l) - 1];
+        fmm::scatter_solution_to_children(level, tree->levels[static_cast<size_t>(l) - 1], v[static_cast<size_t>(l)],
+                                          v[static_cast<size_t>(l) - 1], tree->dimension, tree->comm);
+        if (!level.is_process_active) continue;
+#pragma omp parallel for schedule(dynamic, 16)
         for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
             const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            if (box.skeleton_indices.empty()) continue;
-            const int64_t parent = box.morton_index >> dimension;
-            const int64_t pbi = parent - parent_level.local_morton_start;
-            const auto* pbox = parent_level.find_local_box(parent);
-            if (pbox == nullptr) throw std::logic_error("partial_forward_output: a parent is not local");
-            const int64_t offset = partial_child_offset(level, box.morton_index, dimension);
-            auto& x = v[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-            const auto& px = v[static_cast<size_t>(l) - 1][static_cast<size_t>(pbi)];
-            const int64_t k = static_cast<int64_t>(box.skeleton_indices.size());
+            if (!box.f22.sparsified || box.f22.redundant.empty()) continue;
+            auto& x = v[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+            const int64_t n = box.num_points, kp = box.f22.T.rows, r = box.f22.T.cols;
+            std::vector<DataType> xs(static_cast<size_t>(kp * nrhs)), xr(static_cast<size_t>(r * nrhs));
             for (int c = 0; c < nrhs; ++c)
-                for (int64_t i = 0; i < k; ++i)
-                    x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * box.num_points)] =
-                        px[static_cast<size_t>(offset + i + c * pbox->num_points)];
-            if (box.f22.sparsified && !box.f22.redundant.empty()) {  // x_R22 += T22^T x_S'
-                const int64_t kp = box.f22.T.rows, r = box.f22.T.cols;
-                for (int c = 0; c < nrhs; ++c)
-                    for (int64_t j = 0; j < r; ++j) {
-                        DataType acc(0);
-                        for (int64_t i = 0; i < kp; ++i)
-                            acc += box.f22.T.data[static_cast<size_t>(i + j * kp)] *
-                                   x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * box.num_points)];
-                        x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * box.num_points)] += acc;
-                    }
-            }
+                for (int64_t i = 0; i < kp; ++i)
+                    xs[static_cast<size_t>(i + c * kp)] = x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)];
+            partial_gemm<DataType>('T', 'N', r, nrhs, kp, DataType(1), box.f22.T.data.data(), kp, xs.data(), kp, DataType(0),
+                                   xr.data(), r);
+            for (int c = 0; c < nrhs; ++c)
+                for (int64_t j = 0; j < r; ++j)
+                    x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * n)] += xr[static_cast<size_t>(j + c * r)];
         }
     }
     out2.assign(static_cast<size_t>(n22) * static_cast<size_t>(nrhs), DataType(0));
     auto& leaf_level = tree->levels[static_cast<size_t>(leaf)];
-    for (int64_t bi = 0; bi < leaf_level.num_boxes_local; ++bi) {
-        const auto& box = leaf_level.local_boxes[static_cast<size_t>(bi)];
-        const auto& x = v[static_cast<size_t>(leaf)][static_cast<size_t>(bi)];
-        for (int64_t s = 0; s < box.num_points; ++s) {
-            const int64_t id = box.point_indices[static_cast<size_t>(s)];
-            if (id < pc) continue;
-            for (int c = 0; c < nrhs; ++c)
-                out2[static_cast<size_t>((id - pc) + c * n22)] = x[static_cast<size_t>(s + c * box.num_points)];
+    if (leaf_level.is_process_active) {
+        for (int64_t bi = 0; bi < leaf_level.num_boxes_local; ++bi) {
+            const auto& box = leaf_level.local_boxes[static_cast<size_t>(bi)];
+            const auto& x = v[static_cast<size_t>(leaf)][static_cast<size_t>(bi)].left_side;
+            for (int64_t s = 0; s < box.num_points; ++s) {
+                const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                if (id < pc) continue;
+                for (int c = 0; c < nrhs; ++c)
+                    out2[static_cast<size_t>((id - pc) + c * n22)] = x[static_cast<size_t>(s + c * box.num_points)];
+            }
         }
+    }
+    if (tree->mpi_size > 1) {
+        MPI_Allreduce(MPI_IN_PLACE, out2.data(), static_cast<int>(out2.size()), partial_mpi_type<DataType>(), MPI_SUM,
+                      tree->comm);
     }
 }
 
 // The backward partial solve's input: x2 (F22 index order) placed at the
-// leaves and taken up with P22 (x_S' += T22 x_R22) into every level's F22
-// slots, the root's included; the F11 entries are left as they are.
+// leaves and taken up with P22 (x_S' += T22 x_R) through the solve's
+// children-to-parent gather on scratch vectors, then every level's F22
+// entries (the root's included) into the solve's vectors; the F11 entries
+// are left as the forward solve left them.
 template<typename CoordType, typename DataType>
 void partial_backward_input(fmm::ParallelTree<CoordType, DataType>* tree,
                             std::vector<std::vector<fmm::SolveDataRequest<CoordType, DataType>>>& solve_data,
                             int nrhs, const std::vector<DataType>& x2) {
-    partial_require_single_rank(*tree, "the backward partial solve's input");
     const int64_t pc = tree->partial_count, n22 = tree->num_points - pc;
-    const int dimension = tree->dimension;
     const int leaf = tree->num_levels - 1;
+    auto t = partial_scratch<CoordType, DataType>(tree, nullptr, nrhs);
     auto& leaf_level = tree->levels[static_cast<size_t>(leaf)];
-    for (int64_t bi = 0; bi < leaf_level.num_boxes_local; ++bi) {
-        const auto& box = leaf_level.local_boxes[static_cast<size_t>(bi)];
-        auto& x = solve_data[static_cast<size_t>(leaf)][static_cast<size_t>(bi)].left_side;
-        for (int64_t s = 0; s < box.num_points; ++s) {
-            const int64_t id = box.point_indices[static_cast<size_t>(s)];
-            if (id < pc) continue;
-            for (int c = 0; c < nrhs; ++c)
-                x[static_cast<size_t>(s + c * box.num_points)] = x2[static_cast<size_t>((id - pc) + c * n22)];
+    if (leaf_level.is_process_active) {
+        for (int64_t bi = 0; bi < leaf_level.num_boxes_local; ++bi) {
+            const auto& box = leaf_level.local_boxes[static_cast<size_t>(bi)];
+            auto& x = t[static_cast<size_t>(leaf)][static_cast<size_t>(bi)].left_side;
+            for (int64_t s = 0; s < box.num_points; ++s) {
+                const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                if (id < pc) continue;
+                for (int c = 0; c < nrhs; ++c)
+                    x[static_cast<size_t>(s + c * box.num_points)] = x2[static_cast<size_t>((id - pc) + c * n22)];
+            }
         }
     }
     for (int l = leaf; l >= 1; --l) {
         auto& level = tree->levels[static_cast<size_t>(l)];
-        auto& parent_level = tree->levels[static_cast<size_t>(l) - 1];
+        if (level.is_process_active) {
+#pragma omp parallel for schedule(dynamic, 16)
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                if (!box.f22.sparsified || box.f22.redundant.empty()) continue;
+                auto& x = t[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                const int64_t n = box.num_points, kp = box.f22.T.rows, r = box.f22.T.cols;
+                std::vector<DataType> xr(static_cast<size_t>(r * nrhs)), xs(static_cast<size_t>(kp * nrhs));
+                for (int c = 0; c < nrhs; ++c)
+                    for (int64_t j = 0; j < r; ++j)
+                        xr[static_cast<size_t>(j + c * r)] = x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * n)];
+                partial_gemm<DataType>('N', 'N', kp, nrhs, r, DataType(1), box.f22.T.data.data(), kp, xr.data(), r, DataType(0),
+                                       xs.data(), kp);
+                for (int c = 0; c < nrhs; ++c)
+                    for (int64_t i = 0; i < kp; ++i)
+                        x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)] += xs[static_cast<size_t>(i + c * kp)];
+            }
+        }
+        fmm::gather_skeleton_to_parent(level, tree->levels[static_cast<size_t>(l) - 1], t[static_cast<size_t>(l)],
+                                       t[static_cast<size_t>(l) - 1], tree->dimension, tree->comm);
+    }
+    for (int l = 0; l <= leaf; ++l) {
+        auto& level = tree->levels[static_cast<size_t>(l)];
+        if (!level.is_process_active) continue;
         for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
             const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            if (box.skeleton_indices.empty()) continue;
-            auto& x = solve_data[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
-            if (box.f22.sparsified && !box.f22.redundant.empty()) {  // x_S' += T22 x_R22
-                const int64_t kp = box.f22.T.rows, r = box.f22.T.cols;
-                for (int c = 0; c < nrhs; ++c)
-                    for (int64_t i = 0; i < kp; ++i) {
-                        DataType acc(0);
-                        for (int64_t j = 0; j < r; ++j)
-                            acc += box.f22.T.data[static_cast<size_t>(i + j * kp)] *
-                                   x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * box.num_points)];
-                        x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * box.num_points)] += acc;
-                    }
-            }
-            const int64_t parent = box.morton_index >> dimension;
-            const int64_t pbi = parent - parent_level.local_morton_start;
-            const auto* pbox = parent_level.find_local_box(parent);
-            if (pbox == nullptr) throw std::logic_error("partial_backward_input: a parent is not local");
-            const int64_t offset = partial_child_offset(level, box.morton_index, dimension);
-            auto& px = solve_data[static_cast<size_t>(l) - 1][static_cast<size_t>(pbi)].left_side;
-            const int64_t k = static_cast<int64_t>(box.skeleton_indices.size());
-            for (int64_t i = 0; i < k; ++i) {
-                const int64_t s = box.skeleton_indices[static_cast<size_t>(i)];
+            const auto& from = t[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+            auto& to = solve_data[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+            for (int64_t s = 0; s < box.num_points; ++s) {
                 if (box.point_indices[static_cast<size_t>(s)] < pc) continue;
                 for (int c = 0; c < nrhs; ++c)
-                    px[static_cast<size_t>(offset + i + c * pbox->num_points)] = x[static_cast<size_t>(s + c * box.num_points)];
+                    to[static_cast<size_t>(s + c * box.num_points)] = from[static_cast<size_t>(s + c * box.num_points)];
             }
         }
     }
+}
+
+// A byte exchange over comm: send[r] goes to rank r, the result's [r]
+// came from rank r (collective; empty buffers allowed).
+inline std::vector<std::vector<char>> partial_exchange(MPI_Comm comm, const std::vector<std::vector<char>>& send, int tag) {
+    int size = 1;
+    MPI_Comm_size(comm, &size);
+    std::vector<int64_t> scount(static_cast<size_t>(size)), rcount(static_cast<size_t>(size));
+    for (int r = 0; r < size; ++r) {
+        scount[static_cast<size_t>(r)] = static_cast<int64_t>(send[static_cast<size_t>(r)].size());
+        if (scount[static_cast<size_t>(r)] > INT32_MAX) throw std::runtime_error("partial exchange: a message over 2 GB");
+    }
+    MPI_Alltoall(scount.data(), 1, MPI_INT64_T, rcount.data(), 1, MPI_INT64_T, comm);
+    std::vector<std::vector<char>> recv(static_cast<size_t>(size));
+    std::vector<MPI_Request> reqs;
+    for (int r = 0; r < size; ++r) {
+        if (rcount[static_cast<size_t>(r)] == 0) continue;
+        recv[static_cast<size_t>(r)].resize(static_cast<size_t>(rcount[static_cast<size_t>(r)]));
+        reqs.emplace_back();
+        MPI_Irecv(recv[static_cast<size_t>(r)].data(), static_cast<int>(rcount[static_cast<size_t>(r)]), MPI_BYTE, r, tag, comm,
+                  &reqs.back());
+    }
+    for (int r = 0; r < size; ++r) {
+        if (scount[static_cast<size_t>(r)] == 0) continue;
+        reqs.emplace_back();
+        MPI_Isend(send[static_cast<size_t>(r)].data(), static_cast<int>(scount[static_cast<size_t>(r)]), MPI_BYTE, r, tag, comm,
+                  &reqs.back());
+    }
+    if (!reqs.empty()) MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
+    return recv;
+}
+
+template<typename T>
+void partial_put(std::vector<char>& buf, const T* v, size_t n) {
+    const size_t at = buf.size();
+    buf.resize(at + n * sizeof(T));
+    std::memcpy(buf.data() + at, v, n * sizeof(T));
+}
+template<typename T>
+const char* partial_get(const char* p, T* v, size_t n) {
+    std::memcpy(v, p, n * sizeof(T));
+    return p + n * sizeof(T);
 }
 
 // =====================================================================
@@ -786,30 +1088,42 @@ void partial_chain_parts(const fmm::BoxData<CoordType, DataType>& box, const std
 template<typename CoordType, typename DataType>
 void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const int64_t* rows, int64_t nrows,
                            const int64_t* cols, int64_t ncols, DataType* out) {
+    // Collective over the tree's communicator, every rank passing the same
+    // rows and cols, the result replicated.  A rank holds the blocks of its
+    // boxes; a level's terms are computed once: a box's own terms and its
+    // X_RN terms by its owner (the neighbours' column blocks received), its
+    // X_NR terms by the owner of the column box (the neighbours' row blocks
+    // received), the root's term by the root's owner; the blocks go to the
+    // parents' owner between levels, and a sum assembles the result.
     using Block = PartialChainBlock<DataType>;
-    partial_require_single_rank(tree, "the Schur complement's entries");
     auto& pr = tree.partial_root;
     if (pr.cb_released) throw std::runtime_error("partial Schur: released (c_bpack_partial_schur_release)");
     const int64_t pc = tree.partial_count, n22 = tree.num_points - pc;
     const int dimension = tree.dimension;
     const int leaf = tree.num_levels - 1;
+    int me = 0, nranks = 1;
+    MPI_Comm_rank(tree.comm, &me);
+    MPI_Comm_size(tree.comm, &nranks);
     std::fill(out, out + nrows * ncols, DataType(0));
     if (nrows == 0 || ncols == 0) return;
     if (pr.leaf_box.empty() && n22 > 0) {
         pr.leaf_box.assign(static_cast<size_t>(n22), -1);
         pr.leaf_slot.assign(static_cast<size_t>(n22), -1);
         const auto& level = tree.levels[static_cast<size_t>(leaf)];
-        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            for (int64_t s = 0; s < box.num_points; ++s) {
-                const int64_t id = box.point_indices[static_cast<size_t>(s)];
-                if (id < pc) continue;
-                pr.leaf_box[static_cast<size_t>(id - pc)] = bi;
-                pr.leaf_slot[static_cast<size_t>(id - pc)] = s;
+        if (level.is_process_active) {
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                for (int64_t s = 0; s < box.num_points; ++s) {
+                    const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                    if (id < pc) continue;
+                    pr.leaf_box[static_cast<size_t>(id - pc)] = bi;
+                    pr.leaf_slot[static_cast<size_t>(id - pc)] = s;
+                }
             }
         }
     }
-    // the two sides: distinct points, their requested positions, the blocks of the current level
+    // the two sides: distinct points (the same on every rank), their requested
+    // positions, the blocks of this rank's boxes at the current level
     struct Side {
         std::vector<int64_t> points;
         std::vector<std::vector<int64_t>> positions;
@@ -833,7 +1147,10 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
         for (size_t m = 0; m < side.points.size(); ++m) {
             const int64_t f = side.points[m];
             const int64_t b = pr.leaf_box[static_cast<size_t>(f)];
-            if (b < 0) throw std::runtime_error("partial Schur: a point is not in a local leaf");
+            if (b < 0) {
+                if (nranks == 1) throw std::runtime_error("partial Schur: a point is not in a local leaf");
+                continue;  // another rank's
+            }
             auto it = block_of.find(b);
             if (it == block_of.end()) {
                 it = block_of.emplace(b, side.blocks.size()).first;
@@ -853,58 +1170,68 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
     };
     Side R = make_side(rows, nrows), C = make_side(cols, ncols);
     // G (|members_i| x |members_j|) into out at the requested positions
-    auto scatter = [&](const Block& bi, const Block& bj, const std::vector<DataType>& G) {
-        const int64_t ni = static_cast<int64_t>(bi.members.size());
-        for (size_t c = 0; c < bj.members.size(); ++c)
-            for (int64_t jj : C.positions[static_cast<size_t>(bj.members[c])])
+    auto scatter = [&](const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const std::vector<DataType>& G) {
+        const int64_t ni = static_cast<int64_t>(mi.size());
+        for (size_t c = 0; c < mj.size(); ++c)
+            for (int64_t jj : C.positions[static_cast<size_t>(mj[c])])
                 for (int64_t r = 0; r < ni; ++r) {
                     const DataType g = G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
-                    for (int64_t ii : R.positions[static_cast<size_t>(bi.members[static_cast<size_t>(r)])])
+                    for (int64_t ii : R.positions[static_cast<size_t>(mi[static_cast<size_t>(r)])])
                         out[ii + jj * nrows] += g;
                 }
     };
+    // a block of another rank's box: its members, raw rows and values, w part, and the box's live set
+    struct Remote {
+        int64_t morton = -1, num_points = 0;
+        std::vector<int64_t> members, rows, wrows, skeleton;
+        std::vector<DataType> v, wv;
+        std::vector<int32_t> rowpos, wpos;
+    };
     for (int l = leaf; l >= 0; --l) {
         auto& level = tree.levels[static_cast<size_t>(l)];
+        const bool active = level.is_process_active;
         if (l == 0) {
             // the root: v_i^T CB_root v_j over the root's F22 slots
-            const auto& root = level.local_boxes[0];
-            std::vector<int64_t> pos22(static_cast<size_t>(root.num_points), -1);
-            for (int64_t a = 0; a < pr.n22; ++a) pos22[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)])] = a;
-            auto f22_part = [&](const Block& b, std::vector<int64_t>& a, std::vector<DataType>& v) {
-                const int64_t nr = static_cast<int64_t>(b.rows.size()), n = static_cast<int64_t>(b.members.size());
-                std::vector<int64_t> t;
-                for (int64_t q = 0; q < nr; ++q) {
-                    const int64_t p = pos22[static_cast<size_t>(b.rows[static_cast<size_t>(q)])];
-                    if (p >= 0) { a.push_back(p); t.push_back(q); }
-                }
-                const int64_t na = static_cast<int64_t>(a.size());
-                v.resize(static_cast<size_t>(na * n));
-                for (int64_t c = 0; c < n; ++c)
-                    for (int64_t i = 0; i < na; ++i) v[static_cast<size_t>(i + c * na)] = b.v[static_cast<size_t>(t[static_cast<size_t>(i)] + c * nr)];
-            };
-            std::vector<std::vector<int64_t>> ca(C.blocks.size());
-            std::vector<std::vector<DataType>> cv(C.blocks.size());
-            for (size_t j = 0; j < C.blocks.size(); ++j) f22_part(C.blocks[j], ca[j], cv[j]);
+            if (pr.active) {
+                const auto& root = level.local_boxes[0];
+                std::vector<int64_t> pos22(static_cast<size_t>(root.num_points), -1);
+                for (int64_t a = 0; a < pr.n22; ++a) pos22[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)])] = a;
+                auto f22_part = [&](const Block& b, std::vector<int64_t>& a, std::vector<DataType>& v) {
+                    const int64_t nr = static_cast<int64_t>(b.rows.size()), n = static_cast<int64_t>(b.members.size());
+                    std::vector<int64_t> t;
+                    for (int64_t q = 0; q < nr; ++q) {
+                        const int64_t p = pos22[static_cast<size_t>(b.rows[static_cast<size_t>(q)])];
+                        if (p >= 0) { a.push_back(p); t.push_back(q); }
+                    }
+                    const int64_t na = static_cast<int64_t>(a.size());
+                    v.resize(static_cast<size_t>(na * n));
+                    for (int64_t c = 0; c < n; ++c)
+                        for (int64_t i = 0; i < na; ++i) v[static_cast<size_t>(i + c * na)] = b.v[static_cast<size_t>(t[static_cast<size_t>(i)] + c * nr)];
+                };
+                std::vector<std::vector<int64_t>> ca(C.blocks.size());
+                std::vector<std::vector<DataType>> cv(C.blocks.size());
+                for (size_t j = 0; j < C.blocks.size(); ++j) f22_part(C.blocks[j], ca[j], cv[j]);
 #pragma omp parallel for schedule(dynamic, 1)
-            for (size_t i = 0; i < R.blocks.size(); ++i) {
-                std::vector<int64_t> ai;
-                std::vector<DataType> vi, M, tmp, G;
-                f22_part(R.blocks[i], ai, vi);
-                const int64_t na = static_cast<int64_t>(ai.size()), ni = static_cast<int64_t>(R.blocks[i].members.size());
-                if (na == 0) continue;
-                for (size_t j = 0; j < C.blocks.size(); ++j) {
-                    const int64_t nb = static_cast<int64_t>(ca[j].size()), nj = static_cast<int64_t>(C.blocks[j].members.size());
-                    if (nb == 0) continue;
-                    M.resize(static_cast<size_t>(na * nb));
-                    for (int64_t c = 0; c < nb; ++c)
-                        for (int64_t r = 0; r < na; ++r)
-                            M[static_cast<size_t>(r + c * na)] =
-                                pr.cb.data[static_cast<size_t>(ai[static_cast<size_t>(r)] + ca[j][static_cast<size_t>(c)] * pr.cb.lda)];
-                    tmp.resize(static_cast<size_t>(na * nj));
-                    partial_gemm<DataType>('N', 'N', na, nj, nb, DataType(1), M.data(), na, cv[j].data(), nb, DataType(0), tmp.data(), na);
-                    G.assign(static_cast<size_t>(ni * nj), DataType(0));
-                    partial_gemm<DataType>('T', 'N', ni, nj, na, DataType(1), vi.data(), na, tmp.data(), na, DataType(0), G.data(), ni);
-                    scatter(R.blocks[i], C.blocks[j], G);
+                for (size_t i = 0; i < R.blocks.size(); ++i) {
+                    std::vector<int64_t> ai;
+                    std::vector<DataType> vi, M, tmp, G;
+                    f22_part(R.blocks[i], ai, vi);
+                    const int64_t na = static_cast<int64_t>(ai.size()), ni = static_cast<int64_t>(R.blocks[i].members.size());
+                    if (na == 0) continue;
+                    for (size_t j = 0; j < C.blocks.size(); ++j) {
+                        const int64_t nb = static_cast<int64_t>(ca[j].size()), nj = static_cast<int64_t>(C.blocks[j].members.size());
+                        if (nb == 0) continue;
+                        M.resize(static_cast<size_t>(na * nb));
+                        for (int64_t c = 0; c < nb; ++c)
+                            for (int64_t r = 0; r < na; ++r)
+                                M[static_cast<size_t>(r + c * na)] =
+                                    pr.cb.data[static_cast<size_t>(ai[static_cast<size_t>(r)] + ca[j][static_cast<size_t>(c)] * pr.cb.lda)];
+                        tmp.resize(static_cast<size_t>(na * nj));
+                        partial_gemm<DataType>('N', 'N', na, nj, nb, DataType(1), M.data(), na, cv[j].data(), nb, DataType(0), tmp.data(), na);
+                        G.assign(static_cast<size_t>(ni * nj), DataType(0));
+                        partial_gemm<DataType>('T', 'N', ni, nj, na, DataType(1), vi.data(), na, tmp.data(), na, DataType(0), G.data(), ni);
+                        scatter(R.blocks[i].members, C.blocks[j].members, G);
+                    }
                 }
             }
             break;
@@ -935,29 +1262,145 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
         }
         // the level's terms
         if (l >= 2) {
-            std::unordered_map<int64_t, std::vector<size_t>> col_by_box;
-            for (size_t j = 0; j < C.blocks.size(); ++j) col_by_box[C.blocks[j].box].push_back(j);
-#pragma omp parallel for schedule(dynamic, 1)
-            for (size_t i = 0; i < R.blocks.size(); ++i) {
-                const Block& bi = R.blocks[i];
-                const auto& boxI = level.local_boxes[static_cast<size_t>(bi.box)];
-                const auto& fi = boxI.f22;
-                const bool own_i = fi.sparsified && !fi.redundant.empty() && !bi.ridx.empty();
-                const int64_t ni = static_cast<int64_t>(bi.members.size()), ri = static_cast<int64_t>(bi.ridx.size());
-                std::vector<DataType> X, tmp, G, V;
-                auto pair_terms = [&](int64_t nb_local, int64_t idx_in_i) {
-                    const auto it = col_by_box.find(nb_local);
-                    if (it == col_by_box.end()) return;
-                    const auto& boxJ = level.local_boxes[static_cast<size_t>(nb_local)];
+            // this rank's blocks to the owners of their boxes' remote neighbours
+            std::vector<std::vector<char>> send(static_cast<size_t>(nranks));
+            if (active) {
+                for (int side_id = 0; side_id < 2; ++side_id) {
+                    const Side& side = side_id == 0 ? R : C;
+                    for (const auto& b : side.blocks) {
+                        const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
+                        std::set<int> dest;
+                        for (int64_t nm : box.one_hop)
+                            if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
+                        if (dest.empty()) continue;
+                        std::vector<char> msg;
+                        const int64_t head[7] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
+                                                 static_cast<int64_t>(b.rows.size()), static_cast<int64_t>(b.wrows.size()),
+                                                 static_cast<int64_t>(box.skeleton_indices.size())};
+                        partial_put(msg, head, 7);
+                        partial_put(msg, b.members.data(), b.members.size());
+                        partial_put(msg, b.rows.data(), b.rows.size());
+                        partial_put(msg, b.v.data(), b.v.size());
+                        partial_put(msg, b.wrows.data(), b.wrows.size());
+                        partial_put(msg, b.wv.data(), b.wv.size());
+                        partial_put(msg, box.skeleton_indices.data(), box.skeleton_indices.size());
+                        for (int r : dest) send[static_cast<size_t>(r)].insert(send[static_cast<size_t>(r)].end(), msg.begin(), msg.end());
+                    }
+                }
+            }
+            const auto recv = partial_exchange(tree.comm, send, 620);
+            std::vector<Remote> remote_rows, remote_cols;
+            for (const auto& buf : recv) {
+                for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+                    int64_t head[7];
+                    p = partial_get(p, head, 7);
+                    Remote rb;
+                    rb.morton = head[1];
+                    rb.num_points = head[2];
+                    const int64_t nm = head[3], nr = head[4], nw = head[5], kp = head[6];
+                    rb.members.resize(static_cast<size_t>(nm));
+                    rb.rows.resize(static_cast<size_t>(nr));
+                    rb.v.resize(static_cast<size_t>(nr * nm));
+                    rb.wrows.resize(static_cast<size_t>(nw));
+                    rb.wv.resize(static_cast<size_t>(nw * nm));
+                    rb.skeleton.resize(static_cast<size_t>(kp));
+                    p = partial_get(p, rb.members.data(), rb.members.size());
+                    p = partial_get(p, rb.rows.data(), rb.rows.size());
+                    p = partial_get(p, rb.v.data(), rb.v.size());
+                    p = partial_get(p, rb.wrows.data(), rb.wrows.size());
+                    p = partial_get(p, rb.wv.data(), rb.wv.size());
+                    p = partial_get(p, rb.skeleton.data(), rb.skeleton.size());
+                    rb.rowpos.assign(static_cast<size_t>(rb.num_points), -1);
+                    for (int64_t t = 0; t < nr; ++t) rb.rowpos[static_cast<size_t>(rb.rows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
+                    rb.wpos.assign(static_cast<size_t>(kp), -1);
+                    for (int64_t t = 0; t < nw; ++t) rb.wpos[static_cast<size_t>(rb.wrows[static_cast<size_t>(t)])] = static_cast<int32_t>(t);
+                    (head[0] == 0 ? remote_rows : remote_cols).push_back(std::move(rb));
+                }
+            }
+            if (active) {
+                // the column blocks by box (Morton): this rank's (index) and received (index into remote_cols)
+                std::unordered_map<int64_t, std::vector<size_t>> col_by_box, remote_col_by_box;
+                for (size_t j = 0; j < C.blocks.size(); ++j)
+                    col_by_box[level.local_boxes[static_cast<size_t>(C.blocks[j].box)].morton_index].push_back(j);
+                for (size_t j = 0; j < remote_cols.size(); ++j) remote_col_by_box[remote_cols[j].morton].push_back(j);
+                // X_RN_bi(ri, bj raw slots in the column block's rows) times its raw values: G += vp_i^T (X V)
+                auto rn_term = [&](const Block& bi, const typename fmm::BoxData<CoordType, DataType>::F22Part& fi, int64_t idx_in_i,
+                                   const std::vector<int32_t>& rowpos,
+                                   const std::vector<DataType>& vj, int64_t nrj, int64_t nj, std::vector<DataType>& G) {
+                    const int64_t ni = static_cast<int64_t>(bi.members.size()), ri = static_cast<int64_t>(bi.ridx.size());
+                    const int64_t r = static_cast<int64_t>(fi.redundant.size());
+                    const int64_t m = fi.neighbor_f22_counts[static_cast<size_t>(idx_in_i)];
+                    if (m == 0 || ri == 0) return false;
+                    int64_t col0 = 0;
+                    for (int64_t q = 0; q < idx_in_i; ++q) col0 += fi.neighbor_f22_counts[static_cast<size_t>(q)];
+                    const auto& slots = fi.neighbor_f22_slots[static_cast<size_t>(idx_in_i)];
+                    std::vector<int64_t> cpos, tpos;
+                    for (int64_t c = 0; c < m; ++c) {
+                        const int32_t t = rowpos[static_cast<size_t>(slots[static_cast<size_t>(c)])];
+                        if (t >= 0) { cpos.push_back(col0 + c); tpos.push_back(t); }
+                    }
+                    const int64_t nc = static_cast<int64_t>(cpos.size());
+                    if (nc == 0) return false;
+                    std::vector<DataType> X(static_cast<size_t>(ri * nc)), V(static_cast<size_t>(nc * nj)), tmp(static_cast<size_t>(ri * nj));
+                    for (int64_t c = 0; c < nc; ++c)
+                        for (int64_t a = 0; a < ri; ++a)
+                            X[static_cast<size_t>(a + c * ri)] = fi.X_RN.data[static_cast<size_t>(bi.ridx[static_cast<size_t>(a)] + cpos[static_cast<size_t>(c)] * r)];
+                    for (int64_t c = 0; c < nj; ++c)
+                        for (int64_t q = 0; q < nc; ++q) V[static_cast<size_t>(q + c * nc)] = vj[static_cast<size_t>(tpos[static_cast<size_t>(q)] + c * nrj)];
+                    partial_gemm<DataType>('N', 'N', ri, nj, nc, DataType(1), X.data(), ri, V.data(), nc, DataType(0), tmp.data(), ri);
+                    partial_gemm<DataType>('T', 'N', ni, nj, ri, DataType(1), bi.vp.data(), ri, tmp.data(), ri, DataType(1), G.data(), ni);
+                    return true;
+                };
+                // X_NR_bj(bi raw slots in the row block's w rows, rj) times vp_j: G += wv_i^T (X vp_j)
+                auto nr_term = [&](const std::vector<int32_t>& s_of_i, const std::vector<int32_t>& wpos_i, const std::vector<DataType>& wv_i,
+                                   int64_t nwi, int64_t ni, int64_t morton_i, const fmm::BoxData<CoordType, DataType>& boxJ, const Block& bj,
+                                   std::vector<DataType>& G) {
                     const auto& fj = boxJ.f22;
-                    for (size_t jb : it->second) {
-                        const Block& bj = C.blocks[jb];
-                        const int64_t nj = static_cast<int64_t>(bj.members.size()), rj = static_cast<int64_t>(bj.ridx.size());
-                        const bool own_j = fj.sparsified && !fj.redundant.empty() && rj > 0;
-                        G.assign(static_cast<size_t>(ni * nj), DataType(0));
-                        bool any = false;
-                        if (nb_local == bi.box) {
-                            const int64_t r = static_cast<int64_t>(fi.redundant.size()), kp = static_cast<int64_t>(boxI.skeleton_indices.size());
+                    const int64_t nj = static_cast<int64_t>(bj.members.size()), rj = static_cast<int64_t>(bj.ridx.size());
+                    const auto itb = std::find(boxJ.one_hop.begin(), boxJ.one_hop.end(), morton_i);
+                    if (itb == boxJ.one_hop.end()) return false;
+                    const size_t idi = static_cast<size_t>(itb - boxJ.one_hop.begin());
+                    const int64_t m = fj.neighbor_f22_counts[idi], total = fj.X_NR.rows;
+                    int64_t row0 = 0;
+                    for (size_t q = 0; q < idi; ++q) row0 += fj.neighbor_f22_counts[q];
+                    const auto& slots = fj.neighbor_f22_slots[idi];
+                    std::vector<int64_t> crow, wposl;
+                    for (int64_t c = 0; c < m; ++c) {
+                        const int32_t sp = s_of_i[static_cast<size_t>(slots[static_cast<size_t>(c)])];
+                        if (sp < 0) continue;  // in R_bi: the X_RN term
+                        const int32_t t = wpos_i[static_cast<size_t>(sp)];
+                        if (t >= 0) { crow.push_back(row0 + c); wposl.push_back(t); }
+                    }
+                    const int64_t nc = static_cast<int64_t>(crow.size());
+                    if (nc == 0) return false;
+                    std::vector<DataType> X(static_cast<size_t>(nc * rj)), V(static_cast<size_t>(nc * ni)), tmp(static_cast<size_t>(nc * nj));
+                    for (int64_t c = 0; c < rj; ++c)
+                        for (int64_t q = 0; q < nc; ++q)
+                            X[static_cast<size_t>(q + c * nc)] = fj.X_NR.data[static_cast<size_t>(crow[static_cast<size_t>(q)] + bj.ridx[static_cast<size_t>(c)] * total)];
+                    for (int64_t c = 0; c < ni; ++c)
+                        for (int64_t q = 0; q < nc; ++q) V[static_cast<size_t>(q + c * nc)] = wv_i[static_cast<size_t>(wposl[static_cast<size_t>(q)] + c * nwi)];
+                    partial_gemm<DataType>('N', 'N', nc, nj, rj, DataType(1), X.data(), nc, bj.vp.data(), rj, DataType(0), tmp.data(), nc);
+                    partial_gemm<DataType>('T', 'N', ni, nj, nc, DataType(1), V.data(), nc, tmp.data(), nc, DataType(1), G.data(), ni);
+                    return true;
+                };
+                // this rank's row blocks: own terms, X_RN terms with any column block, X_NR terms with this rank's
+#pragma omp parallel for schedule(dynamic, 1)
+                for (size_t i = 0; i < R.blocks.size(); ++i) {
+                    const Block& bi = R.blocks[i];
+                    const auto& boxI = level.local_boxes[static_cast<size_t>(bi.box)];
+                    const auto& fi = boxI.f22;
+                    const bool own_i = fi.sparsified && !fi.redundant.empty() && !bi.ridx.empty();
+                    const int64_t ni = static_cast<int64_t>(bi.members.size()), ri = static_cast<int64_t>(bi.ridx.size());
+                    const auto& s_of_i = maps.at(bi.box).first;
+                    std::vector<DataType> X, tmp, G;
+                    // the same box
+                    if (const auto it = col_by_box.find(boxI.morton_index); it != col_by_box.end()) {
+                        const int64_t r = static_cast<int64_t>(fi.redundant.size()), kp = static_cast<int64_t>(boxI.skeleton_indices.size());
+                        for (size_t jb : it->second) {
+                            const Block& bj = C.blocks[jb];
+                            const int64_t nj = static_cast<int64_t>(bj.members.size()), rj = static_cast<int64_t>(bj.ridx.size());
+                            G.assign(static_cast<size_t>(ni * nj), DataType(0));
+                            bool any = false;
                             if (own_i) {
                                 // tmp = X_RR(ri, rj) vp_j + X_RS(ri, wj) wv_j;  G += vp_i^T tmp
                                 tmp.assign(static_cast<size_t>(ri * nj), DataType(0));
@@ -994,97 +1437,81 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                                 partial_gemm<DataType>('T', 'N', ni, nj, wi, DataType(1), bi.wv.data(), wi, tmp.data(), wi, DataType(1), G.data(), ni);
                                 any = true;
                             }
-                        } else {
-                            if (own_i && fi.neighbor_f22_counts[static_cast<size_t>(idx_in_i)] > 0) {
-                                // G += vp_i^T X_RN_bi(ri, bj raw slots in bj's rows) v_j
-                                const int64_t r = static_cast<int64_t>(fi.redundant.size());
-                                const int64_t m = fi.neighbor_f22_counts[static_cast<size_t>(idx_in_i)];
-                                int64_t col0 = 0;
-                                for (int64_t q = 0; q < idx_in_i; ++q) col0 += fi.neighbor_f22_counts[static_cast<size_t>(q)];
-                                const auto& slots = fi.neighbor_f22_slots[static_cast<size_t>(idx_in_i)];
-                                std::vector<int64_t> cpos, tpos;
-                                for (int64_t c = 0; c < m; ++c) {
-                                    const int32_t t = bj.rowpos[static_cast<size_t>(slots[static_cast<size_t>(c)])];
-                                    if (t >= 0) { cpos.push_back(col0 + c); tpos.push_back(t); }
-                                }
-                                const int64_t nc = static_cast<int64_t>(cpos.size());
-                                if (nc > 0) {
-                                    X.resize(static_cast<size_t>(ri * nc));
-                                    for (int64_t c = 0; c < nc; ++c)
-                                        for (int64_t a = 0; a < ri; ++a)
-                                            X[static_cast<size_t>(a + c * ri)] = fi.X_RN.data[static_cast<size_t>(
-                                                bi.ridx[static_cast<size_t>(a)] + cpos[static_cast<size_t>(c)] * r)];
-                                    const int64_t nrj = static_cast<int64_t>(bj.rows.size());
-                                    V.resize(static_cast<size_t>(nc * nj));
-                                    for (int64_t c = 0; c < nj; ++c)
-                                        for (int64_t q = 0; q < nc; ++q)
-                                            V[static_cast<size_t>(q + c * nc)] = bj.v[static_cast<size_t>(tpos[static_cast<size_t>(q)] + c * nrj)];
-                                    tmp.resize(static_cast<size_t>(ri * nj));
-                                    partial_gemm<DataType>('N', 'N', ri, nj, nc, DataType(1), X.data(), ri, V.data(), nc, DataType(0), tmp.data(), ri);
-                                    partial_gemm<DataType>('T', 'N', ni, nj, ri, DataType(1), bi.vp.data(), ri, tmp.data(), ri, DataType(1), G.data(), ni);
-                                    any = true;
-                                }
+                            if (any) scatter(bi.members, bj.members, G);
+                        }
+                    }
+                    // the one-hop neighbours
+                    for (size_t q = 0; q < boxI.one_hop.size(); ++q) {
+                        const int64_t nm = boxI.one_hop[q];
+                        if (level.is_box_on_process(nm)) {
+                            const auto it = col_by_box.find(nm);
+                            if (it == col_by_box.end()) continue;
+                            const auto& boxJ = level.local_boxes[static_cast<size_t>(nm - level.local_morton_start)];
+                            const bool sp_j = boxJ.f22.sparsified && !boxJ.f22.redundant.empty();
+                            for (size_t jb : it->second) {
+                                const Block& bj = C.blocks[jb];
+                                const int64_t nj = static_cast<int64_t>(bj.members.size());
+                                G.assign(static_cast<size_t>(ni * nj), DataType(0));
+                                bool any = false;
+                                if (own_i) any |= rn_term(bi, fi, static_cast<int64_t>(q), bj.rowpos, bj.v, static_cast<int64_t>(bj.rows.size()), nj, G);
+                                if (sp_j && !bj.ridx.empty() && !bi.wrows.empty())
+                                    any |= nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, boxI.morton_index, boxJ, bj, G);
+                                if (any) scatter(bi.members, bj.members, G);
                             }
-                            if (own_j && !bi.wrows.empty()) {
-                                // G += wv_i^T X_NR_bj(bi raw slots in bi's w rows, rj) vp_j
-                                const auto itb = std::find(boxJ.one_hop.begin(), boxJ.one_hop.end(), boxI.morton_index);
-                                if (itb != boxJ.one_hop.end()) {
-                                    const size_t idi = static_cast<size_t>(itb - boxJ.one_hop.begin());
-                                    const int64_t m = fj.neighbor_f22_counts[idi], total = fj.X_NR.rows;
-                                    int64_t row0 = 0;
-                                    for (size_t q = 0; q < idi; ++q) row0 += fj.neighbor_f22_counts[q];
-                                    const auto& slots = fj.neighbor_f22_slots[idi];
-                                    const auto& s_of = maps.at(bi.box).first;
-                                    std::vector<int64_t> crow, wposl;
-                                    for (int64_t c = 0; c < m; ++c) {
-                                        const int32_t sp = s_of[static_cast<size_t>(slots[static_cast<size_t>(c)])];
-                                        if (sp < 0) continue;  // in R_bi: the X_RN term
-                                        const int32_t t = bi.wpos[static_cast<size_t>(sp)];
-                                        if (t >= 0) { crow.push_back(row0 + c); wposl.push_back(t); }
-                                    }
-                                    const int64_t nc = static_cast<int64_t>(crow.size());
-                                    if (nc > 0) {
-                                        X.resize(static_cast<size_t>(nc * rj));
-                                        for (int64_t c = 0; c < rj; ++c)
-                                            for (int64_t q = 0; q < nc; ++q)
-                                                X[static_cast<size_t>(q + c * nc)] = fj.X_NR.data[static_cast<size_t>(
-                                                    crow[static_cast<size_t>(q)] + bj.ridx[static_cast<size_t>(c)] * total)];
-                                        const int64_t nwi = static_cast<int64_t>(bi.wrows.size());
-                                        V.resize(static_cast<size_t>(nc * ni));
-                                        for (int64_t c = 0; c < ni; ++c)
-                                            for (int64_t q = 0; q < nc; ++q)
-                                                V[static_cast<size_t>(q + c * nc)] = bi.wv[static_cast<size_t>(wposl[static_cast<size_t>(q)] + c * nwi)];
-                                        tmp.resize(static_cast<size_t>(nc * nj));
-                                        partial_gemm<DataType>('N', 'N', nc, nj, rj, DataType(1), X.data(), nc, bj.vp.data(), rj, DataType(0), tmp.data(), nc);
-                                        partial_gemm<DataType>('T', 'N', ni, nj, nc, DataType(1), V.data(), nc, tmp.data(), nc, DataType(1), G.data(), ni);
-                                        any = true;
-                                    }
-                                }
+                        } else if (own_i) {
+                            // a remote column box: its X_NR terms are its owner's
+                            const auto it = remote_col_by_box.find(nm);
+                            if (it == remote_col_by_box.end()) continue;
+                            for (size_t jb : it->second) {
+                                const Remote& bj = remote_cols[jb];
+                                const int64_t nj = static_cast<int64_t>(bj.members.size());
+                                G.assign(static_cast<size_t>(ni * nj), DataType(0));
+                                if (rn_term(bi, fi, static_cast<int64_t>(q), bj.rowpos, bj.v, static_cast<int64_t>(bj.rows.size()), nj, G))
+                                    scatter(bi.members, bj.members, G);
                             }
                         }
-                        if (any) scatter(bi, bj, G);
                     }
-                };
-                pair_terms(bi.box, -1);
-                for (size_t q = 0; q < boxI.one_hop.size(); ++q) {
-                    const int64_t nb = boxI.one_hop[q];
-                    if (!level.is_box_on_process(nb)) throw std::runtime_error("partial Schur: a neighbour is not local");
-                    pair_terms(nb - level.local_morton_start, static_cast<int64_t>(q));
+                }
+                // received row blocks: their X_NR terms with this rank's column blocks
+#pragma omp parallel for schedule(dynamic, 1)
+                for (size_t i = 0; i < remote_rows.size(); ++i) {
+                    const Remote& bi = remote_rows[i];
+                    if (bi.wrows.empty()) continue;
+                    std::vector<int32_t> s_of_i(static_cast<size_t>(bi.num_points), -1);
+                    for (size_t t = 0; t < bi.skeleton.size(); ++t) s_of_i[static_cast<size_t>(bi.skeleton[t])] = static_cast<int32_t>(t);
+                    const int64_t ni = static_cast<int64_t>(bi.members.size());
+                    std::vector<DataType> G;
+                    // the column boxes of this rank among the row box's neighbours (they list it)
+                    for (const auto& kv : col_by_box) {
+                        const auto& boxJ = level.local_boxes[static_cast<size_t>(kv.first - level.local_morton_start)];
+                        if (!(boxJ.f22.sparsified && !boxJ.f22.redundant.empty())) continue;
+                        if (std::find(boxJ.one_hop.begin(), boxJ.one_hop.end(), bi.morton) == boxJ.one_hop.end()) continue;
+                        for (size_t jb : kv.second) {
+                            const Block& bj = C.blocks[jb];
+                            if (bj.ridx.empty()) continue;
+                            G.assign(static_cast<size_t>(ni * static_cast<int64_t>(bj.members.size())), DataType(0));
+                            if (nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, bi.morton, boxJ, bj, G))
+                                scatter(bi.members, bj.members, G);
+                        }
+                    }
                 }
             }
         }
         // the parent blocks: each block's w part at its box's offset; the dense
-        // parts of one box's blocks share their rows and merge
+        // parts of one box's blocks share their rows and merge; blocks whose
+        // parent is another rank's go to it
         auto& parent_level = tree.levels[static_cast<size_t>(l) - 1];
-        for (Side* side : {&R, &C}) {
+        std::vector<std::vector<char>> send_up(static_cast<size_t>(nranks));
+        for (int side_id = 0; side_id < 2; ++side_id) {
+            Side* side = side_id == 0 ? &R : &C;
             std::vector<Block> up;
+            std::vector<int64_t> up_parent;  // the parents' Morton indices
             std::unordered_map<int64_t, size_t> dense_of;  // box at this level -> merged block at the parent
             for (auto& b : side->blocks) {
                 const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
                 if (b.wrows.empty()) continue;  // nothing left of these chains above
                 const int64_t morton = box.morton_index;
                 const int64_t parent = morton >> dimension;
-                if (!parent_level.is_box_on_process(parent)) throw std::runtime_error("partial Schur: a parent is not local");
                 const int64_t off = partial_child_offset(level, morton, dimension);
                 const bool dense = !b.ridx.empty();
                 const int64_t nw = static_cast<int64_t>(b.wrows.size());
@@ -1099,240 +1526,367 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                     dense_of.emplace(b.box, up.size());
                 }
                 Block u;
-                u.box = parent - parent_level.local_morton_start;
                 u.members = std::move(b.members);
                 u.rows.resize(static_cast<size_t>(nw));
                 for (int64_t t = 0; t < nw; ++t) u.rows[static_cast<size_t>(t)] = off + b.wrows[static_cast<size_t>(t)];
                 u.v = std::move(b.wv);
                 up.push_back(std::move(u));
+                up_parent.push_back(parent);
             }
-            side->blocks = std::move(up);
+            side->blocks.clear();
+            for (size_t k = 0; k < up.size(); ++k) {
+                const int64_t parent = up_parent[k];
+                if (parent_level.is_process_active && parent_level.is_box_on_process(parent)) {
+                    up[k].box = parent - parent_level.local_morton_start;
+                    side->blocks.push_back(std::move(up[k]));
+                    continue;
+                }
+                const int dest = level.parent_level_owner;
+                if (dest < 0) throw std::runtime_error("partial Schur: no owner of a parent box");
+                auto& buf = send_up[static_cast<size_t>(dest)];
+                const int64_t head[4] = {side_id, parent, static_cast<int64_t>(up[k].members.size()), static_cast<int64_t>(up[k].rows.size())};
+                partial_put(buf, head, 4);
+                partial_put(buf, up[k].members.data(), up[k].members.size());
+                partial_put(buf, up[k].rows.data(), up[k].rows.size());
+                partial_put(buf, up[k].v.data(), up[k].v.size());
+            }
+        }
+        const auto recv_up = partial_exchange(tree.comm, send_up, 621);
+        for (const auto& buf : recv_up) {
+            for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+                int64_t head[4];
+                p = partial_get(p, head, 4);
+                Block u;
+                u.box = head[1] - parent_level.local_morton_start;
+                u.members.resize(static_cast<size_t>(head[2]));
+                u.rows.resize(static_cast<size_t>(head[3]));
+                u.v.resize(static_cast<size_t>(head[2] * head[3]));
+                p = partial_get(p, u.members.data(), u.members.size());
+                p = partial_get(p, u.rows.data(), u.rows.size());
+                p = partial_get(p, u.v.data(), u.v.size());
+                (head[0] == 0 ? R : C).blocks.push_back(std::move(u));
+            }
         }
     }
+    if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, out, static_cast<int>(nrows * ncols), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
 }
 
 // y2 = CB x2 = P22^T CB' P22 x2 (header): an up-pass with P (w = x_S' +
 // T x_R, the raw vectors kept), the sparsified blocks and the root's block
 // applied level by level, a down-pass with P^T (a_S' = g_S' + a_parent,
 // a_R = g_R + T^T a_S').  x2, y2 column-major n22 x ncol in F22 index order
-// (replicated).  Every pass runs over a level's boxes in parallel: a box
-// writes only its own vectors and its range of its parent's.
+// (replicated); collective over the tree's communicator.  The passes go
+// through the solve's children-to-parent gather and parent-to-children
+// scatter; at a level, a box's raw vector goes to its remote neighbours'
+// owners (the X_RN terms), and a sparsified box's X_NR rows of a remote
+// neighbour, applied to its p, go to that neighbour's owner (the records
+// stay where they are).  Every pass runs over a rank's boxes in parallel.
 template<typename CoordType, typename DataType>
 void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const DataType* x2, DataType* y2,
                             int64_t ncol) {
-    partial_require_single_rank(tree, "the Schur complement's product");
     const auto& pr = tree.partial_root;
     if (pr.cb_released) throw std::runtime_error("partial Schur: released (c_bpack_partial_schur_release)");
     const int64_t pc = tree.partial_count, n22 = tree.num_points - pc;
     const int dimension = tree.dimension;
     const int leaf = tree.num_levels - 1;
     if (ncol <= 0) return;
+    const int nrhs = static_cast<int>(ncol);
+    int me = 0, nranks = 1;
+    MPI_Comm_rank(tree.comm, &me);
+    MPI_Comm_size(tree.comm, &nranks);
     auto own = [](const fmm::BoxData<CoordType, DataType>& box) {
         return box.f22.sparsified && !box.f22.redundant.empty();
     };
-    // per level and box: raw (the box's points x ncol), p = raw[R], w = raw[S'] + T p,
-    // and the accumulator h over the box's points
-    using Vecs = std::vector<std::vector<DataType>>;
-    std::vector<Vecs> raw(static_cast<size_t>(tree.num_levels)), pv(static_cast<size_t>(tree.num_levels)),
-        h(static_cast<size_t>(tree.num_levels));
-    std::vector<std::vector<int64_t>> offset(static_cast<size_t>(tree.num_levels));
-    for (int l = 0; l <= leaf; ++l) {
-        auto& level = tree.levels[static_cast<size_t>(l)];
-        const int64_t nb = level.num_boxes_local;
-        raw[static_cast<size_t>(l)].resize(static_cast<size_t>(nb));
-        pv[static_cast<size_t>(l)].resize(static_cast<size_t>(nb));
-        h[static_cast<size_t>(l)].resize(static_cast<size_t>(nb));
-        offset[static_cast<size_t>(l)].assign(static_cast<size_t>(nb), 0);
-#pragma omp parallel for schedule(dynamic, 16)
-        for (int64_t bi = 0; bi < nb; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            const size_t n = static_cast<size_t>(box.num_points) * static_cast<size_t>(ncol);
-            raw[static_cast<size_t>(l)][static_cast<size_t>(bi)].assign(n, DataType(0));
-            h[static_cast<size_t>(l)][static_cast<size_t>(bi)].assign(n, DataType(0));
-            if (l > 0 && !box.skeleton_indices.empty())
-                offset[static_cast<size_t>(l)][static_cast<size_t>(bi)] = partial_child_offset(level, box.morton_index, dimension);
-        }
-    }
+    using SD = fmm::SolveDataRequest<CoordType, DataType>;
+    // raw: per level and local box, its points x ncol; pv: p = raw[R]
+    auto raw = partial_scratch<CoordType, DataType>(&tree, nullptr, nrhs);
+    std::vector<std::vector<std::vector<DataType>>> pv(static_cast<size_t>(tree.num_levels));
     {
         auto& level = tree.levels[static_cast<size_t>(leaf)];
+        if (level.is_process_active) {
 #pragma omp parallel for schedule(dynamic, 16)
-        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            auto& v = raw[static_cast<size_t>(leaf)][static_cast<size_t>(bi)];
-            for (int64_t s = 0; s < box.num_points; ++s) {
-                const int64_t id = box.point_indices[static_cast<size_t>(s)];
-                if (id < pc) continue;
-                for (int64_t c = 0; c < ncol; ++c)
-                    v[static_cast<size_t>(s + c * box.num_points)] = x2[static_cast<size_t>((id - pc) + c * n22)];
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                auto& v = raw[static_cast<size_t>(leaf)][static_cast<size_t>(bi)].left_side;
+                for (int64_t s = 0; s < box.num_points; ++s) {
+                    const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                    if (id < pc) continue;
+                    for (int64_t c = 0; c < ncol; ++c)
+                        v[static_cast<size_t>(s + c * box.num_points)] = x2[static_cast<size_t>((id - pc) + c * n22)];
+                }
             }
         }
     }
-    // up: p = raw[R], w = raw[S'] + T p into the parent's raw vector at the box's offset
+    // w = raw[S'] + T p for every local box of a level (column-major kp x ncol)
+    auto w_of = [&](const fmm::BoxData<CoordType, DataType>& box, const std::vector<DataType>& x, const std::vector<DataType>* p) {
+        const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
+        std::vector<DataType> w(static_cast<size_t>(kp * ncol));
+        for (int64_t c = 0; c < ncol; ++c)
+            for (int64_t i = 0; i < kp; ++i)
+                w[static_cast<size_t>(i + c * kp)] = x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)];
+        if (p != nullptr) {
+            const int64_t r = static_cast<int64_t>(box.f22.redundant.size());
+            partial_gemm<DataType>('N', 'N', kp, ncol, r, DataType(1), box.f22.T.data.data(), kp, p->data(), r, DataType(1), w.data(), kp);
+        }
+        return w;
+    };
+    // up: p = raw[R], and the records with S' = w gathered into the parents' raw vectors
     for (int l = leaf; l >= 1; --l) {
         auto& level = tree.levels[static_cast<size_t>(l)];
-        auto& parent_level = tree.levels[static_cast<size_t>(l) - 1];
+        std::vector<SD> up;
+        if (level.is_process_active) {
+            pv[static_cast<size_t>(l)].assign(static_cast<size_t>(level.num_boxes_local), {});
+            up.resize(static_cast<size_t>(level.num_boxes_local));
+#pragma omp parallel for schedule(dynamic, 1)
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                const auto& x = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                up[static_cast<size_t>(bi)].initialize(box.morton_index, me, box.num_points, nrhs);
+                auto& u = up[static_cast<size_t>(bi)].left_side;
+                u = x;
+                if (box.skeleton_indices.empty()) continue;
+                const std::vector<DataType>* p = nullptr;
+                if (own(box)) {
+                    const int64_t r = static_cast<int64_t>(box.f22.redundant.size()), n = box.num_points;
+                    auto& pb = pv[static_cast<size_t>(l)][static_cast<size_t>(bi)];
+                    pb.resize(static_cast<size_t>(r * ncol));
+                    for (int64_t c = 0; c < ncol; ++c)
+                        for (int64_t j = 0; j < r; ++j)
+                            pb[static_cast<size_t>(j + c * r)] = x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * n)];
+                    p = &pb;
+                }
+                const auto w = w_of(box, x, p);
+                const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
+                for (int64_t c = 0; c < ncol; ++c)
+                    for (int64_t i = 0; i < kp; ++i)
+                        u[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)] = w[static_cast<size_t>(i + c * kp)];
+            }
+        }
+        fmm::gather_skeleton_to_parent(level, tree.levels[static_cast<size_t>(l) - 1], up, raw[static_cast<size_t>(l) - 1],
+                                       dimension, tree.comm);
+    }
+    // h: the accumulators; the root's block on the root's owner
+    auto h = partial_scratch<CoordType, DataType>(&tree, nullptr, nrhs);
+    if (pr.active && pr.n22 > 0) {
+        const auto& box = tree.levels[0].local_boxes[0];
+        const auto& x = raw[0][0].left_side;
+        auto& out = h[0][0].left_side;
+        const int64_t n = box.num_points, m = pr.n22;
+        std::vector<DataType> v(static_cast<size_t>(m * ncol)), g(static_cast<size_t>(m * ncol));
+        for (int64_t c = 0; c < ncol; ++c)
+            for (int64_t a = 0; a < m; ++a) v[static_cast<size_t>(a + c * m)] = x[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)];
+        constexpr int64_t chunk = 256;
+        const int64_t nchunks = (m + chunk - 1) / chunk;
+#pragma omp parallel for schedule(static)
+        for (int64_t q = 0; q < nchunks; ++q) {
+            const int64_t a0 = q * chunk, rows = std::min(chunk, m - a0);
+            partial_gemm<DataType>('N', 'N', rows, ncol, m, DataType(1), pr.cb.data.data() + a0, pr.cb.lda, v.data(), m, DataType(0),
+                                   g.data() + a0, m);
+        }
+        for (int64_t c = 0; c < ncol; ++c)
+            for (int64_t a = 0; a < m; ++a) out[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)] = g[static_cast<size_t>(a + c * m)];
+    }
+    // the records, level by level
+    for (int l = leaf; l >= 2; --l) {
+        auto& level = tree.levels[static_cast<size_t>(l)];
+        const bool active = level.is_process_active;
+        auto is_local = [&](int64_t m) { return active && level.is_box_on_process(m); };
+        // (1) raw vectors to the owners of remote neighbours
+        std::vector<std::vector<char>> send_raw(static_cast<size_t>(nranks));
+        if (active) {
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                if (box.skeleton_indices.empty()) continue;
+                std::set<int> dest;
+                for (int64_t nm : box.one_hop)
+                    if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
+                const auto& x = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                const int64_t head[2] = {box.morton_index, box.num_points};
+                for (int r : dest) {
+                    partial_put(send_raw[static_cast<size_t>(r)], head, 2);
+                    partial_put(send_raw[static_cast<size_t>(r)], x.data(), x.size());
+                }
+            }
+        }
+        const auto recv_raw = partial_exchange(tree.comm, send_raw, 610);
+        std::unordered_map<int64_t, std::pair<int64_t, std::vector<DataType>>> remote_raw;
+        for (const auto& buf : recv_raw) {
+            for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+                int64_t head[2];
+                p = partial_get(p, head, 2);
+                std::vector<DataType> x(static_cast<size_t>(head[1] * ncol));
+                p = partial_get(p, x.data(), x.size());
+                remote_raw[head[0]] = {head[1], std::move(x)};
+            }
+        }
+        // (2) a sparsified box's X_NR rows of a remote neighbour applied to its p, to that neighbour's owner
+        std::vector<std::vector<char>> send_nr(static_cast<size_t>(nranks));
+        if (active) {
+            std::vector<std::vector<std::pair<int, std::vector<char>>>> parts(static_cast<size_t>(level.num_boxes_local));
+#pragma omp parallel for schedule(dynamic, 1)
+            for (int64_t ni = 0; ni < level.num_boxes_local; ++ni) {
+                const auto& nb = level.local_boxes[static_cast<size_t>(ni)];
+                if (!own(nb)) continue;
+                const auto& fn = nb.f22;
+                const auto& pn = pv[static_cast<size_t>(l)][static_cast<size_t>(ni)];
+                const int64_t rn = static_cast<int64_t>(fn.redundant.size());
+                int64_t row0 = 0;
+                for (size_t idx = 0; idx < nb.one_hop.size(); ++idx) {
+                    const int64_t m = fn.neighbor_f22_counts[idx];
+                    const int64_t target = nb.one_hop[idx];
+                    if (m > 0 && !level.is_box_on_process(target)) {
+                        std::vector<DataType> t(static_cast<size_t>(m * ncol));
+                        partial_gemm<DataType>('N', 'N', m, ncol, rn, DataType(1), fn.X_NR.data.data() + row0, fn.X_NR.rows, pn.data(), rn,
+                                               DataType(0), t.data(), m);
+                        std::vector<char> msg;
+                        const int64_t head[2] = {target, m};
+                        partial_put(msg, head, 2);
+                        partial_put(msg, fn.neighbor_f22_slots[idx].data(), static_cast<size_t>(m));
+                        partial_put(msg, t.data(), t.size());
+                        parts[static_cast<size_t>(ni)].emplace_back(level.owner_rank_of(target), std::move(msg));
+                    }
+                    row0 += m;
+                }
+            }
+            for (auto& list : parts)
+                for (auto& [r, msg] : list) send_nr[static_cast<size_t>(r)].insert(send_nr[static_cast<size_t>(r)].end(), msg.begin(), msg.end());
+        }
+        const auto recv_nr = partial_exchange(tree.comm, send_nr, 611);
+        std::unordered_map<int64_t, std::vector<std::pair<std::vector<int64_t>, std::vector<DataType>>>> pushed;
+        for (const auto& buf : recv_nr) {
+            for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+                int64_t head[2];
+                p = partial_get(p, head, 2);
+                std::vector<int64_t> slots(static_cast<size_t>(head[1]));
+                p = partial_get(p, slots.data(), slots.size());
+                std::vector<DataType> t(static_cast<size_t>(head[1] * ncol));
+                p = partial_get(p, t.data(), t.size());
+                pushed[head[0]].emplace_back(std::move(slots), std::move(t));
+            }
+        }
+        if (!active) continue;
+        // (3) every local box's terms
         std::exception_ptr failure;
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            if (box.skeleton_indices.empty()) continue;
-            const auto& x = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-            const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
-            std::vector<DataType> w(static_cast<size_t>(kp * ncol));
-            for (int64_t c = 0; c < ncol; ++c)
-                for (int64_t i = 0; i < kp; ++i)
-                    w[static_cast<size_t>(i + c * kp)] = x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)];
-            if (own(box)) {
-                const int64_t r = static_cast<int64_t>(box.f22.redundant.size());
-                auto& p = pv[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-                p.resize(static_cast<size_t>(r * ncol));
-                for (int64_t c = 0; c < ncol; ++c)
-                    for (int64_t j = 0; j < r; ++j)
-                        p[static_cast<size_t>(j + c * r)] = x[static_cast<size_t>(box.f22.redundant[static_cast<size_t>(j)] + c * n)];
-                partial_gemm<DataType>('N', 'N', kp, ncol, r, DataType(1), box.f22.T.data.data(), kp, p.data(), r, DataType(1),
-                                       w.data(), kp);
-            }
-            const int64_t parent = box.morton_index >> dimension;
-            const auto* pbox = parent_level.find_local_box(parent);
-            if (pbox == nullptr) {
+            try {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                const auto& f = box.f22;
+                if (box.skeleton_indices.empty()) continue;
+                const bool mine = own(box);
+                const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
+                const int64_t r = mine ? static_cast<int64_t>(f.redundant.size()) : 0;
+                const auto& x = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                std::vector<DataType> gR(static_cast<size_t>(r * ncol), DataType(0)), gS(static_cast<size_t>(kp * ncol), DataType(0));
+                if (mine) {
+                    const auto& p = pv[static_cast<size_t>(l)][static_cast<size_t>(bi)];
+                    const auto w = w_of(box, x, &p);
+                    partial_gemm<DataType>('N', 'N', r, ncol, r, DataType(1), f.X_RR.data.data(), r, p.data(), r, DataType(1), gR.data(), r);
+                    partial_gemm<DataType>('N', 'N', r, ncol, kp, DataType(1), f.X_RS.data.data(), r, w.data(), kp, DataType(1), gR.data(), r);
+                    partial_gemm<DataType>('N', 'N', kp, ncol, r, DataType(1), f.X_SR.data.data(), kp, p.data(), r, DataType(1), gS.data(), kp);
+                    // the neighbours' raw vectors (local, or received) against X_RN
+                    const int64_t total = f.X_RN.cols;
+                    if (total > 0) {
+                        std::vector<DataType> rn(static_cast<size_t>(total * ncol));
+                        int64_t col0 = 0;
+                        for (size_t idx = 0; idx < box.one_hop.size(); ++idx) {
+                            const int64_t m = f.neighbor_f22_counts[idx];
+                            if (m == 0) continue;
+                            const int64_t nm = box.one_hop[idx];
+                            const std::vector<DataType>* xn = nullptr;
+                            int64_t nn = 0;
+                            if (is_local(nm)) {
+                                const int64_t nl = nm - level.local_morton_start;
+                                xn = &raw[static_cast<size_t>(l)][static_cast<size_t>(nl)].left_side;
+                                nn = level.local_boxes[static_cast<size_t>(nl)].num_points;
+                            } else {
+                                const auto it = remote_raw.find(nm);
+                                if (it == remote_raw.end()) throw std::runtime_error("partial Schur product: no vector of neighbour " + std::to_string(nm));
+                                nn = it->second.first;
+                                xn = &it->second.second;
+                            }
+                            const auto& slots = f.neighbor_f22_slots[idx];
+                            for (int64_t c = 0; c < ncol; ++c)
+                                for (int64_t i = 0; i < m; ++i)
+                                    rn[static_cast<size_t>(col0 + i + c * total)] = (*xn)[static_cast<size_t>(slots[static_cast<size_t>(i)] + c * nn)];
+                            col0 += m;
+                        }
+                        partial_gemm<DataType>('N', 'N', r, ncol, total, DataType(1), f.X_RN.data.data(), r, rn.data(), total, DataType(1),
+                                               gR.data(), r);
+                    }
+                }
+                // the sparsified neighbours' p against their X_NR rows over this box's S' (local: here; remote: received)
+                std::vector<int32_t> s_of(static_cast<size_t>(n), -1);
+                for (int64_t i = 0; i < kp; ++i) s_of[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)])] = static_cast<int32_t>(i);
+                auto add_rows = [&](const std::vector<int64_t>& slots, const DataType* t, int64_t m) {
+                    for (int64_t i = 0; i < m; ++i) {
+                        const int32_t si = s_of[static_cast<size_t>(slots[static_cast<size_t>(i)])];
+                        if (si < 0) continue;  // this box's R rows: in X_RN above
+                        for (int64_t c = 0; c < ncol; ++c) gS[static_cast<size_t>(si + c * kp)] += t[static_cast<size_t>(i + c * m)];
+                    }
+                };
+                std::vector<DataType> t;
+                for (size_t idx = 0; idx < box.one_hop.size(); ++idx) {
+                    const int64_t nm = box.one_hop[idx];
+                    if (!is_local(nm)) continue;
+                    const int64_t nl = nm - level.local_morton_start;
+                    const auto& nb = level.local_boxes[static_cast<size_t>(nl)];
+                    if (!own(nb)) continue;
+                    const auto& fn = nb.f22;
+                    const auto it = std::find(nb.one_hop.begin(), nb.one_hop.end(), box.morton_index);
+                    if (it == nb.one_hop.end()) continue;
+                    const size_t idn = static_cast<size_t>(it - nb.one_hop.begin());
+                    const int64_t m = fn.neighbor_f22_counts[idn], rn_ = static_cast<int64_t>(fn.redundant.size());
+                    if (m == 0) continue;
+                    int64_t row0 = 0;
+                    for (size_t q = 0; q < idn; ++q) row0 += fn.neighbor_f22_counts[q];
+                    const auto& pn = pv[static_cast<size_t>(l)][static_cast<size_t>(nl)];
+                    t.resize(static_cast<size_t>(m * ncol));
+                    partial_gemm<DataType>('N', 'N', m, ncol, rn_, DataType(1), fn.X_NR.data.data() + row0, fn.X_NR.rows, pn.data(), rn_,
+                                           DataType(0), t.data(), m);
+                    add_rows(fn.neighbor_f22_slots[idn], t.data(), m);
+                }
+                if (const auto it = pushed.find(box.morton_index); it != pushed.end())
+                    for (const auto& [slots, tv] : it->second) add_rows(slots, tv.data(), static_cast<int64_t>(slots.size()));
+                auto& out = h[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+                for (int64_t c = 0; c < ncol; ++c) {
+                    for (int64_t i = 0; i < kp; ++i) out[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)] += gS[static_cast<size_t>(i + c * kp)];
+                    for (int64_t j = 0; j < r; ++j) out[static_cast<size_t>(f.redundant[static_cast<size_t>(j)] + c * n)] += gR[static_cast<size_t>(j + c * r)];
+                }
+            } catch (...) {
 #pragma omp critical(partial_schur_multiply_failure)
-                if (!failure) failure = std::make_exception_ptr(std::logic_error("partial_schur_multiply: a parent is not local"));
-                continue;
+                if (!failure) failure = std::current_exception();
             }
-            auto& px = raw[static_cast<size_t>(l) - 1][static_cast<size_t>(parent - parent_level.local_morton_start)];
-            const int64_t off = offset[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-            for (int64_t c = 0; c < ncol; ++c)
-                std::copy_n(w.data() + c * kp, kp, px.data() + off + c * pbox->num_points);
         }
         if (failure) std::rethrow_exception(failure);
     }
-    // the root: g = CB_root v on the root's F22 slots, in row chunks
-    {
-        const auto& box = tree.levels[0].local_boxes[0];
-        const auto& x = raw[0][0];
-        auto& out = h[0][0];
-        const int64_t n = box.num_points, m = pr.n22;
-        if (m > 0) {
-            std::vector<DataType> v(static_cast<size_t>(m * ncol)), g(static_cast<size_t>(m * ncol));
-            for (int64_t c = 0; c < ncol; ++c)
-                for (int64_t a = 0; a < m; ++a)
-                    v[static_cast<size_t>(a + c * m)] = x[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)];
-            constexpr int64_t chunk = 256;
-            const int64_t nchunks = (m + chunk - 1) / chunk;
-#pragma omp parallel for schedule(static)
-            for (int64_t q = 0; q < nchunks; ++q) {
-                const int64_t a0 = q * chunk, rows = std::min(chunk, m - a0);
-                partial_gemm<DataType>('N', 'N', rows, ncol, m, DataType(1), pr.cb.data.data() + a0, pr.cb.lda, v.data(), m,
-                                       DataType(0), g.data() + a0, m);
-            }
-            for (int64_t c = 0; c < ncol; ++c)
-                for (int64_t a = 0; a < m; ++a)
-                    out[static_cast<size_t>(pr.slots22[static_cast<size_t>(a)] + c * n)] = g[static_cast<size_t>(a + c * m)];
-        }
-    }
-    // the records, level by level: a box gathers its own terms and its sparsified neighbours' X_NR rows over its S'
-    for (int l = leaf; l >= 2; --l) {
-        auto& level = tree.levels[static_cast<size_t>(l)];
-#pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            const auto& f = box.f22;
-            if (box.skeleton_indices.empty()) continue;
-            const bool mine = own(box);
-            const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
-            const int64_t r = mine ? static_cast<int64_t>(f.redundant.size()) : 0;
-            const auto& x = raw[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-            std::vector<DataType> gR(static_cast<size_t>(r * ncol), DataType(0)), gS(static_cast<size_t>(kp * ncol), DataType(0));
-            if (mine) {
-                // the box's own blocks: gR = X_RR p + X_RS w, gS = X_SR p (w = raw[S'] + T p again, kept local)
-                const auto& p = pv[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-                std::vector<DataType> w(static_cast<size_t>(kp * ncol));
-                for (int64_t c = 0; c < ncol; ++c)
-                    for (int64_t i = 0; i < kp; ++i)
-                        w[static_cast<size_t>(i + c * kp)] = x[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)];
-                partial_gemm<DataType>('N', 'N', kp, ncol, r, DataType(1), f.T.data.data(), kp, p.data(), r, DataType(1), w.data(), kp);
-                partial_gemm<DataType>('N', 'N', r, ncol, r, DataType(1), f.X_RR.data.data(), r, p.data(), r, DataType(1), gR.data(), r);
-                partial_gemm<DataType>('N', 'N', r, ncol, kp, DataType(1), f.X_RS.data.data(), r, w.data(), kp, DataType(1), gR.data(), r);
-                partial_gemm<DataType>('N', 'N', kp, ncol, r, DataType(1), f.X_SR.data.data(), kp, p.data(), r, DataType(1), gS.data(), kp);
-                // the neighbours' raw vectors against X_RN
-                const int64_t total = f.X_RN.cols;
-                if (total > 0) {
-                    std::vector<DataType> rn(static_cast<size_t>(total * ncol));
-                    int64_t col0 = 0;
-                    for (size_t idx = 0; idx < box.one_hop.size(); ++idx) {
-                        const int64_t m = f.neighbor_f22_counts[idx];
-                        if (m == 0) continue;
-                        const int64_t nl = box.one_hop[idx] - level.local_morton_start;
-                        const int64_t nn = level.local_boxes[static_cast<size_t>(nl)].num_points;
-                        const auto& xn = raw[static_cast<size_t>(l)][static_cast<size_t>(nl)];
-                        const auto& slots = f.neighbor_f22_slots[idx];
-                        for (int64_t c = 0; c < ncol; ++c)
-                            for (int64_t i = 0; i < m; ++i)
-                                rn[static_cast<size_t>(col0 + i + c * total)] = xn[static_cast<size_t>(slots[static_cast<size_t>(i)] + c * nn)];
-                        col0 += m;
-                    }
-                    partial_gemm<DataType>('N', 'N', r, ncol, total, DataType(1), f.X_RN.data.data(), r, rn.data(), total, DataType(1),
-                                           gR.data(), r);
-                }
-            }
-            // the sparsified neighbours' p against their X_NR rows that are this box's S' slots
-            std::vector<int32_t> s_of;
-            std::vector<DataType> t;
-            for (size_t idx = 0; idx < box.one_hop.size(); ++idx) {
-                const int64_t nl = box.one_hop[idx] - level.local_morton_start;
-                const auto& nb = level.local_boxes[static_cast<size_t>(nl)];
-                if (!own(nb)) continue;
-                const auto& fn = nb.f22;
-                const auto it = std::find(nb.one_hop.begin(), nb.one_hop.end(), box.morton_index);
-                if (it == nb.one_hop.end()) continue;
-                const size_t idn = static_cast<size_t>(it - nb.one_hop.begin());
-                const int64_t m = fn.neighbor_f22_counts[idn], rn_ = static_cast<int64_t>(fn.redundant.size());
-                if (m == 0) continue;
-                int64_t row0 = 0;
-                for (size_t q = 0; q < idn; ++q) row0 += fn.neighbor_f22_counts[q];
-                const auto& pn = pv[static_cast<size_t>(l)][static_cast<size_t>(nl)];
-                t.resize(static_cast<size_t>(m * ncol));
-                partial_gemm<DataType>('N', 'N', m, ncol, rn_, DataType(1), fn.X_NR.data.data() + row0, fn.X_NR.rows, pn.data(), rn_,
-                                       DataType(0), t.data(), m);
-                if (s_of.empty()) {
-                    s_of.assign(static_cast<size_t>(n), -1);
-                    for (int64_t i = 0; i < kp; ++i) s_of[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)])] = static_cast<int32_t>(i);
-                }
-                const auto& slots = fn.neighbor_f22_slots[idn];
-                for (int64_t i = 0; i < m; ++i) {
-                    const int32_t si = s_of[static_cast<size_t>(slots[static_cast<size_t>(i)])];
-                    if (si < 0) continue;  // this box's R rows: in X_RN above
-                    for (int64_t c = 0; c < ncol; ++c) gS[static_cast<size_t>(si + c * kp)] += t[static_cast<size_t>(i + c * m)];
-                }
-            }
-            auto& out = h[static_cast<size_t>(l)][static_cast<size_t>(bi)];
-            for (int64_t c = 0; c < ncol; ++c) {
-                for (int64_t i = 0; i < kp; ++i) out[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)] += gS[static_cast<size_t>(i + c * kp)];
-                for (int64_t j = 0; j < r; ++j) out[static_cast<size_t>(f.redundant[static_cast<size_t>(j)] + c * n)] += gR[static_cast<size_t>(j + c * r)];
-            }
-        }
-    }
-    // down: a_S' = g_S' + a_parent, a_R = g_R + T^T a_S'
+    // down: a_S' = g_S' + a_parent (the scatter puts the parent's values at the children's S'), a_R = g_R + T^T a_S'
     for (int l = 1; l <= leaf; ++l) {
         auto& level = tree.levels[static_cast<size_t>(l)];
-        auto& parent_level = tree.levels[static_cast<size_t>(l) - 1];
+        std::vector<SD> from_parent;
+        if (level.is_process_active) {
+            from_parent.resize(static_cast<size_t>(level.num_boxes_local));
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                from_parent[static_cast<size_t>(bi)].initialize(box.morton_index, me, box.num_points, nrhs);
+            }
+        }
+        fmm::scatter_solution_to_children(level, tree.levels[static_cast<size_t>(l) - 1], from_parent, h[static_cast<size_t>(l) - 1],
+                                          dimension, tree.comm);
+        if (!level.is_process_active) continue;
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
             const auto& box = level.local_boxes[static_cast<size_t>(bi)];
             if (box.skeleton_indices.empty()) continue;
-            auto& a = h[static_cast<size_t>(l)][static_cast<size_t>(bi)];
+            auto& a = h[static_cast<size_t>(l)][static_cast<size_t>(bi)].left_side;
+            const auto& pa = from_parent[static_cast<size_t>(bi)].left_side;
             const int64_t n = box.num_points, kp = static_cast<int64_t>(box.skeleton_indices.size());
-            const int64_t parent = box.morton_index >> dimension;
-            const int64_t pl = parent - parent_level.local_morton_start;
-            const int64_t pn = parent_level.local_boxes[static_cast<size_t>(pl)].num_points;
-            const auto& pa = h[static_cast<size_t>(l) - 1][static_cast<size_t>(pl)];
-            const int64_t off = offset[static_cast<size_t>(l)][static_cast<size_t>(bi)];
             std::vector<DataType> aS(static_cast<size_t>(kp * ncol));
             for (int64_t c = 0; c < ncol; ++c)
                 for (int64_t i = 0; i < kp; ++i) {
-                    DataType& ai = a[static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n)];
-                    ai += pa[static_cast<size_t>(off + i + c * pn)];
-                    aS[static_cast<size_t>(i + c * kp)] = ai;
+                    const size_t q = static_cast<size_t>(box.skeleton_indices[static_cast<size_t>(i)] + c * n);
+                    a[q] += pa[q];
+                    aS[static_cast<size_t>(i + c * kp)] = a[q];
                 }
             if (own(box)) {
                 const int64_t r = static_cast<int64_t>(box.f22.redundant.size());
@@ -1345,20 +1899,24 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
             }
         }
     }
+    std::fill(y2, y2 + n22 * ncol, DataType(0));
     {
         auto& level = tree.levels[static_cast<size_t>(leaf)];
+        if (level.is_process_active) {
 #pragma omp parallel for schedule(dynamic, 16)
-        for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
-            const auto& box = level.local_boxes[static_cast<size_t>(bi)];
-            const auto& a = h[static_cast<size_t>(leaf)][static_cast<size_t>(bi)];
-            for (int64_t s = 0; s < box.num_points; ++s) {
-                const int64_t id = box.point_indices[static_cast<size_t>(s)];
-                if (id < pc) continue;
-                for (int64_t c = 0; c < ncol; ++c)
-                    y2[static_cast<size_t>((id - pc) + c * n22)] = a[static_cast<size_t>(s + c * box.num_points)];
+            for (int64_t bi = 0; bi < level.num_boxes_local; ++bi) {
+                const auto& box = level.local_boxes[static_cast<size_t>(bi)];
+                const auto& a = h[static_cast<size_t>(leaf)][static_cast<size_t>(bi)].left_side;
+                for (int64_t s = 0; s < box.num_points; ++s) {
+                    const int64_t id = box.point_indices[static_cast<size_t>(s)];
+                    if (id < pc) continue;
+                    for (int64_t c = 0; c < ncol; ++c)
+                        y2[static_cast<size_t>((id - pc) + c * n22)] = a[static_cast<size_t>(s + c * box.num_points)];
+                }
             }
         }
     }
+    if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, y2, static_cast<int>(n22 * ncol), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
 }
 
 template<typename CoordType, typename DataType>

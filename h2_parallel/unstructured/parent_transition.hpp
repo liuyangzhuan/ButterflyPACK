@@ -697,6 +697,7 @@ std::vector<BoxData<CoordType, DataType>> build_parent_level_interactions_unstru
                     ref.skeleton = extract_skeleton_indices(assist, dimension);
                     ref.full_size = static_cast<int64_t>(assist.indices.size());
                     ref.skeleton_positions = &assist.skel_indices;
+                    ref.skeleton_before = &assist.skel_before;
                     b2_children.push_back(std::move(ref));
                 }
 

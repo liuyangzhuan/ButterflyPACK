@@ -186,8 +186,8 @@ double h2_quick_verification_partial(
                                     static_cast<const std::vector<DataType>*>(nullptr), &out2);
     const double t_forward = MPI_Wtime() - t0;
     std::vector<DataType> y2(static_cast<size_t>(n22), DataType(0.0));
-    partial_schur_multiply(*tree, x2.data(), y2.data(), 1);
     RealType diff_schur = 0, norm_schur = 0, norm_b2 = 0;
+    partial_schur_multiply(*tree, x2.data(), y2.data(), 1);
     for (int64_t j = 0; j < n22; ++j) {
         diff_schur += mag2(out2[static_cast<size_t>(j)] - y2[static_cast<size_t>(j)]);
         norm_schur += mag2(out2[static_cast<size_t>(j)]);

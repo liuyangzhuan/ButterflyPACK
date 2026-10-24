@@ -495,6 +495,7 @@ struct PointDataRequest {
     std::vector<CoordType> coords;  ///< Point coordinates (dim × num_points, column-major)
     std::vector<int64_t> indices; ///< Global point indices
     std::vector<int64_t> skel_indices; ///< Skeleton indices
+    std::vector<int64_t> skel_before;  ///< H2_partial: the skeleton before the F22 phase (set by its owner's publish, not serialized)
     bool on_boundary; ///< if this box is on the boundary
     
     PointDataRequest() : morton_index(-1), source_rank(-1) {}
@@ -594,7 +595,8 @@ struct SolveDataRequest {
         num_points = rhs_info.num_points;
         nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
-        skeleton_indices = box.skeleton_indices;
+        // the F11 factors' skeleton (H2_partial: before the F22 phase)
+        skeleton_indices = box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
         right_side = rhs_info.right_side;
         left_side = rhs_info.left_side;
         
@@ -613,7 +615,8 @@ struct SolveDataRequest {
         num_points = rhs_info.num_points;
         nrhs = rhs_info.nrhs;
         redundant_indices = box.redundant_indices;
-        skeleton_indices = box.skeleton_indices;
+        // the F11 factors' skeleton (H2_partial: before the F22 phase)
+        skeleton_indices = box.skeleton_before_f22.empty() ? box.skeleton_indices : box.skeleton_before_f22;
         one_hop = box.one_hop;
         use_full_set = box.use_full_set;
         right_side = rhs_info.right_side;

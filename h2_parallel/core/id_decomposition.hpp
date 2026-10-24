@@ -548,6 +548,16 @@ IDResult<DataType> compute_id_partial(
     } else {
         result.interpolation.allocate(static_cast<int64_t>(forced.size()), 0);
     }
+    if (result.redundant_indices.empty()) {
+        // nothing eliminated: the box's points in their order, as the full-rank
+        // ID gives them (a live set as long as the point list is that list,
+        // which the lazy fill's row lookup assumes)
+        result.skeleton_indices.resize(static_cast<size_t>(n));
+        for (int64_t c = 0; c < n; ++c) result.skeleton_indices[static_cast<size_t>(c)] = c;
+        result.interpolation.allocate(n, 0);
+        result.rank = n;
+        return result;
+    }
     for (int64_t c : forced) result.skeleton_indices.push_back(c);
     result.rank = static_cast<int64_t>(result.skeleton_indices.size());
     return result;
