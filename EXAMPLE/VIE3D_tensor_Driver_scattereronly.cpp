@@ -170,6 +170,208 @@ int plot_slice_index(int n){
   return std::min(n, std::max(1, (n-1)/2 + 1));
 }
 
+// The diagonal blocks of the block-diagonal preconditioner, distributed: the 2^level groups of the scatterer points
+// that c_bpack_construct_init_diaglevel_simple's KD split makes (a group of m points is split along the axis of its
+// largest extent into its ceil(m/2) lowest and floor(m/2) highest points), computed from the points' grid indices
+// on the ranks that own them, with per-level reductions over all ranks instead of a sort of all points on rank 0.
+// A cut that falls inside a grid plane takes the plane's points in the order of their second, then third index
+// (the serial sort breaks such ties arbitrarily).  Any scatterer shape works; for a box of 2^k-divisible sides the
+// blocks are its boxes.  Then each block's root orders its points by tensor id, which gives each point its position.
+// In: the scatterer points of this rank (tensor ids, 1-based in dims), and block_info of the first call of
+// c_bpack_construct_init_diaglevel_simple (its local blocks, stride 8: head, tail+1, -, -, root, nproc, -, gid).
+// Out: diag_tensor_perm (the local blocks' tensor ids, in block_info order and in position order) and, per point,
+// the root, gid and position of its block (what the library's second call returns).
+void discover_diag_blocks(int ndim, int* dims, int level, const vector<int>& tensor_ids, const vector<int>& block_info,
+                          int nblock, vector<int>& diag_tensor_perm, vector<int>& point_root, vector<int>& point_gid,
+                          vector<int>& point_pos, MPI_Comm comm){
+  int myrank = 0, nproc = 1;
+  MPI_Comm_rank(comm, &myrank);
+  MPI_Comm_size(comm, &nproc);
+  const int stride = 8;
+  const size_t np = tensor_ids.size();
+  auto fail = [&](const char* what){
+    cout<<"Rank "<<myrank<<": diagonal block discovery: "<<what<<endl;
+    MPI_Abort(comm, 1);
+  };
+  vector<int> md(3*np);
+  for(size_t p=0; p<np; p++){
+    int ts = tensor_ids[p];
+    z_c_bpack_singleindex_to_multiindex(&ndim, dims, &ts, &md[3*p]);
+  }
+  // group sizes: the library's balanced ranges (left ceil(m/2), right floor(m/2)), by group number from 1
+  long long ntot = 0, nloc = static_cast<long long>(np);
+  MPI_Allreduce(&nloc, &ntot, 1, MPI_LONG_LONG, MPI_SUM, comm);
+  const int ngroup = 1 << level;
+  vector<long long> gsize(2*static_cast<size_t>(ngroup), 0);
+  gsize[1] = ntot;
+  for(int g=1; g<ngroup; g++){
+    gsize[2*g] = (gsize[g] + 1)/2;
+    gsize[2*g+1] = gsize[g]/2;
+  }
+
+  vector<int> q(np, 0);  // each point's group, numbered from 0 at its level
+  for(int l=0; l<level; l++){
+    const int G = 1 << l;
+    vector<int> lo(3*G, INT_MAX), hi(3*G, INT_MIN);
+    for(size_t p=0; p<np; p++){
+      for(int d=0; d<3; d++){
+        lo[3*q[p]+d] = min(lo[3*q[p]+d], md[3*p+d]);
+        hi[3*q[p]+d] = max(hi[3*q[p]+d], md[3*p+d]);
+      }
+    }
+    MPI_Allreduce(MPI_IN_PLACE, lo.data(), 3*G, MPI_INT, MPI_MIN, comm);
+    MPI_Allreduce(MPI_IN_PLACE, hi.data(), 3*G, MPI_INT, MPI_MAX, comm);
+    vector<int> axis(G);
+    for(int g=0; g<G; g++){
+      if(hi[3*g] < lo[3*g]) fail("an empty group");
+      int a = 0;
+      for(int d=1; d<3; d++) if(hi[3*g+d]-lo[3*g+d] > hi[3*g+a]-lo[3*g+a]) a = d;  // (the first of equal extents)
+      axis[g] = a;
+    }
+    // three histograms per group: along the split axis; in the cut plane along the next axis; in the cut line
+    // along the last one.  cut[3*g+j]: the cut index at stage j; need: the points still to take at that stage.
+    vector<int> cut(3*G, 0);
+    vector<long long> need(G);
+    for(int g=0; g<G; g++) need[g] = gsize[2*(G+g)];  // (the left child's size)
+    for(int j=0; j<3; j++){
+      vector<size_t> off(G+1, 0);
+      for(int g=0; g<G; g++){
+        int d = (axis[g]+j)%3;
+        off[g+1] = off[g] + static_cast<size_t>(hi[3*g+d]-lo[3*g+d]+1);
+      }
+      vector<long long> hist(off[G], 0);
+      for(size_t p=0; p<np; p++){
+        int g = q[p], a = axis[g];
+        bool in = true;  // (in the cut plane, then in the cut line)
+        for(int jj=0; jj<j; jj++) in = in && md[3*p+(a+jj)%3] == cut[3*g+jj];
+        if(!in) continue;
+        int d = (a+j)%3;
+        hist[off[g] + static_cast<size_t>(md[3*p+d]-lo[3*g+d])]++;
+      }
+      MPI_Allreduce(MPI_IN_PLACE, hist.data(), static_cast<int>(off[G]), MPI_LONG_LONG, MPI_SUM, comm);
+      for(int g=0; g<G; g++){
+        int d = (axis[g]+j)%3;
+        long long below = 0;
+        size_t b = off[g];
+        for(; b<off[g+1]; b++){
+          if(below + hist[b] >= need[g]) break;
+          below += hist[b];
+        }
+        if(b == off[g+1]) fail("a cut beyond its group");
+        cut[3*g+j] = lo[3*g+d] + static_cast<int>(b - off[g]);
+        need[g] -= below;  // (taken from the cut slice at the next stage)
+        if(j == 2 && hist[b] != need[g]) fail("two points at one grid index");
+      }
+    }
+    for(size_t p=0; p<np; p++){
+      int g = q[p], a = axis[g];
+      int x0 = md[3*p+a], x1 = md[3*p+(a+1)%3], x2 = md[3*p+(a+2)%3];
+      bool left = x0 < cut[3*g] || (x0 == cut[3*g] && (x1 < cut[3*g+1] || (x1 == cut[3*g+1] && x2 <= cut[3*g+2])));
+      q[p] = 2*g + (left ? 0 : 1);
+    }
+  }
+
+  // the roots of all blocks
+  vector<int> mine;
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] == myrank){ mine.push_back(info[7]); mine.push_back(myrank); }
+  }
+  int nmine = static_cast<int>(mine.size());
+  vector<int> cnts(nproc), dsp(nproc, 0);
+  MPI_Allgather(&nmine, 1, MPI_INT, cnts.data(), 1, MPI_INT, comm);
+  for(int rr=1; rr<nproc; rr++) dsp[rr] = dsp[rr-1] + cnts[rr-1];
+  vector<int> all(dsp[nproc-1] + cnts[nproc-1]);
+  MPI_Allgatherv(mine.data(), nmine, MPI_INT, all.data(), cnts.data(), dsp.data(), MPI_INT, comm);
+  vector<int> root_of(ngroup+1, -1);
+  for(size_t k=0; k+1<all.size(); k+=2) root_of[all[k]] = all[k+1];
+  for(int gid=1; gid<=ngroup; gid++) if(root_of[gid] < 0) fail("a block without a root");
+
+  // the points to their blocks' roots: (gid, tensor id); back: positions
+  vector<vector<int> > req(nproc);
+  vector<vector<size_t> > req_point(nproc);
+  for(size_t p=0; p<np; p++){
+    int gid = q[p] + 1, r = root_of[gid];
+    req[r].push_back(gid); req[r].push_back(tensor_ids[p]);
+    req_point[r].push_back(p);
+  }
+  vector<int> sc(nproc), rc(nproc), sd(nproc, 0), rd(nproc, 0);
+  for(int rr=0; rr<nproc; rr++) sc[rr] = static_cast<int>(req[rr].size());
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  for(int rr=1; rr<nproc; rr++){ sd[rr] = sd[rr-1] + sc[rr-1]; rd[rr] = rd[rr-1] + rc[rr-1]; }
+  vector<int> sendbuf, recvbuf(rd[nproc-1] + rc[nproc-1]);
+  sendbuf.reserve(sd[nproc-1] + sc[nproc-1]);
+  for(int rr=0; rr<nproc; rr++) sendbuf.insert(sendbuf.end(), req[rr].begin(), req[rr].end());
+  vector<vector<int> >().swap(req);
+  MPI_Alltoallv(sendbuf.data(), sc.data(), sd.data(), MPI_INT, recvbuf.data(), rc.data(), rd.data(), MPI_INT, comm);
+  unordered_map<int,int> local_block;  // gid -> index in block_info
+  vector<long long> block_off(nblock+1, 0);
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    local_block[info[7]] = bb;
+    block_off[bb+1] = block_off[bb] + (info[1] - info[0]);
+  }
+  vector<vector<int> > members(nblock);
+  for(size_t k=0; k<recvbuf.size(); k+=2){
+    auto it = local_block.find(recvbuf[k]);
+    if(it == local_block.end() || block_info[it->second*stride+4] != myrank) fail("a point sent to a rank that is not its block's root");
+    members[it->second].push_back(recvbuf[k+1]);
+  }
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] != myrank) continue;
+    sort(members[bb].begin(), members[bb].end());
+    if(static_cast<long long>(members[bb].size()) != block_off[bb+1] - block_off[bb]) fail("a block's size differs from the library's");
+  }
+  vector<int> pos_reply(recvbuf.size()/2);
+  for(size_t k=0; k<recvbuf.size(); k+=2){
+    const vector<int>& m = members[local_block[recvbuf[k]]];
+    pos_reply[k/2] = static_cast<int>(lower_bound(m.begin(), m.end(), recvbuf[k+1]) - m.begin());
+  }
+  vector<int> sc2(nproc), rc2(nproc), sd2(nproc), rd2(nproc);
+  for(int rr=0; rr<nproc; rr++){ sc2[rr] = rc[rr]/2; sd2[rr] = rd[rr]/2; rc2[rr] = sc[rr]/2; rd2[rr] = sd[rr]/2; }
+  vector<int> pos_recv(np);
+  MPI_Alltoallv(pos_reply.data(), sc2.data(), sd2.data(), MPI_INT, pos_recv.data(), rc2.data(), rd2.data(), MPI_INT, comm);
+  point_root.assign(np, -1); point_gid.assign(np, -1); point_pos.assign(np, -1);
+  for(int rr=0; rr<nproc; rr++){
+    for(size_t k=0; k<req_point[rr].size(); k++){
+      size_t p = req_point[rr][k];
+      point_root[p] = rr;
+      point_gid[p] = q[p] + 1;
+      point_pos[p] = pos_recv[rd2[rr] + k];
+    }
+  }
+
+  // diag_tensor_perm; a block's other ranks get its points from its root: records (gid, n, ids)
+  diag_tensor_perm.assign(block_off[nblock], 0);
+  vector<vector<int> > lists(nproc);
+  for(int bb=0; bb<nblock; bb++){
+    const int* info = block_info.data() + bb*stride;
+    if(info[4] != myrank) continue;
+    copy(members[bb].begin(), members[bb].end(), diag_tensor_perm.begin() + block_off[bb]);
+    for(int rr=info[4]+1; rr<info[4]+info[5]; rr++){
+      lists[rr].push_back(info[7]);
+      lists[rr].push_back(static_cast<int>(members[bb].size()));
+      lists[rr].insert(lists[rr].end(), members[bb].begin(), members[bb].end());
+    }
+  }
+  for(int rr=0; rr<nproc; rr++) sc[rr] = static_cast<int>(lists[rr].size());
+  MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+  sd[0] = rd[0] = 0;
+  for(int rr=1; rr<nproc; rr++){ sd[rr] = sd[rr-1] + sc[rr-1]; rd[rr] = rd[rr-1] + rc[rr-1]; }
+  sendbuf.clear();
+  for(int rr=0; rr<nproc; rr++) sendbuf.insert(sendbuf.end(), lists[rr].begin(), lists[rr].end());
+  recvbuf.assign(rd[nproc-1] + rc[nproc-1], 0);
+  MPI_Alltoallv(sendbuf.data(), sc.data(), sd.data(), MPI_INT, recvbuf.data(), rc.data(), rd.data(), MPI_INT, comm);
+  for(size_t k=0; k<recvbuf.size(); ){
+    int gid = recvbuf[k], n = recvbuf[k+1];
+    auto it = local_block.find(gid);
+    if(it == local_block.end() || n != block_off[it->second+1] - block_off[it->second]) fail("a block's points sent to a rank without it");
+    copy(recvbuf.begin()+k+2, recvbuf.begin()+k+2+n, diag_tensor_perm.begin() + block_off[it->second]);
+    k += 2 + n;
+  }
+}
+
 size_t tensor_slice_size(int nx, int ny, int nz){
   return static_cast<size_t>(ny)*nz + static_cast<size_t>(nx)*nz + static_cast<size_t>(nx)*ny;
 }
@@ -2247,8 +2449,6 @@ if(myrank==master_rank){
     int64_t Ntot_s2s = static_cast<int64_t>(Nx_s)*Ny_s*Nz_s;
     double background_s0 = 2.0;
     double scatterer_tol = 1e-12;
-    vector<int> scatter_tensor_root;
-    vector<double> data_geo_scatterer;
     int Nscatter = 0;
     /*****************************************************************/
     int* perms_bf_s2s = new int[Nmax_s*Ndim]; //permutation vector returned by HODLR
@@ -2315,8 +2515,6 @@ if(myrank==master_rank){
       vector<pair<int64_t,int> >().swap(local_slowness_requests);
     }
 
-    vector<int> active_tensor_ids;
-    if(bdiag_precon==1) active_tensor_ids.reserve(nloc_s2s);
     for (int i=0; i<nloc_s2s; i++){
       double s1 = quant_ptr_bf_s2s->_local_slowness[i];
       smax_loc = max(smax_loc,s1);
@@ -2328,7 +2526,6 @@ if(myrank==master_rank){
         double k0 = background_s0*w;
         double coef = pow(k0,2.0)*(pow(s1/background_s0,2.0)-1);
         quant_ptr_bf_s2s->_local_inv_mass_coef[i] = 1.0/(pow(h,3.0)*coef);
-        if(bdiag_precon==1) active_tensor_ids.push_back(quant_ptr_bf_s2s->_local_tensor_ids[i]);
       }
     }
 
@@ -2350,41 +2547,6 @@ if(myrank==master_rank){
       cout<<"Scatterer unknowns: "<<Nscatter_glo<<" out of "<<Ntot_s2s<<endl;
     }
 
-    if(bdiag_precon==1){
-      int active_count = static_cast<int>(active_tensor_ids.size());
-      vector<int> active_counts(size,0), active_displs(size,0);
-      MPI_Gather(&active_count, 1, MPI_INT, active_counts.data(), 1, MPI_INT, master_rank, MPI_COMM_WORLD);
-      vector<int> gathered_tensor_ids;
-      if(myrank==master_rank){
-        int total_active = 0;
-        for(int rr=0; rr<size; rr++){
-          active_displs[rr] = total_active;
-          total_active += active_counts[rr];
-        }
-        gathered_tensor_ids.resize(total_active);
-      }
-      MPI_Gatherv(active_tensor_ids.empty() ? nullptr : active_tensor_ids.data(), active_count, MPI_INT,
-                  myrank==master_rank ? gathered_tensor_ids.data() : nullptr,
-                  active_counts.data(), active_displs.data(), MPI_INT, master_rank, MPI_COMM_WORLD);
-      if(myrank==master_rank){
-        std::sort(gathered_tensor_ids.begin(), gathered_tensor_ids.end());
-        gathered_tensor_ids.erase(std::unique(gathered_tensor_ids.begin(), gathered_tensor_ids.end()), gathered_tensor_ids.end());
-        if(static_cast<int>(gathered_tensor_ids.size()) != Nscatter){
-          cout<<"Gathered "<<gathered_tensor_ids.size()<<" unique scatterer ids but expected "<<Nscatter<<endl;
-          exit(1);
-        }
-        scatter_tensor_root.swap(gathered_tensor_ids);
-        data_geo_scatterer.resize(static_cast<size_t>(Ndim)*scatter_tensor_root.size());
-        for(size_t ii=0; ii<scatter_tensor_root.size(); ii++){
-          int tensor_scalar = scatter_tensor_root[ii];
-          int tensor_md[Ndim];
-          z_c_bpack_singleindex_to_multiindex(&Ndim,Ns_s,&tensor_scalar,tensor_md);
-          data_geo_scatterer[ii*Ndim] = data_geo[(tensor_md[0]-1) * Ndim];
-          data_geo_scatterer[ii*Ndim+1] = data_geo[(tensor_md[1]-1) * Ndim+1];
-          data_geo_scatterer[ii*Ndim+2] = data_geo[(tensor_md[2]-1) * Ndim+2];
-        }
-      }
-    }
 	  z_c_bpack_printoption(&option_bf,&ptree_bf);
     z_c_bpack_md_construct_element_compute(&Ndim,&bmat_bf_s2s, &option_bf, &stats_bf_s2s, &msh_bf_s2s, &kerquant_bf_s2s, &ptree_bf, &C_FuncZmn_BF_S2S_MD, &C_FuncZmnBlock_BF_S2S_MD, quant_ptr_bf_s2s);
 
@@ -2503,9 +2665,11 @@ if(myrank==master_rank){
 	    int nlocal_active = static_cast<int>(active_tensor_old.size());
 	    double dummy_geo_scatterer = 0.0;
 	    int dummy_scatter_tensor_root = 0;
-	    double* data_geo_scatterer_ptr = (myrank==master_rank && !data_geo_scatterer.empty()) ? data_geo_scatterer.data() : &dummy_geo_scatterer;
-	    int* scatter_tensor_root_ptr = (myrank==master_rank && !scatter_tensor_root.empty()) ? scatter_tensor_root.data() : &dummy_scatter_tensor_root;
+	    // (the library's split is not run: no coordinates or scatterer ids on rank 0)
+	    double* data_geo_scatterer_ptr = &dummy_geo_scatterer;
+	    int* scatter_tensor_root_ptr = &dummy_scatter_tensor_root;
 
+	    double t_discovery0 = MPI_Wtime();
 	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
 	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
 	        &nblock, dummy_block_info, &diag_perm_size, dummy_diag_perm, mesh_range,
@@ -2519,7 +2683,9 @@ if(myrank==master_rank){
 	    vector<int> active_diag_pos(nlocal_active,-1);
 	    int nblock_capacity = nblock;
 	    int diag_perm_capacity = diag_perm_size;
-	    route_capacity = nlocal_active;
+	    // the second call fills block_info and mesh_range; with route_capacity -1 every rank returns before the
+	    // library's serial split (all points sorted on rank 0), which discover_diag_blocks does distributed
+	    route_capacity = -1;
 	    z_c_bpack_construct_init_diaglevel_simple(&Nscatter, &Ndim, data_geo_scatterer_ptr, scatter_tensor_root_ptr,
 	        &(quant_ptr_bf_s2s->_bdiag_level), &nlocal_active, active_tensor_old.data(),
 	        &nblock_capacity, quant_ptr_bf_s2s->_diag_block_info.data(),
@@ -2530,8 +2696,14 @@ if(myrank==master_rank){
 	      cout<<"diagonal block metadata changed between simple constructor calls"<<endl;
 	      exit(1);
 	    }
-	    vector<double>().swap(data_geo_scatterer);
-	    vector<int>().swap(scatter_tensor_root);
+	    discover_diag_blocks(Ndim, Ns_s, quant_ptr_bf_s2s->_bdiag_level, active_tensor_old,
+	                         quant_ptr_bf_s2s->_diag_block_info, nblock, diag_tensor_perm, active_diag_root,
+	                         active_diag_gid, active_diag_pos, MPI_COMM_WORLD);
+	    {
+	      double t_disc = MPI_Wtime() - t_discovery0, t_max = 0.0;
+	      MPI_Reduce(&t_disc, &t_max, 1, MPI_DOUBLE, MPI_MAX, master_rank, MPI_COMM_WORLD);
+	      if(myrank==master_rank) std::cout<<"Diagonal block discovery: "<<nblock<<" local blocks on rank 0, "<<t_max<<" s"<<std::endl;
+	    }
 
     // The lightweight scatterer tree above is used only to discover diagonal blocks.
     // Enable the high-frequency HODBF options only for the smaller blocks.
@@ -2846,6 +3018,13 @@ if(myrank==master_rank){
   	z_c_bpack_construct_element_compute(&(quant_ptr_bf_s2s->bmat_diags[bb]), &(quant_ptr_bf_s2s->option_diag), &(quant_ptr_bf_s2s->stats_diags[bb]), &(quant_ptr_bf_s2s->msh_diags[bb]), &(quant_ptr_bf_s2s->kerquant_diags[bb]), &(quant_ptr_bf_s2s->ptree_diags[bb]), &C_FuncZmn_BF_S2S, &C_FuncZmnBlock_BF_S2S, quant_ptr_bf_s2s->quant_ptr_diags[bb]);
     z_c_bpack_factor(&(quant_ptr_bf_s2s->bmat_diags[bb]),&(quant_ptr_bf_s2s->option_diag),&(quant_ptr_bf_s2s->stats_diags[bb]),&(quant_ptr_bf_s2s->ptree_diags[bb]),&(quant_ptr_bf_s2s->msh_diags[bb]));
     t_block_setup += MPI_Wtime() - t_block0;
+    if(global_block_id == 1 && myrank == pgrp_head){
+      // the share of the block's entries (the GPU evaluator, or the C callbacks on the CPU) in its setup
+      double t_entry = 0.0;
+      z_c_bpack_getstats(&(quant_ptr_bf_s2s->stats_diags[bb]), "Time_Entry", &t_entry);
+      std::cout<<"Diagonal block 1: construction+factorization "<<MPI_Wtime() - t_block0<<" s, of which entry evaluation "
+               <<t_entry<<" s"<<std::endl;
+    }
 
     quant_ptr_bf_s2s->quant_ptr_diags[bb]->msh_bf = &(quant_ptr_bf_s2s->msh_diags[bb]);
 
