@@ -2710,7 +2710,7 @@ private:
     int scratch_points_from_slots(const std::vector<int>& slots, cudaStream_t stream);
     void ensure_scratch_slots(int64_t count, cudaStream_t stream);
     void put_back_packed_blocks();
-    std::array<double, 8> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [6] bytes down; [5] the final wait)
+    std::array<double, 10> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [6] bytes down; [5] the final wait; [7]-[9] the copier's wait for device data, setup, stores)
     // the F22 step's records to the host in the background (the level's own
     // copier went with finish()), and the device bytes of its blocks in flight
     std::unique_ptr<HostCopier> f22_copier_;
@@ -7788,7 +7788,7 @@ int LevelEliminator<CoordType, DataType, KernelType>::place_scratch_points(const
 // those two transposed] over its F22 columns, its QRCP, and the records
 // X_SR, X_RS, X_RR (from its self block) and X_NR, X_RN (from the near
 // blocks of its neighbours' F22 points), back to the host.  The blocks are
-// read, not changed: the host slices them once they are back.  A pair
+// read, not changed: f22_slice cuts them to the kept slots afterwards.  A pair
 // without a near block (no elimination touched it) and a box without a self
 // block take the kernel's, as on the host.
 // ---------------------------------------------------------------------------
@@ -7831,14 +7831,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_boxes(std::vector<Par
         f22_released(f22_copier_->wait_all());
         f22_t_[5] += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_wait).count();
         f22_t_[4] = f22_copier_->busy_seconds();
+        f22_t_[7] = f22_copier_->wait_seconds();
+        f22_t_[8] = f22_copier_->setup_seconds();
+        f22_t_[9] = f22_copier_->store_seconds();
         f22_copier_.reset();
     }
     if (tree_->mpi_rank == 0 && env::trace("phase")) {
         std::printf("  [gpu] level %d F22 step on the device, %zu boxes in %d chunks: points %.2f s, sketch %.2f s, "
-                    "targets and ID %.2f s, records %.2f s; their copies to the host %.2f GB in the background (busy %.2f s), "
-                    "the last waited for %.2f s\n",
+                    "targets and ID %.2f s, records %.2f s; their copies to the host %.2f GB in the background (busy %.2f s: "
+                    "setup %.2f, stores %.2f, waiting for device data %.2f), the last waited for %.2f s\n",
                     level_index_, works.size(), chunks, f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], f22_t_[6] / 1e9,
-                    f22_t_[4], f22_t_[5]);
+                    f22_t_[4], f22_t_[8], f22_t_[9], f22_t_[7], f22_t_[5]);
         std::fflush(stdout);
     }
 }
@@ -8253,17 +8256,26 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
         job.device = reinterpret_cast<char*>(d_rec);
         job.bytes = front_elems * D;
         job.ready = ready;
-        struct Shape { MatrixStorage<DataType>* m; int rows, cols; };
+        struct Shape { PartialRecord<DataType>* m; int rows, cols; };
         auto shapes = std::make_shared<std::vector<Shape>>();
         for (size_t i = 0; i < nb; ++i) {
             const Rec& c = rec[i];
             if (c.r <= 0) continue;
             auto& w = works[w0 + i];
             size_t at = c.front * D;
-            auto take = [&](MatrixStorage<DataType>& out, int rows, int cols_) {
+            auto take = [&](PartialRecord<DataType>& out, int rows, int cols_) {
                 const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols_) * D;
-                out = MatrixStorage<DataType>{};
-                if (bytes > 0) job.segments.push_back(HostCopier::Segment(&out.data, nullptr, at, bytes));
+                out = PartialRecord<DataType>{};
+                if (bytes > 0) {  // sized by the copier, not zero-filled: it writes all of it
+                    PartialRecord<DataType>* rec = &out;
+                    const size_t n = static_cast<size_t>(rows) * static_cast<size_t>(cols_);
+                    job.segments.push_back(HostCopier::Segment::into(
+                        [rec, n] {
+                            rec->data.resize(n);
+                            return reinterpret_cast<char*>(rec->data.data());
+                        },
+                        at, bytes));
+                }
                 shapes->push_back(Shape{&out, rows, cols_});
                 at += bytes;
             };
@@ -8279,7 +8291,6 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
                 sh.m->rows = sh.rows;
                 sh.m->cols = sh.cols;
                 sh.m->lda = sh.rows;
-                sh.m->format = MatrixStorage<DataType>::FULL;
             }
         };
         f22_inflight_[reinterpret_cast<char*>(d_rec)] = rec_bytes;

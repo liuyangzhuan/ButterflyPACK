@@ -126,7 +126,7 @@ still needed, so the F22 serving cost stays.
 Test driver: `Laplace3D_H2Test_Driver --H2_partial n11` on a slab-plus-faces
 point set and on a plain cube split, dense checks at small N.
 
-## Status (2026-10-23)
+## Status (2026-10-24)
 
 - **P1** done (CPU, 1 and 4 ranks).
 - **P2a** done (CPU), in `partial.hpp`:
@@ -304,7 +304,46 @@ point set and on a plain cube split, dense checks at small N.
     (2.3 s), the F22 sketches (1.5 s).  The records stay host-side (49 GB at
     64^3: more than a 40 GB card), so the partial solves and the CB product
     run on the host.
-- Next: P4 (release API, `H2_compress_factors` on the records), P5 (the
-  STRUMPACK hand-off).  GPU leftovers: a blocked QRCP for the F22 targets;
-  the records on the device (with compression, or several cards) for a
-  device CB product and partial solves.
+  - **GPU follow-ups**, from a 64^3 one-GPU profile (2026-10-24; nsys and a
+    per-box dump of the F22 targets).  The step's "targets and ID" is all
+    QRCP kernel time (level 3 1.61 s, level 2 2.49 s); under a traffic model
+    of 16 sum (m-i)(n-i) bytes a box the kernels reach 282 / 371 GB/s, and
+    the column update reads every element twice and the reflector once.  The
+    traffic is in the tall targets of the boxes in or next to the F11 slab
+    (their exact near F11 rows): at level 2, 32 boxes up to 4615 x 1792 with
+    ranks 500-715 carry 90% of it, at level 3, 128 boxes 61%.  The records'
+    copies ran at 7 GB/s (appended on one thread into fresh vectors; the D2H
+    itself at 20-24), so ~2 s of the step waited for them.  X_NR's rows at
+    the sparsified neighbours' R positions are never read (the CB product and
+    entries take those couplings from the neighbour's X_RN): 17.5 of the
+    49.5 GB.  In this order:
+    (d) the records' copy (done, below);
+    (b) a two-phase F22 step (every box's ID, the publish, then the records),
+        the ID launches grouped by size instead of by the records' chunks
+        (12 of level 3's 29 QRCP launches ran on 21-28 of the 108 SMs);
+    (e) X_NR without the sparsified neighbours' R rows (needs (b));
+    (a) a blocked QRCP (dlaqps-style: one read of the trailing matrix a
+        step, a GEMM update a panel).
+    A QR before the QRCP of the tall targets halves their traffic, but
+    cuSOLVER's geqrf runs at 0.3-1.2 TFLOP/s on these shapes (1.1 s for the
+    two levels); a smaller far sketch (d = |S_old| + 8 now, mean ranks 167 of
+    474 and 255 of 1338) would change the sampling: not pursued.
+  - **(d)** done 2026-10-24: the records are `PartialRecord`s (core/tree.hpp),
+    not zero-filled when sized; the copier sizes them on its thread and copies
+    each 64 MB slot into them in 1 MB pieces over its threads
+    (`HostCopier::Segment::into`), and populates the reserved pages of large
+    vector destinations before appending to them (MADV_POPULATE_WRITE, every
+    copier user).  64^3 on one GPU, runs interleaved on one node: 12.33 /
+    12.37 s before, 10.65 / 11.22 s after, and 11.98 s after ten other runs
+    on the node: the copies are page-fault bound (9-14 GB/s, vs 7) and the
+    faults' cost varies with the node's memory; the step's waits for them
+    went from ~2 s to 0.4-1.6 s.  Checks and logdets unchanged (GPU and CPU
+    paths, 1 to 8 ranks).  Measured and dropped (means of two interleaved
+    runs): zero-filled destinations (a parallel copy into them ran at 9-10
+    GB/s), populating plus appending (11.55 s), the owner sizing the records
+    on its own thread (it stalled 0.2-1.1 s a level against the copier's page
+    faults; 11.23 s), populating the sized ones first (11.48 s).
+- Next: (b) + (e), then (a); P4 (release API, `H2_compress_factors` on the
+  records), P5 (the STRUMPACK hand-off).  Later: the records on the device
+  (with compression, or several cards) for a device CB product and partial
+  solves.

@@ -11,6 +11,8 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <mpi.h>
 #include "morton.hpp"
 #include "region_partition.hpp"
@@ -466,6 +468,53 @@ struct MatrixStorage {
      */
     int64_t size() const {
         return lda * cols;
+    }
+};
+/**
+ * @brief An allocator whose construct without arguments default-initializes:
+ * a vector of scalars it allocates is not zero-filled by resize(n).
+ */
+template<typename T>
+struct DefaultInitAllocator : std::allocator<T> {
+    template<typename U>
+    struct rebind { using other = DefaultInitAllocator<U>; };
+    DefaultInitAllocator() noexcept = default;
+    template<typename U>
+    DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept {}
+    template<typename U>
+    void construct(U* p) noexcept(std::is_nothrow_default_constructible_v<U>) {
+        ::new (static_cast<void*>(p)) U;
+    }
+    template<typename U, typename... Args>
+    void construct(U* p, Args&&... args) {
+        ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+    }
+};
+
+/**
+ * @brief A dense column-major block of the partial factorization's F22
+ * records (T22, X_RR, X_RS, X_SR, X_RN, X_NR; unstructured/partial.hpp).
+ * Sizing it does not zero-fill it: the GPU path sizes a record and its
+ * background copy writes it from many threads, the pages faulting in on
+ * those threads (a zero-filled destination halved that copy, measured).
+ */
+template<typename DataType>
+struct PartialRecord {
+    std::vector<DataType, DefaultInitAllocator<DataType>> data;
+    int64_t rows = 0;
+    int64_t cols = 0;
+    int64_t lda = 0;
+    void allocate(int64_t nrows, int64_t ncols) {  // zero-filled
+        rows = nrows;
+        cols = ncols;
+        lda = nrows;
+        data.assign(static_cast<size_t>(std::max<int64_t>(nrows * ncols, 0)), DataType{});
+    }
+    void assign(int64_t nrows, int64_t ncols, const std::vector<DataType>& values) {
+        rows = nrows;
+        cols = ncols;
+        lda = nrows;
+        data.assign(values.begin(), values.end());
     }
 };
 
@@ -1029,12 +1078,12 @@ struct BoxData {
         bool sparsified = false;
         std::vector<int64_t> skeleton;     ///< S22 (box slots)
         std::vector<int64_t> redundant;    ///< R22 (box slots)
-        MatrixStorage<DataType> T;         ///< k' x r22 over skeleton_indices (S' = S11, S22), zero rows on S11
-        MatrixStorage<DataType> X_RR;      ///< r22 x r22 (the transformed R22 block)
-        MatrixStorage<DataType> X_RS;      ///< r22 x k'
-        MatrixStorage<DataType> X_SR;      ///< k' x r22
-        MatrixStorage<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
-        MatrixStorage<DataType> X_NR;      ///< (the neighbours' raw F22 points) x r22
+        PartialRecord<DataType> T;         ///< k' x r22 over skeleton_indices (S' = S11, S22), zero rows on S11
+        PartialRecord<DataType> X_RR;      ///< r22 x r22 (the transformed R22 block)
+        PartialRecord<DataType> X_RS;      ///< r22 x k'
+        PartialRecord<DataType> X_SR;      ///< k' x r22
+        PartialRecord<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
+        PartialRecord<DataType> X_NR;      ///< (the neighbours' raw F22 points) x r22
         std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot
         std::vector<std::vector<int64_t>> neighbor_f22_slots; ///< per one_hop slot: those points as the neighbour's box slots
         bool released = false;
@@ -1605,8 +1654,8 @@ struct PartialF22Work {
     // ---- results
     bool done = false;                  ///< the device took the box
     std::vector<int64_t> skel22, red22; ///< the ID's F22 skeleton and redundant columns (indices of pos22), sorted
-    MatrixStorage<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
-    MatrixStorage<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;
+    PartialRecord<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
+    PartialRecord<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;
 };
 
 /**

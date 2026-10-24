@@ -625,7 +625,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 for (int64_t i = 0; i < k22; ++i) f.skeleton.push_back(S_old[static_cast<size_t>(posS[static_cast<size_t>(k11 + i)])]);
                 for (int64_t j = 0; j < r22; ++j) f.redundant.push_back(S_old[static_cast<size_t>(posR[static_cast<size_t>(j)])]);
                 // T over S' rows (zero on S11)
-                f.T.allocate(kp, r22, MS::FULL);
+                f.T.allocate(kp, r22);
                 for (int64_t j = 0; j < r22; ++j)
                     for (int64_t i = 0; i < k22; ++i)
                         f.T.data[static_cast<size_t>(k11 + i + j * kp)] = id.interpolation(ps[static_cast<size_t>(i)], pr_[static_cast<size_t>(j)]);
@@ -642,14 +642,11 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     for (int64_t i = 0; i < r22; ++i) A_RS[static_cast<size_t>(i + j * r22)] = Aat(posR[static_cast<size_t>(i)], posS[static_cast<size_t>(j)]);
                 for (int64_t j = 0; j < r22; ++j)
                     for (int64_t i = 0; i < r22; ++i) A_RR[static_cast<size_t>(i + j * r22)] = Aat(posR[static_cast<size_t>(i)], posR[static_cast<size_t>(j)]);
-                f.X_SR.allocate(kp, r22, MS::FULL);
-                f.X_SR.data = A_SR;
+                f.X_SR.assign(kp, r22, A_SR);
                 partial_gemm<DataType>('N', 'N', kp, r22, kp, DataType(-1), A_SS.data(), kp, T, kp, DataType(1), f.X_SR.data.data(), kp);
-                f.X_RS.allocate(r22, kp, MS::FULL);
-                f.X_RS.data = A_RS;
+                f.X_RS.assign(r22, kp, A_RS);
                 partial_gemm<DataType>('T', 'N', r22, kp, kp, DataType(-1), T, kp, A_SS.data(), kp, DataType(1), f.X_RS.data.data(), r22);
-                f.X_RR.allocate(r22, r22, MS::FULL);
-                f.X_RR.data = A_RR;
+                f.X_RR.assign(r22, r22, A_RR);
                 // X_RR = A_RR - T^T A_SR - X_RS T  (X_RS T = A_RS T - T^T A_SS T)
                 partial_gemm<DataType>('T', 'N', r22, r22, kp, DataType(-1), T, kp, A_SR.data(), kp, DataType(1), f.X_RR.data.data(), r22);
                 partial_gemm<DataType>('N', 'N', r22, r22, kp, DataType(-1), f.X_RS.data.data(), r22, T, kp, DataType(1), f.X_RR.data.data(), r22);
@@ -663,8 +660,8 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     f.neighbor_f22_counts[idx] = static_cast<int64_t>(near[idx].q22.size());
                     total += f.neighbor_f22_counts[idx];
                 }
-                f.X_NR.allocate(total, r22, MS::FULL);
-                f.X_RN.allocate(r22, total, MS::FULL);
+                f.X_NR.allocate(total, r22);
+                f.X_RN.allocate(r22, total);
                 int64_t row0 = 0;
                 for (size_t idx = 0; idx < b.one_hop.size(); ++idx) {
                     const int64_t m = f.neighbor_f22_counts[idx];
@@ -2136,7 +2133,7 @@ void partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
             auto& f = box.f22;
             if (!f.sparsified) continue;
             for (auto* m : {&f.X_RR, &f.X_RS, &f.X_SR, &f.X_RN, &f.X_NR}) {
-                std::vector<DataType>().swap(m->data);
+                decltype(m->data)().swap(m->data);
                 m->rows = m->cols = m->lda = 0;
             }
             f.released = true;
