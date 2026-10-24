@@ -977,7 +977,9 @@ void assemble_fromD1D2Tau(double x1,double x2,double y1,double y2,double z1,doub
 void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1,double z2, int col_index_1based, _Complex double* output, C_QuantApp_BF* Q){
 
     double s0=2;
-    int self = sqrt(pow(x1-x2,2)+pow(y1-y2,2)+pow(z1-z2,2))<1e-20? 1:0;
+    const double dx = x1-x2, dy = y1-y2, dz = z1-z2;
+    const double r2 = dx*dx + dy*dy + dz*dz;
+    int self = r2<1e-40? 1:0;
     if(self==1){
       Q->SampleSelf(x1, y1, z1, x2, y2, z2, output);
       if(Q->_scaleGreen==0){
@@ -992,10 +994,18 @@ void assemble_fromD1D2Tau_s2s(double x1,double x2,double y1,double y2, double z1
       }else{
         *output = -*output ;
       }
+    }else if(Q->_d==3){
+      // -Babich(3, w, s0/(2 pi), 0, s0 r) in closed form, -e^{i k r}/(4 pi r) with k = s0 w.  Babich evaluates two
+      // Hankel functions (orders -1/2 and 1/2, the second for a zero coefficient) and about ten transcendental
+      // functions an entry.  The GPU evaluator's HelmholtzEntry is the same expression.
+      const double r = sqrt(r2);
+      const double amp = -1.0/(4.0*pi*r);
+      const double kr = s0*Q->_w*r;
+      *output = amp*cos(kr) + Im*(amp*sin(kr));
     }else{
       double D1 =s0/2.0/pi; //fr[nr*nc + idxr+idxc*nr];
       double D2 =0;// fr[nr*nc*2 + idxr+idxc*nr];
-      double tau = sqrt(pow(s0,2)* (pow(x1-x2,2) + pow(y1-y2,2) + pow(z1-z2,2)));
+      double tau = sqrt(pow(s0,2)*r2);
       *output =-Babich(Q->_d, Q->_w, D1, D2, tau);
     }
 }
@@ -1029,6 +1039,19 @@ void assemble_fromD1D2Tau_block_s2s(int nth, int nr, int nc, double* x1,double* 
       int col_index_1based = col_indices_1based ? col_indices_1based[idxc] : -1;
       assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],col_index_1based,&valtmp, Q);
       alldat_loc[idx_val_map[nth]+idxr+idxc*nr]=valtmp;
+    }
+}
+
+
+// assemble_fromD1D2Tau_block_s2s without its inner parallel loop, for C_FuncZmnBlock_BF_S2S (its caller's loop over
+// blocks is the parallel one)
+void assemble_diag_block_block(int nth, int nr, int nc, double* x1,double* x2,double* y1,double* y2,double* z1,double* z2, const int* col_indices_1based, _Complex double* alldat_loc, int64_t* idx_val_map, C_QuantApp_BF* Q){
+    for (int idxc=0;idxc<nc;idxc++){
+      int col_index_1based = col_indices_1based ? col_indices_1based[idxc] : -1;
+      for (int idxr=0;idxr<nr;idxr++){
+        assemble_fromD1D2Tau_s2s(x1[idxr],x2[idxc],y1[idxr],y2[idxc],z1[idxr],z2[idxc],col_index_1based,
+                                 &alldat_loc[idx_val_map[nth]+idxr+idxc*nr], Q);
+      }
     }
 }
 
@@ -1481,7 +1504,7 @@ inline void C_FuncZmnBlock_BF_S2S(int* Ninter, int* Nallrows, int* Nallcols, int
         z2[idxc] = Q->_data[(n-1) * Q->_d+2];
       }
 
-      assemble_fromD1D2Tau_block_s2s(nn1,nr,nc,x1,x2,y1,y2,z1,z2,allcols+idx_col_map[nn1],alldat_loc,idx_val_map.data(),fr,Q);
+      assemble_diag_block_block(nn1,nr,nc,x1,x2,y1,y2,z1,z2,allcols+idx_col_map[nn1],alldat_loc,idx_val_map.data(),Q);
       free(x1);
       free(y1);
       free(z1);
