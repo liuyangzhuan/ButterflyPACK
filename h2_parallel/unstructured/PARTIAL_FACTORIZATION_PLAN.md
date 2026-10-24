@@ -274,11 +274,37 @@ point set and on a plain cube split, dense checks at small N.
     | 4 | 105 s | 30 s |
     | 8 | 129 s | 36 s |
 
-    Left at 64^3 on one GPU (40 s): the host transitions and the next
-    levels' block uploads (about 18 s), the F22 records' download and
-    unpacking (6 s), the device QRCP of the F22 targets (4 s).
-  - **P3c** (next) a device transition from the sliced device blocks (no
-    download, host transition and upload), the records kept on the device
-    for the partial solves and the CB product.
-- Next: P3, then P4 (release API, `H2_compress_factors` on the records)
-  and P5 (the STRUMPACK hand-off).
+    Left at 64^3 on one GPU (40 s) after P3b: the host transitions and the
+    next levels' block uploads, the records' download, the device QRCP.
+  - **P3c** done 2026-10-24: the partial levels' parents built on the
+    device.  After the F22 step the level's self and near blocks are sliced
+    on the device to the new live sets (`LevelEliminator::f22_slice`: a
+    gather at the kept positions, the old block freed) and the sparsified
+    boxes' device skeletons set to them (the remote ones' from the publish);
+    the device transition reads a child's rows in a source that recorded
+    them at the live set before the step through that set (a gather at the
+    kept positions).  Level 1's transition runs on the device too, and the
+    root's partial LU runs there (`partial_root_on_device`: A11 = P L U, W,
+    CB by MAGMA), its factors to the host.  The F22 records go to the host
+    through a background copier (fixed pinned slots, its own stream) while
+    the next chunks run: growing one pinned buffer to a chunk's records had
+    cost 5.5 s at 64^3 (pinning ~1 s/GB).
+    GPU = CPU to the printed digits of every dense check, 1 to 8 ranks.
+    64^3, F11 = 16384 (A100 40 GB; CPU 64 threads a node):
+
+    | ranks | CPU | P3a | P3b | P3c |
+    |---|---|---|---|---|
+    | 1 | 189 s | 144 s | 40 s | 12.4 s |
+    | 4 | 105 s | 74 s | 30 s | 8.1 s |
+    | 8 | 129 s | 97 s | 36 s | 14.0 s |
+
+    (8 ranks: 2 a GPU; the factor time includes the GPU-aware MPI warm-up,
+    about 6.5 s.)  Left on one GPU: the F22 targets' QRCP (4.1 s of 12.4,
+    bandwidth-bound: one pivoted Householder pass a column), the F11 waves
+    (2.3 s), the F22 sketches (1.5 s).  The records stay host-side (49 GB at
+    64^3: more than a 40 GB card), so the partial solves and the CB product
+    run on the host.
+- Next: P4 (release API, `H2_compress_factors` on the records), P5 (the
+  STRUMPACK hand-off).  GPU leftovers: a blocked QRCP for the F22 targets;
+  the records on the device (with compression, or several cards) for a
+  device CB product and partial solves.

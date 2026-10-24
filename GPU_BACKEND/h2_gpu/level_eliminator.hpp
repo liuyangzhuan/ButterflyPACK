@@ -564,11 +564,12 @@ public:
         (void)works;
         throw std::logic_error("f22_boxes: not on this eliminator");
     }
-    // ... and the blocks back into the host BoxData sliced to the new live
-    // sets of the sparsified boxes (`kept`: this rank's and its copies')
-    virtual void download_blocks_sliced(const PartialF22Kept& kept) {
+    // ... and the level's blocks sliced to the new live sets of the
+    // sparsified boxes (`kept`: this rank's and its copies'), for the
+    // transition
+    virtual void f22_slice(const PartialF22Kept& kept) {
         (void)kept;
-        throw std::logic_error("download_blocks_sliced: not on this eliminator");
+        throw std::logic_error("f22_slice: not on this eliminator");
     }
 };
 
@@ -751,7 +752,6 @@ public:
     int eliminate_wave(const std::vector<int64_t>& wave, int wave_index) override;
     void finish() override;
     void download_blocks() override { download_blocks_to_host(); }
-    void download_blocks_sliced(const PartialF22Kept& kept) override { download_blocks_to_host(&kept); }
     // needs the device fill sources (freed ones are restored from their
     // host copies), unless nothing was eliminated
     bool can_build_parent() const override { return gpu_sketch_ || !eliminated_any_; }
@@ -2704,14 +2704,30 @@ private:
                      F22Columns* f22 = nullptr);
 public:
     void f22_boxes(std::vector<PartialF22Work<DataType>>& works) override;
+    void f22_slice(const PartialF22Kept& kept) override;
 private:
     void f22_chunk(std::vector<PartialF22Work<DataType>>& works, size_t w0, size_t w1);
     int scratch_points_from_slots(const std::vector<int>& slots, cudaStream_t stream);
     void ensure_scratch_slots(int64_t count, cudaStream_t stream);
     void put_back_packed_blocks();
-    std::array<double, 7> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [6] bytes down)
+    std::array<double, 8> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [6] bytes down; [5] the final wait)
+    // the F22 step's records to the host in the background (the level's own
+    // copier went with finish()), and the device bytes of its blocks in flight
+    std::unique_ptr<HostCopier> f22_copier_;
+    std::unordered_map<char*, size_t> f22_inflight_;
+    size_t f22_inflight_bytes_ = 0;
+    void f22_released(std::vector<char*>&& blocks) {
+        for (char* b : blocks) {
+            const auto it = f22_inflight_.find(b);
+            if (it != f22_inflight_.end()) {
+                f22_inflight_bytes_ -= it->second;
+                f22_inflight_.erase(it);
+            }
+        }
+        free_copied_blocks(std::move(blocks));
+    }
     void free_copied_blocks(std::vector<char*>&& blocks);
-    void download_blocks_to_host(const PartialF22Kept* kept = nullptr);
+    void download_blocks_to_host();
     void release_level_data();
     void check_device_kernel();
     // Kernel entries of `items` (in the metadata image `meta`, on the device
@@ -7338,7 +7354,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::collect_elimination_marks
 // Level end: Schur and near-field blocks back into the host BoxData.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host(const PartialF22Kept* kept) {
+void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host() {
     Context& ctx = Context::instance();
     cudaStream_t stream = ctx.stream();
     auto& stats = eliminator_stats();
@@ -7347,38 +7363,13 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host(c
     // silently lost.  Near blocks are held packed between groups now, so this
     // puts the remainder back rather than refusing.
     put_back_packed_blocks();
-    // (H2_partial: `kept` slices a block's rows and columns of a sparsified box
-    // to its new live set as it is gathered)
-    struct Piece {
-        const DeviceMatrix* m;
-        size_t offset;
-        int rows, cols;
-        const std::vector<int64_t>* rk;
-        const std::vector<int64_t>* ck;
-    };
-    auto kept_of = [&](int64_t morton, int n) -> const std::vector<int64_t>* {
-        if (kept == nullptr) return nullptr;
-        const auto it = kept->find(morton);
-        if (it == kept->end()) return nullptr;
-        if (it->second.first != n) {
-            throw std::runtime_error("LevelEliminator: a block of box " + std::to_string(morton) +
-                                     " is not over its live set before the F22 step");
-        }
-        return &it->second.second;
-    };
-    auto make_piece = [&](const DeviceMatrix* m, size_t offset, int64_t row_box, int64_t col_box) {
-        const std::vector<int64_t>* rk = kept_of(row_box, m->rows);
-        const std::vector<int64_t>* ck = kept_of(col_box, m->cols);
-        return Piece{m, offset, rk ? static_cast<int>(rk->size()) : m->rows, ck ? static_cast<int>(ck->size()) : m->cols, rk, ck};
-    };
+    struct Piece { const DeviceMatrix* m; size_t offset; int rows, cols; };
     std::vector<Piece> pieces;
     size_t total = 0;
-    for (size_t b = 0; b < states_.size(); ++b) {
-        const BoxState& st = states_[b];
+    for (const BoxState& st : states_) {
         if (!st.schur.ptr) continue;
-        const int64_t m = level_.local_boxes[b].morton_index;
-        pieces.push_back(make_piece(&st.schur, total, m, m));
-        total += static_cast<size_t>(pieces.back().rows) * pieces.back().cols;
+        pieces.push_back(Piece{&st.schur, total, st.schur.rows, st.schur.cols});
+        total += static_cast<size_t>(st.schur.rows) * st.schur.cols;
     }
     // (CA levels: pairs of two ghosts stay behind, no local box keeps them)
     std::vector<std::pair<uint64_t, const DeviceMatrix*>> edge_list;
@@ -7391,10 +7382,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host(c
     std::sort(edge_list.begin(), edge_list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (const auto& kv : edge_list) {
         if (kv.second->ptr == nullptr) throw std::runtime_error("LevelEliminator: unallocated edge at level end");
-        // (a nonsymmetric matrix's K(row, col) is keyed dkey(row, col); a symmetric one's K(hi, lo) edge_key(lo, hi))
-        const int64_t a = static_cast<int64_t>(kv.first & 0xffffffffu), c = static_cast<int64_t>(kv.first >> 32);
-        pieces.push_back(make_piece(kv.second, total, a, c));
-        total += static_cast<size_t>(pieces.back().rows) * pieces.back().cols;
+        pieces.push_back(Piece{kv.second, total, kv.second->rows, kv.second->cols});
+        total += static_cast<size_t>(kv.second->rows) * kv.second->cols;
     }
     if (total == 0) return;
 
@@ -7422,10 +7411,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::download_blocks_to_host(c
             meta_.clear();
             for (size_t i = first; i < last; ++i) {
                 const Piece& p = pieces[i];
-                IndexList rl{}, cl{};
-                if (p.rk != nullptr) rl = IndexList{static_cast<int64_t>(meta_.append(std::vector<int>(p.rk->begin(), p.rk->end()))), 0, nullptr};
-                if (p.ck != nullptr) cl = IndexList{static_cast<int64_t>(meta_.append(std::vector<int>(p.ck->begin(), p.ck->end()))), 0, nullptr};
-                copies.push_back(GatherItem{d_pack + (p.offset - base), p.rows, p.rows, p.cols, p.m->ptr, 1, p.m->rows, rl, cl});
+                copies.push_back(GatherItem{d_pack + (p.offset - base), p.rows, p.rows, p.cols, p.m->ptr, 1, p.m->rows,
+                                            IndexList{}, IndexList{}});
                 max_m = std::max(max_m, p.rows);
                 max_n = std::max(max_n, p.cols);
             }
@@ -7826,6 +7813,9 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_boxes(std::vector<Par
     const size_t budget = std::max<size_t>(heap_.largest_free() / 3, size_t{256} << 20);
     f22_t_ = {};
     int chunks = 0;
+    f22_copier_ = std::make_unique<HostCopier>(ctx.device());
+    f22_inflight_.clear();
+    f22_inflight_bytes_ = 0;
     for (size_t w0 = 0; w0 < works.size();) {
         size_t w1 = w0, bytes = 0;
         while (w1 < works.size() && (w1 == w0 || bytes + box_bytes(works[w1]) <= budget)) {
@@ -7836,11 +7826,19 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_boxes(std::vector<Par
         ++chunks;
         w0 = w1;
     }
+    {   // the records' last copies (their finalize sets the shapes)
+        const auto t_wait = std::chrono::steady_clock::now();
+        f22_released(f22_copier_->wait_all());
+        f22_t_[5] += std::chrono::duration<double>(std::chrono::steady_clock::now() - t_wait).count();
+        f22_t_[4] = f22_copier_->busy_seconds();
+        f22_copier_.reset();
+    }
     if (tree_->mpi_rank == 0 && env::trace("phase")) {
         std::printf("  [gpu] level %d F22 step on the device, %zu boxes in %d chunks: points %.2f s, sketch %.2f s, "
-                    "targets and ID %.2f s, records %.2f s, their download %.2f s (%.2f GB), unpacking %.2f s\n",
-                    level_index_, works.size(), chunks, f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], f22_t_[4],
-                    f22_t_[6] / 1e9, f22_t_[5]);
+                    "targets and ID %.2f s, records %.2f s; their copies to the host %.2f GB in the background (busy %.2f s), "
+                    "the last waited for %.2f s\n",
+                    level_index_, works.size(), chunks, f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], f22_t_[6] / 1e9,
+                    f22_t_[4], f22_t_[5]);
         std::fflush(stdout);
     }
 }
@@ -8131,7 +8129,12 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
         back_elems += static_cast<size_t>(c.kp) * c.kp + 2 * static_cast<size_t>(c.nt) * c.kp;
     }
     if (front_elems > 0) {
-        S* d_rec = heap_.alloc<S>((front_elems + back_elems) * D);
+        // room for the records block beside the ones still being copied
+        const size_t rec_bytes = (front_elems + back_elems) * D;
+        f22_released(f22_copier_->take_finished());
+        const size_t cap = std::max<size_t>(heap_.largest_free() / 2, rec_bytes);
+        while (f22_inflight_bytes_ > 0 && f22_inflight_bytes_ + rec_bytes > cap) f22_released(f22_copier_->wait_released());
+        S* d_rec = heap_.alloc<S>(rec_bytes);
         S* d_back = d_rec + front_elems;
         meta_.clear();
         gathers.clear();
@@ -8240,25 +8243,29 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
         if (tn2.count() > 0) tn2.gemm(md, MagmaTrans, MagmaNoTrans, -1.0, 1.0, queue);
         if (nn3.count() > 0) nn3.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
         lap(3);
-        // ---- (7) the records to the host
-        DataType* h_rec = static_cast<DataType*>(pinned_pool().result.reserve(front_elems * D));
-        check_cuda(cudaMemcpyAsync(h_rec, d_rec, front_elems * D, cudaMemcpyDeviceToHost, stream), "F22 step: records");
-        check_cuda(cudaStreamSynchronize(stream), "F22 step: records");
-        heap_.free(d_rec);
-        eliminator_stats().bytes_down += static_cast<double>(front_elems * D);
-        f22_t_[6] += static_cast<double>(front_elems * D);
-        lap(4);
-        #pragma omp parallel for schedule(dynamic)
-        for (int64_t ii = 0; ii < static_cast<int64_t>(nb); ++ii) {
-            const size_t i = static_cast<size_t>(ii);
+        // ---- (7) the records to the host in the background (the copier's
+        // fixed pinned slots and stream) while the next chunk runs; the block
+        // goes once copied
+        cudaEvent_t ready = nullptr;
+        check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "cudaEventCreate");
+        check_cuda(cudaEventRecord(ready, stream), "cudaEventRecord");
+        HostCopier::Job job;
+        job.device = reinterpret_cast<char*>(d_rec);
+        job.bytes = front_elems * D;
+        job.ready = ready;
+        struct Shape { MatrixStorage<DataType>* m; int rows, cols; };
+        auto shapes = std::make_shared<std::vector<Shape>>();
+        for (size_t i = 0; i < nb; ++i) {
             const Rec& c = rec[i];
             if (c.r <= 0) continue;
             auto& w = works[w0 + i];
-            const DataType* at = h_rec + c.front;
+            size_t at = c.front * D;
             auto take = [&](MatrixStorage<DataType>& out, int rows, int cols_) {
-                const size_t n = static_cast<size_t>(rows) * static_cast<size_t>(cols_);
-                out.set_owned(rows, cols_, std::vector<DataType>(at, at + n), MatrixStorage<DataType>::FULL);
-                at += n;
+                const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols_) * D;
+                out = MatrixStorage<DataType>{};
+                if (bytes > 0) job.segments.push_back(HostCopier::Segment(&out.data, nullptr, at, bytes));
+                shapes->push_back(Shape{&out, rows, cols_});
+                at += bytes;
             };
             take(w.T, c.kp, c.r);
             take(w.X_SR, c.kp, c.r);
@@ -8267,7 +8274,19 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
             take(w.X_NR, c.nt, c.r);
             take(w.X_RN, c.r, c.nt);
         }
-        lap(5);
+        job.finalize = [shapes] {
+            for (const Shape& sh : *shapes) {
+                sh.m->rows = sh.rows;
+                sh.m->cols = sh.cols;
+                sh.m->lda = sh.rows;
+                sh.m->format = MatrixStorage<DataType>::FULL;
+            }
+        };
+        f22_inflight_[reinterpret_cast<char*>(d_rec)] = rec_bytes;
+        f22_inflight_bytes_ += rec_bytes;
+        f22_copier_->submit(std::move(job));
+        eliminator_stats().bytes_down += static_cast<double>(front_elems * D);
+        f22_t_[6] += static_cast<double>(front_elems * D);
     }
     heap_.free(d_targets);
     heap_.free(d_id);
@@ -8319,6 +8338,125 @@ void LevelEliminator<CoordType, DataType, KernelType>::put_back_packed_blocks() 
         materialize_adopted(want, Context::instance().stream(), MatDownload);
     }
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// H2_partial, after the F22 step (unstructured/partial.hpp): the level's
+// blocks sliced on the device to the new live sets of the sparsified boxes
+// (`kept`: this rank's and its copies', the kept positions within the live
+// sets before the step), the old blocks freed, and those boxes' device
+// skeletons set to the new live sets (the host's, which the step and its
+// publish have set), so that the device transition builds the parents from
+// them.
+// ---------------------------------------------------------------------------
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::f22_slice(const PartialF22Kept& kept) {
+    Context& ctx = Context::instance();
+    ctx.activate();
+    cudaStream_t stream = ctx.stream();
+    const size_t D = sizeof(S);
+    put_back_packed_blocks();
+    auto kept_of = [&](int64_t morton, int n) -> const std::vector<int64_t>* {
+        const auto it = kept.find(morton);
+        if (it == kept.end()) return nullptr;
+        if (it->second.first != n) {
+            throw std::runtime_error("LevelEliminator: F22 slicing: a block of box " + std::to_string(morton) +
+                                     " is not over its live set before the step");
+        }
+        return &it->second.second;
+    };
+    struct Job { DeviceMatrix* m; int rows, cols; const std::vector<int64_t>* rk; const std::vector<int64_t>* ck; };
+    std::vector<Job> jobs;
+    for (size_t b = 0; b < states_.size(); ++b) {
+        BoxState& st = states_[b];
+        if (st.schur.ptr == nullptr) continue;
+        const std::vector<int64_t>* k = kept_of(level_.local_boxes[b].morton_index, st.schur.rows);
+        if (k != nullptr) jobs.push_back(Job{&st.schur, static_cast<int>(k->size()), static_cast<int>(k->size()), k, k});
+    }
+    for (auto& kv : edges_) {
+        if (kv.second.ptr == nullptr) throw std::runtime_error("LevelEliminator: F22 slicing: an unallocated near block");
+        // (a nonsymmetric matrix: K(row, col) under dkey(row, col))
+        const int64_t row = static_cast<int64_t>(kv.first & 0xffffffffu), col = static_cast<int64_t>(kv.first >> 32);
+        const std::vector<int64_t>* rk = kept_of(row, kv.second.rows);
+        const std::vector<int64_t>* ck = kept_of(col, kv.second.cols);
+        if (rk == nullptr && ck == nullptr) continue;
+        jobs.push_back(Job{&kv.second, rk ? static_cast<int>(rk->size()) : kv.second.rows,
+                           ck ? static_cast<int>(ck->size()) : kv.second.cols, rk, ck});
+    }
+    // in chunks the heap has room for: the new blocks gathered from the old,
+    // which then go (stream-ordered)
+    const size_t budget = std::max<size_t>(heap_.largest_free() / 4, size_t{256} << 20);
+    for (size_t j0 = 0; j0 < jobs.size();) {
+        size_t j1 = j0, bytes = 0;
+        while (j1 < jobs.size() &&
+               (j1 == j0 || bytes + static_cast<size_t>(jobs[j1].rows) * jobs[j1].cols * D <= budget)) {
+            bytes += static_cast<size_t>(jobs[j1].rows) * jobs[j1].cols * D;
+            ++j1;
+        }
+        meta_.clear();
+        std::vector<GatherItem> items;
+        std::vector<S*> fresh(j1 - j0, nullptr);
+        int max_m = 0, max_n = 0;
+        for (size_t j = j0; j < j1; ++j) {
+            const Job& jb = jobs[j];
+            S* out = jb.rows > 0 && jb.cols > 0
+                         ? heap_.alloc_resident<S>(static_cast<size_t>(jb.rows) * jb.cols * D, ResidentKind::LevelSchur)
+                         : nullptr;
+            fresh[j - j0] = out;
+            if (out == nullptr) continue;
+            IndexList rl{}, cl{};
+            if (jb.rk != nullptr) rl = IndexList{static_cast<int64_t>(meta_.append(std::vector<int>(jb.rk->begin(), jb.rk->end()))), 0, nullptr};
+            if (jb.ck != nullptr) cl = IndexList{static_cast<int64_t>(meta_.append(std::vector<int>(jb.ck->begin(), jb.ck->end()))), 0, nullptr};
+            items.push_back(GatherItem{out, jb.rows, jb.rows, jb.cols, jb.m->ptr, 1, jb.m->rows, rl, cl});
+            max_m = std::max(max_m, jb.rows);
+            max_n = std::max(max_n, jb.cols);
+        }
+        if (!items.empty()) {
+            const size_t off = meta_.append(items);
+            char* md = meta_.upload(meta_device_, stream);
+            launch_gather(reinterpret_cast<const GatherItem*>(md + off), static_cast<int>(items.size()), max_m, max_n, md,
+                          stream);
+        }
+        for (size_t j = j0; j < j1; ++j) {
+            Job& jb = jobs[j];
+            heap_.free(jb.m->ptr);  // (its gather is queued before any later use of the memory)
+            *jb.m = DeviceMatrix{fresh[j - j0], jb.rows, jb.cols};
+        }
+        j0 = j1;
+    }
+    // the sparsified boxes' live sets: their device skeletons
+    std::vector<int> all;
+    std::vector<std::pair<BoxState*, size_t>> listed;
+    auto set_skeleton = [&](BoxState& st, const std::vector<int64_t>& skeleton) {
+        st.skeleton.assign(skeleton.begin(), skeleton.end());
+        st.skeleton_identity = static_cast<int>(st.skeleton.size()) == st.n;
+        for (size_t i = 0; st.skeleton_identity && i < st.skeleton.size(); ++i) st.skeleton_identity = st.skeleton[i] == static_cast<int>(i);
+        st.d_skeleton = nullptr;
+        if (st.skeleton_identity) return;
+        listed.emplace_back(&st, all.size());
+        all.insert(all.end(), st.skeleton.begin(), st.skeleton.end());
+    };
+    for (const auto& [morton, entry] : kept) {
+        if (is_local(morton)) {
+            const Box* box = level_.find_local_box(morton);
+            if (box == nullptr) continue;
+            set_skeleton(state_of(morton), box->skeleton_indices);
+        } else if (remote_index_.count(morton) != 0) {
+            const auto it = level_.assisting_box_points_for_kernel_evaluation.find(morton);
+            if (it == level_.assisting_box_points_for_kernel_evaluation.end()) {
+                throw std::runtime_error("LevelEliminator: F22 slicing: no copy of box " + std::to_string(morton));
+            }
+            set_skeleton(state_of(morton), level_.assisting_boxes[static_cast<size_t>(it->second)].skel_indices);
+        }
+    }
+    if (!all.empty()) {
+        int* d_lists = heap_.alloc_resident<int>(all.size() * sizeof(int), ResidentKind::Lists);
+        level_allocs_.push_back(reinterpret_cast<char*>(d_lists));
+        check_cuda(cudaMemcpyAsync(d_lists, all.data(), all.size() * sizeof(int), cudaMemcpyHostToDevice, stream),
+                   "F22 slicing: skeleton lists");
+        for (const auto& [st, start] : listed) st->d_skeleton = d_lists + start;
+    }
+    check_cuda(cudaStreamSynchronize(stream), "F22 slicing");
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
@@ -12188,6 +12326,17 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
     }
     // host skeleton (positions) of a child, for the fill-row lookups
     auto host_skeleton = [&](int64_t cm) -> const std::vector<int64_t>* { return ring_info(cm).skeleton; };
+    // (H2_partial) its live set before the F22 step, at which the sources
+    // eliminated after it recorded its rows
+    auto host_skeleton_before = [&](int64_t cm) -> const std::vector<int64_t>* {
+        if (level_.partial_count == 0) return nullptr;
+        if (const Box* b = level_.find_local_box(cm)) return &b->skeleton_before_f22;
+        if (const Box* g = level_.find_ghost_box(cm)) return &g->skeleton_before_f22;
+        const auto it = level_.assisting_box_points_for_kernel_evaluation.find(cm);
+        return it == level_.assisting_box_points_for_kernel_evaluation.end()
+                   ? nullptr
+                   : &level_.assisting_boxes[static_cast<size_t>(it->second)].skel_before;
+    };
     auto host_full = [&](int64_t cm) -> int64_t { return ring_info(cm).full; };
     // The lazy far fill's sources of a child pair (i, j): the eliminated
     // one-hop neighbors of i next to j, in the host's order (wave, Morton;
@@ -12554,6 +12703,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
                 endpoint.morton = xm;
                 endpoint.full_size = host_full(xm);
                 endpoint.skeleton = host_skeleton(xm);
+                endpoint.skeleton_before = host_skeleton_before(xm);
                 endpoint.wanted = endpoint.skeleton;
                 endpoint.wanted_count = static_cast<int64_t>(endpoint.skeleton->size());
                 int64_t slot_offset = 0, slot_count = 0;
@@ -12634,6 +12784,7 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             endpoint.morton = xm;
             endpoint.full_size = host_full(xm);
             endpoint.skeleton = host_skeleton(xm);
+            endpoint.skeleton_before = host_skeleton_before(xm);
             endpoint.wanted = endpoint.skeleton;
             endpoint.wanted_count = static_cast<int64_t>(endpoint.skeleton->size());
             int64_t slot_offset = 0, slot_count = 0;
@@ -12644,7 +12795,18 @@ std::unique_ptr<DeviceLevelBlocks<DataType>> LevelEliminator<CoordType, DataType
             info.ld = s.r;
             const int k = static_cast<int>(endpoint.skeleton->size());
             const bool by_skeleton = slot_count == endpoint.full_size && !xs.skeleton_identity;
-            if (!by_skeleton) {  // contiguous columns
+            bool in_order = static_cast<int>(positions.size()) == k;
+            for (int q = 0; in_order && q < k; ++q) in_order = positions[static_cast<size_t>(q)] == q;
+            if (!by_skeleton && !in_order) {
+                // (H2_partial) a slot recorded at the live set before the F22
+                // step: the kept positions in it
+                const IndexList cols{static_cast<int64_t>(meta.append(std::vector<int>(positions.begin(), positions.end()))),
+                                     static_cast<int>(slot_offset), nullptr};
+                info.ptr = nullptr;
+                info.buffer = buffer_bytes;
+                g_pending.push_back(GPending{buffer_bytes, base, s.r, k, cols});
+                buffer_bytes = align_up(buffer_bytes + static_cast<size_t>(s.r) * k * D);
+            } else if (!by_skeleton) {  // contiguous columns
                 info.ptr = base + static_cast<size_t>(slot_offset) * s.r;
             } else {
                 IndexList cols = current_slots_in(xs, meta, wave_stamp_);
@@ -13507,6 +13669,105 @@ void factor_root_on_device(DeviceLevelBlocks<DataType>& blocks, BoxData<CoordTyp
     blocks.schur.clear();
     root.X_RR.set_owned(n, n, std::move(lu), MatrixStorage<DataType>::LU_FACTORED);
     root.X_RR_pivots.assign(piv.begin(), piv.end());
+  }
+}
+
+// H2_partial's root on the device (unstructured/partial.hpp's
+// partial_root_factorize, its setup done): from the root block the level-1
+// transition assembled here, A11 = P L U into the root box's X_RR (the
+// logdet reads it), W = A11^-1 A12, A21 and CB = A22 - A21 W, all to the
+// host, where the partial solves and the CB read them.
+template<typename CoordType, typename DataType>
+void partial_root_on_device(DeviceLevelBlocks<DataType>& blocks, BoxData<CoordType, DataType>& root,
+                            PartialRootFactor<DataType>& pr) {
+  if constexpr (!gpu_data_type<DataType>) {
+    (void)blocks; (void)root; (void)pr;
+    throw std::runtime_error("partial_root_on_device: data type not run on the GPU");
+  } else {
+    using S = typename DeviceScalar<DataType>::type;
+    auto it = blocks.schur.find(root.morton_index);
+    if (it == blocks.schur.end() || blocks.schur.size() != 1 || !blocks.edges.empty()) {
+        throw std::runtime_error("partial_root_on_device: expected the root block alone");
+    }
+    const DeviceMatrixT<S> m = it->second;
+    if (m.rows != root.num_points || m.cols != root.num_points) {
+        throw std::runtime_error("partial_root_on_device: root block shape");
+    }
+    Context& ctx = Context::instance();
+    ctx.activate();
+    cudaStream_t stream = ctx.stream();
+    magma_queue_t queue = ctx.queue();
+    DeviceHeap& heap = DeviceHeap::instance();
+    const int n = m.rows, n11 = static_cast<int>(pr.n11), n22 = static_cast<int>(pr.n22);
+    auto room = [](int a, int b) { return std::max<size_t>(static_cast<size_t>(a) * static_cast<size_t>(b), 1) * sizeof(S); };
+    S* d11 = heap.alloc<S>(room(n11, n11));
+    S* d12 = heap.alloc<S>(room(n11, n22));
+    S* d21 = heap.alloc<S>(room(n22, n11));
+    S* d22 = heap.alloc<S>(room(n22, n22));
+    {   // the four blocks, by the F11 and F22 slots
+        MetaBuilder& meta = pinned_pool().meta;
+        DeviceBuffer meta_device;
+        meta.clear();
+        const IndexList l11{static_cast<int64_t>(meta.append(std::vector<int>(pr.slots11.begin(), pr.slots11.end()))), 0, nullptr};
+        const IndexList l22{static_cast<int64_t>(meta.append(std::vector<int>(pr.slots22.begin(), pr.slots22.end()))), 0, nullptr};
+        std::vector<GatherItemT<S>> items;
+        if (n11 > 0) items.push_back(GatherItemT<S>{d11, n11, n11, n11, m.ptr, 1, n, l11, l11});
+        if (n11 > 0 && n22 > 0) {
+            items.push_back(GatherItemT<S>{d12, n11, n11, n22, m.ptr, 1, n, l11, l22});
+            items.push_back(GatherItemT<S>{d21, n22, n22, n11, m.ptr, 1, n, l22, l11});
+        }
+        if (n22 > 0) items.push_back(GatherItemT<S>{d22, n22, n22, n22, m.ptr, 1, n, l22, l22});
+        if (!items.empty()) {
+            const size_t off = meta.append(items);
+            char* md = meta.upload(meta_device, stream);
+            launch_gather(reinterpret_cast<const GatherItemT<S>*>(md + off), static_cast<int>(items.size()), std::max(n11, n22),
+                          std::max(n11, n22), md, stream);
+        }
+        check_cuda(cudaStreamSynchronize(stream), "partial root: blocks");
+        meta.clear();
+    }
+    heap.free(m.ptr);
+    blocks.schur.clear();
+    // A11 = P L U, W = A11^-1 A12, CB = A22 - A21 W
+    std::vector<magma_int_t> piv(static_cast<size_t>(std::max(n11, 1)), 0);
+    if (n11 > 0) {
+        magma_int_t info = 0;
+        if constexpr (std::is_same_v<DataType, double>) {
+            magma_dgetrf_gpu(n11, n11, d11, n11, piv.data(), &info);
+        } else {
+            magma_zgetrf_gpu(n11, n11, reinterpret_cast<magmaDoubleComplex*>(d11), n11, piv.data(), &info);
+        }
+        if (info != 0) {
+            throw std::runtime_error("partial_root_on_device: LU of the F11 block failed at pivot " + std::to_string(info));
+        }
+        if (n22 > 0) {
+            if constexpr (std::is_same_v<DataType, double>) {
+                magma_dgetrs_gpu(MagmaNoTrans, n11, n22, d11, n11, piv.data(), d12, n11, &info);
+                magma_dgemm(MagmaNoTrans, MagmaNoTrans, n22, n22, n11, -1.0, d21, n22, d12, n11, 1.0, d22, n22, queue);
+            } else {
+                magma_zgetrs_gpu(MagmaNoTrans, n11, n22, reinterpret_cast<magmaDoubleComplex*>(d11), n11, piv.data(),
+                                 reinterpret_cast<magmaDoubleComplex*>(d12), n11, &info);
+                magma_zgemm(MagmaNoTrans, MagmaNoTrans, n22, n22, n11, MAGMA_Z_MAKE(-1.0, 0.0),
+                            reinterpret_cast<magmaDoubleComplex*>(d21), n22, reinterpret_cast<magmaDoubleComplex*>(d12), n11,
+                            MAGMA_Z_MAKE(1.0, 0.0), reinterpret_cast<magmaDoubleComplex*>(d22), n22, queue);
+            }
+            if (info != 0) throw std::runtime_error("partial_root_on_device: getrs failed, info " + std::to_string(info));
+            magma_queue_sync(queue);
+        }
+    }
+    // to the host
+    auto down = [&](const S* d, int rows, int cols) {
+        std::vector<DataType> h(static_cast<size_t>(rows) * static_cast<size_t>(cols));
+        if (!h.empty()) check_cuda(cudaMemcpy(h.data(), d, h.size() * sizeof(S), cudaMemcpyDeviceToHost), "partial root factors");
+        return h;
+    };
+    root.X_RR.set_owned(n11, n11, down(d11, n11, n11), MatrixStorage<DataType>::LU_FACTORED);
+    root.X_RR_pivots.assign(piv.begin(), piv.end());
+    pr.w.set_owned(n11, n22, down(d12, n11, n22), MatrixStorage<DataType>::FULL);
+    pr.a21.set_owned(n22, n11, down(d21, n22, n11), MatrixStorage<DataType>::FULL);
+    pr.cb.set_owned(n22, n22, down(d22, n22, n22), MatrixStorage<DataType>::FULL);
+    pr.cb_released = false;
+    for (S* d : {d11, d12, d21, d22}) heap.free(d);
   }
 }
 

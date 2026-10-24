@@ -1006,21 +1006,18 @@ public:
     // This rank builds the parents of its boxes on the device (transition).
     bool builds_parents(const Level& level, const Level& parent_level) const {
         const bool reduction_ahead = parent_level.num_active_processes != level.num_active_processes;
-        // (H2_partial: the host transition, from the blocks the F22 step sliced)
         return level_ && level.is_process_active && level_->can_build_parent() &&
-               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian && !tree_->partial();
+               (reduction_ahead || parent_level.is_process_active) && !opt_.is_hermitian;
     }
 
     // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
-    // the boxes' steps on the device, then the level's blocks and factors
-    // back to the host, where the step finishes and the transition runs
+    // the boxes' steps on the device, then the level's blocks sliced there to
+    // the new live sets (the transition builds the parents from them, or
+    // takes them to the host)
     bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
     void f22_boxes(std::vector<PartialF22Work<DataType>>& works) { level_->f22_boxes(works); }
     void end_partial_level(const PartialF22Kept& kept) {
-        if (!level_) return;
-        level_->restore_host_copies();
-        level_->download_blocks_sliced(kept);
-        level_.reset();
+        if (level_) level_->f22_slice(kept);
     }
 
     // Device transition: this level's blocks never leave the device, and the
@@ -1576,6 +1573,16 @@ public:
 
     // The level-1 transition assembled the root block on the device.
     bool holds_root_block() const { return blocks_ != nullptr; }
+
+    // H2_partial: the partial root (its setup done) from the root block the
+    // level-1 transition left on the device, its factors to the host
+    // (partial_root_on_device); false without that block.
+    bool partial_root(Box& root, PartialRootFactor<DataType>& pr) {
+        if (!blocks_) return false;
+        partial_root_on_device(*blocks_, root, pr);
+        blocks_.reset();
+        return true;
+    }
 
     // The root's LU on the device: of the block the level-1 transition
     // assembled there, or of the host-assembled block (multi-rank runs)

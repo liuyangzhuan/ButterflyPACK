@@ -2097,7 +2097,18 @@ void hierarchical_factorization_unstructured(
         bool root_on_device = false;
         int64_t n = root_box.num_points;
 #ifdef H2_HAVE_GPU
-        if (gpu_driver.holds_root_block()) {
+        if (gpu_driver.holds_root_block() && tree->partial()) {
+            // H2_partial: the partial root on the device, its factors to the host
+            const auto root_start = clock::now();
+            partial_root_setup(*tree, root_box);
+            root_on_device = gpu_driver.partial_root(root_box, tree->partial_root);
+            if (print_detail && rank == root_print_rank) {
+                std::cout << "  ✓ Root partial LU complete (GPU): F11 " << tree->partial_root.n11 << ", F22 "
+                          << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
+            }
+        } else if (gpu_driver.holds_root_block()) {
             // root block assembled on the device by the level-1 transition
             root_on_device = gpu_driver.factor_root(
                 root_box, print_detail && rank == root_print_rank);
@@ -2159,10 +2170,13 @@ void hierarchical_factorization_unstructured(
         } else if (factorization_method == FactorizationMethod::LU && tree->partial()) {
             // H2_partial: A11's LU into X_RR, W, A21 and the Schur complement
             // on the F22 points (unstructured/partial.hpp)
+            const auto root_start = clock::now();
             partial_root_factorize(*tree, root_box);
             if (print_detail && rank == root_print_rank) {
                 std::cout << "  ✓ Root partial LU complete: F11 " << tree->partial_root.n11
-                          << ", F22 " << tree->partial_root.n22 << std::endl;
+                          << ", F22 " << tree->partial_root.n22 << " ("
+                          << std::chrono::duration<double, std::milli>(clock::now() - root_start).count() << " ms)"
+                          << std::endl;
             }
         } else if (factorization_method == FactorizationMethod::LU) {
             root_box.X_RR.data = root_box.schur_complement.data;

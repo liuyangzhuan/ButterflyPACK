@@ -216,9 +216,9 @@ void partial_f22_publish(fmm::ParallelTree<CoordType, DataType>* tree, fmm::Tree
 // part is skeletonized against the far ring and the near field's live F11
 // points, its R22 sparsified, the box's live set reduced to S' = S11, S22.
 // With `device` (H2_use_gpu: LevelEliminator::f22_boxes) the boxes' steps
-// run there from the plans made here; `blocks_back` then brings the level's
-// blocks to the host sliced to the new live sets (the boxes the step
-// sparsified, this rank's and its copies').
+// run there from the plans made here; `blocks_back` then has the level's
+// blocks sliced to the new live sets (the boxes the step sparsified, this
+// rank's and its copies') where they are: the host takes nothing from them.
 // =====================================================================
 template<typename CoordType, typename DataType, typename KernelType>
 void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLevel<CoordType, DataType>& level,
@@ -360,32 +360,15 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
             if (b.f22.sparsified) kept_of.emplace(b.morton_index, std::make_pair(static_cast<int64_t>(b.skeleton_before_f22.size()), kept[oi]));
         }
         if (tree->mpi_size > 1) partial_f22_publish(tree, level, level_comm, kept_of);
-        const double t_back0 = MPI_Wtime();
-        if (blocks_back) blocks_back(kept_of);
-        t_id += MPI_Wtime() - t_back0;  // (the blocks back)
-        for (size_t oi = 0; oi < occupied_local.size(); ++oi) {
+        for (size_t oi = 0; oi < occupied_local.size(); ++oi) {  // the new live sets
             Box& b = level.local_boxes[static_cast<size_t>(occupied_local[oi])];
             if (!b.f22.sparsified) continue;
-            const auto& posS = kept[oi];
-            const int64_t kp = static_cast<int64_t>(posS.size());
             b.skeleton_indices.clear();
-            for (int64_t q : posS) b.skeleton_indices.push_back(b.skeleton_before_f22[static_cast<size_t>(q)]);
-            if (!b.schur_complement.is_allocated()) {
-                // a self block the device never formed (nothing eliminated, no
-                // update): the kernel's over S'
-                std::vector<int64_t> ids(static_cast<size_t>(kp));
-                for (int64_t i = 0; i < kp; ++i)
-                    ids[static_cast<size_t>(i)] = b.point_indices[static_cast<size_t>(b.skeleton_indices[static_cast<size_t>(i)])];
-                MS block;
-                block.allocate(kp, kp, MS::FULL);
-                kernel->evaluate_block_by_index(ids.data(), kp, ids.data(), kp, block.data.data(), kp);
-                b.schur_complement = std::move(block);
-            } else if (b.schur_complement.rows != kp || b.schur_complement.cols != kp) {
-                throw std::runtime_error("F22 phase: box " + std::to_string(b.morton_index) + "'s self block came back " +
-                                         std::to_string(b.schur_complement.rows) + " x " +
-                                         std::to_string(b.schur_complement.cols) + ", not over S'");
-            }
+            for (int64_t q : kept[oi]) b.skeleton_indices.push_back(b.skeleton_before_f22[static_cast<size_t>(q)]);
         }
+        const double t_back0 = MPI_Wtime();
+        if (blocks_back) blocks_back(kept_of);
+        t_id += MPI_Wtime() - t_back0;  // (the blocks sliced)
         sliced_on_device = true;
     } else {
 #pragma omp parallel
@@ -807,7 +790,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
     if (tree->mpi_size > 1) MPI_Allreduce(MPI_IN_PLACE, counts, 3, MPI_INT64_T, MPI_SUM, level_comm);
     if (print_detail && fmm::env::trace("phase")) {
         if (device) {
-            std::printf("  F22 phase parts (this rank): plans %.2f s, device %.2f s, results %.2f s, blocks back %.2f s, "
+            std::printf("  F22 phase parts (this rank): plans %.2f s, device %.2f s, results %.2f s, blocks sliced %.2f s, "
                         "then %.2f s serial\n", t_target, t_sketch, t_records, t_id, MPI_Wtime() - t_loop0 - t_loop);
         } else {
             std::printf("  F22 phase parts (this rank): loop %.2f s, then %.2f s serial; thread-seconds: sketch %.2f, "
@@ -864,16 +847,13 @@ void partial_columns_parallel(int64_t n, F&& f) {
     if (failure) std::rethrow_exception(failure);
 }
 
+// The root's split by point id (its F11 and F22 slots), before its numbers
+// (partial_root_factorize on the host, LevelEliminator's
+// partial_root_on_device on the device).
 template<typename CoordType, typename DataType>
-void partial_root_factorize(fmm::ParallelTree<CoordType, DataType>& tree,
-                            fmm::BoxData<CoordType, DataType>& root_box) {
-    using MS = fmm::MatrixStorage<DataType>;
+void partial_root_setup(fmm::ParallelTree<CoordType, DataType>& tree, const fmm::BoxData<CoordType, DataType>& root_box) {
     auto& pr = tree.partial_root;
     const int64_t n = root_box.num_points;
-    const MS& A = root_box.schur_complement;
-    if (!A.is_allocated() || A.rows != n || A.cols != n) {
-        throw std::runtime_error("partial root: the root's Schur complement does not cover its points");
-    }
     pr = fmm::PartialRootFactor<DataType>{};
     pr.active = true;
     for (int64_t s = 0; s < n; ++s) {
@@ -888,6 +868,19 @@ void partial_root_factorize(fmm::ParallelTree<CoordType, DataType>& tree,
         pr.ids22[static_cast<size_t>(j)] = root_box.point_indices[static_cast<size_t>(pr.slots22[static_cast<size_t>(j)])];
     }
     pr.n22_global = tree.num_points - tree.partial_count;
+}
+
+template<typename CoordType, typename DataType>
+void partial_root_factorize(fmm::ParallelTree<CoordType, DataType>& tree,
+                            fmm::BoxData<CoordType, DataType>& root_box) {
+    using MS = fmm::MatrixStorage<DataType>;
+    auto& pr = tree.partial_root;
+    const int64_t n = root_box.num_points;
+    const MS& A = root_box.schur_complement;
+    if (!A.is_allocated() || A.rows != n || A.cols != n) {
+        throw std::runtime_error("partial root: the root's Schur complement does not cover its points");
+    }
+    partial_root_setup(tree, root_box);
     auto gather = [&](const std::vector<int64_t>& rows, const std::vector<int64_t>& cols, MS& out) {
         const int64_t m = static_cast<int64_t>(rows.size()), k = static_cast<int64_t>(cols.size());
         out.allocate(m, k, MS::FULL);
