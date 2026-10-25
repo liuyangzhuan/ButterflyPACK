@@ -101,30 +101,6 @@ struct Run {
     int g = 0, start = 0, count = 0;
 };
 
-// The runs of lf >> shift over a list sorted by leaf.
-inline void runs_of(const int* lf, int n, int shift, std::vector<Run>& out) {
-    out.clear();
-    for (int p = 0; p < n;) {
-        const int g = lf[p] >> shift;
-        int q = p + 1;
-        while (q < n && (lf[q] >> shift) == g) ++q;
-        out.push_back(Run{g, p, q - p});
-        p = q;
-    }
-}
-
-// The index of group g among runs (sorted by group).
-inline int run_index(const std::vector<Run>& runs, int g) {
-    int lo = 0, hi = static_cast<int>(runs.size()) - 1;
-    while (lo <= hi) {
-        const int mid = (lo + hi) / 2;
-        if (runs[mid].g == g) return mid;
-        if (runs[mid].g < g) lo = mid + 1;
-        else hi = mid - 1;
-    }
-    throw std::logic_error("bf::gpu::extract: a parent group is missing");
-}
-
 }  // namespace detail
 
 inline void prepare_leaves(const BfDevice& bf, ExtractLeaves& lv) {
@@ -152,11 +128,27 @@ inline void prepare_leaves(const BfDevice& bf, ExtractLeaves& lv) {
     lv.ready = true;
 }
 
+// One stage's GEMMs, in the arrays MAGMA's variable-size batch reads.
+struct ExtractStage {
+    std::vector<magma_int_t> m, n, k, lda, ldb, ldc;
+    std::vector<const DataType*> a, b;
+    std::vector<DataType*> c;
+    void resize(size_t count) {
+        m.resize(count); n.resize(count); k.resize(count);
+        lda.resize(count); ldb.resize(count); ldc.resize(count);
+        a.resize(count); b.resize(count); c.resize(count);
+    }
+    size_t size() const { return m.size(); }
+};
+
 // BF(I_k, J_k) for k < count: rowidx[k] rows from `rows` and colidx[k]
 // columns from `cols` (0-based, the butterfly's own order, stacked), into
 // `out` (host), the blocks stacked in order, each column major.  Returns
 // false when the device has no room for the partial products (nothing
 // written; the caller runs the host path).
+//
+// The planning is per intersection and runs in parallel over them: every
+// list below is flat, laid out by a counting pass and filled by a second.
 inline bool extract(const BfDevice& bf, ExtractLeaves& leaves, int count, const int* rowidx, const int* colidx,
                     const int* rows, const int* cols, DataType* out, ExtractProfile& prof,
                     fmm::gpu::MetaBuilder& meta, fmm::gpu::DeviceBuffer& meta_device) {
@@ -172,93 +164,162 @@ inline bool extract(const BfDevice& bf, ExtractLeaves& leaves, int count, const 
         if (t == 1) return bf.block(0, 0, C).cols;
         return bf.block(t - 1, F, 2 * C).rows;
     };
-    auto factor = [&](int l, int i, int j) -> const BlockDesc& { return bf.block(l, i, j); };
 
-    // ---- per intersection: the rows and columns in leaf order, and the runs
-    // of their groups at every level
-    std::vector<int64_t> row_at(static_cast<size_t>(count) + 1, 0), col_at(static_cast<size_t>(count) + 1, 0);
+    std::vector<int64_t> row_at(static_cast<size_t>(count) + 1, 0), col_at(row_at.size(), 0),
+        out_at(row_at.size(), 0);
     for (int k = 0; k < count; ++k) {
         row_at[k + 1] = row_at[k] + rowidx[k];
         col_at[k + 1] = col_at[k] + colidx[k];
+        out_at[k + 1] = out_at[k] + static_cast<int64_t>(rowidx[k]) * colidx[k];
     }
-    // leaf order: srow[p'] is the caller's row at leaf-order position p'
-    std::vector<int> srow(static_cast<size_t>(row_at[count])), scol(static_cast<size_t>(col_at[count]));
-    std::vector<int> rleaf(srow.size()), cleaf(scol.size());
-    std::vector<int> pos_r(srow.size()), pos_c(scol.size());
-    for (int k = 0; k < count; ++k) {
-        auto order = [&](const int* idx, int64_t at, int n, const std::vector<int>& leaf_of, std::vector<int>& sorted,
-                         std::vector<int>& lf, std::vector<int>& pos) {
-            std::vector<int> p(static_cast<size_t>(n));
+    const int64_t nrow = row_at[count], ncol = col_at[count], entries = out_at[count];
+
+    // ---- each intersection's rows and columns in leaf order: srow[p'] is the
+    // caller's row at leaf-order position p', pos_r its inverse
+    std::vector<int> srow(static_cast<size_t>(nrow)), rleaf(srow.size()), pos_r(srow.size());
+    std::vector<int> scol(static_cast<size_t>(ncol)), cleaf(scol.size()), pos_c(scol.size());
+#pragma omp parallel
+    {
+        std::vector<int> p;
+        auto order = [&](const int* idx, int64_t at, int n, const std::vector<int>& leaf_of, int* sorted, int* lf,
+                         int* pos) {
+            p.resize(static_cast<size_t>(n));
             std::iota(p.begin(), p.end(), 0);
-            std::stable_sort(p.begin(), p.end(), [&](int x, int y) {
-                return leaf_of[idx[at + x]] < leaf_of[idx[at + y]];
-            });
+            std::stable_sort(p.begin(), p.end(),
+                             [&](int x, int y) { return leaf_of[idx[at + x]] < leaf_of[idx[at + y]]; });
             for (int q = 0; q < n; ++q) {
                 sorted[at + q] = idx[at + p[q]];
                 lf[at + q] = leaf_of[sorted[at + q]];
                 pos[at + p[q]] = q;
             }
         };
-        order(rows, row_at[k], rowidx[k], leaves.row_leaf, srow, rleaf, pos_r);
-        order(cols, col_at[k], colidx[k], leaves.col_leaf, scol, cleaf, pos_c);
-    }
-    // runs[k][t]: the row groups (shift L - t) and the column groups (shift t)
-    // of level t, t = 0 .. L
-    std::vector<std::vector<std::vector<Run>>> rrun(static_cast<size_t>(count)), crun(static_cast<size_t>(count));
-    for (int k = 0; k < count; ++k) {
-        rrun[k].resize(static_cast<size_t>(L) + 1);
-        crun[k].resize(static_cast<size_t>(L) + 1);
-        for (int t = 0; t <= L; ++t) {
-            detail::runs_of(rleaf.data() + row_at[k], rowidx[k], L - t, rrun[k][t]);
-            detail::runs_of(cleaf.data() + col_at[k], colidx[k], t, crun[k][t]);
+#pragma omp for schedule(dynamic, 16)
+        for (int k = 0; k < count; ++k) {
+            order(rows, row_at[k], rowidx[k], leaves.row_leaf, srow.data(), rleaf.data(), pos_r.data());
+            order(cols, col_at[k], colidx[k], leaves.col_leaf, scol.data(), cleaf.data(), pos_c.data());
         }
     }
 
-    // ---- the partial products: offsets per (level, intersection, row run,
-    // column run).  Right half: vector levels 1 .. h+1, matrices
-    // rank x (columns in the run); left half: L+1 down to h+1, (rows in the
-    // run) x rank.  Level t's groups are those of tree level t-1.
-    struct Slots {
-        std::vector<std::vector<int64_t>> at;  // [k][fi * nC + ci]
+    // ---- the runs of every tree level t = 0 .. L: intersection k's row
+    // groups (leaf >> (L - t)) are rr[t][ro[t][k] .. ro[t][k+1]), its column
+    // groups (leaf >> t) cr[t][co[t][k] .. co[t][k+1])
+    auto count_runs = [](const int* lf, int n, int shift) {
+        int runs = 0;
+        for (int q = 0; q < n; ++q)
+            if (q == 0 || (lf[q] >> shift) != (lf[q - 1] >> shift)) ++runs;
+        return runs;
+    };
+    std::vector<std::vector<Run>> rr(static_cast<size_t>(L) + 1), cr(static_cast<size_t>(L) + 1);
+    std::vector<std::vector<int64_t>> ro(static_cast<size_t>(L) + 1, std::vector<int64_t>(row_at.size(), 0));
+    std::vector<std::vector<int64_t>> co(ro);
+#pragma omp parallel for schedule(dynamic, 16)
+    for (int k = 0; k < count; ++k) {
+        for (int t = 0; t <= L; ++t) {
+            ro[t][k + 1] = count_runs(rleaf.data() + row_at[k], rowidx[k], L - t);
+            co[t][k + 1] = count_runs(cleaf.data() + col_at[k], colidx[k], t);
+        }
+    }
+    for (int t = 0; t <= L; ++t) {
+        for (int k = 0; k < count; ++k) {
+            ro[t][k + 1] += ro[t][k];
+            co[t][k + 1] += co[t][k];
+        }
+        rr[t].resize(static_cast<size_t>(ro[t][count]));
+        cr[t].resize(static_cast<size_t>(co[t][count]));
+    }
+    auto fill_runs = [](const int* lf, int n, int shift, Run* out) {
+        int at = 0;
+        for (int p = 0; p < n;) {
+            const int g = lf[p] >> shift;
+            int q = p + 1;
+            while (q < n && (lf[q] >> shift) == g) ++q;
+            out[at++] = Run{g, p, q - p};
+            p = q;
+        }
+    };
+#pragma omp parallel for schedule(dynamic, 16)
+    for (int k = 0; k < count; ++k) {
+        for (int t = 0; t <= L; ++t) {
+            fill_runs(rleaf.data() + row_at[k], rowidx[k], L - t, rr[t].data() + ro[t][k]);
+            fill_runs(cleaf.data() + col_at[k], colidx[k], t, cr[t].data() + co[t][k]);
+        }
+    }
+    // the index of group g among an intersection's runs (sorted by group)
+    auto find = [](const Run* r, int64_t n, int g) -> int {
+        int64_t lo = 0, hi = n - 1;
+        while (lo <= hi) {
+            const int64_t mid = (lo + hi) / 2;
+            if (r[mid].g == g) return static_cast<int>(mid);
+            if (r[mid].g < g) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        throw std::logic_error("bf::gpu::extract: a parent group is missing");
+    };
+
+    // ---- the partial products of vector level t (groups of tree level t-1):
+    // slot (k, fi, ci) is at[base[k] + fi * nC + ci], an offset into the
+    // level's buffer.  Right half: rank x (columns in the run); left half:
+    // (rows in the run) x rank.
+    struct Level {
+        std::vector<int64_t> base, at;
         int64_t total = 0;
     };
-    auto layout = [&](int t, bool right, Slots& s) {
-        s.at.assign(static_cast<size_t>(count), {});
-        s.total = 0;
+    auto layout = [&](int t, bool right, Level& s) {
+        const auto& RR = rr[t - 1];
+        const auto& CR = cr[t - 1];
+        const auto& RO = ro[t - 1];
+        const auto& CO = co[t - 1];
+        s.base.assign(row_at.size(), 0);
+        std::vector<int64_t> elems(row_at.size(), 0);
+#pragma omp parallel for schedule(dynamic, 16)
         for (int k = 0; k < count; ++k) {
-            const auto& fr = rrun[k][t - 1];
-            const auto& cr = crun[k][t - 1];
-            auto& at = s.at[k];
-            at.resize(fr.size() * cr.size());
-            for (size_t fi = 0; fi < fr.size(); ++fi) {
-                for (size_t ci = 0; ci < cr.size(); ++ci) {
-                    const int r = rank_of(t, fr[fi].g, cr[ci].g);
-                    at[fi * cr.size() + ci] = s.total;
-                    s.total += static_cast<int64_t>(r) * (right ? cr[ci].count : fr[fi].count);
+            const int64_t nF = RO[k + 1] - RO[k], nC = CO[k + 1] - CO[k];
+            int64_t e = 0;
+            for (int64_t fi = 0; fi < nF; ++fi)
+                for (int64_t ci = 0; ci < nC; ++ci)
+                    e += static_cast<int64_t>(rank_of(t, RR[RO[k] + fi].g, CR[CO[k] + ci].g)) *
+                         (right ? CR[CO[k] + ci].count : RR[RO[k] + fi].count);
+            s.base[k + 1] = nF * nC;
+            elems[k + 1] = e;
+        }
+        for (int k = 0; k < count; ++k) {
+            s.base[k + 1] += s.base[k];
+            elems[k + 1] += elems[k];
+        }
+        s.at.resize(static_cast<size_t>(s.base[count]));
+        s.total = elems[count];
+#pragma omp parallel for schedule(dynamic, 16)
+        for (int k = 0; k < count; ++k) {
+            const int64_t nF = RO[k + 1] - RO[k], nC = CO[k + 1] - CO[k];
+            int64_t off = elems[k], idx = s.base[k];
+            for (int64_t fi = 0; fi < nF; ++fi) {
+                for (int64_t ci = 0; ci < nC; ++ci) {
+                    s.at[idx++] = off;
+                    off += static_cast<int64_t>(rank_of(t, RR[RO[k] + fi].g, CR[CO[k] + ci].g)) *
+                           (right ? CR[CO[k] + ci].count : RR[RO[k] + fi].count);
                 }
             }
         }
     };
-    std::vector<Slots> R(static_cast<size_t>(h) + 2), W(static_cast<size_t>(L) + 2);
+    std::vector<Level> R(static_cast<size_t>(h) + 2), W(static_cast<size_t>(L) + 2);
     for (int t = 1; t <= h + 1; ++t) layout(t, true, R[t]);
     for (int t = L + 1; t >= h + 1; --t) layout(t, false, W[t]);
 
-    // the device buffers: one per level and half, the leaf-order entries, the
-    // caller-order entries
-    int64_t entries = 0;
-    std::vector<int64_t> out_at(static_cast<size_t>(count) + 1, 0);
-    for (int k = 0; k < count; ++k) out_at[k + 1] = out_at[k] + static_cast<int64_t>(rowidx[k]) * colidx[k];
-    entries = out_at[count];
+    // ---- the device buffers: a level and half each, the leaf-order entries,
+    // the caller-order entries
     auto& heap = fmm::gpu::DeviceHeap::instance();
     heap.ensure_initialized();
-    std::vector<char*> owned;
+    std::vector<std::pair<char*, int64_t>> owned;
     bool room = true;
     auto take = [&](int64_t elements) -> DataType* {
         if (!room) return nullptr;
-        char* p = heap.try_alloc(static_cast<size_t>(std::max<int64_t>(elements, 1)) * sizeof(DataType),
-                                 fmm::gpu::ResidentKind::Matvec);
-        if (p == nullptr) { room = false; return nullptr; }
-        owned.push_back(p);
+        const int64_t n = std::max<int64_t>(elements, 1);
+        char* p = heap.try_alloc(static_cast<size_t>(n) * sizeof(DataType), fmm::gpu::ResidentKind::Matvec);
+        if (p == nullptr) {
+            room = false;
+            return nullptr;
+        }
+        owned.push_back({p, n});
         return reinterpret_cast<DataType*>(p);
     };
     std::vector<DataType*> dR(static_cast<size_t>(h) + 2, nullptr), dW(static_cast<size_t>(L) + 2, nullptr);
@@ -267,178 +328,256 @@ inline bool extract(const BfDevice& bf, ExtractLeaves& leaves, int count, const 
     DataType* sorted = take(entries);
     DataType* d_out = take(entries);
     if (!room) {
-        for (char* p : owned) heap.free(p);
+        for (auto& o : owned) heap.free(o.first);
         return false;
     }
 
-    // ---- the work, all staged in one metadata image
-    meta.clear();
-    std::vector<ExtractGather> gathers;
-    std::vector<int> index;
-    // V: level 1 of the right half, one row group (all rows) per intersection
-    for (int k = 0; k < count; ++k) {
-        const auto& cr = crun[k][0];
-        for (size_t ci = 0; ci < cr.size(); ++ci) {
-            const int b = cr[ci].g;
-            const BlockDesc& v = factor(0, 0, b);
-            ExtractGather g;
-            g.src = v.offset;
-            g.ld_src = v.lda;
-            g.r = v.cols;
-            g.count = cr[ci].count;
-            g.transposed = 1;
-            g.dst = R[1].at[k][ci];
-            g.idx = static_cast<int64_t>(index.size());
-            for (int q = 0; q < cr[ci].count; ++q)
-                index.push_back(scol[col_at[k] + cr[ci].start + q] - leaves.col_head[b]);
-            gathers.push_back(g);
-        }
-    }
-    const int nv = static_cast<int>(gathers.size());
-    // U: level L+1 of the left half, one column group (all columns)
-    for (int k = 0; k < count; ++k) {
-        const auto& fr = rrun[k][L];
-        for (size_t fi = 0; fi < fr.size(); ++fi) {
-            const int a = fr[fi].g;
-            const BlockDesc& u = factor(L + 1, a, 0);
-            ExtractGather g;
-            g.src = u.offset;
-            g.ld_src = u.lda;
-            g.r = u.cols;
-            g.count = fr[fi].count;
-            g.transposed = 0;
-            g.dst = W[L + 1].at[k][fi];
-            g.idx = static_cast<int64_t>(index.size());
-            for (int q = 0; q < fr[fi].count; ++q)
-                index.push_back(srow[row_at[k] + fr[fi].start + q] - leaves.row_head[a]);
-            gathers.push_back(g);
-        }
-    }
-    const int nu = static_cast<int>(gathers.size()) - nv;
-
-    // GEMM batches, at most kMaxBatch entries each
-    constexpr size_t kMaxBatch = 65535;
-    std::vector<fmm::gpu::VBatch<DataType>> batches;
-    std::vector<int> batch_level;  // which stage a batch belongs to, in launch order
-    auto add = [&](int stage, const DataType* a, int lda, const DataType* b, int ldb, DataType* c, int ldc, int m,
-                   int n, int kk) {
-        if (m <= 0 || n <= 0) return;
-        if (batches.empty() || batch_level.back() != stage || batches.back().entries.size() >= kMaxBatch) {
-            batches.emplace_back();
-            batch_level.push_back(stage);
-        }
-        typename fmm::gpu::VBatch<DataType>::Entry e;
-        e.a = a; e.b = b; e.c = c;
-        e.m = m; e.n = n; e.k = kk;
-        e.lda = std::max(lda, 1); e.ldb = std::max(ldb, 1); e.ldc = std::max(ldc, 1);
-        batches.back().entries.push_back(e);
-        prof.flops += 2.0 * m * n * kk;
+    // ---- the GEMM stages, in launch order: the right half's levels, the
+    // left half's, the middle.  Each counts its products per intersection,
+    // then fills them in parallel.
+    std::vector<ExtractStage> stages;
+    auto build = [&](auto items_of, auto fill_one) {
+        std::vector<int64_t> at(row_at.size(), 0);
+#pragma omp parallel for schedule(dynamic, 16)
+        for (int k = 0; k < count; ++k) at[k + 1] = items_of(k);
+        for (int k = 0; k < count; ++k) at[k + 1] += at[k];
+        stages.emplace_back();
+        ExtractStage& s = stages.back();
+        s.resize(static_cast<size_t>(at[count]));
+#pragma omp parallel for schedule(dynamic, 16)
+        for (int k = 0; k < count; ++k) fill_one(k, s, at[k]);
+    };
+    auto put = [](ExtractStage& s, int64_t i, const DataType* a, int lda, const DataType* b, int ldb, DataType* c,
+                  int ldc, int m, int n, int kk) {
+        s.a[i] = a; s.b[i] = b; s.c[i] = c;
+        s.m[i] = m; s.n[i] = n; s.k[i] = kk;
+        s.lda[i] = std::max(lda, 1); s.ldb[i] = std::max(ldb, 1); s.ldc[i] = std::max(ldc, 1);
     };
     // right half: vector level t -> t+1 through Kerl(t), t = 1 .. h
     for (int t = 1; t <= h; ++t) {
-        for (int k = 0; k < count; ++k) {
-            const auto& f_in = rrun[k][t - 1];
-            const auto& f_out = rrun[k][t];
-            const auto& c_in = crun[k][t - 1];
-            const auto& c_out = crun[k][t];
-            for (size_t fo = 0; fo < f_out.size(); ++fo) {
-                const int F = f_out[fo].g;
-                const int fi = detail::run_index(f_in, F >> 1);
-                for (size_t ci = 0; ci < c_in.size(); ++ci) {
-                    const int C = c_in[ci].g;
-                    const int co = detail::run_index(c_out, C >> 1);
-                    const BlockDesc& K = factor(t, F, C);
-                    const int r_out = rank_of(t + 1, F, C >> 1);
-                    const int r_in = rank_of(t, F >> 1, C);
-                    const DataType* B = dR[t] + R[t].at[k][fi * c_in.size() + ci];
-                    DataType* Cp = dR[t + 1] + R[t + 1].at[k][fo * c_out.size() + co] +
-                                   static_cast<int64_t>(c_in[ci].start - c_out[co].start) * r_out;
-                    add(t, bf.values + K.offset, K.lda, B, r_in, Cp, r_out, r_out, c_in[ci].count, r_in);
-                }
-            }
-        }
+        build([&](int k) { return (ro[t][k + 1] - ro[t][k]) * (co[t - 1][k + 1] - co[t - 1][k]); },
+              [&](int k, ExtractStage& s, int64_t i) {
+                  const Run* f_in = rr[t - 1].data() + ro[t - 1][k];
+                  const int64_t nf_in = ro[t - 1][k + 1] - ro[t - 1][k];
+                  const Run* f_out = rr[t].data() + ro[t][k];
+                  const int64_t nf_out = ro[t][k + 1] - ro[t][k];
+                  const Run* c_in = cr[t - 1].data() + co[t - 1][k];
+                  const int64_t nc_in = co[t - 1][k + 1] - co[t - 1][k];
+                  const Run* c_out = cr[t].data() + co[t][k];
+                  const int64_t nc_out = co[t][k + 1] - co[t][k];
+                  for (int64_t fo = 0; fo < nf_out; ++fo) {
+                      const int F = f_out[fo].g;
+                      const int fi = find(f_in, nf_in, F >> 1);
+                      for (int64_t ci = 0; ci < nc_in; ++ci) {
+                          const int C = c_in[ci].g;
+                          const int cp = find(c_out, nc_out, C >> 1);
+                          const BlockDesc& K = bf.block(t, F, C);
+                          const int r_out = rank_of(t + 1, F, C >> 1);
+                          const int r_in = rank_of(t, F >> 1, C);
+                          const DataType* B = dR[t] + R[t].at[R[t].base[k] + fi * nc_in + ci];
+                          DataType* Cp = dR[t + 1] + R[t + 1].at[R[t + 1].base[k] + fo * nc_out + cp] +
+                                         static_cast<int64_t>(c_in[ci].start - c_out[cp].start) * r_out;
+                          put(s, i++, bf.values + K.offset, K.lda, B, r_in, Cp, r_out, r_out, c_in[ci].count, r_in);
+                      }
+                  }
+              });
     }
     // left half: vector level t -> t-1 through Kerl(t-1), t = L+1 .. h+2
     for (int t = L + 1; t >= h + 2; --t) {
-        for (int k = 0; k < count; ++k) {
-            const auto& f_in = rrun[k][t - 1];
-            const auto& f_out = rrun[k][t - 2];
-            const auto& c_in = crun[k][t - 1];
-            const auto& c_out = crun[k][t - 2];
-            for (size_t fi = 0; fi < f_in.size(); ++fi) {
-                const int F = f_in[fi].g;
-                const int fo = detail::run_index(f_out, F >> 1);
-                for (size_t co = 0; co < c_out.size(); ++co) {
-                    const int J = c_out[co].g;
-                    const int ci = detail::run_index(c_in, J >> 1);
-                    const BlockDesc& K = factor(t - 1, F, J);
-                    const int r_in = rank_of(t, F, J >> 1);
-                    const int r_out = rank_of(t - 1, F >> 1, J);
-                    const DataType* A = dW[t] + W[t].at[k][fi * c_in.size() + ci];
-                    DataType* Cp = dW[t - 1] + W[t - 1].at[k][fo * c_out.size() + co] +
-                                   (f_in[fi].start - f_out[fo].start);
-                    add(1000 + t, A, f_in[fi].count, bf.values + K.offset, K.lda, Cp, f_out[fo].count,
-                        f_in[fi].count, r_out, r_in);
-                }
-            }
-        }
+        build([&](int k) { return (ro[t - 1][k + 1] - ro[t - 1][k]) * (co[t - 2][k + 1] - co[t - 2][k]); },
+              [&](int k, ExtractStage& s, int64_t i) {
+                  const Run* f_in = rr[t - 1].data() + ro[t - 1][k];
+                  const int64_t nf_in = ro[t - 1][k + 1] - ro[t - 1][k];
+                  const Run* f_out = rr[t - 2].data() + ro[t - 2][k];
+                  const int64_t nf_out = ro[t - 2][k + 1] - ro[t - 2][k];
+                  const Run* c_in = cr[t - 1].data() + co[t - 1][k];
+                  const int64_t nc_in = co[t - 1][k + 1] - co[t - 1][k];
+                  const Run* c_out = cr[t - 2].data() + co[t - 2][k];
+                  const int64_t nc_out = co[t - 2][k + 1] - co[t - 2][k];
+                  for (int64_t fi = 0; fi < nf_in; ++fi) {
+                      const int F = f_in[fi].g;
+                      const int fp = find(f_out, nf_out, F >> 1);
+                      for (int64_t cj = 0; cj < nc_out; ++cj) {
+                          const int J = c_out[cj].g;
+                          const int ci = find(c_in, nc_in, J >> 1);
+                          const BlockDesc& K = bf.block(t - 1, F, J);
+                          const int r_in = rank_of(t, F, J >> 1);
+                          const int r_out = rank_of(t - 1, F >> 1, J);
+                          const DataType* A = dW[t] + W[t].at[W[t].base[k] + fi * nc_in + ci];
+                          DataType* Cp = dW[t - 1] + W[t - 1].at[W[t - 1].base[k] + fp * nc_out + cj] +
+                                         (f_in[fi].start - f_out[fp].start);
+                          put(s, i++, A, f_in[fi].count, bf.values + K.offset, K.lda, Cp, f_out[fp].count,
+                              f_in[fi].count, r_out, r_in);
+                      }
+                  }
+              });
     }
     // the middle: entries in leaf order
+    build([&](int k) { return (ro[h][k + 1] - ro[h][k]) * (co[h][k + 1] - co[h][k]); },
+          [&](int k, ExtractStage& s, int64_t i) {
+              const Run* fr = rr[h].data() + ro[h][k];
+              const int64_t nf = ro[h][k + 1] - ro[h][k];
+              const Run* cc = cr[h].data() + co[h][k];
+              const int64_t nc = co[h][k + 1] - co[h][k];
+              const int m = rowidx[k];
+              for (int64_t fi = 0; fi < nf; ++fi) {
+                  for (int64_t ci = 0; ci < nc; ++ci) {
+                      const int r = rank_of(h + 1, fr[fi].g, cc[ci].g);
+                      const DataType* A = dW[h + 1] + W[h + 1].at[W[h + 1].base[k] + fi * nc + ci];
+                      const DataType* B = dR[h + 1] + R[h + 1].at[R[h + 1].base[k] + fi * nc + ci];
+                      DataType* Cp = sorted + out_at[k] + fr[fi].start + static_cast<int64_t>(cc[ci].start) * m;
+                      put(s, i++, A, fr[fi].count, B, r, Cp, m, fr[fi].count, cc[ci].count, r);
+                  }
+              }
+          });
+
+    // ---- gathers (V: one per column leaf of an intersection; U: one per row
+    // leaf), their local indices, and the scatter's positions
+    std::vector<int64_t> v_at(row_at.size(), 0), u_at(row_at.size(), 0);
     for (int k = 0; k < count; ++k) {
-        const auto& fr = rrun[k][h];
-        const auto& cr = crun[k][h];
-        const int m = rowidx[k];
-        for (size_t fi = 0; fi < fr.size(); ++fi) {
-            for (size_t ci = 0; ci < cr.size(); ++ci) {
-                const int r = rank_of(h + 1, fr[fi].g, cr[ci].g);
-                const DataType* A = dW[h + 1] + W[h + 1].at[k][fi * cr.size() + ci];
-                const DataType* B = dR[h + 1] + R[h + 1].at[k][fi * cr.size() + ci];
-                DataType* Cp = sorted + out_at[k] + fr[fi].start + static_cast<int64_t>(cr[ci].start) * m;
-                add(2000, A, fr[fi].count, B, r, Cp, m, fr[fi].count, cr[ci].count, r);
-            }
+        v_at[k + 1] = v_at[k] + (co[0][k + 1] - co[0][k]);
+        u_at[k + 1] = u_at[k] + (ro[L][k + 1] - ro[L][k]);
+    }
+    const int nv = static_cast<int>(v_at[count]), nu = static_cast<int>(u_at[count]);
+    // the index array: V's local columns, U's local rows, pos_r, pos_c
+    const int64_t idx_v = 0, idx_u = ncol, idx_pr = ncol + nrow, idx_pc = ncol + 2 * nrow;
+    const int64_t nindex = 2 * (nrow + ncol);
+
+    // ---- the metadata image: laid out first (it may move while it grows),
+    // then filled
+    constexpr int64_t kMaxBatch = 65535;
+    struct Chunk {
+        size_t stage = 0;
+        int64_t first = 0, count = 0;
+        size_t sizes = 0, pointers = 0;
+        magma_int_t max_m = 0, max_n = 0, max_k = 0;
+    };
+    std::vector<Chunk> chunks;
+    meta.clear();
+    const size_t at_gather = meta.alloc(static_cast<size_t>(nv + nu) * sizeof(ExtractGather));
+    const size_t at_scatter = meta.alloc(static_cast<size_t>(count) * sizeof(ExtractScatter));
+    const size_t at_index = meta.alloc(static_cast<size_t>(nindex) * sizeof(int));
+    for (size_t s = 0; s < stages.size(); ++s) {
+        const int64_t n = static_cast<int64_t>(stages[s].size());
+        for (int64_t first = 0; first < n; first += kMaxBatch) {
+            Chunk c;
+            c.stage = s;
+            c.first = first;
+            c.count = std::min(kMaxBatch, n - first);
+            c.sizes = meta.alloc(static_cast<size_t>(6 * (c.count + 1)) * sizeof(magma_int_t));
+            c.pointers = meta.alloc(static_cast<size_t>(3 * c.count) * sizeof(void*));
+            chunks.push_back(c);
         }
     }
-    // the scatter to the caller's order
-    std::vector<ExtractScatter> scatters(static_cast<size_t>(count));
+    auto* gathers = reinterpret_cast<ExtractGather*>(meta.host(at_gather));
+    auto* scatters = reinterpret_cast<ExtractScatter*>(meta.host(at_scatter));
+    int* index = reinterpret_cast<int*>(meta.host(at_index));
+#pragma omp parallel for schedule(dynamic, 16)
     for (int k = 0; k < count; ++k) {
-        ExtractScatter& s = scatters[k];
-        s.src = s.dst = out_at[k];
-        s.m = rowidx[k];
-        s.n = colidx[k];
-        s.pos_r = static_cast<int64_t>(index.size());
-        index.insert(index.end(), pos_r.begin() + row_at[k], pos_r.begin() + row_at[k + 1]);
-        s.pos_c = static_cast<int64_t>(index.size());
-        index.insert(index.end(), pos_c.begin() + col_at[k], pos_c.begin() + col_at[k + 1]);
+        for (int64_t q = 0; q < colidx[k]; ++q) {
+            const int64_t p = col_at[k] + q;
+            index[idx_v + p] = scol[p] - leaves.col_head[cleaf[p]];
+            index[idx_pc + p] = pos_c[p];
+        }
+        for (int64_t q = 0; q < rowidx[k]; ++q) {
+            const int64_t p = row_at[k] + q;
+            index[idx_u + p] = srow[p] - leaves.row_head[rleaf[p]];
+            index[idx_pr + p] = pos_r[p];
+        }
+        int64_t g = v_at[k];
+        for (int64_t ci = co[0][k]; ci < co[0][k + 1]; ++ci) {
+            const Run& run = cr[0][ci];
+            const BlockDesc& v = bf.block(0, 0, run.g);
+            ExtractGather e;
+            e.src = v.offset; e.ld_src = v.lda; e.r = v.cols;
+            e.count = run.count; e.transposed = 1;
+            e.dst = R[1].at[R[1].base[k] + (ci - co[0][k])];
+            e.idx = idx_v + col_at[k] + run.start;
+            gathers[g++] = e;
+        }
+        g = nv + u_at[k];
+        for (int64_t fi = ro[L][k]; fi < ro[L][k + 1]; ++fi) {
+            const Run& run = rr[L][fi];
+            const BlockDesc& u = bf.block(L + 1, run.g, 0);
+            ExtractGather e;
+            e.src = u.offset; e.ld_src = u.lda; e.r = u.cols;
+            e.count = run.count; e.transposed = 0;
+            e.dst = W[L + 1].at[W[L + 1].base[k] + (fi - ro[L][k])];
+            e.idx = idx_u + row_at[k] + run.start;
+            gathers[g++] = e;
+        }
+        ExtractScatter sc;
+        sc.src = sc.dst = out_at[k];
+        sc.m = rowidx[k];
+        sc.n = colidx[k];
+        sc.pos_r = idx_pr + row_at[k];
+        sc.pos_c = idx_pc + col_at[k];
+        scatters[k] = sc;
     }
-
-    const size_t at_gather = meta.append(gathers);
-    const size_t at_scatter = meta.append(scatters);
-    const size_t at_index = meta.append(index);
-    for (auto& b : batches) b.stage(meta);
-    for (const auto& b : batches) prof.items += static_cast<int64_t>(b.count());
+    double flops = 0.0;
+#pragma omp parallel for schedule(dynamic, 1) reduction(+ : flops)
+    for (size_t ch = 0; ch < chunks.size(); ++ch) {
+        Chunk& c = chunks[ch];
+        const ExtractStage& s = stages[c.stage];
+        auto* sz = reinterpret_cast<magma_int_t*>(meta.host(c.sizes));
+        auto* pt = reinterpret_cast<const void**>(meta.host(c.pointers));
+        const int64_t n = c.count;
+        for (int64_t q = 0; q < n; ++q) {
+            const int64_t i = c.first + q;
+            sz[0 * (n + 1) + q] = s.m[i];
+            sz[1 * (n + 1) + q] = s.n[i];
+            sz[2 * (n + 1) + q] = s.k[i];
+            sz[3 * (n + 1) + q] = s.lda[i];
+            sz[4 * (n + 1) + q] = s.ldb[i];
+            sz[5 * (n + 1) + q] = s.ldc[i];
+            pt[q] = s.a[i];
+            pt[n + q] = s.b[i];
+            pt[2 * n + q] = s.c[i];
+            c.max_m = std::max(c.max_m, s.m[i]);
+            c.max_n = std::max(c.max_n, s.n[i]);
+            c.max_k = std::max(c.max_k, s.k[i]);
+            flops += 2.0 * s.m[i] * s.n[i] * s.k[i];
+        }
+        for (int w = 0; w < 6; ++w) sz[w * (n + 1) + n] = 0;
+    }
+    prof.flops += flops;
+    for (const ExtractStage& s : stages) prof.items += static_cast<int64_t>(s.size());
     const auto t1 = clock::now();
 
     // ---- launch, in dependence order on the backend's stream
     cudaStream_t stream = fmm::gpu::Context::instance().stream();
     magma_queue_t queue = fmm::gpu::Context::instance().queue();
     char* dm = meta.upload(meta_device, stream);
-    const auto* d_gather = reinterpret_cast<const ExtractGather*>(dm + at_gather);
-    const auto* d_scatter = reinterpret_cast<const ExtractScatter*>(dm + at_scatter);
-    const auto* d_index = reinterpret_cast<const int*>(dm + at_index);
-    // a rank of zero leaves its products unwritten: the entries start at zero
-    fmm::gpu::check_cuda(cudaMemsetAsync(sorted, 0, static_cast<size_t>(std::max<int64_t>(entries, 1)) * sizeof(DataType),
-                                         stream), "bf extract zero");
-    if (nv > 0) launch_extract_gather(d_gather, nv, d_index, bf.values, dR[1], stream);
-    if (nu > 0) launch_extract_gather(d_gather + nv, nu, d_index, bf.values, dW[L + 1], stream);
-    for (const auto& b : batches) b.gemm(dm, MagmaNoTrans, MagmaNoTrans, DataType(1), DataType(0), queue);
-    if (count > 0) launch_extract_scatter(d_scatter, count, d_index, sorted, d_out, stream);
+    // a product of rank zero writes nothing: everything starts at zero
+    for (const auto& o : owned) {
+        fmm::gpu::check_cuda(cudaMemsetAsync(o.first, 0, static_cast<size_t>(o.second) * sizeof(DataType), stream),
+                             "bf extract zero");
+    }
+    if (nv > 0) launch_extract_gather(reinterpret_cast<const ExtractGather*>(dm + at_gather), nv,
+                                      reinterpret_cast<const int*>(dm + at_index), bf.values, dR[1], stream);
+    if (nu > 0) launch_extract_gather(reinterpret_cast<const ExtractGather*>(dm + at_gather) + nv, nu,
+                                      reinterpret_cast<const int*>(dm + at_index), bf.values, dW[L + 1], stream);
+    for (const Chunk& c : chunks) {
+        if (c.max_m <= 0 || c.max_n <= 0) continue;
+        auto* sz = reinterpret_cast<magma_int_t*>(dm + c.sizes);
+        auto* pt = reinterpret_cast<void**>(dm + c.pointers);
+        const int64_t n = c.count;
+        fmm::gpu::gemm_vbatched<DataType>(
+            MagmaNoTrans, MagmaNoTrans, sz, sz + (n + 1), sz + 2 * (n + 1), DataType(1),
+            reinterpret_cast<const DataType* const*>(pt), sz + 3 * (n + 1),
+            reinterpret_cast<const DataType* const*>(pt + n), sz + 4 * (n + 1), DataType(0),
+            reinterpret_cast<DataType**>(pt + 2 * n), sz + 5 * (n + 1), static_cast<magma_int_t>(n), queue,
+            c.max_m, c.max_n, std::max<magma_int_t>(c.max_k, 1));
+    }
+    if (count > 0) launch_extract_scatter(reinterpret_cast<const ExtractScatter*>(dm + at_scatter), count,
+                                          reinterpret_cast<const int*>(dm + at_index), sorted, d_out, stream);
     if (entries > 0) {
         fmm::gpu::check_cuda(cudaMemcpyAsync(out, d_out, static_cast<size_t>(entries) * sizeof(DataType),
                                              cudaMemcpyDeviceToHost, stream), "bf extract download");
     }
     fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "bf extract");
     const auto t2 = clock::now();
-    for (char* p : owned) heap.free(p);
+    for (auto& o : owned) heap.free(o.first);
     prof.entries = entries;
     prof.plan = std::chrono::duration<double>(t1 - t0).count();
     prof.run = std::chrono::duration<double>(t2 - t1).count();
