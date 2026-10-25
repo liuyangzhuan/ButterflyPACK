@@ -62,6 +62,7 @@ struct DriverOptions {
   int extract_check = 0;   // intersections of the extraction check of a compression-only H2 (precon 2); 0: none
   int64_t h2_partial = 0;  // H2_partial: the first h2_partial points (the grid's first planes) form F11
   int partial_check = 0;   // 1: the partial solves and Schur complement against dense LAPACK on rank 0 (N <= 20000, distributed64 1)
+  int partial_extract_bench = 0;  // > 0: that many rounds of parent-like Schur complement blocks through c_bpack_extractelement
   int logdet_check = 0;    // 1: the logdet and a solve again after another H2 is built (format 7, not precon 2)
   int verbosity = 1;
   int elem_extract = -1;  // -1: 2, with hodlr_extract_ranks 1
@@ -262,6 +263,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       options.h2_partial = parse_int64(value, "H2_partial");
     } else if (name == "partial_check") {
       options.partial_check = parse_int(value, "partial_check");
+    } else if (name == "partial_extract_bench") {
+      options.partial_extract_bench = parse_int(value, "partial_extract_bench");
     } else if (name == "extract_check") {
       options.extract_check = parse_int(value, "extract_check");
     } else if (name == "logdet_check") {
@@ -494,6 +497,9 @@ void print_usage(const char* executable) {
          "                                transposed mult alone)\n"
       << "  --H2_partial <n>   (format=7, H2_unstructured 1, sym 0: eliminate the first n points only;\n"
          "                            the Schur complement on the rest is served by c_bpack_partial_*)\n"
+      << "  --partial_extract_bench <R>   (with --H2_partial: R rounds of Schur complement blocks as a\n"
+      << "                            parent front would read them through c_bpack_extractelement - near\n"
+      << "                            field 64 x 64 blocks and 16 x 4096 panels - timed)\n"
       << "  --partial_check <0|1>   (with --H2_partial, distributed64 1, N <= 20000: the partial solves\n"
          "                            and the Schur complement against dense LAPACK on rank 0)\n"
       << "  --extract_check <count>   (format=7, precon 2, distributed64 1: that many\n"
@@ -919,12 +925,54 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
     }
   }
   const double t4 = MPI_Wtime();
-  double times[4] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3};
-  MPI_Allreduce(MPI_IN_PLACE, times, 4, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  // the same blocks through c_bpack_extractelement, as STRUMPACK reads a
+  // child's update block: one call, 1-based F22 indices, block k to rank k
+  // mod P (1 x 1 grids)
+  double ext_diff = 0.0, ext_scale = 0.0;
+  {
+    std::vector<int> allrows, allcols, rowidx(nblocks), colidx(nblocks), pgidx(nblocks), pmaps(3 * nblocks);
+    int64_t nloc_dat = 0;
+    int ra = 0, ca = 0;
+    for (int k = 0; k < nblocks; ++k) {
+      for (int i = 0; i < nr[k]; ++i) allrows.push_back(rows[static_cast<size_t>(ra + i)] + 1);
+      for (int j = 0; j < nc[k]; ++j) allcols.push_back(cols[static_cast<size_t>(ca + j)] + 1);
+      rowidx[k] = nr[k];
+      colidx[k] = nc[k];
+      pgidx[k] = k;
+      pmaps[k] = 1;
+      pmaps[nblocks + k] = 1;
+      pmaps[2 * nblocks + k] = k % mpi_size;
+      if (k % mpi_size == rank) nloc_dat += static_cast<int64_t>(nr[k]) * nc[k];
+      ra += nr[k];
+      ca += nc[k];
+    }
+    std::vector<double> dat(static_cast<size_t>(std::max<int64_t>(nloc_dat, 1)));
+    int ninter = nblocks, nallrows = static_cast<int>(allrows.size()), nallcols = static_cast<int>(allcols.size()), npmap = nblocks;
+    d_c_bpack_extractelement(&resources.matrix, &resources.option, &resources.mesh, &resources.stats, &resources.process_tree,
+                             &ninter, &nallrows, &nallcols, &nloc_dat, allrows.data(), allcols.data(), dat.data(),
+                             rowidx.data(), colidx.data(), pgidx.data(), &npmap, pmaps.data());
+    int64_t at = 0;
+    for (int k = 0; k < nblocks; ++k) {
+      if (k % mpi_size != rank) continue;
+      for (size_t e = 0; e < blocks[k].size(); ++e) {
+        ext_diff = std::max(ext_diff, std::abs(dat[static_cast<size_t>(at) + e] - blocks[k][e]));
+        ext_scale = std::max(ext_scale, std::abs(blocks[k][e]));
+      }
+      at += static_cast<int64_t>(blocks[k].size());
+    }
+    MPI_Allreduce(MPI_IN_PLACE, &ext_diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, &ext_scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  }
+  const double t5 = MPI_Wtime();
+  double times[5] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4};
+  MPI_Allreduce(MPI_IN_PLACE, times, 5, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
   if (rank == 0) {
     std::cout << std::setprecision(3) << "H2 partial solves: forward " << times[0] << " s, backward " << times[1]
               << " s, Schur mult " << times[2] << " s, Schur extract " << times[3] << " s; x2 returned to "
               << x2_diff << std::endl;
+    std::cout << std::setprecision(3) << "H2 partial extractelement: the same " << nblocks << " blocks in one call "
+              << times[4] << " s, against the Schur extract's " << ext_diff / std::max(ext_scale, 1e-300)
+              << " (relative)" << std::endl;
   }
   if (o.partial_check == 0) return;
   if (N > 40000) throw std::invalid_argument("--partial_check: N <= 40000");
@@ -1072,6 +1120,89 @@ double resident_gb() {
     std::fclose(f);
   }
   return static_cast<double>(resident) * static_cast<double>(sysconf(_SC_PAGESIZE)) / 1e9;
+}
+
+// --partial_extract_bench R: R rounds of Schur complement blocks as a
+// STRUMPACK parent front reads a child's update block (extract_2d through
+// c_bpack_extractelement, 1-based F22 indices, each block to one rank): per
+// round 64 dense blocks between neighbouring 4^3 cubes of the F22 points (a
+// compressed front's dense leaves) and 32 panels, 16 points of a cube against
+// a 16^3 region not touching it and the transpose (BACA's row and column
+// samples).  Prints the time a round and the rate.
+void partial_extract_bench(const DriverOptions& o, ButterflyResources& resources, int rank, int mpi_size) {
+  const int64_t n = o.grid_size, n22 = n * n * n - o.h2_partial;
+  if (n22 <= 0) return;
+  const int64_t i0 = (o.h2_partial + n * n - 1) / (n * n);  // the first whole F22 plane
+  if (n - i0 < 16 || n < 16) throw std::invalid_argument("--partial_extract_bench: at least 16^3 whole F22 points");
+  auto f22 = [&](int64_t i, int64_t j, int64_t k) { return static_cast<int>(k + n * j + n * n * i - o.h2_partial + 1); };
+  auto cube = [&](int64_t ci, int64_t cj, int64_t ck, int64_t side, std::vector<int>& out) {
+    for (int64_t i = ci; i < ci + side; ++i)
+      for (int64_t j = cj; j < cj + side; ++j)
+        for (int64_t k = ck; k < ck + side; ++k) out.push_back(f22(i, j, k));
+  };
+  std::mt19937_64 rng(20261025);
+  auto pick = [&](int64_t lo, int64_t hi) { return lo + static_cast<int64_t>(rng() % static_cast<uint64_t>(hi - lo + 1)); };
+  double t_total = 0.0, entries = 0.0;
+  for (int r = 0; r < o.partial_extract_bench; ++r) {
+    std::vector<int> allrows, allcols, rowidx, colidx;
+    auto add = [&](const std::vector<int>& rr, const std::vector<int>& cc) {
+      allrows.insert(allrows.end(), rr.begin(), rr.end());
+      allcols.insert(allcols.end(), cc.begin(), cc.end());
+      rowidx.push_back(static_cast<int>(rr.size()));
+      colidx.push_back(static_cast<int>(cc.size()));
+    };
+    for (int b = 0; b < 64; ++b) {  // neighbouring 4^3 cubes
+      const int64_t ci = pick(i0, n - 4), cj = pick(0, n - 4), ck = pick(0, n - 4);
+      const int64_t di = std::clamp<int64_t>(ci + 4 * pick(-1, 1), i0, n - 4), dj = std::clamp<int64_t>(cj + 4 * pick(-1, 1), 0, n - 4),
+                    dk = std::clamp<int64_t>(ck + 4 * pick(-1, 1), 0, n - 4);
+      std::vector<int> rr, cc;
+      cube(ci, cj, ck, 4, rr);
+      cube(di, dj, dk, 4, cc);
+      add(rr, cc);
+    }
+    for (int b = 0; b < 16; ++b) {  // 16 points of a cube against a 16^3 region away from it, and the transpose
+      const int64_t ci = pick(i0, n - 4), cj = pick(0, n - 4), ck = pick(0, n - 4);
+      std::vector<int> pts, far;
+      cube(ci, cj, ck, 4, pts);
+      std::shuffle(pts.begin(), pts.end(), rng);
+      pts.resize(16);
+      int64_t fi = 0, fj = 0, fk = 0;
+      for (int tries = 0;; ++tries) {
+        fi = pick(i0, n - 16);
+        fj = pick(0, n - 16);
+        fk = pick(0, n - 16);
+        const bool apart = ci + 8 <= fi || fi + 20 <= ci || cj + 8 <= fj || fj + 20 <= cj || ck + 8 <= fk || fk + 20 <= ck;
+        if (apart || tries > 100) break;
+      }
+      cube(fi, fj, fk, 16, far);
+      add(pts, far);
+      add(far, pts);
+    }
+    const int ninter = static_cast<int>(rowidx.size());
+    std::vector<int> pgidx(ninter), pmaps(3 * ninter);
+    int64_t nloc = 0;
+    for (int k = 0; k < ninter; ++k) {
+      pgidx[k] = k;
+      pmaps[k] = pmaps[ninter + k] = 1;
+      pmaps[2 * ninter + k] = k % mpi_size;
+      if (k % mpi_size == rank) nloc += static_cast<int64_t>(rowidx[k]) * colidx[k];
+      entries += static_cast<double>(rowidx[k]) * colidx[k];
+    }
+    std::vector<double> dat(static_cast<size_t>(std::max<int64_t>(nloc, 1)));
+    int nallrows = static_cast<int>(allrows.size()), nallcols = static_cast<int>(allcols.size()), npmap = ninter, ni = ninter;
+    MPI_Barrier(MPI_COMM_WORLD);
+    const double t0 = MPI_Wtime();
+    d_c_bpack_extractelement(&resources.matrix, &resources.option, &resources.mesh, &resources.stats, &resources.process_tree,
+                             &ni, &nallrows, &nallcols, &nloc, allrows.data(), allcols.data(), dat.data(), rowidx.data(),
+                             colidx.data(), pgidx.data(), &npmap, pmaps.data());
+    MPI_Barrier(MPI_COMM_WORLD);
+    t_total += MPI_Wtime() - t0;
+  }
+  if (rank == 0) {
+    std::cout << std::setprecision(3) << "H2 partial extract bench: " << o.partial_extract_bench << " rounds of 96 blocks, "
+              << entries / o.partial_extract_bench / 1e6 << " M entries a round, " << t_total / o.partial_extract_bench
+              << " s a round, " << entries / t_total / 1e6 << " M entries/s" << std::endl;
+  }
 }
 
 // --H2_partial, after partial_checks: the release of the Schur complement.
@@ -1967,6 +2098,7 @@ int main(int argc, char** argv) {
     }
     } else {
       partial_checks(driver_options, application, resources, rank, mpi_size, local_points, distributed_input);
+      if (driver_options.partial_extract_bench > 0) partial_extract_bench(driver_options, resources, rank, mpi_size);
       partial_release_check(driver_options, resources, rank, local_points, distributed_input);
     }
 

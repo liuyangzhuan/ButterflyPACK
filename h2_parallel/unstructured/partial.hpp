@@ -52,6 +52,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -1325,6 +1326,7 @@ const char* partial_get(const char* p, T* v, size_t n) {
 template<typename DataType>
 struct PartialChainBlock {
     int64_t box = -1;                ///< local box index at the level
+    int64_t inter = 0;               ///< the block of the request its members are in
     std::vector<int64_t> members;    ///< indices into the side's distinct points
     std::vector<int64_t> rows;       ///< raw rows: positions in the box's point list
     std::vector<DataType> v;         ///< |rows| x |members|
@@ -1391,16 +1393,23 @@ void partial_chain_parts(const fmm::BoxData<CoordType, DataType>& box, const std
     for (size_t t = 0; t < b.wrows.size(); ++t) b.wpos[static_cast<size_t>(b.wrows[t])] = static_cast<int32_t>(t);
 }
 
+// The blocks CB(I_n, J_n), n < ninter, of a request: I_n is nrows[n] F22
+// indices (0-based) after the earlier blocks' in rows, J_n likewise in cols,
+// and block n goes column major into out after the earlier blocks.
+// Collective over the tree's communicator, every rank passing the same
+// request; `replicate`: the result on every rank, else each rank's out holds
+// its contributions, which sum to it over the ranks.
 template<typename CoordType, typename DataType>
-void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const int64_t* rows, int64_t nrows,
-                           const int64_t* cols, int64_t ncols, DataType* out) {
-    // Collective over the tree's communicator, every rank passing the same
-    // rows and cols, the result replicated.  A rank holds the blocks of its
-    // boxes; a level's terms are computed once: a box's own terms and its
-    // X_RN terms by its owner (the neighbours' column blocks received), its
-    // X_NR terms by the owner of the column box (the neighbours' row blocks
-    // received), the root's term by the root's owner; the blocks go to the
-    // parents' owner between levels, and a sum assembles the result.
+void partial_schur_blocks(fmm::ParallelTree<CoordType, DataType>& tree, int64_t ninter, const int64_t* rows,
+                          const int64_t* nrows, const int64_t* cols, const int64_t* ncols, DataType* out,
+                          bool replicate) {
+    // A rank holds the chain blocks of its boxes, one a box and block of the
+    // request (blocks of different ones never pair); a level's terms are
+    // computed once: a box's own terms and its X_RN terms by its owner (the
+    // neighbours' column blocks received), its X_NR terms by the owner of the
+    // column box (the neighbours' row blocks received), the root's term by
+    // the root's owner; the blocks go to the parents' owner between levels,
+    // and a sum assembles the result.
     using Block = PartialChainBlock<DataType>;
     auto& pr = tree.partial_root;
     if (pr.cb_released) throw std::runtime_error("partial Schur: released (c_bpack_partial_schur_release)");
@@ -1410,8 +1419,14 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
     int me = 0, nranks = 1;
     MPI_Comm_rank(tree.comm, &me);
     MPI_Comm_size(tree.comm, &nranks);
-    std::fill(out, out + nrows * ncols, DataType(0));
-    if (nrows == 0 || ncols == 0) return;
+    std::vector<int64_t> roff(static_cast<size_t>(ninter) + 1, 0), coff(roff), ooff(roff);
+    for (int64_t k = 0; k < ninter; ++k) {
+        roff[static_cast<size_t>(k) + 1] = roff[static_cast<size_t>(k)] + nrows[k];
+        coff[static_cast<size_t>(k) + 1] = coff[static_cast<size_t>(k)] + ncols[k];
+        ooff[static_cast<size_t>(k) + 1] = ooff[static_cast<size_t>(k)] + nrows[k] * ncols[k];
+    }
+    std::fill(out, out + ooff.back(), DataType(0));
+    if (ooff.back() == 0) return;
     if (pr.leaf_box.empty() && n22 > 0) {
         pr.leaf_box.assign(static_cast<size_t>(n22), -1);
         pr.leaf_slot.assign(static_cast<size_t>(n22), -1);
@@ -1428,44 +1443,47 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
             }
         }
     }
-    // the two sides: distinct points (the same on every rank), their requested
-    // positions, the blocks of this rank's boxes at the current level
+    // the two sides: each block of the request's distinct points (the same on
+    // every rank), their positions in it, the chain blocks of this rank's
+    // boxes at the current level
     struct Side {
         std::vector<int64_t> points;
         std::vector<std::vector<int64_t>> positions;
         std::vector<Block> blocks;
     };
-    auto make_side = [&](const int64_t* idx, int64_t n) {
+    auto make_side = [&](const int64_t* idx, const std::vector<int64_t>& off) {
         Side side;
-        std::unordered_map<int64_t, int64_t> of;
-        for (int64_t q = 0; q < n; ++q) {
-            const int64_t f = idx[q];
-            if (f < 0 || f >= n22) throw std::runtime_error("partial Schur: an index out of range");
-            auto it = of.find(f);
-            if (it == of.end()) {
-                it = of.emplace(f, static_cast<int64_t>(side.points.size())).first;
-                side.points.push_back(f);
-                side.positions.emplace_back();
+        std::unordered_map<int64_t, size_t> block_of;  // (leaf box, block of the request) -> chain block
+        for (int64_t k = 0; k < ninter; ++k) {
+            std::unordered_map<int64_t, int64_t> of;
+            const int64_t q0 = off[static_cast<size_t>(k)], n = off[static_cast<size_t>(k) + 1] - q0;
+            for (int64_t q = 0; q < n; ++q) {
+                const int64_t f = idx[q0 + q];
+                if (f < 0 || f >= n22) throw std::runtime_error("partial Schur: an index out of range");
+                auto it = of.find(f);
+                if (it == of.end()) {
+                    const int64_t m = static_cast<int64_t>(side.points.size());
+                    it = of.emplace(f, m).first;
+                    side.points.push_back(f);
+                    side.positions.emplace_back();
+                    const int64_t b = pr.leaf_box[static_cast<size_t>(f)];
+                    if (b >= 0) {
+                        auto bt = block_of.find(b * ninter + k);
+                        if (bt == block_of.end()) {
+                            bt = block_of.emplace(b * ninter + k, side.blocks.size()).first;
+                            side.blocks.emplace_back();
+                            side.blocks.back().box = b;
+                            side.blocks.back().inter = k;
+                        }
+                        auto& blk = side.blocks[bt->second];
+                        blk.members.push_back(m);
+                        blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
+                    } else if (nranks == 1) {
+                        throw std::runtime_error("partial Schur: a point is not in a local leaf");
+                    }  // (else another rank's)
+                }
+                side.positions[static_cast<size_t>(it->second)].push_back(q);
             }
-            side.positions[static_cast<size_t>(it->second)].push_back(q);
-        }
-        std::unordered_map<int64_t, size_t> block_of;  // leaf box -> block
-        for (size_t m = 0; m < side.points.size(); ++m) {
-            const int64_t f = side.points[m];
-            const int64_t b = pr.leaf_box[static_cast<size_t>(f)];
-            if (b < 0) {
-                if (nranks == 1) throw std::runtime_error("partial Schur: a point is not in a local leaf");
-                continue;  // another rank's
-            }
-            auto it = block_of.find(b);
-            if (it == block_of.end()) {
-                it = block_of.emplace(b, side.blocks.size()).first;
-                side.blocks.emplace_back();
-                side.blocks.back().box = b;
-            }
-            auto& blk = side.blocks[it->second];
-            blk.members.push_back(static_cast<int64_t>(m));
-            blk.rows.push_back(pr.leaf_slot[static_cast<size_t>(f)]);
         }
         for (auto& blk : side.blocks) {
             const int64_t k = static_cast<int64_t>(blk.members.size());
@@ -1474,21 +1492,22 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
         }
         return side;
     };
-    Side R = make_side(rows, nrows), C = make_side(cols, ncols);
-    // G (|members_i| x |members_j|) into out at the requested positions
-    auto scatter = [&](const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const std::vector<DataType>& G) {
-        const int64_t ni = static_cast<int64_t>(mi.size());
+    Side R = make_side(rows, roff), C = make_side(cols, coff);
+    // G (|members_i| x |members_j|) into block k of out at the requested positions
+    auto scatter = [&](int64_t k, const std::vector<int64_t>& mi, const std::vector<int64_t>& mj, const std::vector<DataType>& G) {
+        const int64_t ni = static_cast<int64_t>(mi.size()), ld = nrows[k];
+        DataType* ok = out + ooff[static_cast<size_t>(k)];
         for (size_t c = 0; c < mj.size(); ++c)
             for (int64_t jj : C.positions[static_cast<size_t>(mj[c])])
                 for (int64_t r = 0; r < ni; ++r) {
                     const DataType g = G[static_cast<size_t>(r + static_cast<int64_t>(c) * ni)];
                     for (int64_t ii : R.positions[static_cast<size_t>(mi[static_cast<size_t>(r)])])
-                        out[ii + jj * nrows] += g;
+                        ok[ii + jj * ld] += g;
                 }
     };
     // a block of another rank's box: its members, raw rows and values, w part, and the box's live set
     struct Remote {
-        int64_t morton = -1, num_points = 0;
+        int64_t morton = -1, num_points = 0, inter = 0;
         std::vector<int64_t> members, rows, wrows, skeleton;
         std::vector<DataType> v, wv;
         std::vector<int32_t> rowpos, wpos;
@@ -1526,7 +1545,7 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                     if (na == 0) continue;
                     for (size_t j = 0; j < C.blocks.size(); ++j) {
                         const int64_t nb = static_cast<int64_t>(ca[j].size()), nj = static_cast<int64_t>(C.blocks[j].members.size());
-                        if (nb == 0) continue;
+                        if (nb == 0 || C.blocks[j].inter != R.blocks[i].inter) continue;
                         M.resize(static_cast<size_t>(na * nb));
                         for (int64_t c = 0; c < nb; ++c)
                             for (int64_t r = 0; r < na; ++r)
@@ -1536,7 +1555,7 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                         partial_gemm<DataType>('N', 'N', na, nj, nb, DataType(1), M.data(), na, cv[j].data(), nb, DataType(0), tmp.data(), na);
                         G.assign(static_cast<size_t>(ni * nj), DataType(0));
                         partial_gemm<DataType>('T', 'N', ni, nj, na, DataType(1), vi.data(), na, tmp.data(), na, DataType(0), G.data(), ni);
-                        scatter(R.blocks[i].members, C.blocks[j].members, G);
+                        scatter(R.blocks[i].inter, R.blocks[i].members, C.blocks[j].members, G);
                     }
                 }
             }
@@ -1580,10 +1599,10 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                             if (!level.is_box_on_process(nm)) dest.insert(level.owner_rank_of(nm));
                         if (dest.empty()) continue;
                         std::vector<char> msg;
-                        const int64_t head[7] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
+                        const int64_t head[8] = {side_id, box.morton_index, box.num_points, static_cast<int64_t>(b.members.size()),
                                                  static_cast<int64_t>(b.rows.size()), static_cast<int64_t>(b.wrows.size()),
-                                                 static_cast<int64_t>(box.skeleton_indices.size())};
-                        partial_put(msg, head, 7);
+                                                 static_cast<int64_t>(box.skeleton_indices.size()), b.inter};
+                        partial_put(msg, head, 8);
                         partial_put(msg, b.members.data(), b.members.size());
                         partial_put(msg, b.rows.data(), b.rows.size());
                         partial_put(msg, b.v.data(), b.v.size());
@@ -1598,11 +1617,12 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
             std::vector<Remote> remote_rows, remote_cols;
             for (const auto& buf : recv) {
                 for (const char* p = buf.data(); p < buf.data() + buf.size();) {
-                    int64_t head[7];
-                    p = partial_get(p, head, 7);
+                    int64_t head[8];
+                    p = partial_get(p, head, 8);
                     Remote rb;
                     rb.morton = head[1];
                     rb.num_points = head[2];
+                    rb.inter = head[7];
                     const int64_t nm = head[3], nr = head[4], nw = head[5], kp = head[6];
                     rb.members.resize(static_cast<size_t>(nm));
                     rb.rows.resize(static_cast<size_t>(nr));
@@ -1704,6 +1724,7 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                         const int64_t r = static_cast<int64_t>(fi.redundant.size()), kp = static_cast<int64_t>(boxI.skeleton_indices.size());
                         for (size_t jb : it->second) {
                             const Block& bj = C.blocks[jb];
+                            if (bj.inter != bi.inter) continue;
                             const int64_t nj = static_cast<int64_t>(bj.members.size()), rj = static_cast<int64_t>(bj.ridx.size());
                             G.assign(static_cast<size_t>(ni * nj), DataType(0));
                             bool any = false;
@@ -1743,7 +1764,7 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                                 partial_gemm<DataType>('T', 'N', ni, nj, wi, DataType(1), bi.wv.data(), wi, tmp.data(), wi, DataType(1), G.data(), ni);
                                 any = true;
                             }
-                            if (any) scatter(bi.members, bj.members, G);
+                            if (any) scatter(bi.inter, bi.members, bj.members, G);
                         }
                     }
                     // the one-hop neighbours
@@ -1756,13 +1777,14 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                             const bool sp_j = boxJ.f22.sparsified && !boxJ.f22.redundant.empty();
                             for (size_t jb : it->second) {
                                 const Block& bj = C.blocks[jb];
+                                if (bj.inter != bi.inter) continue;
                                 const int64_t nj = static_cast<int64_t>(bj.members.size());
                                 G.assign(static_cast<size_t>(ni * nj), DataType(0));
                                 bool any = false;
                                 if (own_i) any |= rn_term(bi, fi, static_cast<int64_t>(q), bj.rowpos, bj.v, static_cast<int64_t>(bj.rows.size()), nj, G, cache);
                                 if (sp_j && !bj.ridx.empty() && !bi.wrows.empty())
                                     any |= nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, boxI.morton_index, boxJ, bj, G, cache);
-                                if (any) scatter(bi.members, bj.members, G);
+                                if (any) scatter(bi.inter, bi.members, bj.members, G);
                             }
                         } else if (own_i) {
                             // a remote column box: its X_NR terms are its owner's
@@ -1770,10 +1792,11 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                             if (it == remote_col_by_box.end()) continue;
                             for (size_t jb : it->second) {
                                 const Remote& bj = remote_cols[jb];
+                                if (bj.inter != bi.inter) continue;
                                 const int64_t nj = static_cast<int64_t>(bj.members.size());
                                 G.assign(static_cast<size_t>(ni * nj), DataType(0));
                                 if (rn_term(bi, fi, static_cast<int64_t>(q), bj.rowpos, bj.v, static_cast<int64_t>(bj.rows.size()), nj, G, cache))
-                                    scatter(bi.members, bj.members, G);
+                                    scatter(bi.inter, bi.members, bj.members, G);
                             }
                         }
                     }
@@ -1795,10 +1818,10 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                         if (std::find(boxJ.one_hop.begin(), boxJ.one_hop.end(), bi.morton) == boxJ.one_hop.end()) continue;
                         for (size_t jb : kv.second) {
                             const Block& bj = C.blocks[jb];
-                            if (bj.ridx.empty()) continue;
+                            if (bj.ridx.empty() || bj.inter != bi.inter) continue;
                             G.assign(static_cast<size_t>(ni * static_cast<int64_t>(bj.members.size())), DataType(0));
                             if (nr_term(s_of_i, bi.wpos, bi.wv, static_cast<int64_t>(bi.wrows.size()), ni, bi.morton, boxJ, bj, G, cache))
-                                scatter(bi.members, bj.members, G);
+                                scatter(bi.inter, bi.members, bj.members, G);
                         }
                     }
                 }
@@ -1813,7 +1836,7 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
             Side* side = side_id == 0 ? &R : &C;
             std::vector<Block> up;
             std::vector<int64_t> up_parent;  // the parents' Morton indices
-            std::unordered_map<int64_t, size_t> dense_of;  // box at this level -> merged block at the parent
+            std::unordered_map<int64_t, size_t> dense_of;  // (box at this level, block of the request) -> merged block at the parent
             for (auto& b : side->blocks) {
                 const auto& box = level.local_boxes[static_cast<size_t>(b.box)];
                 if (b.wrows.empty()) continue;  // nothing left of these chains above
@@ -1823,16 +1846,17 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                 const bool dense = !b.ridx.empty();
                 const int64_t nw = static_cast<int64_t>(b.wrows.size());
                 if (dense) {
-                    auto it = dense_of.find(b.box);
+                    auto it = dense_of.find(b.box * ninter + b.inter);
                     if (it != dense_of.end()) {
                         auto& u = up[it->second];
                         u.members.insert(u.members.end(), b.members.begin(), b.members.end());
                         u.v.insert(u.v.end(), b.wv.begin(), b.wv.end());
                         continue;
                     }
-                    dense_of.emplace(b.box, up.size());
+                    dense_of.emplace(b.box * ninter + b.inter, up.size());
                 }
                 Block u;
+                u.inter = b.inter;
                 u.members = std::move(b.members);
                 u.rows.resize(static_cast<size_t>(nw));
                 for (int64_t t = 0; t < nw; ++t) u.rows[static_cast<size_t>(t)] = off + b.wrows[static_cast<size_t>(t)];
@@ -1851,8 +1875,9 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                 const int dest = level.parent_level_owner;
                 if (dest < 0) throw std::runtime_error("partial Schur: no owner of a parent box");
                 auto& buf = send_up[static_cast<size_t>(dest)];
-                const int64_t head[4] = {side_id, parent, static_cast<int64_t>(up[k].members.size()), static_cast<int64_t>(up[k].rows.size())};
-                partial_put(buf, head, 4);
+                const int64_t head[5] = {side_id, parent, static_cast<int64_t>(up[k].members.size()), static_cast<int64_t>(up[k].rows.size()),
+                                         up[k].inter};
+                partial_put(buf, head, 5);
                 partial_put(buf, up[k].members.data(), up[k].members.size());
                 partial_put(buf, up[k].rows.data(), up[k].rows.size());
                 partial_put(buf, up[k].v.data(), up[k].v.size());
@@ -1861,10 +1886,11 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
         const auto recv_up = partial_exchange(tree.comm, send_up, 621);
         for (const auto& buf : recv_up) {
             for (const char* p = buf.data(); p < buf.data() + buf.size();) {
-                int64_t head[4];
-                p = partial_get(p, head, 4);
+                int64_t head[5];
+                p = partial_get(p, head, 5);
                 Block u;
                 u.box = head[1] - parent_level.local_morton_start;
+                u.inter = head[4];
                 u.members.resize(static_cast<size_t>(head[2]));
                 u.rows.resize(static_cast<size_t>(head[3]));
                 u.v.resize(static_cast<size_t>(head[2] * head[3]));
@@ -1875,7 +1901,139 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
             }
         }
     }
-    if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, out, static_cast<int>(nrows * ncols), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
+    if (replicate && nranks > 1) {
+        for (int64_t at = 0; at < ooff.back();) {  // (counts are ints)
+            const int64_t n = std::min<int64_t>(ooff.back() - at, int64_t{1} << 30);
+            MPI_Allreduce(MPI_IN_PLACE, out + at, static_cast<int>(n), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
+            at += n;
+        }
+    }
+}
+
+// One block CB(rows, cols) (c_bpack_partial_schur_extract): rows and cols
+// F22 indices, 0-based, out nrows x ncols column major, replicated.
+template<typename CoordType, typename DataType>
+void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const int64_t* rows, int64_t nrows,
+                           const int64_t* cols, int64_t ncols, DataType* out) {
+    partial_schur_blocks(tree, 1, rows, &nrows, cols, &ncols, out, true);
+}
+
+// c_bpack_extractelement(_bridge) on a partial factorization (format 7): the
+// Schur complement's blocks CB(I_n, J_n), n < ninter, the CB as an N22 x N22
+// matrix (STRUMPACK reads a child's update block so).  allrows / allcols: the
+// intersections' 1-based F22 indices (1..N22), stacked, rowidx[n] and
+// colidx[n] of them, every caller rank passing all of them; block n to the
+// caller's rank owner[n], its blocks in alldat_loc in intersection order,
+// each column major.  tree: the factorization's, null on the caller's ranks
+// outside it, whose ranks must be a subset of caller_comm's.  Collective over
+// caller_comm.  The source ranks compute every block in one pass
+// (partial_schur_blocks), each block's sum lands on one of them (its owner
+// when the owner holds the factorization), and goes on to the owner.
+template<typename CoordType, typename DataType>
+void extract_partial_blocks(fmm::ParallelTree<CoordType, DataType>* tree, MPI_Comm caller_comm, int64_t ninter,
+                            const int* allrows, const int* allcols, const int* rowidx, const int* colidx,
+                            const std::vector<int>& owner, DataType* alldat_loc) {
+    int crank = 0, csize = 1, srank = -1, ssize = 0;
+    MPI_Comm_rank(caller_comm, &crank);
+    MPI_Comm_size(caller_comm, &csize);
+    if (tree != nullptr) {
+        MPI_Comm_rank(tree->comm, &srank);
+        MPI_Comm_size(tree->comm, &ssize);
+    }
+    // the source's ranks among the caller's
+    std::vector<int> source_of(static_cast<size_t>(csize));  // caller rank -> source rank (-1)
+    MPI_Allgather(&srank, 1, MPI_INT, source_of.data(), 1, MPI_INT, caller_comm);
+    int nsource = 0;
+    for (int r : source_of) nsource += r >= 0 ? 1 : 0;
+    if (nsource == 0) throw std::invalid_argument("extract_partial_blocks: no rank holds the factorization");
+    std::vector<int> caller_of(static_cast<size_t>(nsource), -1);  // source rank -> caller rank
+    for (int c = 0; c < csize; ++c) {
+        const int s = source_of[static_cast<size_t>(c)];
+        if (s < 0) continue;
+        if (s >= nsource || caller_of[static_cast<size_t>(s)] != -1) {
+            throw std::invalid_argument("extract_partial_blocks: the factorization's ranks are not a subset of the caller's");
+        }
+        caller_of[static_cast<size_t>(s)] = c;
+    }
+    if (tree != nullptr && ssize != nsource) throw std::invalid_argument("extract_partial_blocks: a source rank outside the caller");
+    // the source rank each block's sum lands on, and the blocks in that order
+    std::vector<int> lands(static_cast<size_t>(ninter));
+    std::vector<int64_t> r0(static_cast<size_t>(ninter) + 1, 0), c0(r0);
+    for (int64_t n = 0; n < ninter; ++n) {
+        if (rowidx[n] < 0 || colidx[n] < 0) throw std::invalid_argument("extract_partial_blocks: a negative block size");
+        const int o = owner[static_cast<size_t>(n)];
+        if (o < 0 || o >= csize) throw std::invalid_argument("extract_partial_blocks: an owner outside the caller's ranks");
+        lands[static_cast<size_t>(n)] = source_of[static_cast<size_t>(o)] >= 0 ? source_of[static_cast<size_t>(o)]
+                                                                              : static_cast<int>(n % nsource);
+        r0[static_cast<size_t>(n) + 1] = r0[static_cast<size_t>(n)] + rowidx[n];
+        c0[static_cast<size_t>(n) + 1] = c0[static_cast<size_t>(n)] + colidx[n];
+    }
+    std::vector<int64_t> order(static_cast<size_t>(ninter));
+    std::iota(order.begin(), order.end(), int64_t{0});
+    std::stable_sort(order.begin(), order.end(), [&](int64_t x, int64_t y) { return lands[x] < lands[y]; });
+    // where each owned block goes in alldat_loc
+    std::vector<int64_t> base(static_cast<size_t>(ninter), -1);
+    int64_t mine_total = 0;
+    for (int64_t n = 0; n < ninter; ++n) {
+        if (owner[static_cast<size_t>(n)] != crank) continue;
+        base[static_cast<size_t>(n)] = mine_total;
+        mine_total += static_cast<int64_t>(rowidx[n]) * colidx[n];
+    }
+    std::vector<std::vector<char>> send(static_cast<size_t>(csize));
+    if (tree != nullptr) {
+        // ---- the blocks in landing order, 0-based F22 indices
+        std::vector<int64_t> rows, cols, nr(static_cast<size_t>(ninter)), nc(static_cast<size_t>(ninter));
+        std::vector<int64_t> boff(static_cast<size_t>(ninter) + 1, 0);
+        for (size_t q = 0; q < order.size(); ++q) {
+            const int64_t n = order[q];
+            for (int64_t i = r0[static_cast<size_t>(n)]; i < r0[static_cast<size_t>(n) + 1]; ++i) rows.push_back(int64_t{allrows[i]} - 1);
+            for (int64_t j = c0[static_cast<size_t>(n)]; j < c0[static_cast<size_t>(n) + 1]; ++j) cols.push_back(int64_t{allcols[j]} - 1);
+            nr[q] = rowidx[n];
+            nc[q] = colidx[n];
+            boff[q + 1] = boff[q] + nr[q] * nc[q];
+        }
+        std::vector<DataType> part(static_cast<size_t>(std::max<int64_t>(boff.back(), 1)));
+        partial_schur_blocks(*tree, ninter, rows.data(), nr.data(), cols.data(), nc.data(), part.data(), false);
+        // ---- each block's sum on its landing rank
+        std::vector<int> counts(static_cast<size_t>(ssize), 0);
+        for (size_t q = 0; q < order.size(); ++q) {
+            const int64_t c = counts[static_cast<size_t>(lands[order[q]])] + nr[q] * nc[q];
+            if (c > INT_MAX) throw std::runtime_error("extract_partial_blocks: a source rank's blocks over 2^31 entries");
+            counts[static_cast<size_t>(lands[order[q]])] = static_cast<int>(c);
+        }
+        std::vector<DataType> landed(static_cast<size_t>(std::max(counts[static_cast<size_t>(srank)], 1)));
+        if (ssize > 1) {
+            MPI_Reduce_scatter(part.data(), landed.data(), counts.data(), partial_mpi_type<DataType>(), MPI_SUM, tree->comm);
+        } else {
+            std::copy(part.begin(), part.begin() + counts[0], landed.begin());
+        }
+        // ---- on to the owners (their own: copied)
+        int64_t at = 0;
+        for (size_t q = 0; q < order.size(); ++q) {
+            const int64_t n = order[q];
+            if (lands[static_cast<size_t>(n)] != srank) continue;
+            const int64_t len = nr[q] * nc[q];
+            const int to = owner[static_cast<size_t>(n)];
+            if (to == crank) {
+                std::copy_n(landed.data() + at, len, alldat_loc + base[static_cast<size_t>(n)]);
+            } else {
+                partial_put(send[static_cast<size_t>(to)], &n, 1);
+                partial_put(send[static_cast<size_t>(to)], landed.data() + at, static_cast<size_t>(len));
+            }
+            at += len;
+        }
+    }
+    const auto recv = partial_exchange(caller_comm, send, 630);
+    for (const auto& buf : recv) {
+        for (const char* p = buf.data(); p < buf.data() + buf.size();) {
+            int64_t n = -1;
+            p = partial_get(p, &n, 1);
+            if (n < 0 || n >= ninter || base[static_cast<size_t>(n)] < 0) {
+                throw std::logic_error("extract_partial_blocks: a block for another rank");
+            }
+            p = partial_get(p, alldat_loc + base[static_cast<size_t>(n)], static_cast<size_t>(int64_t{rowidx[n]} * colidx[n]));
+        }
+    }
 }
 
 // y2 = CB x2 = P22^T CB' P22 x2 (header): an up-pass with P (w = x_S' +

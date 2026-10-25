@@ -2587,14 +2587,24 @@ static butterfly::H2<double, H2Data>* h2_of(F2Cptr* bmat) {
 // The blocks of a list of intersections from a compression-only
 // unstructured Color H2 (format 7; unstructured/extraction.hpp), each to one
 // rank of caller_comm (pmaps of 1 x 1 grids), collective over caller_comm;
-// the H2 on a subset of its ranks, bmat null on the others.
+// the H2 on a subset of its ranks, bmat null on the others.  `partial`: a
+// partial factorization (H2_partial; every caller rank passing the same):
+// the blocks of its Schur complement instead, the indices 1-based F22 ones
+// (unstructured/partial.hpp, extract_partial_blocks).
 static void h2_extract_elements(
-    F2Cptr* bmat, MPI_Comm caller_comm, int* Ninter, int* allrows, int* allcols,
+    F2Cptr* bmat, MPI_Comm caller_comm, bool partial, int* Ninter, int* allrows, int* allcols,
     C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap,
     int* pmaps, const char* caller) {
   using H2Data = typename butterfly::fmm_data<C_DT>::type;
   const std::vector<int> owner =
     single_rank_owners(*Ninter, pgidx, *Npmap, pmaps, (std::string(caller) + " (format 7)").c_str());
+  if (partial) {
+    butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+    butterfly::color_unstructured::extract_partial_blocks(
+      h2 != nullptr ? h2->tree.get() : nullptr, caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
+      reinterpret_cast<H2Data*>(alldat_loc));
+    return;
+  }
   butterfly::color_unstructured::extract_compressed_blocks(
     h2_of<H2Data>(bmat), caller_comm, *Ninter, allrows, allcols, rowidx, colidx, owner,
     reinterpret_cast<H2Data*>(alldat_loc));
@@ -2757,9 +2767,12 @@ void c_bpack_extractelement(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cptr* stat
     using H2Data = typename butterfly::fmm_data<C_DT>::type;
     void* H2_raw = nullptr;
     c_bpack_get_h2(*bmat, &H2_raw);
-    MPI_Comm comm = static_cast<butterfly::H2<double, H2Data>*>(H2_raw)->comm;
+    auto* h2 = static_cast<butterfly::H2<double, H2Data>*>(H2_raw);
+    MPI_Comm comm = h2->comm;
+    // (every rank holds the matrix, so its kind needs no collective)
+    const bool partial = h2->build_state == butterfly::H2BuildState::RS_PARTIAL;
     try {
-      h2_extract_elements(bmat, comm, Ninter, allrows, allcols, alldat_loc,
+      h2_extract_elements(bmat, comm, partial, Ninter, allrows, allcols, alldat_loc,
                           rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement");
     } catch (const std::exception& e) {
       int rank = 0;
@@ -2785,16 +2798,23 @@ void c_bpack_extractelement_bridge(F2Cptr* bmat,F2Cptr* option,F2Cptr* msh,F2Cpt
   int fcomm = 0;
   c_bpack_get_comm(ptree_caller, &fcomm);
   MPI_Comm caller_comm = MPI_Comm_f2c(static_cast<MPI_Fint>(fcomm));
-  int format = -1;
+  // and whether it is a partial factorization, in the same reduction
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  int kind[2] = {-1, 0};
   if (option != nullptr && *option != nullptr) {
     double tmp = 0.0;
     c_bpack_getoption(option, "format", &tmp);
-    format = static_cast<int>(tmp);
+    kind[0] = static_cast<int>(tmp);
+    if (kind[0] == 7) {
+      butterfly::H2<double, H2Data>* h2 = h2_of<H2Data>(bmat);
+      kind[1] = h2 != nullptr && h2->build_state == butterfly::H2BuildState::RS_PARTIAL ? 1 : 0;
+    }
   }
-  MPI_Allreduce(MPI_IN_PLACE, &format, 1, MPI_INT, MPI_MAX, caller_comm);
+  MPI_Allreduce(MPI_IN_PLACE, kind, 2, MPI_INT, MPI_MAX, caller_comm);
+  const int format = kind[0];
   if (format == 7) {
     try {
-      h2_extract_elements(bmat, caller_comm, Ninter, allrows, allcols, alldat_loc,
+      h2_extract_elements(bmat, caller_comm, kind[1] != 0, Ninter, allrows, allcols, alldat_loc,
                           rowidx, colidx, pgidx, Npmap, pmaps, "c_bpack_extractelement_bridge");
     } catch (const std::exception& e) {
       int rank = 0;

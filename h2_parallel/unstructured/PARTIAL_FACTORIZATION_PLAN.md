@@ -438,7 +438,32 @@ point set and on a plain cube split, dense checks at small N.
     48.2 -> 26.4 GB, product 0.37 -> 1.09 s.  GPU and CPU paths agree to the
     quantization (the records' rounding-level differences can land a step
     apart).
-- Next: P5 (the STRUMPACK hand-off).
+- **P5**, the STRUMPACK hand-off.  STRUMPACK reads a child's CB by
+  entries (extract_2d), not by products.  Step 1 done 2026-10-25:
+  `c_bpack_extractelement` and its `_bridge` on a partial object return
+  blocks of the CB, as the N22 x N22 matrix (1-based F22 indices), each
+  intersection to one rank (1 x 1 grids, as for a compression-only H2), so
+  STRUMPACK's extraction path serves a partial-H2 child as it serves the
+  other format-7 fronts.  `partial_schur_blocks` computes every
+  intersection of a call in one pass (chain blocks tagged by intersection;
+  `partial_schur_entries` is its one-block case, unchanged bit for bit), and
+  `extract_partial_blocks` sums each block on one source rank and routes it
+  to its owner over the caller's communicator.  The dispatch adds no
+  collective: a local check where every rank holds the matrix, and in the
+  bridge the partial flag rides in its existing format reduction (the
+  other STRUMPACK-H2 variant reads S's entries through this path tens of
+  thousands of times a factorization, in rounds with a drain discipline).
+  Other format-7 objects unchanged bit for bit (extract_check on 1 and 4
+  ranks, extract_ranks through the bridge).  The CB by extractelement
+  equals the single-block call's exactly, GPU and CPU, 1 to 8 ranks.
+  Driver `--partial_extract_bench R`: rounds of 64 near-field 64 x 64
+  blocks and 32 panels of 16 x 4096 (a compressed parent's dense leaves and
+  BACA samples).  64^3, F11 = 16384: 5.9 M entries/s on one GPU's rank
+  (compressed records 3.8), 5.4 (4.5) on 4 ranks, against about 5e7 for the
+  GPU HODLR extraction in the STRUMPACK work: the entries are the next
+  lever.  Then: FrontH2Partial in STRUMPACK (its own CompressionType and
+  options; the other variant reuses FrontHODLR with HODLROptions::use_h2()),
+  in a worktree of its own.
   Later: the records on the device (with compression, or several cards) for
   a device CB product and partial solves; with compression they would fit
   (5.9 GB at 64^3) and the device decompresses at hundreds of GB/s.

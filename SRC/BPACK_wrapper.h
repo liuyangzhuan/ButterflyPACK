@@ -171,6 +171,10 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Nin
  * the records are kept compressed (lossy at 0.02 tol_comp): the entries and
  * products decompress what they read.  All collective over the matrix's
  * communicator, every rank passing the same rows, cols and x2.
+ * c_bpack_extractelement and c_bpack_extractelement_bridge on the object
+ * return blocks of the Schur complement, as an N22 x N22 matrix: 1-based F22
+ * indices (1..N22), each intersection to one rank (1 x 1 process grids, as
+ * for a compression-only H2), every intersection of a call in one pass.
  */
 void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
 void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
