@@ -305,6 +305,12 @@ bpack_example_gpu_evaluators(claplace3d_h2)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
+set(CBUTTERFLY Butterfly_Driver.cpp)
+add_executable(cbutterfly ${CBUTTERFLY})
+target_link_libraries(cbutterfly ${all_link_libs_d})
+endif()
+
+if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))
 set(CRBF3DH2 RBF3D_H2Test_Driver.cpp)
 add_executable(crbf3d_h2 ${CRBF3DH2})
 target_link_libraries(crbf3d_h2 ${all_link_libs_d})

@@ -446,6 +446,22 @@ contains
          val_d = stats%Flop_C_Extract
          valid_opt = 1
       endif
+      !>**** the sketching construction's own timers (BF_randomized): the
+      !> sampling (the random vectors and the caller's matvec), the levels'
+      !> reconstruction from the samples, and of that the per-block algebra,
+      !> summed over the threads that ran it
+      if (trim(str) == 'Time_Random_Sample') then
+         val_d = stats%Time_random(2)
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Random_Resolve') then
+         val_d = stats%Time_random(3)
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_Random_OneBlock') then
+         val_d = stats%Time_random(5)
+         valid_opt = 1
+      endif
 
       if (trim(str) == 'Mem_Factor') then
          val_d = stats%Mem_Factor
@@ -4963,7 +4979,7 @@ contains
       implicit none
       real(kind=8) t1, t2
       integer Ninloc, Noutloc, Ncol
-      DT::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
+      DT, target::xin(Ninloc, Ncol), xout(Noutloc, Ncol)
 
       character(kind=c_char, len=1) :: trans(*)
       type(c_ptr), intent(in) :: bf_for_Cptr
@@ -4978,6 +4994,8 @@ contains
       type(matrixblock), pointer::blocks
 
       type(proctree), pointer::ptree
+      integer(c_int) :: gpu_info
+      real(c_double) :: gpu_flops
 
       t1 = MPI_Wtime()
 
@@ -5038,10 +5056,20 @@ contains
       stats%Time_C_Mult_FFT_Backward = 0
       stats%Time_C_Mult_FFT_Output = 0
       xout = 0
+      !>**** on the device when the options ask for it (GPU_BACKEND/bf_gpu);
+      !> gpu_info 1: it declined, or was not asked, and the host runs it
+      gpu_info = 1
+      if (BF_gpu_mult_ok(blocks, option)) then
+         call c_bf_gpu_mult_host(bf_for_Cptr, ptree_Cptr, trans(1), Ncol, c_loc(xin), Ninloc, &
+                                 c_loc(xout), Noutloc, gpu_flops, gpu_info)
+         if (gpu_info == 0) stats%Flop_Tmp = stats%Flop_Tmp + gpu_flops
+      endif
+      if (gpu_info /= 0) then
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
       else
          call BF_block_MVP_dat(blocks, trim(str), Ninloc, Noutloc, Ncol, xin, Ninloc, xout, Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
+      endif
       endif
 
       t2 = MPI_Wtime()
@@ -5884,6 +5912,9 @@ contains
       type(matrixblock), pointer::blocks
 
       call c_f_pointer(bf_Cptr, blocks)
+      !>**** the device copy goes with it (keyed on its address, which a later
+      !> block may reuse); nothing to do when it never had one
+      if (BPACK_gpu_available()) call c_bf_gpu_release(bf_Cptr)
       call BF_delete(blocks, 1)
       deallocate (blocks)
       bf_Cptr = c_null_ptr

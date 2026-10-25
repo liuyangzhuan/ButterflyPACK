@@ -399,6 +399,25 @@ module BPACK_GPU
          integer(c_int) :: rank(*), jpvt(*), info
       end subroutine c_bf_gpu_level_id
 
+      !>**** A butterfly matvec on the caller's host arrays, run on the device
+      !> (GPU_BACKEND/bf_gpu): y = op(bf) x, the factors resident between
+      !> calls.  Collective over the butterfly's ranks.  info 1 means the
+      !> device declined and the caller runs the CPU path.
+      subroutine c_bf_gpu_mult_host(bf, ptree, op, nrhs, x, ldx, y, ldy, flops, info) &
+         bind(c, name="c_bf_gpu_mult_host")
+         import :: c_int, c_double, c_ptr, c_char
+         type(c_ptr), value :: bf, ptree, x, y
+         character(kind=c_char) :: op
+         integer(c_int) :: nrhs, ldx, ldy, info
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_mult_host
+
+      !>**** Drop what a butterfly holds on the device; before it is freed
+      subroutine c_bf_gpu_release(bf) bind(c, name="c_bf_gpu_release")
+         import :: c_ptr
+         type(c_ptr), value :: bf
+      end subroutine c_bf_gpu_release
+
    end interface
 
    !> the device indices of the forward blocks of a rank (HODLR_gpu_block_table)
@@ -426,6 +445,22 @@ contains
       if (.not. BPACK_gpu_available()) return
       BF_gpu_rankreveal_ok = .true.
    end function BF_gpu_rankreveal_ok
+
+   !>**** Whether a butterfly's matvec runs on the device (GPU_BACKEND/bf_gpu):
+   !> the options ask for the GPU, this library has the backend, and the
+   !> block is a butterfly (the sweep is not validated on a low-rank block).
+   !> The device copy of the factors is made at the first call and kept.
+   logical function BF_gpu_mult_ok(blocks, option)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+
+      BF_gpu_mult_ok = .false.
+      if (option%HODLR_use_gpu <= 0) return
+      if (blocks%level_butterfly == 0) return
+      if (.not. BPACK_gpu_available()) return
+      BF_gpu_mult_ok = .true.
+   end function BF_gpu_mult_ok
 
    !> Whether this library has the GPU backend (the double or double complex
    !> library of a build with enable_h2_gpu=ON)

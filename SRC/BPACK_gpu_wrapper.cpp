@@ -1190,10 +1190,21 @@ void c_bpack_hodlr_gpu_baca_end(void* gpu, double* out) {
 #ifdef BPACK_BF_GPU_ENABLED
 namespace {
 
+// The device's setup for a butterfly's ranks, before the device pool is
+// first reserved: ranks of a node that share a GPU split its memory
+// (fmm::gpu::share_device), and a run of several ranks takes its exchange
+// arena.  Collective over comm.  Both take effect once per process, as for an
+// H2 (begin_operator_build) and a HODLR (BPACK_gpu_bind).
+void bf_device_setup(MPI_Comm comm, int nproc) {
+  const int share = fmm::gpu::share_device(comm);
+  fmm::gpu::reserve_exchange_arena(nproc, share);
+}
+
 // Make a butterfly resident: upload its factors, read the grids the sweep
 // needs, and wire the closures through which bf_gpu asks the Fortran for its
 // distribution decisions (bf_ranges.hpp explains why they are closures).
-// Returns nullptr when the device has no room for the factors.
+// Returns nullptr when the device has no room for the factors.  Collective
+// over the butterfly's ranks the first time, as its matvec is.
 bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
   bf::gpu::BfFingerprint print;
   c_bf_get_layout(bf, &print.level_butterfly, &print.level_half, &print.M, &print.N, &print.M_loc,
@@ -1225,9 +1236,19 @@ bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
     at += want;
   }
 
+  int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
+  c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
+  if (nproc > 1) MPI_Comm_rank(comm, &myid);
+  bf_device_setup(comm, nproc);
+
   bf::gpu::BfResident& r = bf::gpu::bf_store_add(bf, print);
-  if (!bf::gpu::upload(lv, up, shp, print.level_butterfly, print.level_half, print.M, print.N,
-                       print.M_loc, print.N_loc, r.dev)) {
+  int uploaded = bf::gpu::upload(lv, up, shp, print.level_butterfly, print.level_half, print.M, print.N,
+                                 print.M_loc, print.N_loc, r.dev) ? 1 : 0;
+  // every rank declines together, or those that went on would wait in the
+  // plan's collectives for those that did not
+  if (nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &uploaded, 1, MPI_INT, MPI_MIN, comm);
+  if (!uploaded) {
     bf::gpu::bf_store_release(bf);     // no room: the caller stays on the host
     return nullptr;
   }
@@ -1244,10 +1265,6 @@ bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
     }
     return g;
   };
-  int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
-  c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
-  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
-  if (nproc > 1) MPI_Comm_rank(comm, &myid);
   const int L = print.level_butterfly;
   bf::gpu::set_ranges(r.dev, ranges('R', L + 2), ranges('C', L + 2), ranges('N', L + 3),
                       ranges('T', L + 3), nproc, myid);
@@ -1386,8 +1403,11 @@ void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const
       // two small collectives per level, once per block and orientation
       bf::gpu::build_sweep_plan(r->bridge, r->dev, o, *nrhs, plan);
     }
+    // everything on the backend's stream, and the product complete on return
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
     const double f = bf::gpu::sweep(r->dev, plan, *nrhs, static_cast<const double*>(x), *ldx,
-                                    static_cast<double*>(y), *ldy, *alpha, *beta, r->scratch);
+                                    static_cast<double*>(y), *ldy, *alpha, *beta, r->scratch, stream);
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult");
     if (flops != nullptr) *flops = f;
     *info = 0;
   } catch (const std::exception&) {
@@ -1398,6 +1418,72 @@ void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const
   (void)bf; (void)ptree; (void)op; (void)nrhs; (void)x; (void)ldx; (void)y; (void)ldy;
   (void)alpha; (void)beta;
   if (flops != nullptr) *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+// The same product on the caller's host arrays (C_BF_Mult): x goes to the
+// device, the resident sweep runs, y = op(bf) x comes back.  For a caller
+// that keeps its vectors on the host; one that can keep them on the device
+// saves both copies with c_bf_gpu_mult.  The device copies of x and y are
+// taken per call from the arena, which is a bump of a pointer.  info 1: the
+// device declined, and the caller runs its host path.
+void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, const void* x,
+                        const int* ldx, void* y, const int* ldy, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    bf::gpu::BfResident* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';
+    const int nin = o == 'N' ? r->dev.N_loc : r->dev.M_loc;
+    const int nout = o == 'N' ? r->dev.M_loc : r->dev.N_loc;
+    bf::gpu::SweepPlan& plan = r->plan(o);
+    if (!plan.built) bf::gpu::build_sweep_plan(r->bridge, r->dev, o, *nrhs, plan);
+
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    const size_t bin = static_cast<size_t>(std::max(nin, 1)) * *nrhs * sizeof(double);
+    const size_t bout = static_cast<size_t>(std::max(nout, 1)) * *nrhs * sizeof(double);
+    char* dx = heap.try_alloc(bin, fmm::gpu::ResidentKind::Matvec);
+    char* dy = heap.try_alloc(bout, fmm::gpu::ResidentKind::Matvec);
+    // a rank without room must not leave the others in the sweep's exchanges
+    int room = (dx != nullptr && dy != nullptr) ? 1 : 0;
+    if (r->bridge.nproc > 1) MPI_Allreduce(MPI_IN_PLACE, &room, 1, MPI_INT, MPI_MIN, r->bridge.comm);
+    if (!room) {
+      if (dx != nullptr) heap.free(dx);
+      if (dy != nullptr) heap.free(dy);
+      return;
+    }
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    if (nin > 0) {
+      fmm::gpu::check_cuda(cudaMemcpy2DAsync(dx, static_cast<size_t>(nin) * sizeof(double), x,
+                                             static_cast<size_t>(*ldx) * sizeof(double),
+                                             static_cast<size_t>(nin) * sizeof(double), *nrhs,
+                                             cudaMemcpyHostToDevice, stream),
+                           "c_bf_gpu_mult_host x");
+    }
+    const double f = bf::gpu::sweep(r->dev, plan, *nrhs, reinterpret_cast<const double*>(dx), std::max(nin, 1),
+                                    reinterpret_cast<double*>(dy), std::max(nout, 1), 1.0, 0.0, r->scratch,
+                                    stream);
+    if (nout > 0) {
+      fmm::gpu::check_cuda(cudaMemcpy2DAsync(y, static_cast<size_t>(*ldy) * sizeof(double), dy,
+                                             static_cast<size_t>(nout) * sizeof(double),
+                                             static_cast<size_t>(nout) * sizeof(double), *nrhs,
+                                             cudaMemcpyDeviceToHost, stream),
+                           "c_bf_gpu_mult_host y");
+    }
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_mult_host");
+    heap.free(dx);
+    heap.free(dy);
+    *flops = f;
+    *info = 0;
+  } catch (const std::exception&) {
+    *info = 1;
+  }
+#else
+  (void)bf; (void)ptree; (void)op; (void)nrhs; (void)x; (void)ldx; (void)y; (void)ldy;
+  *flops = 0.0;
   *info = 1;
 #endif
 }

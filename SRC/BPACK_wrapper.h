@@ -216,6 +216,8 @@ void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* 
 void c_bf_gpu_mult(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
                    const int* ldx, void* y, const int* ldy, const double* alpha, const double* beta,
                    double* flops, int* info);
+void c_bf_gpu_mult_host(F2Cptr bf, F2Cptr ptree, const char* op, const int* nrhs, const void* x,
+                        const int* ldx, void* y, const int* ldy, double* flops, int* info);
 void c_bf_gpu_release(F2Cptr bf);
 void c_bpack_gpu_workspace_alloc(const int64_t* elements, void** ptr);
 void c_bpack_gpu_workspace_free(void* ptr);
