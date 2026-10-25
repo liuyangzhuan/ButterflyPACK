@@ -1083,7 +1083,9 @@ struct BoxData {
         PartialRecord<DataType> X_RS;      ///< r22 x k'
         PartialRecord<DataType> X_SR;      ///< k' x r22
         PartialRecord<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
-        PartialRecord<DataType> X_NR;      ///< (the neighbours' raw F22 points that stay live) x r22
+        /// per one_hop slot: (that neighbour's raw F22 points that stay live) x r22
+        /// (the CB product and entries read it a neighbour at a time)
+        std::vector<PartialRecord<DataType>> X_NR;
         std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot: X_RN's columns
         std::vector<std::vector<int64_t>> neighbor_f22_slots; ///< per one_hop slot: those points as the neighbour's box slots
         /// per one_hop slot: X_NR's rows, the neighbour's raw F22 points it does
@@ -1662,7 +1664,8 @@ struct PartialF22Work {
     bool done = false;                  ///< the device took the box (its ID)
     std::vector<int64_t> skel22, red22; ///< the ID's F22 skeleton and redundant columns (indices of pos22), sorted
     PartialRecord<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
-    PartialRecord<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;  ///< X_NR over the near's q22_nr rows
+    PartialRecord<DataType> X_SR, X_RS, X_RR, X_RN;
+    std::vector<PartialRecord<DataType>> X_NR;  ///< per near: over its q22_nr rows
 };
 
 /**

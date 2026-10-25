@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include <mpi.h>
+#include <unistd.h>
 
 #include "dBPACK_wrapper.h"
 #include "bpack_inv_mult_check.hpp"
@@ -1062,6 +1064,79 @@ void partial_checks(const DriverOptions& o, const Laplace3DApplication& applicat
   (void)mpi_size;
 }
 
+// This process's resident set (GB, /proc/self/statm).
+double resident_gb() {
+  unsigned long pages = 0, resident = 0;
+  if (FILE* f = std::fopen("/proc/self/statm", "r")) {
+    if (std::fscanf(f, "%lu %lu", &pages, &resident) != 2) resident = 0;
+    std::fclose(f);
+  }
+  return static_cast<double>(resident) * static_cast<double>(sysconf(_SC_PAGESIZE)) / 1e9;
+}
+
+// --H2_partial, after partial_checks: the release of the Schur complement.
+// The partial solves give what they gave before it, and the Schur
+// complement's entries and products are refused.
+void partial_release_check(const DriverOptions& o, ButterflyResources& resources, int rank, int local_points,
+                           const DistributedInput& input) {
+  const int64_t N = checked_cube(o.grid_size, "grid_size");
+  const int n22 = static_cast<int>(N - o.h2_partial), nrhs = o.nrhs;
+  if (n22 == 0) return;
+  std::vector<double> b(static_cast<size_t>(local_points) * nrhs), x2(static_cast<size_t>(n22) * nrhs);
+  for (size_t i = 0; i < b.size(); ++i) b[i] = 1.0 + 0.001 * static_cast<double>((input.first + static_cast<int64_t>(i)) % 89);
+  for (size_t i = 0; i < x2.size(); ++i) x2[i] = std::sin(0.37 * static_cast<double>(i));
+  int nloc = local_points, N22 = n22, Nrhs = nrhs;
+  auto solves = [&](std::vector<double>& out2, std::vector<double>& x) {
+    out2.assign(x2.size(), 0.0);
+    x.assign(b.size(), 0.0);
+    d_c_bpack_partial_forward(out2.data(), b.data(), &nloc, &N22, &Nrhs, &resources.matrix, &resources.option,
+                              &resources.stats, &resources.process_tree);
+    d_c_bpack_partial_backward(x.data(), x2.data(), &nloc, &N22, &Nrhs, &resources.matrix, &resources.option,
+                               &resources.stats, &resources.process_tree);
+  };
+  std::vector<double> out2a, xa, out2b, xb;
+  solves(out2a, xa);
+  double rss[2] = {resident_gb(), 0.0};
+  d_c_bpack_partial_schur_release(&resources.matrix, &resources.option);
+  rss[1] = resident_gb();
+  solves(out2b, xb);
+  double diff = 0.0, scale = 0.0;
+  for (size_t i = 0; i < out2a.size(); ++i) {
+    diff = std::max(diff, std::abs(out2a[i] - out2b[i]));
+    scale = std::max(scale, std::abs(out2a[i]));
+  }
+  for (size_t i = 0; i < xa.size(); ++i) {
+    diff = std::max(diff, std::abs(xa[i] - xb[i]));
+    scale = std::max(scale, std::abs(xa[i]));
+  }
+  int refused = 0;
+  try {
+    std::vector<double> y2(x2.size());
+    d_c_bpack_partial_schur_mult(y2.data(), x2.data(), &N22, &Nrhs, &resources.matrix, &resources.option);
+  } catch (const std::exception&) {
+    refused = 1;
+  }
+  try {
+    double v = 0.0;
+    int one = 1, r0 = 0;
+    d_c_bpack_partial_schur_extract(&v, &r0, &one, &r0, &one, &resources.matrix, &resources.option);
+  } catch (const std::exception&) {
+    refused += 1;
+  }
+  double drop[2] = {rss[0] - rss[1], rss[0]};
+  MPI_Allreduce(MPI_IN_PLACE, &diff, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, &scale, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, drop, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, &refused, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  if (rank == 0) {
+    std::cout << std::setprecision(3) << "H2 partial release: resident set " << drop[1] << " -> " << drop[1] - drop[0]
+              << " GB (summed over ranks); the solves after it differ by " << diff / std::max(scale, 1e-300)
+              << " (relative); the Schur complement's product and entries " << (refused == 2 ? "refused" : "NOT refused")
+              << std::endl;
+  }
+  if (refused != 2) throw std::runtime_error("partial_release_check: a call on the released Schur complement went through");
+}
+
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
 
@@ -1892,6 +1967,7 @@ int main(int argc, char** argv) {
     }
     } else {
       partial_checks(driver_options, application, resources, rank, mpi_size, local_points, distributed_input);
+      partial_release_check(driver_options, resources, rank, local_points, distributed_input);
     }
 
     d_c_bpack_printstats(&resources.stats, &resources.process_tree);

@@ -166,8 +166,9 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Nin
  * Schur complement CB = F22 - F21 F11^-1 F12 by entries (rows, cols 0-based
  * F22 indices; out column-major nrows x ncols, replicated) and by products
  * (x2, y2 N22 x Ncol, replicated); and the release of the Schur complement
- * (the solves stay).  All collective over the matrix's communicator, every
- * rank passing the same rows, cols and x2.
+ * (its root block and the F22 records, nearly all of the object's memory; the
+ * solves stay, and Schur calls after it throw).  All collective over the
+ * matrix's communicator, every rank passing the same rows, cols and x2.
  */
 void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
 void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);

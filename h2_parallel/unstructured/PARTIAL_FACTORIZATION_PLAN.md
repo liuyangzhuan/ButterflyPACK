@@ -402,7 +402,23 @@ point set and on a plain cube split, dense checks at small N.
     still read the candidates to decide the same; memcheck then showed the
     other block's panel running past 32 steps): the panel end's candidates
     are a second set.
-- Next: P4 (release API, `H2_compress_factors` on the records), P5 (the
-  STRUMPACK hand-off).
+- **P4**, first part, 2026-10-25 (multi-rank was already P2b and P3):
+  - The release (`c_bpack_partial_schur_release`, `partial_schur_release`)
+    frees what only the Schur complement reads: the root's CB block, every
+    sparsified box's records and its neighbour lists, the entries' leaf
+    index; the partial solves keep the F11 factors, T, the root's LU, W and
+    A21.  BPACK_TRACE=memory prints each rank's bytes (H2_PARTIAL_RELEASE).
+    The driver now checks after the dense checks that the solves give the
+    same results bit for bit after a release and that the Schur calls are
+    refused.  64^3: 34.0 GB freed of 40.5 GB resident (31.7 records, 2.1
+    root block); with glibc's allocator the resident set drops 39.6 ->
+    11.7 GB (1 rank), 43.6 -> 12.7 GB (4 ranks); tcmalloc keeps the pages
+    for the process's next allocations.
+  - X_NR is one record a neighbour (`F22Part::X_NR[one_hop slot]`, m x r
+    each): the CB product and entries read it a neighbour at a time.  On the
+    device a neighbour's block is formed and copied apart.  Every check the
+    same bit for bit.
+- Next: P4's `H2_compress_factors` on the records, P5 (the STRUMPACK
+  hand-off).
   Later: the records on the device (with compression, or several cards) for
   a device CB product and partial solves.

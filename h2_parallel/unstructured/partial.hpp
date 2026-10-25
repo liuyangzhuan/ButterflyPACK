@@ -37,6 +37,7 @@
 #include "core/blas_declare.hpp"
 #include "core/factorization.hpp"
 #include "core/id_decomposition.hpp"
+#include "core/memory_diagnostics.hpp"
 #include "core/morton.hpp"
 #include "core/solver.hpp"
 
@@ -754,15 +755,12 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                 const size_t nn = b.one_hop.size();
                 f.neighbor_nr_counts.assign(nn, 0);
                 f.neighbor_nr_slots.assign(nn, {});
-                int64_t total_nr = 0;
                 for (size_t idx = 0; idx < nn; ++idx) {
                     const auto& nr = st.near[idx];
                     for (int64_t q : nr.q22_nr) f.neighbor_nr_slots[idx].push_back((*nr.S_old)[static_cast<size_t>(q)]);
                     f.neighbor_nr_counts[idx] = static_cast<int64_t>(nr.q22_nr.size());
-                    total_nr += f.neighbor_nr_counts[idx];
                 }
-                f.X_NR.allocate(total_nr, r22);
-                int64_t row0 = 0;
+                f.X_NR.assign(nn, {});
                 for (size_t idx = 0; idx < nn; ++idx) {
                     const auto& nr = st.near[idx];
                     const int64_t m = static_cast<int64_t>(nr.q22_nr.size());
@@ -771,9 +769,7 @@ void partial_f22_phase(fmm::ParallelTree<CoordType, DataType>* tree, fmm::TreeLe
                     std::vector<DataType> A_NR = coupling_nb_b(b, nr, nr.q22_nr, st.posR);  // m x r22
                     const auto A_NS = coupling_nb_b(b, nr, nr.q22_nr, st.posS);           // m x kp
                     partial_gemm<DataType>('N', 'N', m, r22, kp, DataType(-1), A_NS.data(), m, T, kp, DataType(1), A_NR.data(), m);
-                    for (int64_t j = 0; j < r22; ++j)
-                        std::copy_n(A_NR.data() + j * m, m, f.X_NR.data.data() + row0 + j * total_nr);
-                    row0 += m;
+                    f.X_NR[idx].assign(m, r22, A_NR);
                 }
                 t_records += MPI_Wtime() - t0;
             } catch (...) {
@@ -1648,23 +1644,21 @@ void partial_schur_entries(fmm::ParallelTree<CoordType, DataType>& tree, const i
                     const auto itb = std::find(boxJ.one_hop.begin(), boxJ.one_hop.end(), morton_i);
                     if (itb == boxJ.one_hop.end()) return false;
                     const size_t idi = static_cast<size_t>(itb - boxJ.one_hop.begin());
-                    const int64_t m = fj.neighbor_nr_counts[idi], total = fj.X_NR.rows;
-                    int64_t row0 = 0;
-                    for (size_t q = 0; q < idi; ++q) row0 += fj.neighbor_nr_counts[q];
+                    const int64_t m = fj.neighbor_nr_counts[idi];
                     const auto& slots = fj.neighbor_nr_slots[idi];
                     std::vector<int64_t> crow, wposl;
                     for (int64_t c = 0; c < m; ++c) {
                         const int32_t sp = s_of_i[static_cast<size_t>(slots[static_cast<size_t>(c)])];
                         if (sp < 0) continue;  // (X_NR keeps bi's live rows only: R_bi is the X_RN term)
                         const int32_t t = wpos_i[static_cast<size_t>(sp)];
-                        if (t >= 0) { crow.push_back(row0 + c); wposl.push_back(t); }
+                        if (t >= 0) { crow.push_back(c); wposl.push_back(t); }
                     }
                     const int64_t nc = static_cast<int64_t>(crow.size());
                     if (nc == 0) return false;
                     std::vector<DataType> X(static_cast<size_t>(nc * rj)), V(static_cast<size_t>(nc * ni)), tmp(static_cast<size_t>(nc * nj));
                     for (int64_t c = 0; c < rj; ++c)
                         for (int64_t q = 0; q < nc; ++q)
-                            X[static_cast<size_t>(q + c * nc)] = fj.X_NR.data[static_cast<size_t>(crow[static_cast<size_t>(q)] + bj.ridx[static_cast<size_t>(c)] * total)];
+                            X[static_cast<size_t>(q + c * nc)] = fj.X_NR[idi].data[static_cast<size_t>(crow[static_cast<size_t>(q)] + bj.ridx[static_cast<size_t>(c)] * m)];
                     for (int64_t c = 0; c < ni; ++c)
                         for (int64_t q = 0; q < nc; ++q) V[static_cast<size_t>(q + c * nc)] = wv_i[static_cast<size_t>(wposl[static_cast<size_t>(q)] + c * nwi)];
                     partial_gemm<DataType>('N', 'N', nc, nj, rj, DataType(1), X.data(), nc, bj.vp.data(), rj, DataType(0), tmp.data(), nc);
@@ -2018,13 +2012,12 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
                 const auto& fn = nb.f22;
                 const auto& pn = pv[static_cast<size_t>(l)][static_cast<size_t>(ni)];
                 const int64_t rn = static_cast<int64_t>(fn.redundant.size());
-                int64_t row0 = 0;
                 for (size_t idx = 0; idx < nb.one_hop.size(); ++idx) {
                     const int64_t m = fn.neighbor_nr_counts[idx];
                     const int64_t target = nb.one_hop[idx];
                     if (m > 0 && !level.is_box_on_process(target)) {
                         std::vector<DataType> t(static_cast<size_t>(m * ncol));
-                        partial_gemm<DataType>('N', 'N', m, ncol, rn, DataType(1), fn.X_NR.data.data() + row0, fn.X_NR.rows, pn.data(), rn,
+                        partial_gemm<DataType>('N', 'N', m, ncol, rn, DataType(1), fn.X_NR[idx].data.data(), m, pn.data(), rn,
                                                DataType(0), t.data(), m);
                         std::vector<char> msg;
                         const int64_t head[2] = {target, m};
@@ -2033,7 +2026,6 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
                         partial_put(msg, t.data(), t.size());
                         parts[static_cast<size_t>(ni)].emplace_back(level.owner_rank_of(target), std::move(msg));
                     }
-                    row0 += m;
                 }
             }
             for (auto& list : parts)
@@ -2126,11 +2118,9 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
                     const size_t idn = static_cast<size_t>(it - nb.one_hop.begin());
                     const int64_t m = fn.neighbor_nr_counts[idn], rn_ = static_cast<int64_t>(fn.redundant.size());
                     if (m == 0) continue;
-                    int64_t row0 = 0;
-                    for (size_t q = 0; q < idn; ++q) row0 += fn.neighbor_nr_counts[q];
                     const auto& pn = pv[static_cast<size_t>(l)][static_cast<size_t>(nl)];
                     t.resize(static_cast<size_t>(m * ncol));
-                    partial_gemm<DataType>('N', 'N', m, ncol, rn_, DataType(1), fn.X_NR.data.data() + row0, fn.X_NR.rows, pn.data(), rn_,
+                    partial_gemm<DataType>('N', 'N', m, ncol, rn_, DataType(1), fn.X_NR[idn].data.data(), m, pn.data(), rn_,
                                            DataType(0), t.data(), m);
                     add_rows(fn.neighbor_nr_slots[idn], t.data(), m);
                 }
@@ -2207,23 +2197,52 @@ void partial_schur_multiply(fmm::ParallelTree<CoordType, DataType>& tree, const 
     if (nranks > 1) MPI_Allreduce(MPI_IN_PLACE, y2, static_cast<int>(n22 * ncol), partial_mpi_type<DataType>(), MPI_SUM, tree.comm);
 }
 
+// The release of the Schur complement (c_bpack_partial_schur_release): the
+// root's CB block and every sparsified box's records and neighbour lists,
+// which only the CB entries and products read, go.  What the partial solves
+// read stays: the F11 factors, the boxes' T, the root's LU, W and A21.
+// Returns the bytes this rank freed (BPACK_TRACE=memory prints them).
 template<typename CoordType, typename DataType>
-void partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
+size_t partial_schur_release(fmm::ParallelTree<CoordType, DataType>& tree) {
     auto& pr = tree.partial_root;
+    const size_t rss0 = fmm::env::trace("memory") ? h2_diag_current_rss_bytes() : 0;
+    size_t records = 0, lists = 0;
+    const size_t root = pr.cb.data.capacity() * sizeof(DataType) +
+                        (pr.leaf_box.capacity() + pr.leaf_slot.capacity()) * sizeof(int64_t);
     std::vector<DataType>().swap(pr.cb.data);
     pr.cb.rows = pr.cb.cols = pr.cb.lda = 0;
+    std::vector<int64_t>().swap(pr.leaf_box);
+    std::vector<int64_t>().swap(pr.leaf_slot);
     pr.cb_released = true;
     for (auto& level : tree.levels) {
         for (auto& box : level.local_boxes) {
             auto& f = box.f22;
             if (!f.sparsified) continue;
-            for (auto* m : {&f.X_RR, &f.X_RS, &f.X_SR, &f.X_RN, &f.X_NR}) {
-                decltype(m->data)().swap(m->data);
-                m->rows = m->cols = m->lda = 0;
+            for (auto* m : {&f.X_RR, &f.X_RS, &f.X_SR, &f.X_RN}) {
+                records += m->data.capacity() * sizeof(DataType);
+                *m = fmm::PartialRecord<DataType>{};
+            }
+            for (const auto& m : f.X_NR) records += m.data.capacity() * sizeof(DataType);
+            decltype(f.X_NR)().swap(f.X_NR);
+            for (auto* v : {&f.neighbor_f22_counts, &f.neighbor_nr_counts}) {
+                lists += v->capacity() * sizeof(int64_t);
+                std::vector<int64_t>().swap(*v);
+            }
+            for (auto* vv : {&f.neighbor_f22_slots, &f.neighbor_nr_slots}) {
+                for (const auto& v : *vv) lists += v.capacity() * sizeof(int64_t);
+                std::vector<std::vector<int64_t>>().swap(*vv);
             }
             f.released = true;
         }
     }
+    const size_t freed = records + root + lists;
+    if (fmm::env::trace("memory")) {
+        std::printf("H2_PARTIAL_RELEASE rank=%d freed=%.6f records=%.6f root=%.6f lists=%.6f rss_before=%.6f rss_after=%.6f\n",
+                    tree.mpi_rank, freed / 1e9, records / 1e9, root / 1e9, lists / 1e9, rss0 / 1e9,
+                    h2_diag_current_rss_bytes() / 1e9);
+        std::fflush(stdout);
+    }
+    return freed;
 }
 
 }  // namespace color_unstructured

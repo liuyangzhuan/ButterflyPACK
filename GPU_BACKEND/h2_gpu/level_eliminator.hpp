@@ -7857,9 +7857,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_records(std::vector<P
         for (const auto& nr : w.near) rows = rows || !nr.q22_nr.empty();
         if (rows) {
             with_rows.push_back(i);
-        } else {  // (none: an empty X_NR, 0 x r)
-            w.X_NR = PartialRecord<DataType>{};
-            w.X_NR.cols = static_cast<int64_t>(w.red22.size());
+        } else {  // (none: no neighbour's X_NR has rows)
+            w.X_NR.assign(w.near.size(), {});
         }
     }
     auto box_bytes = [](const PartialF22Work<DataType>& w) {
@@ -8411,8 +8410,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
     };
     // ---- X_NR = K(nb, b)(F22_nb, R) - K(nb, b)(F22_nb, S') T over the
     // neighbours' F22 points that stay live.  Per box, at the front of the
-    // block (downloaded): X_NR (nt_nr x r); behind: K(nb, b)(live F22_nb, S')
-    // (nt_nr x kp).
+    // block (downloaded): X_NR, a neighbour's m x r after another; behind:
+    // K(nb, b)(live F22_nb, S') (nt_nr x kp).
     struct Rec { int kp = 0, r = 0, nt_nr = 0; size_t front = 0, back = 0; };
     std::vector<Rec> rec(nb);
     size_t front_elems = 0, back_elems = 0;
@@ -8467,19 +8466,20 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
             const auto& nr = w.near[idx];
             const int m = static_cast<int>(nr.q22_nr.size());
             if (m == 0) continue;
+            S* xb = xnr + static_cast<size_t>(row0) * c.r;  // this neighbour's m x r
             const IndexList lq{static_cast<int64_t>(meta_.append(ints(nr.q22_nr))), 0, nullptr};
             if (const DeviceMatrix* kb = block_of(nr.morton, w.morton)) {
-                add_gather(GatherItem{xnr + row0, c.nt_nr, m, c.r, kb->ptr, 1, kb->rows, lq, lR});
+                add_gather(GatherItem{xb, m, m, c.r, kb->ptr, 1, kb->rows, lq, lR});
                 add_gather(GatherItem{ks + row0, c.nt_nr, m, c.kp, kb->ptr, 1, kb->rows, lq, lS});
             } else {
                 const IndexList pq{static_cast<int64_t>(meta_.append(pick(*nr.S_old, nr.q22_nr))), remote_points(nr.morton),
                                    nullptr};
-                add_eval(EvalItem{xnr + row0, c.nt_nr, m, c.r, pq, pR});
+                add_eval(EvalItem{xb, m, m, c.r, pq, pR});
                 add_eval(EvalItem{ks + row0, c.nt_nr, m, c.kp, pq, pS});
             }
+            nn.entries.push_back({ks + row0, f22_T_.at(w.morton), xb, m, c.r, c.kp, c.nt_nr, c.kp, m});
             row0 += m;
         }
-        nn.entries.push_back({ks, f22_T_.at(w.morton), xnr, c.nt_nr, c.r, c.kp, c.nt_nr, c.kp, c.nt_nr});
     }
     const size_t off_g = meta_.append(gathers);
     const size_t off_e = meta_.append(evals);
@@ -8495,7 +8495,17 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
         f22_t_[10] += std::chrono::duration<double>(clock::now() - tick).count();
     }
     f22_submit_records(d_rec, front_elems, rec_bytes, [&](auto&& take) {
-        for (size_t i = 0; i < nb; ++i) take(works[at_works[i]].X_NR, rec[i].nt_nr, rec[i].r, rec[i].front);
+        for (size_t i = 0; i < nb; ++i) {
+            auto& w = works[at_works[i]];
+            w.X_NR.assign(w.near.size(), {});
+            size_t at = rec[i].front;
+            for (size_t idx = 0; idx < w.near.size(); ++idx) {
+                const int m = static_cast<int>(w.near[idx].q22_nr.size());
+                if (m == 0) continue;
+                take(w.X_NR[idx], m, rec[i].r, static_cast<int64_t>(at));
+                at += static_cast<size_t>(m) * rec[i].r;
+            }
+        }
     });
 }
 
