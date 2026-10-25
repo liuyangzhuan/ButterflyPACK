@@ -379,6 +379,14 @@ void matvec_bf1_device(char trans, int nin, int nout, int nvec, const void* x, v
 }
 #endif
 
+// The host path for a GPU-vs-CPU reference: off both options that send a butterfly's matvec and
+// extraction to the device (HODLR_use_gpu, and H2_use_gpu, which an H2 front's F12/F21 carry), or
+// the check compares the device with itself and passes whatever the device does.
+void use_host(F2Cptr& option, bool host, double hodlr_gpu, double h2_gpu) {
+  d_c_bpack_set_I_option(&option, "HODLR_use_gpu", host ? 0 : static_cast<int>(hodlr_gpu));
+  d_c_bpack_set_I_option(&option, "H2_use_gpu", host ? 0 : static_cast<int>(h2_gpu));
+}
+
 void no_distance(int*, int*, double*, C2Fptr) {}
 void no_admissibility(int*, int*, int* value, C2Fptr) { *value = 1; }
 
@@ -491,6 +499,8 @@ int main(int argc, char* argv[]) {
 
     double gpu = 0.0, n15 = 0.0, lrlevel = 0.0, leaf = 0.0, knn = 0.0, elem = 0.0, less_adapt = 0.0;
     d_c_bpack_getoption(&option, "HODLR_use_gpu", &gpu);
+    double h2_gpu = 0.0;
+    d_c_bpack_getoption(&option, "H2_use_gpu", &h2_gpu);
     d_c_bpack_getoption(&option, "forwardN15flag", &n15);
     d_c_bpack_getoption(&option, "LRlevel", &lrlevel);
     d_c_bpack_getoption(&option, "Nmin_leaf", &leaf);
@@ -648,10 +658,10 @@ int main(int argc, char* argv[]) {
       std::vector<double> yn_gpu, yt_gpu, yn_cpu, yt_cpu;
       apply(bf1, ptree, 'N', xn, yn_gpu, Nl, Ml, opt.nvec);
       apply(bf1, ptree, 'T', xt, yt_gpu, Ml, Nl, opt.nvec);
-      d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", 0);
+      use_host(bf1.option, true, gpu, h2_gpu);
       apply(bf1, ptree, 'N', xn, yn_cpu, Nl, Ml, opt.nvec);
       apply(bf1, ptree, 'T', xt, yt_cpu, Ml, Nl, opt.nvec);
-      d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", static_cast<int>(gpu));
+      use_host(bf1.option, false, gpu, h2_gpu);
       const double rn = relative_difference(yn_cpu, yn_gpu, static_cast<size_t>(Ml) * opt.nvec);
       const double rt = relative_difference(yt_cpu, yt_gpu, static_cast<size_t>(Nl) * opt.nvec);
       const bool exact = opt.nvec % 2 == 0;
@@ -783,7 +793,7 @@ int main(int argc, char* argv[]) {
       // same up to their order, so they agree to rounding
       if (gpu > 0) {
         std::vector<double> host(data.size());
-        d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", 0);
+        use_host(bf1.option, true, gpu, h2_gpu);
         MPI_Barrier(MPI_COMM_WORLD);
         const double s0 = MPI_Wtime();
         d_c_bf_extractelement(&bf1.bf, &bf1.option, &bf1.msh, &bf1.stats, &ptree, &Ninter, &Nallrows, &Nallcols,
@@ -791,7 +801,7 @@ int main(int argc, char* argv[]) {
                               pgidx.data(), &Npmap, pmaps.data());
         MPI_Barrier(MPI_COMM_WORLD);
         const double t_host = MPI_Wtime() - s0;
-        d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", static_cast<int>(gpu));
+        use_host(bf1.option, false, gpu, h2_gpu);
         const double rel = relative_difference(host, data, static_cast<size_t>(mine));
         if (myid == 0) {
           std::cout << "BFTEST check bf=1 extract gpu_vs_cpu rel=" << rel << " seconds_cpu=" << t_host << std::endl;
