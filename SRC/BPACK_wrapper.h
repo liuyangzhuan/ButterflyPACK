@@ -167,8 +167,10 @@ void c_bpack_inv_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Nin
  * F22 indices; out column-major nrows x ncols, replicated) and by products
  * (x2, y2 N22 x Ncol, replicated); and the release of the Schur complement
  * (its root block and the F22 records, nearly all of the object's memory; the
- * solves stay, and Schur calls after it throw).  All collective over the
- * matrix's communicator, every rank passing the same rows, cols and x2.
+ * solves stay, and Schur calls after it throw).  With H2_compress_factors 1
+ * the records are kept compressed (lossy at 0.02 tol_comp): the entries and
+ * products decompress what they read.  All collective over the matrix's
+ * communicator, every rank passing the same rows, cols and x2.
  */
 void c_bpack_partial_forward(C_DT* out2, C_DT const* b, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);
 void c_bpack_partial_backward(C_DT* x, C_DT const* x2, int* Nloc, int* N22, int* Nrhs, F2Cptr* bmat, F2Cptr* option, F2Cptr* stats, F2Cptr* ptree);

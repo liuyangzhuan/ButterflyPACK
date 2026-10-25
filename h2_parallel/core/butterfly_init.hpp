@@ -860,6 +860,7 @@ int bpack_initiate_distributed64(
   tree->id_adaptive_batch = options.id_adaptive_batch;
   tree->id_s_op = options.s_op;
   tree->partial_count = options.partial_count;
+  tree->partial_compress_records = options.partial_count > 0 && options.compress_factors >= 1;
 
   auto layout = std::make_unique<DistributedLayout64>();
   assign_distributed_points(
@@ -943,6 +944,7 @@ int h2_initiate(H2<CoordType, DataType>* H2_solver, const ProgramOptions& option
   H2_solver->tree->id_adaptive_batch = options.id_adaptive_batch;
   H2_solver->tree->id_s_op = options.s_op;
   H2_solver->tree->partial_count = options.partial_count;
+  H2_solver->tree->partial_compress_records = options.partial_count > 0 && options.compress_factors >= 1;
 
   idxs = 0;
   idxe = -1;

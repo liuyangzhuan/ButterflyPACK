@@ -153,7 +153,11 @@ struct ProgramOptions {
     // parent blocks held under memory pressure, the CA blocks on more than
     // one rank - so the factorization is lossy too, within the tolerance.
     // (A value 2, "also the fill sources", was planned; the fill sources
-    // went in under 1, and 2 was never different.)
+    // went in under 1, and 2 was never different.)  With H2_partial, the
+    // F22 records instead (CPU and GPU): what the Schur complement's entries
+    // and products read, kept on the host lossy at 0.02 tol_comp
+    // (core/partial_record_codec.hpp); the factorization's own data and the
+    // partial solves' factors stay uncompressed.
     int compress_factors = 0;
     int gemm_split = 16;        // Maximum task split for one Color work item; 0 disables splitting
     int xrr_factor = 0;         // X_RR pivot factorization: 0 Bunch-Kaufman, 1 LU with partial pivoting
@@ -207,7 +211,6 @@ inline void validate_h2_backend_selection(const ProgramOptions& options) {
         if (options.xrr_factor != 1) throw std::invalid_argument("H2_partial needs H2_XRR_factor=1 (LU)");
         if (options.precon == 2) throw std::invalid_argument("H2_partial is a factorization (precon 1 or 3)");
         if (options.id_proxy_mode != 0) throw std::invalid_argument("H2_partial needs H2_ID_proxy=0");
-        if (options.compress_factors != 0) throw std::invalid_argument("H2_partial: H2_compress_factors is not supported yet");
     }
     if (options.unstructured == 0) return;
 

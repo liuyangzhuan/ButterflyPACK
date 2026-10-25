@@ -504,17 +504,28 @@ struct PartialRecord {
     int64_t rows = 0;
     int64_t cols = 0;
     int64_t lda = 0;
+    // H2_compress_factors: the entries as lossy Bitcomp chunks, data empty
+    // (core/partial_record_codec.hpp): the chunks end to end, each padded to
+    // its stride
+    std::vector<char, DefaultInitAllocator<char>> packed;
+    std::vector<uint32_t> strides;
+    bool compressed() const { return !strides.empty(); }
+    size_t bytes() const { return data.capacity() * sizeof(DataType) + packed.capacity(); }
     void allocate(int64_t nrows, int64_t ncols) {  // zero-filled
         rows = nrows;
         cols = ncols;
         lda = nrows;
         data.assign(static_cast<size_t>(std::max<int64_t>(nrows * ncols, 0)), DataType{});
+        packed.clear();
+        strides.clear();
     }
     void assign(int64_t nrows, int64_t ncols, const std::vector<DataType>& values) {
         rows = nrows;
         cols = ncols;
         lda = nrows;
         data.assign(values.begin(), values.end());
+        packed.clear();
+        strides.clear();
     }
 };
 
@@ -1716,6 +1727,7 @@ struct ParallelTree {
     int id_adaptive_batch;               ///< Adaptive rows per spatial node for mode 2
     double id_s_op = 0.0;                ///< H2_s_op: the IDs' absolute floor is tol * id_s_op (0: off)
     int64_t partial_count = 0;           ///< H2_partial: points with id < partial_count are F11 (eliminated); 0: full factorization
+    bool partial_compress_records = false;  ///< H2_compress_factors with H2_partial: the F22 records stored compressed
     bool partial() const { return partial_count > 0; }
     bool partial_f11(int64_t point_id) const { return point_id < partial_count; }
     PartialRootFactor<DataType> partial_root;  ///< the root of a partial factorization

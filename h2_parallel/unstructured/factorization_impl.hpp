@@ -338,7 +338,9 @@ void hierarchical_factorization_unstructured(
     gpu_options.is_symmetric = is_symmetric;
     gpu_options.is_hermitian = is_hermitian;
     gpu_options.occupancy = true;
-    gpu_options.compress_factors = compress_factors;
+    // (H2_partial: the F22 records instead, tree->partial_compress_records;
+    // the F22 step reads the near blocks raw)
+    gpu_options.compress_factors = tree->partial() ? 0 : compress_factors;
     gpu::ColorGpuDriver<CoordType, DataType, KernelType> gpu_driver(tree, kernel, gpu_options);
     {
         // as the full-grid loop: before the first level (the kernels and

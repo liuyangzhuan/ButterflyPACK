@@ -47,6 +47,7 @@
 #include "host_copier.hpp"
 #include "evaluator.hpp"
 #include "owner_plan.hpp"
+#include "core/partial_record_codec.hpp"
 
 #include <omp.h>
 
@@ -2719,7 +2720,7 @@ private:
     int scratch_points_from_slots(const std::vector<int>& slots, cudaStream_t stream);
     void ensure_scratch_slots(int64_t count, cudaStream_t stream);
     void put_back_packed_blocks();
-    std::array<double, 11> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [3] own records, [10] X_NR; [6] bytes down; [5] the final wait; [7]-[9] the copier's wait for device data, setup, stores)
+    std::array<double, 13> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [3] own records, [10] X_NR; [6] bytes down; [5] the final wait; [7]-[9] the copier's wait for device data, setup, stores; H2_compress_factors: [11] the compressed records' raw bytes, [12] groups left raw)
     std::array<int, 2> f22_chunks_{};  // (and its ID and record chunks)
     // a sparsified box's T (k' x r, zero on S11) from f22_ids to f22_records,
     // in the blocks listed
@@ -7897,9 +7898,14 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_records(std::vector<P
         std::printf("  [gpu] level %d F22 step on the device, %zu boxes: IDs and own records in %d chunks (points %.2f s, "
                     "sketch %.2f s, targets and ID %.2f s, records %.2f s), X_NR of %zu in %d chunks %.2f s; their copies to "
                     "the host %.2f GB in the background (busy %.2f s: setup %.2f, stores %.2f, waiting for device data %.2f), "
-                    "the last waited for %.2f s\n",
+                    "the last waited for %.2f s",
                     level_index_, works.size(), f22_chunks_[0], f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], with_rows.size(),
                     f22_chunks_[1], f22_t_[10], f22_t_[6] / 1e9, f22_t_[4], f22_t_[8], f22_t_[9], f22_t_[7], f22_t_[5]);
+        if (tree_->partial_compress_records) {
+            std::printf("; records compressed from %.2f GB, %.0f groups of them left raw (no codec staging)", f22_t_[11] / 1e9,
+                        f22_t_[12]);
+        }
+        std::printf("\n");
         std::fflush(stdout);
     }
 }
@@ -8370,11 +8376,11 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
             const Rec& c = rec[i];
             if (c.r <= 0) continue;
             auto& w = works[at_works[i]];
-            take(w.T, c.kp, c.r, c.front);
-            take(w.X_SR, c.kp, c.r, -1);
-            take(w.X_RS, c.r, c.kp, -1);
-            take(w.X_RR, c.r, c.r, -1);
-            take(w.X_RN, c.r, c.nt, -1);
+            take(w.T, c.kp, c.r, c.front, false);  // (the partial solves read T)
+            take(w.X_SR, c.kp, c.r, -1, true);
+            take(w.X_RS, c.r, c.kp, -1, true);
+            take(w.X_RR, c.r, c.r, -1, true);
+            take(w.X_RN, c.r, c.nt, -1, true);
         }
     });
 }
@@ -8502,7 +8508,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
             for (size_t idx = 0; idx < w.near.size(); ++idx) {
                 const int m = static_cast<int>(w.near[idx].q22_nr.size());
                 if (m == 0) continue;
-                take(w.X_NR[idx], m, rec[i].r, static_cast<int64_t>(at));
+                take(w.X_NR[idx], m, rec[i].r, static_cast<int64_t>(at), true);
                 at += static_cast<size_t>(m) * rec[i].r;
             }
         }
@@ -8510,10 +8516,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vec
 }
 
 // The records at the front of a block (front_elems scalars, every record in
-// the order `each` takes them: take(record, rows, cols, offset), offset < 0 for
-// "right after the previous one") to the host in the background (the
-// copier's fixed pinned slots and stream) while the next chunks run; the
-// block (block_bytes) goes once copied.
+// the order `each` takes them: take(record, rows, cols, offset, lossy),
+// offset < 0 for "right after the previous one") to the host in the
+// background (the copier's fixed pinned slots and stream) while the next
+// chunks run; the block (block_bytes) goes once copied.  H2_compress_factors
+// (tree_->partial_compress_records): the lossy ones are compressed here first
+// (core/partial_record_codec.hpp), in groups of at most kXnrStagingBudget
+// (the codec's staging), each group's bytes a block of its own and copied
+// into the records' packed bytes; a group the codec gets no staging for goes
+// raw with the rest.
 template<typename CoordType, typename DataType, typename KernelType>
 template<typename Each>
 void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_rec, size_t front_elems, size_t block_bytes,
@@ -8521,45 +8532,129 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_r
     Context& ctx = Context::instance();
     cudaStream_t stream = ctx.stream();
     const size_t D = sizeof(S);
-    cudaEvent_t ready = nullptr;
-    check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "cudaEventCreate");
-    check_cuda(cudaEventRecord(ready, stream), "cudaEventRecord");
-    HostCopier::Job job;
-    job.device = reinterpret_cast<char*>(d_rec);
-    job.bytes = front_elems * D;
-    job.ready = ready;
-    struct Shape { PartialRecord<DataType>* m; int rows, cols; };
-    auto shapes = std::make_shared<std::vector<Shape>>();
-    size_t at = 0;
-    each([&](PartialRecord<DataType>& out, int rows, int cols_, int64_t offset) {
-        if (offset >= 0) at = static_cast<size_t>(offset) * D;
-        const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols_) * D;
+    struct Item { PartialRecord<DataType>* m; int rows, cols; size_t at; bool lossy; bool packed = false; };
+    std::vector<Item> items;
+    size_t at = 0;  // elements
+    each([&](PartialRecord<DataType>& out, int rows, int cols_, int64_t offset, bool lossy) {
+        if (offset >= 0) at = static_cast<size_t>(offset);
         out = PartialRecord<DataType>{};
+        items.push_back(Item{&out, rows, cols_, at, lossy});
+        at += static_cast<size_t>(rows) * static_cast<size_t>(cols_);
+    });
+    auto submit = [&](char* block, size_t bytes, std::vector<HostCopier::Segment>&& segments, size_t copied,
+                      std::shared_ptr<std::vector<Item>> shapes) {
+        cudaEvent_t ready = nullptr;
+        check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "cudaEventCreate");
+        check_cuda(cudaEventRecord(ready, stream), "cudaEventRecord");
+        HostCopier::Job job;
+        job.device = block;
+        job.bytes = bytes;
+        job.ready = ready;
+        job.segments = std::move(segments);
+        job.finalize = [shapes] {
+            for (const Item& it : *shapes) {
+                it.m->rows = it.rows;
+                it.m->cols = it.cols;
+                it.m->lda = it.rows;
+            }
+        };
+        f22_inflight_[block] = bytes;
+        f22_inflight_bytes_ += bytes;
+        f22_copier_->submit(std::move(job));
+        eliminator_stats().bytes_down += static_cast<double>(copied);
+        f22_t_[6] += static_cast<double>(copied);
+    };
+#ifdef H2_HAVE_NVCOMP
+    if (tree_->partial_compress_records) {
+        WaveXnrCompressor<S> codec(heap_);
+        for (size_t g0 = 0; g0 < items.size();) {
+            std::vector<size_t> group;
+            size_t raw = 0, g1 = g0;
+            for (; g1 < items.size(); ++g1) {
+                const Item& it = items[g1];
+                const size_t b = static_cast<size_t>(it.rows) * static_cast<size_t>(it.cols) * D;
+                if (!it.lossy || b == 0) continue;
+                if (!group.empty() && raw + b > kXnrStagingBudget) break;
+                group.push_back(g1);
+                raw += b;
+            }
+            g0 = g1;
+            if (group.empty()) continue;
+            std::vector<const S*> srcs;
+            std::vector<size_t> elems;
+            for (size_t k : group) {
+                srcs.push_back(d_rec + items[k].at);
+                elems.push_back(static_cast<size_t>(items[k].rows) * static_cast<size_t>(items[k].cols));
+            }
+            std::vector<CompressedXnr> out;
+            if (!codec.compress(srcs, elems, kRecordToleranceFraction * tolerance_, out, stream)) {
+                f22_t_[12] += 1;
+                continue;
+            }
+            size_t total = 0;
+            for (const auto& o : out) total += o.bytes;
+            char* d_pk = heap_.try_alloc(total, ResidentKind::Codec);
+            if (d_pk == nullptr) {
+                codec.release();
+                f22_t_[12] += 1;
+                continue;
+            }
+            f22_t_[11] += static_cast<double>(raw);
+            // each record's chunks end to end, as the host decompresses them
+            const auto& chunks = codec.chunks();
+            auto shapes = std::make_shared<std::vector<Item>>();
+            std::vector<HostCopier::Segment> segments;
+            size_t off = 0;
+            for (size_t q = 0; q < group.size(); ++q) {
+                Item& it = items[group[q]];
+                std::vector<uint32_t> strides(out[q].nchunks);
+                const size_t first = off;
+                for (size_t c = 0; c < out[q].nchunks; ++c) {
+                    const auto& ch = chunks[out[q].chunk0 + c];
+                    check_cuda(cudaMemcpyAsync(d_pk + off, codec.staging() + ch.offset, ch.stride, cudaMemcpyDeviceToDevice,
+                                               stream),
+                               "F22 step: a compressed record");
+                    strides[c] = static_cast<uint32_t>(ch.stride);
+                    off += ch.stride;
+                }
+                it.m->strides = std::move(strides);
+                it.packed = true;
+                PartialRecord<DataType>* record = it.m;
+                const size_t n = out[q].bytes;
+                segments.push_back(HostCopier::Segment::into(
+                    [record, n] {
+                        record->packed.resize(n);
+                        return record->packed.data();
+                    },
+                    first, n));
+                shapes->push_back(it);
+            }
+            codec.release();  // (the staging: after the copies, in the stream's order)
+            submit(d_pk, total, std::move(segments), total, shapes);
+        }
+    }
+#endif
+    // the rest from the block itself
+    auto shapes = std::make_shared<std::vector<Item>>();
+    std::vector<HostCopier::Segment> segments;
+    size_t copied = 0;
+    for (const Item& it : items) {
+        if (it.packed) continue;
+        const size_t n = static_cast<size_t>(it.rows) * static_cast<size_t>(it.cols), bytes = n * D;
         if (bytes > 0) {  // sized by the copier, not zero-filled: it writes all of it
-            PartialRecord<DataType>* record = &out;
-            const size_t n = static_cast<size_t>(rows) * static_cast<size_t>(cols_);
-            job.segments.push_back(HostCopier::Segment::into(
+            PartialRecord<DataType>* record = it.m;
+            segments.push_back(HostCopier::Segment::into(
                 [record, n] {
                     record->data.resize(n);
                     return reinterpret_cast<char*>(record->data.data());
                 },
-                at, bytes));
+                it.at * D, bytes));
+            copied += bytes;
         }
-        shapes->push_back(Shape{&out, rows, cols_});
-        at += bytes;
-    });
-    job.finalize = [shapes] {
-        for (const Shape& sh : *shapes) {
-            sh.m->rows = sh.rows;
-            sh.m->cols = sh.cols;
-            sh.m->lda = sh.rows;
-        }
-    };
-    f22_inflight_[reinterpret_cast<char*>(d_rec)] = block_bytes;
-    f22_inflight_bytes_ += block_bytes;
-    f22_copier_->submit(std::move(job));
-    eliminator_stats().bytes_down += static_cast<double>(front_elems * D);
-    f22_t_[6] += static_cast<double>(front_elems * D);
+        shapes->push_back(it);
+    }
+    (void)front_elems;
+    submit(reinterpret_cast<char*>(d_rec), block_bytes, std::move(segments), copied, shapes);
 }
 
 // Point slots copied, in order, from the point table's scratch on: their

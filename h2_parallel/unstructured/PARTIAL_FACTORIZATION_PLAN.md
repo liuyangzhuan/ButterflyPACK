@@ -402,7 +402,7 @@ point set and on a plain cube split, dense checks at small N.
     still read the candidates to decide the same; memcheck then showed the
     other block's panel running past 32 steps): the panel end's candidates
     are a second set.
-- **P4**, first part, 2026-10-25 (multi-rank was already P2b and P3):
+- **P4** done 2026-10-25 (multi-rank was already P2b and P3):
   - The release (`c_bpack_partial_schur_release`, `partial_schur_release`)
     frees what only the Schur complement reads: the root's CB block, every
     sparsified box's records and its neighbour lists, the entries' leaf
@@ -418,7 +418,27 @@ point set and on a plain cube split, dense checks at small N.
     each): the CB product and entries read it a neighbour at a time.  On the
     device a neighbour's block is formed and copied apart.  Every check the
     same bit for bit.
-- Next: P4's `H2_compress_factors` on the records, P5 (the STRUMPACK
-  hand-off).
+  - `H2_compress_factors 1` keeps the records compressed
+    (core/partial_record_codec.hpp): lossy Bitcomp in the format of the GPU
+    kept factors, a step of 0.02 tol_comp of each record's largest entry,
+    512 KB chunks.  The device compresses a chunk's records before their copy
+    (`f22_submit_records`, in groups of 1 GB of staging; a group without
+    staging goes raw, BPACK_TRACE=phase counts them), the host path a box's
+    as it forms them; the product decompresses each record where it reads
+    it, the entries only the chunks of the entries they read.  T stays raw
+    (the solves), and the F11 waves' own device compression stays off (the
+    F22 step reads the near blocks raw).  The step: 32^3 against dense
+    LAPACK, schur_mult / schur_extract 2.00e-6 / 1.54e-7 raw, 2.67e-6 /
+    6.82e-7 at 0.2, 2.04e-6 / 2.32e-7 at 0.05, 2.01e-6 / 1.68e-7 at 0.02.
+    64^3 on one GPU, two runs each interleaved on one node: records 31.6 ->
+    5.9 GB, resident set 40.5 -> 22 GB, factor time 9.83 / 9.77 -> 8.49 /
+    8.56 s (the copier moves 5.9 GB: level 3's wait for it 0.41 -> 0.03 s);
+    a CB product 1.16 -> 3.45 s and the driver's entries 0.022 -> 0.080 s
+    (host decompression, about 0.5 GB/s a thread); 4 ranks: 4.27 -> 3.85 s,
+    48.2 -> 26.4 GB, product 0.37 -> 1.09 s.  GPU and CPU paths agree to the
+    quantization (the records' rounding-level differences can land a step
+    apart).
+- Next: P5 (the STRUMPACK hand-off).
   Later: the records on the device (with compression, or several cards) for
-  a device CB product and partial solves.
+  a device CB product and partial solves; with compression they would fit
+  (5.9 GB at 64^3) and the device decompresses at hundreds of GB/s.
