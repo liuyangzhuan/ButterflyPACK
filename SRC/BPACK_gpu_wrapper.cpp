@@ -1518,6 +1518,7 @@ void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const
   *info = 1;
   if (flops != nullptr) *flops = 0.0;
   try {
+    fmm::gpu::HostRange range("bf matvec, device vectors");
     bf::gpu::BfResident* r = bf_resident(bf, ptree);
     if (r == nullptr) return;
     const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';
@@ -1557,6 +1558,7 @@ void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, 
   *info = 1;
   *flops = 0.0;
   try {
+    fmm::gpu::HostRange range("bf matvec, host vectors");
     bf::gpu::BfResident* r = bf_resident(bf, ptree);
     if (r == nullptr) return;
     const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';

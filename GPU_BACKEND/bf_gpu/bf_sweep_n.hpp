@@ -41,16 +41,22 @@
 //     the partial scatters of the ranks sharing an output block.
 //
 // The CPU allocates a vector block on first write and so uses beta = 0 there
-// and beta = 1 afterwards.  Every block of a level exists here, so a level is
-// zeroed once and every product accumulates with beta = 1.  That is also what
-// the exchanges need: they add into the target, because a rank may already
-// hold its own contribution to it.
+// and beta = 1 afterwards.  Here, on one process, the first batch writing a
+// level writes all of it, so it takes beta = 0 and the next beta = 1; with
+// several, a level is zeroed before its first write and every product
+// accumulates with beta = 1, because the exchanges add into the target - a
+// rank may already hold its own contribution to it - and some blocks only
+// ever receive.
 //
 // Within one batched GEMM no two items may write the same block.  Below the
 // midpoint the pair writes one output, so the two halves of the pair go in
 // separate passes; above it the pair writes two outputs but two different
 // loop positions share one output, so the passes split on the parity of the
 // index that halves.
+
+#include <cstring>
+#include <map>
+#include <memory>
 
 #include "bf_exchange.hpp"
 #include "bf_ranges.hpp"
@@ -166,6 +172,95 @@ inline void set_grid(VecLevel& v, const SweepRanges& r, int l) {
 
 }  // namespace detail
 
+// ---------------------------------------------------------------------------
+// A sweep recorded once per plan and nrhs, replayed by every call.
+//
+// Measured on one A100 (262144^2, L = 12, 2026-10-25): rebuilding every
+// level's GEMM list on the host and uploading its nine arrays per call cost
+// 0.6 ms of copies and 1.6 ms of host time at one column, and zeroing every
+// vector level 3.5 ms at 256 columns.  Recorded, a call runs one kernel that
+// turns the vector offsets into pointers, then the GEMMs and the exchanges;
+// the vector levels take turns in two buffers instead of one each.
+// ---------------------------------------------------------------------------
+
+// One GEMM: its factor block by offset into the factors, its input and output
+// by buffer and element offset.  Buffers: 0 the caller's x, 1 and 2 the two
+// the vector levels take turns in, 3 the caller's y.
+struct SweepItem {
+    int64_t a_off = 0, b_off = 0, c_off = 0;
+    int b_buf = 0, c_buf = 0;
+    int m = 0, n = 0, k = 0, lda = 0, ldb = 0, ldc = 0;
+};
+
+// One batched GEMM: items [first, first + count).  beta is 0 where the batch
+// is the first to write a level and writes all of it (one process), else 1
+// over a level zeroed first; the closing product takes the caller's alpha
+// and beta.
+struct SweepBatch {
+    int first = 0, count = 0;
+    bool trans_a = false;
+    bool closing = false;
+    DataType beta = DataType(1);
+    int max_m = 0, max_n = 0, max_k = 0;
+    int tc_first = 0, tc48 = 0, tc64 = 0;  // its tensor-core tiles in the exec's list (48s, then 64s)
+    double flops = 0.0;
+};
+
+// The recorded sweep: the steps in order, the batches, which buffer each
+// vector level lives in, and the GEMMs' arrays on the device.
+struct SweepExec {
+    enum class Op { Launch, Zero, Exchange, Midpoint, Copy };
+    struct Step {
+        Op op = Op::Launch;
+        int arg = 0;     // Launch: the batch; Zero, Copy: the level written (index into levels);
+                         // Exchange: the sweep level whose pair exchange this is
+        int level = -1;  // Exchange: the level exchanged; Copy: the level copied from
+        int tag = 0;
+    };
+    int nrhs = 0;
+    std::vector<Step> program;
+    std::vector<SweepBatch> batches;
+    std::vector<VecLevel*> levels;   // the vector levels, in the order the sweep writes them
+    std::vector<int> buffer;         // 1 or 2, per entry of levels
+    int64_t buffer_elements = 0;
+    int count = 0;
+    double flops = 0.0;
+    char* block = nullptr;           // the device arrays, one block of the arena
+    const DataType** d_a = nullptr;
+    const DataType** d_b = nullptr;
+    DataType** d_c = nullptr;
+    magma_int_t *d_m = nullptr, *d_n = nullptr, *d_k = nullptr;
+    magma_int_t *d_lda = nullptr, *d_ldb = nullptr, *d_ldc = nullptr;
+    int64_t *d_boff = nullptr, *d_coff = nullptr;
+    signed char *d_bbuf = nullptr, *d_cbuf = nullptr;
+    int2* d_tc = nullptr;
+
+    SweepExec() = default;
+    SweepExec(const SweepExec&) = delete;
+    SweepExec& operator=(const SweepExec&) = delete;
+    ~SweepExec() { release(); }
+    void release() {
+        if (block != nullptr) fmm::gpu::DeviceHeap::instance().free(block);
+        block = nullptr;
+    }
+};
+
+// Batches of few columns (bf_sweep_exec.cu): every element of C summed in
+// MAGMA's order, so the result is MAGMA's to the bit.  sweep_narrow_kind:
+// 0 none fits, else the kernel launch_sweep_narrow will use.
+int sweep_narrow_kind(bool trans_a, int max_m, int max_n);
+void launch_sweep_narrow(bool trans_a, int count, const int* m, const int* n, const int* k, DataType alpha,
+                         const DataType* const* a, const int* lda, const DataType* const* b, const int* ldb,
+                         DataType beta, DataType* const* c, const int* ldc, int max_m, int max_n,
+                         cudaStream_t stream);
+
+// The kernel of a replay (bf_sweep_exec.cu): every GEMM's input and output
+// pointer from its offset and buffer, and the leading dimensions of x and y.
+void launch_sweep_patch(int count, const int64_t* b_off, const int64_t* c_off, const signed char* b_buf,
+                        const signed char* c_buf, const DataType* vin, DataType* buf0, DataType* buf1,
+                        DataType* vout, int ldi, int ldo, const DataType** b, DataType** c, int* ldb, int* ldc,
+                        cudaStream_t stream);
+
 // A sweep's plan for one orientation: the vector levels and the exchange
 // plans of every level.  Built once per butterfly block and reused, because
 // building an exchange plan costs two small collectives and a matvec is
@@ -184,6 +279,8 @@ struct SweepPlan {
     std::vector<ExchangePlan> pair;   // the exchange after sweep level l
     ExchangePlan mid;                 // the midpoint redistribution
     bool built = false;
+    // the sweep recorded for each nrhs a caller has used (sweep_exec)
+    std::map<int, std::unique_ptr<SweepExec>> execs;
 
     // The traffic the plan carries: records and rows sent and received, over
     // the pair-wise exchanges and the midpoint.  A sweep that matches the CPU
@@ -210,6 +307,7 @@ struct SweepPlan {
     }
 
     void release() {
+        execs.clear();
         for (ExchangePlan& p : pair) release_plan(p);
         release_plan(mid);
         pair.clear();
@@ -374,53 +472,113 @@ inline void repack(SweepPlan& plan, int nrhs) {
     plan.nrhs = nrhs;
 }
 
-// The sweep.  Vout = alpha * op(bf) * Vin + beta * Vout for 'N', and
-// Vout = alpha * op(bf)^T * Vin + beta * Vout for 'T' and 'C'; every pointer
-// device resident.  `plan` must have been built for this block and this
-// orientation.
-//
-// The caller's alpha and beta belong to the closing product alone: the
-// interior runs with alpha 1 and beta 1 over zeroed levels, and Vout is the
-// only buffer the caller already holds a value in.
-inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
-                    DataType* vout, int ldo, DataType alpha, DataType beta, SweepScratch& s_scratch,
-                    cudaStream_t stream = nullptr) {
-    if (!plan.built || plan.vec.empty()) {
-        throw std::invalid_argument("bf::gpu::sweep: the plan is not built");
-    }
+// The leaf and closing products' row partitions: where each of this rank's
+// V and U blocks starts in x and y (arr_acc_n and arr_acc_m on the host).
+inline void leaf_offsets(const BfDevice& bf, std::vector<int64_t>& acc_n, std::vector<int64_t>& acc_m) {
     const int L = bf.level_butterfly;
-    const bool forward = (plan.chara == 'N');
-    repack(plan, nrhs);
-
-    // the input and output row partitions: the accumulated heights of this
-    // rank's V and U blocks (arr_acc_n and arr_acc_m on the host)
     const LevelDesc& dV = bf.level(0);
     const LevelDesc& dU = bf.level(L + 1);
-    std::vector<int64_t> acc_n(static_cast<size_t>(dV.nc) + 1, 0);
+    acc_n.assign(static_cast<size_t>(dV.nc) + 1, 0);
     for (int j = 0; j < dV.nc; ++j)
         acc_n[static_cast<size_t>(j) + 1] = acc_n[static_cast<size_t>(j)] + bf.block(0, 0, j).rows;
-    std::vector<int64_t> acc_m(static_cast<size_t>(dU.nr) + 1, 0);
+    acc_m.assign(static_cast<size_t>(dU.nr) + 1, 0);
     for (int i = 0; i < dU.nr; ++i)
         acc_m[static_cast<size_t>(i) + 1] = acc_m[static_cast<size_t>(i)] + bf.block(L + 1, i, 0).rows;
+}
 
-    // one arena block per vector level; every level is zeroed, because the
-    // products accumulate with beta 1 and so do the exchanges
-    auto& heap = fmm::gpu::DeviceHeap::instance();
-    heap.ensure_initialized();
-    std::vector<DataType*> owned;
-    auto attach = [&](VecLevel& v) {
-        if (v.elements == 0) { v.data = nullptr; return; }
-        v.data = heap.alloc<DataType>(static_cast<size_t>(v.elements) * sizeof(DataType),
-                                      fmm::gpu::ResidentKind::Matvec);
-        owned.push_back(v.data);
-        fmm::gpu::check_cuda(cudaMemsetAsync(v.data, 0, static_cast<size_t>(v.elements) * sizeof(DataType),
-                                             stream), "bf sweep zero");
+// Whether a batch runs on the FP64 tensor cores (fmm::gpu::launch_dgemm_vbatched_tc,
+// which rounds as MAGMA does): from 32 columns, and transposed from 9 (below
+// that a narrow kernel takes it).  Measured on one A100 (262144^2, L = 12,
+// ms a matvec): untransposed MAGMA 3.6 and the tensor cores 5.1 at 24
+// columns, 5.8 and 5.3 at 32, 9.2 and 6.6 at 64, 33 and 24 at 256;
+// transposed MAGMA stays at 4.6-5.3 up to 32 columns, the tensor cores the same.
+inline bool sweep_tensor_cores(bool trans_a, int max_n) {
+    if (!std::is_same<DataType, double>::value) return false;
+    return max_n >= 32 || (trans_a && max_n > 8);
+}
+
+// Record the sweep of `plan` for nrhs: the same walk as the CPU sweep's
+// levels (the index arithmetic above), but every GEMM kept as offsets, and
+// the order of the GEMMs, zeroings and exchanges kept as a program.
+inline SweepExec& sweep_exec(const BfDevice& bf, SweepPlan& plan, int nrhs) {
+    auto found = plan.execs.find(nrhs);
+    if (found != plan.execs.end()) return *found->second;
+    repack(plan, nrhs);
+    auto owned = std::make_unique<SweepExec>();
+    SweepExec& ex = *owned;
+    ex.nrhs = nrhs;
+    const int L = bf.level_butterfly;
+    const bool forward = (plan.chara == 'N');
+    // with several ranks an exchange adds into blocks no local product writes,
+    // so every level is zeroed before its first write, as the CPU's are
+    const bool zeroing = bf.nproc > 1;
+    std::vector<int64_t> acc_n, acc_m;
+    leaf_offsets(bf, acc_n, acc_m);
+
+    std::vector<SweepItem> items;
+    std::vector<char> written;
+    auto level_index = [&](const VecLevel* v) {
+        for (size_t i = 0; i < ex.levels.size(); ++i)
+            if (ex.levels[i] == v) return static_cast<int>(i);
+        return -1;
     };
-    for (VecLevel& v : plan.vec) attach(v);
-    attach(plan.mid_src);
+    // a level takes the buffer the level written before it does not use
+    auto take_level = [&](VecLevel* v, int buf) {
+        ex.levels.push_back(v);
+        ex.buffer.push_back(buf);
+        written.push_back(0);
+        ex.buffer_elements = std::max(ex.buffer_elements, v->elements);
+        return static_cast<int>(ex.levels.size()) - 1;
+    };
+    auto level_of = [&](VecLevel* v) {
+        const int i = level_index(v);
+        if (i >= 0) return i;
+        return take_level(v, ex.buffer.empty() ? 1 : 3 - ex.buffer.back());
+    };
+    auto zero_first = [&](int li) {
+        if (written[static_cast<size_t>(li)]) return;
+        ex.program.push_back(SweepExec::Step{SweepExec::Op::Zero, li, -1, 0});
+        written[static_cast<size_t>(li)] = 1;
+    };
+    // the items since `first` as one batch writing level li (-1: y)
+    auto close_batch = [&](size_t first, bool trans_a, int li) {
+        if (items.size() == first) return;
+        SweepBatch b;
+        b.first = static_cast<int>(first);
+        b.count = static_cast<int>(items.size() - first);
+        b.trans_a = trans_a;
+        b.closing = li < 0;
+        for (size_t i = first; i < items.size(); ++i) {
+            const SweepItem& it = items[i];
+            b.max_m = std::max(b.max_m, it.m);
+            b.max_n = std::max(b.max_n, it.n);
+            b.max_k = std::max(b.max_k, it.k);
+            b.flops += 2.0 * it.m * it.n * it.k;
+        }
+        if (!b.closing) {
+            const size_t lu = static_cast<size_t>(li);
+            if (written[lu]) {
+                b.beta = DataType(1);
+            } else {
+                // the batch writes every block of the level with a nonzero
+                // height, once each: no zeroing, beta 0
+                const VecLevel& v = *ex.levels[lu];
+                int64_t blocks = 0;
+                for (int r : v.rows) blocks += r > 0 ? 1 : 0;
+                if (!zeroing && b.count == blocks) {
+                    b.beta = DataType(0);
+                    written[lu] = 1;
+                } else {
+                    zero_first(li);
+                    b.beta = DataType(1);
+                }
+            }
+        }
+        ex.flops += b.flops;
+        ex.program.push_back(SweepExec::Step{SweepExec::Op::Launch, static_cast<int>(ex.batches.size()), -1, 0});
+        ex.batches.push_back(b);
+    };
 
-    double flops = 0.0;
-    std::vector<GemmItem> items;
     const int boundary = forward ? bf.level_half : bf.level_half + 1;
     auto out_level_of = [&](const detail::LevelForm& f, int level) -> VecLevel& {
         if (f.below && level == boundary) return plan.mid_src;
@@ -431,9 +589,11 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
     auto leaf_product = [&](int leaf_level) {
         const detail::LevelForm f = detail::form_of(bf, forward, leaf_level);
         VecLevel& out = out_level_of(f, leaf_level);
+        if (out.elements == 0) return;
+        const int li = level_of(&out);
         const LevelDesc& leaf = bf.level(leaf_level);
         const std::vector<int64_t>& acc = forward ? acc_n : acc_m;
-        items.clear();
+        const size_t first = items.size();
         for (int b = 0; b < leaf.nr * leaf.nc; ++b) {
             const BlockDesc& d = bf.blocks[static_cast<size_t>(leaf.first + b)];
             if (d.rows == 0 || d.cols == 0) continue;
@@ -442,17 +602,20 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
             const int il = detail::local_of(index_i, out.idx_r, out.inc_r, out.nr, "leaf output row");
             const int jl = detail::local_of(index_j, out.idx_c, out.inc_c, out.nc, "leaf output column");
             const size_t ob = static_cast<size_t>(il) * out.nc + jl;
-            GemmItem it;
-            it.a = bf.values + d.offset;  it.lda = d.lda;
-            it.b = vin + acc[static_cast<size_t>(b)];  it.ldb = ldi;
-            it.c = out.data + out.offset[ob];  it.ldc = out.rows[ob];
+            SweepItem it;
+            it.a_off = d.offset;  it.lda = d.lda;
+            it.b_buf = 0;  it.b_off = acc[static_cast<size_t>(b)];  it.ldb = 0;  // x and its ld, per call
+            it.c_buf = ex.buffer[static_cast<size_t>(li)];  it.c_off = out.offset[ob];  it.ldc = out.rows[ob];
             it.m = d.cols; it.n = nrhs; it.k = d.rows;   // A^T: (cols x rows)
             items.push_back(it);
         }
-        flops += issue(items, DataType(1), DataType(1), /*trans_a=*/true, s_scratch);
+        close_batch(first, /*trans_a=*/true, li);
     };
 
-    // ---- one kernel level
+    // ---- one kernel level: below the midpoint the pair writes one output, so
+    // its two halves go in separate batches; above it the pair writes two
+    // outputs but two loop positions share one, so the batches split on the
+    // parity of the index that halves.
     auto run_level = [&](int level) {
         const detail::LevelForm f = detail::form_of(bf, forward, level);
         const LevelDesc& kerl = bf.level(level);
@@ -461,12 +624,10 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
         const VecLevel& in = plan.vec[static_cast<size_t>(f.in_level)];
         VecLevel& out = out_level_of(f, level);
         if (out.elements == 0) return;
-        // Below the midpoint the pair writes one output, so its two halves go
-        // in separate batches; above it the pair writes two outputs but two
-        // loop positions share one, so the batches split on the parity of the
-        // index that halves.
+        const int in_li = level_index(&in);
+        const int li = level_of(&out);
         for (int pass = 0; pass < 2; ++pass) {
-            items.clear();
+            const size_t first = items.size();
             for (int il = 0; il < g.nr[lu]; ++il) {
                 for (int jl = 0; jl < g.nc[lu]; ++jl) {
                     const int index_i = il * g.inc_r[lu] + g.idx_r[lu];
@@ -486,10 +647,15 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
                         const size_t ib = static_cast<size_t>(p.in_i) * in.nc + p.in_j;
                         const size_t ob = static_cast<size_t>(p.out_i) * out.nc + p.out_j;
                         if (in.rows[ib] == 0 || out.rows[ob] == 0) continue;
-                        GemmItem it;
-                        it.a = bf.values + k.offset;  it.lda = k.lda;
-                        it.b = in.data + in.offset[ib];  it.ldb = in.rows[ib];
-                        it.c = out.data + out.offset[ob];  it.ldc = out.rows[ob];
+                        if (in_li < 0) {
+                            throw std::runtime_error("bf::gpu::sweep_exec: a level is read before it is written");
+                        }
+                        SweepItem it;
+                        it.a_off = k.offset;  it.lda = k.lda;
+                        it.b_buf = ex.buffer[static_cast<size_t>(in_li)];  it.b_off = in.offset[ib];
+                        it.ldb = in.rows[ib];
+                        it.c_buf = ex.buffer[static_cast<size_t>(li)];  it.c_off = out.offset[ob];
+                        it.ldc = out.rows[ob];
                         it.m = f.transposed ? k.cols : k.rows;
                         it.n = nrhs;
                         it.k = f.transposed ? k.rows : k.cols;
@@ -497,7 +663,7 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
                     }
                 }
             }
-            flops += issue(items, DataType(1), DataType(1), f.transposed, s_scratch);
+            close_batch(first, f.transposed, li);
         }
     };
 
@@ -505,8 +671,9 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
     auto closing_product = [&](int close_level) {
         const LevelDesc& d = bf.level(close_level);
         const VecLevel& in = plan.vec[static_cast<size_t>(L) + 1];
+        const int in_li = level_index(&in);
         const std::vector<int64_t>& acc = forward ? acc_m : acc_n;
-        items.clear();
+        const size_t first = items.size();
         for (int b = 0; b < d.nr * d.nc; ++b) {
             const BlockDesc& k = bf.blocks[static_cast<size_t>(d.first + b)];
             if (k.rows == 0 || k.cols == 0) continue;
@@ -516,46 +683,56 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
             const int jl = detail::local_of(index_j, in.idx_c, in.inc_c, in.nc, "closing input column");
             const size_t ib = static_cast<size_t>(il) * in.nc + jl;
             if (in.rows[ib] == 0) continue;
-            GemmItem it;
-            it.a = bf.values + k.offset;  it.lda = k.lda;
-            it.b = in.data + in.offset[ib];  it.ldb = in.rows[ib];
-            it.c = vout + acc[static_cast<size_t>(b)];  it.ldc = ldo;
+            if (in_li < 0) throw std::runtime_error("bf::gpu::sweep_exec: the closing level is never written");
+            SweepItem it;
+            it.a_off = k.offset;  it.lda = k.lda;
+            it.b_buf = ex.buffer[static_cast<size_t>(in_li)];  it.b_off = in.offset[ib];  it.ldb = in.rows[ib];
+            it.c_buf = 3;  it.c_off = acc[static_cast<size_t>(b)];  it.ldc = 0;  // y and its ld, per call
             it.m = k.rows; it.n = nrhs; it.k = k.cols;
             items.push_back(it);
         }
-        flops += issue(items, alpha, beta, false, s_scratch);
+        close_batch(first, false, -1);
     };
 
     auto exchange_after = [&](int level, int tag) {
-        ExchangePlan& ex = plan.pair[static_cast<size_t>(level)];
-        if (ex.empty()) return;
+        ExchangePlan& xp = plan.pair[static_cast<size_t>(level)];
+        if (xp.empty()) return;
         const detail::LevelForm f = detail::form_of(bf, forward, level);
-        VecLevel& v = out_level_of(f, level);
-        exchange_level(ex, v, v, nrhs, tag, stream);
+        const int li = level_of(&out_level_of(f, level));
+        zero_first(li);  // a rank with no product of its own at this level
+        ex.program.push_back(SweepExec::Step{SweepExec::Op::Exchange, level, li, tag});
     };
 
     // ---- the first half: the leaf product, then its kernel levels, each
     // followed by the pair-wise broadcast.  The level that ends the half has
     // no exchange - the redistribution follows it instead.
     const int step = forward ? 1 : -1;
-    const int first = forward ? 0 : L + 1;
-    for (int level = first;; level += step) {
-        if (level == first) leaf_product(level);
+    const int first_level = forward ? 0 : L + 1;
+    for (int level = first_level;; level += step) {
+        if (level == first_level) leaf_product(level);
         else run_level(level);
         if (level == boundary) break;
         exchange_after(level, 100 + level);
     }
 
     // ---- the midpoint: between the two orderings
+    VecLevel& mid_dst = plan.vec[static_cast<size_t>(plan.mid_level)];
     if (!plan.mid.empty()) {
-        exchange_level(plan.mid, plan.mid_src, plan.vec[static_cast<size_t>(plan.mid_level)], nrhs, 200, stream);
-    } else if (plan.mid_src.data != nullptr && plan.mid_level >= 0) {
+        const int src = level_of(&plan.mid_src);
+        zero_first(src);
+        const int dst = level_of(&mid_dst);
+        zero_first(dst);  // the arrivals add into it
+        ex.program.push_back(SweepExec::Step{SweepExec::Op::Midpoint, 0, -1, 200});
+    } else if (plan.mid_src.elements > 0 && plan.mid_level >= 0) {
         // one rank: the orderings coincide, so the level is already in place
-        VecLevel& dst = plan.vec[static_cast<size_t>(plan.mid_level)];
-        if (dst.data != nullptr && dst.elements == plan.mid_src.elements) {
-            fmm::gpu::check_cuda(cudaMemcpyAsync(dst.data, plan.mid_src.data,
-                                                 static_cast<size_t>(dst.elements) * sizeof(DataType),
-                                                 cudaMemcpyDeviceToDevice, stream), "bf sweep midpoint");
+        const int src = level_index(&plan.mid_src);
+        if (src >= 0 && mid_dst.elements == plan.mid_src.elements && mid_dst.offset == plan.mid_src.offset) {
+            const int dst = take_level(&mid_dst, ex.buffer[static_cast<size_t>(src)]);
+            written[static_cast<size_t>(dst)] = 1;
+        } else if (src >= 0 && mid_dst.elements == plan.mid_src.elements) {
+            const int dst = level_of(&mid_dst);
+            written[static_cast<size_t>(dst)] = 1;
+            ex.program.push_back(SweepExec::Step{SweepExec::Op::Copy, dst, src, 0});
         }
     }
 
@@ -569,10 +746,200 @@ inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataTyp
         exchange_after(level, 300 + level);
     }
 
-    for (DataType* p : owned) heap.free(p);
+    // ---- the tensor-core tiles of the batches wide enough for them
+    std::vector<int2> tiles;
+    const bool tc = std::is_same<DataType, double>::value;
+    for (SweepBatch& b : ex.batches) {
+        b.tc_first = static_cast<int>(tiles.size());
+        b.tc48 = b.tc64 = 0;
+        if (!tc || !sweep_tensor_cores(b.trans_a, b.max_n)) continue;
+        std::vector<int2> t48, t64;
+        for (int i = 0; i < b.count; ++i) {
+            const SweepItem& it = items[static_cast<size_t>(b.first + i)];
+            if (it.m <= 0 || it.n <= 0) continue;
+            typename fmm::gpu::VBatch<double>::Entry e{};
+            e.m = it.m;
+            e.n = it.n;
+            const int tile = fmm::gpu::VBatch<double>::tc_tile_of(e);
+            std::vector<int2>& out = tile == 48 ? t48 : t64;
+            const int rows = (it.m + tile - 1) / tile, cols = (it.n + tile - 1) / tile;
+            for (int c = 0; c < cols; ++c)
+                for (int r = 0; r < rows; ++r) out.push_back(make_int2(i, (r << 16) | c));
+        }
+        b.tc48 = static_cast<int>(t48.size());
+        b.tc64 = static_cast<int>(t64.size());
+        tiles.insert(tiles.end(), t48.begin(), t48.end());
+        tiles.insert(tiles.end(), t64.begin(), t64.end());
+    }
+
+    // ---- the arrays, in one block of the arena and one copy
+    static_assert(sizeof(magma_int_t) == sizeof(int), "the tensor-core GEMM takes 32-bit sizes");
+    const size_t n = items.size();
+    ex.count = static_cast<int>(n);
+    size_t at = 0;
+    auto place = [&](size_t bytes) {
+        const size_t here = at;
+        at = fmm::gpu::align_up(at + std::max<size_t>(bytes, 1));
+        return here;
+    };
+    const size_t o_a = place(n * sizeof(DataType*)), o_b = place(n * sizeof(DataType*));
+    const size_t o_c = place(n * sizeof(DataType*));
+    const size_t o_sizes = place(6 * (n + 1) * sizeof(magma_int_t));
+    const size_t o_boff = place(n * sizeof(int64_t)), o_coff = place(n * sizeof(int64_t));
+    const size_t o_bbuf = place(n), o_cbuf = place(n);
+    const size_t o_tc = place(tiles.size() * sizeof(int2));
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    ex.block = heap.try_alloc(at, fmm::gpu::ResidentKind::Matvec);
+    if (ex.block == nullptr) throw std::runtime_error("bf::gpu::sweep_exec: no room on the device for the sweep's arrays");
+    std::vector<char> image(at, 0);
+    const DataType** ha = reinterpret_cast<const DataType**>(image.data() + o_a);
+    magma_int_t* hs = reinterpret_cast<magma_int_t*>(image.data() + o_sizes);
+    int64_t* hboff = reinterpret_cast<int64_t*>(image.data() + o_boff);
+    int64_t* hcoff = reinterpret_cast<int64_t*>(image.data() + o_coff);
+    signed char* hbbuf = reinterpret_cast<signed char*>(image.data() + o_bbuf);
+    signed char* hcbuf = reinterpret_cast<signed char*>(image.data() + o_cbuf);
+    for (size_t i = 0; i < n; ++i) {
+        const SweepItem& it = items[i];
+        ha[i] = bf.values + it.a_off;
+        hs[0 * (n + 1) + i] = it.m;
+        hs[1 * (n + 1) + i] = it.n;
+        hs[2 * (n + 1) + i] = it.k;
+        hs[3 * (n + 1) + i] = it.lda;
+        hs[4 * (n + 1) + i] = it.ldb;
+        hs[5 * (n + 1) + i] = it.ldc;
+        hboff[i] = it.b_off;
+        hcoff[i] = it.c_off;
+        hbbuf[i] = static_cast<signed char>(it.b_buf);
+        hcbuf[i] = static_cast<signed char>(it.c_buf);
+    }
+    if (!tiles.empty()) std::memcpy(image.data() + o_tc, tiles.data(), tiles.size() * sizeof(int2));
+    fmm::gpu::check_cuda(cudaMemcpy(ex.block, image.data(), at, cudaMemcpyHostToDevice), "bf sweep record");
+    ex.d_a = reinterpret_cast<const DataType**>(ex.block + o_a);
+    ex.d_b = reinterpret_cast<const DataType**>(ex.block + o_b);
+    ex.d_c = reinterpret_cast<DataType**>(ex.block + o_c);
+    magma_int_t* ds = reinterpret_cast<magma_int_t*>(ex.block + o_sizes);
+    ex.d_m = ds;
+    ex.d_n = ds + (n + 1);
+    ex.d_k = ds + 2 * (n + 1);
+    ex.d_lda = ds + 3 * (n + 1);
+    ex.d_ldb = ds + 4 * (n + 1);
+    ex.d_ldc = ds + 5 * (n + 1);
+    ex.d_boff = reinterpret_cast<int64_t*>(ex.block + o_boff);
+    ex.d_coff = reinterpret_cast<int64_t*>(ex.block + o_coff);
+    ex.d_bbuf = reinterpret_cast<signed char*>(ex.block + o_bbuf);
+    ex.d_cbuf = reinterpret_cast<signed char*>(ex.block + o_cbuf);
+    ex.d_tc = reinterpret_cast<int2*>(ex.block + o_tc);
+
+    // a caller alternating among a few nrhs keeps them all; more than that
+    // and the oldest go
+    constexpr size_t kKeep = 4;
+    while (plan.execs.size() >= kKeep) plan.execs.erase(plan.execs.begin());
+    SweepExec& ref = *owned;
+    plan.execs[nrhs] = std::move(owned);
+    return ref;
+}
+
+// One batch of a replay: a narrow kernel for few columns, the tensor cores
+// for many, else MAGMA - all three sum every element in the same order.
+inline void run_batch(const SweepExec& ex, const SweepBatch& b, DataType alpha, DataType beta,
+                      cudaStream_t stream) {
+    const DataType al = b.closing ? alpha : DataType(1);
+    const DataType be = b.closing ? beta : b.beta;
+    const size_t f = static_cast<size_t>(b.first);
+    if (al == DataType(1) && (be == DataType(0) || be == DataType(1)) &&
+        sweep_narrow_kind(b.trans_a, b.max_m, b.max_n) != 0) {
+        launch_sweep_narrow(b.trans_a, b.count, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f, ex.d_lda + f,
+                            ex.d_b + f, ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, b.max_m, b.max_n, stream);
+        return;
+    }
+    if (b.tc48 + b.tc64 > 0) {
+        if constexpr (std::is_same<DataType, double>::value) {
+            for (int part = 0; part < 2; ++part) {
+                const int nb = part == 0 ? b.tc48 : b.tc64;
+                if (nb == 0) continue;
+                fmm::gpu::launch_dgemm_vbatched_tc(
+                    b.trans_a, false, ex.d_m + f, ex.d_n + f, ex.d_k + f, al, ex.d_a + f, ex.d_lda + f, ex.d_b + f,
+                    ex.d_ldb + f, be, ex.d_c + f, ex.d_ldc + f, ex.d_tc + b.tc_first + (part == 0 ? 0 : b.tc48), nb,
+                    part == 0 ? 48 : 64, stream);
+            }
+            return;
+        }
+    }
+    fmm::gpu::gemm_vbatched<DataType>(b.trans_a ? MagmaTrans : MagmaNoTrans, MagmaNoTrans, ex.d_m + f, ex.d_n + f,
+                                      ex.d_k + f, al, ex.d_a + f, ex.d_lda + f, ex.d_b + f, ex.d_ldb + f, be,
+                                      ex.d_c + f, ex.d_ldc + f, static_cast<magma_int_t>(b.count),
+                                      fmm::gpu::Context::instance().queue(), b.max_m, b.max_n, b.max_k);
+}
+
+// The sweep.  Vout = alpha * op(bf) * Vin + beta * Vout for 'N', and
+// Vout = alpha * op(bf)^T * Vin + beta * Vout for 'T' and 'C'; every pointer
+// device resident.  `plan` must have been built for this block and this
+// orientation; the first call for an nrhs records the sweep (sweep_exec).
+//
+// The caller's alpha and beta belong to the closing product alone.  The
+// stream must be the backend's (fmm::gpu::Context), on which MAGMA runs.
+inline double sweep(const BfDevice& bf, SweepPlan& plan, int nrhs, const DataType* vin, int ldi,
+                    DataType* vout, int ldo, DataType alpha, DataType beta, SweepScratch& /*unused*/,
+                    cudaStream_t stream = nullptr) {
+    if (!plan.built || plan.vec.empty()) {
+        throw std::invalid_argument("bf::gpu::sweep: the plan is not built");
+    }
+    if (stream == nullptr) stream = fmm::gpu::Context::instance().stream();
+    SweepExec& ex = sweep_exec(bf, plan, nrhs);
+    repack(plan, nrhs);  // the levels' offsets, which the exchanges read
+
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    DataType* buf[3] = {nullptr, nullptr, nullptr};
+    if (ex.buffer_elements > 0) {
+        const size_t bytes = static_cast<size_t>(ex.buffer_elements) * sizeof(DataType);
+        buf[1] = heap.alloc<DataType>(bytes, fmm::gpu::ResidentKind::Matvec);
+        buf[2] = heap.alloc<DataType>(bytes, fmm::gpu::ResidentKind::Matvec);
+    }
+    for (size_t i = 0; i < ex.levels.size(); ++i) ex.levels[i]->data = buf[ex.buffer[i]];
+    launch_sweep_patch(ex.count, ex.d_boff, ex.d_coff, ex.d_bbuf, ex.d_cbuf, vin, buf[1], buf[2], vout, ldi, ldo,
+                       ex.d_b, ex.d_c, ex.d_ldb, ex.d_ldc, stream);
+
+    for (const SweepExec::Step& st : ex.program) {
+        switch (st.op) {
+            case SweepExec::Op::Launch:
+                run_batch(ex, ex.batches[static_cast<size_t>(st.arg)], alpha, beta, stream);
+                break;
+            case SweepExec::Op::Zero: {
+                const VecLevel& v = *ex.levels[static_cast<size_t>(st.arg)];
+                if (v.elements > 0) {
+                    fmm::gpu::check_cuda(cudaMemsetAsync(v.data, 0, static_cast<size_t>(v.elements) * sizeof(DataType),
+                                                         stream), "bf sweep zero");
+                }
+                break;
+            }
+            case SweepExec::Op::Exchange: {
+                VecLevel& v = *ex.levels[static_cast<size_t>(st.level)];
+                exchange_level(plan.pair[static_cast<size_t>(st.arg)], v, v, nrhs, st.tag, stream);
+                break;
+            }
+            case SweepExec::Op::Midpoint:
+                exchange_level(plan.mid, plan.mid_src, plan.vec[static_cast<size_t>(plan.mid_level)], nrhs, st.tag,
+                               stream);
+                break;
+            case SweepExec::Op::Copy: {
+                const VecLevel& dst = *ex.levels[static_cast<size_t>(st.arg)];
+                const VecLevel& src = *ex.levels[static_cast<size_t>(st.level)];
+                fmm::gpu::check_cuda(cudaMemcpyAsync(dst.data, src.data, static_cast<size_t>(dst.elements) * sizeof(DataType),
+                                                     cudaMemcpyDeviceToDevice, stream), "bf sweep midpoint");
+                break;
+            }
+        }
+    }
+
+    // the buffers go back with the work still queued: whatever reuses them
+    // runs after it, on the same stream
+    for (int b = 1; b <= 2; ++b)
+        if (buf[b] != nullptr) heap.free(buf[b]);
     for (VecLevel& v : plan.vec) v.data = nullptr;
     plan.mid_src.data = nullptr;
-    return flops;
+    return ex.flops;
 }
 
 }  // namespace gpu

@@ -618,7 +618,8 @@ if (enable_h2_gpu)
   add_library(bf_gpu_kernels OBJECT GPU_BACKEND/bf_gpu/bf_id.cu
                                     GPU_BACKEND/bf_gpu/bf_exchange.cu
                                     GPU_BACKEND/bf_gpu/bf_extract.cu
-                                    GPU_BACKEND/bf_gpu/bf_randomized.cu)
+                                    GPU_BACKEND/bf_gpu/bf_randomized.cu
+                                    GPU_BACKEND/bf_gpu/bf_sweep_exec.cu)
   set_target_properties(bf_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(bf_gpu_kernels PRIVATE H2_HAVE_GPU)
   target_include_directories(bf_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
