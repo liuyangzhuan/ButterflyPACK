@@ -1537,12 +1537,15 @@ void hierarchical_factorization_unstructured(
                 const auto f22_start = clock::now();
 #ifdef H2_HAVE_GPU
                 if (gpu_driver.f22_on_device()) {
-                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> on_device =
-                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_boxes(works); };
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> ids_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_ids(works); };
+                    const std::function<void(std::vector<PartialF22Work<DataType>>&)> records_on_device =
+                        [&](std::vector<PartialF22Work<DataType>>& works) { gpu_driver.f22_records(works); };
                     const std::function<void(const PartialF22Kept&)> blocks_back =
                         [&](const PartialF22Kept& kept) { gpu_driver.end_partial_level(kept); };
                     partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,
-                                      print_detail && rank == level_print_rank, level_comm, on_device, blocks_back);
+                                      print_detail && rank == level_print_rank, level_comm, ids_on_device,
+                                      records_on_device, blocks_back);
                 } else
 #endif
                 partial_f22_phase(tree, level, kernel, tolerance, occupied_indices,

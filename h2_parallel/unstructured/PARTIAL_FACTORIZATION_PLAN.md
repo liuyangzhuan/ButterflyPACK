@@ -343,7 +343,26 @@ point set and on a plain cube split, dense checks at small N.
     GB/s), populating plus appending (11.55 s), the owner sizing the records
     on its own thread (it stalled 0.2-1.1 s a level against the copier's page
     faults; 11.23 s), populating the sized ones first (11.48 s).
-- Next: (b) + (e), then (a); P4 (release API, `H2_compress_factors` on the
-  records), P5 (the STRUMPACK hand-off).  Later: the records on the device
-  (with compression, or several cards) for a device CB product and partial
-  solves.
+  - **(b) + (e)** done 2026-10-24: the F22 step in two passes, on both
+    paths: every box's ID and own records (T, X_SR, X_RS, X_RR, X_RN), then,
+    the kept sets known and published, every box's X_NR over only its
+    neighbours' F22 points that stay live (`F22Part::neighbor_nr_*`, which the
+    CB product and entries now read X_NR by).  The neighbours' live sets
+    before the step are copied first, since the publish reduces the remote
+    copies'.  On the device (`f22_ids`, `f22_records`) a level's IDs go in
+    four round-robin chunks, each box's QRCP launched with boxes of its size
+    (a few large ones on the cooperative path, the others up to one a
+    multiprocessor), and each chunk's own records copy to the host behind the
+    next chunks.  64^3 on one GPU, runs interleaved with (d) on one node:
+    11.31 / 11.01 s -> 10.95 / 10.89 s; records 49.5 -> 32.0 GB (host RSS
+    53.1 -> 36.0 GB); targets and ID 1.67 -> 1.35 s at level 3, 2.50 -> 1.96 s
+    at level 2.  The copier still bounds level 3 (17.8 GB at ~7.3 GB/s there,
+    2.5 s against 1.9 s of IDs).  The CB product took the same time (one
+    product ~1.5 s: not its X_NR bytes).  Checks unchanged, GPU and CPU paths,
+    1 to 8 ranks.  Dropped on the way: all IDs, then all records (13.1 s: the
+    records' copies had no IDs left to overlap with), and huge pages or 32
+    threads for the records' copy (no gain; slower).
+- Next: (a) the blocked QRCP (level 2's IDs, 2.0 s of its 3.5); P4 (release
+  API, `H2_compress_factors` on the records), P5 (the STRUMPACK hand-off).
+  Later: the records on the device (with compression, or several cards) for
+  a device CB product and partial solves.

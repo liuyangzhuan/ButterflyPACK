@@ -1011,11 +1011,12 @@ public:
     }
 
     // ---- H2_partial's F22 step (unstructured/partial.hpp) on a device level:
-    // the boxes' steps on the device, then the level's blocks sliced there to
+    // the boxes' two passes on the device, then the level's blocks sliced there to
     // the new live sets (the transition builds the parents from them, or
     // takes them to the host)
     bool f22_on_device() const { return level_ != nullptr && tree_->partial(); }
-    void f22_boxes(std::vector<PartialF22Work<DataType>>& works) { level_->f22_boxes(works); }
+    void f22_ids(std::vector<PartialF22Work<DataType>>& works) { level_->f22_ids(works); }
+    void f22_records(std::vector<PartialF22Work<DataType>>& works) { level_->f22_records(works); }
     void end_partial_level(const PartialF22Kept& kept) {
         if (level_) level_->f22_slice(kept);
     }

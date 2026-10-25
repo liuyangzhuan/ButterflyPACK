@@ -558,11 +558,16 @@ public:
     virtual void set_pack_parent_blocks(bool pack) { (void)pack; }
     virtual std::unique_ptr<DeviceLevelBlocks<DataType>> build_parent(
         std::vector<BoxData<CoordType, DataType>>& parents) = 0;
-    // H2_partial: the F22 step of the level's boxes, after its last wave
-    // (unstructured/partial.hpp plans them and finishes the step)
-    virtual void f22_boxes(std::vector<PartialF22Work<DataType>>& works) {
+    // H2_partial: the F22 step of the level's boxes, after its last wave, in
+    // two passes (unstructured/partial.hpp plans them, has the kept sets in
+    // between and finishes the step): their IDs, then their records
+    virtual void f22_ids(std::vector<PartialF22Work<DataType>>& works) {
         (void)works;
-        throw std::logic_error("f22_boxes: not on this eliminator");
+        throw std::logic_error("f22_ids: not on this eliminator");
+    }
+    virtual void f22_records(std::vector<PartialF22Work<DataType>>& works) {
+        (void)works;
+        throw std::logic_error("f22_records: not on this eliminator");
     }
     // ... and the level's blocks sliced to the new live sets of the
     // sparsified boxes (`kept`: this rank's and its copies'), for the
@@ -2689,7 +2694,7 @@ private:
     void collect_elimination_marks();
 
     void run_ids(const std::vector<int64_t>& wave, std::vector<WaveBox>& boxes, int& boundary_count);
-    // H2_partial's F22 step (f22_boxes): the boxes' columns are their live
+    // H2_partial's F22 step (f22_ids): the boxes' columns are their live
     // slots before the step, copied to the point table from col_base on; the
     // sketch returns after the fill, its targets in y (d x columns, ld d) in
     // the block y_block, which the caller frees.
@@ -2703,14 +2708,23 @@ private:
     void sketch_wave(const std::vector<int64_t>& wave, std::vector<WaveBox>& boxes, int& boundary_count,
                      F22Columns* f22 = nullptr);
 public:
-    void f22_boxes(std::vector<PartialF22Work<DataType>>& works) override;
+    void f22_ids(std::vector<PartialF22Work<DataType>>& works) override;
+    void f22_records(std::vector<PartialF22Work<DataType>>& works) override;
     void f22_slice(const PartialF22Kept& kept) override;
 private:
-    void f22_chunk(std::vector<PartialF22Work<DataType>>& works, size_t w0, size_t w1);
+    void f22_id_chunk(std::vector<PartialF22Work<DataType>>& works, const std::vector<size_t>& at_works);
+    void f22_record_chunk(std::vector<PartialF22Work<DataType>>& works, const std::vector<size_t>& at_works);
+    template<typename Each>
+    void f22_submit_records(S* d_rec, size_t front_elems, size_t block_bytes, Each&& each);
     int scratch_points_from_slots(const std::vector<int>& slots, cudaStream_t stream);
     void ensure_scratch_slots(int64_t count, cudaStream_t stream);
     void put_back_packed_blocks();
-    std::array<double, 10> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [6] bytes down; [5] the final wait; [7]-[9] the copier's wait for device data, setup, stores)
+    std::array<double, 11> f22_t_{};  // BPACK_TRACE=phase: the F22 step's parts (seconds; [3] own records, [10] X_NR; [6] bytes down; [5] the final wait; [7]-[9] the copier's wait for device data, setup, stores)
+    std::array<int, 2> f22_chunks_{};  // (and its ID and record chunks)
+    // a sparsified box's T (k' x r, zero on S11) from f22_ids to f22_records,
+    // in the blocks listed
+    std::unordered_map<int64_t, S*> f22_T_;
+    std::vector<char*> f22_T_blocks_;
     // the F22 step's records to the host in the background (the level's own
     // copier went with finish()), and the device bytes of its blocks in flight
     std::unique_ptr<HostCopier> f22_copier_;
@@ -4653,7 +4667,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::sketch_wave(
         id_bytes = align_up(id_bytes + static_cast<size_t>(plans[bi].n) * sizeof(int));
         max_id_n = std::max(max_id_n, plans[bi].n);
     }
-    // (the F22 step takes its ID elsewhere: f22_boxes)
+    // (the F22 step takes its ID elsewhere: f22_ids)
     char* d_id = f22 ? nullptr : heap_.alloc_resident(std::max<size_t>(id_bytes, 1), ResidentKind::Lists);  // pivots: the level's skeleton lists
     if (d_id != nullptr) level_allocs_.push_back(d_id);  // its pivots are the device skeleton lists
     std::vector<QrcpItem> id_items(adaptive || f22 ? 0 : plans.size());
@@ -7781,50 +7795,91 @@ int LevelEliminator<CoordType, DataType, KernelType>::place_scratch_points(const
 }
 
 // ---------------------------------------------------------------------------
-// H2_partial's F22 step on the device (unstructured/partial.hpp's
-// partial_f22_phase plans the boxes and finishes the step on the host).  Per
-// box: the far sketch over its live slots before the step (sketch_wave's F22
-// columns), the ID target [Y(:, F22); the near F11 rows; the box's S11 rows;
-// those two transposed] over its F22 columns, its QRCP, and the records
-// X_SR, X_RS, X_RR (from its self block) and X_NR, X_RN (from the near
-// blocks of its neighbours' F22 points), back to the host.  The blocks are
-// read, not changed: f22_slice cuts them to the kept slots afterwards.  A pair
-// without a near block (no elimination touched it) and a box without a self
-// block take the kernel's, as on the host.
+// H2_partial's F22 step on the device, in partial_f22_phase's two passes
+// (unstructured/partial.hpp plans the boxes, has the kept sets between the
+// passes and finishes the step on the host).  f22_ids, per box: the far
+// sketch over its live slots before the step (sketch_wave's F22 columns),
+// the ID target [Y(:, F22); the near F11 rows; the box's S11 rows; those two
+// transposed] over its F22 columns and its QRCP; then a sparsified box's own
+// records - T, X_SR, X_RS, X_RR (from its self block) and X_RN (over its
+// neighbours' F22 points, from the near blocks) - to the host while the next
+// chunks run, T staying here too.  f22_records: X_NR, over the neighbours'
+// F22 points that stay live (q22_nr, from the kept sets), to the host.  The
+// blocks are read, not changed: f22_slice cuts them to the kept slots
+// afterwards.  A pair without a near block (no elimination touched it) and
+// a box without a self block take the kernel's, as on the host.
 // ---------------------------------------------------------------------------
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::f22_boxes(std::vector<PartialF22Work<DataType>>& works) {
+void LevelEliminator<CoordType, DataType, KernelType>::f22_ids(std::vector<PartialF22Work<DataType>>& works) {
     Context& ctx = Context::instance();
     ctx.activate();
     put_back_packed_blocks();
-    // chunks of boxes by a device budget: the sketches and targets, then the
-    // records with their products' operands
+    // chunks of boxes, round robin: a chunk's own records go to the host while
+    // the next chunks' IDs run, and every chunk mixes the level's large and
+    // small targets alike; four of them from 32 boxes on, more if a device
+    // budget for their sketches and targets wants
     auto box_bytes = [](const PartialF22Work<DataType>& w) {
         const size_t k = w.S_old.size(), n22 = w.pos22.size(), d = k + 8;
-        size_t near11 = 0, near22 = 0;
-        for (const auto& nr : w.near) {
-            near11 += nr.q11.size();
-            near22 += nr.q22.size();
-        }
-        const size_t sketch = d * k + (d + 2 * (near11 + w.pos11.size())) * n22;
-        const size_t records = 4 * k * k + 4 * near22 * k;
-        return sizeof(S) * std::max(sketch, records) * 3 / 2;
+        size_t near11 = 0;
+        for (const auto& nr : w.near) near11 += nr.q11.size();
+        return sizeof(S) * (d * k + (d + 2 * (near11 + w.pos11.size())) * n22) * 3 / 2;
     };
     const size_t budget = std::max<size_t>(heap_.largest_free() / 3, size_t{256} << 20);
+    size_t total = 0;
+    for (const auto& w : works) total += box_bytes(w);
+    const size_t n = works.size();
+    const size_t chunks = std::min(n, std::max<size_t>(n >= 32 ? 4 : 1, (total + budget - 1) / budget));
     f22_t_ = {};
-    int chunks = 0;
+    f22_chunks_ = {};
+    f22_T_.clear();
     f22_copier_ = std::make_unique<HostCopier>(ctx.device());
     f22_inflight_.clear();
     f22_inflight_bytes_ = 0;
-    for (size_t w0 = 0; w0 < works.size();) {
-        size_t w1 = w0, bytes = 0;
-        while (w1 < works.size() && (w1 == w0 || bytes + box_bytes(works[w1]) <= budget)) {
-            bytes += box_bytes(works[w1]);
-            ++w1;
+    for (size_t c = 0; c < chunks; ++c) {
+        std::vector<size_t> at;
+        for (size_t i = c; i < n; i += chunks) at.push_back(i);
+        f22_id_chunk(works, at);
+        ++f22_chunks_[0];
+    }
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::f22_records(std::vector<PartialF22Work<DataType>>& works) {
+    Context& ctx = Context::instance();
+    ctx.activate();
+    // the sparsified boxes with X_NR rows, in chunks by a device budget for
+    // X_NR and its product's operand
+    std::vector<size_t> with_rows;
+    for (size_t i = 0; i < works.size(); ++i) {
+        auto& w = works[i];
+        if (w.red22.empty()) continue;
+        bool rows = false;
+        for (const auto& nr : w.near) rows = rows || !nr.q22_nr.empty();
+        if (rows) {
+            with_rows.push_back(i);
+        } else {  // (none: an empty X_NR, 0 x r)
+            w.X_NR = PartialRecord<DataType>{};
+            w.X_NR.cols = static_cast<int64_t>(w.red22.size());
         }
-        f22_chunk(works, w0, w1);
-        ++chunks;
-        w0 = w1;
+    }
+    auto box_bytes = [](const PartialF22Work<DataType>& w) {
+        const size_t kp = w.pos11.size() + w.skel22.size(), r = w.red22.size();
+        size_t nt_nr = 0;
+        for (const auto& nr : w.near) nt_nr += nr.q22_nr.size();
+        return sizeof(S) * nt_nr * (r + kp);
+    };
+    const size_t budget = std::max<size_t>(heap_.largest_free() / 3, size_t{256} << 20);
+    if (!f22_copier_) throw std::logic_error("LevelEliminator: f22_records before f22_ids");
+    for (size_t s0 = 0; s0 < with_rows.size();) {
+        size_t s1 = s0, bytes = 0;
+        while (s1 < with_rows.size() && (s1 == s0 || bytes + box_bytes(works[with_rows[s1]]) <= budget)) {
+            bytes += box_bytes(works[with_rows[s1]]);
+            ++s1;
+        }
+        f22_record_chunk(works, std::vector<size_t>(with_rows.begin() + static_cast<std::ptrdiff_t>(s0),
+                                                    with_rows.begin() + static_cast<std::ptrdiff_t>(s1)));
+        ++f22_chunks_[1];
+        s0 = s1;
     }
     {   // the records' last copies (their finalize sets the shapes)
         const auto t_wait = std::chrono::steady_clock::now();
@@ -7836,24 +7891,28 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_boxes(std::vector<Par
         f22_t_[9] = f22_copier_->store_seconds();
         f22_copier_.reset();
     }
+    for (char* block : f22_T_blocks_) heap_.free(block);
+    f22_T_blocks_.clear();
+    f22_T_.clear();
     if (tree_->mpi_rank == 0 && env::trace("phase")) {
-        std::printf("  [gpu] level %d F22 step on the device, %zu boxes in %d chunks: points %.2f s, sketch %.2f s, "
-                    "targets and ID %.2f s, records %.2f s; their copies to the host %.2f GB in the background (busy %.2f s: "
-                    "setup %.2f, stores %.2f, waiting for device data %.2f), the last waited for %.2f s\n",
-                    level_index_, works.size(), chunks, f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], f22_t_[6] / 1e9,
-                    f22_t_[4], f22_t_[8], f22_t_[9], f22_t_[7], f22_t_[5]);
+        std::printf("  [gpu] level %d F22 step on the device, %zu boxes: IDs and own records in %d chunks (points %.2f s, "
+                    "sketch %.2f s, targets and ID %.2f s, records %.2f s), X_NR of %zu in %d chunks %.2f s; their copies to "
+                    "the host %.2f GB in the background (busy %.2f s: setup %.2f, stores %.2f, waiting for device data %.2f), "
+                    "the last waited for %.2f s\n",
+                    level_index_, works.size(), f22_chunks_[0], f22_t_[0], f22_t_[1], f22_t_[2], f22_t_[3], with_rows.size(),
+                    f22_chunks_[1], f22_t_[10], f22_t_[6] / 1e9, f22_t_[4], f22_t_[8], f22_t_[9], f22_t_[7], f22_t_[5]);
         std::fflush(stdout);
     }
 }
 
 template<typename CoordType, typename DataType, typename KernelType>
-void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<PartialF22Work<DataType>>& works,
-                                                                  size_t w0, size_t w1) {
+void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<PartialF22Work<DataType>>& works,
+                                                                     const std::vector<size_t>& at_works) {
     Context& ctx = Context::instance();
     cudaStream_t stream = ctx.stream();
     magma_queue_t queue = ctx.queue();
     const size_t D = sizeof(S);
-    const size_t nb = w1 - w0;
+    const size_t nb = at_works.size();
     using clock = std::chrono::steady_clock;
     auto tick = clock::now();
     auto lap = [&](int k) {  // (BPACK_TRACE=phase: the step's parts, after a sync)
@@ -7888,7 +7947,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
     std::vector<int> copy_slots;
     std::vector<int> col_base(nb);
     for (size_t i = 0; i < nb; ++i) {
-        const auto& w = works[w0 + i];
+        const auto& w = works[at_works[i]];
         const BoxState& bs = state_of(w.morton);
         col_base[i] = static_cast<int>(copy_slots.size());
         for (int64_t q : w.S_old) copy_slots.push_back(bs.slot + static_cast<int>(q));
@@ -7902,8 +7961,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
     cols.col_base = col_base;
     std::vector<int64_t> wave(nb);
     for (size_t i = 0; i < nb; ++i) {
-        wave[i] = works[w0 + i].morton;
-        cols.slots.push_back(&works[w0 + i].S_old);
+        wave[i] = works[at_works[i]].morton;
+        cols.slots.push_back(&works[at_works[i]].S_old);
     }
     {
         std::vector<WaveBox> unused(nb);
@@ -7918,7 +7977,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
     std::vector<Shape> sh(nb);
     size_t t_elems = 0, tmp_elems = 0;
     for (size_t i = 0; i < nb; ++i) {
-        const auto& w = works[w0 + i];
+        const auto& w = works[at_works[i]];
         Shape& s = sh[i];
         s.k = static_cast<int>(w.S_old.size());
         s.k11 = static_cast<int>(w.pos11.size());
@@ -7953,7 +8012,7 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
     };
     size_t tmp_at = 0;
     for (size_t i = 0; i < nb; ++i) {
-        const auto& w = works[w0 + i];
+        const auto& w = works[at_works[i]];
         const Shape& s = sh[i];
         const BoxState& bs = state_of(w.morton);
         S* T = d_targets + s.t_off;
@@ -8031,25 +8090,42 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
         if (at != s.rows) throw std::logic_error("LevelEliminator: F22 step: target rows");
     }
 
-    // ---- (4) the QRCP of every target: rank, flag, norm and pivots
+    // ---- (4) the QRCP of every target: rank, flag, norm and pivots.  The
+    // launches by the boxes' sizes (a box's results are the same bit for bit
+    // whatever its batch, device_id.cu): a box one block would take over
+    // ~0.2 s on (16 m n min(m, n) / 3 bytes at ~33 GB/s, A100) goes a few to
+    // a launch on several blocks each (launch_qrcp's cooperative path), the
+    // others by size as many to a launch as the device has multiprocessors,
+    // a block each.  (Chunks of boxes by count had run the larger ones side
+    // by side on a quarter of the multiprocessors: 1.6 s at level 3 of 64^3.)
     size_t id_bytes = 0;
     const size_t id_rank = id_bytes; id_bytes = align_up(id_bytes + nb * sizeof(int));
     const size_t id_flag = id_bytes; id_bytes = align_up(id_bytes + nb * sizeof(int));
     const size_t id_norm = id_bytes; id_bytes = align_up(id_bytes + nb * sizeof(double));
     std::vector<size_t> id_jpvt(nb);
-    int max_id_n = 0;
     for (size_t i = 0; i < nb; ++i) {
         id_jpvt[i] = id_bytes;
         id_bytes = align_up(id_bytes + static_cast<size_t>(sh[i].n22) * sizeof(int));
-        max_id_n = std::max(max_id_n, sh[i].n22);
     }
     char* d_id = heap_.alloc(std::max<size_t>(id_bytes, 1));
+    auto cost = [&](size_t i) { return double(sh[i].rows) * sh[i].n22 * std::min(sh[i].rows, sh[i].n22); };
+    constexpr double kHeavy = 0.2 * 33e9 * 3.0 / 16.0;  // cost = m n min(m, n) of 0.2 s on one block
+    std::vector<size_t> order(nb);
+    std::iota(order.begin(), order.end(), size_t{0});
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return cost(a) > cost(b); });
     std::vector<QrcpItem> qitems(nb);
-    for (size_t i = 0; i < nb; ++i) {
-        qitems[i] = QrcpItem{d_targets + sh[i].t_off, sh[i].rows, sh[i].n22, sh[i].rows,
+    for (size_t j = 0; j < nb; ++j) {
+        const size_t i = order[j];
+        qitems[j] = QrcpItem{d_targets + sh[i].t_off, sh[i].rows, sh[i].n22, sh[i].rows,
                              reinterpret_cast<int*>(d_id + id_jpvt[i]), reinterpret_cast<int*>(d_id + id_rank) + i,
                              reinterpret_cast<double*>(d_id + id_norm) + i, reinterpret_cast<int*>(d_id + id_flag) + i};
     }
+    static const int sms = [] {
+        int device = 0, value = 0;
+        cudaGetDevice(&device);
+        cudaDeviceGetAttribute(&value, cudaDevAttrMultiProcessorCount, device);
+        return std::max(value, 1);
+    }();
     const size_t off_g = meta_.append(gathers);
     const size_t off_e = meta_.append(evals);
     const size_t off_tg = meta_.append(tgathers);
@@ -8064,25 +8140,39 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
             launch_gather(reinterpret_cast<const GatherItem*>(md + off_tg), static_cast<int>(tgathers.size()), tg_m, tg_n, md,
                           stream);
         }
-        char* d_work = nullptr;
-        if (const size_t wb = qrcp_work_bytes<S>(static_cast<int>(nb), max_id_n)) d_work = heap_.alloc(wb, ResidentKind::Adaptive);
-        launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_q), static_cast<int>(nb), max_id_n, tolerance_,
-                    id_absolute_tolerance(tree_, tolerance_), d_work, stream);
-        if (d_work != nullptr) heap_.free(d_work);
+        for (size_t j0 = 0; j0 < nb;) {
+            const bool heavy = cost(order[j0]) > kHeavy;
+            const size_t cap = heavy ? 4 : static_cast<size_t>(sms);
+            size_t j1 = j0;
+            int max_n = 0;
+            while (j1 < nb && j1 - j0 < cap && (cost(order[j1]) > kHeavy) == heavy) {
+                max_n = std::max(max_n, sh[order[j1]].n22);
+                ++j1;
+            }
+            const int count = static_cast<int>(j1 - j0);
+            char* d_work = nullptr;
+            if (const size_t wb = qrcp_work_bytes<S>(count, max_n)) d_work = heap_.alloc(wb, ResidentKind::Adaptive);
+            launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_q) + j0, count, max_n, tolerance_,
+                        id_absolute_tolerance(tree_, tolerance_), d_work, stream);
+            if (d_work != nullptr) heap_.free(d_work);
+            j0 = j1;
+        }
     }
     char* h_id = static_cast<char*>(pinned_pool().result.reserve(std::max<size_t>(id_bytes, 256)));
     check_cuda(cudaMemcpyAsync(h_id, d_id, id_bytes, cudaMemcpyDeviceToHost, stream), "F22 step: ID");
     check_cuda(cudaStreamSynchronize(stream), "F22 step: ID");
     heap_.free(cols.y_block);
     if (d_tmp != nullptr) heap_.free(d_tmp);
-    lap(2);
 
     // ---- (5) the ID's columns (compute_id_complex's conventions: rank 0
-    // keeps column 0 with a zero T), sorted by position as on the host
+    // keeps column 0 with a zero T), sorted by position as on the host, and
+    // a sparsified box's T (k' x r over S' = S11, S22, zero on S11), kept
+    // here for f22_records
     struct Ids { int ke = 0, r = 0; std::vector<int> ps, pr; };  // T's rows / columns of the sorted lists
     std::vector<Ids> ids(nb);
+    size_t T_elems = 0;
     for (size_t i = 0; i < nb; ++i) {
-        auto& w = works[w0 + i];
+        auto& w = works[at_works[i]];
         const Shape& s = sh[i];
         const int* ranks = reinterpret_cast<const int*>(h_id + id_rank);
         const int* flags = reinterpret_cast<const int*>(h_id + id_flag);
@@ -8108,128 +8198,141 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
             w.skel22.resize(static_cast<size_t>(s.n22));
             std::iota(w.skel22.begin(), w.skel22.end(), int64_t{0});
             w.red22.clear();
+            continue;
         }
+        T_elems += static_cast<size_t>(s.k11 + id.ke) * id.r;
     }
+    if (T_elems == 0) {
+        lap(2);
+        heap_.free(d_targets);
+        heap_.free(d_id);
+        return;
+    }
+    {
+        S* d_T = heap_.alloc<S>(T_elems * D);
+        f22_T_blocks_.push_back(reinterpret_cast<char*>(d_T));
+        check_cuda(cudaMemsetAsync(d_T, 0, T_elems * D, stream), "F22 step: T");
+        meta_.clear();
+        gathers.clear();
+        g_m = g_n = 0;
+        size_t T_at = 0;
+        for (size_t i = 0; i < nb; ++i) {
+            const Ids& id = ids[i];
+            if (id.r <= 0) continue;
+            const Shape& s = sh[i];
+            const int kp = s.k11 + id.ke;
+            S* Tb = d_T + T_at;
+            T_at += static_cast<size_t>(kp) * id.r;
+            f22_T_[works[at_works[i]].morton] = Tb;
+            const IndexList lps{static_cast<int64_t>(meta_.append(id.ps)), 0, nullptr};
+            const IndexList lpr{static_cast<int64_t>(meta_.append(id.pr)), id.ke, nullptr};
+            add_gather(gathers, g_m, g_n, GatherItem{Tb + s.k11, kp, id.ke, id.r, d_targets + s.t_off, 1, s.rows, lps, lpr});
+        }
+        const size_t off_t = meta_.append(gathers);
+        char* md = meta_.upload(meta_device_, stream);
+        launch_gather(reinterpret_cast<const GatherItem*>(md + off_t), static_cast<int>(gathers.size()), g_m, g_n, md, stream);
+    }
+    lap(2);
+    heap_.free(d_targets);
+    heap_.free(d_id);
 
-    // ---- (6) the records of the boxes with something sparsified.  Per box,
-    // at the front of the records block (downloaded): T (kp x r), X_SR (kp x
-    // r), X_RS (r x kp), X_RR (r x r), X_NR (nt x r), X_RN (r x nt); behind
-    // them: A_SS (kp x kp) and the near blocks' S columns and rows K(nb,
-    // b)(F22_nb, S') (nt x kp) and K(b, nb)(S', F22_nb) (kp x nt).
-    struct Rec { int kp = 0, r = 0, nt = 0; size_t front = 0, back = 0; };
+    // ---- (6) the sparsified boxes' own records.  Per box, at the front of
+    // the records block (downloaded): T (kp x r), X_SR (kp x r), X_RS (r x
+    // kp), X_RR (r x r), X_RN (r x nt); behind them A_SS (kp x kp) and the
+    // near blocks' S rows K(b, nb)(S', F22_nb) (kp x nt).
+    struct Rec { int k11 = 0, kp = 0, r = 0, nt = 0; size_t front = 0, back = 0; };
     std::vector<Rec> rec(nb);
     size_t front_elems = 0, back_elems = 0;
     for (size_t i = 0; i < nb; ++i) {
         if (ids[i].r <= 0) continue;
         Rec& c = rec[i];
+        c.k11 = sh[i].k11;
         c.kp = sh[i].k11 + ids[i].ke;
         c.r = ids[i].r;
-        for (const auto& nr : works[w0 + i].near) c.nt += static_cast<int>(nr.q22.size());
+        for (const auto& nr : works[at_works[i]].near) c.nt += static_cast<int>(nr.q22.size());
         c.front = front_elems;
         front_elems += static_cast<size_t>(c.kp) * c.r * 2 + static_cast<size_t>(c.r) * c.kp + static_cast<size_t>(c.r) * c.r +
-                       2 * static_cast<size_t>(c.nt) * c.r;
+                       static_cast<size_t>(c.nt) * c.r;
         c.back = back_elems;
-        back_elems += static_cast<size_t>(c.kp) * c.kp + 2 * static_cast<size_t>(c.nt) * c.kp;
+        back_elems += static_cast<size_t>(c.kp) * c.kp + static_cast<size_t>(c.nt) * c.kp;
     }
-    if (front_elems > 0) {
-        // room for the records block beside the ones still being copied
-        const size_t rec_bytes = (front_elems + back_elems) * D;
-        f22_released(f22_copier_->take_finished());
-        const size_t cap = std::max<size_t>(heap_.largest_free() / 2, rec_bytes);
-        while (f22_inflight_bytes_ > 0 && f22_inflight_bytes_ + rec_bytes > cap) f22_released(f22_copier_->wait_released());
-        S* d_rec = heap_.alloc<S>(rec_bytes);
-        S* d_back = d_rec + front_elems;
-        meta_.clear();
-        gathers.clear();
-        evals.clear();
-        g_m = g_n = e_m = e_n = 0;
-        // the products in four passes, in order: X_RR -= T^T A_SR (A_SR still in
-        // X_SR's place); X_SR -= A_SS T, X_NR -= K(F22_nb, S') T; X_RS -= T^T A_SS,
-        // X_RN -= T^T K(S', F22_nb); X_RR -= X_RS T
-        VBatch<S> tn0, nn1, tn2, nn3;
-        for (size_t i = 0; i < nb; ++i) {
-            const Rec& c = rec[i];
-            if (c.r <= 0) continue;
-            const auto& w = works[w0 + i];
-            const Shape& s = sh[i];
-            const Ids& id = ids[i];
-            const BoxState& bs = state_of(w.morton);
-            S* Tf = d_rec + c.front;
-            S* xsr = Tf + static_cast<size_t>(c.kp) * c.r;
-            S* xrs = xsr + static_cast<size_t>(c.kp) * c.r;
-            S* xrr = xrs + static_cast<size_t>(c.r) * c.kp;
-            S* xnr = xrr + static_cast<size_t>(c.r) * c.r;
-            S* xrn = xnr + static_cast<size_t>(c.nt) * c.r;
-            S* ass = d_back + c.back;
-            S* ks = ass + static_cast<size_t>(c.kp) * c.kp;
-            S* ls = ks + static_cast<size_t>(c.nt) * c.kp;
-            // T: zero, then the ID's rows of the F22 skeleton, sorted
-            check_cuda(cudaMemsetAsync(Tf, 0, static_cast<size_t>(c.kp) * c.r * D, stream), "F22 step: T");
-            const IndexList lps{static_cast<int64_t>(meta_.append(id.ps)), 0, nullptr};
-            const IndexList lpr{static_cast<int64_t>(meta_.append(id.pr)), id.ke, nullptr};
-            add_gather(gathers, g_m, g_n, GatherItem{Tf + s.k11, c.kp, id.ke, c.r, d_targets + s.t_off, 1, s.rows, lps, lpr});
-            // the positions of S' and R22 in S_old, and their points
-            std::vector<int64_t> posS(w.pos11), posR;
-            for (int64_t j : w.skel22) posS.push_back(w.pos22[static_cast<size_t>(j)]);
-            for (int64_t j : w.red22) posR.push_back(w.pos22[static_cast<size_t>(j)]);
-            const IndexList lS{static_cast<int64_t>(meta_.append(ints(posS))), 0, nullptr};
-            const IndexList lR{static_cast<int64_t>(meta_.append(ints(posR))), 0, nullptr};
-            const IndexList pS{static_cast<int64_t>(meta_.append(pick(w.S_old, posS))), bs.slot, nullptr};
-            const IndexList pR{static_cast<int64_t>(meta_.append(pick(w.S_old, posR))), bs.slot, nullptr};
-            // the box's own blocks: A_SS, and A_SR / A_RS / A_RR in place of X_SR / X_RS / X_RR
-            const auto own = [&](S* out, int ldo, int m, int n, const IndexList& rl, const IndexList& cl, const IndexList& rp,
-                                 const IndexList& cp) {
-                if (bs.schur.ptr != nullptr) {
-                    add_gather(gathers, g_m, g_n, GatherItem{out, ldo, m, n, bs.schur.ptr, 1, bs.schur.rows, rl, cl});
-                } else {
-                    add_eval(EvalItem{out, ldo, m, n, rp, cp});
-                }
-            };
-            own(ass, c.kp, c.kp, c.kp, lS, lS, pS, pS);
-            own(xsr, c.kp, c.kp, c.r, lS, lR, pS, pR);
-            own(xrs, c.r, c.r, c.kp, lR, lS, pR, pS);
-            own(xrr, c.r, c.r, c.r, lR, lR, pR, pR);
-            tn0.entries.push_back({Tf, xsr, xrr, c.r, c.r, c.kp, c.kp, c.kp, c.r});
-            nn1.entries.push_back({ass, Tf, xsr, c.kp, c.r, c.kp, c.kp, c.kp, c.kp});
-            tn2.entries.push_back({Tf, ass, xrs, c.r, c.kp, c.kp, c.kp, c.kp, c.r});
-            nn3.entries.push_back({xrs, Tf, xrr, c.r, c.r, c.kp, c.r, c.kp, c.r});
-            // the neighbours' F22 points: X_NR = K(nb, b)(F22_nb, R) - K(nb, b)(F22_nb, S') T,
-            // X_RN = K(b, nb)(R, F22_nb) - T^T K(b, nb)(S', F22_nb)
-            int row0 = 0;
-            for (size_t idx = 0; idx < w.near.size(); ++idx) {
-                const auto& nr = w.near[idx];
-                const int m = static_cast<int>(nr.q22.size());
-                if (m == 0) continue;
-                const IndexList lq{static_cast<int64_t>(meta_.append(ints(nr.q22))), 0, nullptr};
-                const DeviceMatrix* kb = block_of(nr.morton, w.morton);
-                const DeviceMatrix* lb = block_of(w.morton, nr.morton);
-                IndexList pq{};
-                if (kb == nullptr || lb == nullptr) {
-                    pq = IndexList{static_cast<int64_t>(meta_.append(pick(*nr.S_old, nr.q22))), remote_points(nr.morton), nullptr};
-                }
-                if (kb != nullptr) {
-                    add_gather(gathers, g_m, g_n, GatherItem{xnr + row0, c.nt, m, c.r, kb->ptr, 1, kb->rows, lq, lR});
-                    add_gather(gathers, g_m, g_n, GatherItem{ks + row0, c.nt, m, c.kp, kb->ptr, 1, kb->rows, lq, lS});
-                } else {
-                    add_eval(EvalItem{xnr + row0, c.nt, m, c.r, pq, pR});
-                    add_eval(EvalItem{ks + row0, c.nt, m, c.kp, pq, pS});
-                }
-                if (lb != nullptr) {
-                    add_gather(gathers, g_m, g_n,
-                               GatherItem{xrn + static_cast<size_t>(row0) * c.r, c.r, c.r, m, lb->ptr, 1, lb->rows, lR, lq});
-                    add_gather(gathers, g_m, g_n,
-                               GatherItem{ls + static_cast<size_t>(row0) * c.kp, c.kp, c.kp, m, lb->ptr, 1, lb->rows, lS, lq});
-                } else {
-                    add_eval(EvalItem{xrn + static_cast<size_t>(row0) * c.r, c.r, c.r, m, pR, pq});
-                    add_eval(EvalItem{ls + static_cast<size_t>(row0) * c.kp, c.kp, c.kp, m, pS, pq});
-                }
-                row0 += m;
+    // room for the records block beside the ones still being copied
+    const size_t rec_bytes = (front_elems + back_elems) * D;
+    f22_released(f22_copier_->take_finished());
+    const size_t cap = std::max<size_t>(heap_.largest_free() / 2, rec_bytes);
+    while (f22_inflight_bytes_ > 0 && f22_inflight_bytes_ + rec_bytes > cap) f22_released(f22_copier_->wait_released());
+    S* d_rec = heap_.alloc<S>(rec_bytes);
+    S* d_back = d_rec + front_elems;
+    meta_.clear();
+    gathers.clear();
+    evals.clear();
+    g_m = g_n = e_m = e_n = 0;
+    // the products in four passes, in order: X_RR -= T^T A_SR (A_SR still in
+    // X_SR's place); X_SR -= A_SS T; X_RS -= T^T A_SS, X_RN -= T^T K(S',
+    // F22_nb); X_RR -= X_RS T
+    VBatch<S> tn0, nn1, tn2, nn3;
+    for (size_t i = 0; i < nb; ++i) {
+        const Rec& c = rec[i];
+        if (c.r <= 0) continue;
+        const auto& w = works[at_works[i]];
+        const BoxState& bs = state_of(w.morton);
+        S* Tf = d_rec + c.front;
+        S* xsr = Tf + static_cast<size_t>(c.kp) * c.r;
+        S* xrs = xsr + static_cast<size_t>(c.kp) * c.r;
+        S* xrr = xrs + static_cast<size_t>(c.r) * c.kp;
+        S* xrn = xrr + static_cast<size_t>(c.r) * c.r;
+        S* ass = d_back + c.back;
+        S* ls = ass + static_cast<size_t>(c.kp) * c.kp;
+        check_cuda(cudaMemcpyAsync(Tf, f22_T_.at(w.morton), static_cast<size_t>(c.kp) * c.r * D, cudaMemcpyDeviceToDevice,
+                                   stream), "F22 step: T");
+        // the positions of S' and R22 in S_old, and their points
+        std::vector<int64_t> posS(w.pos11), posR;
+        for (int64_t j : w.skel22) posS.push_back(w.pos22[static_cast<size_t>(j)]);
+        for (int64_t j : w.red22) posR.push_back(w.pos22[static_cast<size_t>(j)]);
+        const IndexList lS{static_cast<int64_t>(meta_.append(ints(posS))), 0, nullptr};
+        const IndexList lR{static_cast<int64_t>(meta_.append(ints(posR))), 0, nullptr};
+        const IndexList pS{static_cast<int64_t>(meta_.append(pick(w.S_old, posS))), bs.slot, nullptr};
+        const IndexList pR{static_cast<int64_t>(meta_.append(pick(w.S_old, posR))), bs.slot, nullptr};
+        // the box's own blocks: A_SS, and A_SR / A_RS / A_RR in place of X_SR / X_RS / X_RR
+        const auto own = [&](S* out, int ldo, int m, int n, const IndexList& rl, const IndexList& cl, const IndexList& rp,
+                             const IndexList& cp) {
+            if (bs.schur.ptr != nullptr) {
+                add_gather(gathers, g_m, g_n, GatherItem{out, ldo, m, n, bs.schur.ptr, 1, bs.schur.rows, rl, cl});
+            } else {
+                add_eval(EvalItem{out, ldo, m, n, rp, cp});
             }
-            if (c.nt > 0) {
-                nn1.entries.push_back({ks, Tf, xnr, c.nt, c.r, c.kp, c.nt, c.kp, c.nt});
-                tn2.entries.push_back({Tf, ls, xrn, c.r, c.nt, c.kp, c.kp, c.kp, c.r});
+        };
+        own(ass, c.kp, c.kp, c.kp, lS, lS, pS, pS);
+        own(xsr, c.kp, c.kp, c.r, lS, lR, pS, pR);
+        own(xrs, c.r, c.r, c.kp, lR, lS, pR, pS);
+        own(xrr, c.r, c.r, c.r, lR, lR, pR, pR);
+        tn0.entries.push_back({Tf, xsr, xrr, c.r, c.r, c.kp, c.kp, c.kp, c.r});
+        nn1.entries.push_back({ass, Tf, xsr, c.kp, c.r, c.kp, c.kp, c.kp, c.kp});
+        tn2.entries.push_back({Tf, ass, xrs, c.r, c.kp, c.kp, c.kp, c.kp, c.r});
+        nn3.entries.push_back({xrs, Tf, xrr, c.r, c.r, c.kp, c.r, c.kp, c.r});
+        // the neighbours' F22 points: X_RN = K(b, nb)(R, F22_nb) - T^T K(b, nb)(S', F22_nb)
+        int col0 = 0;
+        for (size_t idx = 0; idx < w.near.size(); ++idx) {
+            const auto& nr = w.near[idx];
+            const int m = static_cast<int>(nr.q22.size());
+            if (m == 0) continue;
+            const IndexList lq{static_cast<int64_t>(meta_.append(ints(nr.q22))), 0, nullptr};
+            if (const DeviceMatrix* lb = block_of(w.morton, nr.morton)) {
+                add_gather(gathers, g_m, g_n,
+                           GatherItem{xrn + static_cast<size_t>(col0) * c.r, c.r, c.r, m, lb->ptr, 1, lb->rows, lR, lq});
+                add_gather(gathers, g_m, g_n,
+                           GatherItem{ls + static_cast<size_t>(col0) * c.kp, c.kp, c.kp, m, lb->ptr, 1, lb->rows, lS, lq});
+            } else {
+                const IndexList pq{static_cast<int64_t>(meta_.append(pick(*nr.S_old, nr.q22))), remote_points(nr.morton),
+                                   nullptr};
+                add_eval(EvalItem{xrn + static_cast<size_t>(col0) * c.r, c.r, c.r, m, pR, pq});
+                add_eval(EvalItem{ls + static_cast<size_t>(col0) * c.kp, c.kp, c.kp, m, pS, pq});
             }
+            col0 += m;
         }
+        if (c.nt > 0) tn2.entries.push_back({Tf, ls, xrn, c.r, c.nt, c.kp, c.kp, c.kp, c.r});
+    }
+    {
         const size_t off_g2 = meta_.append(gathers);
         const size_t off_e2 = meta_.append(evals);
         tn0.stage(meta_);
@@ -8245,62 +8348,195 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_chunk(std::vector<Par
         if (nn1.count() > 0) nn1.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
         if (tn2.count() > 0) tn2.gemm(md, MagmaTrans, MagmaNoTrans, -1.0, 1.0, queue);
         if (nn3.count() > 0) nn3.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
-        lap(3);
-        // ---- (7) the records to the host in the background (the copier's
-        // fixed pinned slots and stream) while the next chunk runs; the block
-        // goes once copied
-        cudaEvent_t ready = nullptr;
-        check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "cudaEventCreate");
-        check_cuda(cudaEventRecord(ready, stream), "cudaEventRecord");
-        HostCopier::Job job;
-        job.device = reinterpret_cast<char*>(d_rec);
-        job.bytes = front_elems * D;
-        job.ready = ready;
-        struct Shape { PartialRecord<DataType>* m; int rows, cols; };
-        auto shapes = std::make_shared<std::vector<Shape>>();
+    }
+    lap(3);
+    // ---- (7) the own records to the host in the background (the copier's
+    // fixed pinned slots and stream) while the next chunk runs; the block goes
+    // once copied
+    f22_submit_records(d_rec, front_elems, rec_bytes, [&](auto&& take) {
         for (size_t i = 0; i < nb; ++i) {
             const Rec& c = rec[i];
             if (c.r <= 0) continue;
-            auto& w = works[w0 + i];
-            size_t at = c.front * D;
-            auto take = [&](PartialRecord<DataType>& out, int rows, int cols_) {
-                const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols_) * D;
-                out = PartialRecord<DataType>{};
-                if (bytes > 0) {  // sized by the copier, not zero-filled: it writes all of it
-                    PartialRecord<DataType>* rec = &out;
-                    const size_t n = static_cast<size_t>(rows) * static_cast<size_t>(cols_);
-                    job.segments.push_back(HostCopier::Segment::into(
-                        [rec, n] {
-                            rec->data.resize(n);
-                            return reinterpret_cast<char*>(rec->data.data());
-                        },
-                        at, bytes));
-                }
-                shapes->push_back(Shape{&out, rows, cols_});
-                at += bytes;
-            };
-            take(w.T, c.kp, c.r);
-            take(w.X_SR, c.kp, c.r);
-            take(w.X_RS, c.r, c.kp);
-            take(w.X_RR, c.r, c.r);
-            take(w.X_NR, c.nt, c.r);
-            take(w.X_RN, c.r, c.nt);
+            auto& w = works[at_works[i]];
+            take(w.T, c.kp, c.r, c.front);
+            take(w.X_SR, c.kp, c.r, -1);
+            take(w.X_RS, c.r, c.kp, -1);
+            take(w.X_RR, c.r, c.r, -1);
+            take(w.X_RN, c.r, c.nt, -1);
         }
-        job.finalize = [shapes] {
-            for (const Shape& sh : *shapes) {
-                sh.m->rows = sh.rows;
-                sh.m->cols = sh.cols;
-                sh.m->lda = sh.rows;
-            }
-        };
-        f22_inflight_[reinterpret_cast<char*>(d_rec)] = rec_bytes;
-        f22_inflight_bytes_ += rec_bytes;
-        f22_copier_->submit(std::move(job));
-        eliminator_stats().bytes_down += static_cast<double>(front_elems * D);
-        f22_t_[6] += static_cast<double>(front_elems * D);
+    });
+}
+
+template<typename CoordType, typename DataType, typename KernelType>
+void LevelEliminator<CoordType, DataType, KernelType>::f22_record_chunk(std::vector<PartialF22Work<DataType>>& works,
+                                                                         const std::vector<size_t>& at_works) {
+    Context& ctx = Context::instance();
+    cudaStream_t stream = ctx.stream();
+    magma_queue_t queue = ctx.queue();
+    const size_t D = sizeof(S);
+    const size_t nb = at_works.size();
+    using clock = std::chrono::steady_clock;
+    const auto tick = clock::now();
+    auto ints = [](const std::vector<int64_t>& v) { return std::vector<int>(v.begin(), v.end()); };
+    auto pick = [](const std::vector<int64_t>& from, const std::vector<int64_t>& at) {
+        std::vector<int> out(at.size());
+        for (size_t i = 0; i < at.size(); ++i) out[i] = static_cast<int>(from[static_cast<size_t>(at[i])]);
+        return out;
+    };
+    auto block_of = [&](int64_t row, int64_t col) -> const DeviceMatrix* {  // K(row, col), or none
+        const auto it = edges_.find(dkey(row, col));
+        if (it == edges_.end()) return nullptr;
+        if (it->second.ptr == nullptr) throw std::runtime_error("LevelEliminator: F22 step: a packed near block");
+        return &it->second;
+    };
+    auto remote_points = [&](int64_t m) {
+        if (!is_local(m) && remote_index_.find(m) == remote_index_.end()) {
+            throw std::runtime_error("LevelEliminator: F22 step: neighbour " + std::to_string(m) +
+                                     " has neither a near block nor points on the device");
+        }
+        return state_of(m).slot;
+    };
+    // ---- X_NR = K(nb, b)(F22_nb, R) - K(nb, b)(F22_nb, S') T over the
+    // neighbours' F22 points that stay live.  Per box, at the front of the
+    // block (downloaded): X_NR (nt_nr x r); behind: K(nb, b)(live F22_nb, S')
+    // (nt_nr x kp).
+    struct Rec { int kp = 0, r = 0, nt_nr = 0; size_t front = 0, back = 0; };
+    std::vector<Rec> rec(nb);
+    size_t front_elems = 0, back_elems = 0;
+    for (size_t i = 0; i < nb; ++i) {
+        const auto& w = works[at_works[i]];
+        Rec& c = rec[i];
+        c.kp = static_cast<int>(w.pos11.size() + w.skel22.size());
+        c.r = static_cast<int>(w.red22.size());
+        for (const auto& nr : w.near) c.nt_nr += static_cast<int>(nr.q22_nr.size());
+        c.front = front_elems;
+        front_elems += static_cast<size_t>(c.nt_nr) * c.r;
+        c.back = back_elems;
+        back_elems += static_cast<size_t>(c.nt_nr) * c.kp;
     }
-    heap_.free(d_targets);
-    heap_.free(d_id);
+    // room for the block beside the ones still being copied
+    const size_t rec_bytes = (front_elems + back_elems) * D;
+    f22_released(f22_copier_->take_finished());
+    const size_t cap = std::max<size_t>(heap_.largest_free() / 2, rec_bytes);
+    while (f22_inflight_bytes_ > 0 && f22_inflight_bytes_ + rec_bytes > cap) f22_released(f22_copier_->wait_released());
+    S* d_rec = heap_.alloc<S>(rec_bytes);
+    S* d_back = d_rec + front_elems;
+    meta_.clear();
+    std::vector<GatherItem> gathers;
+    std::vector<EvalItem> evals;
+    int g_m = 0, g_n = 0, e_m = 0, e_n = 0;
+    auto add_gather = [&](const GatherItem& g) {
+        gathers.push_back(g);
+        g_m = std::max(g_m, g.m);
+        g_n = std::max(g_n, g.n);
+    };
+    auto add_eval = [&](const EvalItem& e) {
+        evals.push_back(e);
+        e_m = std::max(e_m, e.m);
+        e_n = std::max(e_n, e.n);
+    };
+    VBatch<S> nn;
+    for (size_t i = 0; i < nb; ++i) {
+        const Rec& c = rec[i];
+        const auto& w = works[at_works[i]];
+        const BoxState& bs = state_of(w.morton);
+        S* xnr = d_rec + c.front;
+        S* ks = d_back + c.back;
+        std::vector<int64_t> posS(w.pos11), posR;
+        for (int64_t j : w.skel22) posS.push_back(w.pos22[static_cast<size_t>(j)]);
+        for (int64_t j : w.red22) posR.push_back(w.pos22[static_cast<size_t>(j)]);
+        const IndexList lS{static_cast<int64_t>(meta_.append(ints(posS))), 0, nullptr};
+        const IndexList lR{static_cast<int64_t>(meta_.append(ints(posR))), 0, nullptr};
+        const IndexList pS{static_cast<int64_t>(meta_.append(pick(w.S_old, posS))), bs.slot, nullptr};
+        const IndexList pR{static_cast<int64_t>(meta_.append(pick(w.S_old, posR))), bs.slot, nullptr};
+        int row0 = 0;
+        for (size_t idx = 0; idx < w.near.size(); ++idx) {
+            const auto& nr = w.near[idx];
+            const int m = static_cast<int>(nr.q22_nr.size());
+            if (m == 0) continue;
+            const IndexList lq{static_cast<int64_t>(meta_.append(ints(nr.q22_nr))), 0, nullptr};
+            if (const DeviceMatrix* kb = block_of(nr.morton, w.morton)) {
+                add_gather(GatherItem{xnr + row0, c.nt_nr, m, c.r, kb->ptr, 1, kb->rows, lq, lR});
+                add_gather(GatherItem{ks + row0, c.nt_nr, m, c.kp, kb->ptr, 1, kb->rows, lq, lS});
+            } else {
+                const IndexList pq{static_cast<int64_t>(meta_.append(pick(*nr.S_old, nr.q22_nr))), remote_points(nr.morton),
+                                   nullptr};
+                add_eval(EvalItem{xnr + row0, c.nt_nr, m, c.r, pq, pR});
+                add_eval(EvalItem{ks + row0, c.nt_nr, m, c.kp, pq, pS});
+            }
+            row0 += m;
+        }
+        nn.entries.push_back({ks, f22_T_.at(w.morton), xnr, c.nt_nr, c.r, c.kp, c.nt_nr, c.kp, c.nt_nr});
+    }
+    const size_t off_g = meta_.append(gathers);
+    const size_t off_e = meta_.append(evals);
+    nn.stage(meta_);
+    char* md = meta_.upload(meta_device_, stream);
+    if (!evals.empty()) eval_blocks(evals, meta_, md, off_e, e_m, e_n, stream);
+    if (!gathers.empty()) {
+        launch_gather(reinterpret_cast<const GatherItem*>(md + off_g), static_cast<int>(gathers.size()), g_m, g_n, md, stream);
+    }
+    if (nn.count() > 0) nn.gemm(md, MagmaNoTrans, MagmaNoTrans, -1.0, 1.0, queue);
+    if (env::trace("phase")) {  // (the step's X_NR part, after a sync)
+        check_cuda(cudaStreamSynchronize(stream), "F22 step");
+        f22_t_[10] += std::chrono::duration<double>(clock::now() - tick).count();
+    }
+    f22_submit_records(d_rec, front_elems, rec_bytes, [&](auto&& take) {
+        for (size_t i = 0; i < nb; ++i) take(works[at_works[i]].X_NR, rec[i].nt_nr, rec[i].r, rec[i].front);
+    });
+}
+
+// The records at the front of a block (front_elems scalars, every record in
+// the order `each` takes them: take(record, rows, cols, offset), offset < 0 for
+// "right after the previous one") to the host in the background (the
+// copier's fixed pinned slots and stream) while the next chunks run; the
+// block (block_bytes) goes once copied.
+template<typename CoordType, typename DataType, typename KernelType>
+template<typename Each>
+void LevelEliminator<CoordType, DataType, KernelType>::f22_submit_records(S* d_rec, size_t front_elems, size_t block_bytes,
+                                                                           Each&& each) {
+    Context& ctx = Context::instance();
+    cudaStream_t stream = ctx.stream();
+    const size_t D = sizeof(S);
+    cudaEvent_t ready = nullptr;
+    check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "cudaEventCreate");
+    check_cuda(cudaEventRecord(ready, stream), "cudaEventRecord");
+    HostCopier::Job job;
+    job.device = reinterpret_cast<char*>(d_rec);
+    job.bytes = front_elems * D;
+    job.ready = ready;
+    struct Shape { PartialRecord<DataType>* m; int rows, cols; };
+    auto shapes = std::make_shared<std::vector<Shape>>();
+    size_t at = 0;
+    each([&](PartialRecord<DataType>& out, int rows, int cols_, int64_t offset) {
+        if (offset >= 0) at = static_cast<size_t>(offset) * D;
+        const size_t bytes = static_cast<size_t>(rows) * static_cast<size_t>(cols_) * D;
+        out = PartialRecord<DataType>{};
+        if (bytes > 0) {  // sized by the copier, not zero-filled: it writes all of it
+            PartialRecord<DataType>* record = &out;
+            const size_t n = static_cast<size_t>(rows) * static_cast<size_t>(cols_);
+            job.segments.push_back(HostCopier::Segment::into(
+                [record, n] {
+                    record->data.resize(n);
+                    return reinterpret_cast<char*>(record->data.data());
+                },
+                at, bytes));
+        }
+        shapes->push_back(Shape{&out, rows, cols_});
+        at += bytes;
+    });
+    job.finalize = [shapes] {
+        for (const Shape& sh : *shapes) {
+            sh.m->rows = sh.rows;
+            sh.m->cols = sh.cols;
+            sh.m->lda = sh.rows;
+        }
+    };
+    f22_inflight_[reinterpret_cast<char*>(d_rec)] = block_bytes;
+    f22_inflight_bytes_ += block_bytes;
+    f22_copier_->submit(std::move(job));
+    eliminator_stats().bytes_down += static_cast<double>(front_elems * D);
+    f22_t_[6] += static_cast<double>(front_elems * D);
 }
 
 // Point slots copied, in order, from the point table's scratch on: their

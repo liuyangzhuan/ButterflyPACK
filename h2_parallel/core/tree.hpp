@@ -1083,9 +1083,14 @@ struct BoxData {
         PartialRecord<DataType> X_RS;      ///< r22 x k'
         PartialRecord<DataType> X_SR;      ///< k' x r22
         PartialRecord<DataType> X_RN;      ///< r22 x (the neighbours' raw F22 points)
-        PartialRecord<DataType> X_NR;      ///< (the neighbours' raw F22 points) x r22
-        std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot
+        PartialRecord<DataType> X_NR;      ///< (the neighbours' raw F22 points that stay live) x r22
+        std::vector<int64_t> neighbor_f22_counts;             ///< per one_hop slot: X_RN's columns
         std::vector<std::vector<int64_t>> neighbor_f22_slots; ///< per one_hop slot: those points as the neighbour's box slots
+        /// per one_hop slot: X_NR's rows, the neighbour's raw F22 points it does
+        /// not sparsify at this level (its R22 rows are not kept: those
+        /// couplings are its X_RN's), and those points as its box slots
+        std::vector<int64_t> neighbor_nr_counts;
+        std::vector<std::vector<int64_t>> neighbor_nr_slots;
         bool released = false;
     } f22;
     std::vector<int64_t> two_hop; ///< Morton indices of 2-hop neighbors
@@ -1632,9 +1637,10 @@ const std::vector<int64_t>& factor_skeleton(const BoxData<CoordType, DataType>& 
 
 /**
  * H2_partial: one box's F22 step as the device takes it
- * (unstructured/partial.hpp plans the box, LevelEliminator::f22_boxes
- * returns the step's ID and records).  Positions are within the box's live
- * slots before the step (S_old), a neighbour's within its own.
+ * (unstructured/partial.hpp plans the box; LevelEliminator::f22_ids returns
+ * the step's ID, f22_records, once the host has set q22_nr from the kept
+ * sets, its records).  Positions are within the box's live slots before the
+ * step (S_old), a neighbour's within its own.
  */
 /// H2_partial: the boxes the F22 step sparsified (this rank's and the copies'),
 /// by Morton index: the old live set's size and the kept positions in it
@@ -1649,13 +1655,14 @@ struct PartialF22Work {
         int64_t morton = -1;
         const std::vector<int64_t>* S_old = nullptr;  ///< the neighbour's live slots before the step
         std::vector<int64_t> q11, q22;                ///< its F11 / F22 positions
+        std::vector<int64_t> q22_nr;                  ///< X_NR's rows: the F22 positions it keeps live
     };
     std::vector<Near> near;             ///< the box's one_hop order
     // ---- results
-    bool done = false;                  ///< the device took the box
+    bool done = false;                  ///< the device took the box (its ID)
     std::vector<int64_t> skel22, red22; ///< the ID's F22 skeleton and redundant columns (indices of pos22), sorted
     PartialRecord<DataType> T;          ///< k' x r22 over S' = S11, S22 (zero rows on S11)
-    PartialRecord<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;
+    PartialRecord<DataType> X_SR, X_RS, X_RR, X_NR, X_RN;  ///< X_NR over the near's q22_nr rows
 };
 
 /**
