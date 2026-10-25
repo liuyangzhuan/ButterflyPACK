@@ -339,7 +339,26 @@ int main(int argc, char** argv) {
       double* dy = heap.alloc<double>(ygpu.size() * sizeof(double), fmm::gpu::ResidentKind::Matvec);
       cudaMemcpy(dx, x.data(), x.size() * sizeof(double), cudaMemcpyHostToDevice);
       cudaMemset(dy, 0, ygpu.size() * sizeof(double));
-      const double fl = bf::gpu::sweep(dev, plan, nrhs, dx, nin, dy, nout, 1.0, 0.0, scratch);
+      // argv[4] != 0: go through the library's device-pointer entry point
+      // (c_bf_gpu_mult), which also exercises the resident store, the cached
+      // sweep plan and the bridge closures the wrapper builds.  Otherwise call
+      // the sweep directly, as before.
+      double fl = 0.0;
+      if (argc > 4 && std::atoi(argv[4]) != 0) {
+        int nrhs_c2 = nrhs, ldx = nin, ldy = nout, gi = 1;
+        double al = 1.0, be = 0.0;
+        char opc2 = op;
+        d_c_bf_gpu_mult(bf, ptree2, &opc2, &nrhs_c2, dx, &ldx, dy, &ldy, &al, &be, &fl, &gi);
+        if (gi != 0) {
+          std::printf("  [rank %d] op=%c use=%d: c_bf_gpu_mult declined (info=%d)\n", rank, op, c, gi);
+          std::fflush(stdout);
+          fails++;
+          heap.free(dy); heap.free(dx);
+          continue;
+        }
+      } else {
+        fl = bf::gpu::sweep(dev, plan, nrhs, dx, nin, dy, nout, 1.0, 0.0, scratch);
+      }
       cudaDeviceSynchronize();
       cudaMemcpy(ygpu.data(), dy, ygpu.size() * sizeof(double), cudaMemcpyDeviceToHost);
       heap.free(dy); heap.free(dx);

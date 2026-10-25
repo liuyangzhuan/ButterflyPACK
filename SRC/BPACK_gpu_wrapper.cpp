@@ -37,7 +37,30 @@
 // the butterfly backend is real double for now (bf_gpu's DataType)
 #define BPACK_BF_GPU_ENABLED 1
 #include "bf_gpu/bf_id.hpp"
+#include "bf_gpu/bf_store.hpp"
 #endif
+#endif
+
+#ifdef BPACK_BF_GPU_ENABLED
+extern "C" {
+void c_bf_get_layout(void* bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc,
+                     int* N_loc, int* nlevels, int* nblocks);
+void c_bf_get_blocks(void* bf, int* nr, int* nc, int* idx_r, int* idx_c, int* inc_r, int* inc_c,
+                     int* rows, int* cols, void** ptrs);
+void c_bf_get_vec_ranges(void* bf, void* ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c,
+                         int* inc_c, int* nc);
+void c_bf_get_mvp_vec_ranges(void* bf, void* ptree, char chara, int* idx_r, int* inc_r, int* nr,
+                             int* idx_c, int* inc_c, int* nc);
+void c_bf_get_sub_head(void* bf, void* ptree, int* is_head, int* comm, int* nproc);
+void c_bf_get_exchange_dest(void* bf, void* ptree, int level, char mode, char collect, int nr, int nc,
+                            int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_dest(void* bf, void* ptree, int level, char mode_new, int nr, int nc, int idx_r,
+                           int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_range(void* bf, void* ptree, int level, char mode_new, int* idx_r, int* inc_r,
+                            int* nr, int* idx_c, int* inc_c, int* nc);
+void c_bf_get_block_group(void* bf, void* ptree, int level, int index_i, int index_j, char mode,
+                          int* nproc, int* comm, int* is_head);
+}
 #endif
 
 namespace {
@@ -1164,6 +1187,104 @@ void c_bpack_hodlr_gpu_baca_end(void* gpu, double* out) {
 #endif
 }
 
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// Make a butterfly resident: upload its factors, read the grids the sweep
+// needs, and wire the closures through which bf_gpu asks the Fortran for its
+// distribution decisions (bf_ranges.hpp explains why they are closures).
+// Returns nullptr when the device has no room for the factors.
+bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
+  bf::gpu::BfFingerprint print;
+  c_bf_get_layout(bf, &print.level_butterfly, &print.level_half, &print.M, &print.N, &print.M_loc,
+                  &print.N_loc, &print.nlevels, &print.nblocks);
+  if (bf::gpu::BfResident* hit = bf::gpu::bf_store_find(bf, print)) return hit;
+  if (print.nlevels <= 0 || print.nblocks <= 0) return nullptr;
+
+  // the factor layout and the host pointers of every block
+  const int nlev = print.nlevels, nblk = print.nblocks;
+  std::vector<int> nr(nlev), nc(nlev), ir(nlev), ic(nlev), er(nlev), ec(nlev);
+  std::vector<int> brows(nblk), bcols(nblk);
+  std::vector<void*> bptr(nblk);
+  c_bf_get_blocks(bf, nr.data(), nc.data(), ir.data(), ic.data(), er.data(), ec.data(), brows.data(),
+                  bcols.data(), bptr.data());
+
+  std::vector<bf::gpu::LevelDesc> lv(nlev);
+  std::vector<std::vector<const double*>> up(nlev);
+  std::vector<std::vector<std::pair<int, int>>> shp(nlev);
+  int at = 0;
+  for (int l = 0; l < nlev; ++l) {
+    lv[l].nr = nr[l]; lv[l].nc = nc[l];
+    lv[l].idx_r = ir[l]; lv[l].idx_c = ic[l];
+    lv[l].inc_r = er[l]; lv[l].inc_c = ec[l];
+    const int want = nr[l] * nc[l];
+    for (int b = 0; b < want; ++b) {
+      up[l].push_back(reinterpret_cast<const double*>(bptr[at + b]));
+      shp[l].push_back({brows[at + b], bcols[at + b]});
+    }
+    at += want;
+  }
+
+  bf::gpu::BfResident& r = bf::gpu::bf_store_add(bf, print);
+  if (!bf::gpu::upload(lv, up, shp, print.level_butterfly, print.level_half, print.M, print.N,
+                       print.M_loc, print.N_loc, r.dev)) {
+    bf::gpu::bf_store_release(bf);     // no room: the caller stays on the host
+    return nullptr;
+  }
+
+  auto ranges = [&](char which, int levels) {
+    bf::gpu::SweepRanges g;
+    g.resize(levels);
+    if (which == 'R' || which == 'C') {
+      c_bf_get_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                          g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    } else {
+      c_bf_get_mvp_vec_ranges(bf, ptree, which, g.idx_r.data(), g.inc_r.data(), g.nr.data(),
+                              g.idx_c.data(), g.inc_c.data(), g.nc.data());
+    }
+    return g;
+  };
+  int is_head = 0, comm_f = 0, nproc = 1, myid = 0;
+  c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+  MPI_Comm comm = MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f));
+  if (nproc > 1) MPI_Comm_rank(comm, &myid);
+  const int L = print.level_butterfly;
+  bf::gpu::set_ranges(r.dev, ranges('R', L + 2), ranges('C', L + 2), ranges('N', L + 3),
+                      ranges('T', L + 3), nproc, myid);
+
+  r.bridge.comm = comm;
+  r.bridge.nproc = nproc;
+  r.bridge.exchange_dest = [bf, ptree](int level, char mode, char collect,
+                                       const bf::gpu::VecLevel& src, int* dest) {
+    c_bf_get_exchange_dest(bf, ptree, level, mode, collect, src.nr, src.nc, src.idx_r, src.inc_r,
+                           src.idx_c, src.inc_c, dest);
+  };
+  r.bridge.all2all_dest = [bf, ptree](int level, char mode_new, const bf::gpu::VecLevel& src,
+                                      int* dest) {
+    c_bf_get_all2all_dest(bf, ptree, level, mode_new, src.nr, src.nc, src.idx_r, src.inc_r,
+                          src.idx_c, src.inc_c, dest);
+  };
+  r.bridge.all2all_range = [bf, ptree](int level, char mode_new) {
+    bf::gpu::Range2 g;
+    c_bf_get_all2all_range(bf, ptree, level, mode_new, &g.idx_r, &g.inc_r, &g.nr, &g.idx_c,
+                           &g.inc_c, &g.nc);
+    return g;
+  };
+  r.bridge.block_group = [bf, ptree](int level, int index_i, int index_j, char mode) {
+    bf::gpu::BfBridge::Group g;
+    int np = 1, cf = 0, head = 0;
+    c_bf_get_block_group(bf, ptree, level, index_i, index_j, mode, &np, &cf, &head);
+    g.nproc = np;
+    g.comm = MPI_Comm_f2c(static_cast<MPI_Fint>(cf));
+    g.is_head = head != 0;
+    return g;
+  };
+  return &r;
+}
+
+}  // namespace
+#endif
+
 // The rank-reveal of one level of a butterfly construction, on the device
 // (GPU_BACKEND/bf_gpu).  BF_compress_NlogN does it per block under OpenMP -
 // a truncated QRCP, Q^H applied to the panel, a triangular solve - and the
@@ -1235,6 +1356,125 @@ void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* 
   (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
   (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
   *info = 1;   // no butterfly backend in this precision: the caller stays on the host
+#endif
+}
+
+// A butterfly matvec on device-resident vectors (GPU_BACKEND/bf_gpu):
+// y = alpha op(bf) x + beta y, with x and y already in device memory.  This
+// is the device-pointer overload STRUMPACK's Schur sampling needs: it applies
+// F12, then F11's inverse, then F21, and with host intermediates every stage
+// pays a transfer - which is what made enabling the GPU for an H2 front a
+// regression before this existed.
+//
+// The factors and the sweep plans stay resident between calls (bf_store.hpp),
+// so the tens of thousands of samples per front upload nothing and build no
+// plan.  info 1 means the device declined - no room for the factors, or a
+// case the sweep does not handle yet, such as the closing factor's sub-group
+// spanning several ranks - and the caller runs its host path instead.
+void c_bf_gpu_mult(void* bf, void* ptree, const char* op, const int* nrhs, const void* x,
+                   const int* ldx, void* y, const int* ldy, const double* alpha,
+                   const double* beta, double* flops, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  if (flops != nullptr) *flops = 0.0;
+  try {
+    bf::gpu::BfResident* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    const char o = (*op == 'N' || *op == 'n') ? 'N' : 'T';
+    bf::gpu::SweepPlan& plan = r->plan(o);
+    if (!plan.built) {
+      // two small collectives per level, once per block and orientation
+      bf::gpu::build_sweep_plan(r->bridge, r->dev, o, *nrhs, plan);
+    }
+    const double f = bf::gpu::sweep(r->dev, plan, *nrhs, static_cast<const double*>(x), *ldx,
+                                    static_cast<double*>(y), *ldy, *alpha, *beta, r->scratch);
+    if (flops != nullptr) *flops = f;
+    *info = 0;
+  } catch (const std::exception&) {
+    // a case the sweep refuses: leave info 1 and let the caller use the host
+    *info = 1;
+  }
+#else
+  (void)bf; (void)ptree; (void)op; (void)nrhs; (void)x; (void)ldx; (void)y; (void)ldy;
+  (void)alpha; (void)beta;
+  if (flops != nullptr) *flops = 0.0;
+  *info = 1;
+#endif
+}
+
+// Drop what a butterfly holds on the device.  The caller must do this before
+// the block is freed: the store is keyed on its address, and although every
+// lookup re-checks the block's layout, releasing is what keeps the device
+// memory from being held by a block that no longer exists.
+void c_bf_gpu_release(void* bf) {
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    bf::gpu::bf_store_release(bf);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_release", e.what());
+  }
+#else
+  (void)bf;
+#endif
+}
+
+// Device memory for a caller that holds vectors across several backend calls
+// (STRUMPACK's Schur sampling chain: F12's product, F11's solve, F21's
+// product, without a host hop between them).
+//
+// It comes from the backend's own arena rather than a cudaMalloc of the
+// caller's, because the arena takes most of what the device had free when it
+// was reserved (BPACK_GPU_HEAP_FRACTION, 0.85 by default): a separate
+// allocation would be competing with it for what little is left, and would
+// fail unpredictably.  `elements` counts matrix entries, not bytes, so the
+// caller does not need to know the precision.  ptr is null when the arena has
+// no room, and the caller keeps its host path.
+void c_bpack_gpu_workspace_alloc(const int64_t* elements, void** ptr) {
+#ifdef BPACK_GPU_ENABLED
+  *ptr = nullptr;
+  try {
+    if (*elements <= 0) return;
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    *ptr = heap.try_alloc(static_cast<size_t>(*elements) * sizeof(Scalar),
+                          fmm::gpu::ResidentKind::Matvec);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_alloc", e.what());
+  }
+#else
+  (void)elements;
+  *ptr = nullptr;
+#endif
+}
+
+void c_bpack_gpu_workspace_free(void* ptr) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    if (ptr != nullptr) fmm::gpu::DeviceHeap::instance().free(reinterpret_cast<char*>(ptr));
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_free", e.what());
+  }
+#else
+  (void)ptr;
+#endif
+}
+
+// Copy between the caller's host memory and such a workspace.  `elements`
+// counts matrix entries; `to_device` selects the direction.
+void c_bpack_gpu_workspace_copy(void* device, void* host, const int64_t* elements,
+                                const int* to_device) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    if (device == nullptr || host == nullptr || *elements <= 0) return;
+    const size_t bytes = static_cast<size_t>(*elements) * sizeof(Scalar);
+    fmm::gpu::check_cuda(*to_device ? cudaMemcpy(device, host, bytes, cudaMemcpyHostToDevice)
+                                    : cudaMemcpy(host, device, bytes, cudaMemcpyDeviceToHost),
+                         "c_bpack_gpu_workspace_copy");
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_gpu_workspace_copy", e.what());
+  }
+#else
+  (void)device; (void)host; (void)elements; (void)to_device;
 #endif
 }
 
