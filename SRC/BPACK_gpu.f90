@@ -512,6 +512,14 @@ contains
    !> BF_gpu_construct instead, see BF_gpu_construct_ok), and the level's
    !> entries arrive in one contiguous buffer - which they do not when there
    !> are masks, so a masked block stays on the host.
+   !>
+   !> EITHER option asks for it, because a butterfly block reaches here from
+   !> two places: coupling two HODLRs, where it inherits HODLR_use_gpu, or as
+   !> the F12/F21 of an H2 front, where the format is 7 and the caller sets
+   !> H2_use_gpu instead.  A STRUMPACK H2 front does the latter and
+   !> deliberately leaves HODLR_use_gpu at 0, because HODLR_gpu_check_options
+   !> requires format 1 and LRlevel 0 - neither true of an H2 with butterfly
+   !> couplings - so reading HODLR_use_gpu alone would never fire there.
    logical function BF_gpu_rankreveal_ok(blocks, option, Nboundall)
       implicit none
       type(matrixblock)::blocks
@@ -519,7 +527,8 @@ contains
       integer::Nboundall
 
       BF_gpu_rankreveal_ok = .false.
-      if (option%HODLR_use_gpu <= 0 .or. blocks%level_butterfly == 0) return
+      if (option%HODLR_use_gpu <= 0 .and. option%H2_use_gpu <= 0) return
+      if (blocks%level_butterfly == 0) return
       if (Nboundall /= 0) return
       if (.not. BPACK_gpu_available()) return
       BF_gpu_rankreveal_ok = .true.
@@ -529,13 +538,15 @@ contains
    !> the options ask for the GPU, this library has the backend, and the
    !> block is a butterfly (the sweep is not validated on a low-rank block).
    !> The device copy of the factors is made at the first call and kept.
+   !> Either option asks for it, as for BF_gpu_rankreveal_ok: a STRUMPACK H2
+   !> front sets H2_use_gpu and leaves HODLR_use_gpu at 0.
    logical function BF_gpu_mult_ok(blocks, option)
       implicit none
       type(matrixblock)::blocks
       type(Hoption)::option
 
       BF_gpu_mult_ok = .false.
-      if (option%HODLR_use_gpu <= 0) return
+      if (option%HODLR_use_gpu <= 0 .and. option%H2_use_gpu <= 0) return
       if (blocks%level_butterfly == 0) return
       if (.not. BPACK_gpu_available()) return
       BF_gpu_mult_ok = .true.
