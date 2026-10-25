@@ -88,13 +88,35 @@ __device__ __forceinline__ T load(const T* p) {
     }
 }
 
+// The loops over a column below load kAhead rows a lane ahead of their sums
+// and stores, which keep the order of the one-row-at-a-time loop and so its
+// result bit for bit: a warp otherwise waited on one load at a time (the
+// cooperative QRCP of level 2 at 64^3 stalled 60% of its cycles there, at
+// 37% of the DRAM bandwidth; with 4 rows ahead 52%, its launches 27% faster,
+// and 8 gained nothing more).
+constexpr int kAhead = 4;
+
+// x[u] = col[r + 32 u], u < kAhead
+template<bool kUncached, typename T>
+__device__ __forceinline__ void load_ahead(const T* col, int r, T (&x)[kAhead]) {
+#pragma unroll
+    for (int u = 0; u < kAhead; ++u) x[u] = load<kUncached>(col + r + 32 * u);
+}
+
 // Householder reflector of col[i:m) by one warp (LAPACK dlarfg): col[i] =
 // beta, col[i+1:m) = v; returns tau and beta.
 template<bool kUncached>
 __device__ __forceinline__ void make_reflector(double* col, int i, int m, int lane, double& tau, double& beta) {
     const double alpha = load<kUncached>(col + i);
     double s = 0.0;
-    for (int r = i + 1 + lane; r < m; r += 32) {
+    int r = i + 1 + lane;
+    for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+        double x[kAhead];
+        load_ahead<kUncached>(col, r, x);
+#pragma unroll
+        for (int u = 0; u < kAhead; ++u) s += x[u] * x[u];
+    }
+    for (; r < m; r += 32) {
         const double x = load<kUncached>(col + r);
         s += x * x;
     }
@@ -105,7 +127,14 @@ __device__ __forceinline__ void make_reflector(double* col, int i, int m, int la
         beta = -copysign(sqrt(alpha * alpha + xnorm * xnorm), alpha);
         tau = (beta - alpha) / beta;
         const double scal = 1.0 / (alpha - beta);
-        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
+        r = i + 1 + lane;
+        for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+            double x[kAhead];
+            load_ahead<kUncached>(col, r, x);
+#pragma unroll
+            for (int u = 0; u < kAhead; ++u) col[r + 32 * u] = x[u] * scal;
+        }
+        for (; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
         __syncwarp();
         if (lane == 0) col[i] = beta;
     }
@@ -116,7 +145,14 @@ template<bool kUncached>
 __device__ __forceinline__ void make_reflector(dcomplex* col, int i, int m, int lane, dcomplex& tau, double& beta) {
     const dcomplex alpha = load<kUncached>(col + i);
     double s = 0.0;
-    for (int r = i + 1 + lane; r < m; r += 32) s += abs2(load<kUncached>(col + r));
+    int r = i + 1 + lane;
+    for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+        dcomplex x[kAhead];
+        load_ahead<kUncached>(col, r, x);
+#pragma unroll
+        for (int u = 0; u < kAhead; ++u) s += abs2(x[u]);
+    }
+    for (; r < m; r += 32) s += abs2(load<kUncached>(col + r));
     const double xnorm = sqrt(warp_sum(s));
     tau = dcomplex(0.0);
     beta = alpha.re;
@@ -124,22 +160,60 @@ __device__ __forceinline__ void make_reflector(dcomplex* col, int i, int m, int 
         beta = -copysign(norm3d(alpha.re, alpha.im, xnorm), alpha.re);  // dlapy3
         tau = dcomplex((beta - alpha.re) / beta, -alpha.im / beta);
         const dcomplex scal = dcomplex(1.0) / (alpha - dcomplex(beta));
-        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
+        r = i + 1 + lane;
+        for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+            dcomplex x[kAhead];
+            load_ahead<kUncached>(col, r, x);
+#pragma unroll
+            for (int u = 0; u < kAhead; ++u) col[r + 32 * u] = x[u] * scal;
+        }
+        for (; r < m; r += 32) col[r] = load<kUncached>(col + r) * scal;
         __syncwarp();
         if (lane == 0) col[i] = dcomplex(beta);
     }
 }
 
-// H^H = I - conj(tau) v v^H applied to col by one warp (v_i = 1 implicit).
-template<bool kUncached, typename T>
-__device__ __forceinline__ void apply_reflector(const T* v, T tau, T* col, int i, int m, int lane) {
+// H^H = I - conj(tau) v v^H applied to col by one warp (v_i = 1 implicit),
+// v's rows from vat(r).
+template<bool kUncached, typename T, typename V>
+__device__ __forceinline__ void apply_reflector_with(V&& vat, T tau, T* col, int i, int m, int lane) {
     T s = lane == 0 ? load<kUncached>(col + i) : T(0.0);
-    for (int r = i + 1 + lane; r < m; r += 32) s += conj(load<kUncached>(v + r)) * load<kUncached>(col + r);
+    int r = i + 1 + lane;
+    for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+        T c[kAhead], v[kAhead];
+        load_ahead<kUncached>(col, r, c);
+#pragma unroll
+        for (int u = 0; u < kAhead; ++u) v[u] = vat(r + 32 * u);
+#pragma unroll
+        for (int u = 0; u < kAhead; ++u) s += conj(v[u]) * c[u];
+    }
+    for (; r < m; r += 32) s += conj(vat(r)) * load<kUncached>(col + r);
     const T w = conj(tau) * warp_sum(s);
     if (w != T(0.0)) {
         if (lane == 0) col[i] = load<kUncached>(col + i) - w;
-        for (int r = i + 1 + lane; r < m; r += 32) col[r] = load<kUncached>(col + r) - w * load<kUncached>(v + r);
+        r = i + 1 + lane;
+        for (; r + 32 * (kAhead - 1) < m; r += 32 * kAhead) {
+            T c[kAhead], v[kAhead];
+            load_ahead<kUncached>(col, r, c);
+#pragma unroll
+            for (int u = 0; u < kAhead; ++u) v[u] = vat(r + 32 * u);
+#pragma unroll
+            for (int u = 0; u < kAhead; ++u) col[r + 32 * u] = c[u] - w * v[u];
+        }
+        for (; r < m; r += 32) col[r] = load<kUncached>(col + r) - w * vat(r);
     }
+}
+template<bool kUncached, typename T>
+__device__ __forceinline__ void apply_reflector(const T* v, T tau, T* col, int i, int m, int lane) {
+    apply_reflector_with<kUncached>([&](int r) { return load<kUncached>(v + r); }, tau, col, i, m, lane);
+}
+// ... with v's rows i+1 .. i+staged in v_sh (the block's copy, the rest
+// from v): the same values, so the same result bit for bit.
+template<typename T>
+__device__ __forceinline__ void apply_reflector_staged(const T* v_sh, int staged, const T* v, T tau, T* col, int i, int m,
+                                                       int lane) {
+    const int split = i + 1 + staged;
+    apply_reflector_with<true>([&](int r) { return r < split ? v_sh[r - i - 1] : ldg2(v + r); }, tau, col, i, m, lane);
 }
 
 // LAPACK dlaqp2's partial norm downdate of a trailing column after step i.
@@ -403,6 +477,11 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
     namespace cg = cooperative_groups;
     cg::grid_group grid = cg::this_grid();
     constexpr int kWarps = kCoopThreads / 32;
+    // the step's reflector, staged once a block: every owned column reads it
+    // twice, and otherwise from L2 (the loads bypass L1)
+    constexpr int kStaged = (40 << 10) / static_cast<int>(sizeof(T));
+    __shared__ double v_raw[(40 << 10) / sizeof(double)];
+    T* v_sh = reinterpret_cast<T*>(v_raw);
     __shared__ double scratch[kMaxWarps];
     __shared__ int iscratch[kMaxWarps];
     const int box = blockIdx.x / cpb, part = blockIdx.x % cpb;
@@ -581,11 +660,14 @@ qrcp_coop_kernel(const QrcpItemT<T>* items, int count, int cpb, int max_n, doubl
         // ---- the reflector on the owned trailing columns, norm downdates
         const T tau = get_tau<T>(box_d);
         const T* v = A + static_cast<int64_t>(i) * lda;
+        const int staged = min(m - i - 1, kStaged);
+        for (int r = tid; r < staged; r += kCoopThreads) v_sh[r] = ldg2(v + i + 1 + r);
+        __syncthreads();
         for (int t = first_owned(i + 1, part, stride) + warp;; t += kWarps) {
             const int j = part + stride * t;
             if (j >= n) break;
             T* col = A + static_cast<int64_t>(j) * lda;
-            apply_reflector<true>(v, tau, col, i, m, lane);
+            apply_reflector_staged(v_sh, staged, v, tau, col, i, m, lane);
             __syncwarp();
             downdate_norm<true>(col, i, m, lane, tol3z, vn1 + j, vn2 + j);
             __syncwarp();

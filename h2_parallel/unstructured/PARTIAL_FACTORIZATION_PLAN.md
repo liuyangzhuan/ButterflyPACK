@@ -362,7 +362,23 @@ point set and on a plain cube split, dense checks at small N.
     1 to 8 ranks.  Dropped on the way: all IDs, then all records (13.1 s: the
     records' copies had no IDs left to overlap with), and huge pages or 32
     threads for the records' copy (no gain; slower).
-- Next: (a) the blocked QRCP (level 2's IDs, 2.0 s of its 3.5); P4 (release
-  API, `H2_compress_factors` on the records), P5 (the STRUMPACK hand-off).
+  - **(a), first part** done 2026-10-24: Nsight Compute on level 2's
+    cooperative QRCP launches (64^3) showed them latency-bound, not
+    bandwidth-bound: 37% of the DRAM bandwidth, no eligible warp 92% of the
+    cycles, 60% of the stalls on a global load - a warp's loop over a column
+    kept one load in flight.  The column loops (the reflector's norm and
+    scaling, its application) now load four rows a lane ahead of their sums,
+    in the same order (the same results bit for bit; the batch test passes),
+    and the cooperative kernel stages the step's reflector in shared memory.
+    64^3 on one GPU, interleaved on one node: 10.44 / 10.56 s -> 9.20 /
+    9.45 s; targets and ID 1.96 -> 1.35 s at level 2, 1.33 -> 0.86 s at
+    level 3; level 2's launches at 52% of the DRAM bandwidth.  Eight rows
+    ahead gained nothing more, four blocks a multiprocessor 0.06 s.  Tried on
+    the copier and dropped: a second thread setting up the records' pages
+    ahead of the stores (no net gain: their D2H then waits for it, and the
+    tail - X_NR after the publish - stays).
+- Next: (a) the blocked QRCP (dlaqps-style: one read of the trailing
+  matrix a step instead of a read and a write); P4 (release API,
+  `H2_compress_factors` on the records), P5 (the STRUMPACK hand-off).
   Later: the records on the device (with compression, or several cards) for
   a device CB product and partial solves.
