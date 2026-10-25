@@ -36,7 +36,11 @@
 // The receive buffers come from DeviceHeap::exchange_arena(), which exists
 // because CUDA-aware MPI registers the whole allocation holding a buffer at
 // a cost that grows with it; without GPU-aware MPI the buffers are staged
-// through pinned host memory.
+// through pinned host memory.  With NCCL (TPL_NCCL_LIBRARIES) the messages go
+// through it instead, on the stream: measured on one Perlmutter node, Cray
+// MPICH's GPU path turned each message into a pipeline of small copies and
+// event polls (about 6,500 copies and 19,000 polls for one 256-column matvec
+// of a 262144^2 butterfly on 4 GPUs, ~7 GB/s over NVLink).
 //
 // The plan is built once per (block, level, mode, collect) and reused: what
 // depends on nrhs is only the per-peer sizes, which scale, so a matvec
@@ -95,6 +99,11 @@ struct ExchangePlan {
 
     std::vector<int64_t> send_displ, recv_displ;  // host, nproc + 1
     int64_t send_total = 0, recv_total = 0;
+
+    // the group's NCCL communicator (an ncclComm_t) when the library has
+    // NCCL: the exchange then runs on the stream, with no host
+    // synchronization, instead of through MPI.  Shared, never freed here.
+    void* nccl = nullptr;
 
     bool empty() const { return peers.empty(); }
 

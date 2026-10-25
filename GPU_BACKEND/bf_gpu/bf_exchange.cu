@@ -5,8 +5,14 @@
 #include "bf_exchange.hpp"
 
 #include <algorithm>
+#include <map>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+
+#ifdef BPACK_HAVE_NCCL
+#include <nccl.h>
+#endif
 
 namespace bf {
 namespace gpu {
@@ -61,6 +67,52 @@ __global__ void __launch_bounds__(kThreads) unpack_kernel(DataType* level, const
     const int64_t n = static_cast<int64_t>(r.rows) * nrhs;
     for (int64_t i = threadIdx.x; i < n; i += blockDim.x) dst[i] += in[kHeader + i];
 }
+
+#ifdef BPACK_HAVE_NCCL
+// One NCCL communicator per group of ranks, shared by every butterfly on the
+// group and kept for the process: creating one is a collective over the group
+// (an id from its first rank, then NCCL's own setup), so it is done once,
+// when the first plan on the group is built - itself a collective.  A group
+// is known by its members' ranks in MPI_COMM_WORLD, in its own order, so two
+// communicators over the same ranks share one.  Null when NCCL failed on any
+// rank: the group then stays on MPI.
+ncclComm_t nccl_comm_of(MPI_Comm comm) {
+    static auto* comms = new std::map<std::vector<int>, ncclComm_t>;  // never freed, as fmm::gpu::pinned_pool
+    int nproc = 1, myid = 0;
+    MPI_Comm_size(comm, &nproc);
+    MPI_Comm_rank(comm, &myid);
+    MPI_Group group, world;
+    MPI_Comm_group(comm, &group);
+    MPI_Comm_group(MPI_COMM_WORLD, &world);
+    std::vector<int> ranks(static_cast<size_t>(nproc)), key(ranks.size());
+    std::iota(ranks.begin(), ranks.end(), 0);
+    MPI_Group_translate_ranks(group, nproc, ranks.data(), world, key.data());
+    MPI_Group_free(&group);
+    MPI_Group_free(&world);
+    const auto it = comms->find(key);
+    if (it != comms->end()) return it->second;
+    ncclUniqueId id;
+    if (myid == 0 && ncclGetUniqueId(&id) != ncclSuccess) {
+        throw std::runtime_error("bf::gpu: ncclGetUniqueId failed");
+    }
+    MPI_Bcast(&id, static_cast<int>(sizeof(id)), MPI_BYTE, 0, comm);
+    ncclComm_t nc = nullptr;
+    int ok = ncclCommInitRank(&nc, nproc, id, myid) == ncclSuccess ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, comm);
+    if (!ok) {
+        if (nc != nullptr) ncclCommDestroy(nc);
+        nc = nullptr;
+    }
+    (*comms)[key] = nc;
+    return nc;
+}
+
+void check_nccl(ncclResult_t status, const char* what) {
+    if (status != ncclSuccess) {
+        throw std::runtime_error(std::string("NCCL error in ") + what + ": " + ncclGetErrorString(status));
+    }
+}
+#endif
 
 template<typename T>
 T* device_copy(const std::vector<T>& host) {
@@ -218,6 +270,9 @@ ExchangePlan assemble(MPI_Comm comm, int nproc, const std::vector<int>& dest, co
     }
     plan.d_send = device_copy(plan.send);
     plan.d_recv = device_copy(plan.recv);
+#ifdef BPACK_HAVE_NCCL
+    plan.nccl = static_cast<void*>(nccl_comm_of(comm));
+#endif
     return plan;
 }
 
@@ -308,13 +363,49 @@ void exchange_level(ExchangePlan& plan, const VecLevel& src, VecLevel& dst, int 
         plan.displ_nrhs = nrhs;
     }
 
-    // Message buffers: in the exchange arena with GPU-aware MPI (registered
-    // once; sent and received in device memory), else from the heap and
-    // staged through pinned host memory.
     DeviceHeap& arena = DeviceHeap::exchange_arena();
     DeviceHeap& heap = DeviceHeap::instance();
     const size_t sbytes = static_cast<size_t>(std::max<int64_t>(plan.send_total, 1)) * sizeof(DataType);
     const size_t rbytes = static_cast<size_t>(std::max<int64_t>(plan.recv_total, 1)) * sizeof(DataType);
+    constexpr int kWords = static_cast<int>(sizeof(DataType) / sizeof(double));
+
+#ifdef BPACK_HAVE_NCCL
+    // NCCL: pack, the messages and the unpack all on the stream.  The buffers
+    // go back to the heap with the work still queued; whatever reuses them
+    // runs after it, on the same stream.
+    if (plan.nccl != nullptr) {
+        ncclComm_t nc = static_cast<ncclComm_t>(plan.nccl);
+        DataType* sdev = reinterpret_cast<DataType*>(heap.alloc<char>(sbytes));
+        DataType* rdev = reinterpret_cast<DataType*>(heap.alloc<char>(rbytes));
+        launch_pack(src.data, plan.d_send, static_cast<int>(plan.send.size()), plan.d_send_displ, nrhs, sdev, stream);
+        check_nccl(ncclGroupStart(), "bf exchange");
+        for (int p : plan.peers) {
+            const size_t u = static_cast<size_t>(p);
+            const int64_t count = plan.recv_displ[u + 1] - plan.recv_displ[u];
+            if (count > 0) {
+                check_nccl(ncclRecv(rdev + plan.recv_displ[u], static_cast<size_t>(count) * kWords, ncclDouble, p, nc,
+                                    stream), "bf exchange receive");
+            }
+        }
+        for (int p : plan.peers) {
+            const size_t u = static_cast<size_t>(p);
+            const int64_t count = plan.send_displ[u + 1] - plan.send_displ[u];
+            if (count > 0) {
+                check_nccl(ncclSend(sdev + plan.send_displ[u], static_cast<size_t>(count) * kWords, ncclDouble, p, nc,
+                                    stream), "bf exchange send");
+            }
+        }
+        check_nccl(ncclGroupEnd(), "bf exchange");
+        launch_unpack(dst.data, plan.d_recv, static_cast<int>(plan.recv.size()), plan.d_recv_displ, nrhs, rdev, stream);
+        heap.free(reinterpret_cast<char*>(rdev));
+        heap.free(reinterpret_cast<char*>(sdev));
+        return;
+    }
+#endif
+
+    // Message buffers: in the exchange arena with GPU-aware MPI (registered
+    // once; sent and received in device memory), else from the heap and
+    // staged through pinned host memory.
     DataType* sdev = nullptr;
     DataType* rdev = nullptr;
     bool from_arena = false;
@@ -351,7 +442,6 @@ void exchange_level(ExchangePlan& plan, const VecLevel& src, VecLevel& dst, int 
                               cudaMemcpyDeviceToHost), "bf exchange stage out");
     }
 
-    constexpr int kWords = static_cast<int>(sizeof(DataType) / sizeof(double));
     std::vector<MPI_Request> reqs;
     reqs.reserve(2 * plan.peers.size());
     for (int p : plan.peers) {

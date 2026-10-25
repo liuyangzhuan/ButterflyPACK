@@ -332,6 +332,18 @@ if(enable_h2_gpu)
   else()
     message("-- H2 factor compression off (set TPL_H2_NVCOMP_LIBRARIES and TPL_H2_NVCOMP_INCLUDE_DIRS to enable)")
   endif()
+  #--------------------- NCCL (optional) ---------------------
+  # The GPU butterfly's exchanges between GPUs (GPU_BACKEND/bf_gpu/bf_exchange.cu)
+  # through NCCL, on the stream, instead of GPU-aware MPI.  Optional: without
+  # it they stay on MPI.
+  if(TPL_NCCL_LIBRARIES AND TPL_NCCL_INCLUDE_DIRS)
+    message("-- Using NCCL for the GPU butterfly's exchanges: '${TPL_NCCL_LIBRARIES}'")
+    set(BPACK_HAVE_NCCL ON)
+    include_directories(${TPL_NCCL_INCLUDE_DIRS})
+    list(APPEND H2_GPU_LIB ${TPL_NCCL_LIBRARIES})
+  else()
+    message("-- The GPU butterfly's exchanges on MPI (set TPL_NCCL_LIBRARIES and TPL_NCCL_INCLUDE_DIRS for NCCL)")
+  endif()
 endif()
 
 #--------------------- ARPACK ---------------------
@@ -622,6 +634,9 @@ if (enable_h2_gpu)
                                     GPU_BACKEND/bf_gpu/bf_sweep_exec.cu)
   set_target_properties(bf_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(bf_gpu_kernels PRIVATE H2_HAVE_GPU)
+  if(BPACK_HAVE_NCCL)
+    target_compile_definitions(bf_gpu_kernels PRIVATE BPACK_HAVE_NCCL)
+  endif()
   target_include_directories(bf_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
   # nvcc does not inherit the compiler wrapper's implicit include path, and
   # these sources reach mpi.h through gpu_runtime.hpp, so it is located once.
