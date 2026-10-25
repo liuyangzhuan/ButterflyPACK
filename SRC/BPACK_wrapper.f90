@@ -3628,7 +3628,7 @@ contains
       integer seed_myid(50)
       integer times(8)
       real(kind=8) t1, t2, error
-      integer ierr
+      integer ierr, gpu_info
 
       !>**** allocate BPACK solver structures
 
@@ -3653,7 +3653,11 @@ contains
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) " "
       if (ptree%MyID == Main_ID .and. option%verbosity >= 0) write (*, *) "FastMATVEC-based BF construction......"
 
-      call BF_randomized(blocks%pgno, blocks%level_butterfly, option%rank0, option%rankrate, blocks, ker, Bmatvec_user_C, error, 'CMatVec', option, stats, ptree, msh)
+      gpu_info = 1
+      if (BF_gpu_sketch_ok(blocks, option, ptree)) &
+         call BF_randomized_gpu(blocks, C_FuncBMatVec, c_loc(C_QuantApp), error, option, stats, ptree, msh, gpu_info)
+      if (gpu_info /= 0) &
+         call BF_randomized(blocks%pgno, blocks%level_butterfly, option%rank0, option%rankrate, blocks, ker, Bmatvec_user_C, error, 'CMatVec', option, stats, ptree, msh)
 
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 

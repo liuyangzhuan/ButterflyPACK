@@ -38,9 +38,12 @@
 // the butterfly backend is real double for now (bf_gpu's DataType)
 #define BPACK_BF_GPU_ENABLED 1
 #include "bf_gpu/bf_id.hpp"
+#include "bf_gpu/bf_randomized.hpp"
 #include "bf_gpu/bf_store.hpp"
 #endif
 #endif
+
+#include "bpack_gpu.h"  // bpack_gpu_bf_matvec (GPU_INTERFACE)
 
 #ifdef BPACK_BF_GPU_ENABLED
 extern "C" {
@@ -1251,6 +1254,29 @@ std::map<const void*, std::unique_ptr<BfEntries>>& bf_entries() {
   return registry;
 }
 
+// A butterfly's black box on the device (c_bf_set_gpu_matvec), for its
+// construction from matvecs (c_bf_gpu_randomized).
+struct BfMatvec {
+  bpack_gpu_bf_matvec fn = nullptr;
+  void* user = nullptr;
+};
+
+std::map<const void*, BfMatvec>& bf_matvecs() {
+  static std::map<const void*, BfMatvec> registry;
+  return registry;
+}
+
+// The C callback matvec of C_BF_Construct_Matvec_Compute, called as
+// Bmatvec_user_C calls it: (trans, Nin, Nout, nvec, Vin, Vout, quant, a, b).
+using BfHostMatvec = void (*)(const char*, int*, int*, int*, const double*, double*, void*, double*, double*);
+
+// A construction from matvecs between c_bf_gpu_randomized and its fetch, and
+// the pinned staging of a host black box.
+struct BfRandomizedRun {
+  std::unique_ptr<bf::gpu::Randomized> run;
+  fmm::gpu::PinnedBuffer hx, hy;
+};
+
 // Make a butterfly resident: upload its factors, read the grids the sweep
 // needs, and wire the closures through which bf_gpu asks the Fortran for its
 // distribution decisions (bf_ranges.hpp explains why they are closures).
@@ -1799,6 +1825,153 @@ void c_bf_gpu_eval_blocks(void* handle, const int* nblk, const int* rows, const 
 #endif
 }
 
+// The registration of a butterfly's black box on the device (bpack_gpu.h),
+// before its construction from matvecs; a null matvec clears it.
+void c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user) {
+#ifdef BPACK_BF_GPU_ENABLED
+  if (bf == nullptr || *bf == nullptr) gpu_fail("c_bf_set_gpu_matvec", "null butterfly handle");
+  if (matvec == nullptr) {
+    bf_matvecs().erase(*bf);
+    return;
+  }
+  bf_matvecs()[*bf] = BfMatvec{matvec, user};
+#else
+  (void)bf; (void)matvec; (void)user;
+#endif
+}
+
+// BF_randomized (less_adapt 1) on the device, for BF_randomized_gpu
+// (bf_gpu/bf_randomized.hpp): a butterfly on one process with L levels, its
+// leaves' ends ms and ns (one based, cumulative, 2^L each).  The black box is
+// the device one registered for bf, else `matvec`, the C callback, on pinned
+// host copies of the vectors.  On success the shapes of every block - V's,
+// Kerl(1..L)'s row by row, U's - are in rows and cols, the blocks wait on the
+// device under `handle` for c_bf_gpu_randomized_fetch, and prof holds the
+// seconds of all, the black box, the sweeps, the range finding and solves,
+// the error test; the black box's calls and columns, the tries of the rank
+// guess and the test's error.  info 1: the device declined (a butterfly on
+// several processes, no room, a rank guess that never settled).
+void c_bf_gpu_randomized(void* bf, void* ptree, const int* L, const int* level_half, const int* M, const int* N,
+                         const int* ms, const int* ns, const int* rank0, const double* rankrate, const int* itermax,
+                         const int* nbundle, const double* tol_rdetect, const double* tol_ls, void* matvec,
+                         void* quant, void** handle, int* rows, int* cols, double* prof, int* info) {
+  *info = 1;
+  *handle = nullptr;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    int is_head = 0, comm_f = 0, nproc = 1;
+    c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+    if (nproc != 1 || *L < 1) return;
+    bf_device_setup(MPI_Comm_f2c(static_cast<MPI_Fint>(comm_f)), nproc);
+
+    bf::gpu::RandomizedConfig c;
+    c.L = *L;
+    c.level_half = *level_half;
+    c.M = *M;
+    c.N = *N;
+    const int leaves = 1 << *L;
+    c.row_off.assign(static_cast<size_t>(leaves) + 1, 0);
+    c.col_off.assign(static_cast<size_t>(leaves) + 1, 0);
+    for (int k = 0; k < leaves; ++k) {
+      c.row_off[k + 1] = ms[k];
+      c.col_off[k + 1] = ns[k];
+    }
+    if (c.row_off.back() != c.M || c.col_off.back() != c.N) gpu_fail("c_bf_gpu_randomized", "the leaves do not cover the block");
+    c.rank0 = *rank0;
+    c.rankrate = *rankrate;
+    c.itermax = *itermax;
+    c.nbundle = std::max(*nbundle, 1);
+    c.tol_rdetect = *tol_rdetect;
+    c.tol_ls = *tol_ls;
+
+    auto state = std::make_unique<BfRandomizedRun>();
+    BfRandomizedRun* s = state.get();
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    bf::gpu::BlackBox box;
+    auto dev = bf_matvecs().find(bf);
+    if (dev != bf_matvecs().end()) {
+      const BfMatvec m = dev->second;
+      box = [m, c, stream](char op, int nvec, const double* x, double* y) {
+        const int nin = static_cast<int>(op == 'N' ? c.N : c.M), nout = static_cast<int>(op == 'N' ? c.M : c.N);
+        // x is ready for a black box on a stream of its own too
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's device black box");
+        m.fn(op, nin, nout, nvec, x, y, stream, m.user);
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's device black box");
+      };
+    } else {
+      if (matvec == nullptr) return;
+      const BfHostMatvec fn = reinterpret_cast<BfHostMatvec>(matvec);
+      box = [s, fn, quant, c, stream](char op, int nvec, const double* x, double* y) {
+        int nin = static_cast<int>(op == 'N' ? c.N : c.M), nout = static_cast<int>(op == 'N' ? c.M : c.N);
+        const size_t bin = static_cast<size_t>(nin) * nvec * sizeof(double);
+        const size_t bout = static_cast<size_t>(nout) * nvec * sizeof(double);
+        double* hx = static_cast<double*>(s->hx.reserve(std::max<size_t>(bin, 1)));
+        double* hy = static_cast<double*>(s->hy.reserve(std::max<size_t>(bout, 1)));
+        fmm::gpu::check_cuda(cudaMemcpyAsync(hx, x, bin, cudaMemcpyDeviceToHost, stream), "the butterfly's black box x");
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's black box x");
+        std::memset(hy, 0, bout);
+        const char trans[2] = {op, '\0'};
+        double one = 1.0, zero = 0.0;
+        fn(trans, &nin, &nout, &nvec, hx, hy, quant, &one, &zero);
+        fmm::gpu::check_cuda(cudaMemcpyAsync(y, hy, bout, cudaMemcpyHostToDevice, stream), "the butterfly's black box y");
+        fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "the butterfly's black box y");
+      };
+    }
+    s->run = std::make_unique<bf::gpu::Randomized>(c, box);
+    if (!s->run->run()) return;
+    std::vector<int> r, k;
+    s->run->shapes(r, k);
+    std::copy(r.begin(), r.end(), rows);
+    std::copy(k.begin(), k.end(), cols);
+    const bf::gpu::RandomizedProfile& p = s->run->prof;
+    prof[0] = p.total;
+    prof[1] = p.matvec;
+    prof[2] = p.sweep;
+    prof[3] = p.range;
+    prof[4] = p.test;
+    prof[5] = static_cast<double>(p.calls);
+    prof[6] = static_cast<double>(p.columns);
+    prof[7] = p.tries;
+    prof[8] = p.error;
+    // the pinned staging goes now; the factors stay for the fetch
+    s->hx.release();
+    s->hy.release();
+    *handle = state.release();
+    *info = 0;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_randomized", e.what());
+  }
+#else
+  (void)bf; (void)ptree; (void)L; (void)level_half; (void)M; (void)N; (void)ms; (void)ns; (void)rank0;
+  (void)rankrate; (void)itermax; (void)nbundle; (void)tol_rdetect; (void)tol_ls; (void)matvec; (void)quant;
+  (void)rows; (void)cols; (void)prof;
+#endif
+}
+
+// The blocks of a c_bf_gpu_randomized into ptrs, in its order (null: not
+// wanted), and the handle released.  seconds: the copy's time.
+void c_bf_gpu_randomized_fetch(void* handle, void* const* ptrs, double* seconds) {
+  *seconds = 0.0;
+#ifdef BPACK_BF_GPU_ENABLED
+  if (handle == nullptr) return;
+  std::unique_ptr<BfRandomizedRun> state(static_cast<BfRandomizedRun*>(handle));
+  try {
+    const double t0 = MPI_Wtime();
+    std::vector<int> r, k;
+    state->run->shapes(r, k);
+    std::vector<double*> dst(r.size());
+    for (size_t b = 0; b < dst.size(); ++b) dst[b] = static_cast<double*>(ptrs[b]);
+    state->run->download(dst);
+    state->run->release();
+    *seconds = MPI_Wtime() - t0;
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_randomized_fetch", e.what());
+  }
+#else
+  (void)handle; (void)ptrs;
+#endif
+}
+
 // Drop what a butterfly holds on the device.  The caller must do this before
 // the block is freed: the store is keyed on its address, and although every
 // lookup re-checks the block's layout, releasing is what keeps the device
@@ -1808,6 +1981,7 @@ void c_bf_gpu_release(void* bf) {
   try {
     bf::gpu::bf_store_release(bf);
     bf_entries().erase(bf);  // and its GPU evaluator, if it had one
+    bf_matvecs().erase(bf);  // and its device black box
   } catch (const std::exception& e) {
     gpu_fail("c_bf_gpu_release", e.what());
   }

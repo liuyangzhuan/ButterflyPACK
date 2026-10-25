@@ -215,6 +215,10 @@ struct QrcpItemT {
     double* norm;
     int* flag;
     double tol = -1.0;
+    // optional: the Householder scalars of the steps taken (at least min(m, n)
+    // entries; the reflectors stay below the diagonal as LAPACK's geqp3 leaves
+    // them), for a caller forming Q (the butterfly's range finder, bf_gpu)
+    T* tau = nullptr;
 };
 using QrcpItem = QrcpItemT<double>;
 

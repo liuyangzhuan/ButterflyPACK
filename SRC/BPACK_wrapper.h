@@ -96,6 +96,7 @@ void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* l
 void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams, const int* flags);
 void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_matvec(F2Cptr* bf, bpack_gpu_bf_matvec matvec, void* user);
 /* GPU state of formats other than H2 (SRC/BPACK_gpu_wrapper.cpp) */
 void c_bpack_gpu_create(void** gpu);
 void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator);

@@ -143,6 +143,20 @@ void z_c_bf_set_gpu_block_evaluator(void** bf, bpack_gpu_block_evaluator evaluat
 void d_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 void z_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 
+/* A butterfly's black box on the device, for its construction from matvecs
+ * (c_bf_construct_matvec_compute with HODLR_use_gpu > 0 and less_adapt 1, a
+ * butterfly on one process): y = op(A) x for trans 'N' (x N x nvec, y M x
+ * nvec) or 'T' (x M x nvec, y N x nvec), nin and nout the rows of x and y and
+ * their leading dimensions, all device memory of the matrix's type, the rows
+ * in the butterfly's own order as the CPU callback's.  Enqueued on `stream`
+ * (the library's, a cudaStream_t) or complete on return.  Without one, the
+ * construction calls the CPU callback on host copies of the vectors.  Real
+ * double for now: the z_ registration is accepted and not used. */
+typedef void (*bpack_gpu_bf_matvec)(char trans, int nin, int nout, int nvec, const void* x, void* y, void* stream,
+                                    void* user);
+void d_c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user);
+void z_c_bf_set_gpu_matvec(void** bf, bpack_gpu_bf_matvec matvec, void* user);
+
 #ifdef __cplusplus
 }
 #endif

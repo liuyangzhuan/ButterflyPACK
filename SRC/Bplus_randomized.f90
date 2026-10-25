@@ -1482,6 +1482,98 @@ contains
 
    end subroutine BF_randomized
 
+   !>**** BF_randomized (less_adapt 1) on the device (c_bf_gpu_randomized,
+   !> GPU_BACKEND/bf_gpu/bf_randomized.hpp) for C_BF_Construct_Matvec_Compute:
+   !> a butterfly on one process (BF_gpu_sketch_ok) whose black box is a device
+   !> one registered with c_bf_set_gpu_matvec, else the C callback matvec with
+   !> its quant.  The random vectors, the black box's products, the sweeps of
+   !> the half-built butterfly and the levels' range finding and solves stay on
+   !> the device; the factors come back into blocks_o as BF_randomized leaves
+   !> them.  info 1: the device declined (no room, or the rank guess never
+   !> settled) and blocks_o is as it was, for the caller's BF_randomized.
+   subroutine BF_randomized_gpu(blocks_o, matvec, quant, error_inout, option, stats, ptree, msh, info)
+
+      implicit none
+
+      type(matrixblock), target::blocks_o
+      type(c_funptr)::matvec
+      type(c_ptr)::quant
+      real(kind=8)::error_inout
+      type(Hoption)::option
+      type(Hstat)::stats
+      type(proctree), target::ptree
+      type(mesh)::msh
+      integer::info
+
+      type(matrixblock), allocatable::block_rand(:)
+      integer::level_butterfly, nblk, k, i, j, level
+      integer, allocatable::rows(:), cols(:)
+      type(c_ptr), allocatable::ptrs(:)
+      type(c_ptr)::handle
+      real(kind=8)::prof(9), fetch_seconds, Memory
+
+      info = 1
+      level_butterfly = blocks_o%level_butterfly
+      allocate (block_rand(1))
+      call BF_Init_randomized(level_butterfly, option%rank0, blocks_o%row_group, blocks_o%col_group, blocks_o, block_rand(1), msh, ptree, option, 0)
+      nblk = (level_butterfly + 1)*2**(level_butterfly + 1)
+      allocate (rows(nblk), cols(nblk))
+      handle = c_null_ptr
+      call c_bf_gpu_randomized(c_loc(blocks_o), c_loc(ptree), level_butterfly, block_rand(1)%level_half, blocks_o%M, blocks_o%N, &
+                               block_rand(1)%ms, block_rand(1)%ns, option%rank0, option%rankrate, option%itermax, option%Nbundle, &
+                               option%tol_Rdetect, option%tol_LS, matvec, quant, handle, rows, cols, prof, info)
+      if (info /= 0) then
+         call BF_delete(block_rand(1), 1)
+         deallocate (block_rand, rows, cols)
+         return
+      endif
+
+      !>**** the factors, in the order the device lists them: V, Kerl(1:L) row by row, U
+      allocate (ptrs(nblk))
+      ptrs = c_null_ptr
+      k = 0
+      do j = 1, 2**level_butterfly
+         k = k + 1
+         allocate (block_rand(1)%ButterflyV%blocks(j)%matrix(rows(k), cols(k)))
+         if (rows(k) > 0 .and. cols(k) > 0) ptrs(k) = c_loc(block_rand(1)%ButterflyV%blocks(j)%matrix(1, 1))
+      enddo
+      do level = 1, level_butterfly
+         do i = 1, 2**level
+            do j = 1, 2**(level_butterfly - level + 1)
+               k = k + 1
+               allocate (block_rand(1)%ButterflyKerl(level)%blocks(i, j)%matrix(rows(k), cols(k)))
+               if (rows(k) > 0 .and. cols(k) > 0) ptrs(k) = c_loc(block_rand(1)%ButterflyKerl(level)%blocks(i, j)%matrix(1, 1))
+            enddo
+         enddo
+      enddo
+      do i = 1, 2**level_butterfly
+         k = k + 1
+         allocate (block_rand(1)%ButterflyU%blocks(i)%matrix(rows(k), cols(k)))
+         if (rows(k) > 0 .and. cols(k) > 0) ptrs(k) = c_loc(block_rand(1)%ButterflyU%blocks(i)%matrix(1, 1))
+      enddo
+      call c_bf_gpu_randomized_fetch(handle, ptrs, fetch_seconds)
+      deallocate (ptrs, rows, cols)
+
+      !>**** as BF_randomized closes: the test's error, the ranks, and blocks_o replaced
+      error_inout = prof(9)
+      stats%Time_random(2) = stats%Time_random(2) + prof(2)
+      stats%Time_random(3) = stats%Time_random(3) + prof(3) + prof(4)
+      stats%Time_random(5) = stats%Time_random(5) + prof(4)
+      stats%Flop_Tmp = 0
+      call BF_get_rank(block_rand(1), ptree)
+      if (ptree%MyID == ptree%pgrp(blocks_o%pgno)%head .and. option%verbosity >= 2) write (*, '(A38,A6,I3,A8,I2,A8,I3,A7,Es14.7,A8,I5,I5,I5)') &
+         ' CMatVec (GPU) ', ' rank:', block_rand(1)%rankmax, ' Ntrial:', nint(prof(8)), ' L_butt:', block_rand(1)%level_butterfly, &
+         ' error:', error_inout, ' #nproc:', ptree%pgrp(block_rand(1)%pgno)%nproc, block_rand(1)%row_group, block_rand(1)%col_group
+      if (c_bpack_env_trace('phase'//c_null_char) /= 0 .and. ptree%MyID == ptree%pgrp(blocks_o%pgno)%head) &
+         write (*, '(A,6Es11.3,A,I8,A,I10)') ' BF_randomized_gpu (s): all, black box, sweeps, range+solve, test, fetch', &
+         prof(1:5), fetch_seconds, ' calls', nint(prof(6)), ' columns', nint(prof(7))
+      call BF_delete(blocks_o, 1)
+      call BF_copy_delete(block_rand(1), blocks_o, Memory)
+      deallocate (block_rand)
+      info = 0
+
+   end subroutine BF_randomized_gpu
+
    subroutine BF_Reconstruction_Lowrank(block_rand, blocks_o, operand, blackbox_MVP_dat, operand1, option, stats, ptree, msh)
 
 

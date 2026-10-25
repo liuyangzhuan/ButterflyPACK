@@ -20,7 +20,8 @@
  *
  *   1. BF1 from the entries of a kernel     (c_bf_construct_element_compute)
  *   2. BF2 from the entries of BF1          (its block callback is c_bf_extractelement on BF1)
- *   3. BF3 from the matvec of BF1           (its matvec callback is c_bf_mult on BF1)
+ *   3. BF3 from the matvec of BF1           (its matvec callback is c_bf_mult on BF1; on the GPU a
+ *                                            device black box, c_bf_gpu_mult on BF1)
  *
  * and BF1's own matvec and entry extraction.  These are the four operations STRUMPACK uses for
  * the F12, F21 and Schur blocks of a front.  Every line of results starts with "BFTEST".
@@ -74,6 +75,7 @@ struct DriverOptions {
   int extract_size = 64;       // their rows and columns
   int extract_reps = 3;
   int gpu_evaluator = 1;       // with the GPU on, BF1's entries from a GPU evaluator of the kernel
+  int gpu_matvec = 1;          // with the GPU on, BF3's black box BF1's matvec on device vectors
   bool show_help = false;
 };
 
@@ -140,6 +142,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       o.extract_reps = std::stoi(value);
     } else if (name == "gpu_evaluator") {
       o.gpu_evaluator = std::stoi(value);
+    } else if (name == "gpu_matvec") {
+      o.gpu_matvec = std::stoi(value);
     }
   }
   if (o.kernel != "dft" && o.kernel != "laplace") throw std::invalid_argument("--kernel is dft or laplace");
@@ -171,6 +175,9 @@ void print_usage(const char* program) {
       << "  --extract_reps r        repetitions (3)\n"
       << "  --gpu_evaluator 0|1     with the GPU on, BF1's entries from a GPU evaluator of the\n"
       << "                          kernel (1) or from the CPU callbacks (0)\n"
+      << "  --gpu_matvec 0|1        with the GPU on, BF3's black box on the device (1: BF1's\n"
+      << "                          matvec on device vectors, c_bf_set_gpu_matvec) or the CPU\n"
+      << "                          callback (0)\n"
       << "The butterfly needs --lrlevel >= 1 (the driver sets 100); --hodlr_use_gpu 1 asks for the\n"
       << "GPU paths.  Results: lines starting with BFTEST.\n";
 }
@@ -355,6 +362,22 @@ void matvec_bf1(char const* trans, int* nin, int* nout, int* nvec, double const*
   ++s->calls;
   s->columns += *nvec;
 }
+
+#ifdef BPACK_EXAMPLE_GPU
+// The same on device vectors (bpack_gpu_bf_matvec): y = op(BF1) x, complete on return
+void matvec_bf1_device(char trans, int nin, int nout, int nvec, const void* x, void* y, void*, void* user) {
+  MatvecSource* s = static_cast<MatvecSource*>(user);
+  const double t0 = MPI_Wtime();
+  const double one = 1.0, zero = 0.0;
+  double flops = 0.0;
+  int info = 0;
+  d_c_bf_gpu_mult(s->bf1->bf, *s->ptree, &trans, &nvec, x, &nin, y, &nout, &one, &zero, &flops, &info);
+  if (info != 0) throw std::runtime_error("BF1's device matvec declined");
+  s->seconds += MPI_Wtime() - t0;
+  ++s->calls;
+  s->columns += nvec;
+}
+#endif
 
 void no_distance(int*, int*, double*, C2Fptr) {}
 void no_admissibility(int*, int*, int* value, C2Fptr) { *value = 1; }
@@ -824,6 +847,9 @@ int main(int argc, char* argv[]) {
       int Ml3 = Ml, Nl3 = Nl;
       d_c_bf_construct_init(&M, &N, &Ml3, &Nl3, nns.data(), nns.data(), &msh_r, &msh_c, &bf3.bf, &bf3.option,
                             &bf3.stats, &bf3.msh, &bf3.ker, &ptree, &no_distance, &no_admissibility, &source);
+#ifdef BPACK_EXAMPLE_GPU
+      if (gpu > 0 && opt.gpu_matvec) d_c_bf_set_gpu_matvec(&bf3.bf, &matvec_bf1_device, &source);
+#endif
       MPI_Barrier(MPI_COMM_WORLD);
       StatDelta parts(bf3.stats, {"Time_Random_Sample", "Time_Random_Resolve", "Time_Random_OneBlock"});
       StatDelta served(bf1.stats, {"Time_BF_MVP_Gemm", "Time_BF_MVP_Exchange", "Time_BF_MVP_All2All"});

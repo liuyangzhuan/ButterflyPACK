@@ -460,6 +460,37 @@ module BPACK_GPU
          real(c_double) :: warm
       end subroutine c_bf_gpu_entries
 
+      !>**** BF_randomized (less_adapt 1) on the device (GPU_BACKEND/bf_gpu/
+      !> bf_randomized.hpp), for a butterfly on one process: L levels, the
+      !> leaves' ends ms(1:2^L) and ns(1:2^L) as BF_Init_randomized counts
+      !> them.  The black box is the device one registered for bf
+      !> (c_bf_set_gpu_matvec), else the C callback matvec with its quant.
+      !> rows/cols: every block's shape - V's, Kerl(1:L)'s row by row, U's -
+      !> for c_bf_gpu_randomized_fetch, which takes the handle.  prof: seconds
+      !> of all, the black box, the sweeps, the range finding and solves, the
+      !> error test; then the black box's calls and columns, the tries of the
+      !> rank guess and the test's error.  info 1: the device declined.
+      subroutine c_bf_gpu_randomized(bf, ptree, L, level_half, M, N, ms, ns, rank0, rankrate, itermax, nbundle, &
+                                     tol_rdetect, tol_ls, matvec, quant, handle, rows, cols, prof, info) &
+         bind(c, name="c_bf_gpu_randomized")
+         import :: c_int, c_double, c_ptr, c_funptr
+         type(c_ptr), value :: bf, ptree, quant
+         type(c_funptr), value :: matvec
+         integer(c_int) :: L, level_half, M, N, rank0, itermax, nbundle, info
+         integer(c_int) :: ms(*), ns(*), rows(*), cols(*)
+         real(c_double) :: rankrate, tol_rdetect, tol_ls, prof(*)
+         type(c_ptr) :: handle
+      end subroutine c_bf_gpu_randomized
+
+      !>**** The blocks of c_bf_gpu_randomized into ptrs (null: skipped), and
+      !> the handle released; seconds: the time of the copy
+      subroutine c_bf_gpu_randomized_fetch(handle, ptrs, seconds) bind(c, name="c_bf_gpu_randomized_fetch")
+         import :: c_double, c_ptr
+         type(c_ptr), value :: handle
+         type(c_ptr) :: ptrs(*)
+         real(c_double) :: seconds
+      end subroutine c_bf_gpu_randomized_fetch
+
       !>**** Drop what a butterfly holds on the device; before it is freed
       subroutine c_bf_gpu_release(bf) bind(c, name="c_bf_gpu_release")
          import :: c_ptr
@@ -521,6 +552,22 @@ contains
 
       BF_gpu_extract_ok = BF_gpu_mult_ok(blocks, option)
    end function BF_gpu_extract_ok
+
+   !>**** Whether a butterfly's construction from matvecs runs on the device
+   !> (BF_randomized_gpu): as for the matvec, with the less adaptive scheme
+   !> (less_adapt 1; the other one is BF_randomized_old's), on one process.
+   logical function BF_gpu_sketch_ok(blocks, option, ptree)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      type(proctree)::ptree
+
+      BF_gpu_sketch_ok = .false.
+      if (.not. BF_gpu_mult_ok(blocks, option)) return
+      if (option%less_adapt /= 1) return
+      if (ptree%pgrp(blocks%pgno)%nproc /= 1) return
+      BF_gpu_sketch_ok = .true.
+   end function BF_gpu_sketch_ok
 
    !> Whether this library has the GPU backend (the double or double complex
    !> library of a build with enable_h2_gpu=ON)
