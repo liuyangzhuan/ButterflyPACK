@@ -227,6 +227,16 @@ size_t qrcp_work_bytes(int count, int max_n);
 template<typename T>
 void launch_qrcp(const QrcpItemT<T>* items, int count, int max_n, double tol, double abs_tol, void* work,
                  cudaStream_t stream, bool batch_independent = false);
+// The same ID by a blocked QRCP (LAPACK dlaqps: a GEMM update a panel), for
+// tall items of many columns; max_m, the items' most rows.  Its results
+// differ from launch_qrcp's in rounding; a box's are the same bit for bit
+// whatever its batch.  The work block (bytes, 16-byte aligned) is always
+// needed.
+template<typename T>
+size_t qrcp_blocked_work_bytes(int count, int max_m, int max_n);
+template<typename T>
+void launch_qrcp_blocked(const QrcpItemT<T>* items, int count, int max_m, int max_n, double tol, double abs_tol,
+                         void* work, cudaStream_t stream);
 
 // C_i = alpha op(A_i) op(B_i) + beta C_i on the FP64 tensor cores
 // (device_gemm.cu); sizes, leading dimensions and pointers are device arrays

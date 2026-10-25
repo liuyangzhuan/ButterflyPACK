@@ -377,8 +377,32 @@ point set and on a plain cube split, dense checks at small N.
     the copier and dropped: a second thread setting up the records' pages
     ahead of the stores (no net gain: their D2H then waits for it, and the
     tail - X_NR after the publish - stays).
-- Next: (a) the blocked QRCP (dlaqps-style: one read of the trailing
-  matrix a step instead of a read and a write); P4 (release API,
-  `H2_compress_factors` on the records), P5 (the STRUMPACK hand-off).
+  - **(a), blocked QRCP** done 2026-10-24: `launch_qrcp_blocked`
+    (device_id.cu), LAPACK dlaqps / zlaqps on the device: a step reads the
+    trailing matrix once (F's column), a panel of 32 steps updates it once
+    (A -= V F^H); the step's own rows (the pivot column's update, the
+    reflector's norm, V^H x) in chunks of 256 rows over the blocks, each
+    block forming the reflector from the chunks' sums: two grid barriers a
+    step, as before, one more at a panel's end.  As dlaqps, it ended the
+    panel at every cancelled norm downdate, and on these targets one
+    cancelled every 4-5 steps (90% of the panel ends; a test of eps^(3/4)
+    instead of eps^(1/2) made it every 4): no faster than the unblocked
+    kernel.  A cancelled column now keeps an upper bound of its norm
+    (n1 sqrt(temp + 256 sqrt(eps))) until the panel's end, and the panel ends
+    early only if a bound would be the next pivot: panels of 29-30 steps, 2-3
+    early ends a large box.  The F22 IDs use it from 256 columns on (below,
+    its extra barriers cost more: level 4 0.04 -> 0.07 s); the primary waves
+    keep `launch_qrcp`.  64^3 on one GPU, three runs each interleaved on one
+    node: 9.64 / 9.10 / 8.99 s -> 8.70 / 8.67 / 8.62 s; targets and ID 1.35 ->
+    0.95 s at level 2, 0.86 -> 0.75 s at level 3.  Checks and logdets as
+    before, 1 to 8 ranks; the batch test covers it (tall targets, every
+    launch variant bit for bit, ID residuals and ranks as the unblocked
+    kernel's).  The batch test also caught a race on the way (a block that
+    ended the panel rewrote its candidate while another block of the box
+    still read the candidates to decide the same; memcheck then showed the
+    other block's panel running past 32 steps): the panel end's candidates
+    are a second set.
+- Next: P4 (release API, `H2_compress_factors` on the records), P5 (the
+  STRUMPACK hand-off).
   Later: the records on the device (with compression, or several cards) for
   a device CB product and partial solves.

@@ -7,9 +7,9 @@
 // each result is compared bitwise with the box's alone result.
 //
 //   make h2_gpu_batch_determinism
-//   srun -n 1 --gpus 1 ./h2_gpu_batch_determinism [boxes]
+//   srun -n 1 --gpus 1 ./h2_gpu_batch_determinism [boxes] [id]   (id: the ID kernels only)
 //
-// Kernels: the device ID (launch_qrcp), MAGMA getrf/trsm/gemm vbatched (the
+// Kernels: the device ID (launch_qrcp, launch_qrcp_blocked), MAGMA getrf/trsm/gemm vbatched (the
 // X_RR LU, the solves, the updates) and the FP64 tensor-core GEMM, in double
 // and complex.
 
@@ -170,15 +170,19 @@ std::vector<T> download(const T* d, size_t n) {
 
 // ---- device ID: column-pivoted QR, rank, T (launch_qrcp)
 // abs_tol > 0: the H2_s_op floor (both kernels must apply it the same way)
+// blocked: launch_qrcp_blocked on tall targets (m up to 3 n), as the F22 IDs
 template<typename T>
-void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool batch_independent) {
+void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool batch_independent,
+               bool blocked = false) {
     cudaStream_t stream = Context::instance().stream();
     std::uniform_int_distribution<int> sizes(16, 600);
-    std::vector<int> n(static_cast<size_t>(boxes));
+    std::uniform_int_distribution<int> tall(1, 3);
+    std::vector<int> n(static_cast<size_t>(boxes)), m(static_cast<size_t>(boxes));
     std::vector<std::vector<T>> input(static_cast<size_t>(boxes));
     for (int b = 0; b < boxes; ++b) {
         n[b] = sizes(g);
-        input[b] = id_target<T>(n[b], n[b], g);  // d = n rows, as the sketch
+        m[b] = blocked ? n[b] * tall(g) : n[b];  // d = n rows, as the sketch
+        input[b] = id_target<T>(m[b], n[b], g);
     }
     struct Out {
         std::vector<T> a;
@@ -189,7 +193,7 @@ void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool b
         std::vector<Out> out(static_cast<size_t>(boxes));
         for (const auto& batch : gr.batches) {
             const int count = static_cast<int>(batch.size());
-            int max_n = 0;
+            int max_n = 0, max_m = 0;
             std::vector<T*> a(batch.size());
             std::vector<int*> jpvt(batch.size());
             int* d_rank = nullptr;
@@ -202,20 +206,26 @@ void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool b
             for (int i = 0; i < count; ++i) {
                 const int b = batch[static_cast<size_t>(i)];
                 max_n = std::max(max_n, n[b]);
+                max_m = std::max(max_m, m[b]);
                 a[i] = upload(input[b]);
                 check_cuda(cudaMalloc(&jpvt[i], n[b] * sizeof(int)), "cudaMalloc");
-                items[i] = QrcpItemT<T>{a[i], n[b], n[b], n[b], jpvt[i], d_rank + i, d_norm + i, d_flag + i};
+                items[i] = QrcpItemT<T>{a[i], m[b], n[b], m[b], jpvt[i], d_rank + i, d_norm + i, d_flag + i};
             }
             QrcpItemT<T>* d_items = upload(items);
             void* work = nullptr;
-            if (const size_t w = qrcp_work_bytes<T>(count, max_n)) check_cuda(cudaMalloc(&work, w), "cudaMalloc");
-            launch_qrcp<T>(d_items, count, max_n, tol, abs_tol, work, stream, batch_independent);
+            if (blocked) {
+                check_cuda(cudaMalloc(&work, qrcp_blocked_work_bytes<T>(count, max_m, max_n)), "cudaMalloc");
+                launch_qrcp_blocked<T>(d_items, count, max_m, max_n, tol, abs_tol, work, stream);
+            } else {
+                if (const size_t w = qrcp_work_bytes<T>(count, max_n)) check_cuda(cudaMalloc(&work, w), "cudaMalloc");
+                launch_qrcp<T>(d_items, count, max_n, tol, abs_tol, work, stream, batch_independent);
+            }
             check_cuda(cudaStreamSynchronize(stream), "qrcp");
             const std::vector<int> rank = download(d_rank, count), flag = download(d_flag, count);
             const std::vector<double> norm = download(d_norm, count);
             for (int i = 0; i < count; ++i) {
                 const int b = batch[static_cast<size_t>(i)];
-                out[b].a = download(a[i], static_cast<size_t>(n[b]) * n[b]);
+                out[b].a = download(a[i], static_cast<size_t>(m[b]) * n[b]);
                 out[b].jpvt = download(jpvt[i], n[b]);
                 out[b].rank = {rank[i]};
                 out[b].flag = {flag[i]};
@@ -242,12 +252,52 @@ void test_qrcp(int boxes, std::mt19937_64& g, double tol, double abs_tol, bool b
             compare(ref[b].rank, got[b].rank, b, pivots, "rank");
             compare(ref[b].norm, got[b].norm, b, norms, "traced norm");
         }
-        const std::string tag = batch_independent ? (abs_tol > 0.0 ? " (fixed, floor)" : " (fixed)")
-                                                  : (abs_tol > 0.0 ? " (floor)" : "");
+        const std::string tag = std::string(blocked ? " blocked" : "") +
+                                (batch_independent ? (abs_tol > 0.0 ? " (fixed, floor)" : " (fixed)")
+                                                   : (abs_tol > 0.0 ? " (floor)" : ""));
         print(("ID: pivots and rank" + tag).c_str(), Scalar<T>::name(), all[k].name, pivots, boxes);
         print(("ID: R and T" + tag).c_str(), Scalar<T>::name(), all[k].name, factors, boxes);
         print(("ID: traced sketch norm" + tag).c_str(), Scalar<T>::name(), all[k].name, norms, boxes);
     }
+    if (!blocked) return;
+    // the IDs' residuals |A(:, R) - A(:, S) T| / |A| and ranks against the unblocked kernel's
+    blocked = false;
+    const std::vector<Out> unb = run(all[0]);
+    using H = typename Scalar<T>::host;
+    auto residual = [&](int b, const Out& o) {
+        const int k = std::max(o.rank[0], 1), mm = m[b], nn = n[b];
+        const H* a0 = reinterpret_cast<const H*>(input[b].data());
+        const H* f = reinterpret_cast<const H*>(o.a.data());
+        double num = 0.0, den = 0.0;
+        for (size_t i = 0; i < input[b].size(); ++i) den += std::norm(a0[i]);
+        for (int c = k; c < nn; ++c) {
+            const int jr = o.jpvt[static_cast<size_t>(c)];
+            for (int r = 0; r < mm; ++r) {
+                H s = a0[static_cast<size_t>(jr) * mm + r];
+                for (int p = 0; p < k; ++p) {
+                    s -= a0[static_cast<size_t>(o.jpvt[static_cast<size_t>(p)]) * mm + r] *
+                         (o.rank[0] == 0 ? H(0.0) : f[static_cast<size_t>(c) * mm + p]);
+                }
+                num += std::norm(s);
+            }
+        }
+        return den > 0.0 ? std::sqrt(num / den) : 0.0;
+    };
+    double worst_b = 0.0, worst_u = 0.0, ratio = 0.0;
+    int rank_diff = 0, max_rank_diff = 0;
+    for (int b = 0; b < boxes; b += std::max(1, boxes / 12)) {
+        const double eb = residual(b, ref[b]), eu = residual(b, unb[b]);
+        worst_b = std::max(worst_b, eb);
+        worst_u = std::max(worst_u, eu);
+        ratio = std::max(ratio, eu > 0.0 ? eb / eu : (eb > 0.0 ? 1e300 : 1.0));
+        const int d = std::abs(ref[b].rank[0] - unb[b].rank[0]);
+        if (d != 0) ++rank_diff;
+        max_rank_diff = std::max(max_rank_diff, d);
+    }
+    std::printf("  ID blocked vs unblocked %-8s residual max %.2e vs %.2e (worst ratio %.2f), ranks differ in %d "
+                "boxes (by <= %d)\n",
+                Scalar<T>::name(), worst_b, worst_u, ratio, rank_diff, max_rank_diff);
+    std::fflush(stdout);
 }
 
 // ---- a MAGMA batch through VBatch (sizes and pointers in a metadata image)
@@ -478,12 +528,16 @@ void test_gemm(int boxes, std::mt19937_64& g, magma_trans_t ta, magma_trans_t tb
 
 
 template<typename T>
-void test_type(int boxes, uint64_t seed) {
+void test_type(int boxes, uint64_t seed, bool id_only) {
     std::mt19937_64 g(seed);
     test_qrcp<T>(boxes, g, 1e-4, 0.0, false);
     test_qrcp<T>(boxes, g, 1e-4, 0.0, true);
     test_qrcp<T>(boxes, g, 1e-4, 1e-3, false);  // with an H2_s_op floor
     test_qrcp<T>(boxes, g, 1e-4, 1e-3, true);
+    test_qrcp<T>(boxes, g, 1e-4, 0.0, false, true);
+    test_qrcp<T>(boxes, g, 1e-4, 1e-3, false, true);
+    test_qrcp<T>(boxes, g, 1e-10, 0.0, false, true);  // many cancelled norms (panels end early)
+    if (id_only) return;
     test_getrf<T>(boxes, g, false);
     test_getrf<T>(boxes, g, true);
     test_trsm<T>(boxes, g, MagmaUpper, MagmaNonUnit, "trsm (right, upper)");
@@ -508,10 +562,11 @@ void test_type(int boxes, uint64_t seed) {
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
     const int boxes = argc > 1 ? std::atoi(argv[1]) : 400;
+    const bool id_only = argc > 2 && std::string(argv[2]) == "id";  // the ID kernels only
     Context::instance().activate();
     std::printf("batch determinism: %d boxes per kernel; every grouping against each box alone\n", boxes);
-    test_type<double>(boxes, 12345);
-    test_type<dcomplex>(boxes, 67890);
+    test_type<double>(boxes, 12345, id_only);
+    test_type<dcomplex>(boxes, 67890, id_only);
     MPI_Finalize();
     return 0;
 }

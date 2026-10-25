@@ -8090,11 +8090,15 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
         if (at != s.rows) throw std::logic_error("LevelEliminator: F22 step: target rows");
     }
 
-    // ---- (4) the QRCP of every target: rank, flag, norm and pivots.  The
-    // launches by the boxes' sizes (a box's results are the same bit for bit
-    // whatever its batch, device_id.cu): a box one block would take over
+    // ---- (4) the QRCP of every target: rank, flag, norm and pivots, blocked
+    // (launch_qrcp_blocked) from kBlockedColumns columns on: below, its steps'
+    // extra barriers cost more than the trailing matrix's traffic it saves
+    // (64^3 on one GPU: level 4's targets 0.04 s unblocked, 0.07 s blocked;
+    // level 3's, 256-510 columns, 0.86 s and 0.75 s).  The launches by the
+    // boxes' sizes (a box's results are the same bit for bit whatever its
+    // batch, device_id.cu): a box one block would take over
     // ~0.2 s on (16 m n min(m, n) / 3 bytes at ~33 GB/s, A100) goes a few to
-    // a launch on several blocks each (launch_qrcp's cooperative path), the
+    // a launch on several blocks each (the cooperative path), the
     // others by size as many to a launch as the device has multiprocessors,
     // a block each.  (Chunks of boxes by count had run the larger ones side
     // by side on a quarter of the multiprocessors: 1.6 s at level 3 of 64^3.)
@@ -8110,6 +8114,8 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
     char* d_id = heap_.alloc(std::max<size_t>(id_bytes, 1));
     auto cost = [&](size_t i) { return double(sh[i].rows) * sh[i].n22 * std::min(sh[i].rows, sh[i].n22); };
     constexpr double kHeavy = 0.2 * 33e9 * 3.0 / 16.0;  // cost = m n min(m, n) of 0.2 s on one block
+    constexpr int kBlockedColumns = 256;
+    auto blocked = [&](size_t i) { return sh[i].n22 >= kBlockedColumns; };
     std::vector<size_t> order(nb);
     std::iota(order.begin(), order.end(), size_t{0});
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return cost(a) > cost(b); });
@@ -8141,19 +8147,26 @@ void LevelEliminator<CoordType, DataType, KernelType>::f22_id_chunk(std::vector<
                           stream);
         }
         for (size_t j0 = 0; j0 < nb;) {
-            const bool heavy = cost(order[j0]) > kHeavy;
+            const bool heavy = cost(order[j0]) > kHeavy, blk = blocked(order[j0]);
             const size_t cap = heavy ? 4 : static_cast<size_t>(sms);
             size_t j1 = j0;
-            int max_n = 0;
-            while (j1 < nb && j1 - j0 < cap && (cost(order[j1]) > kHeavy) == heavy) {
+            int max_n = 0, max_m = 0;
+            while (j1 < nb && j1 - j0 < cap && (cost(order[j1]) > kHeavy) == heavy && blocked(order[j1]) == blk) {
                 max_n = std::max(max_n, sh[order[j1]].n22);
+                max_m = std::max(max_m, sh[order[j1]].rows);
                 ++j1;
             }
             const int count = static_cast<int>(j1 - j0);
+            const QrcpItem* items = reinterpret_cast<const QrcpItem*>(md + off_q) + j0;
+            const double abs_tol = id_absolute_tolerance(tree_, tolerance_);
             char* d_work = nullptr;
-            if (const size_t wb = qrcp_work_bytes<S>(count, max_n)) d_work = heap_.alloc(wb, ResidentKind::Adaptive);
-            launch_qrcp(reinterpret_cast<const QrcpItem*>(md + off_q) + j0, count, max_n, tolerance_,
-                        id_absolute_tolerance(tree_, tolerance_), d_work, stream);
+            if (blk) {
+                d_work = heap_.alloc(qrcp_blocked_work_bytes<S>(count, max_m, max_n), ResidentKind::Adaptive);
+                launch_qrcp_blocked(items, count, max_m, max_n, tolerance_, abs_tol, d_work, stream);
+            } else {
+                if (const size_t wb = qrcp_work_bytes<S>(count, max_n)) d_work = heap_.alloc(wb, ResidentKind::Adaptive);
+                launch_qrcp(items, count, max_n, tolerance_, abs_tol, d_work, stream);
+            }
             if (d_work != nullptr) heap_.free(d_work);
             j0 = j1;
         }
