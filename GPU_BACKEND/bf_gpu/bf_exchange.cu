@@ -74,8 +74,8 @@ __global__ void __launch_bounds__(kThreads) unpack_kernel(DataType* level, const
 // (an id from its first rank, then NCCL's own setup), so it is done once,
 // when the first plan on the group is built - itself a collective.  A group
 // is known by its members' ranks in MPI_COMM_WORLD, in its own order, so two
-// communicators over the same ranks share one.  Null when NCCL failed on any
-// rank: the group then stays on MPI.
+// communicators over the same ranks share one.  Null for a group spanning
+// several nodes, or when NCCL failed on any rank: the group then stays on MPI.
 ncclComm_t nccl_comm_of(MPI_Comm comm) {
     static auto* comms = new std::map<std::vector<int>, ncclComm_t>;  // never freed, as fmm::gpu::pinned_pool
     int nproc = 1, myid = 0;
@@ -91,6 +91,20 @@ ncclComm_t nccl_comm_of(MPI_Comm comm) {
     MPI_Group_free(&world);
     const auto it = comms->find(key);
     if (it != comms->end()) return it->second;
+    // Only where it was measured: every rank of the group on one node.  Across
+    // nodes NCCL needs the network plugin's settings (NERSC's nccl module), so
+    // a group spanning nodes stays on MPI.
+    MPI_Comm node;
+    MPI_Comm_split_type(comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node);
+    int node_size = 0;
+    MPI_Comm_size(node, &node_size);
+    MPI_Comm_free(&node);
+    int one_node = node_size == nproc ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &one_node, 1, MPI_INT, MPI_MIN, comm);
+    if (!one_node) {
+        (*comms)[key] = nullptr;
+        return nullptr;
+    }
     ncclUniqueId id;
     if (myid == 0 && ncclGetUniqueId(&id) != ncclSuccess) {
         throw std::runtime_error("bf::gpu: ncclGetUniqueId failed");
