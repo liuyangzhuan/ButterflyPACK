@@ -639,8 +639,9 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    // ---- BF1's matvec: on the GPU, first against the host's, which must agree to rounding (the
-    // device sweep runs the host's products in the same order, so bitwise at the time of writing)
+    // ---- BF1's matvec: on the GPU, first against the host's.  Every device kernel sums in k
+    // order, as OpenBLAS does at an even column count: there the two must agree to the bit.  At an
+    // odd count OpenBLAS changes order on blocks of real rank, so there only to rounding.
     if (gpu > 0) {
       std::vector<double> xn = random_vector(static_cast<size_t>(Nl) * opt.nvec, 555u + myid);
       std::vector<double> xt = random_vector(static_cast<size_t>(Ml) * opt.nvec, 666u + myid);
@@ -653,7 +654,12 @@ int main(int argc, char* argv[]) {
       d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", static_cast<int>(gpu));
       const double rn = relative_difference(yn_cpu, yn_gpu, static_cast<size_t>(Ml) * opt.nvec);
       const double rt = relative_difference(yt_cpu, yt_gpu, static_cast<size_t>(Nl) * opt.nvec);
-      if (myid == 0) std::cout << "BFTEST check bf=1 mult gpu_vs_cpu rel_N=" << rn << " rel_T=" << rt << std::endl;
+      const bool exact = opt.nvec % 2 == 0;
+      const bool pass = exact ? (rn == 0.0 && rt == 0.0) : (rn < 1e-13 && rt < 1e-13);
+      if (myid == 0) {
+        std::cout << "BFTEST check bf=1 mult gpu_vs_cpu rel_N=" << rn << " rel_T=" << rt << " expect="
+                  << (exact ? "exact" : "1e-13") << " " << (pass ? "PASS" : "FAIL") << std::endl;
+      }
     }
     for (int nrhs : opt.mult_nrhs) {
       for (char trans : {'N', 'T'}) {
