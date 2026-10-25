@@ -209,6 +209,10 @@ void c_bf_get_all2all_range(F2Cptr bf, F2Cptr ptree, int level, char mode_new, i
                             int* idx_c, int* inc_c, int* nc);
 void c_bf_get_block_group(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode,
                           int* nproc, MPI_Fint* comm, int* is_head);
+void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* const* blk,
+                       const int* transposed, const void* entries, const int64_t* nnz,
+                       const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
+                       int* info);
 void c_bf_get_vec_ranges(F2Cptr bf, F2Cptr ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c, int* inc_c, int* nc);
 void c_bf_get_layout(F2Cptr bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc, int* N_loc, int* nlevels, int* nblocks);
 void c_bf_get_blocks(F2Cptr bf, int* lvl_nr, int* lvl_nc, int* lvl_idxr, int* lvl_idxc, int* lvl_incr, int* lvl_incc, int* blk_rows, int* blk_cols, void** blk_ptr);

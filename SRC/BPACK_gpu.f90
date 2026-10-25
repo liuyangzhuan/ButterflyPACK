@@ -377,6 +377,28 @@ module BPACK_GPU
          type(c_ptr), value :: gpu
          real(c_double) :: flops
       end subroutine c_bpack_gpu_dm_flops
+      !>**** The rank-reveal of one level of a butterfly construction on the
+      !> device (GPU_BACKEND/bf_gpu).  `entry_off` is each panel's offset into
+      !> `entries`, in elements; `transposed` is 1 for the 'C' half.  The
+      !> results come back in block order: `rank` one per block, `jpvt` the
+      !> cumulative sum of the panels' column counts, `xout` the cumulative sum
+      !> of m*n.  info 1 means the device declined (no room, or a precision
+      !> without the butterfly backend) and the caller runs the CPU path.
+      subroutine c_bf_gpu_level_id(nblk, rows, cols, blk, transposed, entries, nnz, rtol, atol, &
+                                   rank, jpvt, xout, info) bind(c, name="c_bf_gpu_level_id")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         integer(c_int) :: nblk, transposed
+         integer(c_int) :: rows(*), cols(*)
+         type(c_ptr) :: blk(*)
+         integer(c_int64_t) :: nnz
+         !>**** the entry buffer and the output X cross as addresses, so this
+         !> binding is the same in every precision; the backend is real double
+         !> for now and declines (info 1) in the others
+         type(c_ptr), value :: entries, xout
+         real(c_double) :: rtol, atol
+         integer(c_int) :: rank(*), jpvt(*), info
+      end subroutine c_bf_gpu_level_id
+
    end interface
 
    !> the device indices of the forward blocks of a rank (HODLR_gpu_block_table)
@@ -385,6 +407,25 @@ module BPACK_GPU
    end type hodlr_gpu_itab
 
 contains
+
+   !>**** Whether a butterfly level's rank-reveal runs on the device
+   !> (GPU_BACKEND/bf_gpu): the options ask for the GPU, this library has the
+   !> backend, the block really is a butterfly (a low-rank block goes through
+   !> BF_gpu_construct instead, see BF_gpu_construct_ok), and the level's
+   !> entries arrive in one contiguous buffer - which they do not when there
+   !> are masks, so a masked block stays on the host.
+   logical function BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+      integer::Nboundall
+
+      BF_gpu_rankreveal_ok = .false.
+      if (option%HODLR_use_gpu <= 0 .or. blocks%level_butterfly == 0) return
+      if (Nboundall /= 0) return
+      if (.not. BPACK_gpu_available()) return
+      BF_gpu_rankreveal_ok = .true.
+   end function BF_gpu_rankreveal_ok
 
    !> Whether this library has the GPU backend (the double or double complex
    !> library of a build with enable_h2_gpu=ON)

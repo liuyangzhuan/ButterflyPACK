@@ -7,3 +7,4 @@ obj/
 # run scripts stay local
 run.sh
 run_id.sh
+run_construct.sh

@@ -611,7 +611,31 @@ if (enable_h2_gpu)
   set_target_properties(hodlr_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(hodlr_gpu_kernels PRIVATE H2_HAVE_GPU)
   target_include_directories(hodlr_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
-  set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>)
+  # CUDA kernels of the butterfly GPU backend (GPU_BACKEND/bf_gpu/; the rest is
+  # header-only C++ used by SRC/BPACK_gpu_wrapper.cpp).  bf_exchange.cu mirrors
+  # the sweep's inter-level exchanges and so needs the MPI headers, which the
+  # Cray compiler wrapper gives the C++ sources but not nvcc.
+  add_library(bf_gpu_kernels OBJECT GPU_BACKEND/bf_gpu/bf_id.cu
+                                    GPU_BACKEND/bf_gpu/bf_exchange.cu)
+  set_target_properties(bf_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  target_compile_definitions(bf_gpu_kernels PRIVATE H2_HAVE_GPU)
+  target_include_directories(bf_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
+  # nvcc does not inherit the compiler wrapper's implicit include path, and
+  # these sources reach mpi.h through gpu_runtime.hpp, so it is located once.
+  # FindMPI reports no include directory when the wrapper has it built in
+  # (Cray), hence the search.
+  find_path(BPACK_MPI_INCLUDE_DIR mpi.h
+            HINTS ${MPI_CXX_INCLUDE_DIRS} ${MPI_C_INCLUDE_DIRS} $ENV{MPICH_DIR} $ENV{MPI_ROOT}
+                  $ENV{I_MPI_ROOT} $ENV{OPENMPI_DIR}
+            PATH_SUFFIXES include)
+  if(BPACK_MPI_INCLUDE_DIR)
+    message(STATUS "Using mpi.h for the butterfly GPU kernels from '${BPACK_MPI_INCLUDE_DIR}'")
+    target_include_directories(bf_gpu_kernels PRIVATE ${BPACK_MPI_INCLUDE_DIR})
+  else()
+    message(WARNING "mpi.h not found for the butterfly GPU kernels; set BPACK_MPI_INCLUDE_DIR")
+  endif()
+  set(H2_GPU_OBJECTS $<TARGET_OBJECTS:h2_gpu_kernels> $<TARGET_OBJECTS:hodlr_gpu_kernels>
+                     $<TARGET_OBJECTS:bf_gpu_kernels>)
 endif()
 
 add_library(butterflypack

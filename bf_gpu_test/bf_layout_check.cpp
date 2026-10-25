@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
                     ec.data(), brows.data(), bcols.data(), bptr.data());
 
   int bad = 0;
+  int fails_construct = 0;
   for (int l = 0; l < nlev; l++) {
     std::printf("  level %2d: nr=%-5d nc=%-5d idx_r=%-4d idx_c=%-4d inc_r=%-3d inc_c=%-3d\n",
                 l, nr[l], nc[l], ir[l], ic[l], er[l], ec[l]);
@@ -175,6 +176,49 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::printf("LAYOUT CHECKS PASS\n");
+
+  // ---- a second construction of the same block with the device
+  // ---- rank-reveal, compared against this one.  The two are independent
+  // ---- compressions of one operator and may pick different pivots, so they
+  // ---- agree to the compression tolerance rather than bitwise; what would
+  // ---- show a broken rank-reveal is a difference far above it.
+  if (argc > 3 && std::atoi(argv[3]) != 0) {
+    F2Cptr bfg, optiong, statsg, mshg, kerquantg, ptreeg;
+    d_c_bpack_createptree(&size, groups.data(), &fcomm, &ptreeg);
+    d_c_bpack_copyoption(&option, &optiong);
+    d_c_bpack_createstats(&statsg);
+    // argv[3] == 2 is the control: build the second one on the host too, so
+    // that an exactly-zero difference confirms the device path really ran when
+    // it is 1 (a gate that silently declined would also "agree")
+    const int use_gpu = std::atoi(argv[3]) == 2 ? 0 : 1;
+    d_c_bpack_set_I_option(&optiong, "HODLR_use_gpu", use_gpu);
+    int Mg = Npo, Ng = Npo, myrowg = 0, mycolg = 0;
+    d_c_bf_construct_init(&Mg, &Ng, &myrowg, &mycolg, nns.data(), nns.data(), &msh, &msh, &bfg,
+                          &optiong, &statsg, &mshg, &kerquantg, &ptreeg, &distmn, &nearfar, nullptr);
+    d_c_bf_construct_element_compute(&bfg, &optiong, &statsg, &mshg, &kerquantg, &ptreeg, &elem,
+                                     &elem_block, nullptr);
+    int Lg = 0, LHg = 0, bMg = 0, bNg = 0, bMlg = 0, bNlg = 0, nlevg = 0, nblkg = 0;
+    d_c_bf_get_layout(bfg, &Lg, &LHg, &bMg, &bNg, &bMlg, &bNlg, &nlevg, &nblkg);
+    const int nrhs_c = 2;
+    std::vector<double> xc(size_t(bNl) * nrhs_c), y0(size_t(bMl) * nrhs_c, 0.0),
+                        y1(size_t(bMl) * nrhs_c, 0.0);
+    std::mt19937_64 crng(4242);
+    std::uniform_real_distribution<double> cuni(-1.0, 1.0);
+    for (auto& v : xc) v = cuni(crng);
+    int nin_c = bNl, nout_c = bMl, nv_c = nrhs_c;
+    char opn = 'N';
+    d_c_bf_mult(&opn, xc.data(), y0.data(), &nin_c, &nout_c, &nv_c, &bf, &option2, &stats2, &ptree2);
+    d_c_bf_mult(&opn, xc.data(), y1.data(), &nin_c, &nout_c, &nv_c, &bfg, &optiong, &statsg, &ptreeg);
+    double num = 0, den = 0;
+    for (size_t i = 0; i < y0.size(); i++) { num += (y1[i]-y0[i])*(y1[i]-y0[i]); den += y0[i]*y0[i]; }
+    const double rel = den > 0 ? std::sqrt(num/den) : std::sqrt(num);
+    const double tol = 1e-4;   // tol_comp set above
+    std::printf("  [rank %d] construction: host L=%d blocks=%d, second(use_gpu=%d) L=%d blocks=%d, "
+                "||y2 - y_host||/||y_host|| = %.3e  %s\n", rank, L, nblk, use_gpu, Lg, nblkg, rel,
+                rel < 50.0 * tol ? "PASS" : "FAIL");
+    std::fflush(stdout);
+    if (!(rel < 50.0 * tol)) fails_construct++;
+  }
 
   // ---- upload through the bridge, then compare the device sweep against
   // ---- ButterflyPACK's own matvec for both orientations
@@ -321,6 +365,7 @@ int main(int argc, char** argv) {
   }
   bf::gpu::release(dev);
   int total = 0;
+  fails += fails_construct;
   MPI_Allreduce(&fails, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Barrier(MPI_COMM_WORLD);
   if (rank == 0)

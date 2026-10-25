@@ -33,6 +33,11 @@
 #endif
 #define BPACK_GPU_ENABLED 1
 #include "hodlr_gpu/gpu_state.hpp"
+#if DAT == 1
+// the butterfly backend is real double for now (bf_gpu's DataType)
+#define BPACK_BF_GPU_ENABLED 1
+#include "bf_gpu/bf_id.hpp"
+#endif
 #endif
 
 namespace {
@@ -1156,6 +1161,80 @@ void c_bpack_hodlr_gpu_baca_end(void* gpu, double* out) {
 #else
   (void)gpu;
   for (int i = 0; i < 6; ++i) out[i] = 0.0;
+#endif
+}
+
+// The rank-reveal of one level of a butterfly construction, on the device
+// (GPU_BACKEND/bf_gpu).  BF_compress_NlogN does it per block under OpenMP -
+// a truncated QRCP, Q^H applied to the panel, a triangular solve - and the
+// level's panels already sit in one contiguous buffer, because
+// element_Zmn_blocklist_user filled alldat_loc_in for the whole level.  So
+// the level goes to the device as one copy and comes back as one batch.
+//
+// `entries` is the level's buffer and `blk` each panel's pointer into it; the
+// offsets are taken by subtraction here rather than recomputed in the Fortran,
+// because the fill compacts masked rows and skips empty blocks, so its block
+// order is not a reliable cumulative sum.  `transposed` is 1 for the 'C' half,
+// which factorizes the transpose.
+//
+// The results come back in the layout the batch lays out: `rank` one per
+// block, `jpvt` the cumulative sum of each panel's column count, `xout` the
+// cumulative sum of m * n, both in block order.  info 0 on success, 1 when the
+// device had no room, so the caller runs the CPU path instead.
+void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* const* blk,
+                       const int* transposed, const void* entries, const int64_t* nnz,
+                       const double* rtol, const double* atol, int* rank, int* jpvt, void* xout,
+                       int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 0;
+  const int count = *nblk;
+  if (count <= 0) return;
+  // real double only, which the guard above already ensures
+  const double* host_entries = static_cast<const double*>(entries);
+  double* host_x = static_cast<double*>(xout);
+  try {
+    bf::gpu::IdBatch batch;
+    batch.panels.resize(static_cast<size_t>(count));
+    for (int b = 0; b < count; ++b) {
+      bf::gpu::IdPanel& p = batch.panels[static_cast<size_t>(b)];
+      p.rows = rows[b];
+      p.cols = cols[b];
+      p.transposed = *transposed;
+      p.entry_offset = static_cast<const double*>(blk[b]) - host_entries;
+      if (p.entry_offset < 0 || p.entry_offset + static_cast<int64_t>(p.rows) * p.cols > *nnz) {
+        gpu_fail("c_bf_gpu_level_id", "a panel lies outside the level's entry buffer");
+      }
+    }
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    heap.ensure_initialized();
+    double* d_entries = reinterpret_cast<double*>(
+        heap.try_alloc(static_cast<size_t>(*nnz) * sizeof(double), fmm::gpu::ResidentKind::Adaptive));
+    if (d_entries == nullptr) { *info = 1; return; }
+    if (!bf::gpu::plan_id_batch(batch)) {
+      heap.free(reinterpret_cast<char*>(d_entries));
+      *info = 1;
+      return;
+    }
+    fmm::gpu::check_cuda(cudaMemcpy(d_entries, host_entries, static_cast<size_t>(*nnz) * sizeof(double),
+                                    cudaMemcpyHostToDevice), "c_bf_gpu_level_id entries");
+    bf::gpu::run_id_batch(d_entries, batch, *rtol, *atol, nullptr);
+    fmm::gpu::check_cuda(cudaMemcpy(rank, batch.d_rank, static_cast<size_t>(count) * sizeof(int),
+                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id rank");
+    fmm::gpu::check_cuda(cudaMemcpy(jpvt, batch.d_jpvt, static_cast<size_t>(batch.jpvt_elements) * sizeof(int),
+                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id jpvt");
+    fmm::gpu::check_cuda(cudaMemcpy(host_x, batch.d_x, static_cast<size_t>(batch.mat_elements) * sizeof(double),
+                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id X");
+    // the Fortran's pivots are one based
+    for (int64_t t = 0; t < batch.jpvt_elements; ++t) jpvt[t] += 1;
+    bf::gpu::release_id_batch(batch);
+    heap.free(reinterpret_cast<char*>(d_entries));
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_level_id", e.what());
+  }
+#else
+  (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
+  (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
+  *info = 1;   // no butterfly backend in this precision: the caller stays on the host
 #endif
 }
 

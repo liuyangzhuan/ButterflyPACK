@@ -21,6 +21,8 @@
 #include "ButterflyPACK_config.fi"
 module Bplus_compress
    use BPACK_DEFS
+   use BPACK_GPU
+   use iso_c_binding
    use MISC_Utilities
    use Bplus_randomizedop
    use BPACK_structure
@@ -67,6 +69,16 @@ contains
       integer::mrange_dummy(1), nrange_dummy(1)
       type(intersect), allocatable :: submats(:)
       type(intersect) :: submats_dummy(1)
+
+      !>**** the level's rank-reveal on the device (GPU_BACKEND/bf_gpu)
+      logical :: gpu_id
+      integer :: g_info, g_trans
+      integer, allocatable :: g_rows(:), g_cols(:), g_rank(:), g_jpvt(:)
+      integer(kind=8), allocatable :: g_xoff(:)
+      integer, allocatable :: g_joff(:)
+      type(c_ptr), allocatable :: g_blk(:)
+      DT, allocatable, target :: g_x(:)   ! target: its address goes to the bridge
+      DT, pointer :: g_xp(:, :)
 
 
       DT:: mat_dummy(1, 1)
@@ -187,16 +199,53 @@ contains
                endif
             endif
 
+            !>**** The level's rank-reveal on the device: one batch over every
+            !> block, which is what it wants - the entries already sit in one
+            !> contiguous buffer, because element_Zmn_blocklist_user filled
+            !> alldat_loc_in for the whole level.  g_info /= 0 means the device
+            !> declined (no room, or a precision without the butterfly
+            !> backend) and the blocks below take the CPU path unchanged.
+            gpu_id = .false.
+            if (allocated(alldat_loc_in) .and. nr*nc > 0 .and. nnz_loc > 0 .and. level /= level_butterfly + 1) then
+            if (BF_gpu_rankreveal_ok(blocks, option, Nboundall)) then
+               allocate (g_rows(nr*nc), g_cols(nr*nc), g_rank(nr*nc), g_blk(nr*nc))
+               allocate (g_xoff(nr*nc + 1), g_joff(nr*nc + 1))
+               g_xoff(1) = 0
+               g_joff(1) = 0
+               do index_ij = 1, nr*nc
+                  g_rows(index_ij) = size(submats(index_ij)%dat, 1)
+                  g_cols(index_ij) = size(submats(index_ij)%dat, 2)
+                  g_blk(index_ij) = c_loc(submats(index_ij)%dat(1, 1))
+                  g_xoff(index_ij + 1) = g_xoff(index_ij) + int(g_rows(index_ij), 8)*g_cols(index_ij)
+                  g_joff(index_ij + 1) = g_joff(index_ij) + g_cols(index_ij)
+               enddo
+               allocate (g_jpvt(max(g_joff(nr*nc + 1), 1)))
+               allocate (g_x(max(g_xoff(nr*nc + 1), 1_8)))
+               g_trans = 0
+               call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
+                                      nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
+                                      c_loc(g_x(1)), g_info)
+               gpu_id = (g_info == 0)
+            endif
+            endif
+
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
 #ifdef HAVE_OPENMP
-            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1) reduction(MAX:rank_new) reduction(+:flops)
+            !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_i_loc,index_j_loc,rank_new1,flops1,g_xp) reduction(MAX:rank_new) reduction(+:flops)
 #endif
             do index_ij = 1, nr*nc
                index_i_loc = (index_ij - 1)/nc + 1
                index_j_loc = mod(index_ij - 1, nc) + 1
                index_i = (index_i_loc - 1)*inc_r + idx_r
                index_j = (index_j_loc - 1)*inc_c + idx_c
-               call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1)
+               if (gpu_id) then
+                  call Array1DtoPointer2D(g_x(g_xoff(index_ij) + 1:g_xoff(index_ij + 1)), g_xp, &
+                                          g_rows(index_ij), g_cols(index_ij))
+                  call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1, &
+                       xdat=g_xp, jpvt_in=g_jpvt(g_joff(index_ij) + 1:g_joff(index_ij + 1)), rank_in=g_rank(index_ij))
+               else
+                  call BF_compress_NlogN_oneblock_R_rankreveal(submats,blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij,level, rank_new1, flops1)
+               endif
                rank_new = MAX(rank_new, rank_new1)
                flops =flops+flops1
             enddo
@@ -226,6 +275,7 @@ contains
                call LogMemory(stats, -SIZEOF(alldat_loc_in)/1024.0d3)
                deallocate(alldat_loc_in)
             endif
+            if(allocated(g_rows))deallocate(g_rows, g_cols, g_rank, g_blk, g_xoff, g_joff, g_jpvt, g_x)
 
             !>**** the adaptive tree sampler (forwardN15flag 3) makes a
             !> data-dependent number of rounds per rank, so a rank that has
@@ -1827,7 +1877,7 @@ contains
 
 
 
-   subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops)
+   subroutine BF_compress_NlogN_oneblock_R_rankreveal(submats, blocks, option, stats, msh, ker, ptree, index_i, index_j, index_ij, level, rank_new, flops, xdat, jpvt_in, rank_in)
 
 
       implicit none
@@ -1854,6 +1904,10 @@ contains
 
       integer, allocatable::jpvt(:)
       integer Nlayer, passflag, levelm, nrow, ncol
+      !>**** the device's rank-reveal of this block, when bf_gpu did it
+      DT, optional :: xdat(:, :)
+      integer, optional :: jpvt_in(:)
+      integer, optional :: rank_in
 
       integer, allocatable :: rankmax_for_butterfly(:), rankmin_for_butterfly(:), mrange(:), nrange(:), mrange1(:), nrange1(:), mmap(:), nmap(:)
       real(kind=8)::n2, n1,overrate
@@ -1894,32 +1948,52 @@ contains
       enddo
 
       rankmax_r = size(submats(index_ij)%dat,1)
+
+      !>**** The rank-reveal, which level 0 and the interior levels share;
+      !> level level_butterfly+1 stores its panel as it stands.  It leaves
+      !> dat(1:rank_new, 1:nn) holding X with A ~ A(:, jpvt(1:rank_new)) X, and
+      !> the placement below is the only thing that differs between levels.
+      !> With xdat/jpvt_in/rank_in present the device already did it
+      !> (GPU_BACKEND/bf_gpu) and its values are taken, so there is one copy of
+      !> the placement and of the skeleton mapping rather than two.
+      if (level /= level_butterfly + 1) then
+         allocate (jpvt(max(rankmax_c, rankmax_r)))
+         jpvt = 0
+         if (present(rank_in)) then
+            !>**** the device factorized the panel as the caller found it, so
+            !> its column count has to be the nn used here; a mismatch would
+            !> silently reveal the rank of a different matrix
+            call BPACK_require(size(xdat, 2) == nn .and. size(xdat, 1) == rankmax_r, &
+                               'bf_gpu rank-reveal: the panel shape differs from the block''s')
+            rank_new = rank_in
+            jpvt(1:rank_new) = jpvt_in(1:rank_new)
+            submats(index_ij)%dat(1:rank_new, 1:nn) = xdat(1:rank_new, 1:nn)
+         else
+            allocate (core(rankmax_r, rankmax_c))
+            do j = 1, rankmax_c
+               core(:, j) = submats(index_ij)%dat(:, select_column(j))
+            enddo
+            allocate (tau(max(rankmax_c, rankmax_r)))
+            call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
+            flops = flops + flop
+            if (rank_new > 0) then
+               call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
+               flops = flops + flop
+               call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
+               flops = flops + flop
+            else
+               rank_new = 1
+               jpvt(1) = 1
+               submats(index_ij)%dat = 0
+            endif
+         endif
+      endif
+
       if (level == 0) then
 
          header_m = msh%basis_group(group_m)%head
          header_n = msh%basis_group(group_n)%head
 
-         allocate (core(rankmax_r, rankmax_c))
-         do j = 1, rankmax_c
-            core(:, j) = submats(index_ij)%dat(:, select_column(j))
-         enddo
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            jpvt(1) = 1
-            submats(index_ij)%dat = 0
-         endif
 
          index_j_loc_k = (index_j - blocks%ButterflyV%idx)/blocks%ButterflyV%inc + 1
          allocate (blocks%ButterflyV%blocks(index_j_loc_k)%matrix(nn, rank_new))
@@ -1947,27 +2021,6 @@ contains
          header_n2 = msh%basis_group(2*group_n + 1)%head
          nnn1 = msh%basis_group(2*group_n)%tail - msh%basis_group(2*group_n)%head + 1
 
-         allocate (core(rankmax_r, rankmax_c))
-         do j = 1, rankmax_c
-            core(:, j) = submats(index_ij)%dat(:, select_column(j))
-         enddo
-
-         allocate (jpvt(max(rankmax_c, rankmax_r)))
-         allocate (tau(max(rankmax_c, rankmax_r)))
-         jpvt = 0
-         call geqp3modf90(core, jpvt, tau, option%tol_comp, BPACK_SafeUnderflow, rank_new, flop=flop)
-         flops = flops + flop
-
-         if (rank_new > 0) then
-            call un_or_mqrf90(core, tau, submats(index_ij)%dat, 'L', 'C', rankmax_r, nn, rank_new, flop=flop)
-            flops = flops + flop
-            call trsmf90(core, submats(index_ij)%dat, 'L', 'U', 'N', 'N', rank_new, nn, flop=flop)
-            flops = flops + flop
-         else
-            rank_new = 1
-            jpvt(1) = 1
-            submats(index_ij)%dat = 0
-         endif
 
          allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k)%matrix(rank_new, nn1))
          allocate (blocks%ButterflyKerl(level)%blocks(index_i_loc_k, index_j_loc_k + 1)%matrix(rank_new, nn2))
@@ -1997,7 +2050,6 @@ contains
       if (allocated(select_column)) deallocate (select_column)
 
    end subroutine BF_compress_NlogN_oneblock_R_rankreveal
-
 
 
 
