@@ -309,7 +309,15 @@ int main(int argc, char** argv) {
   // caching it: a matvec runs no collective of its own.  So each orientation
   // is checked several times through one plan, including at a different nrhs,
   // where only the element offsets and message sizes change.
-  const int nrhs_cases[] = {3, 7, 3};
+  //
+  // Every device kernel sums in k order; OpenBLAS does too at an even nrhs,
+  // so there the device must match the reference to the bit.  At an odd nrhs
+  // OpenBLAS changes order on blocks of real rank (bf_gpu_test/obj/blas_tail),
+  // so there it must agree to rounding only - still checked, because a bug in
+  // our own odd-column paths would otherwise go untested.
+  const int nrhs_cases[] = {3, 8, 7, 4, 3};
+  const int ncases = static_cast<int>(sizeof(nrhs_cases) / sizeof(nrhs_cases[0]));
+  auto passes = [](int nrhs, double rel) { return nrhs % 2 == 0 ? rel == 0.0 : rel < 1e-12; };
   int fails = 0;
   for (int t = 0; t < 2; t++) {
     const char op = t == 0 ? 'N' : 'T';
@@ -319,7 +327,7 @@ int main(int argc, char** argv) {
     bf::gpu::SweepPlan plan;
     bf::gpu::build_sweep_plan(bridge, dev, op, nrhs_cases[0], plan);
     const bf::gpu::SweepPlan::Traffic tr = plan.traffic();
-    for (int c = 0; c < 3; c++) {
+    for (int c = 0; c < ncases; c++) {
       const int nrhs = nrhs_cases[c];
       std::vector<double> x(size_t(nin) * nrhs), yref(size_t(nout) * nrhs, 0.0),
                           ygpu(size_t(nout) * nrhs, 0.0);
@@ -369,15 +377,17 @@ int main(int argc, char** argv) {
         den += yref[i] * yref[i];
       }
       const double rel = den > 0 ? std::sqrt(num / den) : std::sqrt(num);
-      if (rank == 0 || !(rel < 1e-12)) {
-        std::printf("  [rank %d] op=%c use=%d nrhs=%d flops=%.3e rel=%.3e  %s   "
+      const bool ok = passes(nrhs, rel);
+      if (rank == 0 || !ok) {
+        std::printf("  [rank %d] op=%c use=%d nrhs=%d flops=%.3e rel=%.3e  %s (%s)   "
                     "exchange: %d levels, pair %lld->/%lld<- (%lld rows), mid %lld->/%lld<- (%lld rows)\n",
-                    rank, op, c, nrhs, fl, rel, rel < 1e-12 ? "PASS" : "FAIL", tr.levels_exchanging,
+                    rank, op, c, nrhs, fl, rel, ok ? "PASS" : "FAIL", nrhs % 2 == 0 ? "exact" : "< 1e-12",
+                    tr.levels_exchanging,
                     (long long)tr.pair_send, (long long)tr.pair_recv, (long long)tr.pair_rows,
                     (long long)tr.mid_send, (long long)tr.mid_recv, (long long)tr.mid_rows);
         std::fflush(stdout);
       }
-      if (!(rel < 1e-12)) fails++;
+      if (!ok) fails++;
     }
     scratch.release();
     plan.release();
