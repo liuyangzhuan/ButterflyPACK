@@ -24,6 +24,7 @@
 #include <memory>
 
 #include "bf_device.hpp"
+#include "bf_extract.hpp"
 #include "bf_matvec.hpp"
 #include "bf_ranges.hpp"
 #include "bf_sweep_n.hpp"
@@ -53,12 +54,18 @@ struct BfResident {
     BfBridge bridge;
     SweepPlan plan_n, plan_t;
     SweepScratch scratch;
+    // the entry extraction's (bf_extract.hpp): the leaves, and the metadata
+    // image of a call with its device copy, both reused between calls
+    ExtractLeaves leaves;
+    fmm::gpu::MetaBuilder extract_meta;
+    fmm::gpu::DeviceBuffer extract_meta_device;
 
     ~BfResident() { release(); }
     void release() {
         plan_n.release();
         plan_t.release();
         scratch.release();
+        extract_meta_device.release();
         bf::gpu::release(dev);
     }
     // the plan of one orientation, built on first use

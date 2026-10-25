@@ -722,6 +722,24 @@ int main(int argc, char* argv[]) {
                   << " seconds_avg=" << sum / std::max(opt.extract_reps, 1)
                   << " rel=" << std::sqrt(sums[0] / sums[1]) << split << std::endl;
       }
+      // on the GPU, against the host's extraction of the same butterfly: the products are the
+      // same up to their order, so they agree to rounding
+      if (gpu > 0) {
+        std::vector<double> host(data.size());
+        d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", 0);
+        MPI_Barrier(MPI_COMM_WORLD);
+        const double s0 = MPI_Wtime();
+        d_c_bf_extractelement(&bf1.bf, &bf1.option, &bf1.msh, &bf1.stats, &ptree, &Ninter, &Nallrows, &Nallcols,
+                              &mine, rows.data(), cols.data(), host.data(), rowidx.data(), colidx.data(),
+                              pgidx.data(), &Npmap, pmaps.data());
+        MPI_Barrier(MPI_COMM_WORLD);
+        const double t_host = MPI_Wtime() - s0;
+        d_c_bpack_set_I_option(&bf1.option, "HODLR_use_gpu", static_cast<int>(gpu));
+        const double rel = relative_difference(host, data, static_cast<size_t>(mine));
+        if (myid == 0) {
+          std::cout << "BFTEST check bf=1 extract gpu_vs_cpu rel=" << rel << " seconds_cpu=" << t_host << std::endl;
+        }
+      }
     }
 
     // the vectors BF2 and BF3 are compared with BF1 on

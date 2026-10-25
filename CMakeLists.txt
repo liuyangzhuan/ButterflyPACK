@@ -616,7 +616,8 @@ if (enable_h2_gpu)
   # the sweep's inter-level exchanges and so needs the MPI headers, which the
   # Cray compiler wrapper gives the C++ sources but not nvcc.
   add_library(bf_gpu_kernels OBJECT GPU_BACKEND/bf_gpu/bf_id.cu
-                                    GPU_BACKEND/bf_gpu/bf_exchange.cu)
+                                    GPU_BACKEND/bf_gpu/bf_exchange.cu
+                                    GPU_BACKEND/bf_gpu/bf_extract.cu)
   set_target_properties(bf_gpu_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_compile_definitions(bf_gpu_kernels PRIVATE H2_HAVE_GPU)
   target_include_directories(bf_gpu_kernels PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)

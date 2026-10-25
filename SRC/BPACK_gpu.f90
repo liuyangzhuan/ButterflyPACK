@@ -412,6 +412,21 @@ module BPACK_GPU
          real(c_double) :: flops
       end subroutine c_bf_gpu_mult_host
 
+      !>**** The entries of a list of intersections of a butterfly, on the
+      !> device (GPU_BACKEND/bf_gpu/bf_extract.hpp), in C_BF_ExtractElement's
+      !> arguments (columns 1..N, pgidx 0 based).  info 1: the device declined
+      !> (a butterfly on several ranks, a block another rank owns, no room)
+      !> and the caller runs the host path.
+      subroutine c_bf_gpu_extract(bf, ptree, ninter, allrows, allcols, rowidx, colidx, pgidx, npmap, pmaps, &
+                                  alldat_loc, nalldat_loc, flops, info) bind(c, name="c_bf_gpu_extract")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         type(c_ptr), value :: bf, ptree, alldat_loc
+         integer(c_int) :: ninter, npmap, info
+         integer(c_int) :: allrows(*), allcols(*), rowidx(*), colidx(*), pgidx(*), pmaps(*)
+         integer(c_int64_t) :: nalldat_loc
+         real(c_double) :: flops
+      end subroutine c_bf_gpu_extract
+
       !>**** Drop what a butterfly holds on the device; before it is freed
       subroutine c_bf_gpu_release(bf) bind(c, name="c_bf_gpu_release")
          import :: c_ptr
@@ -461,6 +476,18 @@ contains
       if (.not. BPACK_gpu_available()) return
       BF_gpu_mult_ok = .true.
    end function BF_gpu_mult_ok
+
+   !>**** Whether a butterfly's entry extraction is tried on the device
+   !> (GPU_BACKEND/bf_gpu/bf_extract.hpp): as for the matvec.  The device
+   !> itself declines what it does not handle yet - a butterfly on several
+   !> ranks, a block another rank owns - and the host path runs.
+   logical function BF_gpu_extract_ok(blocks, option)
+      implicit none
+      type(matrixblock)::blocks
+      type(Hoption)::option
+
+      BF_gpu_extract_ok = BF_gpu_mult_ok(blocks, option)
+   end function BF_gpu_extract_ok
 
    !> Whether this library has the GPU backend (the double or double complex
    !> library of a build with enable_h2_gpu=ON)

@@ -1488,6 +1488,65 @@ void c_bf_gpu_mult_host(void* bf, void* ptree, const char* op, const int* nrhs, 
 #endif
 }
 
+// The entries of a list of intersections of a butterfly, on the device
+// (bf_extract.hpp), for C_BF_ExtractElement: the intersections as it receives
+// them (rows 1..M and columns 1..N in the butterfly's order, stacked; pgidx,
+// 0 based, and pmaps the process grid of each), every block into alldat_loc
+// in order, column major.  A butterfly on one process whose every block this
+// rank owns in a 1 x 1 grid; otherwise info 1, and the host path runs.  Not
+// collective, except for the device's setup at a butterfly's first use, which
+// on one process involves no other rank.
+void c_bf_gpu_extract(void* bf, void* ptree, const int* ninter, const int* allrows, const int* allcols,
+                      const int* rowidx, const int* colidx, const int* pgidx, const int* npmap,
+                      const int* pmaps, void* alldat_loc, const int64_t* nalldat_loc, double* flops,
+                      int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 1;
+  *flops = 0.0;
+  try {
+    const int count = *ninter;
+    int is_head = 0, comm_f = 0, nproc = 1;
+    c_bf_get_sub_head(bf, ptree, &is_head, &comm_f, &nproc);
+    if (nproc != 1) return;
+    int64_t want = 0, nr = 0, nc = 0;
+    for (int k = 0; k < count; ++k) {
+      const int pg = pgidx[k];
+      if (pmaps[pg] != 1 || pmaps[pg + *npmap] != 1 || pmaps[pg + 2 * *npmap] != 0) return;
+      want += static_cast<int64_t>(rowidx[k]) * colidx[k];
+      nr += rowidx[k];
+      nc += colidx[k];
+    }
+    if (want != *nalldat_loc) return;
+    bf::gpu::BfResident* r = bf_resident(bf, ptree);
+    if (r == nullptr) return;
+    std::vector<int> rows(allrows, allrows + nr), cols(allcols, allcols + nc);
+    for (int& i : rows) i -= 1;
+    for (int& j : cols) j -= 1;
+    bf::gpu::ExtractProfile prof;
+    if (!bf::gpu::extract(r->dev, r->leaves, count, rowidx, colidx, rows.data(), cols.data(),
+                          static_cast<double*>(alldat_loc), prof, r->extract_meta, r->extract_meta_device)) {
+      return;  // no room on the device for the partial products
+    }
+    *flops = prof.flops;
+    *info = 0;
+    if (fmm::env::trace("phase")) {
+      std::printf("BF GPU extract: %d intersections, %lld entries, %lld GEMMs, %.3e flops: plan %.4f s, "
+                  "run %.4f s\n",
+                  count, static_cast<long long>(prof.entries), static_cast<long long>(prof.items), prof.flops,
+                  prof.plan, prof.run);
+      std::fflush(stdout);
+    }
+  } catch (const std::exception& e) {
+    gpu_fail("c_bf_gpu_extract", e.what());
+  }
+#else
+  (void)bf; (void)ptree; (void)ninter; (void)allrows; (void)allcols; (void)rowidx; (void)colidx;
+  (void)pgidx; (void)npmap; (void)pmaps; (void)alldat_loc; (void)nalldat_loc;
+  *flops = 0.0;
+  *info = 1;
+#endif
+}
+
 // Drop what a butterfly holds on the device.  The caller must do this before
 // the block is freed: the store is keyed on its address, and although every
 // lookup re-checks the block's layout, releasing is what keeps the device

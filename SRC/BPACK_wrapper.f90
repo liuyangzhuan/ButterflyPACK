@@ -5248,6 +5248,9 @@ contains
       type(proctree), pointer::ptree
       type(mesh), pointer::msh
       real(kind=8) t1, t2
+      integer(c_int) :: gpu_info
+      real(c_double) :: gpu_flops
+      type(c_ptr) :: gpu_dat
 
       t1 = MPI_Wtime()
 
@@ -5260,6 +5263,18 @@ contains
       stats%Flop_C_Extract = 0
       stats%Time_C_Extract = 0
 
+      !>**** on the device when the options ask for it and it can
+      !> (GPU_BACKEND/bf_gpu/bf_extract.hpp); gpu_info 1: the host runs it
+      gpu_info = 1
+      if (BF_gpu_extract_ok(blocks_o, option)) then
+         gpu_dat = c_null_ptr
+         if (Nalldat_loc > 0) gpu_dat = c_loc(alldat_loc(1))
+         call c_bf_gpu_extract(block_Cptr, ptree_Cptr, Ninter, allrows, allcols, rowidx, colidx, pgidx, Npmap, &
+                               pmaps, gpu_dat, Nalldat_loc, gpu_flops, gpu_info)
+         if (gpu_info == 0) stats%Flop_Tmp = gpu_flops
+      endif
+
+      if (gpu_info /= 0) then
       idx_row = sum(rowidx)
       allocate (allrows1(idx_row))
       allrows1 = allrows
@@ -5282,6 +5297,7 @@ contains
       deallocate (allrows1)
       deallocate (allcols1)
       deallocate (pgidx1)
+      endif
 
       t2 = MPI_Wtime()
 
