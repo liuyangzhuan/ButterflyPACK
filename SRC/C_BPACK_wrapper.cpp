@@ -1939,6 +1939,86 @@ void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evalu
 }
 
 /*
+ * The same three kinds of evaluator for a butterfly block (the bf handle of
+ * c_bf_construct_init): with HODLR_use_gpu > 0, c_bf_construct_element_compute
+ * then takes the block's entries from the device.  K(i, j): i a row and j a
+ * column, each by its own mesh - the CPU callbacks' indices minus one;
+ * coordinates only for a butterfly built with geometry (nogeo 0 or 4).
+ */
+#ifdef BPACK_GPU_EVALUATORS
+template<typename Make>
+static void bf_set_gpu_evaluator(F2Cptr* bf, const char* caller, Make make) {
+  using H2Data = typename butterfly::fmm_data<C_DT>::type;
+  if (bf == nullptr || *bf == nullptr) throw std::invalid_argument(std::string(caller) + ": null butterfly handle");
+  const std::shared_ptr<fmm::gpu::Evaluator> evaluator = make(static_cast<int>(sizeof(H2Data)));
+  c_bf_gpu_set_evaluator(*bf, &evaluator);
+}
+#endif
+
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (launchers == nullptr) throw std::invalid_argument("c_bf_set_gpu_entry_launchers: null argument");
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_launchers", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_launchers(*launchers, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)launchers;
+#endif
+}
+
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams,
+                               const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (source == nullptr || flags == nullptr || (nparams != nullptr && *nparams > 0 && params == nullptr)) {
+    throw std::invalid_argument("c_bf_set_gpu_entry_source: null argument");
+  }
+  const int count = nparams != nullptr ? std::max(*nparams, 0) : 0;
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_entry_source", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_source(source, params, count, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)source;
+  (void)params;
+  (void)nparams;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_block_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_block_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_block(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (evaluate == nullptr || flags == nullptr) {
+    throw std::invalid_argument("c_bf_set_gpu_list_evaluator: null argument");
+  }
+  bf_set_gpu_evaluator(bf, "c_bf_set_gpu_list_evaluator", [&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_list(evaluate, user, *flags, scalar_bytes);
+  });
+#else
+  (void)bf;
+  (void)evaluate;
+  (void)user;
+  (void)flags;
+#endif
+}
+
+/*
  * The warm-up of the registered GPU evaluator now, on the GPU the matrix will
  * use, rather than before its first level (fmm::gpu::Evaluator::warm_up):
  * for H2 with H2_use_gpu, after the registration.  seconds[0]: its time on

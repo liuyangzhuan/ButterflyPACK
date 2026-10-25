@@ -72,6 +72,9 @@ contains
 
       !>**** the level's rank-reveal on the device (GPU_BACKEND/bf_gpu)
       logical :: gpu_id
+      !>**** the level's entries left on the device by the butterfly's GPU
+      !> evaluator for that rank-reveal, rather than brought to the host
+      logical :: entries_dev
       integer :: g_info, g_trans
       integer, allocatable :: g_rows(:), g_cols(:), g_rank(:), g_jpvt(:)
       integer(kind=8), allocatable :: g_xoff(:)
@@ -82,7 +85,11 @@ contains
 
 
       DT:: mat_dummy(1, 1)
+      !>**** seconds by phase, for BPACK_TRACE=phase: sampling, entries, the
+      !> device's rank-reveal, the placement, the level's end
+      real(kind=8) :: tph(5), tq
       Memory = 0.
+      tph = 0
 
       blocks%rankmax = -100000
       blocks%rankmin = 100000
@@ -173,6 +180,7 @@ contains
             enddo
 
 
+            entries_dev = .false.
             if(option%forwardN15flag==3)then
                call assert(option%pat_comp==1,'forwardN15flag=3 currently only supports pat_comp=1')
                call BF_compress_NlogN_tree_R_sample(submats, nr, nc, idx_r, idx_c, inc_r, inc_c, blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, stats, msh, ker, ptree, level, flops1)
@@ -189,15 +197,20 @@ contains
                   flops =flops+flops1
                enddo
                n2 = MPI_Wtime()
+               tph(1) = tph(1) + n2 - n1
                ! time_tmp = time_tmp + n2 - n1
                if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                   allocate(alldat_loc_in(nnz_loc))
                   call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
-                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+                  entries_dev = c_associated(ker%gpu_entries) .and. BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+                  call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in, &
+                                                  entries_on_device=entries_dev)
                else
                   call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
                endif
+               tph(2) = tph(2) + MPI_Wtime() - n2
             endif
+            tq = MPI_Wtime()
 
             !>**** The level's rank-reveal on the device: one batch over every
             !> block, which is what it wants - the entries already sit in one
@@ -222,12 +235,20 @@ contains
                allocate (g_jpvt(max(g_joff(nr*nc + 1), 1)))
                allocate (g_x(max(g_xoff(nr*nc + 1), 1_8)))
                g_trans = 0
-               call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
-                                      nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
-                                      c_loc(g_x(1)), g_info)
+               if (entries_dev) then
+                  call c_bf_gpu_level_id_kept(ker%gpu_entries, nr*nc, g_rows, g_cols, g_blk, g_trans, &
+                                              c_loc(alldat_loc_in(1)), nnz_loc, option%tol_comp, BPACK_SafeUnderflow, &
+                                              g_rank, g_jpvt, c_loc(g_x(1)), g_info)
+               else
+                  call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
+                                         nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
+                                         c_loc(g_x(1)), g_info)
+               endif
                gpu_id = (g_info == 0)
             endif
             endif
+            tph(3) = tph(3) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
 
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
 #ifdef HAVE_OPENMP
@@ -252,6 +273,8 @@ contains
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
+            tph(4) = tph(4) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
 
 
@@ -305,6 +328,7 @@ contains
             endif
             endif
             stats%Flop_Fill = stats%Flop_Fill + flops
+            tph(5) = tph(5) + MPI_Wtime() - tq
          enddo
 
          level_final = level_half + 1
@@ -363,14 +387,21 @@ contains
             enddo
             ! !$omp end parallel do
             n2 = MPI_Wtime()
+            tph(1) = tph(1) + n2 - n1
             ! time_tmp = time_tmp + n2 - n1
+            entries_dev = .false.
             if(Nboundall==0)then ! Nboundall>0 means there are intersections with masks, which cannot use contiguous buffers yet.
                allocate(alldat_loc_in(nnz_loc))
                call LogMemory(stats, SIZEOF(alldat_loc_in)/1024.0d3)
-               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in)
+               entries_dev = level /= level_final .and. c_associated(ker%gpu_entries) .and. &
+                             BF_gpu_rankreveal_ok(blocks, option, Nboundall)
+               call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats, alldat_loc_in, &
+                                               entries_on_device=entries_dev)
             else
                call element_Zmn_blocklist_user(submats, nr*nc, msh, option, ker, 0, passflag, ptree, stats)
             endif
+            tph(2) = tph(2) + MPI_Wtime() - n2
+            tq = MPI_Wtime()
 
             rank_new = 0
             flops = 0
@@ -396,12 +427,20 @@ contains
                allocate (g_jpvt(max(g_joff(nr*nc + 1), 1)))
                allocate (g_x(max(g_xoff(nr*nc + 1), 1_8)))
                g_trans = 1
-               call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
-                                      nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
-                                      c_loc(g_x(1)), g_info)
+               if (entries_dev) then
+                  call c_bf_gpu_level_id_kept(ker%gpu_entries, nr*nc, g_rows, g_cols, g_blk, g_trans, &
+                                              c_loc(alldat_loc_in(1)), nnz_loc, option%tol_comp, BPACK_SafeUnderflow, &
+                                              g_rank, g_jpvt, c_loc(g_x(1)), g_info)
+               else
+                  call c_bf_gpu_level_id(nr*nc, g_rows, g_cols, g_blk, g_trans, c_loc(alldat_loc_in(1)), &
+                                         nnz_loc, option%tol_comp, BPACK_SafeUnderflow, g_rank, g_jpvt, &
+                                         c_loc(g_x(1)), g_info)
+               endif
                gpu_id = (g_info == 0)
             endif
             endif
+            tph(3) = tph(3) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp/max(1,blocks%level_butterfly/2)
 #ifdef HAVE_OPENMP
             !$omp parallel do default(shared) private(index_ij,index_i,index_j,index_j_loc,index_i_loc,rank_new1,flops1,g_xp) reduction(MAX:rank_new) reduction(+:flops)
@@ -428,6 +467,8 @@ contains
 #ifdef HAVE_OPENMP
             !$omp end parallel do
 #endif
+            tph(4) = tph(4) + MPI_Wtime() - tq
+            tq = MPI_Wtime()
             if(option%format==3 .and. option%near_para<=0.1d0)option%tol_comp = option%tol_comp*max(1,blocks%level_butterfly/2)
             do index_ij = 1, nr*nc
                if(Nboundall>0)then
@@ -462,6 +503,7 @@ contains
             endif
             endif
             stats%Flop_Fill = stats%Flop_Fill + flops
+            tph(5) = tph(5) + MPI_Wtime() - tq
          enddo
 
       endif
@@ -493,6 +535,8 @@ contains
 
       call BF_ComputeMemory(blocks, Memory)
       call BF_get_rank(blocks, ptree)
+      if (c_bpack_env_trace('phase'//c_null_char) /= 0 .and. ptree%MyID == ptree%pgrp(blocks%pgno)%head) &
+         write (*, '(A,5Es11.3)') ' BF_compress_NlogN (s): sample, entries, device rank-reveal, placement, level end', tph
       return
 
    end subroutine BF_compress_NlogN

@@ -127,6 +127,22 @@ typedef struct bpack_gpu_entry_launchers {
 void d_c_bpack_set_gpu_entry_launchers(void** bmat, const bpack_gpu_entry_launchers* launchers);
 void z_c_bpack_set_gpu_entry_launchers(void** bmat, const bpack_gpu_entry_launchers* launchers);
 
+/* The same registrations for a butterfly block (the bf handle of
+ * c_bf_construct_init; HODLR_use_gpu > 0): K(i, j) with i a row of its row
+ * mesh and j a column of its column mesh, the CPU callbacks' indices minus
+ * one.  Coordinates (BPACK_GPU_COORDINATES) only for a butterfly built with
+ * geometry (nogeo 0 or 4).  C++ entry evaluators: bpack::gpu::set_bf_entry_evaluator. */
+void d_c_bf_set_gpu_entry_launchers(void** bf, const bpack_gpu_entry_launchers* launchers);
+void z_c_bf_set_gpu_entry_launchers(void** bf, const bpack_gpu_entry_launchers* launchers);
+void d_c_bf_set_gpu_entry_source(void** bf, const char* source, const double* params, const int* nparams,
+                                 const int* flags);
+void z_c_bf_set_gpu_entry_source(void** bf, const char* source, const double* params, const int* nparams,
+                                 const int* flags);
+void d_c_bf_set_gpu_block_evaluator(void** bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void z_c_bf_set_gpu_block_evaluator(void** bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void d_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+void z_c_bf_set_gpu_list_evaluator(void** bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
+
 #ifdef __cplusplus
 }
 #endif

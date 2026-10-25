@@ -47,6 +47,9 @@
 #endif
 
 #include "dBPACK_wrapper.h"
+#ifdef BPACK_EXAMPLE_GPU
+#include "gpu/gpu_evaluators.h"
+#endif
 
 extern "C" void Cblacs_exit(int);
 
@@ -70,6 +73,7 @@ struct DriverOptions {
   int extract_blocks = 64;     // intersections of the extraction timing
   int extract_size = 64;       // their rows and columns
   int extract_reps = 3;
+  int gpu_evaluator = 1;       // with the GPU on, BF1's entries from a GPU evaluator of the kernel
   bool show_help = false;
 };
 
@@ -134,6 +138,8 @@ DriverOptions parse_driver_options(int argc, char** argv) {
       o.extract_size = std::stoi(value);
     } else if (name == "extract_reps") {
       o.extract_reps = std::stoi(value);
+    } else if (name == "gpu_evaluator") {
+      o.gpu_evaluator = std::stoi(value);
     }
   }
   if (o.kernel != "dft" && o.kernel != "laplace") throw std::invalid_argument("--kernel is dft or laplace");
@@ -163,6 +169,8 @@ void print_usage(const char* program) {
       << "  --extract_blocks b      intersections of BF1's extraction timing (64; 0: none)\n"
       << "  --extract_size s        rows and columns of each (64)\n"
       << "  --extract_reps r        repetitions (3)\n"
+      << "  --gpu_evaluator 0|1     with the GPU on, BF1's entries from a GPU evaluator of the\n"
+      << "                          kernel (1) or from the CPU callbacks (0)\n"
       << "The butterfly needs --lrlevel >= 1 (the driver sets 100); --hodlr_use_gpu 1 asks for the\n"
       << "GPU paths.  Results: lines starting with BFTEST.\n";
 }
@@ -188,6 +196,8 @@ class Kernel {
   }
 
   bool geometric() const { return laplace_; }
+  double x(int64_t i) const { return x_[i]; }
+  double xi(int64_t j) const { return xi_[j]; }
   int dim() const { return laplace_ ? 3 : 1; }
 
   double operator()(int64_t i, int64_t j) const {
@@ -224,7 +234,6 @@ class Kernel {
     return xyz;
   }
 
- private:
   void row_point(int64_t i, double* p) const {
     const double h = 1.0 / side_r_;
     p[0] = (static_cast<double>(i % side_r_) + 0.5) * h;
@@ -237,6 +246,8 @@ class Kernel {
     q[1] = (static_cast<double>(j / side_c_) + 0.5) * h;
     q[2] = gap_;
   }
+
+ private:
 
   bool laplace_;
   int M_, N_;
@@ -514,6 +525,23 @@ int main(int argc, char* argv[]) {
     int Ml1 = Ml, Nl1 = Nl;
     d_c_bf_construct_init(&M, &N, &Ml1, &Nl1, nns.data(), nns.data(), &msh_r, &msh_c, &bf1.bf, &bf1.option,
                           &bf1.stats, &bf1.msh, &bf1.ker, &ptree, &no_distance, &no_admissibility, &kernel_source);
+#ifdef BPACK_EXAMPLE_GPU
+    // the kernel's GPU evaluator: its tables by the ids it receives, the trees' order (the CPU
+    // callbacks' indices minus one), so through the trees' permutations
+    if (gpu > 0 && opt.gpu_evaluator) {
+      if (kernel.geometric()) {
+        std::vector<double> p(static_cast<size_t>(M) * 3), q(static_cast<size_t>(N) * 3);
+        for (int r = 0; r < M; ++r) kernel.row_point(row_perm[r] - 1, &p[3 * static_cast<size_t>(r)]);
+        for (int c = 0; c < N; ++c) kernel.col_point(col_perm[c] - 1, &q[3 * static_cast<size_t>(c)]);
+        butterfly_gpu_register_laplace(&bf1.bf, p.data(), M, q.data(), N);
+      } else {
+        std::vector<double> xr(M), xc(N);
+        for (int r = 0; r < M; ++r) xr[r] = kernel.x(row_perm[r] - 1);
+        for (int c = 0; c < N; ++c) xc[c] = kernel.xi(col_perm[c] - 1);
+        butterfly_gpu_register_dft(&bf1.bf, xr.data(), M, xc.data(), N, opt.scale);
+      }
+    }
+#endif
     MPI_Barrier(MPI_COMM_WORLD);
     double t0 = MPI_Wtime();
     d_c_bf_construct_element_compute(&bf1.bf, &bf1.option, &bf1.stats, &bf1.msh, &bf1.ker, &ptree, &kernel_entry,
@@ -522,14 +550,14 @@ int main(int argc, char* argv[]) {
     const double t_bf1 = MPI_Wtime() - t0;
     {
       double entry = stat(bf1.stats, "Time_Entry"), flops = stat(bf1.stats, "Flop_Fill");
-      double mem = stat(bf1.stats, "Mem_Fill");
+      double mem = stat(bf1.stats, "Mem_Fill"), warm = stat(bf1.stats, "Time_GPU_Warmup");
       double entry_max = entry;
       MPI_Allreduce(MPI_IN_PLACE, &entry_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
       MPI_Allreduce(MPI_IN_PLACE, &flops, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       MPI_Allreduce(MPI_IN_PLACE, &mem, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
       if (myid == 0) {
-        std::cout << "BFTEST construct bf=1 from=kernel seconds=" << t_bf1 << " entry_max=" << entry_max
-                  << " flops=" << flops << " mem_MB=" << mem << std::endl;
+        std::cout << "BFTEST construct bf=1 from=kernel seconds=" << t_bf1 - warm << " entry_max=" << entry_max
+                  << " flops=" << flops << " mem_MB=" << mem << " gpu_warmup=" << warm << std::endl;
       }
     }
     print_layout(myid, "bf1", bf1);
@@ -835,6 +863,9 @@ int main(int argc, char* argv[]) {
     d_c_bpack_deleteoption(&mesh_option);
     d_c_bpack_deleteoption(&option);
     d_c_bpack_deleteproctree(&ptree);
+#ifdef BPACK_EXAMPLE_GPU
+    butterfly_gpu_release();
+#endif
   } catch (const std::exception& error) {
     std::cerr << "Butterfly_Driver error on rank " << myid << ": " << error.what() << std::endl;
     return_code = 1;

@@ -123,6 +123,11 @@ module BPACK_GPU
          character(kind=c_char), dimension(*) :: value
       end function c_bpack_env_check
 
+      integer(c_int) function c_bpack_env_trace(value) bind(c, name="c_bpack_env_trace")
+         import :: c_int, c_char
+         character(kind=c_char), dimension(*) :: value
+      end function c_bpack_env_trace
+
       subroutine c_bpack_hodlr_gpu_add_leaf(gpu, row0, m, d, ldd) bind(c, name="c_bpack_hodlr_gpu_add_leaf")
          import :: c_ptr, c_int, c_int64_t
          type(c_ptr), value :: gpu, d
@@ -399,6 +404,22 @@ module BPACK_GPU
          integer(c_int) :: rank(*), jpvt(*), info
       end subroutine c_bf_gpu_level_id
 
+      !>**** c_bf_gpu_level_id on the entries the butterfly's GPU evaluator
+      !> (handle) left on the device; `entries` is the host buffer they mirror,
+      !> filled only when the device declines (info 1)
+      subroutine c_bf_gpu_level_id_kept(handle, nblk, rows, cols, blk, transposed, entries, nnz, rtol, atol, &
+                                        rank, jpvt, xout, info) bind(c, name="c_bf_gpu_level_id_kept")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         type(c_ptr), value :: handle
+         integer(c_int) :: nblk, transposed
+         integer(c_int) :: rows(*), cols(*)
+         type(c_ptr) :: blk(*)
+         integer(c_int64_t) :: nnz
+         type(c_ptr), value :: entries, xout
+         real(c_double) :: rtol, atol
+         integer(c_int) :: rank(*), jpvt(*), info
+      end subroutine c_bf_gpu_level_id_kept
+
       !>**** A butterfly matvec on the caller's host arrays, run on the device
       !> (GPU_BACKEND/bf_gpu): y = op(bf) x, the factors resident between
       !> calls.  Collective over the butterfly's ranks.  info 1 means the
@@ -426,6 +447,18 @@ module BPACK_GPU
          integer(c_int64_t) :: nalldat_loc
          real(c_double) :: flops
       end subroutine c_bf_gpu_extract
+
+      !>**** The handle of a butterfly's GPU evaluator (c_bf_set_gpu_*), null
+      !> when it has none, for its M rows and N columns; xyz: the butterfly
+      !> mesh's coordinates xyz(1:dim, -N:M), or null.  warm: the evaluator's
+      !> first-use costs, paid here.
+      subroutine c_bf_gpu_entries(bf, M, N, dim, xyz, handle, warm) bind(c, name="c_bf_gpu_entries")
+         import :: c_int, c_double, c_ptr
+         type(c_ptr), value :: bf, xyz
+         integer(c_int) :: M, N, dim
+         type(c_ptr) :: handle
+         real(c_double) :: warm
+      end subroutine c_bf_gpu_entries
 
       !>**** Drop what a butterfly holds on the device; before it is freed
       subroutine c_bf_gpu_release(bf) bind(c, name="c_bf_gpu_release")

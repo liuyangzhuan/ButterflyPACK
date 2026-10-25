@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -1200,6 +1201,56 @@ void bf_device_setup(MPI_Comm comm, int nproc) {
   fmm::gpu::reserve_exchange_arena(nproc, share);
 }
 
+// A butterfly's GPU evaluator of its entries (c_bf_set_gpu_*): the
+// application's evaluator, and the points it is evaluated over - the
+// butterfly's own index order, rows 0..M-1 then columns M..M+N-1, with ids
+// the CPU callbacks' indices minus one (a row's in the row mesh's order, a
+// column's in the column mesh's) and the coordinates of a mesh with geometry.
+struct BfEntries {
+  std::shared_ptr<fmm::gpu::Evaluator> evaluator;
+  int M = -1, N = -1, dim = 0;
+  int64_t* d_ids = nullptr;
+  double* d_xyz = nullptr;
+  fmm::gpu::MetaBuilder meta;
+  fmm::gpu::DeviceBuffer meta_device;
+  double warm_seconds = 0.0;
+  // a level's entries an evaluation left on the device (c_bf_gpu_eval_blocks
+  // with keep), for the rank-reveal that follows (c_bf_gpu_level_id_kept)
+  double* kept = nullptr;
+  int64_t kept_elements = 0;
+
+  ~BfEntries() {
+    drop_kept();
+    drop_points();
+  }
+  void drop_kept() {
+    if (kept != nullptr) fmm::gpu::DeviceHeap::instance().free(kept);
+    kept = nullptr;
+    kept_elements = 0;
+  }
+  void drop_points() {
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    if (d_ids != nullptr) heap.free(d_ids);
+    if (d_xyz != nullptr) heap.free(d_xyz);
+    d_ids = nullptr;
+    d_xyz = nullptr;
+    M = N = -1;
+    dim = 0;
+  }
+  fmm::gpu::PointTable points() const {
+    fmm::gpu::PointTable p;
+    p.xyz = d_xyz;
+    p.ids = d_ids;
+    p.dim = std::max(dim, 1);
+    return p;
+  }
+};
+
+std::map<const void*, std::unique_ptr<BfEntries>>& bf_entries() {
+  static std::map<const void*, std::unique_ptr<BfEntries>> registry;
+  return registry;
+}
+
 // Make a butterfly resident: upload its factors, read the grids the sweep
 // needs, and wire the closures through which bf_gpu asks the Fortran for its
 // distribution decisions (bf_ranges.hpp explains why they are closures).
@@ -1302,6 +1353,44 @@ bf::gpu::BfResident* bf_resident(void* bf, void* ptree) {
 }  // namespace
 #endif
 
+#ifdef BPACK_BF_GPU_ENABLED
+namespace {
+
+// The batched ID of a level's panels, d_entries on the device laid out as the
+// host's buffer at host_base (panel b at blk[b]).  False when the device has
+// no room for the batch.
+bool level_id_on_device(const double* d_entries, int count, const int* rows, const int* cols, void* const* blk,
+                        int transposed, const double* host_base, int64_t nnz, double rtol, double atol, int* rank,
+                        int* jpvt, double* host_x) {
+  bf::gpu::IdBatch batch;
+  batch.panels.resize(static_cast<size_t>(count));
+  for (int b = 0; b < count; ++b) {
+    bf::gpu::IdPanel& p = batch.panels[static_cast<size_t>(b)];
+    p.rows = rows[b];
+    p.cols = cols[b];
+    p.transposed = transposed;
+    p.entry_offset = static_cast<const double*>(blk[b]) - host_base;
+    if (p.entry_offset < 0 || p.entry_offset + static_cast<int64_t>(p.rows) * p.cols > nnz) {
+      gpu_fail("c_bf_gpu_level_id", "a panel lies outside the level's entry buffer");
+    }
+  }
+  if (!bf::gpu::plan_id_batch(batch)) return false;
+  bf::gpu::run_id_batch(d_entries, batch, rtol, atol, nullptr);
+  fmm::gpu::check_cuda(cudaMemcpy(rank, batch.d_rank, static_cast<size_t>(count) * sizeof(int),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id rank");
+  fmm::gpu::check_cuda(cudaMemcpy(jpvt, batch.d_jpvt, static_cast<size_t>(batch.jpvt_elements) * sizeof(int),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id jpvt");
+  fmm::gpu::check_cuda(cudaMemcpy(host_x, batch.d_x, static_cast<size_t>(batch.mat_elements) * sizeof(double),
+                                  cudaMemcpyDeviceToHost), "c_bf_gpu_level_id X");
+  // the Fortran's pivots are one based
+  for (int64_t t = 0; t < batch.jpvt_elements; ++t) jpvt[t] += 1;
+  bf::gpu::release_id_batch(batch);
+  return true;
+}
+
+}  // namespace
+#endif
+
 // The rank-reveal of one level of a butterfly construction, on the device
 // (GPU_BACKEND/bf_gpu).  BF_compress_NlogN does it per block under OpenMP -
 // a truncated QRCP, Q^H applied to the panel, a triangular solve - and the
@@ -1331,40 +1420,17 @@ void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* 
   const double* host_entries = static_cast<const double*>(entries);
   double* host_x = static_cast<double*>(xout);
   try {
-    bf::gpu::IdBatch batch;
-    batch.panels.resize(static_cast<size_t>(count));
-    for (int b = 0; b < count; ++b) {
-      bf::gpu::IdPanel& p = batch.panels[static_cast<size_t>(b)];
-      p.rows = rows[b];
-      p.cols = cols[b];
-      p.transposed = *transposed;
-      p.entry_offset = static_cast<const double*>(blk[b]) - host_entries;
-      if (p.entry_offset < 0 || p.entry_offset + static_cast<int64_t>(p.rows) * p.cols > *nnz) {
-        gpu_fail("c_bf_gpu_level_id", "a panel lies outside the level's entry buffer");
-      }
-    }
     auto& heap = fmm::gpu::DeviceHeap::instance();
     heap.ensure_initialized();
     double* d_entries = reinterpret_cast<double*>(
         heap.try_alloc(static_cast<size_t>(*nnz) * sizeof(double), fmm::gpu::ResidentKind::Adaptive));
     if (d_entries == nullptr) { *info = 1; return; }
-    if (!bf::gpu::plan_id_batch(batch)) {
-      heap.free(reinterpret_cast<char*>(d_entries));
-      *info = 1;
-      return;
-    }
     fmm::gpu::check_cuda(cudaMemcpy(d_entries, host_entries, static_cast<size_t>(*nnz) * sizeof(double),
                                     cudaMemcpyHostToDevice), "c_bf_gpu_level_id entries");
-    bf::gpu::run_id_batch(d_entries, batch, *rtol, *atol, nullptr);
-    fmm::gpu::check_cuda(cudaMemcpy(rank, batch.d_rank, static_cast<size_t>(count) * sizeof(int),
-                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id rank");
-    fmm::gpu::check_cuda(cudaMemcpy(jpvt, batch.d_jpvt, static_cast<size_t>(batch.jpvt_elements) * sizeof(int),
-                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id jpvt");
-    fmm::gpu::check_cuda(cudaMemcpy(host_x, batch.d_x, static_cast<size_t>(batch.mat_elements) * sizeof(double),
-                                    cudaMemcpyDeviceToHost), "c_bf_gpu_level_id X");
-    // the Fortran's pivots are one based
-    for (int64_t t = 0; t < batch.jpvt_elements; ++t) jpvt[t] += 1;
-    bf::gpu::release_id_batch(batch);
+    if (!level_id_on_device(d_entries, count, rows, cols, blk, *transposed, host_entries, *nnz, *rtol, *atol, rank,
+                            jpvt, host_x)) {
+      *info = 1;
+    }
     heap.free(reinterpret_cast<char*>(d_entries));
   } catch (const std::exception& e) {
     gpu_fail("c_bf_gpu_level_id", e.what());
@@ -1373,6 +1439,37 @@ void c_bf_gpu_level_id(const int* nblk, const int* rows, const int* cols, void* 
   (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
   (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
   *info = 1;   // no butterfly backend in this precision: the caller stays on the host
+#endif
+}
+
+// c_bf_gpu_level_id on the level's entries the GPU evaluator `handle` left on
+// the device (c_bf_gpu_eval_blocks with keep): no copy of the entries either
+// way.  `entries` is only the host buffer they mirror, for the panels' offsets.
+// info 1: no room for the batch - the entries are then copied into `entries`,
+// so the host path that follows finds them there.
+void c_bf_gpu_level_id_kept(void* handle, const int* nblk, const int* rows, const int* cols, void* const* blk,
+                            const int* transposed, void* entries, const int64_t* nnz, const double* rtol,
+                            const double* atol, int* rank, int* jpvt, void* xout, int* info) {
+#ifdef BPACK_BF_GPU_ENABLED
+  *info = 0;
+  try {
+    BfEntries& e = *static_cast<BfEntries*>(handle);
+    if (e.kept == nullptr || e.kept_elements != *nnz) gpu_fail("c_bf_gpu_level_id_kept", "no entries kept on the device");
+    if (*nblk > 0 && !level_id_on_device(e.kept, *nblk, rows, cols, blk, *transposed,
+                                         static_cast<const double*>(entries), *nnz, *rtol, *atol, rank, jpvt,
+                                         static_cast<double*>(xout))) {
+      fmm::gpu::check_cuda(cudaMemcpy(entries, e.kept, static_cast<size_t>(*nnz) * sizeof(double),
+                                      cudaMemcpyDeviceToHost), "c_bf_gpu_level_id_kept entries");
+      *info = 1;
+    }
+    e.drop_kept();
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_level_id_kept", ex.what());
+  }
+#else
+  (void)handle; (void)nblk; (void)rows; (void)cols; (void)blk; (void)transposed; (void)entries; (void)nnz;
+  (void)rtol; (void)atol; (void)rank; (void)jpvt; (void)xout;
+  *info = 1;
 #endif
 }
 
@@ -1547,6 +1644,161 @@ void c_bf_gpu_extract(void* bf, void* ptree, const int* ninter, const int* allro
 #endif
 }
 
+// The registration of a butterfly's GPU evaluator (C_BPACK_wrapper.cpp's
+// c_bf_set_gpu_*), before its construction: `evaluator` points to a
+// std::shared_ptr<fmm::gpu::Evaluator>, an empty one clearing it.
+void c_bf_gpu_set_evaluator(void* bf, const void* evaluator) {
+#ifdef BPACK_BF_GPU_ENABLED
+  if (bf == nullptr || evaluator == nullptr) gpu_fail("c_bf_gpu_set_evaluator", "null argument");
+  const auto& ev = *static_cast<const std::shared_ptr<fmm::gpu::Evaluator>*>(evaluator);
+  if (!ev) {
+    bf_entries().erase(bf);
+    return;
+  }
+  auto& slot = bf_entries()[bf];
+  if (!slot) slot = std::make_unique<BfEntries>();
+  slot->evaluator = ev;
+#else
+  (void)bf;
+  (void)evaluator;
+#endif
+}
+
+// For C_BF_Construct_Element_Compute: the handle of the butterfly's GPU
+// evaluator, null when it has none, with its points laid out for M rows and
+// N columns.  xyz: the butterfly mesh's coordinates as the Fortran holds them,
+// xyz(1:dim, -N:M) - row i at i, column j at -j - or null for a mesh without
+// geometry.  The evaluator's first-use costs (an NVRTC compile, a first
+// launch) are paid here, outside the construction's own work, and returned.
+void c_bf_gpu_entries(void* bf, const int* M, const int* N, const int* dim, const double* xyz, void** handle,
+                      double* warm_seconds) {
+  *handle = nullptr;
+  *warm_seconds = 0.0;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    auto it = bf_entries().find(bf);
+    if (it == bf_entries().end() || !it->second->evaluator) return;
+    BfEntries& e = *it->second;
+    if (e.evaluator->needs_coordinates() && xyz == nullptr) {
+      gpu_fail("c_bf_gpu_entries",
+               "the GPU evaluator reads coordinates, but the butterfly has none (built with nogeo 0 or 4 it has)");
+    }
+    if (e.M != *M || e.N != *N) {
+      e.drop_points();
+      auto& heap = fmm::gpu::DeviceHeap::instance();
+      heap.ensure_initialized();
+      const int64_t np = static_cast<int64_t>(*M) + *N;
+      std::vector<int64_t> ids(static_cast<size_t>(np));
+      for (int64_t p = 0; p < np; ++p) ids[p] = p < *M ? p : p - *M;
+      e.d_ids = heap.alloc<int64_t>(ids.size() * sizeof(int64_t), fmm::gpu::ResidentKind::Matvec);
+      fmm::gpu::check_cuda(cudaMemcpy(e.d_ids, ids.data(), ids.size() * sizeof(int64_t), cudaMemcpyHostToDevice),
+                           "c_bf_gpu_entries ids");
+      if (xyz != nullptr && *dim > 0) {
+        const int d = *dim;
+        std::vector<double> table(static_cast<size_t>(np) * d);
+        for (int64_t r = 0; r < *M; ++r)
+          for (int q = 0; q < d; ++q) table[r * d + q] = xyz[(r + 1 + *N) * d + q];
+        for (int64_t c = 0; c < *N; ++c)
+          for (int q = 0; q < d; ++q) table[(*M + c) * d + q] = xyz[(*N - c - 1) * d + q];
+        e.d_xyz = heap.alloc<double>(table.size() * sizeof(double), fmm::gpu::ResidentKind::Matvec);
+        fmm::gpu::check_cuda(cudaMemcpy(e.d_xyz, table.data(), table.size() * sizeof(double),
+                                        cudaMemcpyHostToDevice),
+                             "c_bf_gpu_entries coordinates");
+        e.dim = d;
+      }
+      e.M = *M;
+      e.N = *N;
+    }
+    const int count = std::max(1, std::min(64, std::min(*M, *N)));
+    e.warm_seconds = e.evaluator->warm_up<double>(e.points(), count, fmm::gpu::Context::instance().stream());
+    *warm_seconds = e.warm_seconds;
+    *handle = &e;
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_entries", ex.what());
+  }
+#else
+  (void)bf; (void)M; (void)N; (void)dim; (void)xyz;
+#endif
+}
+
+// The entries of nblk blocks by the GPU evaluator `handle` (c_bf_gpu_entries),
+// for element_Zmn_blocklist_user: block b's rowidx[b] rows and colidx[b]
+// columns, stacked in rows and cols as the butterfly's mesh numbers them
+// (rows 1..M, columns M+1..M+N), into out (host), each block column major,
+// stacked in order.  keep 1: left on the device instead, for the level's
+// rank-reveal (c_bf_gpu_level_id_kept), and out is not written.  info 1: no
+// room on the device; the caller computes them on the host instead.
+void c_bf_gpu_eval_blocks(void* handle, const int* nblk, const int* rows, const int* cols, const int* rowidx,
+                          const int* colidx, void* out, const int64_t* nout, const int* keep, int* info) {
+  *info = 1;
+#ifdef BPACK_BF_GPU_ENABLED
+  try {
+    BfEntries& e = *static_cast<BfEntries*>(handle);
+    const int count = *nblk;
+    std::vector<int64_t> r_at(static_cast<size_t>(count) + 1, 0), c_at(r_at.size(), 0), o_at(r_at.size(), 0);
+    int max_m = 0, max_n = 0;
+    for (int k = 0; k < count; ++k) {
+      r_at[k + 1] = r_at[k] + rowidx[k];
+      c_at[k + 1] = c_at[k] + colidx[k];
+      o_at[k + 1] = o_at[k] + static_cast<int64_t>(rowidx[k]) * colidx[k];
+      max_m = std::max(max_m, rowidx[k]);
+      max_n = std::max(max_n, colidx[k]);
+    }
+    if (o_at[count] != *nout) gpu_fail("c_bf_gpu_eval_blocks", "the blocks do not fill the output");
+    if (o_at[count] == 0) {
+      *info = 0;
+      return;
+    }
+    const int64_t nr = r_at[count], nc = c_at[count];
+    auto& heap = fmm::gpu::DeviceHeap::instance();
+    char* d_out = heap.try_alloc(static_cast<size_t>(o_at[count]) * sizeof(double), fmm::gpu::ResidentKind::Matvec);
+    if (d_out == nullptr) return;
+    // the points (the mesh's index minus one, rows then columns) and the
+    // blocks, in one image; the blocks name their points by offset into it
+    e.meta.clear();
+    const size_t at_pts = e.meta.alloc(static_cast<size_t>(nr + nc) * sizeof(int));
+    int* pts = reinterpret_cast<int*>(e.meta.host(at_pts));
+    for (int64_t i = 0; i < nr; ++i) pts[i] = rows[i] - 1;
+    for (int64_t j = 0; j < nc; ++j) pts[nr + j] = cols[j] - 1;
+    double* dout = reinterpret_cast<double*>(d_out);
+    std::vector<fmm::gpu::EvalItemT<double>> items(static_cast<size_t>(count));
+    for (int k = 0; k < count; ++k) {
+      fmm::gpu::EvalItemT<double>& it = items[k];
+      it.out = dout + o_at[k];
+      it.ld = std::max(rowidx[k], 1);
+      it.m = rowidx[k];
+      it.n = colidx[k];
+      it.rows = fmm::gpu::IndexList{static_cast<int64_t>(at_pts + r_at[k] * sizeof(int)), 0, nullptr};
+      it.cols = fmm::gpu::IndexList{static_cast<int64_t>(at_pts + (nr + c_at[k]) * sizeof(int)), 0, nullptr};
+    }
+    const size_t at_items = e.meta.append(items);
+    cudaStream_t stream = fmm::gpu::Context::instance().stream();
+    char* dm = e.meta.upload(e.meta_device, stream);
+    e.evaluator->eval<double>(items, reinterpret_cast<const fmm::gpu::EvalItemT<double>*>(dm + at_items), max_m,
+                              max_n, dm, e.points(), stream);
+    if (*keep != 0) {
+      // for the rank-reveal that follows: no copy to the host
+      fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_eval_blocks");
+      e.drop_kept();
+      e.kept = dout;
+      e.kept_elements = o_at[count];
+      *info = 0;
+      return;
+    }
+    fmm::gpu::check_cuda(cudaMemcpyAsync(out, d_out, static_cast<size_t>(o_at[count]) * sizeof(double),
+                                         cudaMemcpyDeviceToHost, stream),
+                         "c_bf_gpu_eval_blocks entries");
+    fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "c_bf_gpu_eval_blocks");
+    heap.free(d_out);
+    *info = 0;
+  } catch (const std::exception& ex) {
+    gpu_fail("c_bf_gpu_eval_blocks", ex.what());
+  }
+#else
+  (void)handle; (void)nblk; (void)rows; (void)cols; (void)rowidx; (void)colidx; (void)out; (void)nout;
+#endif
+}
+
 // Drop what a butterfly holds on the device.  The caller must do this before
 // the block is freed: the store is keyed on its address, and although every
 // lookup re-checks the block's layout, releasing is what keeps the device
@@ -1555,6 +1807,7 @@ void c_bf_gpu_release(void* bf) {
 #ifdef BPACK_BF_GPU_ENABLED
   try {
     bf::gpu::bf_store_release(bf);
+    bf_entries().erase(bf);  // and its GPU evaluator, if it had one
   } catch (const std::exception& e) {
     gpu_fail("c_bf_gpu_release", e.what());
   }

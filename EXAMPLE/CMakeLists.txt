@@ -32,7 +32,8 @@ endif()
 # (BPACK_EXAMPLE_GPU) when ButterflyPACK has its GPU backends.  The
 # drivers use the shared CUDA runtime, as the library does.
 if (enable_h2_gpu)
-  add_library(bpack_example_gpu OBJECT gpu/laplace3d_gpu.cu gpu/rbf3d_gpu.cu gpu/vie3d_gpu.cu gpu/emsurf_gpu.cu)
+  add_library(bpack_example_gpu OBJECT gpu/laplace3d_gpu.cu gpu/rbf3d_gpu.cu gpu/vie3d_gpu.cu gpu/emsurf_gpu.cu
+                                       gpu/butterfly_gpu.cu)
   set_target_properties(bpack_example_gpu PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
 endif()
 function(bpack_example_gpu_evaluators target)
@@ -308,6 +309,7 @@ if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "P
 set(CBUTTERFLY Butterfly_Driver.cpp)
 add_executable(cbutterfly ${CBUTTERFLY})
 target_link_libraries(cbutterfly ${all_link_libs_d})
+bpack_example_gpu_evaluators(cbutterfly)
 endif()
 
 if ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR (CMAKE_CXX_COMPILER_ID STREQUAL "PGI") OR (CMAKE_CXX_COMPILER_ID STREQUAL "Intel"))

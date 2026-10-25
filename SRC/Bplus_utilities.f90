@@ -25009,7 +25009,7 @@ end subroutine BF_block_extraction_multiply_oneblock_last
 
 
 
-   subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats,alldat_loc_in)
+   subroutine element_Zmn_blocklist_user(submats, Nsub, msh, option, ker, myflag, passflag, ptree, stats,alldat_loc_in, entries_on_device)
 
 
       implicit none
@@ -25039,6 +25039,12 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       type(intersect),allocatable :: submats1(:)
       integer,allocatable:: new2old_sub(:)
       DT:: value_e
+      integer :: gpu_info
+      !>**** in: the caller runs the level's rank-reveal on the device next, so
+      !> a GPU evaluator may leave the entries there (alldat_loc_in then only
+      !> mirrors their layout); out: whether it did
+      logical, optional :: entries_on_device
+      logical :: keep
 
       allocate(submats1(Nsub))
       allocate(new2old_sub(Nsub))
@@ -25134,7 +25140,26 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       myflag1 = myflag
       if(Ninter_loc==0)myflag1=max(myflag,1)
 
-      if (option%elem_extract == 0) then
+      !>**** a butterfly's GPU evaluator (c_bf_set_gpu_*, bound by its
+      !> construction): the entries come from the device, each rank its own,
+      !> so there are no rounds to take part in whatever elem_extract says.
+      !> gpu_info 1: none, or no room on the device - the paths below run.
+      gpu_info = 1
+      keep = .false.
+      if (present(entries_on_device)) keep = entries_on_device .and. present(alldat_loc_in)
+      if (present(entries_on_device)) entries_on_device = .false.
+      if (c_associated(ker%gpu_entries) .and. .not. allocated(ker%addend)) then
+         t1 = MPI_Wtime()
+         call element_Zmn_blocklist_gpu(submats, submats1, new2old_sub, Ninter_loc, option, ker, gpu_info, keep, &
+                                        alldat_loc_in)
+         if (present(entries_on_device)) entries_on_device = keep .and. gpu_info == 0
+         t2 = MPI_Wtime()
+         if (gpu_info == 0) stats%Time_Entry = stats%Time_Entry + t2 - t1
+      endif
+
+      if (gpu_info == 0) then
+         passflag = 2
+      else if (option%elem_extract == 0) then
 
          t1 = MPI_Wtime()
 
@@ -25544,6 +25569,95 @@ end subroutine BF_block_extraction_multiply_oneblock_last
       return
 
    end subroutine element_Zmn_blocklist_user
+
+   !> element_Zmn_blocklist_user's entries by a butterfly's GPU evaluator
+   !> (ker%gpu_entries, c_bf_set_gpu_*): the blocks submats1(1:Ninter_loc) -
+   !> the nonempty ones, rows and columns as the butterfly's mesh numbers them -
+   !> evaluated on the device, then placed as the host paths place them: straight
+   !> into alldat_loc_in when the caller gave it (its blocks lie there in this
+   !> order), else into submats(new2old_sub(nn))%dat through mmap and nmap.
+   !> info 1: no room on the device; nothing written.
+   subroutine element_Zmn_blocklist_gpu(submats, submats1, new2old_sub, Ninter_loc, option, ker, info, keep, alldat_loc_in)
+      implicit none
+      type(intersect) :: submats(*), submats1(:)
+      integer :: new2old_sub(:), Ninter_loc, info
+      type(Hoption)::option
+      type(kernelquant)::ker
+      logical :: keep  ! in: leave them on the device (alldat_loc_in present); out: they were left
+      DT, target, optional :: alldat_loc_in(:)
+      interface
+         subroutine c_bf_gpu_eval_blocks(handle, nblk, rows, cols, rowidx, colidx, out, nout, keep, info) &
+            bind(c, name="c_bf_gpu_eval_blocks")
+            import :: c_int, c_int64_t, c_ptr
+            type(c_ptr), value :: handle, out
+            integer(c_int) :: nblk, keep, info
+            integer(c_int) :: rows(*), cols(*), rowidx(*), colidx(*)
+            integer(c_int64_t) :: nout
+         end subroutine c_bf_gpu_eval_blocks
+      end interface
+      integer(c_int) :: keep_c
+      integer(c_int), allocatable :: rows(:), cols(:), rowidx(:), colidx(:)
+      integer(c_int64_t) :: ntot
+      DT, allocatable, target :: buf(:)
+      integer :: nn, i, j, nr, nc, ir, ic
+      integer(kind=8) :: idx
+
+      allocate (rowidx(max(1, Ninter_loc)), colidx(max(1, Ninter_loc)))
+      nr = 0
+      nc = 0
+      ntot = 0
+      do nn = 1, Ninter_loc
+         rowidx(nn) = submats1(nn)%nr
+         colidx(nn) = submats1(nn)%nc
+         nr = nr + submats1(nn)%nr
+         nc = nc + submats1(nn)%nc
+         ntot = ntot + int(submats1(nn)%nr, 8)*submats1(nn)%nc
+      enddo
+      allocate (rows(max(1, nr)), cols(max(1, nc)))
+      ir = 0
+      ic = 0
+      do nn = 1, Ninter_loc
+         rows(ir + 1:ir + submats1(nn)%nr) = submats1(nn)%rows(1:submats1(nn)%nr)
+         cols(ic + 1:ic + submats1(nn)%nc) = submats1(nn)%cols(1:submats1(nn)%nc)
+         ir = ir + submats1(nn)%nr
+         ic = ic + submats1(nn)%nc
+      enddo
+
+      info = 0
+      ! (scaled entries cannot stay on the device; the scale is 1 for a butterfly)
+      if (option%scale_factor /= 1d0 .or. .not. present(alldat_loc_in)) keep = .false.
+      if (ntot == 0) then
+         keep = .false.
+         return
+      endif
+      if (present(alldat_loc_in)) then
+         keep_c = merge(1, 0, keep)
+         call c_bf_gpu_eval_blocks(ker%gpu_entries, Ninter_loc, rows, cols, rowidx, colidx, c_loc(alldat_loc_in(1)), &
+                                   ntot, keep_c, info)
+         if (info /= 0) keep = .false.
+         if (info == 0 .and. .not. keep .and. option%scale_factor /= 1d0) &
+            alldat_loc_in(1:ntot) = alldat_loc_in(1:ntot)*option%scale_factor
+      else
+         allocate (buf(ntot))
+         keep_c = 0
+         call c_bf_gpu_eval_blocks(ker%gpu_entries, Ninter_loc, rows, cols, rowidx, colidx, c_loc(buf(1)), ntot, &
+                                   keep_c, info)
+         if (info == 0) then
+            idx = 0
+            do nn = 1, Ninter_loc
+               do j = 1, submats1(nn)%nc
+                  do i = 1, submats1(nn)%nr
+                     submats(new2old_sub(nn))%dat(submats1(nn)%mmap(i), submats1(nn)%nmap(j)) = &
+                        buf(idx + i + int(j - 1, 8)*submats1(nn)%nr)*option%scale_factor
+                  enddo
+               enddo
+               idx = idx + int(submats1(nn)%nr, 8)*submats1(nn)%nc
+            enddo
+         endif
+         deallocate (buf)
+      endif
+      deallocate (rows, cols, rowidx, colidx)
+   end subroutine element_Zmn_blocklist_gpu
 
    !> dat += scale_factor U(rows, :) V(cols, :)^T for the intersections submats(1:Nsub) (rows and columns in tree
    !> order): the low-rank term ker%addend registered with the matrix (c_bpack_set_entry_addend), unless the device

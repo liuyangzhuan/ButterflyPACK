@@ -918,6 +918,9 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
         !< and the seconds inside them, to separate the arithmetic from the
         !< per-block work around it.  Reset with Flop_Tmp.
         real(kind=8) :: Cnt_Extract_Gemm = 0d0, Time_Extract_Gemm = 0d0
+        !< the GPU backend's first-use costs a construction paid (a GPU evaluator's
+        !< warm-up: an NVRTC compile, a first launch), left out of Time_Fill
+        real(kind=8) :: Time_GPU_Warmup = 0d0
         integer, allocatable:: rankmax_of_level(:), rankmin_of_level(:) !< maximum and minimum ranks observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global(:) !< maximum ranks among all processes observed at each level of BPACK during matrix fill
         integer, allocatable:: rankmax_of_level_global_factor(:) !< maximum ranks among all processes observed at each level of BPACK during matrix factorization
@@ -967,6 +970,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
         DT, allocatable :: matZ_glo(:, :) !< Full Matrix: the full matrix to sample its entries
         type(entry_addend), allocatable :: addend !< a low-rank term added to every entry the matrix's construction takes (c_bpack_set_entry_addend)
+        type(c_ptr) :: gpu_entries = c_null_ptr !< a butterfly's GPU evaluator (c_bf_set_gpu_*), bound by its construction: element_Zmn_blocklist_user takes the entries from the device
 
         class(*), pointer :: QuantApp => null() !< Kernels Defined in Fortran: pointer to the user-supplied derived type for computing one element of Z
         procedure(F_Zelem), nopass, pointer :: FuncZmn => null() !< Kernels Defined in Fortran: procedure pointer to the user-supplied derived type for computing one element of Z

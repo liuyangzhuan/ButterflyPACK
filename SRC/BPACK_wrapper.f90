@@ -462,6 +462,10 @@ contains
          val_d = stats%Time_random(5)
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_GPU_Warmup') then
+         val_d = stats%Time_GPU_Warmup
+         valid_opt = 1
+      endif
 
       if (trim(str) == 'Mem_Factor') then
          val_d = stats%Mem_Factor
@@ -3948,6 +3952,8 @@ contains
       integer ierr,pp,knn_tmp
       integer:: boundary_map(1,1)
       integer groupm_start, Nboundall,Ninadmissible
+      integer(c_int) :: gpu_dim
+      real(c_double) :: gpu_warm
 
       !>**** allocate BPACK solver structures
 
@@ -3957,6 +3963,24 @@ contains
       call c_f_pointer(msh_Cptr, msh)
       call c_f_pointer(bf_Cptr, blocks)
       call c_f_pointer(ker_Cptr, ker)
+      !>**** a GPU evaluator registered for the butterfly (c_bf_set_gpu_*)
+      !> gives its entries on the device: bound here, while the mesh still has
+      !> its points, and warmed up outside the construction's time
+      ker%gpu_entries = c_null_ptr
+      gpu_warm = 0
+      if (option%HODLR_use_gpu > 0 .and. BPACK_gpu_available()) then
+         if (allocated(msh%xyz)) then
+            gpu_dim = size(msh%xyz, 1)
+            call c_bf_gpu_entries(bf_Cptr, blocks%M, blocks%N, gpu_dim, c_loc(msh%xyz(1, lbound(msh%xyz, 2))), &
+                                  ker%gpu_entries, gpu_warm)
+         else
+            gpu_dim = 0
+            call c_bf_gpu_entries(bf_Cptr, blocks%M, blocks%N, gpu_dim, c_null_ptr, ker%gpu_entries, gpu_warm)
+         endif
+         stats%Time_GPU_Warmup = stats%Time_GPU_Warmup + gpu_warm
+         if (c_associated(ker%gpu_entries) .and. ptree%MyID == Main_ID .and. option%verbosity >= 0) &
+            write (*, *) 'the entries from the GPU evaluator, its warm-up', gpu_warm, 'Seconds (not in the time below)'
+      endif
       if (allocated(msh%xyz)) deallocate (msh%xyz)
       ! !>**** register the user-defined function and type in ker
       ker%C_QuantApp => C_QuantApp
@@ -4021,6 +4045,7 @@ contains
       call LogMemory(stats, stats%Mem_Fill)
       stats%Time_Fill = stats%Time_Fill + t2 - t1
       ! stats%Flop_Fill = stats%Flop_Fill + stats%Flop_Tmp ! Flop_Fill already counted in BF_compress_NlogN
+      ker%gpu_entries = c_null_ptr  ! (bound for this construction only)
       !>**** return the C address of BPACK structures to C caller
       bf_Cptr = c_loc(blocks)
       option_Cptr = c_loc(option)

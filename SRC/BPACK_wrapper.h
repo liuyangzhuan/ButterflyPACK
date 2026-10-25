@@ -87,9 +87,19 @@ void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double
 void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 void c_bpack_gpu_warm_up(F2Cptr* bmat, double* seconds);
+/*
+ * The same for a butterfly block (the bf handle of c_bf_construct_init), with
+ * HODLR_use_gpu > 0: K(i, j) for row i of the row mesh and column j of the
+ * column mesh, ids the CPU callbacks' indices minus one.
+ */
+void c_bf_set_gpu_entry_launchers(F2Cptr* bf, const bpack_gpu_entry_launchers* launchers);
+void c_bf_set_gpu_entry_source(F2Cptr* bf, const char* source, const double* params, const int* nparams, const int* flags);
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void c_bf_set_gpu_list_evaluator(F2Cptr* bf, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);
 /* GPU state of formats other than H2 (SRC/BPACK_gpu_wrapper.cpp) */
 void c_bpack_gpu_create(void** gpu);
 void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator);
+void c_bf_gpu_set_evaluator(void* bf, const void* evaluator);
 void c_bpack_get_internal_global_ids64(F2Cptr* bmat, const int64_t* internal_local_offset, const int64_t* count, int64_t* global_ids);
 void c_bpack_get_input_to_internal_map64(F2Cptr* bmat, const int64_t* input_local_offset, const int64_t* count, int64_t* global_ids, int* internal_owner_ranks, int64_t* internal_global_indices);
 void c_bpack_input_to_internal(F2Cptr* bmat, const int* nrhs, const C_DT* input_values, C_DT* internal_values);
