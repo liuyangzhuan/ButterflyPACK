@@ -197,6 +197,21 @@ c_bpack_setoption(option, nam, (C2Fptr) &val);
 }
 
 void c_bf_extractelement(F2Cptr* blocks,F2Cptr* option,F2Cptr* msh,F2Cptr* stats,F2Cptr* ptree, int* Ninter, int* Nallrows, int* Nallcols, int64_t* Nalldat_loc, int* allrows,int* allcols, C_DT* alldat_loc, int* rowidx, int* colidx, int* pgidx, int* Npmap, int* pmaps);
+void c_bf_get_block_pid(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode, int* pid, int* myid, int* nproc);
+void c_bf_get_sub_head(F2Cptr bf, F2Cptr ptree, int* is_head, MPI_Fint* comm, int* nproc);
+void c_bf_get_exchange_dest(F2Cptr bf, F2Cptr ptree, int level, char mode, char collect, int nr, int nc,
+                            int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_mvp_vec_ranges(F2Cptr bf, F2Cptr ptree, char chara, int* idx_r, int* inc_r, int* nr,
+                             int* idx_c, int* inc_c, int* nc);
+void c_bf_get_all2all_dest(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int nr, int nc,
+                           int idx_r, int inc_r, int idx_c, int inc_c, int* pid);
+void c_bf_get_all2all_range(F2Cptr bf, F2Cptr ptree, int level, char mode_new, int* idx_r, int* inc_r, int* nr,
+                            int* idx_c, int* inc_c, int* nc);
+void c_bf_get_block_group(F2Cptr bf, F2Cptr ptree, int level, int index_i, int index_j, char mode,
+                          int* nproc, MPI_Fint* comm, int* is_head);
+void c_bf_get_vec_ranges(F2Cptr bf, F2Cptr ptree, char dir, int* idx_r, int* inc_r, int* nr, int* idx_c, int* inc_c, int* nc);
+void c_bf_get_layout(F2Cptr bf, int* level_butterfly, int* level_half, int* M, int* N, int* M_loc, int* N_loc, int* nlevels, int* nblocks);
+void c_bf_get_blocks(F2Cptr bf, int* lvl_nr, int* lvl_nc, int* lvl_idxr, int* lvl_idxc, int* lvl_incr, int* lvl_incc, int* blk_rows, int* blk_cols, void** blk_ptr);
 void c_bf_construct_init(int* M, int* N,int* M_loc,int* N_loc, int* nnsr, int* nnsc, F2Cptr* mshr,F2Cptr* mshc,F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncDistmn)(int*, int*, double*,C2Fptr), void (*C_FuncNearFar)(int*, int*, int*,C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_element_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree, void (*C_FuncZmn)(int*, int*, C_DT*,C2Fptr), void (*C_FuncZmnBlock)(int*, int*, int*, int64_t*, int*, int*, C_DT*, int*, int*, int*, int*, int*, C2Fptr), C2Fptr C_QuantApp);
 void c_bf_construct_matvec_compute(F2Cptr* bf, F2Cptr* option,F2Cptr* stats,F2Cptr* msh,F2Cptr* ker,F2Cptr* ptree,void (*C_FuncBMatVec)(char const *, int*, int*, int*, C_DT const*,C_DT*,C2Fptr,C_DT*, C_DT*), C2Fptr C_QuantApp);

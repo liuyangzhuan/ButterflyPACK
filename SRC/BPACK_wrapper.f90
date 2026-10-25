@@ -402,6 +402,38 @@ contains
          val_d = stats%Flop_C_Mult
          valid_opt = 1
       endif
+      if (trim(str) == 'Time_BF_MVP_Gemm') then
+         val_d = stats%Time_BF_MVP_Gemm
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BF_MVP_Gemm_Leaf') then
+         val_d = stats%Time_BF_MVP_Gemm_Leaf
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BF_MVP_Gemm_Kernel') then
+         val_d = stats%Time_BF_MVP_Gemm_Kernel
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BF_MVP_Exchange') then
+         val_d = stats%Time_BF_MVP_Exchange
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BF_MVP_All2All') then
+         val_d = stats%Time_BF_MVP_All2All
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Time_BF_MVP_Other') then
+         val_d = stats%Time_BF_MVP_Other
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_BF_MVP_Gemm_Leaf') then
+         val_d = stats%Flop_BF_MVP_Gemm_Leaf
+         valid_opt = 1
+      endif
+      if (trim(str) == 'Flop_BF_MVP_Gemm_Kernel') then
+         val_d = stats%Flop_BF_MVP_Gemm_Kernel
+         valid_opt = 1
+      endif
       if (trim(str) == 'Cnt_Extract_Gemm') then
          val_d = stats%Cnt_Extract_Gemm
          valid_opt = 1
@@ -2891,6 +2923,487 @@ contains
    !> @param C_FuncDistmn: the C_pointer to user-provided function to compute distance between any row and column of the matrix
    !> @param C_FuncNearFar: the C_pointer to user-provided function to determine whether a block (in permuted order) is compressible or not
    !> @param C_QuantApp: the C_pointer to user-defined quantities required to for entry evaluation,sampling,distance and compressibility test (in)
+!>**** The rank that owns butterfly block (index_i, index_j) at a level, and
+   !> this rank's id in the block's process group: what BF_exchange_matvec's
+   !> destination rule needs (GetBlockPID), exposed so a caller mirroring the
+   !> exchange uses the same answer rather than its own copy of the rule.
+   !> `mode` is 'R' or 'C'.  Returns a zero-based rank within the block's
+   !> communicator, or -1 when the block has no owner here.
+   subroutine C_BF_Get_Block_PID(bf_Cptr, ptree_Cptr, level, index_i, index_j, mode, pid, myid, nproc) bind(c, name="c_bf_get_block_pid")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer, value :: level, index_i, index_j
+      character(kind=c_char), value :: mode
+      integer :: pid, myid, nproc
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: pgno_sub
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      nproc = ptree%pgrp(blocks%pgno)%nproc
+      myid = ptree%MyID - ptree%pgrp(blocks%pgno)%head
+      pgno_sub = -1
+      call GetBlockPID(ptree, blocks%pgno, level, blocks%level_butterfly, &
+                       index_i, index_j, mode, pgno_sub)
+      if (pgno_sub < 0) then
+         pid = -1
+      else
+         pid = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+      endif
+   end subroutine C_BF_Get_Block_PID
+
+   !>**** A butterfly block's own communicator, and whether this rank heads
+   !> its sub-group of the block.  BF_exchange_matvec sends a block only from
+   !> the head of the sub-group that holds it (the other ranks of the
+   !> sub-group hold the same copy) and exchanges on the block's
+   !> communicator, so a caller mirroring the exchange needs both; both are
+   !> properties of the block alone, not of an index pair.
+   subroutine C_BF_Get_Sub_Head(bf_Cptr, ptree_Cptr, is_head, comm, nproc) bind(c, name="c_bf_get_sub_head")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer :: is_head, comm, nproc
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: pgno_sub_mine
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      call GetPgno_Sub(ptree, blocks%pgno, blocks%level_butterfly, pgno_sub_mine)
+      is_head = 0
+      if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) is_head = 1
+      comm = ptree%pgrp(blocks%pgno)%Comm
+      nproc = ptree%pgrp(blocks%pgno)%nproc
+   end subroutine C_BF_Get_Sub_Head
+
+   !>**** Where each block of a sweep level's local grid must be sent, as
+   !> BF_exchange_matvec decides it: the whole rule in one call, so a caller
+   !> mirroring the exchange elsewhere (GPU_BACKEND/bf_gpu) holds no copy of
+   !> it.  `mode` and `collect` are that routine's own arguments; the grid is
+   !> described by its ranges, as GetLocalBlockRange returns them.
+   !> `pid((ii-1)*nc + jj)` is the zero-based rank in the block's
+   !> communicator that block (ii, jj) goes to, or -1 when this rank does not
+   !> send it - either because it is already in place or because this rank is
+   !> not the head of the sub-group holding it.
+   subroutine C_BF_Get_Exchange_Dest(bf_Cptr, ptree_Cptr, level, mode, collect, nr, nc, &
+                                     idx_r, inc_r, idx_c, inc_c, pid) bind(c, name="c_bf_get_exchange_dest")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer, value :: level, nr, nc, idx_r, inc_r, idx_c, inc_c
+      character(kind=c_char), value :: mode, collect
+      integer :: pid(*)
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: ii, jj, index_i, index_j, index_i0, index_j0, pgno_sub, pgno_sub_mine, dest
+      integer :: level_butterfly
+      character :: modetrans
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      level_butterfly = blocks%level_butterfly
+      if (mode == 'R') modetrans = 'C'
+      if (mode == 'C') modetrans = 'R'
+      call GetPgno_Sub(ptree, blocks%pgno, level_butterfly, pgno_sub_mine)
+
+      do ii = 1, nr
+      do jj = 1, nc
+         index_i = (ii - 1)*inc_r + idx_r
+         index_j = (jj - 1)*inc_c + idx_c
+         if (collect == 'R') then ! pair-wise reduction
+            if (mode == 'R') then
+               index_i0 = floor_safe((index_i - 1)/2d0) + 1
+               index_j0 = 2*index_j - mod(index_i, 2)
+            elseif (mode == 'C') then
+               index_i0 = 2*index_i - mod(index_j, 2)
+               index_j0 = floor_safe((index_j - 1)/2d0) + 1
+            endif
+            call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i0, index_j0, modetrans, pgno_sub)
+         elseif (collect == 'B') then ! pair-wise broadcast
+            if (mode == 'R') then
+               index_j0 = index_j + 2*mod(index_j, 2) - 1
+               index_i0 = index_i
+            elseif (mode == 'C') then
+               index_i0 = index_i + 2*mod(index_i, 2) - 1
+               index_j0 = index_j
+            endif
+            call GetBlockPID(ptree, blocks%pgno, level, level_butterfly, index_i0, index_j0, mode, pgno_sub)
+         endif
+         dest = -1
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub)%head /= ptree%MyID .and. ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+               dest = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+            endif
+         endif
+         pid((ii - 1)*nc + jj) = dest
+      enddo
+      enddo
+   end subroutine C_BF_Get_Exchange_Dest
+
+   !>**** The vector ranges a butterfly sweep uses at each level, as
+   !> GetLocalBlockRange computes them, so a caller mirroring the sweep does
+   !> not reimplement that logic.  `dir` is 'R' for the half below level_half
+   !> and 'C' for the half above it; the arrays take level_butterfly + 2
+   !> entries, index l holding the range at sweep level l.
+   subroutine C_BF_Get_Vec_Ranges(bf_Cptr, ptree_Cptr, dir, idx_r, inc_r, nr, idx_c, inc_c, nc) bind(c, name="c_bf_get_vec_ranges")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      character(kind=c_char), value :: dir
+      integer :: idx_r(*), inc_r(*), nr(*), idx_c(*), inc_c(*), nc(*)
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: l, ir, er, n_r, ic, ec, n_c
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      do l = 0, blocks%level_butterfly + 1
+         call GetLocalBlockRange(ptree, blocks%pgno, l, blocks%level_butterfly, &
+                                 ir, er, n_r, ic, ec, n_c, dir)
+         idx_r(l + 1) = ir; inc_r(l + 1) = er; nr(l + 1) = n_r
+         idx_c(l + 1) = ic; inc_c(l + 1) = ec; nc(l + 1) = n_c
+      enddo
+   end subroutine C_BF_Get_Vec_Ranges
+
+   !>**** Where each block of a sweep level goes in the row/column
+   !> redistribution at the sweep's midpoint, as BF_all2all_vec_n_ker decides
+   !> it for `kerflag = 0` (vector blocks).  Same shape as
+   !> C_BF_Get_Exchange_Dest, and the same convention: `pid((ii-1)*nc + jj)` is
+   !> the zero-based rank in the block's communicator, or -1 when this rank
+   !> does not send the block.  `level` is the SOURCE level in the source
+   !> ordering and `mode_new` the destination ordering; the target level
+   !> follows from them, as it does there.  The grid described by the ranges is
+   !> the source grid.
+   !>
+   !> Unlike the pair-wise exchange this one has a single producer per target
+   !> block (the Fortran asserts it) and so assigns rather than accumulates; a
+   !> caller that zeroes its target level first can use one accumulating
+   !> unpack for both.
+   subroutine C_BF_Get_All2all_Dest(bf_Cptr, ptree_Cptr, level, mode_new, nr, nc, &
+                                    idx_r, inc_r, idx_c, inc_c, pid) bind(c, name="c_bf_get_all2all_dest")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer, value :: level, nr, nc, idx_r, inc_r, idx_c, inc_c
+      character(kind=c_char), value :: mode_new
+      integer :: pid(*)
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: ii, jj, index_i, index_j, pgno_sub, pgno_sub_mine, dest
+      integer :: level_butterfly, level_new
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      level_butterfly = blocks%level_butterfly
+      ! mode_new and level_new determine the block range in the new mode
+      if (mode_new == 'R') then
+         level_new = max(level - 1, 0)
+      else
+         level_new = min(level + 1, level_butterfly + 1)
+      endif
+      call GetPgno_Sub(ptree, blocks%pgno, level_butterfly, pgno_sub_mine)
+
+      do ii = 1, nr
+      do jj = 1, nc
+         index_i = (ii - 1)*inc_r + idx_r
+         index_j = (jj - 1)*inc_c + idx_c
+         call GetBlockPID(ptree, blocks%pgno, level_new, level_butterfly, index_i, index_j, mode_new, pgno_sub)
+         dest = -1
+         if (pgno_sub > 0) then
+            if (ptree%pgrp(pgno_sub_mine)%head == ptree%MyID) then
+               dest = ptree%pgrp(pgno_sub)%head - ptree%pgrp(blocks%pgno)%head
+            endif
+         endif
+         pid((ii - 1)*nc + jj) = dest
+      enddo
+      enddo
+   end subroutine C_BF_Get_All2all_Dest
+
+   !>**** The target grid of that redistribution: GetLocalBlockRange at the
+   !> level and ordering C_BF_Get_All2all_Dest sends to, which is also what the
+   !> level's descriptors become afterwards.
+   subroutine C_BF_Get_All2all_Range(bf_Cptr, ptree_Cptr, level, mode_new, &
+                                     idx_r, inc_r, nr, idx_c, inc_c, nc) bind(c, name="c_bf_get_all2all_range")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer, value :: level
+      character(kind=c_char), value :: mode_new
+      integer :: idx_r, inc_r, nr, idx_c, inc_c, nc
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: level_butterfly, level_new
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      level_butterfly = blocks%level_butterfly
+      if (mode_new == 'R') then
+         level_new = max(level - 1, 0)
+      else
+         level_new = min(level + 1, level_butterfly + 1)
+      endif
+      call GetLocalBlockRange(ptree, blocks%pgno, level_new, level_butterfly, &
+                              idx_r, inc_r, nr, idx_c, inc_c, nc, mode_new)
+   end subroutine C_BF_Get_All2all_Range
+
+   !>**** The sub-group that owns one block of a level: its size, its
+   !> communicator and whether this rank heads it.  The 'N' sweep's last step
+   !> broadcasts the single vector block inside that sub-group before applying
+   !> U when the sub-group spans more than one rank, so a caller mirroring the
+   !> sweep needs the same three answers.
+   subroutine C_BF_Get_Block_Group(bf_Cptr, ptree_Cptr, level, index_i, index_j, mode, &
+                                   nproc, comm, is_head) bind(c, name="c_bf_get_block_group")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      integer, value :: level, index_i, index_j
+      character(kind=c_char), value :: mode
+      integer :: nproc, comm, is_head
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: pgno_sub
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      pgno_sub = -1
+      call GetBlockPID(ptree, blocks%pgno, level, blocks%level_butterfly, &
+                       index_i, index_j, mode, pgno_sub)
+      ! nproc 0 says there is no such sub-group; comm then holds the block's
+      ! own communicator rather than a null handle, so a caller that ignores
+      ! nproc still has something valid
+      nproc = 0
+      comm = ptree%pgrp(blocks%pgno)%Comm
+      is_head = 0
+      if (pgno_sub > 0) then
+         nproc = ptree%pgrp(pgno_sub)%nproc
+         comm = ptree%pgrp(pgno_sub)%Comm
+         if (ptree%pgrp(pgno_sub)%head == ptree%MyID) is_head = 1
+      endif
+   end subroutine C_BF_Get_Block_Group
+
+   !>**** The vector-level ranges of a butterfly matvec sweep, exactly as
+   !> BF_block_MVP_dat_nonbatch sets them, for a caller that mirrors the sweep
+   !> elsewhere (GPU_BACKEND/bf_gpu).  C_BF_Get_Vec_Ranges returns the raw
+   !> GetLocalBlockRange output, which is the KERNEL grid; this returns the
+   !> VECTOR grid, which differs from it in two ways that matter:
+   !>
+   !>   * below the sweep's midpoint a rank that owns a single block column
+   !>     ('N') or row ('T') widens its range to the pair, so the pair-wise
+   !>     broadcast of BF_exchange_matvec has somewhere to put the partner;
+   !>   * above the midpoint the ranges are converted from the column-wise
+   !>     kernel grid to the row-wise output grid ('N'), or the reverse ('T').
+   !>
+   !> The arrays take level_butterfly + 3 entries, index l holding the range
+   !> of BFvec%vec(l).  `chara` is 'N' or 'T', as the sweep takes it.  A level
+   !> this rank holds nothing at comes back with nr or nc zero.
+   !>
+   !> This is a transcription of the sweep's own arithmetic, so it can drift
+   !> from it.  What catches a drift is bf_gpu_test/bf_roundtrip, which
+   !> compares the GPU sweep's result against BF_block_MVP_dat at several rank
+   !> counts: a wrong range gives a wrong product, not a plausible one.
+   subroutine C_BF_Get_MVP_Vec_Ranges(bf_Cptr, ptree_Cptr, chara, idx_r, inc_r, nr, idx_c, inc_c, nc) &
+      bind(c, name="c_bf_get_mvp_vec_ranges")
+      implicit none
+      type(c_ptr), value :: bf_Cptr, ptree_Cptr
+      character(kind=c_char), value :: chara
+      integer :: idx_r(*), inc_r(*), nr(*), idx_c(*), inc_c(*), nc(*)
+      type(matrixblock), pointer :: blocks
+      type(proctree), pointer :: ptree
+      integer :: level, level_butterfly, level_half, lv
+      integer :: ir, er, n_r, ic, ec, n_c, ir0, er0, n_r0, ic0, ec0, n_c0
+
+      call c_f_pointer(bf_Cptr, blocks)
+      call c_f_pointer(ptree_Cptr, ptree)
+      level_butterfly = blocks%level_butterfly
+      level_half = blocks%level_half
+      do lv = 1, level_butterfly + 3
+         idx_r(lv) = 1; inc_r(lv) = 1; nr(lv) = 0
+         idx_c(lv) = 1; inc_c(lv) = 1; nc(lv) = 0
+      enddo
+
+      if (chara == 'N') then
+         ! vec(0): the input, partitioned as ButterflyV is
+         idx_r(1) = 1; inc_r(1) = 1; nr(1) = 1
+         idx_c(1) = blocks%ButterflyV%idx
+         inc_c(1) = blocks%ButterflyV%inc
+         nc(1) = blocks%ButterflyV%nblk_loc
+
+         do level = 0, level_half
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, ir, er, n_r, ic, ec, n_c, 'R')
+            if (n_r > 0 .and. n_c > 0) then
+               if (level_half /= level) then ! the last level doesn't double block columns
+               if (n_c == 1 .and. 2**(level_butterfly - level) > 1) then
+                  n_c = 2
+                  ic = ic - 1 + mod(ic, 2)
+               endif
+               endif
+            endif
+            lv = level + 2
+            idx_r(lv) = ir; inc_r(lv) = er; nr(lv) = n_r
+            idx_c(lv) = ic; inc_c(lv) = ec; nc(lv) = n_c
+         enddo
+
+         do level = level_half + 1, level_butterfly + 1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, ir0, er0, n_r0, ic0, ec0, n_c0, 'C')
+            ! column-wise kernel ranges to row-wise output vector ranges
+            if (level /= 0 .and. level /= level_butterfly + 1) then
+               ir = ir0*2 - 1
+               n_r = n_r0*2
+               er = er0
+               ic = ceiling_safe(ic0/2d0)
+               if (ec0 > 1) then
+                  n_c = n_c0
+               else
+                  n_c = ceiling_safe(n_c0/2d0)
+               endif
+               ec = ceiling_safe(ec0/2d0)
+            else
+               ir = ir0; n_r = n_r0; er = er0
+               ic = ic0; n_c = n_c0; ec = ec0
+            endif
+            lv = level + 2
+            idx_r(lv) = ir; inc_r(lv) = er; nr(lv) = n_r
+            idx_c(lv) = ic; inc_c(lv) = ec; nc(lv) = n_c
+         enddo
+
+      elseif (chara == 'T' .or. chara == 'C') then
+         ! vec(0): the input, partitioned as ButterflyU is
+         idx_r(1) = blocks%ButterflyU%idx
+         inc_r(1) = blocks%ButterflyU%inc
+         nr(1) = blocks%ButterflyU%nblk_loc
+         idx_c(1) = 1; inc_c(1) = 1; nc(1) = 1
+
+         do level = level_butterfly + 1, level_half + 1, -1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, ir, er, n_r, ic, ec, n_c, 'C')
+            if (n_r > 0 .and. n_c > 0) then
+               if (level_half + 1 /= level) then ! the last level doesn't double block rows
+               if (n_r == 1 .and. 2**(level - 1) > 1) then
+                  n_r = 2
+                  ir = ir - 1 + mod(ir, 2)
+               endif
+               endif
+            endif
+            lv = level_butterfly - level + 3
+            idx_r(lv) = ir; inc_r(lv) = er; nr(lv) = n_r
+            idx_c(lv) = ic; inc_c(lv) = ec; nc(lv) = n_c
+         enddo
+
+         do level = level_half, 0, -1
+            call GetLocalBlockRange(ptree, blocks%pgno, level, level_butterfly, ir0, er0, n_r0, ic0, ec0, n_c0, 'R')
+            ! row-wise kernel ranges to column-wise output vector ranges
+            if (level /= 0 .and. level /= level_butterfly + 1) then
+               ir = ceiling_safe(ir0/2d0)
+               if (er0 > 1) then
+                  n_r = n_r0
+               else
+                  n_r = ceiling_safe(n_r0/2d0)
+               endif
+               er = ceiling_safe(er0/2d0)
+               ic = ic0*2 - 1
+               n_c = n_c0*2
+               ec = ec0
+            else
+               ir = ir0; n_r = n_r0; er = er0
+               ic = ic0; n_c = n_c0; ec = ec0
+            endif
+            lv = level_butterfly - level + 3
+            idx_r(lv) = ir; inc_r(lv) = er; nr(lv) = n_r
+            idx_c(lv) = ic; inc_c(lv) = ec; nc(lv) = n_c
+         enddo
+      endif
+   end subroutine C_BF_Get_MVP_Vec_Ranges
+
+   !>**** The factor layout of a butterfly block, for a caller that mirrors it
+   !> elsewhere (GPU_BACKEND/bf_gpu).  Two steps: the sizes first, so the
+   !> caller can allocate, then the per-level ranges and the per-block shapes
+   !> and addresses.  The levels are given in the order the 'N' sweep uses
+   !> them: V, then ButterflyKerl(1..level_butterfly), then U.
+   !> @param nlevels: level_butterfly + 2
+   !> @param nblocks: the blocks of every level, summed
+   subroutine C_BF_Get_Layout(bf_Cptr, level_butterfly, level_half, M, N, M_loc, N_loc, nlevels, nblocks) bind(c, name="c_bf_get_layout")
+      implicit none
+      type(c_ptr), value :: bf_Cptr
+      integer :: level_butterfly, level_half, M, N, M_loc, N_loc, nlevels, nblocks
+      type(matrixblock), pointer :: blocks
+      integer :: l
+
+      call c_f_pointer(bf_Cptr, blocks)
+      level_butterfly = blocks%level_butterfly
+      level_half = blocks%level_half
+      M = blocks%M; N = blocks%N
+      M_loc = blocks%M_loc; N_loc = blocks%N_loc
+      nlevels = level_butterfly + 2
+      nblocks = blocks%ButterflyV%nblk_loc + blocks%ButterflyU%nblk_loc
+      do l = 1, level_butterfly
+         nblocks = nblocks + blocks%ButterflyKerl(l)%nr*blocks%ButterflyKerl(l)%nc
+      enddo
+   end subroutine C_BF_Get_Layout
+
+   !>**** The ranges and blocks whose sizes C_BF_Get_Layout reported.  Every
+   !> array is filled in the sweep order V, Kerl(1..level_butterfly), U, the
+   !> blocks of a level row major (i*nc + j), matching how the caller indexes
+   !> them.  blk_ptr is C_NULL_PTR where a local block is absent.
+   subroutine C_BF_Get_Blocks(bf_Cptr, lvl_nr, lvl_nc, lvl_idxr, lvl_idxc, lvl_incr, lvl_incc, blk_rows, blk_cols, blk_ptr) bind(c, name="c_bf_get_blocks")
+      implicit none
+      type(c_ptr), value :: bf_Cptr
+      integer :: lvl_nr(*), lvl_nc(*), lvl_idxr(*), lvl_idxc(*), lvl_incr(*), lvl_incc(*)
+      integer :: blk_rows(*), blk_cols(*)
+      type(c_ptr) :: blk_ptr(*)
+      type(matrixblock), pointer :: blocks
+      integer :: l, i, j, at, lv
+
+      call c_f_pointer(bf_Cptr, blocks)
+      at = 0
+      lv = 0
+
+      !>**** V: one row of nblk_loc blocks
+      lv = lv + 1
+      lvl_nr(lv) = 1; lvl_nc(lv) = blocks%ButterflyV%nblk_loc
+      lvl_idxr(lv) = 1; lvl_incr(lv) = 1
+      lvl_idxc(lv) = blocks%ButterflyV%idx; lvl_incc(lv) = blocks%ButterflyV%inc
+      do j = 1, blocks%ButterflyV%nblk_loc
+         at = at + 1
+         if (associated(blocks%ButterflyV%blocks(j)%matrix)) then
+            blk_rows(at) = size(blocks%ButterflyV%blocks(j)%matrix, 1)
+            blk_cols(at) = size(blocks%ButterflyV%blocks(j)%matrix, 2)
+            blk_ptr(at) = c_loc(blocks%ButterflyV%blocks(j)%matrix(1, 1))
+         else
+            blk_rows(at) = 0; blk_cols(at) = 0; blk_ptr(at) = C_NULL_PTR
+         endif
+      enddo
+
+      !>**** the interior factors
+      do l = 1, blocks%level_butterfly
+         lv = lv + 1
+         lvl_nr(lv) = blocks%ButterflyKerl(l)%nr; lvl_nc(lv) = blocks%ButterflyKerl(l)%nc
+         lvl_idxr(lv) = blocks%ButterflyKerl(l)%idx_r; lvl_incr(lv) = blocks%ButterflyKerl(l)%inc_r
+         lvl_idxc(lv) = blocks%ButterflyKerl(l)%idx_c; lvl_incc(lv) = blocks%ButterflyKerl(l)%inc_c
+         do i = 1, blocks%ButterflyKerl(l)%nr
+            do j = 1, blocks%ButterflyKerl(l)%nc
+               at = at + 1
+               if (associated(blocks%ButterflyKerl(l)%blocks(i, j)%matrix)) then
+                  blk_rows(at) = size(blocks%ButterflyKerl(l)%blocks(i, j)%matrix, 1)
+                  blk_cols(at) = size(blocks%ButterflyKerl(l)%blocks(i, j)%matrix, 2)
+                  blk_ptr(at) = c_loc(blocks%ButterflyKerl(l)%blocks(i, j)%matrix(1, 1))
+               else
+                  blk_rows(at) = 0; blk_cols(at) = 0; blk_ptr(at) = C_NULL_PTR
+               endif
+            enddo
+         enddo
+      enddo
+
+      !>**** U: one column of nblk_loc blocks
+      lv = lv + 1
+      lvl_nr(lv) = blocks%ButterflyU%nblk_loc; lvl_nc(lv) = 1
+      lvl_idxr(lv) = blocks%ButterflyU%idx; lvl_incr(lv) = blocks%ButterflyU%inc
+      lvl_idxc(lv) = 1; lvl_incc(lv) = 1
+      do i = 1, blocks%ButterflyU%nblk_loc
+         at = at + 1
+         if (associated(blocks%ButterflyU%blocks(i)%matrix)) then
+            blk_rows(at) = size(blocks%ButterflyU%blocks(i)%matrix, 1)
+            blk_cols(at) = size(blocks%ButterflyU%blocks(i)%matrix, 2)
+            blk_ptr(at) = c_loc(blocks%ButterflyU%blocks(i)%matrix(1, 1))
+         else
+            blk_rows(at) = 0; blk_cols(at) = 0; blk_ptr(at) = C_NULL_PTR
+         endif
+      enddo
+   end subroutine C_BF_Get_Blocks
+
    subroutine C_BF_Construct_Init(M, N, M_loc, N_loc, nnsr, nnsc, mshr_Cptr, mshc_Cptr, bf_Cptr, option_Cptr, stats_Cptr, msh_Cptr, ker_Cptr, ptree_Cptr, C_FuncDistmn, C_FuncNearFar, C_QuantApp) bind(c, name="c_bf_construct_init")
       implicit none
       integer M, N
